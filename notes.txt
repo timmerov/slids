@@ -1,0 +1,13 @@
+
+
+note: when outer::middle::inner executes outer::return 99;
+execution of inner stops (except for calling destructors of objects going out of scope)
+middle stops
+and outer returns 99.
+middle::return is never called.
+
+remove lambdas.
+
+the c interop section needs TODO review.
+
+
