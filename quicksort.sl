@@ -15,37 +15,37 @@ int32 main() {
         v.add(randomInt(1, 100));
     }
 
-    quickSort(^v, 0, v.size() - 1);
+    void quickSort(int low, int high) {
+        if (low >= high) {
+            return;
+        }
+
+        int partition(int low, int high) {
+            int pivot_val = v[high];
+            int i = low - 1;
+
+            for int j in (low..high) {
+                if (v[j] <= pivot_val) {
+                    i += 1;
+                    v.swap(i, j);
+                }
+            }
+
+            v.swap(i + 1, high);
+
+            return i + 1;
+        }
+
+        int pivot = partition(low, high);
+        quickSort(low, pivot - 1);
+        quickSort(pivot + 1, high);
+    }
+
+    quickSort(0, v.size() - 1);
 
     for int n in v {
         println(n);
     }
 
     return 0;
-}
-
-void quickSort(Vector^ v, int low, int high) {
-    if (low >= high) {
-        return;
-    }
-
-    int pivot = partition(v, low, high);
-    quickSort(v, low, pivot - 1);
-    quickSort(v, pivot + 1, high);
-}
-
-int partition(Vector^ v, int low, int high) {
-    int pivot_val = v^[high];
-    int i = low - 1;
-
-    for int j in (low..high) {
-        if (v^[j] <= pivot_val) {
-            i += 1;
-            v^.swap(i, j);
-        }
-    }
-
-    v^.swap(i + 1, high);
-
-    return i + 1;
 }
