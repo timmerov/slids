@@ -5,22 +5,23 @@ int32 main() {
     Vector primes;
 
     for int n in (2..1000) {
-        bool is_prime = true;
 
-        for int p in primes {
-            if (p * p > n) {
-                break;
-            }
-            if (n % p == 0) {
-                is_prime = false;
-                break;
+        bool isPrime() {
+            for int p in primes {
+                if (p * p > n) {
+                    return true;
+                }
+                if (n % p == 0) {
+                    return false;
+                }
             }
         }
 
-        if (is_prime) {
+        if (isPrime()) {
             primes.add(n);
             println(n);
         }
     }
+
     return 0;
 }
