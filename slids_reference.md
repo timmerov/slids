@@ -327,22 +327,42 @@ Counter {
 
 ## Inheritance
 
+Methods are non-virtual by default — no vtable overhead unless `virtual` is explicitly used. `virtual` must be declared on the base class method and on every override in derived classes. Omitting `virtual` in a derived class when the base declares it virtual is a compiler error.
+
+A virtual class is one that has at least one virtual method. For virtual classes:
+
+- If `_` and `~` are explicitly defined, `~` must be declared `virtual`
+- If `~` is not explicitly defined, the compiler generates a default `virtual ~` that does nothing
+
 ```
 Animal(string name_) {
-    void speak() {
+    _() {
+        name_ = "ubu";
+    }
+
+    virtual ~() {
+        // cleanup
+    }
+
+    virtual void speak() {
         println(name_ + " makes a sound.");
     }
 }
 
 Animal : Dog() {
-    void speak() {
+    // compiler generates: virtual ~() {}
+
+    virtual void speak() {
         println(name_ + " barks.");
     }
 }
 
 Dog dog("spot");
 Animal^ animal = ^dog;
+animal^.speak();   // calls Dog:speak
 ```
+
+> **TODO:** Needs review — it should be possible to add private virtual methods in the implementation file (`.sl`) that are not exposed in the `.slh`. This is similar to the desire to add private fields not exposed in the `.slh`. Both raise ABI and layout questions that need careful thought.
 
 ---
 
