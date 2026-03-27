@@ -411,9 +411,19 @@ while :outer {
 
 Curly brackets are always required. An optional loop name follows the range, prefixed with `:`.
 
+Numeric range:
 ```
 for int i in (0..10) :outer {
-    print(i);
+    println(i);
+}
+```
+
+Collection iteration:
+```
+Vector primes = (2, 3, 5);
+
+for int i in primes {
+    println(i);
 }
 ```
 
@@ -459,6 +469,29 @@ for int i in (0..10) :outer {
 - `break` / `continue` — targets the current (innermost) loop
 - `break N` / `continue N` — targets N loops out (`1` = current, `2` = one level up, etc.)
 - `break name` / `continue name` — targets the loop with that name
+
+---
+
+### Switch
+
+Cases fall through by default. `break` stops fallthrough. `default` handles any unmatched value. An optional name follows the condition, prefixed with `:`.
+
+```
+switch (x) :outer {
+case 1:
+    println("one");
+    break;
+case 2:
+    println("two");
+    break;
+case 3:
+case 4:
+    println("three or four");
+    break;
+default:
+    println("other");
+}
+```
 
 ---
 
