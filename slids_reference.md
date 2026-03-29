@@ -48,10 +48,31 @@ g++ foo.o bar.o -o app
 - `.slh` — header file. All declarations here are **public**.
 - `.sl` — source file. Everything here is **private** unless declared in the matching `.slh`.
 - No `public` / `private` keywords — the header is the contract.
+- Everything in a `.slh` is a forward declaration — no executable code.
+- `.sl` files are compiled in two passes — the first pass collects all slid names and signatures, the second pass resolves references. This means forward declarations are never needed within a single `.sl` file, even for mutually recursive slids or classes defined later in the file.
+
+`.slh` rules:
+- A slid used as a **function** — signature only, no `{}`
+- A slid used as a **class** — must have `{}`, but the body may only contain method declarations and nested class declarations, no executable code
+- A slid **forward declared as a class** — name followed by `;`, no tuple, no `{}`. Tells the compiler the name is a class defined elsewhere. Allows using a pointer to the type without importing its full definition.
+- POD constants and simple data initializations are allowed
+
+A slid is recognized as a method declaration (not a constructor) when its return type differs from its name. A slid is recognized as a forward declaration when it has no `{}` body.
+
+**widget.slh** — uses a `Counter^` without importing `counter.slh`:
+```
+Counter;   // forward class declaration — Counter is defined elsewhere
+
+Widget(Counter^ pccounter_) {
+    int getCount();   // return type is int, not Widget — this is a method declaration
+}
+```
 
 **vec2.slh** (public interface):
 ```
-Vec2(float32 x_, float32 y_) {
+float32 dot(Vec2^ a, Vec2^ b);   // function — no {}
+
+Vec2(float32 x_, float32 y_) {   // class — {} required, declarations only
     void init(float32 x, float32 y);
     float32 length();
     Vec2 operator+(Vec2^ other);
@@ -73,6 +94,10 @@ float32 Vec2:length() {
 
 Vec2 Vec2:operator+(Vec2^ other) {
     return Vec2(x_ + other^.x_, y_ + other^.y_);
+}
+
+float32 dot(Vec2^ a, Vec2^ b) {
+    return a^.x_ * b^.x_ + a^.y_ * b^.y_;
 }
 
 int32 helperSlid() {  // private — not in .slh
@@ -384,6 +409,64 @@ Vec2(float32 x_, float32 y_) {
 
 ## Control flow
 
+### Block names
+
+Every code block `{}` may have an optional name, written after the closing brace with `:`. `if`, `else`, `for`, `while`, and `switch` blocks have default names `:if`, `:else`, `:for`, `:while`, `:switch`. Default names follow standard scoping — an inner block's default name hides the outer block's default name of the same type.
+
+`break` and `continue` rules:
+
+| Block | naked `break` | `break name` / `break N` | `continue` |
+|---|---|---|---|
+| `for` | exit loop | exit named or Nth enclosing block | re-evaluate condition, next iteration |
+| `while` | exit loop | exit named or Nth enclosing block | re-evaluate condition |
+| `switch` | exit block / stop fallthrough | exit named or Nth enclosing block | not valid |
+| `if`, `else`, plain `{}` | compiler error if unnamed | exit named block | not valid |
+
+`break` and `continue` accept either a name or a positive integer. For numbered `break`, the integer counts outward across `for`, `while`, and `switch` blocks. For numbered `continue`, the integer counts outward across `for` and `while` blocks only — `switch` blocks are not counted. `1` is the innermost (same as naked `break`/`continue`).
+
+```
+while (true) {
+    while (true) {
+        break 2;    // exits the outer while loop
+    }
+}
+```
+
+Plain block example — `continue` is not valid, `break` requires a name:
+```
+{
+    // do stuff
+    break myBlock;   // exit the block
+} :myBlock
+```
+
+`break` targeting an outer block by name:
+```
+for int i in (0..10) {
+    for int j in (0..10) {
+        if (i == 5) {
+            break;             // exit inner for loop
+        }
+        if (j == 2) {
+            continue;          // continue inner for loop
+        }
+        if (i == 7) {
+            break outer;       // exit outer for loop by name
+        }
+    }
+} :outer
+```
+
+`break` exiting an outer `for` from inside a `switch`:
+```
+for x in (0..10) {
+    switch (x) {
+    default:
+        break outer;
+    }
+} :outer
+```
+
 ### If / else
 
 Curly brackets are always required after `if` and `else`. The only exception is `else if` — `else` may be followed directly by `if` without braces.
@@ -406,12 +489,12 @@ if (true) { } else x = 42;  // error — {} required after else
 
 ### While
 
-Curly brackets are always required. An optional loop name follows the condition, prefixed with `:`.
+Curly brackets are always required.
 
 ```
-while (condition) :outer {
+while (condition) {
     // ...
-}
+} :outer   // name can be targeted by break/continue from a nested block
 ```
 
 Not legal:
@@ -422,20 +505,20 @@ while (condition) doSomething();  // error — {} required
 **Bottom-condition while** — executes the body first, then tests the condition. Repeats if true.
 
 ```
-while :outer {
+while {
     // do stuff
-} (condition)
+} :outer (condition)
 ```
 
 ### For — range-based
 
-Curly brackets are always required. An optional loop name follows the range, prefixed with `:`.
+Curly brackets are always required.
 
 Numeric range:
 ```
-for int i in (0..10) :outer {
+for int i in (0..10) {
     println(i);
-}
+} :outer
 ```
 
 Collection iteration:
@@ -459,9 +542,9 @@ for int i in (0..10) print(i);  // error — {} required
 Curly brackets are always required.
 
 ```
-for (int i = 0; i < 10; i++) :outer {
+for (int i = 0; i < 10; i++) {
     print(i);
-}
+} :outer
 ```
 
 Not legal:
@@ -469,35 +552,12 @@ Not legal:
 for (int i = 0; i < 10; i++) print(i);  // error — {} required
 ```
 
-### Break and continue
-
-`break` exits the current loop. `continue` skips to the next iteration of the current loop. Both support an optional number or name to target an outer loop.
-
-```
-for int i in (0..10) :outer {
-    for int j in (0..10) :inner {
-        if (i == 5) { break outer; }     // exit both loops by name
-        if (j == 3) { break 2; }         // exit both loops by count
-        if (j == 2) { continue outer; }  // continue outer loop by name
-        if (i == 2) { continue 2; }      // continue outer loop by count
-        if (i == 3) { break; }           // exit current loop
-        if (i == 4) { break 1; }         // same as plain break
-    }
-}
-```
-
-- `break` / `continue` — targets the current (innermost) loop
-- `break N` / `continue N` — targets N loops out (`1` = current, `2` = one level up, etc.)
-- `break name` / `continue name` — targets the loop with that name
-
----
-
 ### Switch
 
-Cases fall through by default. `break` stops fallthrough. `default` handles any unmatched value. An optional name follows the condition, prefixed with `:`.
+Cases fall through by default. `break` stops fallthrough. `default` handles any unmatched value.
 
 ```
-switch (x) :outer {
+switch (x) {
 case 1:
     println("one");
     break;

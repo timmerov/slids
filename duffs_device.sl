@@ -7,25 +7,25 @@ int32 main() {
 
     int n = (count + 7) / 8;
 
-    switch (count % 8) :copy {
+    switch (count % 8) {
     case 0:
-        dst++^ = src++^;
+        while (n > 0) {
+            dst++^ = src++^;
     case 7:
-        dst++^ = src++^;
+            dst++^ = src++^;
     case 6:
-        dst++^ = src++^;
+            dst++^ = src++^;
     case 5:
-        dst++^ = src++^;
+            dst++^ = src++^;
     case 4:
-        dst++^ = src++^;
+            dst++^ = src++^;
     case 3:
-        dst++^ = src++^;
+            dst++^ = src++^;
     case 2:
-        dst++^ = src++^;
+            dst++^ = src++^;
     case 1:
-        dst++^ = src++^;
-        if (--n > 0) {
-            continue copy;
+            dst++^ = src++^;
+            n--;
         }
     }
 
