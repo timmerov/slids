@@ -8,9 +8,31 @@ enum class TokenType {
 
     // identifiers and keywords
     kIdentifier,
+    kInt,
+    kInt8,
+    kInt16,
     kInt32,
+    kInt64,
+    kUint,
+    kUint8,
+    kUint16,
+    kUint32,
+    kUint64,
+    kFloat32,
+    kFloat64,
+    kBool,
     kVoid,
     kReturn,
+    kTrue,
+    kFalse,
+
+    // operators
+    kPlus,
+    kMinus,
+    kStar,
+    kSlash,
+    kPercent,
+    kEquals,
 
     // punctuation
     kLParen,

@@ -1,5 +1,6 @@
 CXX      = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra
+LDFLAGS  = -lstdc++fs
 
 BUILD_DIR = ../build/compiler
 BIN_DIR   = ../bin
@@ -19,7 +20,7 @@ $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
 $(TARGET): $(OBJS)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(BUILD_DIR)/%.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c -o $@ $<

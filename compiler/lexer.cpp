@@ -22,11 +22,9 @@ void Lexer::skipWhitespaceAndComments() {
             advance();
         } else if (c == '/' && pos_ + 1 < (int)source_.size()) {
             if (source_[pos_ + 1] == '/') {
-                // single line comment
                 while (pos_ < (int)source_.size() && peek() != '\n')
                     advance();
             } else if (source_[pos_ + 1] == '*') {
-                // multi-line comment
                 advance(); advance();
                 while (pos_ + 1 < (int)source_.size()) {
                     if (peek() == '*' && source_[pos_ + 1] == '/') {
@@ -62,7 +60,7 @@ Token Lexer::readString() {
             value += c;
         }
     }
-    if (peek() == '"') advance(); // consume closing "
+    if (peek() == '"') advance();
     return Token(TokenType::kStringLiteral, value, line_);
 }
 
@@ -70,7 +68,6 @@ Token Lexer::readNumber() {
     std::string value;
     while (pos_ < (int)source_.size() && (isdigit(peek()) || peek() == '_'))
         value += advance();
-    // strip underscores
     std::string clean;
     for (char c : value)
         if (c != '_') clean += c;
@@ -82,9 +79,23 @@ Token Lexer::readIdentifierOrKeyword() {
     while (pos_ < (int)source_.size() && (isalnum(peek()) || peek() == '_'))
         value += advance();
 
-    if (value == "int32")  return Token(TokenType::kInt32,  value, line_);
-    if (value == "void")   return Token(TokenType::kVoid,   value, line_);
-    if (value == "return") return Token(TokenType::kReturn, value, line_);
+    if (value == "int")     return Token(TokenType::kInt,     value, line_);
+    if (value == "int8")    return Token(TokenType::kInt8,    value, line_);
+    if (value == "int16")   return Token(TokenType::kInt16,   value, line_);
+    if (value == "int32")   return Token(TokenType::kInt32,   value, line_);
+    if (value == "int64")   return Token(TokenType::kInt64,   value, line_);
+    if (value == "uint")    return Token(TokenType::kUint,    value, line_);
+    if (value == "uint8")   return Token(TokenType::kUint8,   value, line_);
+    if (value == "uint16")  return Token(TokenType::kUint16,  value, line_);
+    if (value == "uint32")  return Token(TokenType::kUint32,  value, line_);
+    if (value == "uint64")  return Token(TokenType::kUint64,  value, line_);
+    if (value == "float32") return Token(TokenType::kFloat32, value, line_);
+    if (value == "float64") return Token(TokenType::kFloat64, value, line_);
+    if (value == "bool")    return Token(TokenType::kBool,    value, line_);
+    if (value == "void")    return Token(TokenType::kVoid,    value, line_);
+    if (value == "return")  return Token(TokenType::kReturn,  value, line_);
+    if (value == "true")    return Token(TokenType::kTrue,    value, line_);
+    if (value == "false")   return Token(TokenType::kFalse,   value, line_);
 
     return Token(TokenType::kIdentifier, value, line_);
 }
@@ -101,8 +112,8 @@ std::vector<Token> Lexer::tokenize() {
 
         char c = peek();
 
-        if (c == '"')               { tokens.push_back(readString()); }
-        else if (isdigit(c))        { tokens.push_back(readNumber()); }
+        if (c == '"')                    { tokens.push_back(readString()); }
+        else if (isdigit(c))             { tokens.push_back(readNumber()); }
         else if (isalpha(c) || c == '_') { tokens.push_back(readIdentifierOrKeyword()); }
         else {
             advance();
@@ -113,6 +124,12 @@ std::vector<Token> Lexer::tokenize() {
                 case '}': tokens.emplace_back(TokenType::kRBrace,    "}", line_); break;
                 case ';': tokens.emplace_back(TokenType::kSemicolon, ";", line_); break;
                 case ',': tokens.emplace_back(TokenType::kComma,     ",", line_); break;
+                case '+': tokens.emplace_back(TokenType::kPlus,      "+", line_); break;
+                case '-': tokens.emplace_back(TokenType::kMinus,     "-", line_); break;
+                case '*': tokens.emplace_back(TokenType::kStar,      "*", line_); break;
+                case '/': tokens.emplace_back(TokenType::kSlash,     "/", line_); break;
+                case '%': tokens.emplace_back(TokenType::kPercent,   "%", line_); break;
+                case '=': tokens.emplace_back(TokenType::kEquals,    "=", line_); break;
                 default:  tokens.emplace_back(TokenType::kUnknown,   std::string(1, c), line_); break;
             }
         }

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <filesystem>
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
@@ -21,7 +22,6 @@ int main(int argc, char* argv[]) {
     }
 
     if (output_path.empty()) {
-        // replace .sl with .ll
         output_path = input_path;
         auto pos = output_path.rfind(".sl");
         if (pos != std::string::npos)
@@ -41,6 +41,12 @@ int main(int argc, char* argv[]) {
     std::string source = buf.str();
 
     try {
+        // create output directory if needed
+        std::filesystem::path out_path(output_path);
+        if (out_path.has_parent_path()) {
+            std::filesystem::create_directories(out_path.parent_path());
+        }
+
         Lexer lexer(source);
         auto tokens = lexer.tokenize();
 
