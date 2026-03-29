@@ -1,0 +1,28 @@
+CXX      = g++
+CXXFLAGS = -std=c++17 -Wall -Wextra
+
+BUILD_DIR = ../build/compiler
+BIN_DIR   = ../bin
+TARGET    = $(BIN_DIR)/slidsc
+
+SRCS      = main.cpp lexer.cpp parser.cpp codegen.cpp
+OBJS      = $(addprefix $(BUILD_DIR)/, $(SRCS:.cpp=.o))
+
+.PHONY: all clean
+
+all: $(BUILD_DIR) $(BIN_DIR) $(TARGET)
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(BIN_DIR):
+	mkdir -p $(BIN_DIR)
+
+$(TARGET): $(OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+$(BUILD_DIR)/%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+clean:
+	rm -f $(OBJS) $(TARGET)
