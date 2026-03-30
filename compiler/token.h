@@ -53,6 +53,29 @@ enum class TokenType {
     kSlash,
     kPercent,
 
+    // bitwise operators
+    kBitAnd,
+    kBitOr,
+    kBitXor,
+    kBitNot,
+    kLShift,
+    kRShift,
+
+    // logical xor
+    kXorXor,
+
+    // augmented bitwise assignments
+    kBitAndEq,
+    kBitOrEq,
+    kBitXorEq,
+    kLShiftEq,
+    kRShiftEq,
+
+    // augmented logical assignments
+    kAndEq,
+    kOrEq,
+    kXorXorEq,
+
     // assignment
     kEquals,
     kPlusEq,

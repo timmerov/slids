@@ -151,18 +151,21 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string val = emitExpr(*u->operand);
         std::string tmp = newTmp();
         if (u->op == "!") {
-            // !x == (x == 0)
             out_ << "    " << tmp << " = icmp eq i32 " << val << ", 0\n";
             std::string tmp2 = newTmp();
             out_ << "    " << tmp2 << " = zext i1 " << tmp << " to i32\n";
             return tmp2;
+        }
+        if (u->op == "~") {
+            out_ << "    " << tmp << " = xor i32 " << val << ", -1\n";
+            return tmp;
         }
         throw std::runtime_error("unknown unary op: " + u->op);
     }
 
     if (auto* b = dynamic_cast<const BinaryExpr*>(&expr)) {
         // short-circuit && and ||
-        if (b->op == "&&" || b->op == "||") {
+        if (b->op == "&&" || b->op == "||" || b->op == "^^") {
             std::string result_ptr = newTmp() + "_sc";
             out_ << "    " << result_ptr << " = alloca i32\n";
 
@@ -178,11 +181,15 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 out_ << "    store i32 0, ptr " << result_ptr << "\n";
                 out_ << "    br i1 " << left_bool << ", label %" << eval_right
                      << ", label %" << done << "\n";
-            } else {
+            } else if (b->op == "||") {
                 // if left is true, skip right
                 out_ << "    store i32 1, ptr " << result_ptr << "\n";
                 out_ << "    br i1 " << left_bool << ", label %" << done
                      << ", label %" << eval_right << "\n";
+            } else {
+                // ^^ — always evaluate both sides
+                out_ << "    store i32 0, ptr " << result_ptr << "\n";
+                out_ << "    br label %" << eval_right << "\n";
             }
 
             out_ << eval_right << ":\n";
@@ -190,7 +197,14 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string right_bool = newTmp();
             out_ << "    " << right_bool << " = icmp ne i32 " << right_val << ", 0\n";
             std::string right_int = newTmp();
-            out_ << "    " << right_int << " = zext i1 " << right_bool << " to i32\n";
+            if (b->op == "^^") {
+                // xor the two bools
+                std::string xor_result = newTmp();
+                out_ << "    " << xor_result << " = xor i1 " << left_bool << ", " << right_bool << "\n";
+                out_ << "    " << right_int << " = zext i1 " << xor_result << " to i32\n";
+            } else {
+                out_ << "    " << right_int << " = zext i1 " << right_bool << " to i32\n";
+            }
             out_ << "    store i32 " << right_int << ", ptr " << result_ptr << "\n";
             out_ << "    br label %" << done << "\n";
 
@@ -209,6 +223,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
         else if (b->op == "*")  { out_ << "    " << tmp << " = mul i32 "  << left << ", " << right << "\n"; return tmp; }
         else if (b->op == "/")  { out_ << "    " << tmp << " = sdiv i32 " << left << ", " << right << "\n"; return tmp; }
         else if (b->op == "%")  { out_ << "    " << tmp << " = srem i32 " << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == "&")  { out_ << "    " << tmp << " = and i32 "  << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == "|")  { out_ << "    " << tmp << " = or i32 "   << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == "^")  { out_ << "    " << tmp << " = xor i32 "  << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == "<<") { out_ << "    " << tmp << " = shl i32 "  << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == ">>") { out_ << "    " << tmp << " = ashr i32 " << left << ", " << right << "\n"; return tmp; }
 
         // comparison — returns i1, extend to i32
         std::string cmp = newTmp();

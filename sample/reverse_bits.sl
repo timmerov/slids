@@ -1,4 +1,3 @@
-import std.io;
 
 int32 main() {
     uint8 byte = 0b1010_1100;

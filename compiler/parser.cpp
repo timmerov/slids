@@ -93,6 +93,10 @@ std::unique_ptr<Expr> Parser::parseUnary() {
         advance();
         return std::make_unique<UnaryExpr>("!", parseUnary());
     }
+    if (peek().type == TokenType::kBitNot) {
+        advance();
+        return std::make_unique<UnaryExpr>("~", parseUnary());
+    }
     return parsePrimary();
 }
 
@@ -117,14 +121,24 @@ std::unique_ptr<Expr> Parser::parseAddSub() {
     return left;
 }
 
-std::unique_ptr<Expr> Parser::parseRelational() {
+std::unique_ptr<Expr> Parser::parseShift() {
     auto left = parseAddSub();
+    while (peek().type == TokenType::kLShift ||
+           peek().type == TokenType::kRShift) {
+        std::string op = advance().value;
+        left = std::make_unique<BinaryExpr>(op, std::move(left), parseAddSub());
+    }
+    return left;
+}
+
+std::unique_ptr<Expr> Parser::parseRelational() {
+    auto left = parseShift();
     while (peek().type == TokenType::kLt   ||
            peek().type == TokenType::kGt   ||
            peek().type == TokenType::kLtEq ||
            peek().type == TokenType::kGtEq) {
         std::string op = advance().value;
-        left = std::make_unique<BinaryExpr>(op, std::move(left), parseAddSub());
+        left = std::make_unique<BinaryExpr>(op, std::move(left), parseShift());
     }
     return left;
 }
@@ -139,20 +153,48 @@ std::unique_ptr<Expr> Parser::parseEquality() {
     return left;
 }
 
-std::unique_ptr<Expr> Parser::parseLogicalAnd() {
+std::unique_ptr<Expr> Parser::parseBitAnd() {
     auto left = parseEquality();
+    while (peek().type == TokenType::kBitAnd) {
+        advance();
+        left = std::make_unique<BinaryExpr>("&", std::move(left), parseEquality());
+    }
+    return left;
+}
+
+std::unique_ptr<Expr> Parser::parseBitXor() {
+    auto left = parseBitAnd();
+    while (peek().type == TokenType::kBitXor) {
+        advance();
+        left = std::make_unique<BinaryExpr>("^", std::move(left), parseBitAnd());
+    }
+    return left;
+}
+
+std::unique_ptr<Expr> Parser::parseBitOr() {
+    auto left = parseBitXor();
+    while (peek().type == TokenType::kBitOr) {
+        advance();
+        left = std::make_unique<BinaryExpr>("|", std::move(left), parseBitXor());
+    }
+    return left;
+}
+
+std::unique_ptr<Expr> Parser::parseLogicalAnd() {
+    auto left = parseBitOr();
     while (peek().type == TokenType::kAnd) {
         advance();
-        left = std::make_unique<BinaryExpr>("&&", std::move(left), parseEquality());
+        left = std::make_unique<BinaryExpr>("&&", std::move(left), parseBitOr());
     }
     return left;
 }
 
 std::unique_ptr<Expr> Parser::parseExpr() {
     auto left = parseLogicalAnd();
-    while (peek().type == TokenType::kOr) {
-        advance();
-        left = std::make_unique<BinaryExpr>("||", std::move(left), parseLogicalAnd());
+    while (peek().type == TokenType::kOr ||
+           peek().type == TokenType::kXorXor) {
+        std::string op = advance().value;
+        left = std::make_unique<BinaryExpr>(op, std::move(left), parseLogicalAnd());
     }
     return left;
 }
@@ -288,6 +330,14 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             {TokenType::kStarEq,    "*"},
             {TokenType::kSlashEq,   "/"},
             {TokenType::kPercentEq, "%"},
+            {TokenType::kBitAndEq,  "&"},
+            {TokenType::kBitOrEq,   "|"},
+            {TokenType::kBitXorEq,  "^"},
+            {TokenType::kLShiftEq,  "<<"},
+            {TokenType::kRShiftEq,  ">>"},
+            {TokenType::kAndEq,     "&&"},
+            {TokenType::kOrEq,      "||"},
+            {TokenType::kXorXorEq,  "^^"},
         };
         auto it = compound_ops.find(peek().type);
         if (it != compound_ops.end()) {

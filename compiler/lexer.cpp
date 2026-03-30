@@ -67,11 +67,31 @@ Token Lexer::readString() {
 
 Token Lexer::readNumber() {
     std::string value;
+    // check for 0x or 0b prefix
+    if (peek() == '0' && (peek2() == 'x' || peek2() == 'X')) {
+        advance(); advance(); // consume 0x
+        std::string digits;
+        while (pos_ < (int)source_.size() && (isxdigit(peek()) || peek() == '_'))
+            digits += advance();
+        // strip underscores and convert hex to decimal
+        std::string clean;
+        for (char c : digits) if (c != '_') clean += c;
+        return Token(TokenType::kIntLiteral, std::to_string(std::stoll(clean, nullptr, 16)), line_);
+    }
+    if (peek() == '0' && (peek2() == 'b' || peek2() == 'B')) {
+        advance(); advance(); // consume 0b
+        std::string digits;
+        while (pos_ < (int)source_.size() && (peek() == '0' || peek() == '1' || peek() == '_'))
+            digits += advance();
+        std::string clean;
+        for (char c : digits) if (c != '_') clean += c;
+        return Token(TokenType::kIntLiteral, std::to_string(std::stoll(clean, nullptr, 2)), line_);
+    }
+    // decimal
     while (pos_ < (int)source_.size() && (isdigit(peek()) || peek() == '_'))
         value += advance();
     std::string clean;
-    for (char c : value)
-        if (c != '_') clean += c;
+    for (char c : value) if (c != '_') clean += c;
     return Token(TokenType::kIntLiteral, clean, line_);
 }
 
@@ -161,20 +181,47 @@ std::vector<Token> Lexer::tokenize() {
                     else               { tokens.emplace_back(TokenType::kEquals, "=", line_); }
                     break;
                 case '<':
-                    if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kLtEq, "<=", line_); }
-                    else               { tokens.emplace_back(TokenType::kLt,   "<",  line_); }
+                    if (peek() == '<') {
+                        advance();
+                        if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kLShiftEq, "<<=", line_); }
+                        else               { tokens.emplace_back(TokenType::kLShift, "<<", line_); }
+                    } else if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kLtEq, "<=", line_); }
+                    else                      { tokens.emplace_back(TokenType::kLt,   "<",  line_); }
                     break;
                 case '>':
-                    if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kGtEq, ">=", line_); }
-                    else               { tokens.emplace_back(TokenType::kGt,   ">",  line_); }
+                    if (peek() == '>') {
+                        advance();
+                        if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kRShiftEq, ">>=", line_); }
+                        else               { tokens.emplace_back(TokenType::kRShift, ">>", line_); }
+                    } else if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kGtEq, ">=", line_); }
+                    else                      { tokens.emplace_back(TokenType::kGt,   ">",  line_); }
                     break;
                 case '&':
-                    if (peek() == '&') { advance(); tokens.emplace_back(TokenType::kAnd, "&&", line_); }
-                    else               { tokens.emplace_back(TokenType::kUnknown, "&", line_); }
+                    if (peek() == '&') {
+                        advance();
+                        if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kAndEq,    "&&=", line_); }
+                        else               { tokens.emplace_back(TokenType::kAnd,       "&&",  line_); }
+                    } else if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kBitAndEq, "&=", line_); }
+                    else                      { tokens.emplace_back(TokenType::kBitAnd,  "&",   line_); }
                     break;
                 case '|':
-                    if (peek() == '|') { advance(); tokens.emplace_back(TokenType::kOr, "||", line_); }
-                    else               { tokens.emplace_back(TokenType::kUnknown, "|", line_); }
+                    if (peek() == '|') {
+                        advance();
+                        if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kOrEq,     "||=", line_); }
+                        else               { tokens.emplace_back(TokenType::kOr,        "||",  line_); }
+                    } else if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kBitOrEq,  "|=", line_); }
+                    else                      { tokens.emplace_back(TokenType::kBitOr,   "|",   line_); }
+                    break;
+                case '^':
+                    if (peek() == '^') {
+                        advance();
+                        if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kXorXorEq, "^^=", line_); }
+                        else               { tokens.emplace_back(TokenType::kXorXor,    "^^",  line_); }
+                    } else if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kBitXorEq, "^=", line_); }
+                    else                      { tokens.emplace_back(TokenType::kBitXor,  "^",   line_); }
+                    break;
+                case '~':
+                    tokens.emplace_back(TokenType::kBitNot, "~", line_);
                     break;
                 case '.':
                     if (peek() == '.') { advance(); tokens.emplace_back(TokenType::kDotDot, "..", line_); }

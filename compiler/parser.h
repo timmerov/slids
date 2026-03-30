@@ -141,12 +141,16 @@ private:
     std::unique_ptr<Stmt> parseStmt();
 
     // expression precedence levels
-    std::unique_ptr<Expr> parseExpr();       // logical or
-    std::unique_ptr<Expr> parseLogicalAnd(); // logical and
-    std::unique_ptr<Expr> parseEquality();   // == !=
-    std::unique_ptr<Expr> parseRelational(); // < > <= >=
-    std::unique_ptr<Expr> parseAddSub();     // + -
-    std::unique_ptr<Expr> parseMulDiv();     // * / %
-    std::unique_ptr<Expr> parseUnary();      // ! -
+    std::unique_ptr<Expr> parseExpr();        // logical or, xor
+    std::unique_ptr<Expr> parseLogicalAnd();  // logical and
+    std::unique_ptr<Expr> parseBitOr();       // bitwise or
+    std::unique_ptr<Expr> parseBitXor();      // bitwise xor
+    std::unique_ptr<Expr> parseBitAnd();      // bitwise and
+    std::unique_ptr<Expr> parseEquality();    // == !=
+    std::unique_ptr<Expr> parseRelational();  // < > <= >=
+    std::unique_ptr<Expr> parseShift();       // << >>
+    std::unique_ptr<Expr> parseAddSub();      // + -
+    std::unique_ptr<Expr> parseMulDiv();      // * / %
+    std::unique_ptr<Expr> parseUnary();       // ! ~ -
     std::unique_ptr<Expr> parsePrimary();
 };
