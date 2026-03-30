@@ -33,6 +33,13 @@ struct BinaryExpr : Expr {
         : op(std::move(op)), left(std::move(l)), right(std::move(r)) {}
 };
 
+struct CallExpr : Expr {
+    std::string callee;
+    std::vector<std::unique_ptr<Expr>> args;
+    CallExpr(std::string callee, std::vector<std::unique_ptr<Expr>> args)
+        : callee(std::move(callee)), args(std::move(args)) {}
+};
+
 struct UnaryExpr : Expr {
     std::string op;
     std::unique_ptr<Expr> operand;
@@ -62,7 +69,7 @@ struct AssignStmt : Stmt {
 };
 
 struct ReturnStmt : Stmt {
-    std::unique_ptr<Expr> value;
+    std::unique_ptr<Expr> value; // may be null for void return
     ReturnStmt(std::unique_ptr<Expr> v) : value(std::move(v)) {}
 };
 
@@ -104,7 +111,7 @@ struct ContinueStmt : Stmt {};
 struct FunctionDef {
     std::string return_type;
     std::string name;
-    std::vector<std::pair<std::string, std::string>> params;
+    std::vector<std::pair<std::string, std::string>> params; // type, name
     std::unique_ptr<BlockStmt> body;
 };
 

@@ -4,6 +4,7 @@
 #include <ostream>
 #include <map>
 #include <vector>
+#include <functional>
 
 class Codegen {
 public:
@@ -20,15 +21,19 @@ private:
     std::map<std::string, std::string> locals_;
     std::vector<std::pair<std::string, std::string>> string_constants_;
 
-    // break/continue targets for current loop
+    // function name -> return type
+    std::map<std::string, std::string> func_return_types_;
+
     std::string break_label_;
     std::string continue_label_;
 
     void collectStringConstants();
+    void collectFunctionSignatures();
     void emitFunction(const FunctionDef& fn);
     void emitBlock(const BlockStmt& block);
     void emitStmt(const Stmt& stmt);
     std::string emitExpr(const Expr& expr);
     std::string newTmp();
     std::string newLabel(const std::string& prefix);
+    std::string llvmType(const std::string& slids_type);
 };

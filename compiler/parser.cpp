@@ -59,6 +59,17 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     }
     if (t.type == TokenType::kIdentifier) {
         advance();
+        // function call expression: name(args)
+        if (peek().type == TokenType::kLParen) {
+            advance();
+            std::vector<std::unique_ptr<Expr>> args;
+            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                args.push_back(parseExpr());
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kRParen, "expected ')'");
+            return std::make_unique<CallExpr>(t.value, std::move(args));
+        }
         return std::make_unique<VarExpr>(t.value);
     }
     if (t.type == TokenType::kLParen) {
@@ -162,6 +173,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     // return
     if (t.type == TokenType::kReturn) {
         advance();
+        if (peek().type == TokenType::kSemicolon) {
+            advance();
+            return std::make_unique<ReturnStmt>(nullptr);
+        }
         auto expr = parseExpr();
         expect(TokenType::kSemicolon, "expected ';'");
         return std::make_unique<ReturnStmt>(std::move(expr));
@@ -240,14 +255,15 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         return std::make_unique<VarDeclStmt>(type, name, std::move(init));
     }
 
-    // identifier — assignment or function call
+    // identifier — assignment or function call statement
     if (t.type == TokenType::kIdentifier) {
         std::string name = t.value;
         advance();
 
         if (peek().type == TokenType::kLParen) {
-            advance();
+            // parse as expression then wrap in CallStmt
             std::vector<std::unique_ptr<Expr>> args;
+            advance();
             while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                 args.push_back(parseExpr());
                 if (peek().type == TokenType::kComma) advance();
@@ -277,6 +293,12 @@ FunctionDef Parser::parseFunctionDef() {
     fn.return_type = parseTypeName();
     fn.name = expect(TokenType::kIdentifier, "expected function name").value;
     expect(TokenType::kLParen, "expected '('");
+    while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+        std::string type = parseTypeName();
+        std::string name = expect(TokenType::kIdentifier, "expected parameter name").value;
+        fn.params.emplace_back(type, name);
+        if (peek().type == TokenType::kComma) advance();
+    }
     expect(TokenType::kRParen, "expected ')'");
     fn.body = parseBlock();
     return fn;

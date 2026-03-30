@@ -14,6 +14,20 @@ std::string Codegen::newLabel(const std::string& prefix) {
     return prefix + std::to_string(label_counter_++);
 }
 
+std::string Codegen::llvmType(const std::string& t) {
+    if (t == "int32" || t == "int" || t == "bool") return "i32";
+    if (t == "int64") return "i64";
+    if (t == "int16") return "i16";
+    if (t == "int8")  return "i8";
+    if (t == "void")  return "void";
+    return "i32"; // default
+}
+
+void Codegen::collectFunctionSignatures() {
+    for (auto& fn : program_.functions)
+        func_return_types_[fn.name] = fn.return_type;
+}
+
 static std::string llvmEscape(const std::string& s, int& len) {
     std::string result;
     len = 0;
@@ -62,6 +76,7 @@ void Codegen::collectStringConstants() {
 void Codegen::emit() {
     out_ << "target triple = \"x86_64-pc-linux-gnu\"\n\n";
 
+    collectFunctionSignatures();
     collectStringConstants();
 
     for (auto& [label, value] : string_constants_) {
@@ -89,9 +104,25 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     break_label_ = "";
     continue_label_ = "";
 
-    std::string ret_type = (fn.return_type == "int32") ? "i32" : "void";
-    out_ << "define " << ret_type << " @" << fn.name << "() {\n";
+    std::string ret_type = llvmType(fn.return_type);
+
+    // build parameter list
+    std::string param_str;
+    for (int i = 0; i < (int)fn.params.size(); i++) {
+        if (i > 0) param_str += ", ";
+        param_str += llvmType(fn.params[i].first) + " %arg_" + fn.params[i].second;
+    }
+
+    out_ << "define " << ret_type << " @" << fn.name << "(" << param_str << ") {\n";
     out_ << "entry:\n";
+
+    // alloca and store each parameter so they can be reassigned
+    for (auto& [type, name] : fn.params) {
+        std::string reg = "%var_" + name;
+        out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
+        out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
+        locals_[name] = reg;
+    }
 
     emitBlock(*fn.body);
 
@@ -195,6 +226,27 @@ std::string Codegen::emitExpr(const Expr& expr) {
         return tmp;
     }
 
+    if (auto* call = dynamic_cast<const CallExpr*>(&expr)) {
+        auto it = func_return_types_.find(call->callee);
+        if (it == func_return_types_.end())
+            throw std::runtime_error("undefined function: " + call->callee);
+
+        std::string ret_type = llvmType(it->second);
+
+        // evaluate args
+        std::string arg_str;
+        for (int i = 0; i < (int)call->args.size(); i++) {
+            if (i > 0) arg_str += ", ";
+            std::string val = emitExpr(*call->args[i]);
+            arg_str += "i32 " + val;
+        }
+
+        std::string tmp = newTmp();
+        out_ << "    " << tmp << " = call " << ret_type << " @" << call->callee
+             << "(" << arg_str << ")\n";
+        return tmp;
+    }
+
     if (auto* s = dynamic_cast<const StringLiteralExpr*>(&expr)) {
         std::string label = "@.str" + std::to_string(str_counter_++);
         std::string full = s->value + "\n";
@@ -228,8 +280,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* ret = dynamic_cast<const ReturnStmt*>(&stmt)) {
-        std::string val = emitExpr(*ret->value);
-        out_ << "    ret i32 " << val << "\n";
+        if (ret->value) {
+            std::string val = emitExpr(*ret->value);
+            out_ << "    ret i32 " << val << "\n";
+        } else {
+            out_ << "    ret void\n";
+        }
         return;
     }
 
