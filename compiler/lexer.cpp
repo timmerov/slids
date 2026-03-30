@@ -132,11 +132,26 @@ std::vector<Token> Lexer::tokenize() {
                 case '}': tokens.emplace_back(TokenType::kRBrace,    "}", line_); break;
                 case ';': tokens.emplace_back(TokenType::kSemicolon, ";", line_); break;
                 case ',': tokens.emplace_back(TokenType::kComma,     ",", line_); break;
-                case '+': tokens.emplace_back(TokenType::kPlus,      "+", line_); break;
-                case '-': tokens.emplace_back(TokenType::kMinus,     "-", line_); break;
-                case '*': tokens.emplace_back(TokenType::kStar,      "*", line_); break;
-                case '/': tokens.emplace_back(TokenType::kSlash,     "/", line_); break;
-                case '%': tokens.emplace_back(TokenType::kPercent,   "%", line_); break;
+                case '+':
+                    if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kPlusEq,    "+=", line_); }
+                    else               { tokens.emplace_back(TokenType::kPlus,      "+",  line_); }
+                    break;
+                case '-':
+                    if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kMinusEq,   "-=", line_); }
+                    else               { tokens.emplace_back(TokenType::kMinus,     "-",  line_); }
+                    break;
+                case '*':
+                    if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kStarEq,    "*=", line_); }
+                    else               { tokens.emplace_back(TokenType::kStar,      "*",  line_); }
+                    break;
+                case '/':
+                    if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kSlashEq,   "/=", line_); }
+                    else               { tokens.emplace_back(TokenType::kSlash,     "/",  line_); }
+                    break;
+                case '%':
+                    if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kPercentEq, "%=", line_); }
+                    else               { tokens.emplace_back(TokenType::kPercent,   "%",  line_); }
+                    break;
                 case '!':
                     if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kNotEq, "!=", line_); }
                     else               { tokens.emplace_back(TokenType::kNot, "!", line_); }

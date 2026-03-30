@@ -55,6 +55,11 @@ enum class TokenType {
 
     // assignment
     kEquals,
+    kPlusEq,
+    kMinusEq,
+    kStarEq,
+    kSlashEq,
+    kPercentEq,
 
     // punctuation
     kLParen,

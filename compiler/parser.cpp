@@ -1,5 +1,6 @@
 #include "parser.h"
 #include <stdexcept>
+#include <map>
 
 Parser::Parser(std::vector<Token> tokens)
     : tokens_(std::move(tokens)), pos_(0) {}
@@ -277,6 +278,24 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             advance();
             auto value = parseExpr();
             expect(TokenType::kSemicolon, "expected ';'");
+            return std::make_unique<AssignStmt>(name, std::move(value));
+        }
+
+        // compound assignment: desugar x += expr into x = x + expr
+        static const std::map<TokenType, std::string> compound_ops = {
+            {TokenType::kPlusEq,    "+"},
+            {TokenType::kMinusEq,   "-"},
+            {TokenType::kStarEq,    "*"},
+            {TokenType::kSlashEq,   "/"},
+            {TokenType::kPercentEq, "%"},
+        };
+        auto it = compound_ops.find(peek().type);
+        if (it != compound_ops.end()) {
+            advance();
+            auto rhs = parseExpr();
+            expect(TokenType::kSemicolon, "expected ';'");
+            auto lhs = std::make_unique<VarExpr>(name);
+            auto value = std::make_unique<BinaryExpr>(it->second, std::move(lhs), std::move(rhs));
             return std::make_unique<AssignStmt>(name, std::move(value));
         }
 
