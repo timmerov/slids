@@ -73,7 +73,8 @@ void Codegen::emit() {
     out_ << "\n";
     out_ << "declare i32 @printf(ptr noundef, ...)\n\n";
     out_ << "@.fmt_int = private constant [4 x i8] c\"%d\\0A\\00\"\n";
-    out_ << "@.fmt_int_nonl = private constant [3 x i8] c\"%d\\00\"\n\n";
+    out_ << "@.fmt_int_nonl = private constant [3 x i8] c\"%d\\00\"\n";
+    out_ << "@.str_newline = private constant [2 x i8] c\"\\0A\\00\"\n\n";
 
     str_counter_ = 0;
 
@@ -364,8 +365,18 @@ void Codegen::emitStmt(const Stmt& stmt) {
     if (auto* call = dynamic_cast<const CallStmt*>(&stmt)) {
         if (call->callee == "println" || call->callee == "print") {
             bool newline = (call->callee == "println");
-            if (call->args.size() != 1)
-                throw std::runtime_error(call->callee + " expects exactly 1 argument");
+            if (call->args.size() > 1)
+                throw std::runtime_error(call->callee + " expects 0 or 1 arguments");
+
+            // println() with no args — just a newline
+            if (call->args.size() == 0) {
+                if (!newline)
+                    throw std::runtime_error("print() requires an argument");
+                std::string tmp = newTmp();
+                out_ << "    " << tmp << " = getelementptr [2 x i8], ptr @.str_newline, i32 0, i32 0\n";
+                out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
+                return;
+            }
 
             if (auto* s = dynamic_cast<const StringLiteralExpr*>(call->args[0].get())) {
                 std::string label = "@.str" + std::to_string(str_counter_++);
