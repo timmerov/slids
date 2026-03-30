@@ -9,6 +9,11 @@ char Lexer::peek() {
     return source_[pos_];
 }
 
+char Lexer::peek2() {
+    if (pos_ + 1 >= (int)source_.size()) return '\0';
+    return source_[pos_ + 1];
+}
+
 char Lexer::advance() {
     char c = source_[pos_++];
     if (c == '\n') line_++;
@@ -20,21 +25,17 @@ void Lexer::skipWhitespaceAndComments() {
         char c = peek();
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
             advance();
-        } else if (c == '/' && pos_ + 1 < (int)source_.size()) {
-            if (source_[pos_ + 1] == '/') {
-                while (pos_ < (int)source_.size() && peek() != '\n')
-                    advance();
-            } else if (source_[pos_ + 1] == '*') {
-                advance(); advance();
-                while (pos_ + 1 < (int)source_.size()) {
-                    if (peek() == '*' && source_[pos_ + 1] == '/') {
-                        advance(); advance();
-                        break;
-                    }
-                    advance();
+        } else if (c == '/' && peek2() == '/') {
+            while (pos_ < (int)source_.size() && peek() != '\n')
+                advance();
+        } else if (c == '/' && peek2() == '*') {
+            advance(); advance();
+            while (pos_ + 1 < (int)source_.size()) {
+                if (peek() == '*' && peek2() == '/') {
+                    advance(); advance();
+                    break;
                 }
-            } else {
-                break;
+                advance();
             }
         } else {
             break;
@@ -43,7 +44,7 @@ void Lexer::skipWhitespaceAndComments() {
 }
 
 Token Lexer::readString() {
-    advance(); // consume opening "
+    advance();
     std::string value;
     while (pos_ < (int)source_.size() && peek() != '"') {
         char c = advance();
@@ -79,23 +80,30 @@ Token Lexer::readIdentifierOrKeyword() {
     while (pos_ < (int)source_.size() && (isalnum(peek()) || peek() == '_'))
         value += advance();
 
-    if (value == "int")     return Token(TokenType::kInt,     value, line_);
-    if (value == "int8")    return Token(TokenType::kInt8,    value, line_);
-    if (value == "int16")   return Token(TokenType::kInt16,   value, line_);
-    if (value == "int32")   return Token(TokenType::kInt32,   value, line_);
-    if (value == "int64")   return Token(TokenType::kInt64,   value, line_);
-    if (value == "uint")    return Token(TokenType::kUint,    value, line_);
-    if (value == "uint8")   return Token(TokenType::kUint8,   value, line_);
-    if (value == "uint16")  return Token(TokenType::kUint16,  value, line_);
-    if (value == "uint32")  return Token(TokenType::kUint32,  value, line_);
-    if (value == "uint64")  return Token(TokenType::kUint64,  value, line_);
-    if (value == "float32") return Token(TokenType::kFloat32, value, line_);
-    if (value == "float64") return Token(TokenType::kFloat64, value, line_);
-    if (value == "bool")    return Token(TokenType::kBool,    value, line_);
-    if (value == "void")    return Token(TokenType::kVoid,    value, line_);
-    if (value == "return")  return Token(TokenType::kReturn,  value, line_);
-    if (value == "true")    return Token(TokenType::kTrue,    value, line_);
-    if (value == "false")   return Token(TokenType::kFalse,   value, line_);
+    if (value == "int")      return Token(TokenType::kInt,      value, line_);
+    if (value == "int8")     return Token(TokenType::kInt8,     value, line_);
+    if (value == "int16")    return Token(TokenType::kInt16,    value, line_);
+    if (value == "int32")    return Token(TokenType::kInt32,    value, line_);
+    if (value == "int64")    return Token(TokenType::kInt64,    value, line_);
+    if (value == "uint")     return Token(TokenType::kUint,     value, line_);
+    if (value == "uint8")    return Token(TokenType::kUint8,    value, line_);
+    if (value == "uint16")   return Token(TokenType::kUint16,   value, line_);
+    if (value == "uint32")   return Token(TokenType::kUint32,   value, line_);
+    if (value == "uint64")   return Token(TokenType::kUint64,   value, line_);
+    if (value == "float32")  return Token(TokenType::kFloat32,  value, line_);
+    if (value == "float64")  return Token(TokenType::kFloat64,  value, line_);
+    if (value == "bool")     return Token(TokenType::kBool,     value, line_);
+    if (value == "void")     return Token(TokenType::kVoid,     value, line_);
+    if (value == "return")   return Token(TokenType::kReturn,   value, line_);
+    if (value == "true")     return Token(TokenType::kTrue,     value, line_);
+    if (value == "false")    return Token(TokenType::kFalse,    value, line_);
+    if (value == "if")       return Token(TokenType::kIf,       value, line_);
+    if (value == "else")     return Token(TokenType::kElse,     value, line_);
+    if (value == "while")    return Token(TokenType::kWhile,    value, line_);
+    if (value == "for")      return Token(TokenType::kFor,      value, line_);
+    if (value == "in")       return Token(TokenType::kIn,       value, line_);
+    if (value == "break")    return Token(TokenType::kBreak,    value, line_);
+    if (value == "continue") return Token(TokenType::kContinue, value, line_);
 
     return Token(TokenType::kIdentifier, value, line_);
 }
@@ -129,8 +137,35 @@ std::vector<Token> Lexer::tokenize() {
                 case '*': tokens.emplace_back(TokenType::kStar,      "*", line_); break;
                 case '/': tokens.emplace_back(TokenType::kSlash,     "/", line_); break;
                 case '%': tokens.emplace_back(TokenType::kPercent,   "%", line_); break;
-                case '=': tokens.emplace_back(TokenType::kEquals,    "=", line_); break;
-                default:  tokens.emplace_back(TokenType::kUnknown,   std::string(1, c), line_); break;
+                case '!':
+                    if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kNotEq, "!=", line_); }
+                    else               { tokens.emplace_back(TokenType::kNot, "!", line_); }
+                    break;
+                case '=':
+                    if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kEqEq,  "==", line_); }
+                    else               { tokens.emplace_back(TokenType::kEquals, "=", line_); }
+                    break;
+                case '<':
+                    if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kLtEq, "<=", line_); }
+                    else               { tokens.emplace_back(TokenType::kLt,   "<",  line_); }
+                    break;
+                case '>':
+                    if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kGtEq, ">=", line_); }
+                    else               { tokens.emplace_back(TokenType::kGt,   ">",  line_); }
+                    break;
+                case '&':
+                    if (peek() == '&') { advance(); tokens.emplace_back(TokenType::kAnd, "&&", line_); }
+                    else               { tokens.emplace_back(TokenType::kUnknown, "&", line_); }
+                    break;
+                case '|':
+                    if (peek() == '|') { advance(); tokens.emplace_back(TokenType::kOr, "||", line_); }
+                    else               { tokens.emplace_back(TokenType::kUnknown, "|", line_); }
+                    break;
+                case '.':
+                    if (peek() == '.') { advance(); tokens.emplace_back(TokenType::kDotDot, "..", line_); }
+                    else               { tokens.emplace_back(TokenType::kUnknown, ".", line_); }
+                    break;
+                default:  tokens.emplace_back(TokenType::kUnknown, std::string(1, c), line_); break;
             }
         }
     }

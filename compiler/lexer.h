@@ -14,6 +14,7 @@ private:
     int line_;
 
     char peek();
+    char peek2();
     char advance();
     void skipWhitespaceAndComments();
     Token readString();

@@ -25,13 +25,35 @@ enum class TokenType {
     kReturn,
     kTrue,
     kFalse,
+    kIf,
+    kElse,
+    kWhile,
+    kFor,
+    kIn,
+    kBreak,
+    kContinue,
 
-    // operators
+    // comparison operators
+    kEqEq,
+    kNotEq,
+    kLt,
+    kGt,
+    kLtEq,
+    kGtEq,
+
+    // logical operators
+    kAnd,
+    kOr,
+    kNot,
+
+    // arithmetic operators
     kPlus,
     kMinus,
     kStar,
     kSlash,
     kPercent,
+
+    // assignment
     kEquals,
 
     // punctuation
@@ -41,6 +63,7 @@ enum class TokenType {
     kRBrace,
     kSemicolon,
     kComma,
+    kDotDot,
 
     kEof,
     kUnknown,

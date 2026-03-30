@@ -4,7 +4,7 @@
 #include <vector>
 #include <memory>
 
-// --- AST nodes ---
+// --- Expressions ---
 
 struct Expr {
     virtual ~Expr() = default;
@@ -32,6 +32,15 @@ struct BinaryExpr : Expr {
     BinaryExpr(std::string op, std::unique_ptr<Expr> l, std::unique_ptr<Expr> r)
         : op(std::move(op)), left(std::move(l)), right(std::move(r)) {}
 };
+
+struct UnaryExpr : Expr {
+    std::string op;
+    std::unique_ptr<Expr> operand;
+    UnaryExpr(std::string op, std::unique_ptr<Expr> operand)
+        : op(std::move(op)), operand(std::move(operand)) {}
+};
+
+// --- Statements ---
 
 struct Stmt {
     virtual ~Stmt() = default;
@@ -64,11 +73,39 @@ struct CallStmt : Stmt {
         : callee(std::move(callee)), args(std::move(args)) {}
 };
 
+struct BlockStmt : Stmt {
+    std::vector<std::unique_ptr<Stmt>> stmts;
+};
+
+struct IfStmt : Stmt {
+    std::unique_ptr<Expr> cond;
+    std::unique_ptr<BlockStmt> then_block;
+    std::unique_ptr<BlockStmt> else_block; // may be null
+};
+
+struct WhileStmt : Stmt {
+    std::unique_ptr<Expr> cond;
+    std::unique_ptr<BlockStmt> body;
+};
+
+struct ForRangeStmt : Stmt {
+    std::string var_type;
+    std::string var_name;
+    std::unique_ptr<Expr> range_start;
+    std::unique_ptr<Expr> range_end;
+    std::unique_ptr<BlockStmt> body;
+};
+
+struct BreakStmt : Stmt {};
+struct ContinueStmt : Stmt {};
+
+// --- Top-level ---
+
 struct FunctionDef {
     std::string return_type;
     std::string name;
     std::vector<std::pair<std::string, std::string>> params;
-    std::vector<std::unique_ptr<Stmt>> body;
+    std::unique_ptr<BlockStmt> body;
 };
 
 struct Program {
@@ -93,10 +130,16 @@ private:
     std::string parseTypeName();
 
     FunctionDef parseFunctionDef();
+    std::unique_ptr<BlockStmt> parseBlock();
     std::unique_ptr<Stmt> parseStmt();
-    std::unique_ptr<Expr> parseExpr();
-    std::unique_ptr<Expr> parseAddSub();
-    std::unique_ptr<Expr> parseMulDiv();
-    std::unique_ptr<Expr> parseUnary();
+
+    // expression precedence levels
+    std::unique_ptr<Expr> parseExpr();       // logical or
+    std::unique_ptr<Expr> parseLogicalAnd(); // logical and
+    std::unique_ptr<Expr> parseEquality();   // == !=
+    std::unique_ptr<Expr> parseRelational(); // < > <= >=
+    std::unique_ptr<Expr> parseAddSub();     // + -
+    std::unique_ptr<Expr> parseMulDiv();     // * / %
+    std::unique_ptr<Expr> parseUnary();      // ! -
     std::unique_ptr<Expr> parsePrimary();
 };

@@ -3,41 +3,32 @@ LLC      = llc
 CXX      = g++
 LLCFLAGS = --filetype=obj --relocation-model=pic
 
-BIN_DIR  = ../bin
+BIN_DIR   = ../bin
+BUILD_DIR = ../build/sample
 
-.PHONY: all clean hello math1
+# --- add new samples here ---
+SAMPLES = hello math1 primes1
 
-all: hello math1
+.PHONY: all clean $(SAMPLES)
 
-# --- hello ---
+all: $(SAMPLES)
 
-hello: $(BIN_DIR)/hello
+define SAMPLE_RULES
+$(1): $(BIN_DIR)/$(1)
 
-$(BIN_DIR)/hello: ../build/sample/hello/hello.o
-	$(CXX) $< -o $@
+$(BIN_DIR)/$(1): $(BUILD_DIR)/$(1)/$(1).o
+	$(CXX) $$< -o $$@
 
-../build/sample/hello/hello.o: ../build/sample/hello/hello.ll
-	$(LLC) $(LLCFLAGS) $< -o $@
+$(BUILD_DIR)/$(1)/$(1).o: $(BUILD_DIR)/$(1)/$(1).ll
+	$(LLC) $(LLCFLAGS) $$< -o $$@
 
-../build/sample/hello/hello.ll: hello.sl $(SLIDSC)
-	$(SLIDSC) $< -o $@
+$(BUILD_DIR)/$(1)/$(1).ll: $(1).sl $(SLIDSC)
+	mkdir -p $(BUILD_DIR)/$(1)
+	$(SLIDSC) $$< -o $$@
+endef
 
-# --- math1 ---
-
-math1: $(BIN_DIR)/math1
-
-$(BIN_DIR)/math1: ../build/sample/math1/math1.o
-	$(CXX) $< -o $@
-
-../build/sample/math1/math1.o: ../build/sample/math1/math1.ll
-	$(LLC) $(LLCFLAGS) $< -o $@
-
-../build/sample/math1/math1.ll: math1.sl $(SLIDSC)
-	$(SLIDSC) $< -o $@
-
-# --- clean ---
+$(foreach s,$(SAMPLES),$(eval $(call SAMPLE_RULES,$(s))))
 
 clean:
-	rm -f \
-	    ../build/sample/hello/hello.ll ../build/sample/hello/hello.o $(BIN_DIR)/hello \
-	    ../build/sample/math1/math1.ll ../build/sample/math1/math1.o $(BIN_DIR)/math1
+	rm -rf $(BUILD_DIR)
+	rm -f $(addprefix $(BIN_DIR)/, $(SAMPLES))
