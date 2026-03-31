@@ -225,7 +225,7 @@ std::vector<Token> Lexer::tokenize() {
                     break;
                 case '.':
                     if (peek() == '.') { advance(); tokens.emplace_back(TokenType::kDotDot, "..", line_); }
-                    else               { tokens.emplace_back(TokenType::kUnknown, ".", line_); }
+                    else               { tokens.emplace_back(TokenType::kDot, ".", line_); }
                     break;
                 default:  tokens.emplace_back(TokenType::kUnknown, std::string(1, c), line_); break;
             }

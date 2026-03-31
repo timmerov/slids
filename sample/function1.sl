@@ -4,6 +4,7 @@ int32 add(int32 a, int32 b) {
 }
 
 int32 main() {
+    println("expected: 7");
     println(add(3, 4));
     return 0;
 }

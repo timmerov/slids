@@ -8,6 +8,7 @@ int32 main() {
         byte = byte >> 1;
     }
 
+    println("expected: 53");
     println(reversed);
     return 0;
 }

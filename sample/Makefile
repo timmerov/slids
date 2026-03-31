@@ -7,7 +7,8 @@ BIN_DIR   = ../bin
 BUILD_DIR = ../build/sample
 
 # --- add new samples here ---
-SAMPLES = hello function1 math1 math2 primes1 reverse_bits
+SAMPLES = hello counter function1 math1 math2 primes1 \
+	reverse_bits
 
 .PHONY: all clean $(SAMPLES)
 

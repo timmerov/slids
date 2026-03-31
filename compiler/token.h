@@ -91,6 +91,7 @@ enum class TokenType {
     kRBrace,
     kSemicolon,
     kComma,
+    kDot,
     kDotDot,
 
     kEof,

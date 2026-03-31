@@ -47,6 +47,24 @@ struct UnaryExpr : Expr {
         : op(std::move(op)), operand(std::move(operand)) {}
 };
 
+// field access: obj.field_
+struct FieldAccessExpr : Expr {
+    std::unique_ptr<Expr> object;
+    std::string field;
+    FieldAccessExpr(std::unique_ptr<Expr> obj, std::string field)
+        : object(std::move(obj)), field(std::move(field)) {}
+};
+
+// method call: obj.method(args)
+struct MethodCallExpr : Expr {
+    std::unique_ptr<Expr> object;
+    std::string method;
+    std::vector<std::unique_ptr<Expr>> args;
+    MethodCallExpr(std::unique_ptr<Expr> obj, std::string method,
+                   std::vector<std::unique_ptr<Expr>> args)
+        : object(std::move(obj)), method(std::move(method)), args(std::move(args)) {}
+};
+
 // --- Statements ---
 
 struct Stmt {
@@ -56,9 +74,13 @@ struct Stmt {
 struct VarDeclStmt : Stmt {
     std::string type;
     std::string name;
-    std::unique_ptr<Expr> init;
-    VarDeclStmt(std::string type, std::string name, std::unique_ptr<Expr> init)
-        : type(std::move(type)), name(std::move(name)), init(std::move(init)) {}
+    std::unique_ptr<Expr> init;           // null for default construction
+    std::vector<std::unique_ptr<Expr>> ctor_args; // for Counter c(5)
+    VarDeclStmt(std::string type, std::string name,
+                std::unique_ptr<Expr> init,
+                std::vector<std::unique_ptr<Expr>> ctor_args = {})
+        : type(std::move(type)), name(std::move(name)),
+          init(std::move(init)), ctor_args(std::move(ctor_args)) {}
 };
 
 struct AssignStmt : Stmt {
@@ -66,6 +88,16 @@ struct AssignStmt : Stmt {
     std::unique_ptr<Expr> value;
     AssignStmt(std::string name, std::unique_ptr<Expr> value)
         : name(std::move(name)), value(std::move(value)) {}
+};
+
+// field assignment: obj.field_ = expr
+struct FieldAssignStmt : Stmt {
+    std::unique_ptr<Expr> object;
+    std::string field;
+    std::unique_ptr<Expr> value;
+    FieldAssignStmt(std::unique_ptr<Expr> obj, std::string field,
+                    std::unique_ptr<Expr> value)
+        : object(std::move(obj)), field(std::move(field)), value(std::move(value)) {}
 };
 
 struct ReturnStmt : Stmt {
@@ -78,6 +110,16 @@ struct CallStmt : Stmt {
     std::vector<std::unique_ptr<Expr>> args;
     CallStmt(std::string callee, std::vector<std::unique_ptr<Expr>> args)
         : callee(std::move(callee)), args(std::move(args)) {}
+};
+
+// method call as statement: obj.method(args);
+struct MethodCallStmt : Stmt {
+    std::unique_ptr<Expr> object;
+    std::string method;
+    std::vector<std::unique_ptr<Expr>> args;
+    MethodCallStmt(std::unique_ptr<Expr> obj, std::string method,
+                   std::vector<std::unique_ptr<Expr>> args)
+        : object(std::move(obj)), method(std::move(method)), args(std::move(args)) {}
 };
 
 struct BlockStmt : Stmt {
@@ -108,14 +150,35 @@ struct ContinueStmt : Stmt {};
 
 // --- Top-level ---
 
+struct FieldDef {
+    std::string type;
+    std::string name;
+    std::unique_ptr<Expr> default_val; // may be null
+};
+
+struct MethodDef {
+    std::string return_type;
+    std::string name;
+    std::vector<std::pair<std::string, std::string>> params;
+    std::unique_ptr<BlockStmt> body;
+};
+
+struct SlidDef {
+    std::string name;
+    std::vector<FieldDef> fields;
+    std::unique_ptr<BlockStmt> ctor_body; // may be null
+    std::vector<MethodDef> methods;
+};
+
 struct FunctionDef {
     std::string return_type;
     std::string name;
-    std::vector<std::pair<std::string, std::string>> params; // type, name
+    std::vector<std::pair<std::string, std::string>> params;
     std::unique_ptr<BlockStmt> body;
 };
 
 struct Program {
+    std::vector<SlidDef> slids;
     std::vector<FunctionDef> functions;
 };
 
@@ -134,23 +197,27 @@ private:
     Token& advance();
     Token& expect(TokenType type, const std::string& msg);
     bool isTypeName(const Token& t);
+    bool isUserTypeName(const Token& t);
     std::string parseTypeName();
 
+    SlidDef parseSlidDef();
+    MethodDef parseMethodDef();
     FunctionDef parseFunctionDef();
     std::unique_ptr<BlockStmt> parseBlock();
     std::unique_ptr<Stmt> parseStmt();
 
     // expression precedence levels
-    std::unique_ptr<Expr> parseExpr();        // logical or, xor
-    std::unique_ptr<Expr> parseLogicalAnd();  // logical and
-    std::unique_ptr<Expr> parseBitOr();       // bitwise or
-    std::unique_ptr<Expr> parseBitXor();      // bitwise xor
-    std::unique_ptr<Expr> parseBitAnd();      // bitwise and
-    std::unique_ptr<Expr> parseEquality();    // == !=
-    std::unique_ptr<Expr> parseRelational();  // < > <= >=
-    std::unique_ptr<Expr> parseShift();       // << >>
-    std::unique_ptr<Expr> parseAddSub();      // + -
-    std::unique_ptr<Expr> parseMulDiv();      // * / %
-    std::unique_ptr<Expr> parseUnary();       // ! ~ -
+    std::unique_ptr<Expr> parseExpr();
+    std::unique_ptr<Expr> parseLogicalAnd();
+    std::unique_ptr<Expr> parseBitOr();
+    std::unique_ptr<Expr> parseBitXor();
+    std::unique_ptr<Expr> parseBitAnd();
+    std::unique_ptr<Expr> parseEquality();
+    std::unique_ptr<Expr> parseRelational();
+    std::unique_ptr<Expr> parseShift();
+    std::unique_ptr<Expr> parseAddSub();
+    std::unique_ptr<Expr> parseMulDiv();
+    std::unique_ptr<Expr> parseUnary();
     std::unique_ptr<Expr> parsePrimary();
+    std::unique_ptr<Expr> parsePostfix(std::unique_ptr<Expr> base);
 };
