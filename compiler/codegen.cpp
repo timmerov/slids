@@ -646,6 +646,34 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* u = dynamic_cast<const UnaryExpr*>(&expr)) {
+        // pre/post increment/decrement — handle before evaluating operand
+        if (u->op == "pre++" || u->op == "pre--") {
+            auto* ve = dynamic_cast<const VarExpr*>(u->operand.get());
+            if (!ve) throw std::runtime_error("pre++/-- requires a variable");
+            auto it = locals_.find(ve->name);
+            if (it == locals_.end()) throw std::runtime_error("undefined variable: " + ve->name);
+            std::string old = newTmp();
+            out_ << "    " << old << " = load i32, ptr " << it->second << "\n";
+            std::string new_val = newTmp();
+            std::string instr = (u->op == "pre++") ? "add" : "sub";
+            out_ << "    " << new_val << " = " << instr << " i32 " << old << ", 1\n";
+            out_ << "    store i32 " << new_val << ", ptr " << it->second << "\n";
+            return new_val;
+        }
+        if (u->op == "post++" || u->op == "post--") {
+            auto* ve = dynamic_cast<const VarExpr*>(u->operand.get());
+            if (!ve) throw std::runtime_error("post++/-- requires a variable");
+            auto it = locals_.find(ve->name);
+            if (it == locals_.end()) throw std::runtime_error("undefined variable: " + ve->name);
+            std::string old = newTmp();
+            out_ << "    " << old << " = load i32, ptr " << it->second << "\n";
+            std::string new_val = newTmp();
+            std::string instr = (u->op == "post++") ? "add" : "sub";
+            out_ << "    " << new_val << " = " << instr << " i32 " << old << ", 1\n";
+            out_ << "    store i32 " << new_val << ", ptr " << it->second << "\n";
+            return old;
+        }
+        // other unary ops — evaluate operand first
         std::string val = emitExpr(*u->operand);
         std::string tmp = newTmp();
         if (u->op == "!") {

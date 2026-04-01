@@ -87,20 +87,28 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
 
 // postfix: handle .field and .method(args) chaining
 std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
-    while (peek().type == TokenType::kDot) {
-        advance(); // consume '.'
-        std::string member = expect(TokenType::kIdentifier, "expected field or method name").value;
-        if (peek().type == TokenType::kLParen) {
+    while (true) {
+        if (peek().type == TokenType::kDot) {
             advance();
-            std::vector<std::unique_ptr<Expr>> args;
-            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
-                args.push_back(parseExpr());
-                if (peek().type == TokenType::kComma) advance();
+            std::string member = expect(TokenType::kIdentifier, "expected field or method name").value;
+            if (peek().type == TokenType::kLParen) {
+                advance();
+                std::vector<std::unique_ptr<Expr>> args;
+                while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                    args.push_back(parseExpr());
+                    if (peek().type == TokenType::kComma) advance();
+                }
+                expect(TokenType::kRParen, "expected ')'");
+                base = std::make_unique<MethodCallExpr>(std::move(base), member, std::move(args));
+            } else {
+                base = std::make_unique<FieldAccessExpr>(std::move(base), member);
             }
-            expect(TokenType::kRParen, "expected ')'");
-            base = std::make_unique<MethodCallExpr>(std::move(base), member, std::move(args));
+        } else if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
+            std::string op = (peek().type == TokenType::kPlusPlus) ? "post++" : "post--";
+            advance();
+            base = std::make_unique<UnaryExpr>(op, std::move(base));
         } else {
-            base = std::make_unique<FieldAccessExpr>(std::move(base), member);
+            break;
         }
     }
     return base;
@@ -119,6 +127,14 @@ std::unique_ptr<Expr> Parser::parseUnary() {
     if (peek().type == TokenType::kBitNot) {
         advance();
         return std::make_unique<UnaryExpr>("~", parseUnary());
+    }
+    // pre-increment/decrement: ++x, --x  (desugar to x += 1, returns new value)
+    if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
+        std::string op = (peek().type == TokenType::kPlusPlus) ? "+" : "-";
+        advance();
+        auto operand = parsePrimary();
+        // return x + 1 (or x - 1) — the store happens via UnaryExpr in codegen
+        return std::make_unique<UnaryExpr>(op == "+" ? "pre++" : "pre--", std::move(operand));
     }
     return parsePostfix(parsePrimary());
 }
@@ -389,6 +405,18 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             }
             throw std::runtime_error("Line " + std::to_string(peek().line)
                 + ": expected ';' after method call");
+        }
+
+        // post-increment/decrement statement: x++; x--;
+        if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
+            std::string op = (peek().type == TokenType::kPlusPlus) ? "+" : "-";
+            advance();
+            expect(TokenType::kSemicolon, "expected ';'");
+            // desugar to x = x + 1
+            auto lhs = std::make_unique<VarExpr>(name);
+            auto rhs = std::make_unique<BinaryExpr>(op, std::make_unique<VarExpr>(name),
+                                                        std::make_unique<IntLiteralExpr>(1));
+            return std::make_unique<AssignStmt>(name, std::move(rhs));
         }
 
         // function call statement

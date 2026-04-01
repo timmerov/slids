@@ -153,12 +153,14 @@ std::vector<Token> Lexer::tokenize() {
                 case ';': tokens.emplace_back(TokenType::kSemicolon, ";", line_); break;
                 case ',': tokens.emplace_back(TokenType::kComma,     ",", line_); break;
                 case '+':
-                    if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kPlusEq,    "+=", line_); }
-                    else               { tokens.emplace_back(TokenType::kPlus,      "+",  line_); }
+                    if (peek() == '+')      { advance(); tokens.emplace_back(TokenType::kPlusPlus,  "++", line_); }
+                    else if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kPlusEq,    "+=", line_); }
+                    else                    { tokens.emplace_back(TokenType::kPlus,      "+",  line_); }
                     break;
                 case '-':
-                    if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kMinusEq,   "-=", line_); }
-                    else               { tokens.emplace_back(TokenType::kMinus,     "-",  line_); }
+                    if (peek() == '-')      { advance(); tokens.emplace_back(TokenType::kMinusMinus, "--", line_); }
+                    else if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kMinusEq,   "-=", line_); }
+                    else                    { tokens.emplace_back(TokenType::kMinus,     "-",  line_); }
                     break;
                 case '*':
                     if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kStarEq,    "*=", line_); }

@@ -83,6 +83,8 @@ enum class TokenType {
     kStarEq,
     kSlashEq,
     kPercentEq,
+    kPlusPlus,
+    kMinusMinus,
 
     // punctuation
     kLParen,
