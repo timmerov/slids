@@ -35,14 +35,151 @@ static std::string llvmEscape(const std::string& s, int& len) {
 }
 
 void Codegen::collectFunctionSignatures() {
-    for (auto& fn : program_.functions)
+    for (auto& fn : program_.functions) {
         func_return_types_[fn.name] = fn.return_type;
-    // register class methods as mangled names
+
+        // recurse into all blocks to find nested function defs
+        std::function<void(const BlockStmt&)> findNested = [&](const BlockStmt& block) {
+            for (auto& stmt : block.stmts) {
+                if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
+                    std::string mangled = fn.name + "__" + nfs->def.name;
+                    func_return_types_[mangled] = nfs->def.return_type;
+                    func_return_types_[nfs->def.name] = nfs->def.return_type;
+                } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
+                    findNested(*f->body);
+                } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get())) {
+                    findNested(*w->body);
+                } else if (auto* i = dynamic_cast<const IfStmt*>(stmt.get())) {
+                    findNested(*i->then_block);
+                    if (i->else_block) findNested(*i->else_block);
+                }
+            }
+        };
+        findNested(*fn.body);
+    }
     for (auto& slid : program_.slids) {
         for (auto& m : slid.methods)
             func_return_types_[slid.name + "__" + m.name] = m.return_type;
     }
 }
+
+std::set<std::string> Codegen::collectCaptures(
+    const BlockStmt& body,
+    const std::set<std::string>& parent_locals,
+    const std::set<std::string>& own_params)
+{
+    std::set<std::string> captures;
+    std::function<void(const Stmt&)> scanStmt;
+    std::function<void(const Expr&)> scanExpr;
+
+    scanExpr = [&](const Expr& expr) {
+        if (auto* v = dynamic_cast<const VarExpr*>(&expr)) {
+            if (parent_locals.count(v->name) && !own_params.count(v->name))
+                captures.insert(v->name);
+        } else if (auto* b = dynamic_cast<const BinaryExpr*>(&expr)) {
+            scanExpr(*b->left); scanExpr(*b->right);
+        } else if (auto* u = dynamic_cast<const UnaryExpr*>(&expr)) {
+            scanExpr(*u->operand);
+        } else if (auto* c = dynamic_cast<const CallExpr*>(&expr)) {
+            for (auto& a : c->args) scanExpr(*a);
+        } else if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
+            scanExpr(*fa->object);
+        } else if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
+            scanExpr(*mc->object);
+            for (auto& a : mc->args) scanExpr(*a);
+        }
+    };
+
+    scanStmt = [&](const Stmt& stmt) {
+        if (auto* a = dynamic_cast<const AssignStmt*>(&stmt)) {
+            if (parent_locals.count(a->name) && !own_params.count(a->name))
+                captures.insert(a->name);
+            scanExpr(*a->value);
+        } else if (auto* d = dynamic_cast<const VarDeclStmt*>(&stmt)) {
+            if (d->init) scanExpr(*d->init);
+            for (auto& a : d->ctor_args) scanExpr(*a);
+        } else if (auto* r = dynamic_cast<const ReturnStmt*>(&stmt)) {
+            if (r->value) scanExpr(*r->value);
+        } else if (auto* cs = dynamic_cast<const CallStmt*>(&stmt)) {
+            for (auto& a : cs->args) scanExpr(*a);
+        } else if (auto* ms = dynamic_cast<const MethodCallStmt*>(&stmt)) {
+            scanExpr(*ms->object);
+            for (auto& a : ms->args) scanExpr(*a);
+        } else if (auto* fa = dynamic_cast<const FieldAssignStmt*>(&stmt)) {
+            scanExpr(*fa->object); scanExpr(*fa->value);
+        } else if (auto* b = dynamic_cast<const BlockStmt*>(&stmt)) {
+            for (auto& s : b->stmts) scanStmt(*s);
+        } else if (auto* i = dynamic_cast<const IfStmt*>(&stmt)) {
+            scanExpr(*i->cond);
+            for (auto& s : i->then_block->stmts) scanStmt(*s);
+            if (i->else_block) for (auto& s : i->else_block->stmts) scanStmt(*s);
+        } else if (auto* w = dynamic_cast<const WhileStmt*>(&stmt)) {
+            scanExpr(*w->cond);
+            for (auto& s : w->body->stmts) scanStmt(*s);
+        } else if (auto* f = dynamic_cast<const ForRangeStmt*>(&stmt)) {
+            scanExpr(*f->range_start); scanExpr(*f->range_end);
+            for (auto& s : f->body->stmts) scanStmt(*s);
+        } else if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) {
+            // don't recurse into nested function defs — they have their own scope
+            (void)nfs;
+        }
+    };
+
+    for (auto& stmt : body.stmts) scanStmt(*stmt);
+    return captures;
+}
+
+void Codegen::analyzeNestedFunctions(const FunctionDef& fn) {
+    // collect all locals declared anywhere in parent (including inside loops)
+    std::set<std::string> parent_locals;
+    for (auto& [type, name] : fn.params) parent_locals.insert(name);
+
+    std::function<void(const BlockStmt&)> collectLocals = [&](const BlockStmt& block) {
+        for (auto& stmt : block.stmts) {
+            if (auto* d = dynamic_cast<const VarDeclStmt*>(stmt.get()))
+                parent_locals.insert(d->name);
+            else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
+                parent_locals.insert(f->var_name);
+                collectLocals(*f->body);
+            } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get()))
+                collectLocals(*w->body);
+            else if (auto* i = dynamic_cast<const IfStmt*>(stmt.get())) {
+                collectLocals(*i->then_block);
+                if (i->else_block) collectLocals(*i->else_block);
+            }
+        }
+    };
+    collectLocals(*fn.body);
+
+    // find all nested function defs anywhere in body
+    std::function<void(const BlockStmt&)> findNested = [&](const BlockStmt& block) {
+        for (auto& stmt : block.stmts) {
+            if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
+                std::set<std::string> own_params;
+                for (auto& [type, name] : nfs->def.params) own_params.insert(name);
+
+                auto captures = collectCaptures(*nfs->def.body, parent_locals, own_params);
+
+                std::string mangled = fn.name + "__" + nfs->def.name;
+                NestedFuncInfo info;
+                info.mangled_name = mangled;
+                info.captures = captures;
+                info.parent_name = fn.name;
+                nested_info_[nfs->def.name] = info;
+                nested_info_[mangled] = info;
+            } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
+                findNested(*f->body);
+            } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get())) {
+                findNested(*w->body);
+            } else if (auto* i = dynamic_cast<const IfStmt*>(stmt.get())) {
+                findNested(*i->then_block);
+                if (i->else_block) findNested(*i->else_block);
+            }
+        }
+    };
+    findNested(*fn.body);
+}
+
 
 void Codegen::collectSlids() {
     for (auto& slid : program_.slids) {
@@ -94,7 +231,11 @@ void Codegen::emit() {
     collectSlids();
     collectStringConstants();
 
-    // emit struct types
+    // analyze nested functions for all top-level functions
+    for (auto& fn : program_.functions)
+        analyzeNestedFunctions(fn);
+
+    // emit struct types for classes
     for (auto& slid : program_.slids) {
         auto& info = slid_info_[slid.name];
         out_ << "%struct." << slid.name << " = type { ";
@@ -104,7 +245,12 @@ void Codegen::emit() {
         }
         out_ << " }\n";
     }
-    if (!program_.slids.empty()) out_ << "\n";
+
+    // emit frame struct types for functions with nested functions
+    for (auto& fn : program_.functions)
+        emitFrameStruct(fn);
+
+    if (!program_.slids.empty() || !program_.functions.empty()) out_ << "\n";
 
     // emit string constants
     for (auto& [label, value] : string_constants_) {
@@ -121,14 +267,128 @@ void Codegen::emit() {
 
     str_counter_ = 0;
 
-    // emit class methods
     for (auto& slid : program_.slids)
         emitSlidMethods(slid);
 
-    // emit free functions
     for (auto& fn : program_.functions)
         emitFunction(fn);
 }
+
+void Codegen::emitFrameStruct(const FunctionDef& fn) {
+    bool has_frame = false;
+    std::set<std::string> all_captures;
+
+    std::function<void(const BlockStmt&)> scan = [&](const BlockStmt& block) {
+        for (auto& stmt : block.stmts) {
+            if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
+                auto it = nested_info_.find(nfs->def.name);
+                if (it != nested_info_.end() && it->second.captures.size() >= 2) {
+                    has_frame = true;
+                    for (auto& c : it->second.captures)
+                        all_captures.insert(c);
+                }
+            } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
+                scan(*f->body);
+            } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get())) {
+                scan(*w->body);
+            } else if (auto* i = dynamic_cast<const IfStmt*>(stmt.get())) {
+                scan(*i->then_block);
+                if (i->else_block) scan(*i->else_block);
+            }
+        }
+    };
+    scan(*fn.body);
+
+    if (!has_frame) return;
+
+    out_ << "%frame." << fn.name << " = type { ";
+    bool first = true;
+    for (size_t i = 0; i < all_captures.size(); i++) {
+        if (!first) out_ << ", ";
+        out_ << "ptr";
+        first = false;
+    }
+    out_ << " }\n";
+}
+
+void Codegen::emitNestedFunction(
+    const NestedFunctionDef& fn,
+    const std::string& parent_name,
+    const NestedFuncInfo& info,
+    const std::map<std::string, std::string>& parent_locals,
+    const std::map<std::string, std::string>& parent_types)
+{
+    locals_.clear();
+    local_types_.clear();
+    tmp_counter_ = 0;
+    label_counter_ = 0;
+    break_label_ = "";
+    continue_label_ = "";
+    current_slid_ = "";
+    frame_ptr_reg_ = "";
+
+    std::string ret_type = llvmType(fn.return_type);
+    std::string mangled = parent_name + "__" + fn.name;
+
+    // build parameter list
+    std::string param_str;
+    std::string single_cap_var;
+
+    if (info.captures.size() == 0) {
+        // no parent param needed
+    } else if (info.captures.size() == 1) {
+        // pass single var ptr directly
+        single_cap_var = *info.captures.begin();
+        param_str = "ptr %cap_" + single_cap_var;
+    } else {
+        // pass frame struct ptr
+        param_str = "ptr %frame";
+        frame_ptr_reg_ = "%frame";
+    }
+
+    // add explicit params
+    for (auto& [type, name] : fn.params) {
+        if (!param_str.empty()) param_str += ", ";
+        param_str += llvmType(type) + " %arg_" + name;
+    }
+
+    out_ << "define " << ret_type << " @" << mangled << "(" << param_str << ") {\n";
+    out_ << "entry:\n";
+
+    // set up access to captured variables
+    if (info.captures.size() == 1) {
+        // single capture — the ptr is passed directly
+        locals_[single_cap_var] = "%cap_" + single_cap_var;
+    } else if (info.captures.size() >= 2) {
+        // multi-capture — extract ptrs from frame struct
+        // build ordered list of captures (must match frame struct order)
+        std::vector<std::string> ordered_caps(info.captures.begin(), info.captures.end());
+        for (int i = 0; i < (int)ordered_caps.size(); i++) {
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr %frame." << parent_name
+                 << ", ptr %frame, i32 0, i32 " << i << "\n";
+            std::string ptr = newTmp();
+            out_ << "    " << ptr << " = load ptr, ptr " << gep << "\n";
+            locals_[ordered_caps[i]] = ptr;
+        }
+    }
+
+    // alloca/store explicit params
+    for (auto& [type, name] : fn.params) {
+        std::string reg = "%var_" + name;
+        out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
+        out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
+        locals_[name] = reg;
+    }
+
+    emitBlock(*fn.body);
+
+    if (fn.return_type == "void")
+        out_ << "    ret void\n";
+
+    out_ << "}\n\n";
+}
+
 
 void Codegen::emitSlidMethods(const SlidDef& slid) {
     for (auto& m : slid.methods) {
@@ -171,11 +431,14 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
 
 void Codegen::emitFunction(const FunctionDef& fn) {
     locals_.clear();
+    local_types_.clear();
     tmp_counter_ = 0;
     label_counter_ = 0;
     break_label_ = "";
     continue_label_ = "";
     current_slid_ = "";
+    current_parent_ = fn.name;
+    frame_ptr_reg_ = "";
 
     std::string ret_type = llvmType(fn.return_type);
     std::string param_str;
@@ -196,12 +459,36 @@ void Codegen::emitFunction(const FunctionDef& fn) {
 
     emitBlock(*fn.body);
 
-    // add implicit ret void if needed
     if (fn.return_type == "void")
         out_ << "    ret void\n";
 
     out_ << "}\n\n";
+
+    // save parent state then emit nested functions (recurse into loops/ifs)
+    auto saved_locals = locals_;
+    auto saved_types  = local_types_;
+
+    std::function<void(const BlockStmt&)> emitNested = [&](const BlockStmt& block) {
+        for (auto& stmt : block.stmts) {
+            if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
+                auto it = nested_info_.find(nfs->def.name);
+                if (it != nested_info_.end())
+                    emitNestedFunction(nfs->def, fn.name, it->second, saved_locals, saved_types);
+            } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
+                emitNested(*f->body);
+            } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get())) {
+                emitNested(*w->body);
+            } else if (auto* i = dynamic_cast<const IfStmt*>(stmt.get())) {
+                emitNested(*i->then_block);
+                if (i->else_block) emitNested(*i->else_block);
+            }
+        }
+    };
+    emitNested(*fn.body);
+
+    current_parent_ = "";
 }
+
 
 void Codegen::emitBlock(const BlockStmt& block) {
     for (auto& stmt : block.stmts)
@@ -307,6 +594,42 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* call = dynamic_cast<const CallExpr*>(&expr)) {
+        // check nested function first
+        auto nit = nested_info_.find(call->callee);
+        if (nit != nested_info_.end()) {
+            auto& info = nit->second;
+            std::string mangled = info.parent_name + "__" + call->callee;
+            std::string ret_type = llvmType(func_return_types_[mangled]);
+
+            std::string arg_str;
+            if (info.captures.size() == 1) {
+                std::string cap = *info.captures.begin();
+                arg_str = "ptr " + locals_[cap];
+            } else if (info.captures.size() >= 2) {
+                std::string frame = newTmp() + "_frame";
+                out_ << "    " << frame << " = alloca %frame." << info.parent_name << "\n";
+                std::vector<std::string> ordered_caps(info.captures.begin(), info.captures.end());
+                for (int i = 0; i < (int)ordered_caps.size(); i++) {
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr %frame." << info.parent_name
+                         << ", ptr " << frame << ", i32 0, i32 " << i << "\n";
+                    out_ << "    store ptr " << locals_[ordered_caps[i]] << ", ptr " << gep << "\n";
+                }
+                arg_str = "ptr " + frame;
+            }
+
+            for (auto& arg : call->args) {
+                if (!arg_str.empty()) arg_str += ", ";
+                arg_str += "i32 " + emitExpr(*arg);
+            }
+
+            std::string tmp = newTmp();
+            out_ << "    " << tmp << " = call " << ret_type << " @" << mangled
+                 << "(" << arg_str << ")\n";
+            return tmp;
+        }
+
+        // regular function call
         auto it = func_return_types_.find(call->callee);
         if (it == func_return_types_.end())
             throw std::runtime_error("undefined function: " + call->callee);
@@ -556,6 +879,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
         return;
     }
 
+    // nested function definition — already emitted after parent, skip here
+    if (dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) return;
+
     if (dynamic_cast<const BreakStmt*>(&stmt)) {
         if (break_label_.empty()) throw std::runtime_error("break outside of loop");
         out_ << "    br label %" << break_label_ << "\n";
@@ -691,6 +1017,47 @@ void Codegen::emitStmt(const Stmt& stmt) {
             out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", i32 " << val << ")\n";
             return;
         }
+
+        // check if it's a nested function call
+        auto nit = nested_info_.find(call->callee);
+        if (nit != nested_info_.end()) {
+            auto& info = nit->second;
+            std::string mangled = info.parent_name + "__" + call->callee;
+            std::string ret_type = llvmType(func_return_types_[mangled]);
+
+            std::string arg_str;
+            if (info.captures.size() == 1) {
+                std::string cap = *info.captures.begin();
+                arg_str = "ptr " + locals_[cap];
+            } else if (info.captures.size() >= 2) {
+                // build frame struct on stack and fill in ptrs
+                std::string frame = newTmp() + "_frame";
+                out_ << "    " << frame << " = alloca %frame." << info.parent_name << "\n";
+                std::vector<std::string> ordered_caps(info.captures.begin(), info.captures.end());
+                for (int i = 0; i < (int)ordered_caps.size(); i++) {
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr %frame." << info.parent_name
+                         << ", ptr " << frame << ", i32 0, i32 " << i << "\n";
+                    out_ << "    store ptr " << locals_[ordered_caps[i]] << ", ptr " << gep << "\n";
+                }
+                arg_str = "ptr " + frame;
+            }
+
+            for (auto& arg : call->args) {
+                if (!arg_str.empty()) arg_str += ", ";
+                arg_str += "i32 " + emitExpr(*arg);
+            }
+
+            if (ret_type == "void") {
+                out_ << "    call void @" << mangled << "(" << arg_str << ")\n";
+            } else {
+                std::string tmp = newTmp();
+                out_ << "    " << tmp << " = call " << ret_type << " @" << mangled
+                     << "(" << arg_str << ")\n";
+            }
+            return;
+        }
+
         throw std::runtime_error("unknown function: " + call->callee);
     }
 

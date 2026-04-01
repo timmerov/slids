@@ -170,6 +170,19 @@ struct SlidDef {
     std::vector<MethodDef> methods;
 };
 
+// nested function defined inside a parent function body
+struct NestedFunctionDef {
+    std::string return_type;
+    std::string name;
+    std::vector<std::pair<std::string, std::string>> params;
+    std::unique_ptr<BlockStmt> body;
+};
+
+// nested function definition appearing inside a block
+struct NestedFunctionDefStmt : Stmt {
+    NestedFunctionDef def;
+};
+
 struct FunctionDef {
     std::string return_type;
     std::string name;
@@ -202,6 +215,7 @@ private:
 
     SlidDef parseSlidDef();
     MethodDef parseMethodDef();
+    NestedFunctionDef parseNestedFunctionDef();
     FunctionDef parseFunctionDef();
     std::unique_ptr<BlockStmt> parseBlock();
     std::unique_ptr<Stmt> parseStmt();

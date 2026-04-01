@@ -304,8 +304,34 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         return stmt;
     }
 
-    // primitive type variable declaration
+    // nested function definition: type name(...) { ... }
+    // distinguish from var decl (type name = expr) by lookahead for '(' then '{' after ')'
     if (isTypeName(t)) {
+        // lookahead: type identifier ( ... ) {
+        int lookahead = pos_ + 1; // pos_ is at type, +1 is identifier
+        if (lookahead < (int)tokens_.size()
+            && tokens_[lookahead].type == TokenType::kIdentifier) {
+            int after_name = lookahead + 1;
+            if (after_name < (int)tokens_.size()
+                && tokens_[after_name].type == TokenType::kLParen) {
+                // scan forward past params to find matching ) then check for {
+                int depth = 1;
+                int scan = after_name + 1;
+                while (scan < (int)tokens_.size() && depth > 0) {
+                    if (tokens_[scan].type == TokenType::kLParen) depth++;
+                    else if (tokens_[scan].type == TokenType::kRParen) depth--;
+                    scan++;
+                }
+                // scan now points past the ')'
+                if (scan < (int)tokens_.size()
+                    && tokens_[scan].type == TokenType::kLBrace) {
+                    auto stmt = std::make_unique<NestedFunctionDefStmt>();
+                    stmt->def = parseNestedFunctionDef();
+                    return stmt;
+                }
+            }
+        }
+        // not a nested function — fall through to variable declaration
         std::string type = parseTypeName();
         std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
         expect(TokenType::kEquals, "expected '='");
@@ -421,6 +447,22 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 }
 
 // --- Top-level parsing ---
+
+NestedFunctionDef Parser::parseNestedFunctionDef() {
+    NestedFunctionDef fn;
+    fn.return_type = parseTypeName();
+    fn.name = expect(TokenType::kIdentifier, "expected function name").value;
+    expect(TokenType::kLParen, "expected '('");
+    while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+        std::string type = parseTypeName();
+        std::string name = expect(TokenType::kIdentifier, "expected parameter name").value;
+        fn.params.emplace_back(type, name);
+        if (peek().type == TokenType::kComma) advance();
+    }
+    expect(TokenType::kRParen, "expected ')'");
+    fn.body = parseBlock();
+    return fn;
+}
 
 MethodDef Parser::parseMethodDef() {
     MethodDef m;

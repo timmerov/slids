@@ -3,13 +3,25 @@
 #include <string>
 #include <ostream>
 #include <map>
+#include <set>
 #include <vector>
 #include <functional>
 
 struct SlidInfo {
     std::string name;
-    std::map<std::string, int> field_index;  // field name -> index
-    std::vector<std::string> field_types;    // in order
+    std::map<std::string, int> field_index;
+    std::vector<std::string> field_types;
+};
+
+// info about a nested function's capture set
+struct NestedFuncInfo {
+    std::string mangled_name;       // @parent__nested
+    std::set<std::string> captures; // parent vars accessed
+    std::string parent_name;        // parent function name
+    // calling convention:
+    // 0 captures -> no hidden param
+    // 1 capture  -> pass ptr to that single var
+    // 2+ captures -> pass ptr to frame struct
 };
 
 class Codegen {
@@ -32,15 +44,31 @@ private:
 
     std::string break_label_;
     std::string continue_label_;
-    std::string current_slid_;  // non-empty when inside a method
-    std::string self_ptr_;      // ptr to self when emitting ctor body
+    std::string current_slid_;
+    std::string self_ptr_;
+
+    // nested function support
+    std::map<std::string, NestedFuncInfo> nested_info_; // mangled -> info
+    std::string current_parent_;   // mangled name of current parent function
+    std::string frame_ptr_reg_;    // %frame ptr inside a nested function
 
     void collectStringConstants();
     void collectFunctionSignatures();
     void collectSlids();
+    void analyzeNestedFunctions(const FunctionDef& fn);
+    std::set<std::string> collectCaptures(
+        const BlockStmt& body,
+        const std::set<std::string>& parent_locals,
+        const std::set<std::string>& own_params);
 
+    void emitFrameStruct(const FunctionDef& fn);
     void emitSlidMethods(const SlidDef& slid);
     void emitFunction(const FunctionDef& fn);
+    void emitNestedFunction(const NestedFunctionDef& fn,
+                            const std::string& parent_name,
+                            const NestedFuncInfo& info,
+                            const std::map<std::string, std::string>& parent_locals,
+                            const std::map<std::string, std::string>& parent_types);
     void emitBlock(const BlockStmt& block);
     void emitStmt(const Stmt& stmt);
     std::string emitExpr(const Expr& expr);
