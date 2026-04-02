@@ -66,9 +66,7 @@ private:
     void emitFunction(const FunctionDef& fn);
     void emitNestedFunction(const NestedFunctionDef& fn,
                             const std::string& parent_name,
-                            const NestedFuncInfo& info,
-                            const std::map<std::string, std::string>& parent_locals,
-                            const std::map<std::string, std::string>& parent_types);
+                            const NestedFuncInfo& info);
     void emitBlock(const BlockStmt& block);
     void emitStmt(const Stmt& stmt);
     std::string emitExpr(const Expr& expr);

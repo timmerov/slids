@@ -128,13 +128,12 @@ std::unique_ptr<Expr> Parser::parseUnary() {
         advance();
         return std::make_unique<UnaryExpr>("~", parseUnary());
     }
-    // pre-increment/decrement: ++x, --x  (desugar to x += 1, returns new value)
+    // pre-increment/decrement: ++x, --x — returns new value
     if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
-        std::string op = (peek().type == TokenType::kPlusPlus) ? "+" : "-";
+        std::string op = (peek().type == TokenType::kPlusPlus) ? "pre++" : "pre--";
         advance();
         auto operand = parsePrimary();
-        // return x + 1 (or x - 1) — the store happens via UnaryExpr in codegen
-        return std::make_unique<UnaryExpr>(op == "+" ? "pre++" : "pre--", std::move(operand));
+        return std::make_unique<UnaryExpr>(op, std::move(operand));
     }
     return parsePostfix(parsePrimary());
 }
@@ -273,6 +272,27 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         advance();
         expect(TokenType::kSemicolon, "expected ';'");
         return std::make_unique<ContinueStmt>();
+    }
+
+    // pre-increment/decrement statement: ++x; --x;
+    if (t.type == TokenType::kPlusPlus || t.type == TokenType::kMinusMinus) {
+        bool is_inc = (t.type == TokenType::kPlusPlus);
+        advance();
+        // parse as a UnaryExpr statement — codegen handles field/local
+        auto operand = parsePrimary();
+        expect(TokenType::kSemicolon, "expected ';'");
+        auto ue = std::make_unique<UnaryExpr>(is_inc ? "pre++" : "pre--", std::move(operand));
+        // wrap in a CallStmt-like — actually use a dedicated ExprStmt
+        // since we don't have ExprStmt, we need to handle this differently
+        // For now, if operand is a VarExpr, desugar to AssignStmt
+        if (auto* ve = dynamic_cast<VarExpr*>(ue->operand.get())) {
+            std::string op = is_inc ? "+" : "-";
+            std::string name = ve->name;
+            auto rhs = std::make_unique<BinaryExpr>(op,
+                std::make_unique<VarExpr>(name), std::make_unique<IntLiteralExpr>(1));
+            return std::make_unique<AssignStmt>(name, std::move(rhs));
+        }
+        throw std::runtime_error("++/-- statement requires a variable name");
     }
 
     if (t.type == TokenType::kIf) {

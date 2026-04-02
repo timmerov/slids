@@ -314,9 +314,7 @@ void Codegen::emitFrameStruct(const FunctionDef& fn) {
 void Codegen::emitNestedFunction(
     const NestedFunctionDef& fn,
     const std::string& parent_name,
-    const NestedFuncInfo& info,
-    const std::map<std::string, std::string>& parent_locals,
-    const std::map<std::string, std::string>& parent_types)
+    const NestedFuncInfo& info)
 {
     locals_.clear();
     local_types_.clear();
@@ -464,16 +462,13 @@ void Codegen::emitFunction(const FunctionDef& fn) {
 
     out_ << "}\n\n";
 
-    // save parent state then emit nested functions (recurse into loops/ifs)
-    auto saved_locals = locals_;
-    auto saved_types  = local_types_;
-
+    // emit nested functions after parent
     std::function<void(const BlockStmt&)> emitNested = [&](const BlockStmt& block) {
         for (auto& stmt : block.stmts) {
             if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
                 auto it = nested_info_.find(nfs->def.name);
                 if (it != nested_info_.end())
-                    emitNestedFunction(nfs->def, fn.name, it->second, saved_locals, saved_types);
+                    emitNestedFunction(nfs->def, fn.name, it->second);
             } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
                 emitNested(*f->body);
             } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get())) {
@@ -647,31 +642,44 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
     if (auto* u = dynamic_cast<const UnaryExpr*>(&expr)) {
         // pre/post increment/decrement — handle before evaluating operand
-        if (u->op == "pre++" || u->op == "pre--") {
-            auto* ve = dynamic_cast<const VarExpr*>(u->operand.get());
-            if (!ve) throw std::runtime_error("pre++/-- requires a variable");
-            auto it = locals_.find(ve->name);
-            if (it == locals_.end()) throw std::runtime_error("undefined variable: " + ve->name);
+        if (u->op == "pre++" || u->op == "pre--" ||
+            u->op == "post++" || u->op == "post--") {
+
+            bool is_pre = (u->op == "pre++" || u->op == "pre--");
+            std::string instr = (u->op == "pre++" || u->op == "post++") ? "add" : "sub";
+            std::string ptr;
+
+            // field access via self in a method
+            if (!current_slid_.empty()) {
+                auto* ve = dynamic_cast<const VarExpr*>(u->operand.get());
+                if (ve) {
+                    auto& info = slid_info_[current_slid_];
+                    if (info.field_index.count(ve->name)) {
+                        int idx = info.field_index[ve->name];
+                        std::string gep = newTmp();
+                        std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
+                        out_ << "    " << gep << " = getelementptr %struct." << current_slid_
+                             << ", ptr " << self << ", i32 0, i32 " << idx << "\n";
+                        ptr = gep;
+                    }
+                }
+            }
+
+            // plain local variable
+            if (ptr.empty()) {
+                auto* ve = dynamic_cast<const VarExpr*>(u->operand.get());
+                if (!ve) throw std::runtime_error("++/-- requires a variable");
+                auto it = locals_.find(ve->name);
+                if (it == locals_.end()) throw std::runtime_error("undefined variable: " + ve->name);
+                ptr = it->second;
+            }
+
             std::string old = newTmp();
-            out_ << "    " << old << " = load i32, ptr " << it->second << "\n";
+            out_ << "    " << old << " = load i32, ptr " << ptr << "\n";
             std::string new_val = newTmp();
-            std::string instr = (u->op == "pre++") ? "add" : "sub";
             out_ << "    " << new_val << " = " << instr << " i32 " << old << ", 1\n";
-            out_ << "    store i32 " << new_val << ", ptr " << it->second << "\n";
-            return new_val;
-        }
-        if (u->op == "post++" || u->op == "post--") {
-            auto* ve = dynamic_cast<const VarExpr*>(u->operand.get());
-            if (!ve) throw std::runtime_error("post++/-- requires a variable");
-            auto it = locals_.find(ve->name);
-            if (it == locals_.end()) throw std::runtime_error("undefined variable: " + ve->name);
-            std::string old = newTmp();
-            out_ << "    " << old << " = load i32, ptr " << it->second << "\n";
-            std::string new_val = newTmp();
-            std::string instr = (u->op == "post++") ? "add" : "sub";
-            out_ << "    " << new_val << " = " << instr << " i32 " << old << ", 1\n";
-            out_ << "    store i32 " << new_val << ", ptr " << it->second << "\n";
-            return old;
+            out_ << "    store i32 " << new_val << ", ptr " << ptr << "\n";
+            return is_pre ? new_val : old;
         }
         // other unary ops — evaluate operand first
         std::string val = emitExpr(*u->operand);
