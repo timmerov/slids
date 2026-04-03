@@ -153,11 +153,11 @@ std::unique_ptr<Expr> Parser::parseUnary() {
         advance();
         return std::make_unique<UnaryExpr>("~", parseUnary());
     }
-    // pre-increment/decrement: ++x, --x — returns new value
+    // pre-increment/decrement: ++x, --x, ++(ptr^) — returns new value
     if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
         std::string op = (peek().type == TokenType::kPlusPlus) ? "pre++" : "pre--";
         advance();
-        auto operand = parsePrimary();
+        auto operand = parsePostfix(parsePrimary());  // handles ++(ref^), ++arr[i], etc.
         return std::make_unique<UnaryExpr>(op, std::move(operand));
     }
     // prefix ^ — take address: ^x
@@ -317,25 +317,31 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         return stmt;
     }
 
-    // pre-increment/decrement statement: ++x; --x;
+    // pre-increment/decrement statement: ++x;  ++ref^;  ++(ref^);
     if (t.type == TokenType::kPlusPlus || t.type == TokenType::kMinusMinus) {
         bool is_inc = (t.type == TokenType::kPlusPlus);
         advance();
-        // parse as a UnaryExpr statement — codegen handles field/local
-        auto operand = parsePrimary();
-        expect(TokenType::kSemicolon, "expected ';'");
-        auto ue = std::make_unique<UnaryExpr>(is_inc ? "pre++" : "pre--", std::move(operand));
-        // wrap in a CallStmt-like — actually use a dedicated ExprStmt
-        // since we don't have ExprStmt, we need to handle this differently
-        // For now, if operand is a VarExpr, desugar to AssignStmt
-        if (auto* ve = dynamic_cast<VarExpr*>(ue->operand.get())) {
-            std::string op = is_inc ? "+" : "-";
+        auto operand = parsePostfix(parsePrimary());  // handles ++(ref^), ++arr[i]
+        std::string arith = is_inc ? "+" : "-";
+        // plain variable: ++x -> x = x + 1
+        if (auto* ve = dynamic_cast<VarExpr*>(operand.get())) {
             std::string name = ve->name;
-            auto rhs = std::make_unique<BinaryExpr>(op,
+            expect(TokenType::kSemicolon, "expected ';'");
+            auto rhs = std::make_unique<BinaryExpr>(arith,
                 std::make_unique<VarExpr>(name), std::make_unique<IntLiteralExpr>(1));
             return std::make_unique<AssignStmt>(name, std::move(rhs));
         }
-        throw std::runtime_error("++/-- statement requires a variable name");
+        // dereference: ++(ref^) -> ref^ = ref^ + 1 via DerefAssignStmt
+        if (auto* de = dynamic_cast<DerefExpr*>(operand.get())) {
+            auto* ve = dynamic_cast<VarExpr*>(de->operand.get());
+            if (!ve) throw std::runtime_error("++/-- on deref requires simple pointer variable");
+            std::string ptr_name = ve->name;
+            expect(TokenType::kSemicolon, "expected ';'");
+            auto lhs_read = std::make_unique<DerefExpr>(std::make_unique<VarExpr>(ptr_name));
+            auto rhs = std::make_unique<BinaryExpr>(arith, std::move(lhs_read), std::make_unique<IntLiteralExpr>(1));
+            return std::make_unique<DerefAssignStmt>(std::make_unique<VarExpr>(ptr_name), std::move(rhs));
+        }
+        throw std::runtime_error("++/-- statement requires a variable or dereference target");
     }
 
     if (t.type == TokenType::kIf) {
@@ -540,6 +546,56 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     return std::make_unique<FieldAssignStmt>(std::move(obj), field, std::move(val));
                 }
                 throw std::runtime_error("invalid deref assignment target");
+            }
+            // ptr^ += rhs  (compound assignment through dereference)
+            {
+                static const std::map<TokenType, std::string> compound_ops = {
+                    {TokenType::kPlusEq,    "+"},
+                    {TokenType::kMinusEq,   "-"},
+                    {TokenType::kStarEq,    "*"},
+                    {TokenType::kSlashEq,   "/"},
+                    {TokenType::kPercentEq, "%"},
+                    {TokenType::kBitAndEq,  "&"},
+                    {TokenType::kBitOrEq,   "|"},
+                    {TokenType::kBitXorEq,  "^"},
+                    {TokenType::kLShiftEq,  "<<"},
+                    {TokenType::kRShiftEq,  ">>"},
+                    {TokenType::kAndEq,     "&&"},
+                    {TokenType::kOrEq,      "||"},
+                    {TokenType::kXorXorEq,  "^^"},
+                };
+                auto cop = compound_ops.find(peek().type);
+                if (cop != compound_ops.end()) {
+                    if (auto* de = dynamic_cast<DerefExpr*>(base.get())) {
+                        auto* ve = dynamic_cast<VarExpr*>(de->operand.get());
+                        if (!ve) throw std::runtime_error("compound deref-assign requires simple pointer variable");
+                        std::string ptr_name = ve->name;
+                        advance();
+                        auto rhs = parseExpr();
+                        expect(TokenType::kSemicolon, "expected ';'");
+                        // desugar: ptr^ op= rhs  ->  DerefAssignStmt(ptr, BinaryExpr(op, DerefExpr(ptr), rhs))
+                        auto lhs_read = std::make_unique<DerefExpr>(std::make_unique<VarExpr>(ptr_name));
+                        auto bin = std::make_unique<BinaryExpr>(cop->second, std::move(lhs_read), std::move(rhs));
+                        return std::make_unique<DerefAssignStmt>(std::make_unique<VarExpr>(ptr_name), std::move(bin));
+                    }
+                    throw std::runtime_error("compound assignment requires a dereference target");
+                }
+            }
+            // ptr^++  or  ptr^--  as a statement
+            // parsePostfix already built base = UnaryExpr("post++", DerefExpr(VarExpr(ptr)))
+            if (auto* ue = dynamic_cast<UnaryExpr*>(base.get())) {
+                if (ue->op == "post++" || ue->op == "post--") {
+                    if (auto* de = dynamic_cast<DerefExpr*>(ue->operand.get())) {
+                        auto* ve = dynamic_cast<VarExpr*>(de->operand.get());
+                        if (!ve) throw std::runtime_error("post++/-- on deref requires simple pointer variable");
+                        std::string ptr_name = ve->name;
+                        std::string arith = (ue->op == "post++") ? "+" : "-";
+                        expect(TokenType::kSemicolon, "expected ';'");
+                        auto lhs_read = std::make_unique<DerefExpr>(std::make_unique<VarExpr>(ptr_name));
+                        auto rhs = std::make_unique<BinaryExpr>(arith, std::move(lhs_read), std::make_unique<IntLiteralExpr>(1));
+                        return std::make_unique<DerefAssignStmt>(std::make_unique<VarExpr>(ptr_name), std::move(rhs));
+                    }
+                }
             }
             // ptr^.method()
             if (auto* mc = dynamic_cast<MethodCallExpr*>(base.get())) {

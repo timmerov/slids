@@ -4,7 +4,8 @@ int32 main() {
     ref^ = ref^ + 1;
     ref^ += 1;
     ref^++;
-    ++ref^;
+    ++(ref^);
     println("expected: 4");
     println(ref^);
+    return 0;
 }

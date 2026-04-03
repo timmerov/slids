@@ -558,9 +558,13 @@ void Codegen::emitFunction(const FunctionDef& fn) {
 
     emitBlock(*fn.body);
 
-    if (fn.return_type == "void" && !block_terminated_) {
-        emitDtors();
-        out_ << "    ret void\n";
+    if (!block_terminated_) {
+        if (fn.return_type == "void") {
+            emitDtors();
+            out_ << "    ret void\n";
+        } else {
+            throw std::runtime_error("function '" + fn.name + "' is missing a return statement");
+        }
     }
 
     out_ << "}\n\n";
@@ -896,6 +900,18 @@ std::string Codegen::emitExpr(const Expr& expr) {
             bool is_pre = (u->op == "pre++" || u->op == "pre--");
             std::string instr = (u->op == "pre++" || u->op == "post++") ? "add" : "sub";
             std::string ptr;
+
+            // dereference: ++(ref^) or ref^++ — increment the value pointed to
+            if (auto* de = dynamic_cast<const DerefExpr*>(u->operand.get())) {
+                // emit the pointer value itself (load the ptr variable)
+                std::string ptr_val = emitExpr(*de->operand);
+                std::string old_val = newTmp();
+                out_ << "    " << old_val << " = load i32, ptr " << ptr_val << "\n";
+                std::string new_val = newTmp();
+                out_ << "    " << new_val << " = " << instr << " i32 " << old_val << ", 1\n";
+                out_ << "    store i32 " << new_val << ", ptr " << ptr_val << "\n";
+                return is_pre ? new_val : old_val;
+            }
 
             // field access via self in a method
             if (!current_slid_.empty()) {
