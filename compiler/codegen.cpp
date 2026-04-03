@@ -194,14 +194,29 @@ void Codegen::collectSlids() {
 }
 
 void Codegen::collectStringConstants() {
+    // Flatten a "+" concat chain and collect all StringLiteralExpr leaves
+    std::function<void(const Expr*, bool)> collectExpr = [&](const Expr* e, bool newline_on_last) {
+        if (auto* b = dynamic_cast<const BinaryExpr*>(e)) {
+            if (b->op == "+") {
+                collectExpr(b->left.get(), false);
+                collectExpr(b->right.get(), newline_on_last);
+                return;
+            }
+        }
+        if (auto* s = dynamic_cast<const StringLiteralExpr*>(e)) {
+            std::string full = newline_on_last ? s->value + "\n" : s->value;
+            string_constants_.emplace_back("@.str" + std::to_string(str_counter_++), full);
+        }
+        // integer exprs produce no string constants
+    };
+
     std::function<void(const Stmt&)> collect = [&](const Stmt& stmt) {
         if (auto* call = dynamic_cast<const CallStmt*>(&stmt)) {
-            bool newline = (call->callee == "println");
-            for (auto& arg : call->args)
-                if (auto* s = dynamic_cast<const StringLiteralExpr*>(arg.get())) {
-                    std::string full = newline ? s->value + "\n" : s->value;
-                    string_constants_.emplace_back("@.str" + std::to_string(str_counter_++), full);
-                }
+            if (call->callee == "println" || call->callee == "print") {
+                bool newline = (call->callee == "println");
+                for (auto& arg : call->args)
+                    collectExpr(arg.get(), newline);
+            }
         } else if (auto* b = dynamic_cast<const BlockStmt*>(&stmt)) {
             for (auto& s : b->stmts) collect(*s);
         } else if (auto* i = dynamic_cast<const IfStmt*>(&stmt)) {
@@ -211,6 +226,8 @@ void Codegen::collectStringConstants() {
             for (auto& s : w->body->stmts) collect(*s);
         } else if (auto* f = dynamic_cast<const ForRangeStmt*>(&stmt)) {
             for (auto& s : f->body->stmts) collect(*s);
+        } else if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) {
+            for (auto& s : nfs->def.body->stmts) collect(*s);
         }
     };
 
@@ -230,6 +247,12 @@ void Codegen::emit() {
     collectFunctionSignatures();
     collectSlids();
     collectStringConstants();
+
+    // collect enum values
+    for (auto& e : program_.enums) {
+        for (int i = 0; i < (int)e.values.size(); i++)
+            enum_values_[e.values[i]] = i;
+    }
 
     // analyze nested functions for all top-level functions
     for (auto& fn : program_.functions)
@@ -318,12 +341,14 @@ void Codegen::emitNestedFunction(
 {
     locals_.clear();
     local_types_.clear();
+    array_info_.clear();
     tmp_counter_ = 0;
     label_counter_ = 0;
     break_label_ = "";
     continue_label_ = "";
     current_slid_ = "";
     frame_ptr_reg_ = "";
+    block_terminated_ = false;
 
     std::string ret_type = llvmType(fn.return_type);
     std::string mangled = parent_name + "__" + fn.name;
@@ -381,7 +406,7 @@ void Codegen::emitNestedFunction(
 
     emitBlock(*fn.body);
 
-    if (fn.return_type == "void")
+    if (fn.return_type == "void" && !block_terminated_)
         out_ << "    ret void\n";
 
     out_ << "}\n\n";
@@ -396,6 +421,7 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
         break_label_ = "";
         continue_label_ = "";
         current_slid_ = slid.name;
+        block_terminated_ = false;
 
         std::string ret_type = llvmType(m.return_type);
 
@@ -419,7 +445,7 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
         emitBlock(*m.body);
 
         // add implicit ret void if needed
-        if (m.return_type == "void")
+        if (m.return_type == "void" && !block_terminated_)
             out_ << "    ret void\n";
 
         out_ << "}\n\n";
@@ -430,6 +456,7 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
 void Codegen::emitFunction(const FunctionDef& fn) {
     locals_.clear();
     local_types_.clear();
+    array_info_.clear();
     tmp_counter_ = 0;
     label_counter_ = 0;
     break_label_ = "";
@@ -437,6 +464,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     current_slid_ = "";
     current_parent_ = fn.name;
     frame_ptr_reg_ = "";
+    block_terminated_ = false;
 
     std::string ret_type = llvmType(fn.return_type);
     std::string param_str;
@@ -457,7 +485,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
 
     emitBlock(*fn.body);
 
-    if (fn.return_type == "void")
+    if (fn.return_type == "void" && !block_terminated_)
         out_ << "    ret void\n";
 
     out_ << "}\n\n";
@@ -486,8 +514,10 @@ void Codegen::emitFunction(const FunctionDef& fn) {
 
 
 void Codegen::emitBlock(const BlockStmt& block) {
-    for (auto& stmt : block.stmts)
+    for (auto& stmt : block.stmts) {
+        if (block_terminated_) break; // dead code after terminator — skip
         emitStmt(*stmt);
+    }
 }
 
 // returns the ptr to a field in a struct instance
@@ -540,11 +570,55 @@ std::string Codegen::emitExpr(const Expr& expr) {
             }
         }
         auto it = locals_.find(v->name);
-        if (it == locals_.end())
+        if (it == locals_.end()) {
+            // check if it's an enum value
+            auto eit = enum_values_.find(v->name);
+            if (eit != enum_values_.end())
+                return std::to_string(eit->second);
             throw std::runtime_error("undefined variable: " + v->name);
+        }
         std::string tmp = newTmp();
         out_ << "    " << tmp << " = load i32, ptr " << it->second << "\n";
         return tmp;
+    }
+
+    if (dynamic_cast<const ArrayIndexExpr*>(&expr)) {
+        // support chained indexing: base[i][j] — base may be another ArrayIndexExpr
+        // compute flat linear index and GEP into the alloca
+        // collect index chain and base name
+        std::vector<const Expr*> indices;
+        const Expr* cur = &expr;
+        while (auto* a = dynamic_cast<const ArrayIndexExpr*>(cur)) {
+            indices.insert(indices.begin(), a->index.get());
+            cur = a->base.get();
+        }
+        // cur is now the root VarExpr
+        auto* ve = dynamic_cast<const VarExpr*>(cur);
+        if (!ve) throw std::runtime_error("complex array base not supported");
+        auto ait = array_info_.find(ve->name);
+        if (ait == array_info_.end())
+            throw std::runtime_error("undefined array: " + ve->name);
+        auto& ainfo = ait->second;
+        // compute flat index: i*dim1 + j  (for 2D: row*cols + col)
+        std::string flat = emitExpr(*indices[0]);
+        for (int k = 1; k < (int)indices.size(); k++) {
+            int stride = ainfo.dims[k];
+            std::string stride_val = std::to_string(stride);
+            std::string mul = newTmp();
+            out_ << "    " << mul << " = mul i32 " << flat << ", " << stride_val << "\n";
+            std::string idx_val = emitExpr(*indices[k]);
+            std::string add = newTmp();
+            out_ << "    " << add << " = add i32 " << mul << ", " << idx_val << "\n";
+            flat = add;
+        }
+        std::string gep = newTmp();
+        int total = 1;
+        for (int d : ainfo.dims) total *= d;
+        out_ << "    " << gep << " = getelementptr [" << total << " x i32], ptr "
+             << ainfo.alloca_reg << ", i32 0, i32 " << flat << "\n";
+        std::string val = newTmp();
+        out_ << "    " << val << " = load i32, ptr " << gep << "\n";
+        return val;
     }
 
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
@@ -783,6 +857,27 @@ std::string Codegen::emitExpr(const Expr& expr) {
 }
 
 void Codegen::emitStmt(const Stmt& stmt) {
+    if (auto* arr = dynamic_cast<const ArrayDeclStmt*>(&stmt)) {
+        int total = 1;
+        for (int d : arr->dims) total *= d;
+        std::string reg = "%arr_" + arr->name;
+        out_ << "    " << reg << " = alloca [" << total << " x i32]\n";
+        ArrayInfo ainfo;
+        ainfo.elem_type = arr->elem_type;
+        ainfo.dims = arr->dims;
+        ainfo.alloca_reg = reg;
+        array_info_[arr->name] = ainfo;
+        // store initializer values
+        for (int i = 0; i < (int)arr->init_values.size(); i++) {
+            std::string val = emitExpr(*arr->init_values[i]);
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr [" << total << " x i32], ptr "
+                 << reg << ", i32 0, i32 " << i << "\n";
+            out_ << "    store i32 " << val << ", ptr " << gep << "\n";
+        }
+        return;
+    }
+
     if (auto* decl = dynamic_cast<const VarDeclStmt*>(&stmt)) {
         // class instantiation
         if (slid_info_.count(decl->type)) {
@@ -912,21 +1007,76 @@ void Codegen::emitStmt(const Stmt& stmt) {
         } else {
             out_ << "    ret void\n";
         }
+        block_terminated_ = true;
         return;
     }
 
     // nested function definition — already emitted after parent, skip here
     if (dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) return;
 
-    if (dynamic_cast<const BreakStmt*>(&stmt)) {
-        if (break_label_.empty()) throw std::runtime_error("break outside of loop");
-        out_ << "    br label %" << break_label_ << "\n";
+    if (auto* brk = dynamic_cast<const BreakStmt*>(&stmt)) {
+        std::string target;
+        if (!brk->label.empty()) {
+            // named break: find the frame with this label
+            for (int i = (int)loop_stack_.size() - 1; i >= 0; i--) {
+                if (loop_stack_[i].block_label == brk->label) {
+                    target = loop_stack_[i].break_target;
+                    break;
+                }
+            }
+            if (target.empty())
+                throw std::runtime_error("break: unknown label '" + brk->label + "'");
+        } else if (brk->number > 0) {
+            // numbered break: count outward N loop frames
+            int count = 0;
+            for (int i = (int)loop_stack_.size() - 1; i >= 0; i--) {
+                count++;
+                if (count == brk->number) {
+                    target = loop_stack_[i].break_target;
+                    break;
+                }
+            }
+            if (target.empty())
+                throw std::runtime_error("break " + std::to_string(brk->number) + ": not enough enclosing loops");
+        } else {
+            if (break_label_.empty()) throw std::runtime_error("break outside of loop");
+            target = break_label_;
+        }
+        out_ << "    br label %" << target << "\n";
+        block_terminated_ = true;
         return;
     }
 
-    if (dynamic_cast<const ContinueStmt*>(&stmt)) {
-        if (continue_label_.empty()) throw std::runtime_error("continue outside of loop");
-        out_ << "    br label %" << continue_label_ << "\n";
+    if (auto* cont = dynamic_cast<const ContinueStmt*>(&stmt)) {
+        std::string target;
+        if (!cont->label.empty()) {
+            for (int i = (int)loop_stack_.size() - 1; i >= 0; i--) {
+                if (loop_stack_[i].block_label == cont->label) {
+                    target = loop_stack_[i].continue_target;
+                    break;
+                }
+            }
+            if (target.empty())
+                throw std::runtime_error("continue: unknown label '" + cont->label + "'");
+        } else if (cont->number > 0) {
+            int count = 0;
+            for (int i = (int)loop_stack_.size() - 1; i >= 0; i--) {
+                if (!loop_stack_[i].continue_target.empty()) {
+                    count++;
+                    if (count == cont->number) {
+                        target = loop_stack_[i].continue_target;
+                        break;
+                    }
+                }
+            }
+            if (target.empty())
+                throw std::runtime_error("continue " + std::to_string(cont->number) + ": not enough enclosing loops");
+        } else {
+            if (continue_label_.empty()) throw std::runtime_error("continue outside of loop");
+            target = continue_label_;
+        }
+        out_ << "    br label %" << target << "\n";
+        block_terminated_ = true;
         return;
     }
 
@@ -939,14 +1089,17 @@ void Codegen::emitStmt(const Stmt& stmt) {
         out_ << "    " << cond_bool << " = icmp ne i32 " << cond << ", 0\n";
         out_ << "    br i1 " << cond_bool << ", label %" << then_lbl
              << ", label %" << (if_stmt->else_block ? else_lbl : end_lbl) << "\n";
+        block_terminated_ = false;
         out_ << then_lbl << ":\n";
         emitBlock(*if_stmt->then_block);
-        out_ << "    br label %" << end_lbl << "\n";
+        if (!block_terminated_) out_ << "    br label %" << end_lbl << "\n";
         if (if_stmt->else_block) {
+            block_terminated_ = false;
             out_ << else_lbl << ":\n";
             emitBlock(*if_stmt->else_block);
-            out_ << "    br label %" << end_lbl << "\n";
+            if (!block_terminated_) out_ << "    br label %" << end_lbl << "\n";
         }
+        block_terminated_ = false;
         out_ << end_lbl << ":\n";
         return;
     }
@@ -957,16 +1110,21 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string end_lbl  = newLabel("while_end");
         std::string saved_break = break_label_, saved_continue = continue_label_;
         break_label_ = end_lbl; continue_label_ = cond_lbl;
+        loop_stack_.push_back({w->block_label, end_lbl, cond_lbl});
         out_ << "    br label %" << cond_lbl << "\n";
+        block_terminated_ = false;
         out_ << cond_lbl << ":\n";
         std::string cond = emitExpr(*w->cond);
         std::string cond_bool = newTmp();
         out_ << "    " << cond_bool << " = icmp ne i32 " << cond << ", 0\n";
         out_ << "    br i1 " << cond_bool << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
+        block_terminated_ = false;
         out_ << body_lbl << ":\n";
         emitBlock(*w->body);
-        out_ << "    br label %" << cond_lbl << "\n";
+        if (!block_terminated_) out_ << "    br label %" << cond_lbl << "\n";
+        block_terminated_ = false;
         out_ << end_lbl << ":\n";
+        loop_stack_.pop_back();
         break_label_ = saved_break; continue_label_ = saved_continue;
         return;
     }
@@ -979,14 +1137,27 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string end_lbl  = newLabel("for_end");
         std::string saved_break = break_label_, saved_continue = continue_label_;
         break_label_ = end_lbl; continue_label_ = incr_lbl;
+        loop_stack_.push_back({f->block_label, end_lbl, incr_lbl});
 
-        std::string var_reg = "%var_" + f->var_name;
-        out_ << "    " << var_reg << " = alloca i32\n";
-        locals_[f->var_name] = var_reg;
+        std::string var_reg;
+        bool new_var = !f->var_type.empty();
+        if (new_var) {
+            // declare new loop variable
+            var_reg = "%var_" + f->var_name;
+            out_ << "    " << var_reg << " = alloca i32\n";
+            locals_[f->var_name] = var_reg;
+        } else {
+            // reuse existing variable
+            auto it = locals_.find(f->var_name);
+            if (it == locals_.end())
+                throw std::runtime_error("for loop: undefined variable '" + f->var_name + "'");
+            var_reg = it->second;
+        }
         std::string end_reg = newTmp() + "_end";
         out_ << "    " << end_reg << " = alloca i32\n";
 
         out_ << "    br label %" << init_lbl << "\n";
+        block_terminated_ = false;
         out_ << init_lbl << ":\n";
         std::string start_val = emitExpr(*f->range_start);
         out_ << "    store i32 " << start_val << ", ptr " << var_reg << "\n";
@@ -994,6 +1165,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         out_ << "    store i32 " << end_val << ", ptr " << end_reg << "\n";
         out_ << "    br label %" << cond_lbl << "\n";
 
+        block_terminated_ = false;
         out_ << cond_lbl << ":\n";
         std::string cur = newTmp();
         out_ << "    " << cur << " = load i32, ptr " << var_reg << "\n";
@@ -1003,10 +1175,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
         out_ << "    " << cmp << " = icmp slt i32 " << cur << ", " << lim << "\n";
         out_ << "    br i1 " << cmp << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
 
+        block_terminated_ = false;
         out_ << body_lbl << ":\n";
         emitBlock(*f->body);
-        out_ << "    br label %" << incr_lbl << "\n";
+        if (!block_terminated_) out_ << "    br label %" << incr_lbl << "\n";
 
+        block_terminated_ = false;
         out_ << incr_lbl << ":\n";
         std::string old_val = newTmp();
         out_ << "    " << old_val << " = load i32, ptr " << var_reg << "\n";
@@ -1015,8 +1189,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
         out_ << "    store i32 " << new_val << ", ptr " << var_reg << "\n";
         out_ << "    br label %" << cond_lbl << "\n";
 
+        block_terminated_ = false;
         out_ << end_lbl << ":\n";
-        locals_.erase(f->var_name);
+        if (new_var) locals_.erase(f->var_name);
+        loop_stack_.pop_back();
         break_label_ = saved_break; continue_label_ = saved_continue;
         return;
     }
@@ -1035,22 +1211,64 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 return;
             }
 
-            if (auto* s = dynamic_cast<const StringLiteralExpr*>(call->args[0].get())) {
-                std::string label = "@.str" + std::to_string(str_counter_++);
-                std::string full = newline ? s->value + "\n" : s->value;
-                int len; llvmEscape(full, len);
-                std::string tmp = newTmp();
-                out_ << "    " << tmp << " = getelementptr [" << len << " x i8], ptr "
-                     << label << ", i32 0, i32 0\n";
-                out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
+            // Flatten a left-leaning "+" chain into segments.
+            // Each segment is either a StringLiteralExpr or an integer expr.
+            std::vector<const Expr*> segments;
+            std::function<void(const Expr*)> flatten = [&](const Expr* e) {
+                if (auto* b = dynamic_cast<const BinaryExpr*>(e)) {
+                    if (b->op == "+") {
+                        flatten(b->left.get());
+                        flatten(b->right.get());
+                        return;
+                    }
+                }
+                segments.push_back(e);
+            };
+            flatten(call->args[0].get());
+
+            bool is_concat = segments.size() > 1 ||
+                (segments.size() == 1 && !dynamic_cast<const StringLiteralExpr*>(segments[0]));
+
+            if (!is_concat && segments.size() == 1) {
+                // single string literal
+                if (auto* s = dynamic_cast<const StringLiteralExpr*>(segments[0])) {
+                    std::string label = "@.str" + std::to_string(str_counter_++);
+                    std::string full = newline ? s->value + "\n" : s->value;
+                    int len; llvmEscape(full, len);
+                    std::string tmp = newTmp();
+                    out_ << "    " << tmp << " = getelementptr [" << len << " x i8], ptr "
+                         << label << ", i32 0, i32 0\n";
+                    out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
+                    return;
+                }
+                // single integer expr
+                std::string val = emitExpr(*segments[0]);
+                std::string fmt = newTmp();
+                std::string fmt_name = newline ? "@.fmt_int" : "@.fmt_int_nonl";
+                out_ << "    " << fmt << " = getelementptr [4 x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
+                out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", i32 " << val << ")\n";
                 return;
             }
 
-            std::string val = emitExpr(*call->args[0]);
-            std::string fmt = newTmp();
-            std::string fmt_name = newline ? "@.fmt_int" : "@.fmt_int_nonl";
-            out_ << "    " << fmt << " = getelementptr [4 x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
-            out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", i32 " << val << ")\n";
+            // multi-segment: emit one printf per segment, newline only on last
+            for (int si = 0; si < (int)segments.size(); si++) {
+                bool last = (si == (int)segments.size() - 1);
+                if (auto* s = dynamic_cast<const StringLiteralExpr*>(segments[si])) {
+                    std::string full = (last && newline) ? s->value + "\n" : s->value;
+                    std::string label = "@.str" + std::to_string(str_counter_++);
+                    int len; llvmEscape(full, len);
+                    std::string tmp = newTmp();
+                    out_ << "    " << tmp << " = getelementptr [" << len << " x i8], ptr "
+                         << label << ", i32 0, i32 0\n";
+                    out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
+                } else {
+                    std::string val = emitExpr(*segments[si]);
+                    std::string fmt = newTmp();
+                    std::string fmt_name = (last && newline) ? "@.fmt_int" : "@.fmt_int_nonl";
+                    out_ << "    " << fmt << " = getelementptr [4 x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
+                    out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", i32 " << val << ")\n";
+                }
+            }
             return;
         }
 

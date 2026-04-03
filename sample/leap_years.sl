@@ -1,4 +1,3 @@
-import std.io;
 
 int32 main() {
     for int year in (1992..2109) {

@@ -1,5 +1,6 @@
 #include "parser.h"
 #include <stdexcept>
+#include <functional>
 #include <map>
 
 Parser::Parser(std::vector<Token> tokens)
@@ -103,6 +104,11 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
             } else {
                 base = std::make_unique<FieldAccessExpr>(std::move(base), member);
             }
+        } else if (peek().type == TokenType::kLBracket) {
+            advance();
+            auto idx = parseExpr();
+            expect(TokenType::kRBracket, "expected ']'");
+            base = std::make_unique<ArrayIndexExpr>(std::move(base), std::move(idx));
         } else if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
             std::string op = (peek().type == TokenType::kPlusPlus) ? "post++" : "post--";
             advance();
@@ -264,14 +270,26 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
     if (t.type == TokenType::kBreak) {
         advance();
+        auto stmt = std::make_unique<BreakStmt>();
+        if (peek().type == TokenType::kIntLiteral) {
+            stmt->number = std::stoi(advance().value);
+        } else if (peek().type == TokenType::kIdentifier) {
+            stmt->label = advance().value;
+        }
         expect(TokenType::kSemicolon, "expected ';'");
-        return std::make_unique<BreakStmt>();
+        return stmt;
     }
 
     if (t.type == TokenType::kContinue) {
         advance();
+        auto stmt = std::make_unique<ContinueStmt>();
+        if (peek().type == TokenType::kIntLiteral) {
+            stmt->number = std::stoi(advance().value);
+        } else if (peek().type == TokenType::kIdentifier) {
+            stmt->label = advance().value;
+        }
         expect(TokenType::kSemicolon, "expected ';'");
-        return std::make_unique<ContinueStmt>();
+        return stmt;
     }
 
     // pre-increment/decrement statement: ++x; --x;
@@ -322,14 +340,27 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         stmt->cond = parseExpr();
         expect(TokenType::kRParen, "expected ')'");
         stmt->body = parseBlock();
+        if (peek().type == TokenType::kColon) {
+            advance();
+            stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+        }
         return stmt;
     }
 
     if (t.type == TokenType::kFor) {
         advance();
         auto stmt = std::make_unique<ForRangeStmt>();
-        stmt->var_type = parseTypeName();
-        stmt->var_name = expect(TokenType::kIdentifier, "expected variable name").value;
+        // type is optional — "for int i in" vs "for i in" (reuse existing var)
+        if (isTypeName(peek())) {
+            stmt->var_type = parseTypeName();
+            stmt->var_name = expect(TokenType::kIdentifier, "expected variable name").value;
+        } else if (peek().type == TokenType::kIdentifier) {
+            stmt->var_type = ""; // reuse existing variable
+            stmt->var_name = advance().value;
+        } else {
+            throw std::runtime_error("Line " + std::to_string(peek().line)
+                + ": expected variable name in for loop");
+        }
         expect(TokenType::kIn, "expected 'in'");
         expect(TokenType::kLParen, "expected '('");
         stmt->range_start = parseExpr();
@@ -337,6 +368,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         stmt->range_end = parseExpr();
         expect(TokenType::kRParen, "expected ')'");
         stmt->body = parseBlock();
+        if (peek().type == TokenType::kColon) {
+            advance();
+            stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+        }
         return stmt;
     }
 
@@ -370,16 +405,77 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         // not a nested function — fall through to variable declaration
         std::string type = parseTypeName();
         std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
+
+        // array declaration: Type name[d0][d1...] = ((..),(..),..);
+        if (peek().type == TokenType::kLBracket) {
+            auto arr = std::make_unique<ArrayDeclStmt>();
+            arr->elem_type = type;
+            arr->name = name;
+            while (peek().type == TokenType::kLBracket) {
+                advance();
+                int dim = std::stoi(expect(TokenType::kIntLiteral, "expected array dimension").value);
+                expect(TokenType::kRBracket, "expected ']'");
+                arr->dims.push_back(dim);
+            }
+            expect(TokenType::kEquals, "expected '='");
+            // parse nested initializer lists: flatten into row-major order
+            std::function<void()> parseInitList = [&]() {
+                if (peek().type == TokenType::kLParen) {
+                    advance();
+                    while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                        parseInitList();
+                        if (peek().type == TokenType::kComma) advance();
+                    }
+                    expect(TokenType::kRParen, "expected ')'");
+                } else {
+                    arr->init_values.push_back(parseExpr());
+                }
+            };
+            parseInitList();
+            expect(TokenType::kSemicolon, "expected ';'");
+            return arr;
+        }
+
         expect(TokenType::kEquals, "expected '='");
         auto init = parseExpr();
         expect(TokenType::kSemicolon, "expected ';'");
         return std::make_unique<VarDeclStmt>(type, name, std::move(init));
     }
 
-    // user-defined type variable declaration: Counter c; or Counter c(5);
+    // user-defined type variable declaration: Counter c; or Counter c(5); or Piece board[8][8] = ...
     if (isUserTypeName(t)) {
         std::string type = advance().value;
         std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
+
+        // array declaration: Type name[d0][d1] = (...)
+        if (peek().type == TokenType::kLBracket) {
+            auto arr = std::make_unique<ArrayDeclStmt>();
+            arr->elem_type = type;
+            arr->name = name;
+            while (peek().type == TokenType::kLBracket) {
+                advance();
+                int dim = std::stoi(expect(TokenType::kIntLiteral, "expected array dimension").value);
+                expect(TokenType::kRBracket, "expected ']'");
+                arr->dims.push_back(dim);
+            }
+            expect(TokenType::kEquals, "expected '='");
+            std::function<void()> parseInitList = [&]() {
+                if (peek().type == TokenType::kLParen) {
+                    advance();
+                    while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                        parseInitList();
+                        if (peek().type == TokenType::kComma) advance();
+                    }
+                    expect(TokenType::kRParen, "expected ')'");
+                } else {
+                    arr->init_values.push_back(parseExpr());
+                }
+            };
+            parseInitList();
+            expect(TokenType::kSemicolon, "expected ';'");
+            return arr;
+        }
+
         std::vector<std::unique_ptr<Expr>> ctor_args;
         if (peek().type == TokenType::kLParen) {
             advance();
@@ -576,6 +672,19 @@ SlidDef Parser::parseSlidDef() {
     return slid;
 }
 
+EnumDef Parser::parseEnumDef() {
+    expect(TokenType::kEnum, "expected 'enum'");
+    EnumDef e;
+    e.name = expect(TokenType::kIdentifier, "expected enum name").value;
+    expect(TokenType::kLParen, "expected '('");
+    while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+        e.values.push_back(expect(TokenType::kIdentifier, "expected enum value").value);
+        if (peek().type == TokenType::kComma) advance();
+    }
+    expect(TokenType::kRParen, "expected ')'");
+    return e;
+}
+
 FunctionDef Parser::parseFunctionDef() {
     FunctionDef fn;
     fn.return_type = parseTypeName();
@@ -595,8 +704,12 @@ FunctionDef Parser::parseFunctionDef() {
 Program Parser::parse() {
     Program program;
     while (peek().type != TokenType::kEof) {
+        // enum definition
+        if (peek().type == TokenType::kEnum) {
+            program.enums.push_back(parseEnumDef());
+        }
         // slid class definition: UpperCase identifier followed by (
-        if (isUserTypeName(peek())
+        else if (isUserTypeName(peek())
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
             program.slids.push_back(parseSlidDef());

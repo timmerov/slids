@@ -9,8 +9,10 @@ BUILD_DIR = ../build/sample
 # --- add new samples here ---
 SAMPLES = hello \
 	biz_buzz \
+	chess1 \
 	counter1 counter2 \
 	function1 \
+	leap_years \
 	math1 math2 \
 	primes1 \
 	reverse_bits

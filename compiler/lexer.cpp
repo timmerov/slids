@@ -124,6 +124,7 @@ Token Lexer::readIdentifierOrKeyword() {
     if (value == "in")       return Token(TokenType::kIn,       value, line_);
     if (value == "break")    return Token(TokenType::kBreak,    value, line_);
     if (value == "continue") return Token(TokenType::kContinue, value, line_);
+    if (value == "enum")     return Token(TokenType::kEnum,     value, line_);
 
     return Token(TokenType::kIdentifier, value, line_);
 }
@@ -228,6 +229,15 @@ std::vector<Token> Lexer::tokenize() {
                 case '.':
                     if (peek() == '.') { advance(); tokens.emplace_back(TokenType::kDotDot, "..", line_); }
                     else               { tokens.emplace_back(TokenType::kDot, ".", line_); }
+                    break;
+                case ':':
+                    tokens.emplace_back(TokenType::kColon, ":", line_);
+                    break;
+                case '[':
+                    tokens.emplace_back(TokenType::kLBracket, "[", line_);
+                    break;
+                case ']':
+                    tokens.emplace_back(TokenType::kRBracket, "]", line_);
                     break;
                 default:  tokens.emplace_back(TokenType::kUnknown, std::string(1, c), line_); break;
             }

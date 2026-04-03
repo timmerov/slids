@@ -32,6 +32,7 @@ enum class TokenType {
     kIn,
     kBreak,
     kContinue,
+    kEnum,
 
     // comparison operators
     kEqEq,
@@ -95,6 +96,9 @@ enum class TokenType {
     kComma,
     kDot,
     kDotDot,
+    kColon,
+    kLBracket,
+    kRBracket,
 
     kEof,
     kUnknown,

@@ -65,6 +65,14 @@ struct MethodCallExpr : Expr {
         : object(std::move(obj)), method(std::move(method)), args(std::move(args)) {}
 };
 
+// array index: arr[i] or arr[i][j]
+struct ArrayIndexExpr : Expr {
+    std::unique_ptr<Expr> base;
+    std::unique_ptr<Expr> index;
+    ArrayIndexExpr(std::unique_ptr<Expr> base, std::unique_ptr<Expr> idx)
+        : base(std::move(base)), index(std::move(idx)) {}
+};
+
 // --- Statements ---
 
 struct Stmt {
@@ -122,6 +130,15 @@ struct MethodCallStmt : Stmt {
         : object(std::move(obj)), method(std::move(method)), args(std::move(args)) {}
 };
 
+// fixed-size array declaration: Type name[d0][d1] = ((...), ...)
+struct ArrayDeclStmt : Stmt {
+    std::string elem_type;
+    std::string name;
+    std::vector<int> dims;  // e.g. {8, 8} for [8][8]
+    // initializer: flat list of exprs in row-major order
+    std::vector<std::unique_ptr<Expr>> init_values;
+};
+
 struct BlockStmt : Stmt {
     std::vector<std::unique_ptr<Stmt>> stmts;
 };
@@ -130,23 +147,39 @@ struct IfStmt : Stmt {
     std::unique_ptr<Expr> cond;
     std::unique_ptr<BlockStmt> then_block;
     std::unique_ptr<BlockStmt> else_block; // may be null
+    std::string block_label; // optional :name after }
 };
 
 struct WhileStmt : Stmt {
     std::unique_ptr<Expr> cond;
     std::unique_ptr<BlockStmt> body;
+    std::string block_label; // optional :name after }
 };
 
 struct ForRangeStmt : Stmt {
-    std::string var_type;
+    std::string var_type;   // empty = use existing variable
     std::string var_name;
     std::unique_ptr<Expr> range_start;
     std::unique_ptr<Expr> range_end;
     std::unique_ptr<BlockStmt> body;
+    std::string block_label; // optional :name after }
 };
 
-struct BreakStmt : Stmt {};
-struct ContinueStmt : Stmt {};
+struct BreakStmt : Stmt {
+    std::string label;  // empty = naked break
+    int number = 0;     // 0 = not numbered
+};
+struct ContinueStmt : Stmt {
+    std::string label;  // empty = naked continue
+    int number = 0;     // 0 = not numbered
+};
+
+// --- Enums ---
+
+struct EnumDef {
+    std::string name;
+    std::vector<std::string> values; // ordered list of enumerator names
+};
 
 // --- Top-level ---
 
@@ -191,6 +224,7 @@ struct FunctionDef {
 };
 
 struct Program {
+    std::vector<EnumDef> enums;
     std::vector<SlidDef> slids;
     std::vector<FunctionDef> functions;
 };
@@ -214,6 +248,7 @@ private:
     std::string parseTypeName();
 
     SlidDef parseSlidDef();
+    EnumDef parseEnumDef();
     MethodDef parseMethodDef();
     NestedFunctionDef parseNestedFunctionDef();
     FunctionDef parseFunctionDef();

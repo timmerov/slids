@@ -46,6 +46,28 @@ private:
     std::string continue_label_;
     std::string current_slid_;
     std::string self_ptr_;
+    bool block_terminated_ = false; // true after br/ret, reset at each new label
+
+    // named/numbered break+continue support
+    // each entry: {block_label, break_target, continue_target}
+    // continue_target is "" for non-loop blocks
+    struct LoopFrame {
+        std::string block_label;   // user label, or "" if unnamed
+        std::string break_target;
+        std::string continue_target; // "" for switch/plain blocks
+    };
+    std::vector<LoopFrame> loop_stack_;
+
+    // enum support: enum value name -> integer value
+    std::map<std::string, int> enum_values_;
+
+    // array support: var name -> {elem_type, dims, flat_alloca_reg}
+    struct ArrayInfo {
+        std::string elem_type;
+        std::vector<int> dims;
+        std::string alloca_reg; // ptr to flat [N x i32] alloca
+    };
+    std::map<std::string, ArrayInfo> array_info_;
 
     // nested function support
     std::map<std::string, NestedFuncInfo> nested_info_; // mangled -> info
