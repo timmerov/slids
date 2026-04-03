@@ -15,6 +15,8 @@ std::string Codegen::llvmType(const std::string& t) {
     if (t == "int16") return "i16";
     if (t == "int8")  return "i8";
     if (t == "void")  return "void";
+    // any reference type (ends in ^) is a pointer
+    if (!t.empty() && t.back() == '^') return "ptr";
     return "i32";
 }
 
@@ -37,6 +39,9 @@ static std::string llvmEscape(const std::string& s, int& len) {
 void Codegen::collectFunctionSignatures() {
     for (auto& fn : program_.functions) {
         func_return_types_[fn.name] = fn.return_type;
+        std::vector<std::string> ptypes;
+        for (auto& [t, n] : fn.params) ptypes.push_back(t);
+        func_param_types_[fn.name] = ptypes;
 
         // recurse into all blocks to find nested function defs
         std::function<void(const BlockStmt&)> findNested = [&](const BlockStmt& block) {
@@ -45,6 +50,10 @@ void Codegen::collectFunctionSignatures() {
                     std::string mangled = fn.name + "__" + nfs->def.name;
                     func_return_types_[mangled] = nfs->def.return_type;
                     func_return_types_[nfs->def.name] = nfs->def.return_type;
+                    std::vector<std::string> nptypes;
+                    for (auto& [t, n] : nfs->def.params) nptypes.push_back(t);
+                    func_param_types_[mangled] = nptypes;
+                    func_param_types_[nfs->def.name] = nptypes;
                 } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
                     findNested(*f->body);
                 } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get())) {
@@ -58,8 +67,13 @@ void Codegen::collectFunctionSignatures() {
         findNested(*fn.body);
     }
     for (auto& slid : program_.slids) {
-        for (auto& m : slid.methods)
-            func_return_types_[slid.name + "__" + m.name] = m.return_type;
+        for (auto& m : slid.methods) {
+            std::string mangled = slid.name + "__" + m.name;
+            func_return_types_[mangled] = m.return_type;
+            std::vector<std::string> ptypes;
+            for (auto& [t, n] : m.params) ptypes.push_back(t);
+            func_param_types_[mangled] = ptypes;
+        }
     }
 }
 
@@ -412,6 +426,7 @@ void Codegen::emitNestedFunction(
         out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
         out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
         locals_[name] = reg;
+        local_types_[name] = type;
     }
 
     emitBlock(*fn.body);
@@ -496,6 +511,7 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
             out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
             out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
             locals_[name] = reg;
+            local_types_[name] = type;
         }
 
         emitBlock(*m.body);
@@ -537,6 +553,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
         out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
         out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
         locals_[name] = reg;
+        local_types_[name] = type;
     }
 
     emitBlock(*fn.body);
@@ -679,7 +696,83 @@ std::string Codegen::emitExpr(const Expr& expr) {
         return val;
     }
 
+    if (auto* ao = dynamic_cast<const AddrOfExpr*>(&expr)) {
+        // ^x — return the alloca register for x (its address)
+        if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
+            auto it = locals_.find(ve->name);
+            if (it == locals_.end())
+                throw std::runtime_error("AddrOf: undefined variable '" + ve->name + "'");
+            return it->second; // the alloca ptr IS the address
+        }
+        throw std::runtime_error("AddrOf: unsupported operand");
+    }
+
+    if (auto* de = dynamic_cast<const DerefExpr*>(&expr)) {
+        // ptr^ — first load the pointer from its alloca, then load through it
+        std::string pointee_llvm = "i32"; // default pointee type
+        std::string ptr_reg;
+
+        if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+            auto it = locals_.find(ve->name);
+            if (it == locals_.end())
+                throw std::runtime_error("DerefExpr: undefined variable '" + ve->name + "'");
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end() && !tit->second.empty() && tit->second.back() == '^') {
+                // variable holds a pointer — load the ptr, then load through it
+                std::string loaded_ptr = newTmp();
+                out_ << "    " << loaded_ptr << " = load ptr, ptr " << it->second << "\n";
+                ptr_reg = loaded_ptr;
+                std::string pointee_type = tit->second.substr(0, tit->second.size() - 1);
+                pointee_llvm = llvmType(pointee_type);
+            } else {
+                // variable is a plain value used as ptr (e.g. parameter already holds ptr)
+                ptr_reg = it->second;
+            }
+        } else {
+            // general case: evaluate operand as expression to get a ptr
+            ptr_reg = emitExpr(*de->operand);
+        }
+
+        std::string tmp = newTmp();
+        out_ << "    " << tmp << " = load " << pointee_llvm << ", ptr " << ptr_reg << "\n";
+        return tmp;
+    }
+
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
+        // handle ptr^.field — object is a DerefExpr
+        if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
+            std::string ptr_val;
+            std::string slid_name;
+            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto it = locals_.find(ve->name);
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end() && !tit->second.empty() && tit->second.back() == '^') {
+                    std::string loaded = newTmp();
+                    out_ << "    " << loaded << " = load ptr, ptr " << it->second << "\n";
+                    ptr_val = loaded;
+                    slid_name = tit->second.substr(0, tit->second.size() - 1);
+                } else {
+                    ptr_val = it->second;
+                    if (tit != local_types_.end()) slid_name = tit->second;
+                }
+            } else {
+                ptr_val = emitExpr(*de->operand);
+            }
+            if (slid_name.empty() || !slid_info_.count(slid_name))
+                throw std::runtime_error("DerefFieldAccess: unknown slid type for field '" + fa->field + "'");
+            auto& info = slid_info_[slid_name];
+            auto fit = info.field_index.find(fa->field);
+            if (fit == info.field_index.end())
+                throw std::runtime_error("unknown field: " + fa->field);
+            int idx = fit->second;
+            std::string field_type = llvmType(info.field_types[idx]);
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr %struct." << slid_name
+                 << ", ptr " << ptr_val << ", i32 0, i32 " << idx << "\n";
+            std::string tmp = newTmp();
+            out_ << "    " << tmp << " = load " << field_type << ", ptr " << gep << "\n";
+            return tmp;
+        }
         if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
             std::string gep = emitFieldPtr(ve->name, fa->field);
             auto type_it = local_types_.find(ve->name);
@@ -695,23 +788,40 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
+        // helper to get slid_name and obj_ptr from any object expression
+        std::string slid_name, obj_ptr;
         if (auto* ve = dynamic_cast<const VarExpr*>(mc->object.get())) {
             auto type_it = local_types_.find(ve->name);
             if (type_it == local_types_.end())
                 throw std::runtime_error("unknown type for: " + ve->name);
-            std::string slid_name = type_it->second;
-            std::string obj_ptr = locals_[ve->name];
-
+            slid_name = type_it->second;
+            obj_ptr = locals_[ve->name];
+        } else if (auto* de = dynamic_cast<const DerefExpr*>(mc->object.get())) {
+            // ptr^.method() — load the pointer, use as self
+            if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto type_it = local_types_.find(ve2->name);
+                if (type_it == local_types_.end())
+                    throw std::runtime_error("unknown type for: " + ve2->name);
+                slid_name = type_it->second;
+                if (!slid_name.empty() && slid_name.back() == '^') slid_name.pop_back();
+                // load the pointer value from the alloca
+                std::string loaded = newTmp();
+                out_ << "    " << loaded << " = load ptr, ptr " << locals_[ve2->name] << "\n";
+                obj_ptr = loaded;
+            }
+        }
+        if (!slid_name.empty()) {
             std::string mangled = slid_name + "__" + mc->method;
             auto ret_it = func_return_types_.find(mangled);
             if (ret_it == func_return_types_.end())
                 throw std::runtime_error("unknown method: " + mc->method);
             std::string ret_type = llvmType(ret_it->second);
-
             std::string arg_str = "ptr " + obj_ptr;
-            for (auto& arg : mc->args)
-                arg_str += ", i32 " + emitExpr(*arg);
-
+            auto& mptypes = func_param_types_[mangled];
+            for (int i = 0; i < (int)mc->args.size(); i++) {
+                std::string ptype = (i < (int)mptypes.size()) ? llvmType(mptypes[i]) : "i32";
+                arg_str += ", " + ptype + " " + emitExpr(*mc->args[i]);
+            }
             std::string tmp = newTmp();
             out_ << "    " << tmp << " = call " << ret_type << " @" << mangled
                  << "(" << arg_str << ")\n";
@@ -745,9 +855,13 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 arg_str = "ptr " + frame;
             }
 
+            auto& nptypes_ce = func_param_types_[mangled];
+            int ni_ce = 0;
             for (auto& arg : call->args) {
                 if (!arg_str.empty()) arg_str += ", ";
-                arg_str += "i32 " + emitExpr(*arg);
+                std::string ptype = (ni_ce < (int)nptypes_ce.size()) ? llvmType(nptypes_ce[ni_ce]) : "i32";
+                arg_str += ptype + " " + emitExpr(*arg);
+                ni_ce++;
             }
 
             std::string tmp = newTmp();
@@ -762,9 +876,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
             throw std::runtime_error("undefined function: " + call->callee);
         std::string ret_type = llvmType(it->second);
         std::string arg_str;
+        auto& ptypes = func_param_types_[call->callee];
         for (int i = 0; i < (int)call->args.size(); i++) {
             if (i > 0) arg_str += ", ";
-            arg_str += "i32 " + emitExpr(*call->args[i]);
+            std::string ptype = (i < (int)ptypes.size()) ? llvmType(ptypes[i]) : "i32";
+            arg_str += ptype + " " + emitExpr(*call->args[i]);
         }
         std::string tmp = newTmp();
         out_ << "    " << tmp << " = call " << ret_type << " @" << call->callee
@@ -991,12 +1107,14 @@ void Codegen::emitStmt(const Stmt& stmt) {
             return;
         }
 
-        // primitive variable declaration
+        // primitive or reference variable declaration
         std::string reg = "%var_" + decl->name;
-        out_ << "    " << reg << " = alloca i32\n";
+        std::string llvm_t = llvmType(decl->type);
+        out_ << "    " << reg << " = alloca " << llvm_t << "\n";
         locals_[decl->name] = reg;
+        local_types_[decl->name] = decl->type;
         std::string val = emitExpr(*decl->init);
-        out_ << "    store i32 " << val << ", ptr " << reg << "\n";
+        out_ << "    store " << llvm_t << " " << val << ", ptr " << reg << "\n";
         return;
     }
 
@@ -1024,7 +1142,64 @@ void Codegen::emitStmt(const Stmt& stmt) {
         return;
     }
 
+    if (auto* da = dynamic_cast<const DerefAssignStmt*>(&stmt)) {
+        // ptr^ = val — load the pointer from its alloca, then store through it
+        std::string ptr_reg;
+        std::string pointee_llvm = "i32";
+        if (auto* ve = dynamic_cast<const VarExpr*>(da->ptr.get())) {
+            auto it = locals_.find(ve->name);
+            if (it == locals_.end())
+                throw std::runtime_error("DerefAssign: undefined variable '" + ve->name + "'");
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end() && !tit->second.empty() && tit->second.back() == '^') {
+                std::string loaded_ptr = newTmp();
+                out_ << "    " << loaded_ptr << " = load ptr, ptr " << it->second << "\n";
+                ptr_reg = loaded_ptr;
+                std::string pointee_type = tit->second.substr(0, tit->second.size() - 1);
+                pointee_llvm = llvmType(pointee_type);
+            } else {
+                ptr_reg = it->second;
+            }
+        } else {
+            ptr_reg = emitExpr(*da->ptr);
+        }
+        std::string val = emitExpr(*da->value);
+        out_ << "    store " << pointee_llvm << " " << val << ", ptr " << ptr_reg << "\n";
+        return;
+    }
+
     if (auto* fa = dynamic_cast<const FieldAssignStmt*>(&stmt)) {
+        // handle ptr^.field = val — object is a DerefExpr
+        if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
+            std::string ptr_val;
+            std::string slid_name;
+            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto it = locals_.find(ve->name);
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end() && !tit->second.empty() && tit->second.back() == '^') {
+                    std::string loaded = newTmp();
+                    out_ << "    " << loaded << " = load ptr, ptr " << it->second << "\n";
+                    ptr_val = loaded;
+                    slid_name = tit->second.substr(0, tit->second.size() - 1);
+                } else {
+                    ptr_val = it->second;
+                    if (tit != local_types_.end()) slid_name = tit->second;
+                }
+            } else {
+                ptr_val = emitExpr(*de->operand);
+            }
+            if (slid_name.empty() || !slid_info_.count(slid_name))
+                throw std::runtime_error("DerefFieldAssign: unknown slid type for field '" + fa->field + "'");
+            auto& info = slid_info_[slid_name];
+            int idx = info.field_index[fa->field];
+            std::string field_type = llvmType(info.field_types[idx]);
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr %struct." << slid_name
+                 << ", ptr " << ptr_val << ", i32 0, i32 " << idx << "\n";
+            std::string val = emitExpr(*fa->value);
+            out_ << "    store " << field_type << " " << val << ", ptr " << gep << "\n";
+            return;
+        }
         if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
             std::string gep = emitFieldPtr(ve->name, fa->field);
             auto type_it = local_types_.find(ve->name);
@@ -1040,22 +1215,34 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* mcs = dynamic_cast<const MethodCallStmt*>(&stmt)) {
+        std::string slid_name, obj_ptr;
         if (auto* ve = dynamic_cast<const VarExpr*>(mcs->object.get())) {
             auto type_it = local_types_.find(ve->name);
             if (type_it == local_types_.end())
                 throw std::runtime_error("unknown type for: " + ve->name);
-            std::string slid_name = type_it->second;
-            std::string obj_ptr = locals_[ve->name];
+            slid_name = type_it->second;
+            obj_ptr = locals_[ve->name];
+        } else if (auto* de = dynamic_cast<const DerefExpr*>(mcs->object.get())) {
+            if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto type_it = local_types_.find(ve2->name);
+                if (type_it == local_types_.end())
+                    throw std::runtime_error("unknown type for: " + ve2->name);
+                slid_name = type_it->second;
+                if (!slid_name.empty() && slid_name.back() == '^') slid_name.pop_back();
+                std::string loaded = newTmp();
+                out_ << "    " << loaded << " = load ptr, ptr " << locals_[ve2->name] << "\n";
+                obj_ptr = loaded;
+            }
+        }
+        if (!slid_name.empty()) {
             std::string mangled = slid_name + "__" + mcs->method;
             auto ret_it = func_return_types_.find(mangled);
             if (ret_it == func_return_types_.end())
                 throw std::runtime_error("unknown method: " + mcs->method);
             std::string ret_type = llvmType(ret_it->second);
-
             std::string arg_str = "ptr " + obj_ptr;
             for (auto& arg : mcs->args)
                 arg_str += ", i32 " + emitExpr(*arg);
-
             if (ret_type == "void") {
                 out_ << "    call void @" << mangled << "(" << arg_str << ")\n";
             } else {
@@ -1366,9 +1553,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 arg_str = "ptr " + frame;
             }
 
-            for (auto& arg : call->args) {
+            auto& nptypes_cs = func_param_types_[mangled];
+            for (int i = 0; i < (int)call->args.size(); i++) {
                 if (!arg_str.empty()) arg_str += ", ";
-                arg_str += "i32 " + emitExpr(*arg);
+                std::string ptype = (i < (int)nptypes_cs.size()) ? llvmType(nptypes_cs[i]) : "i32";
+                arg_str += ptype + " " + emitExpr(*call->args[i]);
             }
 
             if (ret_type == "void") {
@@ -1376,6 +1565,27 @@ void Codegen::emitStmt(const Stmt& stmt) {
             } else {
                 std::string tmp = newTmp();
                 out_ << "    " << tmp << " = call " << ret_type << " @" << mangled
+                     << "(" << arg_str << ")\n";
+            }
+            return;
+        }
+
+        // regular top-level function call as statement
+        auto fit = func_return_types_.find(call->callee);
+        if (fit != func_return_types_.end()) {
+            std::string ret_type = llvmType(fit->second);
+            auto& rptypes = func_param_types_[call->callee];
+            std::string arg_str;
+            for (int i = 0; i < (int)call->args.size(); i++) {
+                if (i > 0) arg_str += ", ";
+                std::string ptype = (i < (int)rptypes.size()) ? llvmType(rptypes[i]) : "i32";
+                arg_str += ptype + " " + emitExpr(*call->args[i]);
+            }
+            if (ret_type == "void") {
+                out_ << "    call void @" << call->callee << "(" << arg_str << ")\n";
+            } else {
+                std::string tmp = newTmp();
+                out_ << "    " << tmp << " = call " << ret_type << " @" << call->callee
                      << "(" << arg_str << ")\n";
             }
             return;

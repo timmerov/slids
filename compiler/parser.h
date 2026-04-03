@@ -73,6 +73,18 @@ struct ArrayIndexExpr : Expr {
         : base(std::move(base)), index(std::move(idx)) {}
 };
 
+// dereference: ptr^  (postfix)
+struct DerefExpr : Expr {
+    std::unique_ptr<Expr> operand;
+    DerefExpr(std::unique_ptr<Expr> op) : operand(std::move(op)) {}
+};
+
+// take address: ^x  (prefix)
+struct AddrOfExpr : Expr {
+    std::unique_ptr<Expr> operand;
+    AddrOfExpr(std::unique_ptr<Expr> op) : operand(std::move(op)) {}
+};
+
 // --- Statements ---
 
 struct Stmt {
@@ -137,6 +149,14 @@ struct ArrayDeclStmt : Stmt {
     std::vector<int> dims;  // e.g. {8, 8} for [8][8]
     // initializer: flat list of exprs in row-major order
     std::vector<std::unique_ptr<Expr>> init_values;
+};
+
+// deref assign: ptr^ = expr  or  ptr^.field = expr handled via FieldAssignStmt on DerefExpr
+struct DerefAssignStmt : Stmt {
+    std::unique_ptr<Expr> ptr;   // the pointer expression
+    std::unique_ptr<Expr> value;
+    DerefAssignStmt(std::unique_ptr<Expr> ptr, std::unique_ptr<Expr> val)
+        : ptr(std::move(ptr)), value(std::move(val)) {}
 };
 
 struct BlockStmt : Stmt {

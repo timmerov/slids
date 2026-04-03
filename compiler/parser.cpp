@@ -42,10 +42,17 @@ bool Parser::isUserTypeName(const Token& t) {
 }
 
 std::string Parser::parseTypeName() {
-    if (isTypeName(peek())) return advance().value;
-    if (isUserTypeName(peek())) return advance().value;
-    throw std::runtime_error("Line " + std::to_string(peek().line)
+    std::string base;
+    if (isTypeName(peek())) base = advance().value;
+    else if (isUserTypeName(peek())) base = advance().value;
+    else throw std::runtime_error("Line " + std::to_string(peek().line)
         + ": expected type name, got '" + peek().value + "'");
+    // consume trailing ^ for reference types: int^, int^^, Counter^, etc.
+    while (peek().type == TokenType::kBitXor) {
+        advance();
+        base += "^";
+    }
+    return base;
 }
 
 // --- Expression parsing ---
@@ -109,6 +116,18 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
             auto idx = parseExpr();
             expect(TokenType::kRBracket, "expected ']'");
             base = std::make_unique<ArrayIndexExpr>(std::move(base), std::move(idx));
+        } else if (peek().type == TokenType::kBitXor) {
+            // postfix ^ is dereference only when NOT followed by an expression operand
+            // (if followed by identifier/literal/lparen it's binary XOR, handled by parseBitXor)
+            int next = pos_ + 1;
+            TokenType ntt = (next < (int)tokens_.size()) ? tokens_[next].type : TokenType::kEof;
+            bool next_is_operand =
+                ntt == TokenType::kIdentifier || ntt == TokenType::kIntLiteral ||
+                ntt == TokenType::kStringLiteral || ntt == TokenType::kLParen ||
+                ntt == TokenType::kTrue || ntt == TokenType::kFalse;
+            if (next_is_operand) break; // leave ^ for parseBitXor
+            advance();
+            base = std::make_unique<DerefExpr>(std::move(base));
         } else if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
             std::string op = (peek().type == TokenType::kPlusPlus) ? "post++" : "post--";
             advance();
@@ -140,6 +159,12 @@ std::unique_ptr<Expr> Parser::parseUnary() {
         advance();
         auto operand = parsePrimary();
         return std::make_unique<UnaryExpr>(op, std::move(operand));
+    }
+    // prefix ^ — take address: ^x
+    if (peek().type == TokenType::kBitXor) {
+        advance();
+        auto operand = parsePrimary();
+        return std::make_unique<AddrOfExpr>(std::move(operand));
     }
     return parsePostfix(parsePrimary());
 }
@@ -493,6 +518,38 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     if (t.type == TokenType::kIdentifier) {
         std::string name = t.value;
         advance();
+
+        // deref assignment: ptr^ = val  or  ptr^.field = val  or  ptr^.method()
+        if (peek().type == TokenType::kBitXor) {
+            // parse the full postfix chain starting from deref
+            auto base = parsePostfix(std::make_unique<VarExpr>(name));
+            // base is now DerefExpr, or DerefExpr.field, or DerefExpr.method(...)
+
+            if (peek().type == TokenType::kEquals) {
+                advance();
+                auto val = parseExpr();
+                expect(TokenType::kSemicolon, "expected ';'");
+                // ptr^ = val
+                if (auto* de = dynamic_cast<DerefExpr*>(base.get())) {
+                    return std::make_unique<DerefAssignStmt>(std::move(de->operand), std::move(val));
+                }
+                // ptr^.field = val
+                if (auto* fa = dynamic_cast<FieldAccessExpr*>(base.get())) {
+                    auto obj = std::move(fa->object);
+                    std::string field = fa->field;
+                    return std::make_unique<FieldAssignStmt>(std::move(obj), field, std::move(val));
+                }
+                throw std::runtime_error("invalid deref assignment target");
+            }
+            // ptr^.method()
+            if (auto* mc = dynamic_cast<MethodCallExpr*>(base.get())) {
+                expect(TokenType::kSemicolon, "expected ';'");
+                return std::make_unique<MethodCallStmt>(
+                    std::move(mc->object), mc->method, std::move(mc->args));
+            }
+            throw std::runtime_error("Line " + std::to_string(peek().line)
+                + ": unexpected token after dereference");
+        }
 
         // method call or field access chain followed by assignment
         if (peek().type == TokenType::kDot) {

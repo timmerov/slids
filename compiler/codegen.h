@@ -39,8 +39,9 @@ private:
     int label_counter_;
 
     std::map<std::string, std::string> locals_;      // var name -> alloca reg
-    std::map<std::string, std::string> local_types_; // var name -> slid type name
+    std::map<std::string, std::string> local_types_; // var name -> declared type (slid name or "int^" etc)
     std::map<std::string, std::string> func_return_types_;
+    std::map<std::string, std::vector<std::string>> func_param_types_; // func name -> param types
     std::map<std::string, SlidInfo>    slid_info_;
     std::vector<std::pair<std::string, std::string>> string_constants_;
 
