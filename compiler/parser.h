@@ -199,7 +199,9 @@ struct MethodDef {
 struct SlidDef {
     std::string name;
     std::vector<FieldDef> fields;
-    std::unique_ptr<BlockStmt> ctor_body; // may be null
+    std::unique_ptr<BlockStmt> ctor_body;          // loose code (implicit ctor), or null
+    std::unique_ptr<BlockStmt> explicit_ctor_body; // _() { ... }, or null
+    std::unique_ptr<BlockStmt> dtor_body;          // ~() { ... }, or null
     std::vector<MethodDef> methods;
 };
 

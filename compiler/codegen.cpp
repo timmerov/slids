@@ -189,6 +189,8 @@ void Codegen::collectSlids() {
             info.field_index[slid.fields[i].name] = i;
             info.field_types.push_back(slid.fields[i].type);
         }
+        info.has_explicit_ctor = (slid.explicit_ctor_body != nullptr);
+        info.has_dtor = (slid.dtor_body != nullptr);
         slid_info_[slid.name] = std::move(info);
     }
 }
@@ -236,6 +238,10 @@ void Codegen::collectStringConstants() {
     for (auto& slid : program_.slids) {
         if (slid.ctor_body)
             for (auto& stmt : slid.ctor_body->stmts) collect(*stmt);
+        if (slid.explicit_ctor_body)
+            for (auto& stmt : slid.explicit_ctor_body->stmts) collect(*stmt);
+        if (slid.dtor_body)
+            for (auto& stmt : slid.dtor_body->stmts) collect(*stmt);
         for (auto& m : slid.methods)
             for (auto& stmt : m.body->stmts) collect(*stmt);
     }
@@ -291,6 +297,9 @@ void Codegen::emit() {
     str_counter_ = 0;
 
     for (auto& slid : program_.slids)
+        emitSlidCtorDtor(slid);
+
+    for (auto& slid : program_.slids)
         emitSlidMethods(slid);
 
     for (auto& fn : program_.functions)
@@ -342,6 +351,7 @@ void Codegen::emitNestedFunction(
     locals_.clear();
     local_types_.clear();
     array_info_.clear();
+    dtor_vars_.clear();
     tmp_counter_ = 0;
     label_counter_ = 0;
     break_label_ = "";
@@ -406,12 +416,58 @@ void Codegen::emitNestedFunction(
 
     emitBlock(*fn.body);
 
-    if (fn.return_type == "void" && !block_terminated_)
+    if (fn.return_type == "void" && !block_terminated_) {
+        emitDtors();
         out_ << "    ret void\n";
+    }
 
     out_ << "}\n\n";
 }
 
+
+void Codegen::emitDtors() {
+    // call dtors in reverse declaration order
+    for (int i = (int)dtor_vars_.size() - 1; i >= 0; i--) {
+        auto& [var_name, slid_type] = dtor_vars_[i];
+        out_ << "    call void @" << slid_type << "__dtor(ptr " << locals_[var_name] << ")\n";
+    }
+}
+
+void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
+    // emit explicit constructor: @ClassName__ctor(ptr %self)
+    if (slid.explicit_ctor_body) {
+        locals_.clear();
+        local_types_.clear();
+        tmp_counter_ = 0;
+        label_counter_ = 0;
+        block_terminated_ = false;
+        current_slid_ = slid.name;
+
+        out_ << "define void @" << slid.name << "__ctor(ptr %self) {\n";
+        out_ << "entry:\n";
+        emitBlock(*slid.explicit_ctor_body);
+        if (!block_terminated_) out_ << "    ret void\n";
+        out_ << "}\n\n";
+    }
+
+    // emit destructor: @ClassName__dtor(ptr %self)
+    if (slid.dtor_body) {
+        locals_.clear();
+        local_types_.clear();
+        tmp_counter_ = 0;
+        label_counter_ = 0;
+        block_terminated_ = false;
+        current_slid_ = slid.name;
+
+        out_ << "define void @" << slid.name << "__dtor(ptr %self) {\n";
+        out_ << "entry:\n";
+        emitBlock(*slid.dtor_body);
+        if (!block_terminated_) out_ << "    ret void\n";
+        out_ << "}\n\n";
+    }
+
+    current_slid_ = "";
+}
 
 void Codegen::emitSlidMethods(const SlidDef& slid) {
     for (auto& m : slid.methods) {
@@ -485,8 +541,10 @@ void Codegen::emitFunction(const FunctionDef& fn) {
 
     emitBlock(*fn.body);
 
-    if (fn.return_type == "void" && !block_terminated_)
+    if (fn.return_type == "void" && !block_terminated_) {
+        emitDtors();
         out_ << "    ret void\n";
+    }
 
     out_ << "}\n\n";
 
@@ -910,7 +968,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                      << " " << val << ", ptr " << gep << "\n";
             }
 
-            // run constructor body if any
+            // run implicit constructor body if any (loose code in slid body)
             if (slid_def && slid_def->ctor_body) {
                 std::string saved_slid = current_slid_;
                 std::string saved_self = self_ptr_;
@@ -919,6 +977,16 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 emitBlock(*slid_def->ctor_body);
                 current_slid_ = saved_slid;
                 self_ptr_ = saved_self;
+            }
+
+            // call explicit constructor __ctor if defined
+            if (info.has_explicit_ctor) {
+                out_ << "    call void @" << decl->type << "__ctor(ptr " << reg << ")\n";
+            }
+
+            // register for dtor call on scope exit
+            if (info.has_dtor) {
+                dtor_vars_.push_back({decl->name, decl->type});
             }
             return;
         }
@@ -1001,6 +1069,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* ret = dynamic_cast<const ReturnStmt*>(&stmt)) {
+        emitDtors();
         if (ret->value) {
             std::string val = emitExpr(*ret->value);
             out_ << "    ret i32 " << val << "\n";

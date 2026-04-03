@@ -7,11 +7,12 @@ BIN_DIR   = ../bin
 BUILD_DIR = ../build/sample
 
 # --- add new samples here ---
-SAMPLES = hello \
+SAMPLES = \
 	biz_buzz \
 	chess1 \
 	counter1 counter2 \
 	function1 \
+	hello1 hello2 \
 	leap_years \
 	math1 math2 \
 	primes1 \

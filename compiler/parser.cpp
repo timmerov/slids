@@ -651,6 +651,26 @@ SlidDef Parser::parseSlidDef() {
     bool has_ctor_code = false;
 
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
+        // explicit constructor: _() { ... }
+        if (peek().type == TokenType::kIdentifier && peek().value == "_"
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kLParen) {
+            advance(); // consume _
+            expect(TokenType::kLParen, "expected '('");
+            expect(TokenType::kRParen, "expected ')'");
+            slid.explicit_ctor_body = parseBlock();
+            continue;
+        }
+        // explicit destructor: ~() { ... }
+        if (peek().type == TokenType::kBitNot
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kLParen) {
+            advance(); // consume ~
+            expect(TokenType::kLParen, "expected '('");
+            expect(TokenType::kRParen, "expected ')'");
+            slid.dtor_body = parseBlock();
+            continue;
+        }
         // method definition: starts with a type name followed by identifier followed by (
         if ((isTypeName(peek()) || isUserTypeName(peek()))
             && pos_ + 1 < (int)tokens_.size()

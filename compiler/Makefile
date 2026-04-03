@@ -1,5 +1,5 @@
 CXX      = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra
+CXXFLAGS = -std=c++17 -Wall -Wextra -MMD -MP
 LDFLAGS  = -lstdc++fs
 
 BUILD_DIR = ../build/compiler
@@ -8,6 +8,7 @@ TARGET    = $(BIN_DIR)/slidsc
 
 SRCS      = main.cpp lexer.cpp parser.cpp codegen.cpp
 OBJS      = $(addprefix $(BUILD_DIR)/, $(SRCS:.cpp=.o))
+DEPS      = $(OBJS:.o=.d)
 
 .PHONY: all clean
 
@@ -26,4 +27,6 @@ $(BUILD_DIR)/%.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -f $(OBJS) $(DEPS) $(TARGET)
+
+-include $(DEPS)

@@ -11,6 +11,8 @@ struct SlidInfo {
     std::string name;
     std::map<std::string, int> field_index;
     std::vector<std::string> field_types;
+    bool has_explicit_ctor = false;
+    bool has_dtor = false;
 };
 
 // info about a nested function's capture set
@@ -69,6 +71,10 @@ private:
     };
     std::map<std::string, ArrayInfo> array_info_;
 
+    // dtor tracking: ordered list of (var_name, slid_type) for locals with dtors
+    // in declaration order — dtors called in reverse on return
+    std::vector<std::pair<std::string,std::string>> dtor_vars_;
+
     // nested function support
     std::map<std::string, NestedFuncInfo> nested_info_; // mangled -> info
     std::string current_parent_;   // mangled name of current parent function
@@ -84,6 +90,7 @@ private:
         const std::set<std::string>& own_params);
 
     void emitFrameStruct(const FunctionDef& fn);
+    void emitSlidCtorDtor(const SlidDef& slid);
     void emitSlidMethods(const SlidDef& slid);
     void emitFunction(const FunctionDef& fn);
     void emitNestedFunction(const NestedFunctionDef& fn,
@@ -91,6 +98,7 @@ private:
                             const NestedFuncInfo& info);
     void emitBlock(const BlockStmt& block);
     void emitStmt(const Stmt& stmt);
+    void emitDtors(); // call dtors for all in-scope slid vars that have one
     std::string emitExpr(const Expr& expr);
     std::string emitFieldPtr(const std::string& obj_name, const std::string& field);
     std::string newTmp();
