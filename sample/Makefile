@@ -16,7 +16,7 @@ SAMPLES = \
 	leap_years \
 	math1 math2 \
 	primes1 \
-	reference \
+	reference1 reference2 reference3 \
 	reverse_bits
 
 .PHONY: all clean $(SAMPLES)

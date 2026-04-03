@@ -16,6 +16,7 @@ void incrementTwice(Counter^ c) {
 int32 main() {
     Counter c(10);
     incrementTwice(^c);
+    println("expected: 12");
     println(c.getValue());   // 12
     return 0;
 }
