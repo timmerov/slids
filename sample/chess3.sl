@@ -26,13 +26,13 @@ int32 main() {
         int row = 0;
         int col = 0;
 
-        for row in (0..8) :rows {
-            for col in (0..8) :cols {
+        for row in (0..8) {
+            for col in (0..8) {
                 if (board[row][col] == kKnight) {
                     break rows;
                 }
-            }
-        }
+            } :cols
+        } :rows
 
         println("Knight found at row " + row + ", col " + col);
     }
