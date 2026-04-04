@@ -15,6 +15,7 @@ SAMPLES = \
 	hello1 hello2 \
 	leap_years \
 	math1 math2 \
+	memcpy \
 	primes1 \
 	reference1 reference2 reference3 \
 	reverse_bits \

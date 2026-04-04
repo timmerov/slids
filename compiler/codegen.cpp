@@ -14,6 +14,7 @@ std::string Codegen::llvmType(const std::string& t) {
     if (t == "int64") return "i64";
     if (t == "int16") return "i16";
     if (t == "int8")  return "i8";
+    if (t == "uint8" || t == "char") return "i8";
     if (t == "void")  return "void";
     // reference (^) and pointer ([]) both lower to ptr in LLVM IR
     if (!t.empty() && t.back() == '^') return "ptr";
@@ -735,10 +736,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string gep = newTmp();
         int total = 1;
         for (int d : ainfo.dims) total *= d;
-        out_ << "    " << gep << " = getelementptr [" << total << " x i32], ptr "
+        std::string elt = llvmType(ainfo.elem_type);
+        out_ << "    " << gep << " = getelementptr [" << total << " x " << elt << "], ptr "
              << ainfo.alloca_reg << ", i32 0, i32 " << flat << "\n";
         std::string val = newTmp();
-        out_ << "    " << val << " = load i32, ptr " << gep << "\n";
+        out_ << "    " << val << " = load " << elt << ", ptr " << gep << "\n";
         return val;
     }
 
@@ -777,7 +779,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
             int total = 1;
             for (int d : ainfo.dims) total *= d;
             std::string gep = newTmp();
-            out_ << "    " << gep << " = getelementptr [" << total << " x i32], ptr "
+            std::string elt2 = llvmType(ainfo.elem_type);
+            out_ << "    " << gep << " = getelementptr [" << total << " x " << elt2 << "], ptr "
                  << ainfo.alloca_reg << ", i32 0, i32 " << flat << "\n";
             return gep; // pointer to the element, no load
         }
@@ -1149,7 +1152,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
         int total = 1;
         for (int d : arr->dims) total *= d;
         std::string reg = "%arr_" + arr->name;
-        out_ << "    " << reg << " = alloca [" << total << " x i32]\n";
+        std::string elt = llvmType(arr->elem_type);
+        out_ << "    " << reg << " = alloca [" << total << " x " << elt << "]\n";
         ArrayInfo ainfo;
         ainfo.elem_type = arr->elem_type;
         ainfo.dims = arr->dims;
@@ -1159,9 +1163,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
         for (int i = 0; i < (int)arr->init_values.size(); i++) {
             std::string val = emitExpr(*arr->init_values[i]);
             std::string gep = newTmp();
-            out_ << "    " << gep << " = getelementptr [" << total << " x i32], ptr "
+            out_ << "    " << gep << " = getelementptr [" << total << " x " << elt << "], ptr "
                  << reg << ", i32 0, i32 " << i << "\n";
-            out_ << "    store i32 " << val << ", ptr " << gep << "\n";
+            out_ << "    store " << elt << " " << val << ", ptr " << gep << "\n";
         }
         return;
     }

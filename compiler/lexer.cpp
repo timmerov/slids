@@ -43,6 +43,27 @@ void Lexer::skipWhitespaceAndComments() {
     }
 }
 
+Token Lexer::readCharLiteral() {
+    advance(); // consume opening '
+    int value = 0;
+    if (peek() == '\\') {
+        advance();
+        char esc = advance();
+        switch (esc) {
+            case 'n':  value = '\n'; break;
+            case 't':  value = '\t'; break;
+            case '0':  value = '\0'; break;
+            case '\\': value = '\\'; break;
+            case '\'': value = '\''; break;
+            default:   value = esc;  break;
+        }
+    } else {
+        value = (unsigned char)advance();
+    }
+    if (peek() == '\'') advance(); // consume closing '
+    return Token(TokenType::kIntLiteral, std::to_string(value), line_);
+}
+
 Token Lexer::readString() {
     advance();
     std::string value;
@@ -110,6 +131,7 @@ Token Lexer::readIdentifierOrKeyword() {
     if (value == "uint16")   return Token(TokenType::kUint16,   value, line_);
     if (value == "uint32")   return Token(TokenType::kUint32,   value, line_);
     if (value == "uint64")   return Token(TokenType::kUint64,   value, line_);
+    if (value == "char")     return Token(TokenType::kChar,     value, line_);
     if (value == "float32")  return Token(TokenType::kFloat32,  value, line_);
     if (value == "float64")  return Token(TokenType::kFloat64,  value, line_);
     if (value == "bool")     return Token(TokenType::kBool,     value, line_);
@@ -145,6 +167,7 @@ std::vector<Token> Lexer::tokenize() {
         char c = peek();
 
         if (c == '"')                    { tokens.push_back(readString()); }
+        else if (c == '\'')              { tokens.push_back(readCharLiteral()); }
         else if (isdigit(c))             { tokens.push_back(readNumber()); }
         else if (isalpha(c) || c == '_') { tokens.push_back(readIdentifierOrKeyword()); }
         else {

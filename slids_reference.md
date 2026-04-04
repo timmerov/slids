@@ -118,6 +118,7 @@ int32 helperSlid() {  // private — not in .slh
 | `int64` | 64-bit signed integer |
 | `uint` | platform-width unsigned integer |
 | `uint8` | 8-bit unsigned integer |
+| `char` | character (alias for `uint8`) |
 | `uint16` | 16-bit unsigned integer |
 | `uint32` | 32-bit unsigned integer |
 | `uint64` | 64-bit unsigned integer |
@@ -527,6 +528,20 @@ Vector primes = (2, 3, 5);
 
 for int i in primes {
     println(i);
+}
+```
+
+Enum iteration — iterates over all values of an enum in declaration order:
+```
+enum Direction (
+    kNorth,
+    kSouth,
+    kEast,
+    kWest
+)
+
+for Direction d in Direction {
+    println(d);
 }
 ```
 

@@ -18,6 +18,7 @@ private:
     char advance();
     void skipWhitespaceAndComments();
     Token readString();
+    Token readCharLiteral();
     Token readNumber();
     Token readIdentifierOrKeyword();
 };

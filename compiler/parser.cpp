@@ -26,7 +26,7 @@ bool Parser::isTypeName(const Token& t) {
         case TokenType::kInt: case TokenType::kInt8: case TokenType::kInt16:
         case TokenType::kInt32: case TokenType::kInt64:
         case TokenType::kUint: case TokenType::kUint8: case TokenType::kUint16:
-        case TokenType::kUint32: case TokenType::kUint64:
+        case TokenType::kUint32: case TokenType::kUint64: case TokenType::kChar:
         case TokenType::kFloat32: case TokenType::kFloat64:
         case TokenType::kBool: case TokenType::kVoid:
             return true;
@@ -472,7 +472,6 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 expect(TokenType::kRBracket, "expected ']'");
                 arr->dims.push_back(dim);
             }
-            expect(TokenType::kEquals, "expected '='");
             // parse nested initializer lists: flatten into row-major order
             std::function<void()> parseInitList = [&]() {
                 if (peek().type == TokenType::kLParen) {
@@ -486,7 +485,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     arr->init_values.push_back(parseExpr());
                 }
             };
-            parseInitList();
+            if (peek().type == TokenType::kEquals) {
+                advance();
+                parseInitList();
+            }
             expect(TokenType::kSemicolon, "expected ';'");
             return arr;
         }
@@ -525,7 +527,6 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 expect(TokenType::kRBracket, "expected ']'");
                 arr->dims.push_back(dim);
             }
-            expect(TokenType::kEquals, "expected '='");
             std::function<void()> parseInitList = [&]() {
                 if (peek().type == TokenType::kLParen) {
                     advance();
@@ -538,7 +539,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     arr->init_values.push_back(parseExpr());
                 }
             };
-            parseInitList();
+            if (peek().type == TokenType::kEquals) {
+                advance();
+                parseInitList();
+            }
             expect(TokenType::kSemicolon, "expected ';'");
             return arr;
         }
