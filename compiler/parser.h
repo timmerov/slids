@@ -191,6 +191,15 @@ struct ForRangeStmt : Stmt {
     std::string block_label; // optional :name after }
 };
 
+// for EnumType var in EnumType { ... }
+struct ForEnumStmt : Stmt {
+    std::string var_type;   // the enum type name
+    std::string var_name;
+    std::string enum_name;  // the enum being iterated
+    std::unique_ptr<BlockStmt> body;
+    std::string block_label;
+};
+
 struct BreakStmt : Stmt {
     std::string label;  // empty = naked break
     int number = 0;     // 0 = not numbered
@@ -198,6 +207,17 @@ struct BreakStmt : Stmt {
 struct ContinueStmt : Stmt {
     std::string label;  // empty = naked continue
     int number = 0;     // 0 = not numbered
+};
+
+struct SwitchCase {
+    std::unique_ptr<Expr> value;        // null = default
+    std::vector<std::unique_ptr<Stmt>> stmts;
+};
+
+struct SwitchStmt : Stmt {
+    std::unique_ptr<Expr> expr;
+    std::vector<SwitchCase> cases;
+    std::string block_label;            // optional :label after }
 };
 
 // --- Enums ---
@@ -282,6 +302,7 @@ private:
     FunctionDef parseFunctionDef();
     std::unique_ptr<BlockStmt> parseBlock();
     std::unique_ptr<Stmt> parseStmt();
+    std::unique_ptr<SwitchStmt> parseSwitchStmt();
 
     // expression precedence levels
     std::unique_ptr<Expr> parseExpr();

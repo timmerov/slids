@@ -372,8 +372,38 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         return stmt;
     }
 
+    if (t.type == TokenType::kSwitch) {
+        return parseSwitchStmt();
+    }
+
     if (t.type == TokenType::kFor) {
         advance();
+        // for EnumType var in EnumType { ... }  — enum iteration
+        // detected by: user type name, identifier, 'in', user type name (no '(')
+        if (isUserTypeName(peek())) {
+            int saved = pos_;
+            std::string var_type = advance().value;   // e.g. "Piece"
+            if (peek().type == TokenType::kIdentifier) {
+                std::string var_name = advance().value;
+                if (peek().type == TokenType::kIn) {
+                    advance(); // consume 'in'
+                    if (isUserTypeName(peek())) {
+                        auto stmt = std::make_unique<ForEnumStmt>();
+                        stmt->var_type = var_type;
+                        stmt->var_name = var_name;
+                        stmt->enum_name = advance().value;
+                        stmt->body = parseBlock();
+                        if (peek().type == TokenType::kColon) {
+                            advance();
+                            stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+                        }
+                        return stmt;
+                    }
+                }
+            }
+            // not an enum-for — backtrack and fall through to range for
+            pos_ = saved;
+        }
         auto stmt = std::make_unique<ForRangeStmt>();
         // type is optional — "for int i in" vs "for i in" (reuse existing var)
         if (isTypeName(peek())) {
@@ -845,4 +875,43 @@ Program Parser::parse() {
         }
     }
     return program;
+}
+
+std::unique_ptr<SwitchStmt> Parser::parseSwitchStmt() {
+    expect(TokenType::kSwitch, "expected 'switch'");
+    expect(TokenType::kLParen, "expected '('");
+    auto stmt = std::make_unique<SwitchStmt>();
+    stmt->expr = parseExpr();
+    expect(TokenType::kRParen, "expected ')'");
+    expect(TokenType::kLBrace, "expected '{'");
+
+    while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
+        SwitchCase sc;
+        if (peek().type == TokenType::kCase) {
+            advance();
+            sc.value = parseExpr();
+            expect(TokenType::kColon, "expected ':'");
+        } else if (peek().type == TokenType::kDefault) {
+            advance();
+            expect(TokenType::kColon, "expected ':'");
+            sc.value = nullptr; // default
+        } else {
+            throw std::runtime_error("Line " + std::to_string(peek().line)
+                + ": expected 'case' or 'default' in switch");
+        }
+        // parse statements until next case/default/}
+        while (peek().type != TokenType::kCase
+            && peek().type != TokenType::kDefault
+            && peek().type != TokenType::kRBrace
+            && peek().type != TokenType::kEof) {
+            sc.stmts.push_back(parseStmt());
+        }
+        stmt->cases.push_back(std::move(sc));
+    }
+    expect(TokenType::kRBrace, "expected '}'");
+    if (peek().type == TokenType::kColon) {
+        advance();
+        stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+    }
+    return stmt;
 }

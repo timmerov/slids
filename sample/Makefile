@@ -17,7 +17,8 @@ SAMPLES = \
 	math1 math2 \
 	primes1 \
 	reference1 reference2 reference3 \
-	reverse_bits
+	reverse_bits \
+	switch
 
 .PHONY: all clean $(SAMPLES)
 

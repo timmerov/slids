@@ -50,6 +50,26 @@ static std::string llvmEscape(const std::string& s, int& len) {
     return result;
 }
 
+// Resolve a constant expression (integer literal or enum value) to an int
+// without emitting any IR. Returns -1 and sets ok=false if not constant.
+static bool constExprToInt(const Expr& expr,
+                            const std::map<std::string, int>& enum_values,
+                            int& out) {
+    if (auto* il = dynamic_cast<const IntLiteralExpr*>(&expr)) {
+        out = il->value; return true;
+    }
+    if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
+        auto it = enum_values.find(ve->name);
+        if (it != enum_values.end()) { out = it->second; return true; }
+    }
+    if (auto* ue = dynamic_cast<const UnaryExpr*>(&expr)) {
+        if (ue->op == "-") {
+            int v; if (constExprToInt(*ue->operand, enum_values, v)) { out = -v; return true; }
+        }
+    }
+    return false;
+}
+
 void Codegen::collectFunctionSignatures() {
     for (auto& fn : program_.functions) {
         func_return_types_[fn.name] = fn.return_type;
@@ -256,6 +276,11 @@ void Codegen::collectStringConstants() {
             for (auto& s : w->body->stmts) collect(*s);
         } else if (auto* f = dynamic_cast<const ForRangeStmt*>(&stmt)) {
             for (auto& s : f->body->stmts) collect(*s);
+        } else if (auto* f = dynamic_cast<const ForEnumStmt*>(&stmt)) {
+            for (auto& s : f->body->stmts) collect(*s);
+        } else if (auto* sw = dynamic_cast<const SwitchStmt*>(&stmt)) {
+            for (auto& sc : sw->cases)
+                for (auto& s : sc.stmts) collect(*s);
         } else if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) {
             for (auto& s : nfs->def.body->stmts) collect(*s);
         }
@@ -286,6 +311,7 @@ void Codegen::emit() {
     for (auto& e : program_.enums) {
         for (int i = 0; i < (int)e.values.size(); i++)
             enum_values_[e.values[i]] = i;
+        enum_sizes_[e.name] = (int)e.values.size();
     }
 
     // analyze nested functions for all top-level functions
@@ -1542,6 +1568,113 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // after the loop (e.g. for use after a break, as in chess2.sl row/col)
         loop_stack_.pop_back();
         break_label_ = saved_break; continue_label_ = saved_continue;
+        return;
+    }
+
+    if (auto* f = dynamic_cast<const ForEnumStmt*>(&stmt)) {
+        // for EnumType var in EnumType — iterate 0..enum_size
+        auto sit = enum_sizes_.find(f->enum_name);
+        if (sit == enum_sizes_.end())
+            throw std::runtime_error("for-enum: unknown enum type '" + f->enum_name + "'");
+        int size = sit->second;
+
+        std::string init_lbl = newLabel("for_init");
+        std::string cond_lbl = newLabel("for_cond");
+        std::string body_lbl = newLabel("for_body");
+        std::string incr_lbl = newLabel("for_incr");
+        std::string end_lbl  = newLabel("for_end");
+        std::string saved_break = break_label_, saved_continue = continue_label_;
+        break_label_ = end_lbl; continue_label_ = incr_lbl;
+        loop_stack_.push_back({f->block_label, end_lbl, incr_lbl});
+
+        std::string var_reg = "%var_" + f->var_name;
+        out_ << "    " << var_reg << " = alloca i32\n";
+        locals_[f->var_name] = var_reg;
+        local_types_[f->var_name] = f->var_type;
+
+        out_ << "    br label %" << init_lbl << "\n";
+        block_terminated_ = false;
+        out_ << init_lbl << ":\n";
+        out_ << "    store i32 0, ptr " << var_reg << "\n";
+        out_ << "    br label %" << cond_lbl << "\n";
+
+        block_terminated_ = false;
+        out_ << cond_lbl << ":\n";
+        std::string cur = newTmp();
+        out_ << "    " << cur << " = load i32, ptr " << var_reg << "\n";
+        std::string cmp = newTmp();
+        out_ << "    " << cmp << " = icmp slt i32 " << cur << ", " << size << "\n";
+        out_ << "    br i1 " << cmp << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
+
+        block_terminated_ = false;
+        out_ << body_lbl << ":\n";
+        emitBlock(*f->body);
+        if (!block_terminated_) out_ << "    br label %" << incr_lbl << "\n";
+
+        block_terminated_ = false;
+        out_ << incr_lbl << ":\n";
+        std::string old_v = newTmp();
+        out_ << "    " << old_v << " = load i32, ptr " << var_reg << "\n";
+        std::string new_v = newTmp();
+        out_ << "    " << new_v << " = add i32 " << old_v << ", 1\n";
+        out_ << "    store i32 " << new_v << ", ptr " << var_reg << "\n";
+        out_ << "    br label %" << cond_lbl << "\n";
+
+        block_terminated_ = false;
+        out_ << end_lbl << ":\n";
+        loop_stack_.pop_back();
+        break_label_ = saved_break; continue_label_ = saved_continue;
+        return;
+    }
+
+    if (auto* sw = dynamic_cast<const SwitchStmt*>(&stmt)) {
+        std::string end_lbl = newLabel("sw_end");
+        std::string saved_break = break_label_;
+        break_label_ = end_lbl;
+        loop_stack_.push_back({sw->block_label, end_lbl, ""});
+
+        std::string disc = emitExpr(*sw->expr);
+
+        // build per-case labels
+        std::vector<std::string> case_lbls;
+        for (int i = 0; i < (int)sw->cases.size(); i++)
+            case_lbls.push_back(newLabel("sw_case"));
+
+        // emit LLVM switch instruction
+        // find default label (if any), else use end_lbl
+        std::string default_lbl = end_lbl;
+        for (int i = 0; i < (int)sw->cases.size(); i++)
+            if (!sw->cases[i].value) { default_lbl = case_lbls[i]; break; }
+
+        out_ << "    switch i32 " << disc << ", label %" << default_lbl << " [\n";
+        for (int i = 0; i < (int)sw->cases.size(); i++) {
+            if (!sw->cases[i].value) continue; // skip default
+            int val;
+            if (!constExprToInt(*sw->cases[i].value, enum_values_, val))
+                throw std::runtime_error("switch case value must be a constant integer or enum");
+            out_ << "        i32 " << val << ", label %" << case_lbls[i] << "\n";
+        }
+        out_ << "    ]\n";
+        block_terminated_ = true;
+
+        // emit each case body — fallthrough to next case if no break
+        for (int i = 0; i < (int)sw->cases.size(); i++) {
+            block_terminated_ = false;
+            out_ << case_lbls[i] << ":\n";
+            for (auto& s : sw->cases[i].stmts)
+                emitStmt(*s);
+            // fallthrough: branch to next case label, or end if last
+            if (!block_terminated_) {
+                std::string next = (i + 1 < (int)case_lbls.size())
+                    ? case_lbls[i + 1] : end_lbl;
+                out_ << "    br label %" << next << "\n";
+            }
+        }
+
+        block_terminated_ = false;
+        out_ << end_lbl << ":\n";
+        loop_stack_.pop_back();
+        break_label_ = saved_break;
         return;
     }
 

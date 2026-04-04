@@ -62,7 +62,8 @@ private:
     std::vector<LoopFrame> loop_stack_;
 
     // enum support: enum value name -> integer value
-    std::map<std::string, int> enum_values_;
+    std::map<std::string, int> enum_values_;  // enumerator name -> int value
+    std::map<std::string, int> enum_sizes_;   // enum type name -> number of values
 
     // array support: var name -> {elem_type, dims, flat_alloca_reg}
     struct ArrayInfo {

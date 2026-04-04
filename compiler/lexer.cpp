@@ -125,6 +125,9 @@ Token Lexer::readIdentifierOrKeyword() {
     if (value == "break")    return Token(TokenType::kBreak,    value, line_);
     if (value == "continue") return Token(TokenType::kContinue, value, line_);
     if (value == "enum")     return Token(TokenType::kEnum,     value, line_);
+    if (value == "switch")   return Token(TokenType::kSwitch,   value, line_);
+    if (value == "case")     return Token(TokenType::kCase,     value, line_);
+    if (value == "default")  return Token(TokenType::kDefault,  value, line_);
 
     return Token(TokenType::kIdentifier, value, line_);
 }
