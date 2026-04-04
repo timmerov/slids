@@ -47,10 +47,21 @@ std::string Parser::parseTypeName() {
     else if (isUserTypeName(peek())) base = advance().value;
     else throw std::runtime_error("Line " + std::to_string(peek().line)
         + ": expected type name, got '" + peek().value + "'");
-    // consume trailing ^ for reference types: int^, int^^, Counter^, etc.
-    while (peek().type == TokenType::kBitXor) {
-        advance();
-        base += "^";
+    // consume trailing ^ or [] for pointer/reference types — kept distinct:
+    //   ^ = reference (no arithmetic allowed)
+    //   [] = pointer  (arithmetic allowed: ++, --, +, -)
+    while (true) {
+        if (peek().type == TokenType::kBitXor) {
+            advance();
+            base += "^";
+        } else if (peek().type == TokenType::kLBracket
+                   && pos_ + 1 < (int)tokens_.size()
+                   && tokens_[pos_ + 1].type == TokenType::kRBracket) {
+            advance(); advance(); // consume [ ]
+            base += "[]";
+        } else {
+            break;
+        }
     }
     return base;
 }
@@ -160,10 +171,10 @@ std::unique_ptr<Expr> Parser::parseUnary() {
         auto operand = parsePostfix(parsePrimary());  // handles ++(ref^), ++arr[i], etc.
         return std::make_unique<UnaryExpr>(op, std::move(operand));
     }
-    // prefix ^ — take address: ^x
+    // prefix ^ — take address: ^x, ^arr[i][j]
     if (peek().type == TokenType::kBitXor) {
         advance();
-        auto operand = parsePrimary();
+        auto operand = parsePostfix(parsePrimary());
         return std::make_unique<AddrOfExpr>(std::move(operand));
     }
     return parsePostfix(parsePrimary());
@@ -319,29 +330,12 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
     // pre-increment/decrement statement: ++x;  ++ref^;  ++(ref^);
     if (t.type == TokenType::kPlusPlus || t.type == TokenType::kMinusMinus) {
-        bool is_inc = (t.type == TokenType::kPlusPlus);
+        std::string op = (t.type == TokenType::kPlusPlus) ? "pre++" : "pre--";
         advance();
-        auto operand = parsePostfix(parsePrimary());  // handles ++(ref^), ++arr[i]
-        std::string arith = is_inc ? "+" : "-";
-        // plain variable: ++x -> x = x + 1
-        if (auto* ve = dynamic_cast<VarExpr*>(operand.get())) {
-            std::string name = ve->name;
-            expect(TokenType::kSemicolon, "expected ';'");
-            auto rhs = std::make_unique<BinaryExpr>(arith,
-                std::make_unique<VarExpr>(name), std::make_unique<IntLiteralExpr>(1));
-            return std::make_unique<AssignStmt>(name, std::move(rhs));
-        }
-        // dereference: ++(ref^) -> ref^ = ref^ + 1 via DerefAssignStmt
-        if (auto* de = dynamic_cast<DerefExpr*>(operand.get())) {
-            auto* ve = dynamic_cast<VarExpr*>(de->operand.get());
-            if (!ve) throw std::runtime_error("++/-- on deref requires simple pointer variable");
-            std::string ptr_name = ve->name;
-            expect(TokenType::kSemicolon, "expected ';'");
-            auto lhs_read = std::make_unique<DerefExpr>(std::make_unique<VarExpr>(ptr_name));
-            auto rhs = std::make_unique<BinaryExpr>(arith, std::move(lhs_read), std::make_unique<IntLiteralExpr>(1));
-            return std::make_unique<DerefAssignStmt>(std::make_unique<VarExpr>(ptr_name), std::move(rhs));
-        }
-        throw std::runtime_error("++/-- statement requires a variable or dereference target");
+        auto operand = parsePostfix(parsePrimary());
+        expect(TokenType::kSemicolon, "expected ';'");
+        return std::make_unique<ExprStmt>(
+            std::make_unique<UnaryExpr>(op, std::move(operand)));
     }
 
     if (t.type == TokenType::kIf) {
@@ -473,10 +467,22 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         return std::make_unique<VarDeclStmt>(type, name, std::move(init));
     }
 
-    // user-defined type variable declaration: Counter c; or Counter c(5); or Piece board[8][8] = ...
+    // user-defined type variable declaration: Counter c; or Counter c(5); or Piece board[8][8] = ... or Piece[] ptr = ...
     if (isUserTypeName(t)) {
-        std::string type = advance().value;
+        std::string type = parseTypeName(); // consumes Name plus any trailing ^ or []
         std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
+
+        // pointer or reference variable with initializer: Type[] ptr = expr  or  Type^ ref = expr
+        auto isIndirectType = [](const std::string& t) {
+            return (t.size() >= 1 && t.back() == '^') ||
+                   (t.size() >= 2 && t.substr(t.size()-2) == "[]");
+        };
+        if (isIndirectType(type) && peek().type == TokenType::kEquals) {
+            advance();
+            auto init = parseExpr();
+            expect(TokenType::kSemicolon, "expected ';'");
+            return std::make_unique<VarDeclStmt>(type, name, std::move(init));
+        }
 
         // array declaration: Type name[d0][d1] = (...)
         if (peek().type == TokenType::kLBracket) {
@@ -581,20 +587,11 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     throw std::runtime_error("compound assignment requires a dereference target");
                 }
             }
-            // ptr^++  or  ptr^--  as a statement
-            // parsePostfix already built base = UnaryExpr("post++", DerefExpr(VarExpr(ptr)))
+            // ptr^++  or  ptr^--  as a statement — ExprStmt routes to the correct codegen
             if (auto* ue = dynamic_cast<UnaryExpr*>(base.get())) {
                 if (ue->op == "post++" || ue->op == "post--") {
-                    if (auto* de = dynamic_cast<DerefExpr*>(ue->operand.get())) {
-                        auto* ve = dynamic_cast<VarExpr*>(de->operand.get());
-                        if (!ve) throw std::runtime_error("post++/-- on deref requires simple pointer variable");
-                        std::string ptr_name = ve->name;
-                        std::string arith = (ue->op == "post++") ? "+" : "-";
-                        expect(TokenType::kSemicolon, "expected ';'");
-                        auto lhs_read = std::make_unique<DerefExpr>(std::make_unique<VarExpr>(ptr_name));
-                        auto rhs = std::make_unique<BinaryExpr>(arith, std::move(lhs_read), std::make_unique<IntLiteralExpr>(1));
-                        return std::make_unique<DerefAssignStmt>(std::make_unique<VarExpr>(ptr_name), std::move(rhs));
-                    }
+                    expect(TokenType::kSemicolon, "expected ';'");
+                    return std::make_unique<ExprStmt>(std::move(base));
                 }
             }
             // ptr^.method()
@@ -638,14 +635,11 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
         // post-increment/decrement statement: x++; x--;
         if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
-            std::string op = (peek().type == TokenType::kPlusPlus) ? "+" : "-";
+            std::string op = (peek().type == TokenType::kPlusPlus) ? "post++" : "post--";
             advance();
             expect(TokenType::kSemicolon, "expected ';'");
-            // desugar to x = x + 1
-            auto lhs = std::make_unique<VarExpr>(name);
-            auto rhs = std::make_unique<BinaryExpr>(op, std::make_unique<VarExpr>(name),
-                                                        std::make_unique<IntLiteralExpr>(1));
-            return std::make_unique<AssignStmt>(name, std::move(rhs));
+            return std::make_unique<ExprStmt>(
+                std::make_unique<UnaryExpr>(op, std::make_unique<VarExpr>(name)));
         }
 
         // function call statement

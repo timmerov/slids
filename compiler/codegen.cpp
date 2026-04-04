@@ -15,9 +15,23 @@ std::string Codegen::llvmType(const std::string& t) {
     if (t == "int16") return "i16";
     if (t == "int8")  return "i8";
     if (t == "void")  return "void";
-    // any reference type (ends in ^) is a pointer
+    // reference (^) and pointer ([]) both lower to ptr in LLVM IR
     if (!t.empty() && t.back() == '^') return "ptr";
+    if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return "ptr";
     return "i32";
+}
+
+// type ends in ^ — reference, no arithmetic
+static bool isRefType(const std::string& t) {
+    return !t.empty() && t.back() == '^';
+}
+// type ends in [] — pointer, arithmetic allowed
+static bool isPtrType(const std::string& t) {
+    return t.size() >= 2 && t.substr(t.size()-2) == "[]";
+}
+// either indirect type
+static bool isIndirectType(const std::string& t) {
+    return isRefType(t) || isPtrType(t);
 }
 
 static std::string llvmEscape(const std::string& s, int& len) {
@@ -657,7 +671,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
             throw std::runtime_error("undefined variable: " + v->name);
         }
         std::string tmp = newTmp();
-        out_ << "    " << tmp << " = load i32, ptr " << it->second << "\n";
+        auto tit = local_types_.find(v->name);
+        std::string load_type = (tit != local_types_.end()) ? llvmType(tit->second) : "i32";
+        out_ << "    " << tmp << " = load " << load_type << ", ptr " << it->second << "\n";
         return tmp;
     }
 
@@ -701,12 +717,43 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* ao = dynamic_cast<const AddrOfExpr*>(&expr)) {
-        // ^x — return the alloca register for x (its address)
+        // ^x — return the alloca register (its address)
         if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
             auto it = locals_.find(ve->name);
             if (it == locals_.end())
                 throw std::runtime_error("AddrOf: undefined variable '" + ve->name + "'");
-            return it->second; // the alloca ptr IS the address
+            return it->second;
+        }
+        // ^arr[i][j] — compute GEP but skip the final load, returning the element ptr
+        if (dynamic_cast<const ArrayIndexExpr*>(ao->operand.get())) {
+            std::vector<const Expr*> indices;
+            const Expr* cur = ao->operand.get();
+            while (auto* a = dynamic_cast<const ArrayIndexExpr*>(cur)) {
+                indices.insert(indices.begin(), a->index.get());
+                cur = a->base.get();
+            }
+            auto* ve = dynamic_cast<const VarExpr*>(cur);
+            if (!ve) throw std::runtime_error("AddrOf: complex array base not supported");
+            auto ait = array_info_.find(ve->name);
+            if (ait == array_info_.end())
+                throw std::runtime_error("AddrOf: undefined array '" + ve->name + "'");
+            auto& ainfo = ait->second;
+            std::string flat = emitExpr(*indices[0]);
+            for (int k = 1; k < (int)indices.size(); k++) {
+                int stride = ainfo.dims[k];
+                std::string mul = newTmp();
+                out_ << "    " << mul << " = mul i32 " << flat << ", " << stride << "\n";
+                std::string idx_val = emitExpr(*indices[k]);
+                std::string add = newTmp();
+                out_ << "    " << add << " = add i32 " << mul << ", " << idx_val << "\n";
+                flat = add;
+            }
+            int total = 1;
+            for (int d : ainfo.dims) total *= d;
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr [" << total << " x i32], ptr "
+                 << ainfo.alloca_reg << ", i32 0, i32 " << flat << "\n";
+            return gep; // pointer to the element, no load
         }
         throw std::runtime_error("AddrOf: unsupported operand");
     }
@@ -721,16 +768,18 @@ std::string Codegen::emitExpr(const Expr& expr) {
             if (it == locals_.end())
                 throw std::runtime_error("DerefExpr: undefined variable '" + ve->name + "'");
             auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end() && !tit->second.empty() && tit->second.back() == '^') {
-                // variable holds a pointer — load the ptr, then load through it
+            if (tit != local_types_.end() && isIndirectType(tit->second)) {
+                // variable holds a reference or pointer — load the ptr, then load through it
                 std::string loaded_ptr = newTmp();
                 out_ << "    " << loaded_ptr << " = load ptr, ptr " << it->second << "\n";
                 ptr_reg = loaded_ptr;
-                std::string pointee_type = tit->second.substr(0, tit->second.size() - 1);
+                std::string pointee_type = ( isPtrType(tit->second) ? tit->second.substr(0, tit->second.size()-2) : tit->second.substr(0, tit->second.size()-1) );
                 pointee_llvm = llvmType(pointee_type);
             } else {
-                // variable is a plain value used as ptr (e.g. parameter already holds ptr)
-                ptr_reg = it->second;
+                std::string type_name = (tit != local_types_.end()) ? tit->second : "unknown";
+                throw std::runtime_error(
+                    "cannot dereference '" + ve->name + "' of type '" + type_name +
+                    "': only reference (^) and pointer ([]) types can be dereferenced");
             }
         } else {
             // general case: evaluate operand as expression to get a ptr
@@ -750,11 +799,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
             if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
                 auto it = locals_.find(ve->name);
                 auto tit = local_types_.find(ve->name);
-                if (tit != local_types_.end() && !tit->second.empty() && tit->second.back() == '^') {
+                if (tit != local_types_.end() && isIndirectType(tit->second)) {
                     std::string loaded = newTmp();
                     out_ << "    " << loaded << " = load ptr, ptr " << it->second << "\n";
                     ptr_val = loaded;
-                    slid_name = tit->second.substr(0, tit->second.size() - 1);
+                    slid_name = ( isPtrType(tit->second) ? tit->second.substr(0, tit->second.size()-2) : tit->second.substr(0, tit->second.size()-1) );
                 } else {
                     ptr_val = it->second;
                     if (tit != local_types_.end()) slid_name = tit->second;
@@ -807,7 +856,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 if (type_it == local_types_.end())
                     throw std::runtime_error("unknown type for: " + ve2->name);
                 slid_name = type_it->second;
-                if (!slid_name.empty() && slid_name.back() == '^') slid_name.pop_back();
+                if (isRefType(slid_name)) slid_name.pop_back(); else if (isPtrType(slid_name)) slid_name.resize(slid_name.size()-2);
                 // load the pointer value from the alloca
                 std::string loaded = newTmp();
                 out_ << "    " << loaded << " = load ptr, ptr " << locals_[ve2->name] << "\n";
@@ -938,11 +987,34 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 ptr = it->second;
             }
 
+            // check if the variable is a pointer type ([] — arithmetic allowed)
+            // or a reference type (^ — arithmetic is a compile error)
+            bool is_ptr_arith = false;
+            if (auto* ve = dynamic_cast<const VarExpr*>(u->operand.get())) {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) {
+                    if (isRefType(tit->second))
+                        throw std::runtime_error(
+                            "'" + u->op + "' on reference '" + ve->name +
+                            "': arithmetic on references is not allowed (use a pointer '[]' type)");
+                    if (isPtrType(tit->second))
+                        is_ptr_arith = true;
+                }
+            }
+
             std::string old = newTmp();
-            out_ << "    " << old << " = load i32, ptr " << ptr << "\n";
             std::string new_val = newTmp();
-            out_ << "    " << new_val << " = " << instr << " i32 " << old << ", 1\n";
-            out_ << "    store i32 " << new_val << ", ptr " << ptr << "\n";
+            if (is_ptr_arith) {
+                // pointer arithmetic: load ptr, GEP ±1, store back
+                out_ << "    " << old << " = load ptr, ptr " << ptr << "\n";
+                int step = (instr == "add") ? 1 : -1;
+                out_ << "    " << new_val << " = getelementptr i32, ptr " << old << ", i32 " << step << "\n";
+                out_ << "    store ptr " << new_val << ", ptr " << ptr << "\n";
+            } else {
+                out_ << "    " << old << " = load i32, ptr " << ptr << "\n";
+                out_ << "    " << new_val << " = " << instr << " i32 " << old << ", 1\n";
+                out_ << "    store i32 " << new_val << ", ptr " << ptr << "\n";
+            }
             return is_pre ? new_val : old;
         }
         // other unary ops — evaluate operand first
@@ -1154,7 +1226,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (it == locals_.end())
             throw std::runtime_error("undefined variable: " + assign->name);
         std::string val = emitExpr(*assign->value);
-        out_ << "    store i32 " << val << ", ptr " << it->second << "\n";
+        auto tit = local_types_.find(assign->name);
+        bool is_ptr = tit != local_types_.end() && isIndirectType(tit->second);
+        std::string store_type = is_ptr ? "ptr" : llvmType(tit != local_types_.end() ? tit->second : "int");
+        out_ << "    store " << store_type << " " << val << ", ptr " << it->second << "\n";
         return;
     }
 
@@ -1167,11 +1242,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (it == locals_.end())
                 throw std::runtime_error("DerefAssign: undefined variable '" + ve->name + "'");
             auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end() && !tit->second.empty() && tit->second.back() == '^') {
+            if (tit != local_types_.end() && isIndirectType(tit->second)) {
                 std::string loaded_ptr = newTmp();
                 out_ << "    " << loaded_ptr << " = load ptr, ptr " << it->second << "\n";
                 ptr_reg = loaded_ptr;
-                std::string pointee_type = tit->second.substr(0, tit->second.size() - 1);
+                std::string pointee_type = ( isPtrType(tit->second) ? tit->second.substr(0, tit->second.size()-2) : tit->second.substr(0, tit->second.size()-1) );
                 pointee_llvm = llvmType(pointee_type);
             } else {
                 ptr_reg = it->second;
@@ -1192,11 +1267,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
                 auto it = locals_.find(ve->name);
                 auto tit = local_types_.find(ve->name);
-                if (tit != local_types_.end() && !tit->second.empty() && tit->second.back() == '^') {
+                if (tit != local_types_.end() && isIndirectType(tit->second)) {
                     std::string loaded = newTmp();
                     out_ << "    " << loaded << " = load ptr, ptr " << it->second << "\n";
                     ptr_val = loaded;
-                    slid_name = tit->second.substr(0, tit->second.size() - 1);
+                    slid_name = ( isPtrType(tit->second) ? tit->second.substr(0, tit->second.size()-2) : tit->second.substr(0, tit->second.size()-1) );
                 } else {
                     ptr_val = it->second;
                     if (tit != local_types_.end()) slid_name = tit->second;
@@ -1244,7 +1319,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (type_it == local_types_.end())
                     throw std::runtime_error("unknown type for: " + ve2->name);
                 slid_name = type_it->second;
-                if (!slid_name.empty() && slid_name.back() == '^') slid_name.pop_back();
+                if (isRefType(slid_name)) slid_name.pop_back(); else if (isPtrType(slid_name)) slid_name.resize(slid_name.size()-2);
                 std::string loaded = newTmp();
                 out_ << "    " << loaded << " = load ptr, ptr " << locals_[ve2->name] << "\n";
                 obj_ptr = loaded;
@@ -1463,9 +1538,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
         block_terminated_ = false;
         out_ << end_lbl << ":\n";
-        if (new_var) locals_.erase(f->var_name);
+        // intentionally do NOT erase new_var from locals_ — the variable persists
+        // after the loop (e.g. for use after a break, as in chess2.sl row/col)
         loop_stack_.pop_back();
         break_label_ = saved_break; continue_label_ = saved_continue;
+        return;
+    }
+
+    if (auto* es = dynamic_cast<const ExprStmt*>(&stmt)) {
+        emitExpr(*es->expr); // evaluate for side effects, discard result
         return;
     }
 

@@ -132,6 +132,12 @@ struct CallStmt : Stmt {
         : callee(std::move(callee)), args(std::move(args)) {}
 };
 
+// expression used as a statement for its side effects: ++ptr; x++; etc.
+struct ExprStmt : Stmt {
+    std::unique_ptr<Expr> expr;
+    ExprStmt(std::unique_ptr<Expr> e) : expr(std::move(e)) {}
+};
+
 // method call as statement: obj.method(args);
 struct MethodCallStmt : Stmt {
     std::unique_ptr<Expr> object;

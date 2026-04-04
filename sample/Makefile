@@ -9,7 +9,7 @@ BUILD_DIR = ../build/sample
 # --- add new samples here ---
 SAMPLES = \
 	biz_buzz \
-	chess1 \
+	chess1 chess2 \
 	counter1 counter2 \
 	function1 \
 	hello1 hello2 \
