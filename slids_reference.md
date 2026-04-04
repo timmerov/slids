@@ -508,7 +508,7 @@ while (condition) doSomething();  // error — {} required
 ```
 while {
     // do stuff
-} :outer (condition)
+} :outer (condition);
 ```
 
 ### For — range-based

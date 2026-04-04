@@ -9,7 +9,7 @@ int32 main() {
     while {
         ch = from++^;
         to++^ = ch;
-    } (ch != 0)
+    } (ch != 0);
 
     println("expected: Hello, World!");
     println(dest);

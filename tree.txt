@@ -1,0 +1,36 @@
+.
+├── compiler
+│   ├── codegen.cpp
+│   ├── codegen.h
+│   ├── lexer.cpp
+│   ├── lexer.h
+│   ├── main.cpp
+│   ├── Makefile
+│   ├── parser.cpp
+│   ├── parser.h
+│   └── token.h
+├── sample
+│   ├── biz_buzz.sl
+│   ├── chess1.sl
+│   ├── chess2.sl
+│   ├── chess3.sl
+│   ├── counter1.sl
+│   ├── counter2.sl
+│   ├── duffs_device.sl
+│   ├── function1.sl
+│   ├── hello1.sl
+│   ├── hello2.sl
+│   ├── leap_years.sl
+│   ├── Makefile
+│   ├── math1.sl
+│   ├── math2.sl
+│   ├── memcpy.sl
+│   ├── primes1.sl
+│   ├── primes2.sl
+│   ├── quicksort.sl
+│   ├── reference1.sl
+│   ├── reference2.sl
+│   ├── reference3.sl
+│   ├── reverse_bits.sl
+│   └── switch.sl
+├── slids_reference.md

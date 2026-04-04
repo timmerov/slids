@@ -79,6 +79,15 @@ struct DerefExpr : Expr {
     DerefExpr(std::unique_ptr<Expr> op) : operand(std::move(op)) {}
 };
 
+// ptr++^  — post-increment pointer then dereference the OLD address (rvalue)
+// or used as lvalue: ptr++^ = val  — store val at current ptr, then increment ptr
+struct PostIncDerefExpr : Expr {
+    std::unique_ptr<Expr> operand; // the pointer variable
+    std::string op; // "++" or "--"
+    PostIncDerefExpr(std::unique_ptr<Expr> op_expr, std::string op)
+        : operand(std::move(op_expr)), op(std::move(op)) {}
+};
+
 // take address: ^x  (prefix)
 struct AddrOfExpr : Expr {
     std::unique_ptr<Expr> operand;
@@ -165,6 +174,15 @@ struct DerefAssignStmt : Stmt {
         : ptr(std::move(ptr)), value(std::move(val)) {}
 };
 
+// ptr++^ = expr  — store val at current ptr, then advance ptr
+struct PostIncDerefAssignStmt : Stmt {
+    std::unique_ptr<Expr> ptr;   // the pointer variable
+    std::string op;              // "++" or "--"
+    std::unique_ptr<Expr> value;
+    PostIncDerefAssignStmt(std::unique_ptr<Expr> ptr, std::string op, std::unique_ptr<Expr> val)
+        : ptr(std::move(ptr)), op(std::move(op)), value(std::move(val)) {}
+};
+
 struct BlockStmt : Stmt {
     std::vector<std::unique_ptr<Stmt>> stmts;
 };
@@ -179,7 +197,8 @@ struct IfStmt : Stmt {
 struct WhileStmt : Stmt {
     std::unique_ptr<Expr> cond;
     std::unique_ptr<BlockStmt> body;
-    std::string block_label; // optional :name after }
+    std::string block_label;    // optional :name after }
+    bool bottom_condition = false; // true for while { } (cond); form
 };
 
 struct ForRangeStmt : Stmt {

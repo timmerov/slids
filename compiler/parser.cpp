@@ -140,9 +140,16 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
             advance();
             base = std::make_unique<DerefExpr>(std::move(base));
         } else if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
-            std::string op = (peek().type == TokenType::kPlusPlus) ? "post++" : "post--";
+            std::string op = (peek().type == TokenType::kPlusPlus) ? "++" : "--";
             advance();
-            base = std::make_unique<UnaryExpr>(op, std::move(base));
+            // ptr++^ — post-inc/dec then deref: treat as PostIncDerefExpr
+            if (peek().type == TokenType::kBitXor) {
+                advance();
+                base = std::make_unique<PostIncDerefExpr>(std::move(base), op);
+            } else {
+                std::string uop = (op == "++") ? "post++" : "post--";
+                base = std::make_unique<UnaryExpr>(uop, std::move(base));
+            }
         } else {
             break;
         }
@@ -361,13 +368,27 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     if (t.type == TokenType::kWhile) {
         advance();
         auto stmt = std::make_unique<WhileStmt>();
-        expect(TokenType::kLParen, "expected '('");
-        stmt->cond = parseExpr();
-        expect(TokenType::kRParen, "expected ')'");
-        stmt->body = parseBlock();
-        if (peek().type == TokenType::kColon) {
-            advance();
-            stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+        if (peek().type == TokenType::kLBrace) {
+            // bottom-condition while: while { body } :label (cond);
+            stmt->bottom_condition = true;
+            stmt->body = parseBlock();
+            if (peek().type == TokenType::kColon) {
+                advance();
+                stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+            }
+            expect(TokenType::kLParen, "expected '('");
+            stmt->cond = parseExpr();
+            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kSemicolon, "expected ';'");
+        } else {
+            expect(TokenType::kLParen, "expected '('");
+            stmt->cond = parseExpr();
+            expect(TokenType::kRParen, "expected ')'");
+            stmt->body = parseBlock();
+            if (peek().type == TokenType::kColon) {
+                advance();
+                stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+            }
         }
         return stmt;
     }
@@ -667,13 +688,29 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 + ": expected ';' after method call");
         }
 
-        // post-increment/decrement statement: x++; x--;
+        // post-increment/decrement statement: x++; x--; or ptr++^ = val;
         if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
-            std::string op = (peek().type == TokenType::kPlusPlus) ? "post++" : "post--";
+            std::string op = (peek().type == TokenType::kPlusPlus) ? "++" : "--";
             advance();
+            // ptr++^ = val  — post-inc-deref lvalue
+            if (peek().type == TokenType::kBitXor) {
+                advance();
+                if (peek().type == TokenType::kEquals) {
+                    advance();
+                    auto val = parseExpr();
+                    expect(TokenType::kSemicolon, "expected ';'");
+                    return std::make_unique<PostIncDerefAssignStmt>(
+                        std::make_unique<VarExpr>(name), op, std::move(val));
+                }
+                // ptr++^ as expression statement (rvalue use)
+                expect(TokenType::kSemicolon, "expected ';'");
+                return std::make_unique<ExprStmt>(
+                    std::make_unique<PostIncDerefExpr>(std::make_unique<VarExpr>(name), op));
+            }
+            std::string uop = (op == "++") ? "post++" : "post--";
             expect(TokenType::kSemicolon, "expected ';'");
             return std::make_unique<ExprStmt>(
-                std::make_unique<UnaryExpr>(op, std::make_unique<VarExpr>(name)));
+                std::make_unique<UnaryExpr>(uop, std::make_unique<VarExpr>(name)));
         }
 
         // function call statement

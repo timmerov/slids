@@ -347,6 +347,8 @@ void Codegen::emit() {
     out_ << "declare i32 @printf(ptr noundef, ...)\n\n";
     out_ << "@.fmt_int    = private constant [4 x i8] c\"%d\\0A\\00\"\n";
     out_ << "@.fmt_int_nonl = private constant [3 x i8] c\"%d\\00\"\n";
+    out_ << "@.fmt_str    = private constant [4 x i8] c\"%s\\0A\\00\"\n";
+    out_ << "@.fmt_str_nonl = private constant [3 x i8] c\"%s\\00\"\n";
     out_ << "@.str_newline = private constant [2 x i8] c\"\\0A\\00\"\n\n";
 
     str_counter_ = 0;
@@ -695,6 +697,17 @@ std::string Codegen::emitExpr(const Expr& expr) {
             auto eit = enum_values_.find(v->name);
             if (eit != enum_values_.end())
                 return std::to_string(eit->second);
+            // check if it's an array — return ptr to first element
+            auto ait = array_info_.find(v->name);
+            if (ait != array_info_.end()) {
+                int total = 1;
+                for (int d : ait->second.dims) total *= d;
+                std::string elt = llvmType(ait->second.elem_type);
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr [" << total << " x " << elt << "], ptr "
+                     << ait->second.alloca_reg << ", i32 0, i32 0\n";
+                return gep;
+            }
             throw std::runtime_error("undefined variable: " + v->name);
         }
         std::string tmp = newTmp();
@@ -818,6 +831,32 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string tmp = newTmp();
         out_ << "    " << tmp << " = load " << pointee_llvm << ", ptr " << ptr_reg << "\n";
         return tmp;
+    }
+
+    if (auto* pide = dynamic_cast<const PostIncDerefExpr*>(&expr)) {
+        // ptr++^ — load value at current ptr, then advance ptr
+        auto* ve = dynamic_cast<const VarExpr*>(pide->operand.get());
+        if (!ve) throw std::runtime_error("PostIncDerefExpr: only simple pointer variables supported");
+        auto it = locals_.find(ve->name);
+        if (it == locals_.end())
+            throw std::runtime_error("PostIncDerefExpr: undefined variable '" + ve->name + "'");
+        auto tit = local_types_.find(ve->name);
+        if (tit == local_types_.end() || !isPtrType(tit->second))
+            throw std::runtime_error("PostIncDerefExpr: '" + ve->name + "' is not a pointer ([]) type");
+        std::string pointee_type = tit->second.substr(0, tit->second.size()-2);
+        std::string pointee_llvm = llvmType(pointee_type);
+        int step = (pide->op == "++") ? 1 : -1;
+        // load current ptr
+        std::string cur_ptr = newTmp();
+        out_ << "    " << cur_ptr << " = load ptr, ptr " << it->second << "\n";
+        // load value at current ptr
+        std::string val = newTmp();
+        out_ << "    " << val << " = load " << pointee_llvm << ", ptr " << cur_ptr << "\n";
+        // advance ptr
+        std::string new_ptr = newTmp();
+        out_ << "    " << new_ptr << " = getelementptr " << pointee_llvm << ", ptr " << cur_ptr << ", i32 " << step << "\n";
+        out_ << "    store ptr " << new_ptr << ", ptr " << it->second << "\n";
+        return val;
     }
 
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
@@ -1289,6 +1328,32 @@ void Codegen::emitStmt(const Stmt& stmt) {
         return;
     }
 
+    if (auto* pida = dynamic_cast<const PostIncDerefAssignStmt*>(&stmt)) {
+        // ptr++^ = val — store val at current ptr, then advance ptr by one element
+        auto* ve = dynamic_cast<const VarExpr*>(pida->ptr.get());
+        if (!ve) throw std::runtime_error("PostIncDerefAssign: only simple pointer variables supported");
+        auto it = locals_.find(ve->name);
+        if (it == locals_.end())
+            throw std::runtime_error("PostIncDerefAssign: undefined variable '" + ve->name + "'");
+        auto tit = local_types_.find(ve->name);
+        if (tit == local_types_.end() || !isPtrType(tit->second))
+            throw std::runtime_error("PostIncDerefAssign: '" + ve->name + "' is not a pointer ([]) type");
+        std::string pointee_type = tit->second.substr(0, tit->second.size()-2);
+        std::string pointee_llvm = llvmType(pointee_type);
+        int step = (pida->op == "++") ? 1 : -1;
+        // load current ptr
+        std::string cur_ptr = newTmp();
+        out_ << "    " << cur_ptr << " = load ptr, ptr " << it->second << "\n";
+        // store value at current ptr
+        std::string val = emitExpr(*pida->value);
+        out_ << "    store " << pointee_llvm << " " << val << ", ptr " << cur_ptr << "\n";
+        // advance ptr
+        std::string new_ptr = newTmp();
+        out_ << "    " << new_ptr << " = getelementptr " << pointee_llvm << ", ptr " << cur_ptr << ", i32 " << step << "\n";
+        out_ << "    store ptr " << new_ptr << ", ptr " << it->second << "\n";
+        return;
+    }
+
     if (auto* fa = dynamic_cast<const FieldAssignStmt*>(&stmt)) {
         // handle ptr^.field = val — object is a DerefExpr
         if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
@@ -1488,17 +1553,32 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string saved_break = break_label_, saved_continue = continue_label_;
         break_label_ = end_lbl; continue_label_ = cond_lbl;
         loop_stack_.push_back({w->block_label, end_lbl, cond_lbl});
-        out_ << "    br label %" << cond_lbl << "\n";
-        block_terminated_ = false;
-        out_ << cond_lbl << ":\n";
-        std::string cond = emitExpr(*w->cond);
-        std::string cond_bool = newTmp();
-        out_ << "    " << cond_bool << " = icmp ne i32 " << cond << ", 0\n";
-        out_ << "    br i1 " << cond_bool << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
-        block_terminated_ = false;
-        out_ << body_lbl << ":\n";
-        emitBlock(*w->body);
-        if (!block_terminated_) out_ << "    br label %" << cond_lbl << "\n";
+        if (w->bottom_condition) {
+            // do-while: body first, condition at bottom
+            out_ << "    br label %" << body_lbl << "\n";
+            block_terminated_ = false;
+            out_ << body_lbl << ":\n";
+            emitBlock(*w->body);
+            if (!block_terminated_) out_ << "    br label %" << cond_lbl << "\n";
+            block_terminated_ = false;
+            out_ << cond_lbl << ":\n";
+            std::string cond = emitExpr(*w->cond);
+            std::string cond_bool = newTmp();
+            out_ << "    " << cond_bool << " = icmp ne i32 " << cond << ", 0\n";
+            out_ << "    br i1 " << cond_bool << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
+        } else {
+            out_ << "    br label %" << cond_lbl << "\n";
+            block_terminated_ = false;
+            out_ << cond_lbl << ":\n";
+            std::string cond = emitExpr(*w->cond);
+            std::string cond_bool = newTmp();
+            out_ << "    " << cond_bool << " = icmp ne i32 " << cond << ", 0\n";
+            out_ << "    br i1 " << cond_bool << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
+            block_terminated_ = false;
+            out_ << body_lbl << ":\n";
+            emitBlock(*w->body);
+            if (!block_terminated_) out_ << "    br label %" << cond_lbl << "\n";
+        }
         block_terminated_ = false;
         out_ << end_lbl << ":\n";
         loop_stack_.pop_back();
@@ -1731,7 +1811,23 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
                     return;
                 }
-                // single integer expr
+                // single integer expr — but first check for char array (print as string)
+                if (auto* ve = dynamic_cast<const VarExpr*>(segments[0])) {
+                    auto ait = array_info_.find(ve->name);
+                    if (ait != array_info_.end() && ait->second.elem_type == "char") {
+                        int total = 1;
+                        for (int d : ait->second.dims) total *= d;
+                        std::string gep = newTmp();
+                        out_ << "    " << gep << " = getelementptr [" << total << " x i8], ptr "
+                             << ait->second.alloca_reg << ", i32 0, i32 0\n";
+                        std::string fmt = newTmp();
+                        std::string fmt_name = newline ? "@.fmt_str" : "@.fmt_str_nonl";
+                        int fmt_size = newline ? 4 : 3;
+                        out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
+                        out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", ptr " << gep << ")\n";
+                        return;
+                    }
+                }
                 std::string val = emitExpr(*segments[0]);
                 std::string fmt = newTmp();
                 std::string fmt_name = newline ? "@.fmt_int" : "@.fmt_int_nonl";
