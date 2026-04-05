@@ -18,7 +18,8 @@ struct SlidInfo {
 // info about a nested function's capture set
 struct NestedFuncInfo {
     std::string mangled_name;       // @parent__nested
-    std::set<std::string> captures; // parent vars accessed
+    std::set<std::string> captures; // parent scalar vars accessed
+    std::set<std::string> array_captures; // parent array vars accessed
     std::string parent_name;        // parent function name
     // calling convention:
     // 0 captures -> no hidden param
@@ -42,6 +43,8 @@ private:
     std::map<std::string, std::string> local_types_; // var name -> declared type (slid name or "int^" etc)
     std::map<std::string, std::string> func_return_types_;
     std::map<std::string, std::vector<std::string>> func_param_types_; // func name -> param types
+    // For tuple-returning functions: func name -> list of {type, name} pairs
+    std::map<std::string, std::vector<TupleField>> func_tuple_returns_;
     std::map<std::string, SlidInfo>    slid_info_;
     std::vector<std::pair<std::string, std::string>> string_constants_;
 
@@ -81,6 +84,11 @@ private:
     std::map<std::string, NestedFuncInfo> nested_info_; // mangled -> info
     std::string current_parent_;   // mangled name of current parent function
     std::string frame_ptr_reg_;    // %frame ptr inside a nested function
+    // for each nested func mangled name: array name -> {elem_type, dims}
+    struct CapturedArrayInfo { std::string elem_type; std::vector<int> dims; };
+    std::map<std::string, std::map<std::string, CapturedArrayInfo>> captured_array_info_;
+
+    std::string current_return_type_; // llvm return type of the function being emitted
 
     void collectStringConstants();
     void collectFunctionSignatures();
@@ -102,6 +110,15 @@ private:
     void emitStmt(const Stmt& stmt);
     void emitDtors(); // call dtors for all in-scope slid vars that have one
     std::string emitExpr(const Expr& expr);
+    // Widen a value of the given LLVM type to i32 via zext, if narrower.
+    // Returns the (possibly new) register holding the i32 value.
+    std::string widenToI32(const std::string& val, const std::string& llvm_type);
+    // Emit an expression, widen to i32 if necessary, return the i32 register.
+    std::string emitExprI32(const Expr& expr);
+    // If llvm_type is narrower than i32, emit trunc i32 val to llvm_type.
+    // val must be an i32 register (as returned by emitExpr after widening).
+    // Returns the value to pass to store.
+    std::string narrowForStore(const std::string& val, const std::string& llvm_type);
     std::string emitFieldPtr(const std::string& obj_name, const std::string& field);
     std::string newTmp();
     std::string newLabel(const std::string& prefix);

@@ -94,6 +94,12 @@ struct AddrOfExpr : Expr {
     AddrOfExpr(std::unique_ptr<Expr> op) : operand(std::move(op)) {}
 };
 
+// tuple literal: (expr, expr, ...)
+struct TupleLiteralExpr : Expr {
+    std::vector<std::unique_ptr<Expr>> values;
+    TupleLiteralExpr(std::vector<std::unique_ptr<Expr>> v) : values(std::move(v)) {}
+};
+
 // --- Statements ---
 
 struct Stmt {
@@ -181,6 +187,16 @@ struct PostIncDerefAssignStmt : Stmt {
     std::unique_ptr<Expr> value;
     PostIncDerefAssignStmt(std::unique_ptr<Expr> ptr, std::string op, std::unique_ptr<Expr> val)
         : ptr(std::move(ptr)), op(std::move(op)), value(std::move(val)) {}
+};
+
+// (type name, type name, ...) = expr  — tuple destructure
+struct TupleField {
+    std::string type;
+    std::string name;
+};
+struct TupleDestructureStmt : Stmt {
+    std::vector<TupleField> fields;  // declared variables
+    std::unique_ptr<Expr> value;     // the call expression
 };
 
 struct BlockStmt : Stmt {
@@ -272,7 +288,8 @@ struct SlidDef {
 
 // nested function defined inside a parent function body
 struct NestedFunctionDef {
-    std::string return_type;
+    std::string return_type;  // "void", "int32", etc., or "()" for tuple
+    std::vector<TupleField> tuple_return_fields; // populated when return_type == "()"
     std::string name;
     std::vector<std::pair<std::string, std::string>> params;
     std::unique_ptr<BlockStmt> body;
@@ -322,6 +339,9 @@ private:
     std::unique_ptr<BlockStmt> parseBlock();
     std::unique_ptr<Stmt> parseStmt();
     std::unique_ptr<SwitchStmt> parseSwitchStmt();
+    // Parse a tuple field list: (type name, type name, ...)
+    // Called when current token is '(' and content looks like type-name pairs
+    std::vector<TupleField> parseTupleFieldList();
 
     // expression precedence levels
     std::unique_ptr<Expr> parseExpr();

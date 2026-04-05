@@ -97,6 +97,17 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     if (t.type == TokenType::kLParen) {
         advance();
         auto expr = parseExpr();
+        if (peek().type == TokenType::kComma) {
+            // multi-value tuple literal: (expr, expr, ...)
+            std::vector<std::unique_ptr<Expr>> values;
+            values.push_back(std::move(expr));
+            while (peek().type == TokenType::kComma) {
+                advance();
+                values.push_back(parseExpr());
+            }
+            expect(TokenType::kRParen, "expected ')'");
+            return std::make_unique<TupleLiteralExpr>(std::move(values));
+        }
         expect(TokenType::kRParen, "expected ')'");
         return expr;
     }
@@ -451,6 +462,44 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         return stmt;
     }
 
+    // tuple return nested function: (int row, int col) funcName(...) { ... }
+    // OR tuple destructure:         (int row, int col) = expr;
+    // Both start with '(' followed by type-name pairs.
+    // Distinguish: if after the closing ')' there is an identifier followed by '(' -> nested func
+    //              if after the closing ')' there is '=' -> destructure
+    if (t.type == TokenType::kLParen) {
+        // Lookahead to decide which it is
+        int scan = pos_ + 1; // skip '('
+        int depth = 1;
+        while (scan < (int)tokens_.size() && depth > 0) {
+            if (tokens_[scan].type == TokenType::kLParen) depth++;
+            else if (tokens_[scan].type == TokenType::kRParen) depth--;
+            scan++;
+        }
+        // scan is now past the matching ')'
+        bool is_tuple_func = scan < (int)tokens_.size()
+            && tokens_[scan].type == TokenType::kIdentifier
+            && scan + 1 < (int)tokens_.size()
+            && tokens_[scan + 1].type == TokenType::kLParen;
+        bool is_tuple_destructure = scan < (int)tokens_.size()
+            && tokens_[scan].type == TokenType::kEquals;
+
+        if (is_tuple_func) {
+            auto stmt = std::make_unique<NestedFunctionDefStmt>();
+            stmt->def = parseNestedFunctionDef();
+            return stmt;
+        }
+        if (is_tuple_destructure) {
+            auto stmt = std::make_unique<TupleDestructureStmt>();
+            stmt->fields = parseTupleFieldList();
+            expect(TokenType::kEquals, "expected '='");
+            stmt->value = parseExpr();
+            expect(TokenType::kSemicolon, "expected ';'");
+            return stmt;
+        }
+        // else fall through to expression parsing (e.g. parenthesised expression)
+    }
+
     // nested function definition: type name(...) { ... }
     // distinguish from var decl (type name = expr) by lookahead for '(' then '{' after ')'
     if (isTypeName(t)) {
@@ -770,9 +819,29 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
 // --- Top-level parsing ---
 
+std::vector<TupleField> Parser::parseTupleFieldList() {
+    expect(TokenType::kLParen, "expected '(' for tuple type");
+    std::vector<TupleField> fields;
+    while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+        TupleField f;
+        f.type = parseTypeName();
+        f.name = expect(TokenType::kIdentifier, "expected field name in tuple").value;
+        fields.push_back(std::move(f));
+        if (peek().type == TokenType::kComma) advance();
+    }
+    expect(TokenType::kRParen, "expected ')' after tuple fields");
+    return fields;
+}
+
 NestedFunctionDef Parser::parseNestedFunctionDef() {
     NestedFunctionDef fn;
-    fn.return_type = parseTypeName();
+    // Handle tuple return type: (int row, int col) funcName(...)
+    if (peek().type == TokenType::kLParen) {
+        fn.return_type = "()";
+        fn.tuple_return_fields = parseTupleFieldList();
+    } else {
+        fn.return_type = parseTypeName();
+    }
     fn.name = expect(TokenType::kIdentifier, "expected function name").value;
     expect(TokenType::kLParen, "expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
@@ -902,6 +971,17 @@ FunctionDef Parser::parseFunctionDef() {
 Program Parser::parse() {
     Program program;
     while (peek().type != TokenType::kEof) {
+        // silently consume: import std.io; import vec2; etc.
+        if (peek().type == TokenType::kImport) {
+            advance(); // consume 'import'
+            // consume ident ('.' ident)*
+            while (peek().type == TokenType::kIdentifier) {
+                advance();
+                if (peek().type == TokenType::kDot) advance(); else break;
+            }
+            expect(TokenType::kSemicolon, "expected ';' after import");
+            continue;
+        }
         // enum definition
         if (peek().type == TokenType::kEnum) {
             program.enums.push_back(parseEnumDef());
@@ -911,6 +991,67 @@ Program Parser::parse() {
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
             program.slids.push_back(parseSlidDef());
+        }
+        // Type:method extension: return_type UpperCaseName : method_name ( ... ) { ... }
+        // Detected by lookahead: after the return type, an uppercase ident followed by ':'
+        else if ([&]() -> bool {
+            // scan past the return type (could be void, int32, UserType, etc.)
+            int scan = pos_;
+            // skip type tokens (including trailing ^ or [])
+            if (scan >= (int)tokens_.size()) return false;
+            bool advance_scan = isTypeName(tokens_[scan]) || isUserTypeName(tokens_[scan]);
+            if (!advance_scan) return false;
+            scan++;
+            while (scan < (int)tokens_.size() &&
+                   (tokens_[scan].type == TokenType::kBitXor ||
+                    (tokens_[scan].type == TokenType::kLBracket &&
+                     scan+1 < (int)tokens_.size() &&
+                     tokens_[scan+1].type == TokenType::kRBracket))) {
+                scan += (tokens_[scan].type == TokenType::kLBracket) ? 2 : 1;
+            }
+            // now expect: UpperCaseName ':'
+            return scan + 1 < (int)tokens_.size()
+                && isUserTypeName(tokens_[scan])
+                && tokens_[scan+1].type == TokenType::kColon;
+        }()) {
+            // parse: return_type SlidName : method_name ( params ) { body }
+            // already positioned at return type
+            std::string ret_type = parseTypeName();
+            std::string slid_name = expect(TokenType::kIdentifier, "expected class name").value;
+            expect(TokenType::kColon, "expected ':'");
+            std::string method_name = expect(TokenType::kIdentifier, "expected method name").value;
+            expect(TokenType::kLParen, "expected '('");
+            std::vector<std::pair<std::string,std::string>> params;
+            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                std::string ptype = parseTypeName();
+                std::string pname = expect(TokenType::kIdentifier, "expected parameter name").value;
+                params.emplace_back(ptype, pname);
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kRParen, "expected ')'");
+            auto body = parseBlock();
+
+            MethodDef md;
+            md.return_type = ret_type;
+            md.name = method_name;
+            md.params = std::move(params);
+            md.body = std::move(body);
+
+            // attach to matching SlidDef, or create a placeholder
+            bool found = false;
+            for (auto& slid : program.slids) {
+                if (slid.name == slid_name) {
+                    slid.methods.push_back(std::move(md));
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                SlidDef stub;
+                stub.name = slid_name;
+                stub.methods.push_back(std::move(md));
+                program.slids.push_back(std::move(stub));
+            }
         } else {
             program.functions.push_back(parseFunctionDef());
         }

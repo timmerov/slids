@@ -22,6 +22,35 @@ std::string Codegen::llvmType(const std::string& t) {
     return "i32";
 }
 
+// Widen a value to i32 via zext if it's narrower (i1, i8, i16).
+// Used at every boolean test site so icmp always sees i32.
+std::string Codegen::widenToI32(const std::string& val, const std::string& llvm_type) {
+    if (llvm_type == "i32" || llvm_type == "i64" || llvm_type == "ptr" || llvm_type == "void")
+        return val;
+    // i1, i8, i16 -> zext to i32
+    std::string tmp = newTmp();
+    out_ << "    " << tmp << " = zext " << llvm_type << " " << val << " to i32\n";
+    return tmp;
+}
+
+// Emit an expression and widen the result to i32 if narrower.
+// Since all load sites already call widenToI32, emitExpr already returns i32
+// for scalar types. This helper is kept for clarity at call sites.
+std::string Codegen::emitExprI32(const Expr& expr) {
+    return emitExpr(expr); // load sites already widen; this is a safe no-op wrapper
+}
+
+std::string Codegen::narrowForStore(const std::string& val, const std::string& llvm_type) {
+    if (llvm_type == "i8" || llvm_type == "i16") {
+        std::string tmp = newTmp();
+        out_ << "    " << tmp << " = trunc i32 " << val << " to " << llvm_type << "\n";
+        return tmp;
+    }
+    return val;
+}
+
+
+
 // type ends in ^ — reference, no arithmetic
 static bool isRefType(const std::string& t) {
     return !t.empty() && t.back() == '^';
@@ -83,8 +112,17 @@ void Codegen::collectFunctionSignatures() {
             for (auto& stmt : block.stmts) {
                 if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
                     std::string mangled = fn.name + "__" + nfs->def.name;
-                    func_return_types_[mangled] = nfs->def.return_type;
-                    func_return_types_[nfs->def.name] = nfs->def.return_type;
+                    if (nfs->def.return_type == "()") {
+                        // tuple return: LLVM return type is a named struct
+                        std::string tuple_type = "%tuple." + mangled;
+                        func_return_types_[mangled] = tuple_type;
+                        func_return_types_[nfs->def.name] = tuple_type;
+                        func_tuple_returns_[mangled] = nfs->def.tuple_return_fields;
+                        func_tuple_returns_[nfs->def.name] = nfs->def.tuple_return_fields;
+                    } else {
+                        func_return_types_[mangled] = nfs->def.return_type;
+                        func_return_types_[nfs->def.name] = nfs->def.return_type;
+                    }
                     std::vector<std::string> nptypes;
                     for (auto& [t, n] : nfs->def.params) nptypes.push_back(t);
                     func_param_types_[mangled] = nptypes;
@@ -125,10 +163,14 @@ std::set<std::string> Codegen::collectCaptures(
         if (auto* v = dynamic_cast<const VarExpr*>(&expr)) {
             if (parent_locals.count(v->name) && !own_params.count(v->name))
                 captures.insert(v->name);
+        } else if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&expr)) {
+            scanExpr(*ai->base); scanExpr(*ai->index);
         } else if (auto* b = dynamic_cast<const BinaryExpr*>(&expr)) {
             scanExpr(*b->left); scanExpr(*b->right);
         } else if (auto* u = dynamic_cast<const UnaryExpr*>(&expr)) {
             scanExpr(*u->operand);
+        } else if (auto* ao = dynamic_cast<const AddrOfExpr*>(&expr)) {
+            scanExpr(*ao->operand);
         } else if (auto* c = dynamic_cast<const CallExpr*>(&expr)) {
             for (auto& a : c->args) scanExpr(*a);
         } else if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
@@ -171,6 +213,8 @@ std::set<std::string> Codegen::collectCaptures(
         } else if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) {
             // don't recurse into nested function defs — they have their own scope
             (void)nfs;
+        } else if (auto* td = dynamic_cast<const TupleDestructureStmt*>(&stmt)) {
+            scanExpr(*td->value);
         }
     };
 
@@ -181,13 +225,17 @@ std::set<std::string> Codegen::collectCaptures(
 void Codegen::analyzeNestedFunctions(const FunctionDef& fn) {
     // collect all locals declared anywhere in parent (including inside loops)
     std::set<std::string> parent_locals;
+    std::map<std::string, CapturedArrayInfo> parent_arrays; // name -> {elem_type, dims}
     for (auto& [type, name] : fn.params) parent_locals.insert(name);
 
     std::function<void(const BlockStmt&)> collectLocals = [&](const BlockStmt& block) {
         for (auto& stmt : block.stmts) {
             if (auto* d = dynamic_cast<const VarDeclStmt*>(stmt.get()))
                 parent_locals.insert(d->name);
-            else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
+            else if (auto* a = dynamic_cast<const ArrayDeclStmt*>(stmt.get())) {
+                parent_locals.insert(a->name);
+                parent_arrays[a->name] = {a->elem_type, a->dims};
+            } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
                 parent_locals.insert(f->var_name);
                 collectLocals(*f->body);
             } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get()))
@@ -207,13 +255,25 @@ void Codegen::analyzeNestedFunctions(const FunctionDef& fn) {
                 std::set<std::string> own_params;
                 for (auto& [type, name] : nfs->def.params) own_params.insert(name);
 
-                auto captures = collectCaptures(*nfs->def.body, parent_locals, own_params);
+                auto all_captures = collectCaptures(*nfs->def.body, parent_locals, own_params);
 
                 std::string mangled = fn.name + "__" + nfs->def.name;
                 NestedFuncInfo info;
                 info.mangled_name = mangled;
-                info.captures = captures;
                 info.parent_name = fn.name;
+                // split into scalar captures and array captures
+                for (auto& cap : all_captures) {
+                    if (parent_arrays.count(cap))
+                        info.array_captures.insert(cap);
+                    else
+                        info.captures.insert(cap);
+                }
+                // record array metadata for this nested function
+                std::map<std::string, CapturedArrayInfo> arr_map;
+                for (auto& ac : info.array_captures)
+                    arr_map[ac] = parent_arrays.at(ac);
+                captured_array_info_[mangled] = arr_map;
+                captured_array_info_[nfs->def.name] = arr_map;
                 nested_info_[nfs->def.name] = info;
                 nested_info_[mangled] = info;
             } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
@@ -284,6 +344,8 @@ void Codegen::collectStringConstants() {
                 for (auto& s : sc.stmts) collect(*s);
         } else if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) {
             for (auto& s : nfs->def.body->stmts) collect(*s);
+        } else if (auto* td = dynamic_cast<const TupleDestructureStmt*>(&stmt)) {
+            (void)td; // no string literals in a tuple destructure
         }
     };
 
@@ -334,6 +396,18 @@ void Codegen::emit() {
     for (auto& fn : program_.functions)
         emitFrameStruct(fn);
 
+    // emit tuple return struct types
+    for (auto& [mangled, fields] : func_tuple_returns_) {
+        // only emit for mangled names (contains "__"), not the bare alias
+        if (mangled.find("__") == std::string::npos) continue;
+        out_ << "%tuple." << mangled << " = type { ";
+        for (int i = 0; i < (int)fields.size(); i++) {
+            if (i > 0) out_ << ", ";
+            out_ << llvmType(fields[i].type);
+        }
+        out_ << " }\n";
+    }
+
     if (!program_.slids.empty() || !program_.functions.empty()) out_ << "\n";
 
     // emit string constants
@@ -371,10 +445,15 @@ void Codegen::emitFrameStruct(const FunctionDef& fn) {
         for (auto& stmt : block.stmts) {
             if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
                 auto it = nested_info_.find(nfs->def.name);
-                if (it != nested_info_.end() && it->second.captures.size() >= 2) {
-                    has_frame = true;
-                    for (auto& c : it->second.captures)
-                        all_captures.insert(c);
+                if (it != nested_info_.end()) {
+                    size_t total = it->second.captures.size() + it->second.array_captures.size();
+                    if (total >= 2) {
+                        has_frame = true;
+                        for (auto& c : it->second.captures)
+                            all_captures.insert(c);
+                        for (auto& c : it->second.array_captures)
+                            all_captures.insert(c);
+                    }
                 }
             } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
                 scan(*f->body);
@@ -417,18 +496,33 @@ void Codegen::emitNestedFunction(
     frame_ptr_reg_ = "";
     block_terminated_ = false;
 
-    std::string ret_type = llvmType(fn.return_type);
     std::string mangled = parent_name + "__" + fn.name;
+    std::string ret_type = (fn.return_type == "()")
+        ? "%tuple." + mangled
+        : llvmType(fn.return_type);
+    current_return_type_ = ret_type;
 
-    // build parameter list
+    // build parameter list — combine scalar + array captures into one ordered list
     std::string param_str;
     std::string single_cap_var;
+    bool single_is_array = false;
 
-    if (info.captures.size() == 0) {
+    // ordered combined list: scalars first (set order), then arrays (set order)
+    std::vector<std::string> ordered_scalar(info.captures.begin(), info.captures.end());
+    std::vector<std::string> ordered_array(info.array_captures.begin(), info.array_captures.end());
+    size_t total_caps = ordered_scalar.size() + ordered_array.size();
+
+    if (total_caps == 0) {
         // no parent param needed
-    } else if (info.captures.size() == 1) {
+    } else if (total_caps == 1) {
         // pass single var ptr directly
-        single_cap_var = *info.captures.begin();
+        if (!ordered_scalar.empty()) {
+            single_cap_var = ordered_scalar[0];
+            single_is_array = false;
+        } else {
+            single_cap_var = ordered_array[0];
+            single_is_array = true;
+        }
         param_str = "ptr %cap_" + single_cap_var;
     } else {
         // pass frame struct ptr
@@ -446,20 +540,46 @@ void Codegen::emitNestedFunction(
     out_ << "entry:\n";
 
     // set up access to captured variables
-    if (info.captures.size() == 1) {
-        // single capture — the ptr is passed directly
-        locals_[single_cap_var] = "%cap_" + single_cap_var;
-    } else if (info.captures.size() >= 2) {
+    auto& arr_meta = captured_array_info_[mangled];
+    if (total_caps == 1) {
+        if (!single_is_array) {
+            locals_[single_cap_var] = "%cap_" + single_cap_var;
+        } else {
+            // captured array: the ptr is the base of the array
+            auto& meta = arr_meta[single_cap_var];
+            ArrayInfo ainfo;
+            ainfo.elem_type = meta.elem_type;
+            ainfo.dims = meta.dims;
+            ainfo.alloca_reg = "%cap_" + single_cap_var; // ptr already points to flat array
+            array_info_[single_cap_var] = ainfo;
+        }
+    } else if (total_caps >= 2) {
         // multi-capture — extract ptrs from frame struct
-        // build ordered list of captures (must match frame struct order)
-        std::vector<std::string> ordered_caps(info.captures.begin(), info.captures.end());
-        for (int i = 0; i < (int)ordered_caps.size(); i++) {
+        // order must match emitFrameStruct and the call sites
+        int slot = 0;
+        for (auto& cap : ordered_scalar) {
             std::string gep = newTmp();
             out_ << "    " << gep << " = getelementptr %frame." << parent_name
-                 << ", ptr %frame, i32 0, i32 " << i << "\n";
+                 << ", ptr %frame, i32 0, i32 " << slot << "\n";
             std::string ptr = newTmp();
             out_ << "    " << ptr << " = load ptr, ptr " << gep << "\n";
-            locals_[ordered_caps[i]] = ptr;
+            locals_[cap] = ptr;
+            slot++;
+        }
+        for (auto& cap : ordered_array) {
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr %frame." << parent_name
+                 << ", ptr %frame, i32 0, i32 " << slot << "\n";
+            std::string ptr = newTmp();
+            out_ << "    " << ptr << " = load ptr, ptr " << gep << "\n";
+            // reconstruct array_info_ for this captured array
+            auto& meta = arr_meta[cap];
+            ArrayInfo ainfo;
+            ainfo.elem_type = meta.elem_type;
+            ainfo.dims = meta.dims;
+            ainfo.alloca_reg = ptr; // ptr to flat array data
+            array_info_[cap] = ainfo;
+            slot++;
         }
     }
 
@@ -538,6 +658,7 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
         block_terminated_ = false;
 
         std::string ret_type = llvmType(m.return_type);
+        current_return_type_ = ret_type;
 
         // build param list — self is first
         std::string param_str = "ptr %self";
@@ -582,6 +703,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     block_terminated_ = false;
 
     std::string ret_type = llvmType(fn.return_type);
+    current_return_type_ = ret_type;
     std::string param_str;
     for (int i = 0; i < (int)fn.params.size(); i++) {
         if (i > 0) param_str += ", ";
@@ -688,7 +810,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                      << ", ptr %self, i32 0, i32 " << idx << "\n";
                 std::string tmp = newTmp();
                 out_ << "    " << tmp << " = load " << field_type << ", ptr " << gep << "\n";
-                return tmp;
+                return widenToI32(tmp, field_type);
             }
         }
         auto it = locals_.find(v->name);
@@ -714,7 +836,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         auto tit = local_types_.find(v->name);
         std::string load_type = (tit != local_types_.end()) ? llvmType(tit->second) : "i32";
         out_ << "    " << tmp << " = load " << load_type << ", ptr " << it->second << "\n";
-        return tmp;
+        return widenToI32(tmp, load_type);
     }
 
     if (dynamic_cast<const ArrayIndexExpr*>(&expr)) {
@@ -754,7 +876,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
              << ainfo.alloca_reg << ", i32 0, i32 " << flat << "\n";
         std::string val = newTmp();
         out_ << "    " << val << " = load " << elt << ", ptr " << gep << "\n";
-        return val;
+        return widenToI32(val, elt);
     }
 
     if (auto* ao = dynamic_cast<const AddrOfExpr*>(&expr)) {
@@ -830,7 +952,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
         std::string tmp = newTmp();
         out_ << "    " << tmp << " = load " << pointee_llvm << ", ptr " << ptr_reg << "\n";
-        return tmp;
+        return widenToI32(tmp, pointee_llvm);
     }
 
     if (auto* pide = dynamic_cast<const PostIncDerefExpr*>(&expr)) {
@@ -856,7 +978,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string new_ptr = newTmp();
         out_ << "    " << new_ptr << " = getelementptr " << pointee_llvm << ", ptr " << cur_ptr << ", i32 " << step << "\n";
         out_ << "    store ptr " << new_ptr << ", ptr " << it->second << "\n";
-        return val;
+        return widenToI32(val, pointee_llvm);
     }
 
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
@@ -892,7 +1014,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                  << ", ptr " << ptr_val << ", i32 0, i32 " << idx << "\n";
             std::string tmp = newTmp();
             out_ << "    " << tmp << " = load " << field_type << ", ptr " << gep << "\n";
-            return tmp;
+            return widenToI32(tmp, field_type);
         }
         if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
             std::string gep = emitFieldPtr(ve->name, fa->field);
@@ -903,7 +1025,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string field_type = llvmType(info.field_types[idx]);
             std::string tmp = newTmp();
             out_ << "    " << tmp << " = load " << field_type << ", ptr " << gep << "\n";
-            return tmp;
+            return widenToI32(tmp, field_type);
         }
         throw std::runtime_error("complex field access not yet supported");
     }
@@ -959,19 +1081,39 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string mangled = info.parent_name + "__" + call->callee;
             std::string ret_type = llvmType(func_return_types_[mangled]);
 
+            std::vector<std::string> ordered_scalar(info.captures.begin(), info.captures.end());
+            std::vector<std::string> ordered_array(info.array_captures.begin(), info.array_captures.end());
+            size_t total_caps = ordered_scalar.size() + ordered_array.size();
+
             std::string arg_str;
-            if (info.captures.size() == 1) {
-                std::string cap = *info.captures.begin();
-                arg_str = "ptr " + locals_[cap];
-            } else if (info.captures.size() >= 2) {
+            if (total_caps == 1) {
+                if (!ordered_scalar.empty())
+                    arg_str = "ptr " + locals_[ordered_scalar[0]];
+                else {
+                    // single array capture — pass ptr to its flat alloca
+                    auto ait = array_info_.find(ordered_array[0]);
+                    if (ait != array_info_.end())
+                        arg_str = "ptr " + ait->second.alloca_reg;
+                }
+            } else if (total_caps >= 2) {
                 std::string frame = newTmp() + "_frame";
                 out_ << "    " << frame << " = alloca %frame." << info.parent_name << "\n";
-                std::vector<std::string> ordered_caps(info.captures.begin(), info.captures.end());
-                for (int i = 0; i < (int)ordered_caps.size(); i++) {
+                int slot = 0;
+                for (auto& cap : ordered_scalar) {
                     std::string gep = newTmp();
                     out_ << "    " << gep << " = getelementptr %frame." << info.parent_name
-                         << ", ptr " << frame << ", i32 0, i32 " << i << "\n";
-                    out_ << "    store ptr " << locals_[ordered_caps[i]] << ", ptr " << gep << "\n";
+                         << ", ptr " << frame << ", i32 0, i32 " << slot << "\n";
+                    out_ << "    store ptr " << locals_[cap] << ", ptr " << gep << "\n";
+                    slot++;
+                }
+                for (auto& cap : ordered_array) {
+                    auto ait = array_info_.find(cap);
+                    std::string arr_ptr = (ait != array_info_.end()) ? ait->second.alloca_reg : "null";
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr %frame." << info.parent_name
+                         << ", ptr " << frame << ", i32 0, i32 " << slot << "\n";
+                    out_ << "    store ptr " << arr_ptr << ", ptr " << gep << "\n";
+                    slot++;
                 }
                 arg_str = "ptr " + frame;
             }
@@ -1022,12 +1164,31 @@ std::string Codegen::emitExpr(const Expr& expr) {
             if (auto* de = dynamic_cast<const DerefExpr*>(u->operand.get())) {
                 // emit the pointer value itself (load the ptr variable)
                 std::string ptr_val = emitExpr(*de->operand);
+                // determine pointee type from the pointer variable's declared type
+                std::string pointee_llvm = "i32";
+                if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                    auto tit2 = local_types_.find(ve2->name);
+                    if (tit2 != local_types_.end() && isIndirectType(tit2->second)) {
+                        std::string pt = isPtrType(tit2->second)
+                            ? tit2->second.substr(0, tit2->second.size()-2)
+                            : tit2->second.substr(0, tit2->second.size()-1);
+                        pointee_llvm = llvmType(pt);
+                    }
+                }
                 std::string old_val = newTmp();
-                out_ << "    " << old_val << " = load i32, ptr " << ptr_val << "\n";
-                std::string new_val = newTmp();
-                out_ << "    " << new_val << " = " << instr << " i32 " << old_val << ", 1\n";
-                out_ << "    store i32 " << new_val << ", ptr " << ptr_val << "\n";
-                return is_pre ? new_val : old_val;
+                out_ << "    " << old_val << " = load " << pointee_llvm << ", ptr " << ptr_val << "\n";
+                // widen to i32 for arithmetic, then truncate back for store
+                std::string old_wide = widenToI32(old_val, pointee_llvm);
+                std::string new_wide = newTmp();
+                out_ << "    " << new_wide << " = " << instr << " i32 " << old_wide << ", 1\n";
+                if (pointee_llvm != "i32") {
+                    std::string new_narrow = newTmp();
+                    out_ << "    " << new_narrow << " = trunc i32 " << new_wide << " to " << pointee_llvm << "\n";
+                    out_ << "    store " << pointee_llvm << " " << new_narrow << ", ptr " << ptr_val << "\n";
+                } else {
+                    out_ << "    store i32 " << new_wide << ", ptr " << ptr_val << "\n";
+                }
+                return is_pre ? new_wide : old_wide;
             }
 
             // field access via self in a method
@@ -1073,15 +1234,40 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string old = newTmp();
             std::string new_val = newTmp();
             if (is_ptr_arith) {
-                // pointer arithmetic: load ptr, GEP ±1, store back
+                // pointer arithmetic: load ptr, GEP ±1, store back using actual pointee type
+                std::string ptr_elem_llvm = "i32";
+                if (auto* ve2 = dynamic_cast<const VarExpr*>(u->operand.get())) {
+                    auto tit2 = local_types_.find(ve2->name);
+                    if (tit2 != local_types_.end() && isPtrType(tit2->second)) {
+                        std::string pt = tit2->second.substr(0, tit2->second.size()-2);
+                        ptr_elem_llvm = llvmType(pt);
+                    }
+                }
                 out_ << "    " << old << " = load ptr, ptr " << ptr << "\n";
                 int step = (instr == "add") ? 1 : -1;
-                out_ << "    " << new_val << " = getelementptr i32, ptr " << old << ", i32 " << step << "\n";
+                out_ << "    " << new_val << " = getelementptr " << ptr_elem_llvm << ", ptr " << old << ", i32 " << step << "\n";
                 out_ << "    store ptr " << new_val << ", ptr " << ptr << "\n";
             } else {
-                out_ << "    " << old << " = load i32, ptr " << ptr << "\n";
-                out_ << "    " << new_val << " = " << instr << " i32 " << old << ", 1\n";
-                out_ << "    store i32 " << new_val << ", ptr " << ptr << "\n";
+                // scalar increment: use actual variable type for load/store, i32 for arithmetic
+                std::string var_llvm = "i32";
+                if (auto* ve2 = dynamic_cast<const VarExpr*>(u->operand.get())) {
+                    auto tit2 = local_types_.find(ve2->name);
+                    if (tit2 != local_types_.end()) var_llvm = llvmType(tit2->second);
+                }
+                out_ << "    " << old << " = load " << var_llvm << ", ptr " << ptr << "\n";
+                std::string old_wide = widenToI32(old, var_llvm);
+                std::string new_wide = newTmp();
+                out_ << "    " << new_wide << " = " << instr << " i32 " << old_wide << ", 1\n";
+                if (var_llvm != "i32") {
+                    std::string new_narrow = newTmp();
+                    out_ << "    " << new_narrow << " = trunc i32 " << new_wide << " to " << var_llvm << "\n";
+                    out_ << "    store " << var_llvm << " " << new_narrow << ", ptr " << ptr << "\n";
+                    new_val = new_narrow; // for return value, use narrow form then widen again
+                    return is_pre ? widenToI32(new_narrow, var_llvm) : old_wide;
+                } else {
+                    out_ << "    store i32 " << new_wide << ", ptr " << ptr << "\n";
+                    return is_pre ? new_wide : old_wide;
+                }
             }
             return is_pre ? new_val : old;
         }
@@ -1204,7 +1390,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string gep = newTmp();
             out_ << "    " << gep << " = getelementptr [" << total << " x " << elt << "], ptr "
                  << reg << ", i32 0, i32 " << i << "\n";
-            out_ << "    store " << elt << " " << val << ", ptr " << gep << "\n";
+            std::string sval = narrowForStore(val, elt);
+            out_ << "    store " << elt << " " << sval << ", ptr " << gep << "\n";
         }
         return;
     }
@@ -1237,8 +1424,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 } else {
                     val = "0";
                 }
-                out_ << "    store " << llvmType(info.field_types[i])
-                     << " " << val << ", ptr " << gep << "\n";
+                std::string ft = llvmType(info.field_types[i]);
+                std::string sval = narrowForStore(val, ft);
+                out_ << "    store " << ft << " " << sval << ", ptr " << gep << "\n";
             }
 
             // run implicit constructor body if any (loose code in slid body)
@@ -1271,7 +1459,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
         locals_[decl->name] = reg;
         local_types_[decl->name] = decl->type;
         std::string val = emitExpr(*decl->init);
-        out_ << "    store " << llvm_t << " " << val << ", ptr " << reg << "\n";
+        std::string sval = narrowForStore(val, llvm_t);
+        out_ << "    store " << llvm_t << " " << sval << ", ptr " << reg << "\n";
         return;
     }
 
@@ -1287,7 +1476,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 out_ << "    " << gep << " = getelementptr %struct." << current_slid_
                      << ", ptr " << self << ", i32 0, i32 " << idx << "\n";
                 std::string val = emitExpr(*assign->value);
-                out_ << "    store " << field_type << " " << val << ", ptr " << gep << "\n";
+                std::string sval = narrowForStore(val, field_type);
+                out_ << "    store " << field_type << " " << sval << ", ptr " << gep << "\n";
                 return;
             }
         }
@@ -1298,7 +1488,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
         auto tit = local_types_.find(assign->name);
         bool is_ptr = tit != local_types_.end() && isIndirectType(tit->second);
         std::string store_type = is_ptr ? "ptr" : llvmType(tit != local_types_.end() ? tit->second : "int");
-        out_ << "    store " << store_type << " " << val << ", ptr " << it->second << "\n";
+        std::string sval = is_ptr ? val : narrowForStore(val, store_type);
+        out_ << "    store " << store_type << " " << sval << ", ptr " << it->second << "\n";
         return;
     }
 
@@ -1324,7 +1515,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             ptr_reg = emitExpr(*da->ptr);
         }
         std::string val = emitExpr(*da->value);
-        out_ << "    store " << pointee_llvm << " " << val << ", ptr " << ptr_reg << "\n";
+        std::string sval = narrowForStore(val, pointee_llvm);
+        out_ << "    store " << pointee_llvm << " " << sval << ", ptr " << ptr_reg << "\n";
         return;
     }
 
@@ -1346,7 +1538,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
         out_ << "    " << cur_ptr << " = load ptr, ptr " << it->second << "\n";
         // store value at current ptr
         std::string val = emitExpr(*pida->value);
-        out_ << "    store " << pointee_llvm << " " << val << ", ptr " << cur_ptr << "\n";
+        std::string sval = narrowForStore(val, pointee_llvm);
+        out_ << "    store " << pointee_llvm << " " << sval << ", ptr " << cur_ptr << "\n";
         // advance ptr
         std::string new_ptr = newTmp();
         out_ << "    " << new_ptr << " = getelementptr " << pointee_llvm << ", ptr " << cur_ptr << ", i32 " << step << "\n";
@@ -1383,7 +1576,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             out_ << "    " << gep << " = getelementptr %struct." << slid_name
                  << ", ptr " << ptr_val << ", i32 0, i32 " << idx << "\n";
             std::string val = emitExpr(*fa->value);
-            out_ << "    store " << field_type << " " << val << ", ptr " << gep << "\n";
+            std::string sval = narrowForStore(val, field_type);
+            out_ << "    store " << field_type << " " << sval << ", ptr " << gep << "\n";
             return;
         }
         if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
@@ -1394,7 +1588,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             int idx = info.field_index[fa->field];
             std::string field_type = llvmType(info.field_types[idx]);
             std::string val = emitExpr(*fa->value);
-            out_ << "    store " << field_type << " " << val << ", ptr " << gep << "\n";
+            std::string sval2 = narrowForStore(val, field_type);
+            out_ << "    store " << field_type << " " << sval2 << ", ptr " << gep << "\n";
             return;
         }
         throw std::runtime_error("complex field assignment not yet supported");
@@ -1444,8 +1639,22 @@ void Codegen::emitStmt(const Stmt& stmt) {
     if (auto* ret = dynamic_cast<const ReturnStmt*>(&stmt)) {
         emitDtors();
         if (ret->value) {
-            std::string val = emitExpr(*ret->value);
-            out_ << "    ret i32 " << val << "\n";
+            // tuple return: build struct with insertvalue
+            if (auto* tl = dynamic_cast<const TupleLiteralExpr*>(ret->value.get())) {
+                // start with undef struct
+                std::string agg = "undef";
+                for (int i = 0; i < (int)tl->values.size(); i++) {
+                    std::string elem = emitExpr(*tl->values[i]);
+                    std::string next = newTmp();
+                    out_ << "    " << next << " = insertvalue " << current_return_type_
+                         << " " << agg << ", i32 " << elem << ", " << i << "\n";
+                    agg = next;
+                }
+                out_ << "    ret " << current_return_type_ << " " << agg << "\n";
+            } else {
+                std::string val = emitExpr(*ret->value);
+                out_ << "    ret " << current_return_type_ << " " << val << "\n";
+            }
         } else {
             out_ << "    ret void\n";
         }
@@ -1455,6 +1664,89 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
     // nested function definition — already emitted after parent, skip here
     if (dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) return;
+
+    if (auto* td = dynamic_cast<const TupleDestructureStmt*>(&stmt)) {
+        // (int row, int col) = someFunc();
+        // 1. Find the function's tuple return info
+        std::string callee;
+        if (auto* ce = dynamic_cast<const CallExpr*>(td->value.get()))
+            callee = ce->callee;
+        else
+            throw std::runtime_error("TupleDestructure: rhs must be a function call");
+
+        auto trit = func_tuple_returns_.find(callee);
+        if (trit == func_tuple_returns_.end())
+            throw std::runtime_error("TupleDestructure: '" + callee + "' is not a tuple-returning function");
+        std::string tuple_llvm = func_return_types_[callee];
+
+        // 2. Build arg list (captures) then call
+        std::string arg_str;
+        auto nit = nested_info_.find(callee);
+        if (nit != nested_info_.end()) {
+            auto& ninfo = nit->second;
+            std::vector<std::string> ord_sc(ninfo.captures.begin(), ninfo.captures.end());
+            std::vector<std::string> ord_ar(ninfo.array_captures.begin(), ninfo.array_captures.end());
+            size_t total_caps = ord_sc.size() + ord_ar.size();
+            if (total_caps == 1) {
+                if (!ord_sc.empty())
+                    arg_str = "ptr " + locals_[ord_sc[0]];
+                else {
+                    auto ait = array_info_.find(ord_ar[0]);
+                    arg_str = "ptr " + (ait != array_info_.end() ? ait->second.alloca_reg : "null");
+                }
+            } else if (total_caps >= 2) {
+                std::string frame = newTmp() + "_frame";
+                out_ << "    " << frame << " = alloca %frame." << ninfo.parent_name << "\n";
+                int slot = 0;
+                for (auto& cap : ord_sc) {
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr %frame." << ninfo.parent_name
+                         << ", ptr " << frame << ", i32 0, i32 " << slot << "\n";
+                    out_ << "    store ptr " << locals_[cap] << ", ptr " << gep << "\n";
+                    slot++;
+                }
+                for (auto& cap : ord_ar) {
+                    auto ait = array_info_.find(cap);
+                    std::string arr_ptr = (ait != array_info_.end()) ? ait->second.alloca_reg : "null";
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr %frame." << ninfo.parent_name
+                         << ", ptr " << frame << ", i32 0, i32 " << slot << "\n";
+                    out_ << "    store ptr " << arr_ptr << ", ptr " << gep << "\n";
+                    slot++;
+                }
+                arg_str = "ptr " + frame;
+            }
+            // explicit params from the call expression
+            if (auto* ce = dynamic_cast<const CallExpr*>(td->value.get())) {
+                auto& nptypes = func_param_types_[nit->second.mangled_name];
+                for (int i = 0; i < (int)ce->args.size(); i++) {
+                    if (!arg_str.empty()) arg_str += ", ";
+                    std::string ptype = (i < (int)nptypes.size()) ? llvmType(nptypes[i]) : "i32";
+                    arg_str += ptype + " " + emitExpr(*ce->args[i]);
+                }
+            }
+            std::string mangled = nit->second.mangled_name;
+            std::string result = newTmp();
+            out_ << "    " << result << " = call " << tuple_llvm << " @" << mangled
+                 << "(" << arg_str << ")\n";
+            // 3. extractvalue each field into a new local
+            for (int i = 0; i < (int)td->fields.size(); i++) {
+                std::string fllvm = llvmType(td->fields[i].type);
+                std::string extracted = newTmp();
+                out_ << "    " << extracted << " = extractvalue " << tuple_llvm
+                     << " " << result << ", " << i << "\n";
+                std::string reg = "%var_" + td->fields[i].name;
+                out_ << "    " << reg << " = alloca " << fllvm << "\n";
+                std::string sval = narrowForStore(extracted, fllvm);
+                out_ << "    store " << fllvm << " " << sval << ", ptr " << reg << "\n";
+                locals_[td->fields[i].name] = reg;
+                local_types_[td->fields[i].name] = td->fields[i].type;
+            }
+        } else {
+            throw std::runtime_error("TupleDestructure: '" + callee + "' not found in nested_info_");
+        }
+        return;
+    }
 
     if (auto* brk = dynamic_cast<const BreakStmt*>(&stmt)) {
         std::string target;
@@ -1866,21 +2158,39 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string ret_type = llvmType(func_return_types_[mangled]);
 
             std::string arg_str;
-            if (info.captures.size() == 1) {
-                std::string cap = *info.captures.begin();
-                arg_str = "ptr " + locals_[cap];
-            } else if (info.captures.size() >= 2) {
-                // build frame struct on stack and fill in ptrs
-                std::string frame = newTmp() + "_frame";
-                out_ << "    " << frame << " = alloca %frame." << info.parent_name << "\n";
-                std::vector<std::string> ordered_caps(info.captures.begin(), info.captures.end());
-                for (int i = 0; i < (int)ordered_caps.size(); i++) {
-                    std::string gep = newTmp();
-                    out_ << "    " << gep << " = getelementptr %frame." << info.parent_name
-                         << ", ptr " << frame << ", i32 0, i32 " << i << "\n";
-                    out_ << "    store ptr " << locals_[ordered_caps[i]] << ", ptr " << gep << "\n";
+            {
+                std::vector<std::string> ord_sc(info.captures.begin(), info.captures.end());
+                std::vector<std::string> ord_ar(info.array_captures.begin(), info.array_captures.end());
+                size_t total_caps = ord_sc.size() + ord_ar.size();
+                if (total_caps == 1) {
+                    if (!ord_sc.empty())
+                        arg_str = "ptr " + locals_[ord_sc[0]];
+                    else {
+                        auto ait = array_info_.find(ord_ar[0]);
+                        arg_str = "ptr " + (ait != array_info_.end() ? ait->second.alloca_reg : "null");
+                    }
+                } else if (total_caps >= 2) {
+                    std::string frame = newTmp() + "_frame";
+                    out_ << "    " << frame << " = alloca %frame." << info.parent_name << "\n";
+                    int slot = 0;
+                    for (auto& cap : ord_sc) {
+                        std::string gep = newTmp();
+                        out_ << "    " << gep << " = getelementptr %frame." << info.parent_name
+                             << ", ptr " << frame << ", i32 0, i32 " << slot << "\n";
+                        out_ << "    store ptr " << locals_[cap] << ", ptr " << gep << "\n";
+                        slot++;
+                    }
+                    for (auto& cap : ord_ar) {
+                        auto ait = array_info_.find(cap);
+                        std::string arr_ptr = (ait != array_info_.end()) ? ait->second.alloca_reg : "null";
+                        std::string gep = newTmp();
+                        out_ << "    " << gep << " = getelementptr %frame." << info.parent_name
+                             << ", ptr " << frame << ", i32 0, i32 " << slot << "\n";
+                        out_ << "    store ptr " << arr_ptr << ", ptr " << gep << "\n";
+                        slot++;
+                    }
+                    arg_str = "ptr " + frame;
                 }
-                arg_str = "ptr " + frame;
             }
 
             auto& nptypes_cs = func_param_types_[mangled];
