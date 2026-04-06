@@ -23,7 +23,15 @@ String(
 
     void set(char[] s) {
         int len = strlen(s);
-
+        if (capacity_ < len) {
+            reserve(len);
+        }
+        char[] src = s;
+        char[] dst = storage_;
+        while (len > 0) {
+            dst++^ = src++^;
+            --len;
+        }
     }
 }
 
@@ -41,11 +49,10 @@ int strlen(char[] s) {
 }
 
 int32 main() {
-    char[] text = "Hello, World!";
+    char[] null_terminated_string_literal = "Hello, World!";
     String s;
-    s.reserve(100);
-    s.set(text);
-    println("expected: size=0 capacity=100");
+    s.set(null_terminated_string_literal);
+    println("expected: size=13 capacity=13");
     println("size=" + s.size_ + " capacity=" + s.capacity_);
     return 0;
 }
