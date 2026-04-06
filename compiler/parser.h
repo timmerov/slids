@@ -94,10 +94,17 @@ struct AddrOfExpr : Expr {
     AddrOfExpr(std::unique_ptr<Expr> op) : operand(std::move(op)) {}
 };
 
-// tuple literal: (expr, expr, ...)
-struct TupleLiteralExpr : Expr {
-    std::vector<std::unique_ptr<Expr>> values;
-    TupleLiteralExpr(std::vector<std::unique_ptr<Expr>> v) : values(std::move(v)) {}
+// new T[n] — heap array allocation; returns a T[] pointer
+struct NewArrayExpr : Expr {
+    std::string elem_type;             // element type (e.g. "char", "int32")
+    std::unique_ptr<Expr> count;       // number of elements
+    NewArrayExpr(std::string t, std::unique_ptr<Expr> n)
+        : elem_type(std::move(t)), count(std::move(n)) {}
+};
+
+// nullptr — null pointer literal
+struct NullptrExpr : Expr {
+    NullptrExpr() = default;
 };
 
 // --- Statements ---
@@ -189,16 +196,6 @@ struct PostIncDerefAssignStmt : Stmt {
         : ptr(std::move(ptr)), op(std::move(op)), value(std::move(val)) {}
 };
 
-// (type name, type name, ...) = expr  — tuple destructure
-struct TupleField {
-    std::string type;
-    std::string name;
-};
-struct TupleDestructureStmt : Stmt {
-    std::vector<TupleField> fields;  // declared variables
-    std::unique_ptr<Expr> value;     // the call expression
-};
-
 struct BlockStmt : Stmt {
     std::vector<std::unique_ptr<Stmt>> stmts;
 };
@@ -255,6 +252,12 @@ struct SwitchStmt : Stmt {
     std::string block_label;            // optional :label after }
 };
 
+// delete name; — free heap memory and null the pointer
+struct DeleteStmt : Stmt {
+    std::string name;  // variable name to free and null
+    DeleteStmt(std::string n) : name(std::move(n)) {}
+};
+
 // --- Enums ---
 
 struct EnumDef {
@@ -288,8 +291,7 @@ struct SlidDef {
 
 // nested function defined inside a parent function body
 struct NestedFunctionDef {
-    std::string return_type;  // "void", "int32", etc., or "()" for tuple
-    std::vector<TupleField> tuple_return_fields; // populated when return_type == "()"
+    std::string return_type;
     std::string name;
     std::vector<std::pair<std::string, std::string>> params;
     std::unique_ptr<BlockStmt> body;
@@ -339,9 +341,6 @@ private:
     std::unique_ptr<BlockStmt> parseBlock();
     std::unique_ptr<Stmt> parseStmt();
     std::unique_ptr<SwitchStmt> parseSwitchStmt();
-    // Parse a tuple field list: (type name, type name, ...)
-    // Called when current token is '(' and content looks like type-name pairs
-    std::vector<TupleField> parseTupleFieldList();
 
     // expression precedence levels
     std::unique_ptr<Expr> parseExpr();

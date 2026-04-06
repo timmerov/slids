@@ -22,6 +22,38 @@ std::string Codegen::llvmType(const std::string& t) {
     return "i32";
 }
 
+// sizeof in bytes for a primitive type (used by new T[n])
+static int elemSize(const std::string& t) {
+    if (t == "int64" || t == "uint64") return 8;
+    if (t == "int32" || t == "uint32" || t == "int") return 4;
+    if (t == "int16" || t == "uint16") return 2;
+    if (t == "int8"  || t == "uint8"  || t == "char") return 1;
+    if (t == "bool") return 4;
+    return 4; // default for user types / int
+}
+
+// Widen a sub-i32 integer value to i32 by emitting a zext instruction.
+// i8/i16 -> i32.  i32, ptr, i64, void -> returned unchanged.
+std::string Codegen::zextToI32(const std::string& val, const std::string& llvm_type) {
+    if (llvm_type == "i8" || llvm_type == "i16") {
+        std::string wide = newTmp();
+        out_ << "    " << wide << " = zext " << llvm_type << " " << val << " to i32\n";
+        return wide;
+    }
+    return val;
+}
+
+// Narrow an i32 value down to the target type for storing into a narrow slot.
+// i32 -> i8/i16 via trunc.  All other target types -> val unchanged.
+std::string Codegen::truncToType(const std::string& val, const std::string& llvm_type) {
+    if (llvm_type == "i8" || llvm_type == "i16") {
+        std::string narrow = newTmp();
+        out_ << "    " << narrow << " = trunc i32 " << val << " to " << llvm_type << "\n";
+        return narrow;
+    }
+    return val;
+}
+
 // type ends in ^ — reference, no arithmetic
 static bool isRefType(const std::string& t) {
     return !t.empty() && t.back() == '^';
@@ -136,6 +168,8 @@ std::set<std::string> Codegen::collectCaptures(
         } else if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
             scanExpr(*mc->object);
             for (auto& a : mc->args) scanExpr(*a);
+        } else if (auto* na = dynamic_cast<const NewArrayExpr*>(&expr)) {
+            scanExpr(*na->count);
         }
     };
 
@@ -171,6 +205,9 @@ std::set<std::string> Codegen::collectCaptures(
         } else if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) {
             // don't recurse into nested function defs — they have their own scope
             (void)nfs;
+        } else if (auto* del = dynamic_cast<const DeleteStmt*>(&stmt)) {
+            if (parent_locals.count(del->name) && !own_params.count(del->name))
+                captures.insert(del->name);
         }
     };
 
@@ -344,7 +381,9 @@ void Codegen::emit() {
     }
 
     out_ << "\n";
-    out_ << "declare i32 @printf(ptr noundef, ...)\n\n";
+    out_ << "declare i32 @printf(ptr noundef, ...)\n";
+    out_ << "declare ptr @malloc(i64)\n";
+    out_ << "declare void @free(ptr)\n\n";
     out_ << "@.fmt_int    = private constant [4 x i8] c\"%d\\0A\\00\"\n";
     out_ << "@.fmt_int_nonl = private constant [3 x i8] c\"%d\\00\"\n";
     out_ << "@.fmt_str    = private constant [4 x i8] c\"%s\\0A\\00\"\n";
@@ -676,6 +715,24 @@ std::string Codegen::emitExpr(const Expr& expr) {
     if (auto* i = dynamic_cast<const IntLiteralExpr*>(&expr))
         return std::to_string(i->value);
 
+    // nullptr literal — null pointer constant
+    if (dynamic_cast<const NullptrExpr*>(&expr))
+        return "null";
+
+    // new T[n] — malloc(n * sizeof(T)), returns ptr
+    if (auto* na = dynamic_cast<const NewArrayExpr*>(&expr)) {
+        int sz = elemSize(na->elem_type);
+        std::string count_val = emitExpr(*na->count);
+        // compute byte size: n * sizeof(T) as i64
+        std::string count_64 = newTmp();
+        out_ << "    " << count_64 << " = sext i32 " << count_val << " to i64\n";
+        std::string bytes = newTmp();
+        out_ << "    " << bytes << " = mul i64 " << count_64 << ", " << sz << "\n";
+        std::string ptr = newTmp();
+        out_ << "    " << ptr << " = call ptr @malloc(i64 " << bytes << ")\n";
+        return ptr;
+    }
+
     if (auto* v = dynamic_cast<const VarExpr*>(&expr)) {
         // check if it's a field access via self in a method
         if (!current_slid_.empty()) {
@@ -714,13 +771,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         auto tit = local_types_.find(v->name);
         std::string load_type = (tit != local_types_.end()) ? llvmType(tit->second) : "i32";
         out_ << "    " << tmp << " = load " << load_type << ", ptr " << it->second << "\n";
-        // zext narrow integer types to i32 so all scalar results are uniform i32
-        if (load_type == "i8" || load_type == "i16") {
-            std::string ext = newTmp();
-            out_ << "    " << ext << " = zext " << load_type << " " << tmp << " to i32\n";
-            return ext;
-        }
-        return tmp;
+        return zextToI32(tmp, load_type);
     }
 
     if (dynamic_cast<const ArrayIndexExpr*>(&expr)) {
@@ -760,7 +811,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
              << ainfo.alloca_reg << ", i32 0, i32 " << flat << "\n";
         std::string val = newTmp();
         out_ << "    " << val << " = load " << elt << ", ptr " << gep << "\n";
-        return val;
+        return zextToI32(val, elt);
     }
 
     if (auto* ao = dynamic_cast<const AddrOfExpr*>(&expr)) {
@@ -836,7 +887,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
         std::string tmp = newTmp();
         out_ << "    " << tmp << " = load " << pointee_llvm << ", ptr " << ptr_reg << "\n";
-        return tmp;
+        return zextToI32(tmp, pointee_llvm);
     }
 
     if (auto* pide = dynamic_cast<const PostIncDerefExpr*>(&expr)) {
@@ -858,17 +909,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
         // load value at current ptr
         std::string val = newTmp();
         out_ << "    " << val << " = load " << pointee_llvm << ", ptr " << cur_ptr << "\n";
-        // zext narrow types to i32 so all scalar expression results are uniform i32
-        if (pointee_llvm == "i8" || pointee_llvm == "i16") {
-            std::string ext = newTmp();
-            out_ << "    " << ext << " = zext " << pointee_llvm << " " << val << " to i32\n";
-            val = ext;
-        }
         // advance ptr
         std::string new_ptr = newTmp();
         out_ << "    " << new_ptr << " = getelementptr " << pointee_llvm << ", ptr " << cur_ptr << ", i32 " << step << "\n";
         out_ << "    store ptr " << new_ptr << ", ptr " << it->second << "\n";
-        return val;
+        return zextToI32(val, pointee_llvm);
     }
 
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
@@ -904,7 +949,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                  << ", ptr " << ptr_val << ", i32 0, i32 " << idx << "\n";
             std::string tmp = newTmp();
             out_ << "    " << tmp << " = load " << field_type << ", ptr " << gep << "\n";
-            return tmp;
+            return zextToI32(tmp, field_type);
         }
         if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
             std::string gep = emitFieldPtr(ve->name, fa->field);
@@ -915,7 +960,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string field_type = llvmType(info.field_types[idx]);
             std::string tmp = newTmp();
             out_ << "    " << tmp << " = load " << field_type << ", ptr " << gep << "\n";
-            return tmp;
+            return zextToI32(tmp, field_type);
         }
         throw std::runtime_error("complex field access not yet supported");
     }
@@ -1216,7 +1261,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string gep = newTmp();
             out_ << "    " << gep << " = getelementptr [" << total << " x " << elt << "], ptr "
                  << reg << ", i32 0, i32 " << i << "\n";
-            out_ << "    store " << elt << " " << val << ", ptr " << gep << "\n";
+            std::string sval = truncToType(val, elt);
+            out_ << "    store " << elt << " " << sval << ", ptr " << gep << "\n";
         }
         return;
     }
@@ -1249,7 +1295,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 } else {
                     val = "0";
                 }
-                out_ << "    store " << llvmType(info.field_types[i])
+                // use ptr store type for pointer/reference fields
+                std::string llvm_field_t = llvmType(info.field_types[i]);
+                out_ << "    store " << llvm_field_t
                      << " " << val << ", ptr " << gep << "\n";
             }
 
@@ -1283,7 +1331,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
         locals_[decl->name] = reg;
         local_types_[decl->name] = decl->type;
         std::string val = emitExpr(*decl->init);
-        out_ << "    store " << llvm_t << " " << val << ", ptr " << reg << "\n";
+        std::string sval = truncToType(val, llvm_t);
+        out_ << "    store " << llvm_t << " " << sval << ", ptr " << reg << "\n";
         return;
     }
 
@@ -1299,7 +1348,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 out_ << "    " << gep << " = getelementptr %struct." << current_slid_
                      << ", ptr " << self << ", i32 0, i32 " << idx << "\n";
                 std::string val = emitExpr(*assign->value);
-                out_ << "    store " << field_type << " " << val << ", ptr " << gep << "\n";
+                std::string sval = truncToType(val, field_type);
+                out_ << "    store " << field_type << " " << sval << ", ptr " << gep << "\n";
                 return;
             }
         }
@@ -1310,12 +1360,39 @@ void Codegen::emitStmt(const Stmt& stmt) {
         auto tit = local_types_.find(assign->name);
         bool is_ptr = tit != local_types_.end() && isIndirectType(tit->second);
         std::string store_type = is_ptr ? "ptr" : llvmType(tit != local_types_.end() ? tit->second : "int");
-        if (store_type == "i8" || store_type == "i16") {
-            std::string trunc = newTmp();
-            out_ << "    " << trunc << " = trunc i32 " << val << " to " << store_type << "\n";
-            val = trunc;
+        std::string sval = truncToType(val, store_type);
+        out_ << "    store " << store_type << " " << sval << ", ptr " << it->second << "\n";
+        return;
+    }
+
+    // delete name; — free(ptr), then null the variable
+    if (auto* del = dynamic_cast<const DeleteStmt*>(&stmt)) {
+        // resolve to field ptr (in method) or local var
+        std::string ptr_alloca;
+        if (!current_slid_.empty()) {
+            auto& info = slid_info_[current_slid_];
+            if (info.field_index.count(del->name)) {
+                int idx = info.field_index[del->name];
+                std::string gep = newTmp();
+                std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
+                out_ << "    " << gep << " = getelementptr %struct." << current_slid_
+                     << ", ptr " << self << ", i32 0, i32 " << idx << "\n";
+                ptr_alloca = gep;
+            }
         }
-        out_ << "    store " << store_type << " " << val << ", ptr " << it->second << "\n";
+        if (ptr_alloca.empty()) {
+            auto it = locals_.find(del->name);
+            if (it == locals_.end())
+                throw std::runtime_error("delete: undefined variable '" + del->name + "'");
+            ptr_alloca = it->second;
+        }
+        // load the current pointer value
+        std::string cur_ptr = newTmp();
+        out_ << "    " << cur_ptr << " = load ptr, ptr " << ptr_alloca << "\n";
+        // call free
+        out_ << "    call void @free(ptr " << cur_ptr << ")\n";
+        // null the variable
+        out_ << "    store ptr null, ptr " << ptr_alloca << "\n";
         return;
     }
 
@@ -1341,7 +1418,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             ptr_reg = emitExpr(*da->ptr);
         }
         std::string val = emitExpr(*da->value);
-        out_ << "    store " << pointee_llvm << " " << val << ", ptr " << ptr_reg << "\n";
+        std::string sval = truncToType(val, pointee_llvm);
+        out_ << "    store " << pointee_llvm << " " << sval << ", ptr " << ptr_reg << "\n";
         return;
     }
 
@@ -1361,14 +1439,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // load current ptr
         std::string cur_ptr = newTmp();
         out_ << "    " << cur_ptr << " = load ptr, ptr " << it->second << "\n";
-        // store value at current ptr — trunc i32 to narrow type if needed
+        // store value at current ptr
         std::string val = emitExpr(*pida->value);
-        if (pointee_llvm == "i8" || pointee_llvm == "i16") {
-            std::string trunc = newTmp();
-            out_ << "    " << trunc << " = trunc i32 " << val << " to " << pointee_llvm << "\n";
-            val = trunc;
-        }
-        out_ << "    store " << pointee_llvm << " " << val << ", ptr " << cur_ptr << "\n";
+        std::string sval = truncToType(val, pointee_llvm);
+        out_ << "    store " << pointee_llvm << " " << sval << ", ptr " << cur_ptr << "\n";
         // advance ptr
         std::string new_ptr = newTmp();
         out_ << "    " << new_ptr << " = getelementptr " << pointee_llvm << ", ptr " << cur_ptr << ", i32 " << step << "\n";
@@ -1405,7 +1479,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             out_ << "    " << gep << " = getelementptr %struct." << slid_name
                  << ", ptr " << ptr_val << ", i32 0, i32 " << idx << "\n";
             std::string val = emitExpr(*fa->value);
-            out_ << "    store " << field_type << " " << val << ", ptr " << gep << "\n";
+            std::string sval = truncToType(val, field_type);
+            out_ << "    store " << field_type << " " << sval << ", ptr " << gep << "\n";
             return;
         }
         if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
@@ -1416,7 +1491,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             int idx = info.field_index[fa->field];
             std::string field_type = llvmType(info.field_types[idx]);
             std::string val = emitExpr(*fa->value);
-            out_ << "    store " << field_type << " " << val << ", ptr " << gep << "\n";
+            std::string sval = truncToType(val, field_type);
+            out_ << "    store " << field_type << " " << sval << ", ptr " << gep << "\n";
             return;
         }
         throw std::runtime_error("complex field assignment not yet supported");
@@ -1818,20 +1894,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
             };
             flatten(call->args[0].get());
 
-            // single-segment special cases: check before is_concat classification
+            // char array variable: print as string with %s — must check before is_concat
+            // since a char[] VarExpr would otherwise be misclassified as an integer segment
             if (segments.size() == 1) {
-                // single string literal
-                if (auto* s = dynamic_cast<const StringLiteralExpr*>(segments[0])) {
-                    std::string label = "@.str" + std::to_string(str_counter_++);
-                    std::string full = newline ? s->value + "\n" : s->value;
-                    int len; llvmEscape(full, len);
-                    std::string tmp = newTmp();
-                    out_ << "    " << tmp << " = getelementptr [" << len << " x i8], ptr "
-                         << label << ", i32 0, i32 0\n";
-                    out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
-                    return;
-                }
-                // char array variable — print as string via %s
                 if (auto* ve = dynamic_cast<const VarExpr*>(segments[0])) {
                     auto ait = array_info_.find(ve->name);
                     if (ait != array_info_.end() && ait->second.elem_type == "char") {
@@ -1848,7 +1913,23 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         return;
                     }
                 }
-                // single integer expression
+            }
+
+            bool is_concat = segments.size() > 1 ||
+                (segments.size() == 1 && !dynamic_cast<const StringLiteralExpr*>(segments[0]));
+
+            if (!is_concat && segments.size() == 1) {
+                // single string literal
+                if (auto* s = dynamic_cast<const StringLiteralExpr*>(segments[0])) {
+                    std::string label = "@.str" + std::to_string(str_counter_++);
+                    std::string full = newline ? s->value + "\n" : s->value;
+                    int len; llvmEscape(full, len);
+                    std::string tmp = newTmp();
+                    out_ << "    " << tmp << " = getelementptr [" << len << " x i8], ptr "
+                         << label << ", i32 0, i32 0\n";
+                    out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
+                    return;
+                }
                 std::string val = emitExpr(*segments[0]);
                 std::string fmt = newTmp();
                 std::string fmt_name = newline ? "@.fmt_int" : "@.fmt_int_nonl";
