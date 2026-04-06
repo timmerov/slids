@@ -11,6 +11,7 @@ enum Piece (
 
 int32 main() {
 
+    println("expected: None King Queen Rook Bishop Knight Pawn");
     for Piece piece in Piece {
         switch (piece) {
         case kKing:
