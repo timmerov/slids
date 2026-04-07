@@ -37,9 +37,6 @@ enum class TokenType {
     kSwitch,
     kCase,
     kDefault,
-    kNew,
-    kDelete,
-    kNullptr,
 
     // comparison operators
     kEqEq,

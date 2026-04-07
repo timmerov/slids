@@ -103,12 +103,7 @@ private:
     void emitDtors(); // call dtors for all in-scope slid vars that have one
     std::string emitExpr(const Expr& expr);
     std::string emitFieldPtr(const std::string& obj_name, const std::string& field);
-    // If llvm_type is a sub-i32 integer (i8, i16), emit a zext to i32 and return
-    // the widened value. For i32, ptr, void — returns val unchanged.
-    std::string zextToI32(const std::string& val, const std::string& llvm_type);
-    // If llvm_type is a sub-i32 integer (i8, i16), emit a trunc from i32 and return
-    // the narrowed value. For i32, ptr, void — returns val unchanged.
-    std::string truncToType(const std::string& val, const std::string& llvm_type);
     std::string newTmp();
     std::string newLabel(const std::string& prefix);
-    std::string llvmType(const std::string& slids_type);};
+    std::string llvmType(const std::string& slids_type);
+};

@@ -94,19 +94,6 @@ struct AddrOfExpr : Expr {
     AddrOfExpr(std::unique_ptr<Expr> op) : operand(std::move(op)) {}
 };
 
-// new T[n] — heap array allocation; returns a T[] pointer
-struct NewArrayExpr : Expr {
-    std::string elem_type;             // element type (e.g. "char", "int32")
-    std::unique_ptr<Expr> count;       // number of elements
-    NewArrayExpr(std::string t, std::unique_ptr<Expr> n)
-        : elem_type(std::move(t)), count(std::move(n)) {}
-};
-
-// nullptr — null pointer literal
-struct NullptrExpr : Expr {
-    NullptrExpr() = default;
-};
-
 // --- Statements ---
 
 struct Stmt {
@@ -250,12 +237,6 @@ struct SwitchStmt : Stmt {
     std::unique_ptr<Expr> expr;
     std::vector<SwitchCase> cases;
     std::string block_label;            // optional :label after }
-};
-
-// delete name; — free heap memory and null the pointer
-struct DeleteStmt : Stmt {
-    std::string name;  // variable name to free and null
-    DeleteStmt(std::string n) : name(std::move(n)) {}
 };
 
 // --- Enums ---

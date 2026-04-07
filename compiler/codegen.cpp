@@ -268,13 +268,6 @@ void Codegen::collectStringConstants() {
                 for (auto& arg : call->args)
                     collectExpr(arg.get(), newline);
             }
-        } else if (auto* decl = dynamic_cast<const VarDeclStmt*>(&stmt)) {
-            // collect string literals used as char[] initializers
-            if (decl->init && (decl->type == "char[]" || decl->type == "uint8[]")) {
-                if (auto* s = dynamic_cast<const StringLiteralExpr*>(decl->init.get())) {
-                    string_constants_.emplace_back("@.str" + std::to_string(str_counter_++), s->value);
-                }
-            }
         } else if (auto* b = dynamic_cast<const BlockStmt*>(&stmt)) {
             for (auto& s : b->stmts) collect(*s);
         } else if (auto* i = dynamic_cast<const IfStmt*>(&stmt)) {
@@ -1818,7 +1811,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
                     return;
                 }
-                // single integer expr — but first check for char array or char[] pointer (print as string)
+                // single integer expr — but first check for char array (print as string)
                 if (auto* ve = dynamic_cast<const VarExpr*>(segments[0])) {
                     auto ait = array_info_.find(ve->name);
                     if (ait != array_info_.end() && ait->second.elem_type == "char") {
@@ -1832,18 +1825,6 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         int fmt_size = newline ? 4 : 3;
                         out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
                         out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", ptr " << gep << ")\n";
-                        return;
-                    }
-                    // char[] pointer variable — load the ptr and print as string
-                    auto tit = local_types_.find(ve->name);
-                    if (tit != local_types_.end() && tit->second == "char[]") {
-                        std::string ptr_val = newTmp();
-                        out_ << "    " << ptr_val << " = load ptr, ptr " << locals_[ve->name] << "\n";
-                        std::string fmt = newTmp();
-                        std::string fmt_name = newline ? "@.fmt_str" : "@.fmt_str_nonl";
-                        int fmt_size = newline ? 4 : 3;
-                        out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
-                        out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", ptr " << ptr_val << ")\n";
                         return;
                     }
                 }
@@ -1867,28 +1848,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
                          << label << ", i32 0, i32 0\n";
                     out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
                 } else {
-                    // check for char[] pointer variable — print as string
-                    bool printed_as_str = false;
-                    if (auto* ve = dynamic_cast<const VarExpr*>(segments[si])) {
-                        auto tit = local_types_.find(ve->name);
-                        if (tit != local_types_.end() && tit->second == "char[]") {
-                            std::string ptr_val = newTmp();
-                            out_ << "    " << ptr_val << " = load ptr, ptr " << locals_[ve->name] << "\n";
-                            std::string fmt = newTmp();
-                            std::string fmt_name = (last && newline) ? "@.fmt_str" : "@.fmt_str_nonl";
-                            int fmt_size = (last && newline) ? 4 : 3;
-                            out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
-                            out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", ptr " << ptr_val << ")\n";
-                            printed_as_str = true;
-                        }
-                    }
-                    if (!printed_as_str) {
-                        std::string val = emitExpr(*segments[si]);
-                        std::string fmt = newTmp();
-                        std::string fmt_name = (last && newline) ? "@.fmt_int" : "@.fmt_int_nonl";
-                        out_ << "    " << fmt << " = getelementptr [4 x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
-                        out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", i32 " << val << ")\n";
-                    }
+                    std::string val = emitExpr(*segments[si]);
+                    std::string fmt = newTmp();
+                    std::string fmt_name = (last && newline) ? "@.fmt_int" : "@.fmt_int_nonl";
+                    out_ << "    " << fmt << " = getelementptr [4 x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
+                    out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", i32 " << val << ")\n";
                 }
             }
             return;

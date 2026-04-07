@@ -47,7 +47,9 @@ std::string Parser::parseTypeName() {
     else if (isUserTypeName(peek())) base = advance().value;
     else throw std::runtime_error("Line " + std::to_string(peek().line)
         + ": expected type name, got '" + peek().value + "'");
-    // consume trailing ^ or [] for pointer/reference types
+    // consume trailing ^ or [] for pointer/reference types — kept distinct:
+    //   ^ = reference (no arithmetic allowed)
+    //   [] = pointer  (arithmetic allowed: ++, --, +, -)
     while (true) {
         if (peek().type == TokenType::kBitXor) {
             advance();
@@ -76,9 +78,8 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         advance();
         return std::make_unique<StringLiteralExpr>(t.value);
     }
-    if (t.type == TokenType::kTrue)    { advance(); return std::make_unique<IntLiteralExpr>(1); }
-    if (t.type == TokenType::kFalse)   { advance(); return std::make_unique<IntLiteralExpr>(0); }
-    if (t.type == TokenType::kNullptr) { advance(); return std::make_unique<NullptrExpr>(); }
+    if (t.type == TokenType::kTrue)  { advance(); return std::make_unique<IntLiteralExpr>(1); }
+    if (t.type == TokenType::kFalse) { advance(); return std::make_unique<IntLiteralExpr>(0); }
     if (t.type == TokenType::kIdentifier) {
         advance();
         if (peek().type == TokenType::kLParen) {
@@ -128,6 +129,7 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
             base = std::make_unique<ArrayIndexExpr>(std::move(base), std::move(idx));
         } else if (peek().type == TokenType::kBitXor) {
             // postfix ^ is dereference only when NOT followed by an expression operand
+            // (if followed by identifier/literal/lparen it's binary XOR, handled by parseBitXor)
             int next = pos_ + 1;
             TokenType ntt = (next < (int)tokens_.size()) ? tokens_[next].type : TokenType::kEof;
             bool next_is_operand =
@@ -140,6 +142,7 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
         } else if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
             std::string op = (peek().type == TokenType::kPlusPlus) ? "++" : "--";
             advance();
+            // ptr++^ — post-inc/dec then deref: treat as PostIncDerefExpr
             if (peek().type == TokenType::kBitXor) {
                 advance();
                 base = std::make_unique<PostIncDerefExpr>(std::move(base), op);
@@ -168,10 +171,11 @@ std::unique_ptr<Expr> Parser::parseUnary() {
         advance();
         return std::make_unique<UnaryExpr>("~", parseUnary());
     }
+    // pre-increment/decrement: ++x, --x, ++(ptr^) — returns new value
     if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
         std::string op = (peek().type == TokenType::kPlusPlus) ? "pre++" : "pre--";
         advance();
-        auto operand = parsePostfix(parsePrimary());
+        auto operand = parsePostfix(parsePrimary());  // handles ++(ref^), ++arr[i], etc.
         return std::make_unique<UnaryExpr>(op, std::move(operand));
     }
     // prefix ^ — take address: ^x, ^arr[i][j]
@@ -179,15 +183,6 @@ std::unique_ptr<Expr> Parser::parseUnary() {
         advance();
         auto operand = parsePostfix(parsePrimary());
         return std::make_unique<AddrOfExpr>(std::move(operand));
-    }
-    // new T[n] — heap array allocation; yields a T[] pointer
-    if (peek().type == TokenType::kNew) {
-        advance();
-        std::string elem_type = parseTypeName();
-        expect(TokenType::kLBracket, "expected '[' after type in 'new'");
-        auto count = parseExpr();
-        expect(TokenType::kRBracket, "expected ']'");
-        return std::make_unique<NewArrayExpr>(elem_type, std::move(count));
     }
     return parsePostfix(parsePrimary());
 }
@@ -340,14 +335,6 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         return stmt;
     }
 
-    // delete name; — free heap memory and null the pointer
-    if (t.type == TokenType::kDelete) {
-        advance();
-        std::string del_name = expect(TokenType::kIdentifier, "expected variable name after 'delete'").value;
-        expect(TokenType::kSemicolon, "expected ';'");
-        return std::make_unique<DeleteStmt>(del_name);
-    }
-
     // pre-increment/decrement statement: ++x;  ++ref^;  ++(ref^);
     if (t.type == TokenType::kPlusPlus || t.type == TokenType::kMinusMinus) {
         std::string op = (t.type == TokenType::kPlusPlus) ? "pre++" : "pre--";
@@ -413,13 +400,14 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     if (t.type == TokenType::kFor) {
         advance();
         // for EnumType var in EnumType { ... }  — enum iteration
+        // detected by: user type name, identifier, 'in', user type name (no '(')
         if (isUserTypeName(peek())) {
             int saved = pos_;
-            std::string var_type = advance().value;
+            std::string var_type = advance().value;   // e.g. "Piece"
             if (peek().type == TokenType::kIdentifier) {
                 std::string var_name = advance().value;
                 if (peek().type == TokenType::kIn) {
-                    advance();
+                    advance(); // consume 'in'
                     if (isUserTypeName(peek())) {
                         auto stmt = std::make_unique<ForEnumStmt>();
                         stmt->var_type = var_type;
@@ -434,14 +422,16 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     }
                 }
             }
+            // not an enum-for — backtrack and fall through to range for
             pos_ = saved;
         }
         auto stmt = std::make_unique<ForRangeStmt>();
+        // type is optional — "for int i in" vs "for i in" (reuse existing var)
         if (isTypeName(peek())) {
             stmt->var_type = parseTypeName();
             stmt->var_name = expect(TokenType::kIdentifier, "expected variable name").value;
         } else if (peek().type == TokenType::kIdentifier) {
-            stmt->var_type = "";
+            stmt->var_type = ""; // reuse existing variable
             stmt->var_name = advance().value;
         } else {
             throw std::runtime_error("Line " + std::to_string(peek().line)
@@ -462,13 +452,16 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     }
 
     // nested function definition: type name(...) { ... }
+    // distinguish from var decl (type name = expr) by lookahead for '(' then '{' after ')'
     if (isTypeName(t)) {
-        int lookahead = pos_ + 1;
+        // lookahead: type identifier ( ... ) {
+        int lookahead = pos_ + 1; // pos_ is at type, +1 is identifier
         if (lookahead < (int)tokens_.size()
             && tokens_[lookahead].type == TokenType::kIdentifier) {
             int after_name = lookahead + 1;
             if (after_name < (int)tokens_.size()
                 && tokens_[after_name].type == TokenType::kLParen) {
+                // scan forward past params to find matching ) then check for {
                 int depth = 1;
                 int scan = after_name + 1;
                 while (scan < (int)tokens_.size() && depth > 0) {
@@ -476,6 +469,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     else if (tokens_[scan].type == TokenType::kRParen) depth--;
                     scan++;
                 }
+                // scan now points past the ')'
                 if (scan < (int)tokens_.size()
                     && tokens_[scan].type == TokenType::kLBrace) {
                     auto stmt = std::make_unique<NestedFunctionDefStmt>();
@@ -484,10 +478,11 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 }
             }
         }
-        // variable declaration
+        // not a nested function — fall through to variable declaration
         std::string type = parseTypeName();
         std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
 
+        // array declaration: Type name[d0][d1...] = ((..),(..),..);
         if (peek().type == TokenType::kLBracket) {
             auto arr = std::make_unique<ArrayDeclStmt>();
             arr->elem_type = type;
@@ -498,6 +493,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 expect(TokenType::kRBracket, "expected ']'");
                 arr->dims.push_back(dim);
             }
+            // parse nested initializer lists: flatten into row-major order
             std::function<void()> parseInitList = [&]() {
                 if (peek().type == TokenType::kLParen) {
                     advance();
@@ -524,11 +520,12 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         return std::make_unique<VarDeclStmt>(type, name, std::move(init));
     }
 
-    // user-defined type variable declaration
+    // user-defined type variable declaration: Counter c; or Counter c(5); or Piece board[8][8] = ... or Piece[] ptr = ...
     if (isUserTypeName(t)) {
-        std::string type = parseTypeName();
+        std::string type = parseTypeName(); // consumes Name plus any trailing ^ or []
         std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
 
+        // pointer or reference variable with initializer: Type[] ptr = expr  or  Type^ ref = expr
         auto isIndirectType = [](const std::string& t) {
             return (t.size() >= 1 && t.back() == '^') ||
                    (t.size() >= 2 && t.substr(t.size()-2) == "[]");
@@ -540,6 +537,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             return std::make_unique<VarDeclStmt>(type, name, std::move(init));
         }
 
+        // array declaration: Type name[d0][d1] = (...)
         if (peek().type == TokenType::kLBracket) {
             auto arr = std::make_unique<ArrayDeclStmt>();
             arr->elem_type = type;
@@ -588,16 +586,21 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         std::string name = t.value;
         advance();
 
+        // deref assignment: ptr^ = val  or  ptr^.field = val  or  ptr^.method()
         if (peek().type == TokenType::kBitXor) {
+            // parse the full postfix chain starting from deref
             auto base = parsePostfix(std::make_unique<VarExpr>(name));
+            // base is now DerefExpr, or DerefExpr.field, or DerefExpr.method(...)
 
             if (peek().type == TokenType::kEquals) {
                 advance();
                 auto val = parseExpr();
                 expect(TokenType::kSemicolon, "expected ';'");
+                // ptr^ = val
                 if (auto* de = dynamic_cast<DerefExpr*>(base.get())) {
                     return std::make_unique<DerefAssignStmt>(std::move(de->operand), std::move(val));
                 }
+                // ptr^.field = val
                 if (auto* fa = dynamic_cast<FieldAccessExpr*>(base.get())) {
                     auto obj = std::move(fa->object);
                     std::string field = fa->field;
@@ -605,6 +608,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 }
                 throw std::runtime_error("invalid deref assignment target");
             }
+            // ptr^ += rhs  (compound assignment through dereference)
             {
                 static const std::map<TokenType, std::string> compound_ops = {
                     {TokenType::kPlusEq,    "+"},
@@ -630,6 +634,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         advance();
                         auto rhs = parseExpr();
                         expect(TokenType::kSemicolon, "expected ';'");
+                        // desugar: ptr^ op= rhs  ->  DerefAssignStmt(ptr, BinaryExpr(op, DerefExpr(ptr), rhs))
                         auto lhs_read = std::make_unique<DerefExpr>(std::make_unique<VarExpr>(ptr_name));
                         auto bin = std::make_unique<BinaryExpr>(cop->second, std::move(lhs_read), std::move(rhs));
                         return std::make_unique<DerefAssignStmt>(std::make_unique<VarExpr>(ptr_name), std::move(bin));
@@ -637,12 +642,14 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     throw std::runtime_error("compound assignment requires a dereference target");
                 }
             }
+            // ptr^++  or  ptr^--  as a statement — ExprStmt routes to the correct codegen
             if (auto* ue = dynamic_cast<UnaryExpr*>(base.get())) {
                 if (ue->op == "post++" || ue->op == "post--") {
                     expect(TokenType::kSemicolon, "expected ';'");
                     return std::make_unique<ExprStmt>(std::move(base));
                 }
             }
+            // ptr^.method()
             if (auto* mc = dynamic_cast<MethodCallExpr*>(base.get())) {
                 expect(TokenType::kSemicolon, "expected ';'");
                 return std::make_unique<MethodCallStmt>(
@@ -652,13 +659,17 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 + ": unexpected token after dereference");
         }
 
+        // method call or field access chain followed by assignment
         if (peek().type == TokenType::kDot) {
+            // parse the chain as an expression starting from VarExpr
             auto base = parsePostfix(std::make_unique<VarExpr>(name));
 
+            // field assignment: obj.field_ = expr;
             if (peek().type == TokenType::kEquals) {
                 advance();
                 auto val = parseExpr();
                 expect(TokenType::kSemicolon, "expected ';'");
+                // unwrap to FieldAccessExpr
                 if (auto* fa = dynamic_cast<FieldAccessExpr*>(base.get())) {
                     auto obj = std::move(fa->object);
                     std::string field = fa->field;
@@ -667,6 +678,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 throw std::runtime_error("invalid assignment target");
             }
 
+            // method call statement
             if (auto* mc = dynamic_cast<MethodCallExpr*>(base.get())) {
                 expect(TokenType::kSemicolon, "expected ';'");
                 return std::make_unique<MethodCallStmt>(
@@ -676,9 +688,11 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 + ": expected ';' after method call");
         }
 
+        // post-increment/decrement statement: x++; x--; or ptr++^ = val;
         if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
             std::string op = (peek().type == TokenType::kPlusPlus) ? "++" : "--";
             advance();
+            // ptr++^ = val  — post-inc-deref lvalue
             if (peek().type == TokenType::kBitXor) {
                 advance();
                 if (peek().type == TokenType::kEquals) {
@@ -688,6 +702,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     return std::make_unique<PostIncDerefAssignStmt>(
                         std::make_unique<VarExpr>(name), op, std::move(val));
                 }
+                // ptr++^ as expression statement (rvalue use)
                 expect(TokenType::kSemicolon, "expected ';'");
                 return std::make_unique<ExprStmt>(
                     std::make_unique<PostIncDerefExpr>(std::make_unique<VarExpr>(name), op));
@@ -698,6 +713,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 std::make_unique<UnaryExpr>(uop, std::make_unique<VarExpr>(name)));
         }
 
+        // function call statement
         if (peek().type == TokenType::kLParen) {
             advance();
             std::vector<std::unique_ptr<Expr>> args;
@@ -710,6 +726,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             return std::make_unique<CallStmt>(name, std::move(args));
         }
 
+        // plain assignment
         if (peek().type == TokenType::kEquals) {
             advance();
             auto value = parseExpr();
@@ -717,6 +734,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             return std::make_unique<AssignStmt>(name, std::move(value));
         }
 
+        // compound assignment
         static const std::map<TokenType, std::string> compound_ops = {
             {TokenType::kPlusEq,    "+"},
             {TokenType::kMinusEq,   "-"},
@@ -787,8 +805,9 @@ MethodDef Parser::parseMethodDef() {
 SlidDef Parser::parseSlidDef() {
     SlidDef slid;
     slid.name = peek().value;
-    advance();
+    advance(); // consume class name
 
+    // parse tuple: (type field_ = default, ...)
     expect(TokenType::kLParen, "expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         FieldDef f;
@@ -803,30 +822,34 @@ SlidDef Parser::parseSlidDef() {
     }
     expect(TokenType::kRParen, "expected ')'");
 
+    // parse body: methods and optional constructor code
     expect(TokenType::kLBrace, "expected '{'");
 
     auto ctor_body = std::make_unique<BlockStmt>();
     bool has_ctor_code = false;
 
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
+        // explicit constructor: _() { ... }
         if (peek().type == TokenType::kIdentifier && peek().value == "_"
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
-            advance();
+            advance(); // consume _
             expect(TokenType::kLParen, "expected '('");
             expect(TokenType::kRParen, "expected ')'");
             slid.explicit_ctor_body = parseBlock();
             continue;
         }
+        // explicit destructor: ~() { ... }
         if (peek().type == TokenType::kBitNot
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
-            advance();
+            advance(); // consume ~
             expect(TokenType::kLParen, "expected '('");
             expect(TokenType::kRParen, "expected ')'");
             slid.dtor_body = parseBlock();
             continue;
         }
+        // method definition: starts with a type name followed by identifier followed by (
         if ((isTypeName(peek()) || isUserTypeName(peek()))
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kIdentifier
@@ -834,6 +857,7 @@ SlidDef Parser::parseSlidDef() {
             && tokens_[pos_ + 2].type == TokenType::kLParen) {
             slid.methods.push_back(parseMethodDef());
         } else {
+            // constructor code
             ctor_body->stmts.push_back(parseStmt());
             has_ctor_code = true;
         }
@@ -878,9 +902,12 @@ FunctionDef Parser::parseFunctionDef() {
 Program Parser::parse() {
     Program program;
     while (peek().type != TokenType::kEof) {
+        // enum definition
         if (peek().type == TokenType::kEnum) {
             program.enums.push_back(parseEnumDef());
-        } else if (isUserTypeName(peek())
+        }
+        // slid class definition: UpperCase identifier followed by (
+        else if (isUserTypeName(peek())
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
             program.slids.push_back(parseSlidDef());
@@ -908,11 +935,12 @@ std::unique_ptr<SwitchStmt> Parser::parseSwitchStmt() {
         } else if (peek().type == TokenType::kDefault) {
             advance();
             expect(TokenType::kColon, "expected ':'");
-            sc.value = nullptr;
+            sc.value = nullptr; // default
         } else {
             throw std::runtime_error("Line " + std::to_string(peek().line)
                 + ": expected 'case' or 'default' in switch");
         }
+        // parse statements until next case/default/}
         while (peek().type != TokenType::kCase
             && peek().type != TokenType::kDefault
             && peek().type != TokenType::kRBrace

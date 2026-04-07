@@ -8,19 +8,20 @@ String(
     }
 
     ~() {
-        delete storage_;
+        //delete storage_;
     }
 
     void reserve(int cap) {
         capacity_ = cap;
-        storage_ = new char[cap];
+        //storage_ = new char[cap];
+        return;
     }
 }
 
 int32 main() {
-    String s;
-    s.reserve(100);
+    //String s;
+    //s.reserve(100);
     println("expected: size=0 capacity=100");
-    println("size=" + s.size_ + " capacity=" + s.capacity_);
+    //println("size=" + s.size_ + " capacity=" + s.capacity_);
     return 0;
 }

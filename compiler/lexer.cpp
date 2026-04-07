@@ -150,9 +150,6 @@ Token Lexer::readIdentifierOrKeyword() {
     if (value == "switch")   return Token(TokenType::kSwitch,   value, line_);
     if (value == "case")     return Token(TokenType::kCase,     value, line_);
     if (value == "default")  return Token(TokenType::kDefault,  value, line_);
-    if (value == "new")      return Token(TokenType::kNew,      value, line_);
-    if (value == "delete")   return Token(TokenType::kDelete,   value, line_);
-    if (value == "nullptr")  return Token(TokenType::kNullptr,  value, line_);
 
     return Token(TokenType::kIdentifier, value, line_);
 }
