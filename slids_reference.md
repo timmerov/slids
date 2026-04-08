@@ -171,6 +171,41 @@ Rules:
 - Leading `+` is valid for any numeric literal
 - Leading `-` is valid for any numeric literal
 
+**Type flexibility of integer literals** — a decimal integer literal is implicitly typed as the smallest signed integer type that can hold its value: `int8`, `int16`, `int32`, or `int64`. So `42` is `int8`, `500` is `int16`, and `100_000` is `int32`. When assigned to a variable with an explicit type, the literal is quietly promoted to match.
+
+Hex (`0x`) and binary (`0b`) literals are always unsigned. Their type is the smallest unsigned type that can hold the value: `uint8`, `uint16`, `uint32`, or `uint64`.
+
+When the type of a literal is made explicit by the variable declaration, the literal takes that type exactly — no implicit narrowing.
+
+---
+
+## Truth, falsity, and numeric promotion
+
+Like C/C++, Slids has no distinct boolean type for conditionals — any integer or pointer expression can be used as a condition:
+
+- **True** — any non-zero integer value, or any non-null pointer
+- **False** — the integer value `0`, or a null pointer (`nullptr`)
+
+`true` and `false` are integer literals `1` and `0` respectively.
+
+The result of any comparison operator (`==`, `!=`, `<`, `>`, `<=`, `>=`) is an integer `1` (true) or `0` (false). This result can be used directly in arithmetic or assigned to any integer variable — it is quietly promoted to match the required type.
+
+**Promotion in mixed-type expressions** — when the two operands of a binary operator have different integer sizes, the smaller operand is promoted to the size of the larger before the operation is performed. The result has the larger type. Signed and unsigned operands of the same size produce an unsigned result.
+
+```
+int8  a = 100;
+int32 b = 1_000;
+int32 c = a + b;   // a promoted to int32 before addition
+
+uint8  flags = 0xFF;
+uint32 mask  = 0x0000_00FF;
+uint32 result = flags & mask;  // flags promoted to uint32
+
+if (c)          { }   // true — c is non-zero
+if (flags)      { }   // true — flags is non-zero
+if (c == b)     { }   // comparison yields 0 or 1 (int8), promoted as needed
+```
+
 ---
 
 ## Enclosure rules

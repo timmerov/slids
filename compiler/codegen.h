@@ -102,6 +102,8 @@ private:
     void emitStmt(const Stmt& stmt);
     void emitDtors(); // call dtors for all in-scope slid vars that have one
     std::string emitExpr(const Expr& expr);
+    std::string emitCondBool(const Expr& expr); // emit expr then icmp ne <type> val, 0 -> i1
+    std::string exprLlvmType(const Expr& expr); // infer LLVM type without emitting IR
     std::string emitFieldPtr(const std::string& obj_name, const std::string& field);
     std::string newTmp();
     std::string newLabel(const std::string& prefix);

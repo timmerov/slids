@@ -1107,7 +1107,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
             out_ << "    " << result_ptr << " = alloca i32\n";
             std::string left_val = emitExpr(*b->left);
             std::string left_bool = newTmp();
-            out_ << "    " << left_bool << " = icmp ne i32 " << left_val << ", 0\n";
+            std::string left_type = exprLlvmType(*b->left);
+            out_ << "    " << left_bool << " = icmp ne " << left_type << " " << left_val << ", 0\n";
             std::string eval_right = newLabel("sc_right");
             std::string done       = newLabel("sc_done");
 
@@ -1127,7 +1128,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
             out_ << eval_right << ":\n";
             std::string right_val = emitExpr(*b->right);
             std::string right_bool = newTmp();
-            out_ << "    " << right_bool << " = icmp ne i32 " << right_val << ", 0\n";
+            std::string right_type = exprLlvmType(*b->right);
+            out_ << "    " << right_bool << " = icmp ne " << right_type << " " << right_val << ", 0\n";
             std::string right_int = newTmp();
             if (b->op == "^^") {
                 std::string xor_result = newTmp();
@@ -1144,20 +1146,46 @@ std::string Codegen::emitExpr(const Expr& expr) {
             return result;
         }
 
+        // determine operand type before emitting (needed for correctly-typed icmp)
+        // integer literals are flexible — they take the type of the other operand.
+        // for two non-literals, promote to the wider of the two.
+        std::string op_type;
+        {
+            bool left_is_literal  = (dynamic_cast<const IntLiteralExpr*>(b->left.get())  != nullptr);
+            bool right_is_literal = (dynamic_cast<const IntLiteralExpr*>(b->right.get()) != nullptr);
+            std::string lt = exprLlvmType(*b->left);
+            std::string rt = exprLlvmType(*b->right);
+            if (left_is_literal && !right_is_literal)
+                op_type = rt;
+            else if (right_is_literal && !left_is_literal)
+                op_type = lt;
+            else {
+                // promote to the wider of the two; treat i8<i16<i32<i64
+                static const std::map<std::string,int> rank = {
+                    {"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+                auto li = rank.find(lt), ri = rank.find(rt);
+                if (li != rank.end() && ri != rank.end())
+                    op_type = (ri->second > li->second) ? rt : lt;
+                else
+                    op_type = "i32"; // fallback for ptr etc.
+            }
+            if (op_type.empty()) op_type = "i32";
+        }
+
         std::string left  = emitExpr(*b->left);
         std::string right = emitExpr(*b->right);
         std::string tmp   = newTmp();
 
-        if      (b->op == "+")  { out_ << "    " << tmp << " = add i32 "  << left << ", " << right << "\n"; return tmp; }
-        else if (b->op == "-")  { out_ << "    " << tmp << " = sub i32 "  << left << ", " << right << "\n"; return tmp; }
-        else if (b->op == "*")  { out_ << "    " << tmp << " = mul i32 "  << left << ", " << right << "\n"; return tmp; }
-        else if (b->op == "/")  { out_ << "    " << tmp << " = sdiv i32 " << left << ", " << right << "\n"; return tmp; }
-        else if (b->op == "%")  { out_ << "    " << tmp << " = srem i32 " << left << ", " << right << "\n"; return tmp; }
-        else if (b->op == "&")  { out_ << "    " << tmp << " = and i32 "  << left << ", " << right << "\n"; return tmp; }
-        else if (b->op == "|")  { out_ << "    " << tmp << " = or i32 "   << left << ", " << right << "\n"; return tmp; }
-        else if (b->op == "^")  { out_ << "    " << tmp << " = xor i32 "  << left << ", " << right << "\n"; return tmp; }
-        else if (b->op == "<<") { out_ << "    " << tmp << " = shl i32 "  << left << ", " << right << "\n"; return tmp; }
-        else if (b->op == ">>") { out_ << "    " << tmp << " = ashr i32 " << left << ", " << right << "\n"; return tmp; }
+        if      (b->op == "+")  { out_ << "    " << tmp << " = add "  << op_type << " " << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == "-")  { out_ << "    " << tmp << " = sub "  << op_type << " " << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == "*")  { out_ << "    " << tmp << " = mul "  << op_type << " " << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == "/")  { out_ << "    " << tmp << " = sdiv " << op_type << " " << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == "%")  { out_ << "    " << tmp << " = srem " << op_type << " " << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == "&")  { out_ << "    " << tmp << " = and "  << op_type << " " << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == "|")  { out_ << "    " << tmp << " = or "   << op_type << " " << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == "^")  { out_ << "    " << tmp << " = xor "  << op_type << " " << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == "<<") { out_ << "    " << tmp << " = shl "  << op_type << " " << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == ">>") { out_ << "    " << tmp << " = ashr " << op_type << " " << left << ", " << right << "\n"; return tmp; }
 
         std::string cmp = newTmp();
         std::string pred;
@@ -1169,7 +1197,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         else if (b->op == ">=") pred = "sge";
         else throw std::runtime_error("unknown operator: " + b->op);
 
-        out_ << "    " << cmp << " = icmp " << pred << " i32 " << left << ", " << right << "\n";
+        out_ << "    " << cmp << " = icmp " << pred << " " << op_type << " " << left << ", " << right << "\n";
         out_ << "    " << tmp << " = zext i1 " << cmp << " to i32\n";
         return tmp;
     }
@@ -1184,6 +1212,165 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     throw std::runtime_error("unsupported expression type");
+}
+
+// Infer the LLVM type that emitExpr will produce for this expression,
+// without emitting any IR. Used by emitCondBool to build a correctly-typed
+// icmp regardless of whether the condition involves i8, i16, i32, ptr, etc.
+std::string Codegen::exprLlvmType(const Expr& expr) {
+    // integer literal — always i32 (emitExpr returns a bare integer string,
+    // and the consumer hardcodes i32 for BinaryExpr; literals used in conditions
+    // are compared as i32)
+    if (dynamic_cast<const IntLiteralExpr*>(&expr)) return "i32";
+
+    // string literal — ptr
+    if (dynamic_cast<const StringLiteralExpr*>(&expr)) return "ptr";
+
+    // variable — look up declared type
+    if (auto* v = dynamic_cast<const VarExpr*>(&expr)) {
+        // field access via self in a method
+        if (!current_slid_.empty()) {
+            auto& info = slid_info_[current_slid_];
+            if (info.field_index.count(v->name))
+                return llvmType(info.field_types[info.field_index.at(v->name)]);
+        }
+        auto tit = local_types_.find(v->name);
+        if (tit != local_types_.end()) return llvmType(tit->second);
+        // enum value — i32
+        if (enum_values_.count(v->name)) return "i32";
+        // array name used as pointer — ptr
+        if (array_info_.count(v->name)) return "ptr";
+        return "i32";
+    }
+
+    // dereference: type is the pointee type
+    if (auto* de = dynamic_cast<const DerefExpr*>(&expr)) {
+        if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end() && isIndirectType(tit->second)) {
+                std::string pt = isPtrType(tit->second)
+                    ? tit->second.substr(0, tit->second.size()-2)
+                    : tit->second.substr(0, tit->second.size()-1);
+                return llvmType(pt);
+            }
+        }
+        return "i32";
+    }
+
+    // field access — look up field type
+    if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
+        std::string slid_name;
+        if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
+            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) {
+                    slid_name = isPtrType(tit->second)
+                        ? tit->second.substr(0, tit->second.size()-2)
+                        : tit->second.substr(0, tit->second.size()-1);
+                }
+            }
+        } else if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end()) slid_name = tit->second;
+        }
+        if (!slid_name.empty() && slid_info_.count(slid_name)) {
+            auto& info = slid_info_[slid_name];
+            auto fit = info.field_index.find(fa->field);
+            if (fit != info.field_index.end())
+                return llvmType(info.field_types[fit->second]);
+        }
+        return "i32";
+    }
+
+    // comparison operators always produce i1 -> zext to i32 in emitExpr
+    if (auto* b = dynamic_cast<const BinaryExpr*>(&expr)) {
+        if (b->op == "==" || b->op == "!=" || b->op == "<" ||
+            b->op == ">"  || b->op == "<=" || b->op == ">=" ||
+            b->op == "&&" || b->op == "||" || b->op == "^^")
+            return "i32";
+        // arithmetic: result is the larger of the two operands; default i32
+        return "i32";
+    }
+
+    // unary: ! and ~ produce i32; inc/dec preserve operand type
+    if (auto* u = dynamic_cast<const UnaryExpr*>(&expr)) {
+        if (u->op == "!" || u->op == "~") return "i32";
+        // pre/post inc/dec — same type as operand
+        return exprLlvmType(*u->operand);
+    }
+
+    // address-of — ptr
+    if (dynamic_cast<const AddrOfExpr*>(&expr)) return "ptr";
+
+    // array index — elem type
+    if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&expr)) {
+        const Expr* cur = &expr;
+        while (auto* a = dynamic_cast<const ArrayIndexExpr*>(cur))
+            cur = a->base.get();
+        if (auto* ve = dynamic_cast<const VarExpr*>(cur)) {
+            auto ait = array_info_.find(ve->name);
+            if (ait != array_info_.end()) return llvmType(ait->second.elem_type);
+        }
+        (void)ai;
+        return "i32";
+    }
+
+    // method call — look up return type
+    if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
+        std::string slid_name;
+        if (auto* ve = dynamic_cast<const VarExpr*>(mc->object.get())) {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end()) slid_name = tit->second;
+        }
+        if (!slid_name.empty()) {
+            auto rit = func_return_types_.find(slid_name + "__" + mc->method);
+            if (rit != func_return_types_.end()) return llvmType(rit->second);
+        }
+        return "i32";
+    }
+
+    // function call — look up return type
+    if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        auto rit = func_return_types_.find(ce->callee);
+        if (rit != func_return_types_.end()) return llvmType(rit->second);
+        return "i32";
+    }
+
+    return "i32";
+}
+
+// Emit the condition expression and produce an i1 result using the correct
+// LLVM type for the icmp — avoids "i8 value used as i32 operand" errors.
+// Returns true if this expression already produces a 0/1 i32 truth value —
+// i.e. it is a comparison or logical op. emitCondBool can skip the extra icmp.
+static bool isAlreadyBool(const Expr& expr) {
+    if (auto* b = dynamic_cast<const BinaryExpr*>(&expr)) {
+        return b->op == "==" || b->op == "!=" || b->op == "<"  ||
+               b->op == ">"  || b->op == "<=" || b->op == ">=" ||
+               b->op == "&&" || b->op == "||" || b->op == "^^";
+    }
+    if (auto* u = dynamic_cast<const UnaryExpr*>(&expr))
+        return u->op == "!";
+    return false;
+}
+
+std::string Codegen::emitCondBool(const Expr& expr) {
+    std::string val = emitExpr(expr);
+    // comparison/logical ops already produce an i32 0 or 1 via zext —
+    // just truncate back to i1 without a redundant icmp.
+    if (isAlreadyBool(expr)) {
+        std::string cond_bool = newTmp();
+        out_ << "    " << cond_bool << " = trunc i32 " << val << " to i1\n";
+        return cond_bool;
+    }
+    std::string t = exprLlvmType(expr);
+    std::string cond_bool = newTmp();
+    if (t == "ptr") {
+        out_ << "    " << cond_bool << " = icmp ne ptr " << val << ", null\n";
+    } else {
+        out_ << "    " << cond_bool << " = icmp ne " << t << " " << val << ", 0\n";
+    }
+    return cond_bool;
 }
 
 void Codegen::emitStmt(const Stmt& stmt) {
@@ -1526,9 +1713,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string then_lbl = newLabel("if_then");
         std::string else_lbl = newLabel("if_else");
         std::string end_lbl  = newLabel("if_end");
-        std::string cond = emitExpr(*if_stmt->cond);
-        std::string cond_bool = newTmp();
-        out_ << "    " << cond_bool << " = icmp ne i32 " << cond << ", 0\n";
+        std::string cond_bool = emitCondBool(*if_stmt->cond);
         out_ << "    br i1 " << cond_bool << ", label %" << then_lbl
              << ", label %" << (if_stmt->else_block ? else_lbl : end_lbl) << "\n";
         block_terminated_ = false;
@@ -1562,17 +1747,13 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (!block_terminated_) out_ << "    br label %" << cond_lbl << "\n";
             block_terminated_ = false;
             out_ << cond_lbl << ":\n";
-            std::string cond = emitExpr(*w->cond);
-            std::string cond_bool = newTmp();
-            out_ << "    " << cond_bool << " = icmp ne i32 " << cond << ", 0\n";
+            std::string cond_bool = emitCondBool(*w->cond);
             out_ << "    br i1 " << cond_bool << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
         } else {
             out_ << "    br label %" << cond_lbl << "\n";
             block_terminated_ = false;
             out_ << cond_lbl << ":\n";
-            std::string cond = emitExpr(*w->cond);
-            std::string cond_bool = newTmp();
-            out_ << "    " << cond_bool << " = icmp ne i32 " << cond << ", 0\n";
+            std::string cond_bool = emitCondBool(*w->cond);
             out_ << "    br i1 " << cond_bool << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
             block_terminated_ = false;
             out_ << body_lbl << ":\n";
