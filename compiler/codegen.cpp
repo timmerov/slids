@@ -268,6 +268,10 @@ void Codegen::collectStringConstants() {
                 for (auto& arg : call->args)
                     collectExpr(arg.get(), newline);
             }
+        } else if (auto* decl = dynamic_cast<const VarDeclStmt*>(&stmt)) {
+            // collect string literals used as initializers (e.g. char[] s = "hello")
+            if (decl->init && dynamic_cast<const StringLiteralExpr*>(decl->init.get()))
+                collectExpr(decl->init.get(), false);
         } else if (auto* b = dynamic_cast<const BlockStmt*>(&stmt)) {
             for (auto& s : b->stmts) collect(*s);
         } else if (auto* i = dynamic_cast<const IfStmt*>(&stmt)) {
@@ -1992,6 +1996,19 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         int fmt_size = newline ? 4 : 3;
                         out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
                         out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", ptr " << gep << ")\n";
+                        return;
+                    }
+                    // char[] pointer variable (initialized from string literal): print as string
+                    auto tit = local_types_.find(ve->name);
+                    if (tit != local_types_.end() && tit->second == "char[]") {
+                        auto lit = locals_.find(ve->name);
+                        std::string ptr_val = newTmp();
+                        out_ << "    " << ptr_val << " = load ptr, ptr " << lit->second << "\n";
+                        std::string fmt = newTmp();
+                        std::string fmt_name = newline ? "@.fmt_str" : "@.fmt_str_nonl";
+                        int fmt_size = newline ? 4 : 3;
+                        out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
+                        out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", ptr " << ptr_val << ")\n";
                         return;
                     }
                 }
