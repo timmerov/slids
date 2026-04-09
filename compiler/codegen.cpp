@@ -1977,22 +1977,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             };
             flatten(call->args[0].get());
 
-            bool is_concat = segments.size() > 1 ||
-                (segments.size() == 1 && !dynamic_cast<const StringLiteralExpr*>(segments[0]));
-
-            if (!is_concat && segments.size() == 1) {
-                // single string literal
-                if (auto* s = dynamic_cast<const StringLiteralExpr*>(segments[0])) {
-                    std::string label = "@.str" + std::to_string(str_counter_++);
-                    std::string full = newline ? s->value + "\n" : s->value;
-                    int len; llvmEscape(full, len);
-                    std::string tmp = newTmp();
-                    out_ << "    " << tmp << " = getelementptr [" << len << " x i8], ptr "
-                         << label << ", i32 0, i32 0\n";
-                    out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
-                    return;
-                }
-                // single integer expr — but first check for char array (print as string)
+            // char array variable: println(dest) where dest is char[N] — print as string
+            if (segments.size() == 1) {
                 if (auto* ve = dynamic_cast<const VarExpr*>(segments[0])) {
                     auto ait = array_info_.find(ve->name);
                     if (ait != array_info_.end() && ait->second.elem_type == "char") {
@@ -2009,6 +1995,24 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         return;
                     }
                 }
+            }
+
+            bool is_concat = segments.size() > 1 ||
+                (segments.size() == 1 && !dynamic_cast<const StringLiteralExpr*>(segments[0]));
+
+            if (!is_concat && segments.size() == 1) {
+                // single string literal
+                if (auto* s = dynamic_cast<const StringLiteralExpr*>(segments[0])) {
+                    std::string label = "@.str" + std::to_string(str_counter_++);
+                    std::string full = newline ? s->value + "\n" : s->value;
+                    int len; llvmEscape(full, len);
+                    std::string tmp = newTmp();
+                    out_ << "    " << tmp << " = getelementptr [" << len << " x i8], ptr "
+                         << label << ", i32 0, i32 0\n";
+                    out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
+                    return;
+                }
+                // single integer expr
                 std::string val = emitExpr(*segments[0]);
                 std::string fmt = newTmp();
                 std::string fmt_name = newline ? "@.fmt_int" : "@.fmt_int_nonl";
