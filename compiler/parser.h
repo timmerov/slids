@@ -73,6 +73,15 @@ struct ArrayIndexExpr : Expr {
         : base(std::move(base)), index(std::move(idx)) {}
 };
 
+// slice: base[start..end]
+struct SliceExpr : Expr {
+    std::unique_ptr<Expr> base;
+    std::unique_ptr<Expr> start;
+    std::unique_ptr<Expr> end;
+    SliceExpr(std::unique_ptr<Expr> base, std::unique_ptr<Expr> start, std::unique_ptr<Expr> end)
+        : base(std::move(base)), start(std::move(start)), end(std::move(end)) {}
+};
+
 // dereference: ptr^  (postfix)
 struct DerefExpr : Expr {
     std::unique_ptr<Expr> operand;

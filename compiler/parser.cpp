@@ -134,8 +134,15 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
         } else if (peek().type == TokenType::kLBracket) {
             advance();
             auto idx = parseExpr();
-            expect(TokenType::kRBracket, "expected ']'");
-            base = std::make_unique<ArrayIndexExpr>(std::move(base), std::move(idx));
+            if (peek().type == TokenType::kDotDot) {
+                advance();
+                auto end_expr = parseExpr();
+                expect(TokenType::kRBracket, "expected ']'");
+                base = std::make_unique<SliceExpr>(std::move(base), std::move(idx), std::move(end_expr));
+            } else {
+                expect(TokenType::kRBracket, "expected ']'");
+                base = std::make_unique<ArrayIndexExpr>(std::move(base), std::move(idx));
+            }
         } else if (peek().type == TokenType::kBitXor) {
             // postfix ^ is dereference only when NOT followed by an expression operand
             // (if followed by identifier/literal/lparen it's binary XOR, handled by parseBitXor)

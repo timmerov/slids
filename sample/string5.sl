@@ -51,10 +51,12 @@ int strlen(char[] s) {
 }
 
 int32 main() {
-    char[] null_terminated_string_literal = "Hello, World!";
+    char[] hello_world = "Hello, World!";
     String s;
-    s.set(null_terminated_string_literal);
+    s.set(hello_world);
     println("expected: size=13 capacity=13");
     println("size=" + s.size_ + " capacity=" + s.capacity_);
+    println("expected: Hello, World!");
+    println(s.storage_[0..s.size_]);
     return 0;
 }

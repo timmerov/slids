@@ -602,6 +602,22 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 return;
             }
 
+            // helper: emit a slice expr via printf("%.*s", len, ptr)
+            auto emitSlice = [&](const SliceExpr* sl, bool nl) {
+                std::string base_ptr = emitExpr(*sl->base);
+                std::string start_val = emitExpr(*sl->start);
+                std::string end_val = emitExpr(*sl->end);
+                std::string sliced = newTmp();
+                out_ << "    " << sliced << " = getelementptr i8, ptr " << base_ptr << ", i32 " << start_val << "\n";
+                std::string len = newTmp();
+                out_ << "    " << len << " = sub i32 " << end_val << ", " << start_val << "\n";
+                std::string fmt = newTmp();
+                std::string fmt_name = nl ? "@.fmt_slice" : "@.fmt_slice_nonl";
+                int fmt_size = nl ? 6 : 5;
+                out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
+                out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", i32 " << len << ", ptr " << sliced << ")\n";
+            };
+
             // Flatten a left-leaning "+" chain into segments.
             // Each segment is either a StringLiteralExpr or an integer expr.
             std::vector<const Expr*> segments;
@@ -648,6 +664,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         return;
                     }
                 }
+                // slice expr: println(s[0..len])
+                if (auto* sl = dynamic_cast<const SliceExpr*>(segments[0])) {
+                    emitSlice(sl, newline);
+                    return;
+                }
             }
 
             bool is_concat = segments.size() > 1 ||
@@ -692,6 +713,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     out_ << "    " << tmp << " = getelementptr [" << len << " x i8], ptr "
                          << label << ", i32 0, i32 0\n";
                     out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
+                } else if (auto* sl = dynamic_cast<const SliceExpr*>(segments[si])) {
+                    emitSlice(sl, last && newline);
                 } else {
                     std::string val = emitExpr(*segments[si]);
                     std::string val_type = exprLlvmType(*segments[si]);

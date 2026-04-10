@@ -307,6 +307,8 @@ void Codegen::emit() {
     out_ << "@.fmt_int_nonl = private constant [3 x i8] c\"%d\\00\"\n";
     out_ << "@.fmt_str    = private constant [4 x i8] c\"%s\\0A\\00\"\n";
     out_ << "@.fmt_str_nonl = private constant [3 x i8] c\"%s\\00\"\n";
+    out_ << "@.fmt_slice    = private constant [6 x i8] c\"%.*s\\0A\\00\"\n";
+    out_ << "@.fmt_slice_nonl = private constant [5 x i8] c\"%.*s\\00\"\n";
     out_ << "@.str_newline = private constant [2 x i8] c\"\\0A\\00\"\n\n";
 
     str_counter_ = 0;
