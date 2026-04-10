@@ -880,7 +880,11 @@ MethodDef Parser::parseMethodDef() {
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "expected ')'");
-    m.body = parseBlock();
+    if (peek().type == TokenType::kSemicolon) {
+        advance(); // forward declaration — no body
+    } else {
+        m.body = parseBlock();
+    }
     return m;
 }
 
@@ -911,24 +915,32 @@ SlidDef Parser::parseSlidDef() {
     bool has_ctor_code = false;
 
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
-        // explicit constructor: _() { ... }
+        // explicit constructor: _() { ... }  or forward decl: _();
         if (peek().type == TokenType::kIdentifier && peek().value == "_"
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
             advance(); // consume _
             expect(TokenType::kLParen, "expected '('");
             expect(TokenType::kRParen, "expected ')'");
-            slid.explicit_ctor_body = parseBlock();
+            if (peek().type == TokenType::kSemicolon) {
+                advance(); // forward declaration only
+            } else {
+                slid.explicit_ctor_body = parseBlock();
+            }
             continue;
         }
-        // explicit destructor: ~() { ... }
+        // explicit destructor: ~() { ... }  or forward decl: ~();
         if (peek().type == TokenType::kBitNot
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
             advance(); // consume ~
             expect(TokenType::kLParen, "expected '('");
             expect(TokenType::kRParen, "expected ')'");
-            slid.dtor_body = parseBlock();
+            if (peek().type == TokenType::kSemicolon) {
+                advance(); // forward declaration only
+            } else {
+                slid.dtor_body = parseBlock();
+            }
             continue;
         }
         // method definition: starts with a type name followed by identifier followed by (
@@ -963,6 +975,33 @@ EnumDef Parser::parseEnumDef() {
     }
     expect(TokenType::kRParen, "expected ')'");
     return e;
+}
+
+ExternalMethodDef Parser::parseExternalMethodDef() {
+    ExternalMethodDef em;
+    // optional return type (primitive keyword); absent for ctor/dtor
+    if (isTypeName(peek())) em.return_type = parseTypeName();
+    // TypeName:
+    em.slid_name = expect(TokenType::kIdentifier, "expected class name").value;
+    expect(TokenType::kColon, "expected ':'");
+    // method name, or _ (ctor), or ~ (dtor)
+    if (peek().type == TokenType::kIdentifier && peek().value == "_") {
+        em.method_name = "_"; advance();
+    } else if (peek().type == TokenType::kBitNot) {
+        em.method_name = "~"; advance();
+    } else {
+        em.method_name = expect(TokenType::kIdentifier, "expected method name").value;
+    }
+    expect(TokenType::kLParen, "expected '('");
+    while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+        std::string type = parseTypeName();
+        std::string name = expect(TokenType::kIdentifier, "expected parameter name").value;
+        em.params.emplace_back(type, name);
+        if (peek().type == TokenType::kComma) advance();
+    }
+    expect(TokenType::kRParen, "expected ')'");
+    em.body = parseBlock();
+    return em;
 }
 
 FunctionDef Parser::parseFunctionDef() {
@@ -1007,7 +1046,16 @@ Program Parser::parse() {
         } else if (peek().type == TokenType::kLParen) {
             program.functions.push_back(parseFunctionDef());
         } else {
-            program.functions.push_back(parseFunctionDef());
+            // detect external method: [returnType] TypeName:
+            int p = pos_;
+            if (isTypeName(tokens_[p]) && !isUserTypeName(tokens_[p])) p++;
+            if (p + 1 < (int)tokens_.size()
+                && isUserTypeName(tokens_[p])
+                && tokens_[p + 1].type == TokenType::kColon) {
+                program.external_methods.push_back(parseExternalMethodDef());
+            } else {
+                program.functions.push_back(parseFunctionDef());
+            }
         }
     }
     return program;

@@ -329,10 +329,21 @@ struct FunctionDef {
     std::unique_ptr<BlockStmt> body;
 };
 
+// method defined outside the class body: void String:clear() { ... }
+// method_name is "_" for ctor, "~" for dtor, else the method name
+struct ExternalMethodDef {
+    std::string slid_name;
+    std::string return_type;
+    std::string method_name;
+    std::vector<std::pair<std::string, std::string>> params;
+    std::unique_ptr<BlockStmt> body;
+};
+
 struct Program {
     std::vector<EnumDef> enums;
     std::vector<SlidDef> slids;
     std::vector<FunctionDef> functions;
+    std::vector<ExternalMethodDef> external_methods;
 };
 
 // --- Parser ---
@@ -356,6 +367,7 @@ private:
     SlidDef parseSlidDef();
     EnumDef parseEnumDef();
     MethodDef parseMethodDef();
+    ExternalMethodDef parseExternalMethodDef();
     NestedFunctionDef parseNestedFunctionDef();
     FunctionDef parseFunctionDef();
     std::unique_ptr<BlockStmt> parseBlock();

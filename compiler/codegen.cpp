@@ -86,6 +86,14 @@ void Codegen::collectFunctionSignatures() {
             func_param_types_[mangled] = ptypes;
         }
     }
+    for (auto& em : program_.external_methods) {
+        if (em.method_name == "_" || em.method_name == "~") continue;
+        std::string mangled = em.slid_name + "__" + em.method_name;
+        func_return_types_[mangled] = em.return_type;
+        std::vector<std::string> ptypes;
+        for (auto& [t, n] : em.params) ptypes.push_back(t);
+        func_param_types_[mangled] = ptypes;
+    }
 }
 
 std::set<std::string> Codegen::collectCaptures(
