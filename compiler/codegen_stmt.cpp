@@ -250,9 +250,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (ret_it == func_return_types_.end())
                 throw std::runtime_error("unknown method: " + mcs->method);
             std::string ret_type = llvmType(ret_it->second);
+            auto& mptypes = func_param_types_[mangled];
             std::string arg_str = "ptr " + obj_ptr;
-            for (auto& arg : mcs->args)
-                arg_str += ", i32 " + emitExpr(*arg);
+            for (int i = 0; i < (int)mcs->args.size(); i++) {
+                std::string ptype = (i < (int)mptypes.size()) ? llvmType(mptypes[i]) : "i32";
+                arg_str += ", " + ptype + " " + emitExpr(*mcs->args[i]);
+            }
             if (ret_type == "void") {
                 out_ << "    call void @" << mangled << "(" << arg_str << ")\n";
             } else {
@@ -767,6 +770,29 @@ void Codegen::emitStmt(const Stmt& stmt) {
                      << "(" << arg_str << ")\n";
             }
             return;
+        }
+
+        // implicit self method call — e.g. reserve(len) inside a method
+        if (!current_slid_.empty()) {
+            std::string mangled = current_slid_ + "__" + call->callee;
+            auto mit = func_return_types_.find(mangled);
+            if (mit != func_return_types_.end()) {
+                std::string ret_type = llvmType(mit->second);
+                auto& mptypes = func_param_types_[mangled];
+                std::string arg_str = "ptr %self";
+                for (int i = 0; i < (int)call->args.size(); i++) {
+                    std::string ptype = (i < (int)mptypes.size()) ? llvmType(mptypes[i]) : "i32";
+                    arg_str += ", " + ptype + " " + emitExpr(*call->args[i]);
+                }
+                if (ret_type == "void") {
+                    out_ << "    call void @" << mangled << "(" << arg_str << ")\n";
+                } else {
+                    std::string tmp = newTmp();
+                    out_ << "    " << tmp << " = call " << ret_type << " @" << mangled
+                         << "(" << arg_str << ")\n";
+                }
+                return;
+            }
         }
 
         throw std::runtime_error("unknown function: " + call->callee);

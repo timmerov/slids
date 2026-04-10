@@ -16,6 +16,9 @@ String(
     }
 
     void reserve(int cap) {
+        if (cap <= capacity_) {
+            return;
+        }
         capacity_ = cap;
         delete storage_;
         storage_ = new char[cap];

@@ -390,6 +390,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             // check if the variable is a pointer type ([] — arithmetic allowed)
             // or a reference type (^ — arithmetic is a compile error)
             bool is_ptr_arith = false;
+            std::string pointee_llvm = "i32";
             if (auto* ve = dynamic_cast<const VarExpr*>(u->operand.get())) {
                 auto tit = local_types_.find(ve->name);
                 if (tit != local_types_.end()) {
@@ -397,8 +398,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
                         throw std::runtime_error(
                             "'" + u->op + "' on reference '" + ve->name +
                             "': arithmetic on references is not allowed (use a pointer '[]' type)");
-                    if (isPtrType(tit->second))
+                    if (isPtrType(tit->second)) {
                         is_ptr_arith = true;
+                        std::string pointee_type = tit->second.substr(0, tit->second.size()-2);
+                        pointee_llvm = llvmType(pointee_type);
+                    }
                 }
             }
 
@@ -408,7 +412,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 // pointer arithmetic: load ptr, GEP ±1, store back
                 out_ << "    " << old << " = load ptr, ptr " << ptr << "\n";
                 int step = (instr == "add") ? 1 : -1;
-                out_ << "    " << new_val << " = getelementptr i32, ptr " << old << ", i32 " << step << "\n";
+                out_ << "    " << new_val << " = getelementptr " << pointee_llvm << ", ptr " << old << ", i32 " << step << "\n";
                 out_ << "    store ptr " << new_val << ", ptr " << ptr << "\n";
             } else {
                 out_ << "    " << old << " = load i32, ptr " << ptr << "\n";
