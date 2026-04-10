@@ -6,7 +6,7 @@ BUILD_DIR = ../build/compiler
 BIN_DIR   = ../bin
 TARGET    = $(BIN_DIR)/slidsc
 
-SRCS      = main.cpp lexer.cpp parser.cpp codegen.cpp
+SRCS      = main.cpp lexer.cpp parser.cpp codegen.cpp codegen_expr.cpp codegen_stmt.cpp
 OBJS      = $(addprefix $(BUILD_DIR)/, $(SRCS:.cpp=.o))
 DEPS      = $(OBJS:.o=.d)
 
