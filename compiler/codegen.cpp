@@ -1292,7 +1292,20 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             b->op == ">"  || b->op == "<=" || b->op == ">=" ||
             b->op == "&&" || b->op == "||" || b->op == "^^")
             return "i32";
-        // arithmetic: result is the larger of the two operands; default i32
+        // arithmetic/bitwise: result is the wider of the two operands
+        {
+            bool left_is_literal  = (dynamic_cast<const IntLiteralExpr*>(b->left.get())  != nullptr);
+            bool right_is_literal = (dynamic_cast<const IntLiteralExpr*>(b->right.get()) != nullptr);
+            std::string lt = exprLlvmType(*b->left);
+            std::string rt = exprLlvmType(*b->right);
+            if (left_is_literal && !right_is_literal) return rt;
+            if (right_is_literal && !left_is_literal) return lt;
+            static const std::map<std::string,int> rank = {
+                {"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+            auto li = rank.find(lt), ri = rank.find(rt);
+            if (li != rank.end() && ri != rank.end())
+                return (ri->second > li->second) ? rt : lt;
+        }
         return "i32";
     }
 
@@ -2030,7 +2043,14 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     return;
                 }
                 // single integer expr
+                // printf is variadic; sub-i32 values must be extended to i32 first.
                 std::string val = emitExpr(*segments[0]);
+                std::string val_type = exprLlvmType(*segments[0]);
+                if (val_type != "i32" && val_type != "i64") {
+                    std::string ext = newTmp();
+                    out_ << "    " << ext << " = zext " << val_type << " " << val << " to i32\n";
+                    val = ext;
+                }
                 std::string fmt = newTmp();
                 std::string fmt_name = newline ? "@.fmt_int" : "@.fmt_int_nonl";
                 out_ << "    " << fmt << " = getelementptr [4 x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
@@ -2051,6 +2071,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
                 } else {
                     std::string val = emitExpr(*segments[si]);
+                    std::string val_type = exprLlvmType(*segments[si]);
+                    if (val_type != "i32" && val_type != "i64") {
+                        std::string ext = newTmp();
+                        out_ << "    " << ext << " = zext " << val_type << " " << val << " to i32\n";
+                        val = ext;
+                    }
                     std::string fmt = newTmp();
                     std::string fmt_name = (last && newline) ? "@.fmt_int" : "@.fmt_int_nonl";
                     out_ << "    " << fmt << " = getelementptr [4 x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
