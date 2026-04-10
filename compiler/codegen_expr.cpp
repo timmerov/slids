@@ -534,6 +534,26 @@ std::string Codegen::emitExpr(const Expr& expr) {
         return tmp;
     }
 
+    if (dynamic_cast<const NullptrExpr*>(&expr)) {
+        return "null";
+    }
+
+    if (auto* ne = dynamic_cast<const NewExpr*>(&expr)) {
+        std::string elt = llvmType(ne->elem_type);
+        std::string count_val = emitExpr(*ne->count);
+        int elem_bytes = 1;
+        if (elt == "i32") elem_bytes = 4;
+        else if (elt == "i64") elem_bytes = 8;
+        else if (elt == "i16") elem_bytes = 2;
+        std::string bytes = newTmp();
+        out_ << "    " << bytes << " = mul i32 " << count_val << ", " << elem_bytes << "\n";
+        std::string bytes64 = newTmp();
+        out_ << "    " << bytes64 << " = zext i32 " << bytes << " to i64\n";
+        std::string tmp = newTmp();
+        out_ << "    " << tmp << " = call ptr @malloc(i64 " << bytes64 << ")\n";
+        return tmp;
+    }
+
     if (auto* s = dynamic_cast<const StringLiteralExpr*>(&expr)) {
         std::string label = "@.str" + std::to_string(str_counter_++);
         int len; llvmEscape(s->value, len);
@@ -554,6 +574,12 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
     // and the consumer hardcodes i32 for BinaryExpr; literals used in conditions
     // are compared as i32)
     if (dynamic_cast<const IntLiteralExpr*>(&expr)) return "i32";
+
+    // nullptr — ptr
+    if (dynamic_cast<const NullptrExpr*>(&expr)) return "ptr";
+
+    // new expr — ptr
+    if (dynamic_cast<const NewExpr*>(&expr)) return "ptr";
 
     // string literal — ptr
     if (dynamic_cast<const StringLiteralExpr*>(&expr)) return "ptr";

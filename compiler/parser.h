@@ -94,6 +94,17 @@ struct AddrOfExpr : Expr {
     AddrOfExpr(std::unique_ptr<Expr> op) : operand(std::move(op)) {}
 };
 
+// nullptr literal — null pointer constant
+struct NullptrExpr : Expr {};
+
+// new T[n] — heap allocation, returns ptr
+struct NewExpr : Expr {
+    std::string elem_type;
+    std::unique_ptr<Expr> count;
+    NewExpr(std::string t, std::unique_ptr<Expr> n)
+        : elem_type(std::move(t)), count(std::move(n)) {}
+};
+
 // --- Statements ---
 
 struct Stmt {
@@ -164,6 +175,12 @@ struct ArrayDeclStmt : Stmt {
     std::vector<int> dims;  // e.g. {8, 8} for [8][8]
     // initializer: flat list of exprs in row-major order
     std::vector<std::unique_ptr<Expr>> init_values;
+};
+
+// delete ptr — free heap allocation
+struct DeleteStmt : Stmt {
+    std::unique_ptr<Expr> operand;
+    DeleteStmt(std::unique_ptr<Expr> op) : operand(std::move(op)) {}
 };
 
 // deref assign: ptr^ = expr  or  ptr^.field = expr handled via FieldAssignStmt on DerefExpr

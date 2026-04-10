@@ -1,0 +1,70 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+Slids is a compiled, systems-level programming language. Source files (`.sl`) compile to LLVM IR (`.ll`), then to native object files via `llc`, then linked with `g++`. The compiler (`slidsc`) is written in C++17.
+
+## Build commands
+
+```bash
+# Build everything (compiler + all samples)
+./make.sh
+
+# Build only the compiler
+cd compiler && make
+
+# Build only samples
+cd sample && make
+
+# Build a single sample
+cd sample && make hello1
+
+# Manually compile a .sl file end-to-end
+./bin/slidsc foo.sl -o foo.ll
+llc --filetype=obj --relocation-model=pic foo.ll -o foo.o
+g++ foo.o -o foo
+./foo
+```
+
+## Testing
+
+There is no automated test suite. Sample programs in `sample/` are the regression tests. Build them with `cd sample && make` and run the binaries in `bin/`. Each sample exercises specific language features (see the Makefile for the full list).
+
+## Compiler pipeline
+
+```
+.sl source → Lexer → Token stream → Parser → AST → Codegen → LLVM IR (.ll)
+```
+
+- `main.cpp` — entry point; reads source, runs lexer → parser → codegen
+- `lexer.cpp` / `token.h` — tokenizer; handles keywords, literals, comments, line tracking
+- `parser.cpp` / `parser.h` — recursive descent parser; produces AST (`Expr`, `Stmt`, `SlidDef`, `FunctionDef`, etc.)
+- `codegen.cpp` — orchestrates IR emission; Phase 1: collect string constants + signatures; Phase 2: analyze nested function captures; Phase 3: emit LLVM IR
+- `codegen_expr.cpp` — expression codegen (binary/unary ops, calls, field access, allocation)
+- `codegen_stmt.cpp` — statement codegen (declarations, assignments, control flow, destructors)
+- `codegen_helpers.h` — type predicates and constant evaluation utilities
+
+## Language concepts
+
+**Slids** are the one unified construct — every function, class, method, and constructor is a slid. Calling a slid executes its body and returns an instance of itself. Nested slids are methods.
+
+**Pointer types:** `^` is a reference (no arithmetic); `[]` is an iterator (arithmetic allowed). Dereference with `^` suffix: `ptr^.field`.
+
+**Memory:** `new Type(init)` / `new Type[n]` for heap allocation. `delete ptr` nullifies pointer after freeing. Destructors are called in reverse declaration order on return.
+
+**File model:** `.slh` headers are public contracts; `.sl` files are private implementations. No forward declarations needed within a `.sl` file — the compiler does two passes.
+
+**Enums, operator overloading, nested functions with capture, labeled break/continue, and `@foreign` for C interop** are all supported. See `slids_reference.md` for full syntax.
+
+## Codegen internals
+
+The codegen class tracks:
+- `locals_` — map from variable name to alloca register
+- `slid_fields_` — field name → index and type for each slid type
+- `func_types_` — function signatures
+- `destructors_` — stack of variables needing cleanup on return
+- `captures_` — variables captured by nested functions
+
+Type mapping: `int` → `i32`, `int64` → `i64`, `bool` → `i1`, `float32` → `float`, `float64` → `double`, pointer types → `ptr`.

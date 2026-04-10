@@ -80,6 +80,15 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     }
     if (t.type == TokenType::kTrue)  { advance(); return std::make_unique<IntLiteralExpr>(1); }
     if (t.type == TokenType::kFalse) { advance(); return std::make_unique<IntLiteralExpr>(0); }
+    if (t.type == TokenType::kNullptr) { advance(); return std::make_unique<NullptrExpr>(); }
+    if (t.type == TokenType::kNew) {
+        advance();
+        std::string elem_type = parseTypeName();
+        expect(TokenType::kLBracket, "expected '[' after type in new");
+        auto count = parseExpr();
+        expect(TokenType::kRBracket, "expected ']'");
+        return std::make_unique<NewExpr>(elem_type, std::move(count));
+    }
     if (t.type == TokenType::kIdentifier) {
         advance();
         if (peek().type == TokenType::kLParen) {
@@ -299,6 +308,13 @@ std::unique_ptr<BlockStmt> Parser::parseBlock() {
 
 std::unique_ptr<Stmt> Parser::parseStmt() {
     Token t = peek();
+
+    if (t.type == TokenType::kDelete) {
+        advance();
+        auto operand = parseExpr();
+        expect(TokenType::kSemicolon, "expected ';'");
+        return std::make_unique<DeleteStmt>(std::move(operand));
+    }
 
     if (t.type == TokenType::kReturn) {
         advance();

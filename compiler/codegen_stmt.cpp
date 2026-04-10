@@ -5,6 +5,12 @@
 #include <stdexcept>
 
 void Codegen::emitStmt(const Stmt& stmt) {
+    if (auto* ds = dynamic_cast<const DeleteStmt*>(&stmt)) {
+        std::string ptr_val = emitExpr(*ds->operand);
+        out_ << "    call void @free(ptr " << ptr_val << ")\n";
+        return;
+    }
+
     if (auto* arr = dynamic_cast<const ArrayDeclStmt*>(&stmt)) {
         int total = 1;
         for (int d : arr->dims) total *= d;
