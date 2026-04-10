@@ -42,6 +42,8 @@ private:
     std::map<std::string, std::string> local_types_; // var name -> declared type (slid name or "int^" etc)
     std::map<std::string, std::string> func_return_types_;
     std::map<std::string, std::vector<std::string>> func_param_types_; // func name -> param types
+    std::map<std::string, std::vector<std::pair<std::string,std::string>>> func_tuple_fields_; // func -> [(type,name)]
+    std::string current_func_return_type_; // LLVM return type of the function being emitted
     std::map<std::string, SlidInfo>    slid_info_;
     std::vector<std::pair<std::string, std::string>> string_constants_;
 
@@ -72,6 +74,7 @@ private:
         std::string alloca_reg; // ptr to flat [N x i32] alloca
     };
     std::map<std::string, ArrayInfo> array_info_;
+    std::map<std::string, ArrayInfo> parent_array_info_; // array info from parent, used in nested functions
 
     // dtor tracking: ordered list of (var_name, slid_type) for locals with dtors
     // in declaration order — dtors called in reverse on return

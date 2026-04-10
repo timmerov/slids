@@ -22,6 +22,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
         ainfo.dims = arr->dims;
         ainfo.alloca_reg = reg;
         array_info_[arr->name] = ainfo;
+        parent_array_info_[arr->name] = ainfo;
+        locals_[arr->name] = reg; // allow array to be captured by nested functions
         // store initializer values
         for (int i = 0; i < (int)arr->init_values.size(); i++) {
             std::string val = emitExpr(*arr->init_values[i]);
@@ -271,8 +273,21 @@ void Codegen::emitStmt(const Stmt& stmt) {
     if (auto* ret = dynamic_cast<const ReturnStmt*>(&stmt)) {
         emitDtors();
         if (ret->value) {
-            std::string val = emitExpr(*ret->value);
-            out_ << "    ret i32 " << val << "\n";
+            if (auto* te = dynamic_cast<const TupleExpr*>(ret->value.get())) {
+                std::string acc = "undef";
+                for (int i = 0; i < (int)te->values.size(); i++) {
+                    std::string val = emitExpr(*te->values[i]);
+                    std::string elem_type = exprLlvmType(*te->values[i]);
+                    std::string tmp = newTmp();
+                    out_ << "    " << tmp << " = insertvalue " << current_func_return_type_
+                         << " " << acc << ", " << elem_type << " " << val << ", " << i << "\n";
+                    acc = tmp;
+                }
+                out_ << "    ret " << current_func_return_type_ << " " << acc << "\n";
+            } else {
+                std::string val = emitExpr(*ret->value);
+                out_ << "    ret " << current_func_return_type_ << " " << val << "\n";
+            }
         } else {
             out_ << "    ret void\n";
         }
@@ -819,6 +834,23 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
 
         throw std::runtime_error("unknown function: " + call->callee);
+    }
+
+    if (auto* td = dynamic_cast<const TupleDestructureStmt*>(&stmt)) {
+        std::string result = emitExpr(*td->init);
+        std::string tuple_type = exprLlvmType(*td->init);
+        for (int i = 0; i < (int)td->fields.size(); i++) {
+            auto& [type, name] = td->fields[i];
+            std::string llvm_t = llvmType(type);
+            std::string reg = "%var_" + name;
+            out_ << "    " << reg << " = alloca " << llvm_t << "\n";
+            std::string extracted = newTmp();
+            out_ << "    " << extracted << " = extractvalue " << tuple_type << " " << result << ", " << i << "\n";
+            out_ << "    store " << llvm_t << " " << extracted << ", ptr " << reg << "\n";
+            locals_[name] = reg;
+            local_types_[name] = type;
+        }
+        return;
     }
 
     throw std::runtime_error("unsupported statement type");

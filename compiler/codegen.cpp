@@ -11,6 +11,7 @@ std::string Codegen::newTmp() { return "%t" + std::to_string(tmp_counter_++); }
 std::string Codegen::newLabel(const std::string& p) { return p + std::to_string(label_counter_++); }
 
 std::string Codegen::llvmType(const std::string& t) {
+    if (!t.empty() && t[0] == '{') return t; // pass through LLVM struct types (tuple returns)
     if (t == "int32" || t == "int" || t == "bool") return "i32";
     if (t == "int64") return "i64";
     if (t == "int16") return "i16";
@@ -24,8 +25,23 @@ std::string Codegen::llvmType(const std::string& t) {
 }
 
 void Codegen::collectFunctionSignatures() {
+    auto buildTupleType = [&](const std::vector<std::pair<std::string,std::string>>& fields) {
+        std::string s = "{ ";
+        for (int i = 0; i < (int)fields.size(); i++) {
+            if (i > 0) s += ", ";
+            s += llvmType(fields[i].first);
+        }
+        return s + " }";
+    };
+
     for (auto& fn : program_.functions) {
-        func_return_types_[fn.name] = fn.return_type;
+        if (!fn.tuple_return_fields.empty()) {
+            std::string st = buildTupleType(fn.tuple_return_fields);
+            func_return_types_[fn.name] = st;
+            func_tuple_fields_[fn.name] = fn.tuple_return_fields;
+        } else {
+            func_return_types_[fn.name] = fn.return_type;
+        }
         std::vector<std::string> ptypes;
         for (auto& [t, n] : fn.params) ptypes.push_back(t);
         func_param_types_[fn.name] = ptypes;
@@ -35,8 +51,16 @@ void Codegen::collectFunctionSignatures() {
             for (auto& stmt : block.stmts) {
                 if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
                     std::string mangled = fn.name + "__" + nfs->def.name;
-                    func_return_types_[mangled] = nfs->def.return_type;
-                    func_return_types_[nfs->def.name] = nfs->def.return_type;
+                    std::string ret;
+                    if (!nfs->def.tuple_return_fields.empty()) {
+                        ret = buildTupleType(nfs->def.tuple_return_fields);
+                        func_tuple_fields_[mangled] = nfs->def.tuple_return_fields;
+                        func_tuple_fields_[nfs->def.name] = nfs->def.tuple_return_fields;
+                    } else {
+                        ret = nfs->def.return_type;
+                    }
+                    func_return_types_[mangled] = ret;
+                    func_return_types_[nfs->def.name] = ret;
                     std::vector<std::string> nptypes;
                     for (auto& [t, n] : nfs->def.params) nptypes.push_back(t);
                     func_param_types_[mangled] = nptypes;
@@ -88,6 +112,20 @@ std::set<std::string> Codegen::collectCaptures(
         } else if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
             scanExpr(*mc->object);
             for (auto& a : mc->args) scanExpr(*a);
+        } else if (auto* te = dynamic_cast<const TupleExpr*>(&expr)) {
+            for (auto& v : te->values) scanExpr(*v);
+        } else if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&expr)) {
+            // find root var of the array index chain
+            const Expr* cur = &expr;
+            while (auto* a = dynamic_cast<const ArrayIndexExpr*>(cur)) {
+                scanExpr(*a->index);
+                cur = a->base.get();
+            }
+            if (auto* ve = dynamic_cast<const VarExpr*>(cur)) {
+                if (parent_locals.count(ve->name) && !own_params.count(ve->name))
+                    captures.insert(ve->name);
+            }
+            (void)ai;
         }
     };
 
@@ -120,6 +158,8 @@ std::set<std::string> Codegen::collectCaptures(
         } else if (auto* f = dynamic_cast<const ForRangeStmt*>(&stmt)) {
             scanExpr(*f->range_start); scanExpr(*f->range_end);
             for (auto& s : f->body->stmts) scanStmt(*s);
+        } else if (auto* td = dynamic_cast<const TupleDestructureStmt*>(&stmt)) {
+            scanExpr(*td->init);
         } else if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) {
             // don't recurse into nested function defs — they have their own scope
             (void)nfs;
@@ -139,7 +179,11 @@ void Codegen::analyzeNestedFunctions(const FunctionDef& fn) {
         for (auto& stmt : block.stmts) {
             if (auto* d = dynamic_cast<const VarDeclStmt*>(stmt.get()))
                 parent_locals.insert(d->name);
-            else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
+            else if (auto* a = dynamic_cast<const ArrayDeclStmt*>(stmt.get()))
+                parent_locals.insert(a->name);
+            else if (auto* td = dynamic_cast<const TupleDestructureStmt*>(stmt.get())) {
+                for (auto& [type, name] : td->fields) parent_locals.insert(name);
+            } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
                 parent_locals.insert(f->var_name);
                 collectLocals(*f->body);
             } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get()))
@@ -158,6 +202,27 @@ void Codegen::analyzeNestedFunctions(const FunctionDef& fn) {
             if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
                 std::set<std::string> own_params;
                 for (auto& [type, name] : nfs->def.params) own_params.insert(name);
+                // also exclude variables declared locally inside the nested function body
+                std::function<void(const BlockStmt&)> collectNested = [&](const BlockStmt& b) {
+                    for (auto& s : b.stmts) {
+                        if (auto* d = dynamic_cast<const VarDeclStmt*>(s.get()))
+                            own_params.insert(d->name);
+                        else if (auto* a = dynamic_cast<const ArrayDeclStmt*>(s.get()))
+                            own_params.insert(a->name);
+                        else if (auto* td2 = dynamic_cast<const TupleDestructureStmt*>(s.get()))
+                            for (auto& [t, n] : td2->fields) own_params.insert(n);
+                        else if (auto* f2 = dynamic_cast<const ForRangeStmt*>(s.get())) {
+                            own_params.insert(f2->var_name);
+                            collectNested(*f2->body);
+                        } else if (auto* w2 = dynamic_cast<const WhileStmt*>(s.get()))
+                            collectNested(*w2->body);
+                        else if (auto* i2 = dynamic_cast<const IfStmt*>(s.get())) {
+                            collectNested(*i2->then_block);
+                            if (i2->else_block) collectNested(*i2->else_block);
+                        }
+                    }
+                };
+                collectNested(*nfs->def.body);
 
                 auto captures = collectCaptures(*nfs->def.body, parent_locals, own_params);
 
@@ -377,8 +442,9 @@ void Codegen::emitNestedFunction(
     frame_ptr_reg_ = "";
     block_terminated_ = false;
 
-    std::string ret_type = llvmType(fn.return_type);
     std::string mangled = parent_name + "__" + fn.name;
+    std::string ret_type = llvmType(func_return_types_[mangled]);
+    current_func_return_type_ = ret_type;
 
     // build parameter list
     std::string param_str;
@@ -405,10 +471,20 @@ void Codegen::emitNestedFunction(
     out_ << "define " << ret_type << " @" << mangled << "(" << param_str << ") {\n";
     out_ << "entry:\n";
 
+    // helper: after restoring a capture ptr, also restore array_info if it was a parent array
+    auto restoreCapture = [&](const std::string& var, const std::string& ptr) {
+        locals_[var] = ptr;
+        if (parent_array_info_.count(var)) {
+            ArrayInfo ainfo = parent_array_info_[var];
+            ainfo.alloca_reg = ptr;
+            array_info_[var] = ainfo;
+        }
+    };
+
     // set up access to captured variables
     if (info.captures.size() == 1) {
         // single capture — the ptr is passed directly
-        locals_[single_cap_var] = "%cap_" + single_cap_var;
+        restoreCapture(single_cap_var, "%cap_" + single_cap_var);
     } else if (info.captures.size() >= 2) {
         // multi-capture — extract ptrs from frame struct
         // build ordered list of captures (must match frame struct order)
@@ -419,7 +495,7 @@ void Codegen::emitNestedFunction(
                  << ", ptr %frame, i32 0, i32 " << i << "\n";
             std::string ptr = newTmp();
             out_ << "    " << ptr << " = load ptr, ptr " << gep << "\n";
-            locals_[ordered_caps[i]] = ptr;
+            restoreCapture(ordered_caps[i], ptr);
         }
     }
 
@@ -498,6 +574,7 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
         block_terminated_ = false;
 
         std::string ret_type = llvmType(m.return_type);
+        current_func_return_type_ = ret_type;
 
         // build param list — self is first
         std::string param_str = "ptr %self";
@@ -532,6 +609,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     locals_.clear();
     local_types_.clear();
     array_info_.clear();
+    parent_array_info_.clear();
     tmp_counter_ = 0;
     label_counter_ = 0;
     break_label_ = "";
@@ -541,7 +619,8 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     frame_ptr_reg_ = "";
     block_terminated_ = false;
 
-    std::string ret_type = llvmType(fn.return_type);
+    std::string ret_type = llvmType(func_return_types_[fn.name]);
+    current_func_return_type_ = ret_type;
     std::string param_str;
     for (int i = 0; i < (int)fn.params.size(); i++) {
         if (i > 0) param_str += ", ";

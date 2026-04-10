@@ -106,6 +106,11 @@ struct AddrOfExpr : Expr {
 // nullptr literal — null pointer constant
 struct NullptrExpr : Expr {};
 
+// tuple literal: (expr, expr, ...) — used in return statements
+struct TupleExpr : Expr {
+    std::vector<std::unique_ptr<Expr>> values;
+};
+
 // new T[n] — heap allocation, returns ptr
 struct NewExpr : Expr {
     std::string elem_type;
@@ -184,6 +189,12 @@ struct ArrayDeclStmt : Stmt {
     std::vector<int> dims;  // e.g. {8, 8} for [8][8]
     // initializer: flat list of exprs in row-major order
     std::vector<std::unique_ptr<Expr>> init_values;
+};
+
+// tuple destructure: (type name, type name, ...) = expr;
+struct TupleDestructureStmt : Stmt {
+    std::vector<std::pair<std::string, std::string>> fields; // (type, name) pairs
+    std::unique_ptr<Expr> init;
 };
 
 // delete ptr — free heap allocation
@@ -298,7 +309,8 @@ struct SlidDef {
 
 // nested function defined inside a parent function body
 struct NestedFunctionDef {
-    std::string return_type;
+    std::string return_type; // empty when tuple_return_fields is non-empty
+    std::vector<std::pair<std::string, std::string>> tuple_return_fields;
     std::string name;
     std::vector<std::pair<std::string, std::string>> params;
     std::unique_ptr<BlockStmt> body;
@@ -310,7 +322,8 @@ struct NestedFunctionDefStmt : Stmt {
 };
 
 struct FunctionDef {
-    std::string return_type;
+    std::string return_type; // empty when tuple_return_fields is non-empty
+    std::vector<std::pair<std::string, std::string>> tuple_return_fields;
     std::string name;
     std::vector<std::pair<std::string, std::string>> params;
     std::unique_ptr<BlockStmt> body;

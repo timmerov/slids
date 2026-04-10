@@ -105,9 +105,19 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     }
     if (t.type == TokenType::kLParen) {
         advance();
-        auto expr = parseExpr();
+        auto first = parseExpr();
+        if (peek().type == TokenType::kComma) {
+            auto tuple = std::make_unique<TupleExpr>();
+            tuple->values.push_back(std::move(first));
+            while (peek().type == TokenType::kComma) {
+                advance();
+                tuple->values.push_back(parseExpr());
+            }
+            expect(TokenType::kRParen, "expected ')'");
+            return tuple;
+        }
         expect(TokenType::kRParen, "expected ')'");
-        return expr;
+        return first;
     }
     throw std::runtime_error("Line " + std::to_string(t.line)
         + ": expected expression, got '" + t.value + "'");
@@ -474,6 +484,44 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         return stmt;
     }
 
+    // tuple return nested function or tuple destructure: starts with '('
+    if (t.type == TokenType::kLParen) {
+        // scan to matching ')' and check what follows
+        int depth = 1, scan = pos_ + 1;
+        while (scan < (int)tokens_.size() && depth > 0) {
+            if (tokens_[scan].type == TokenType::kLParen) depth++;
+            else if (tokens_[scan].type == TokenType::kRParen) depth--;
+            scan++;
+        }
+        // scan is now at the token after the matching ')'
+        if (scan < (int)tokens_.size()
+            && tokens_[scan].type == TokenType::kIdentifier
+            && scan + 1 < (int)tokens_.size()
+            && tokens_[scan + 1].type == TokenType::kLParen) {
+            // (type name, ...) funcName() { ... } — nested function with tuple return
+            auto stmt = std::make_unique<NestedFunctionDefStmt>();
+            stmt->def = parseNestedFunctionDef();
+            return stmt;
+        } else if (scan < (int)tokens_.size()
+                   && tokens_[scan].type == TokenType::kEquals) {
+            // (type name, ...) = expr; — tuple destructure
+            advance(); // consume '('
+            auto td = std::make_unique<TupleDestructureStmt>();
+            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                std::string type = parseTypeName();
+                std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
+                td->fields.emplace_back(type, name);
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kEquals, "expected '='");
+            td->init = parseExpr();
+            expect(TokenType::kSemicolon, "expected ';'");
+            return td;
+        }
+        // fall through to expression statement
+    }
+
     // nested function definition: type name(...) { ... }
     // distinguish from var decl (type name = expr) by lookahead for '(' then '{' after ')'
     if (isTypeName(t)) {
@@ -795,7 +843,18 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
 NestedFunctionDef Parser::parseNestedFunctionDef() {
     NestedFunctionDef fn;
-    fn.return_type = parseTypeName();
+    if (peek().type == TokenType::kLParen) {
+        advance(); // consume '('
+        while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+            std::string type = parseTypeName();
+            std::string name = expect(TokenType::kIdentifier, "expected field name").value;
+            fn.tuple_return_fields.emplace_back(type, name);
+            if (peek().type == TokenType::kComma) advance();
+        }
+        expect(TokenType::kRParen, "expected ')'");
+    } else {
+        fn.return_type = parseTypeName();
+    }
     fn.name = expect(TokenType::kIdentifier, "expected function name").value;
     expect(TokenType::kLParen, "expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
@@ -908,7 +967,18 @@ EnumDef Parser::parseEnumDef() {
 
 FunctionDef Parser::parseFunctionDef() {
     FunctionDef fn;
-    fn.return_type = parseTypeName();
+    if (peek().type == TokenType::kLParen) {
+        advance(); // consume '('
+        while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+            std::string type = parseTypeName();
+            std::string name = expect(TokenType::kIdentifier, "expected field name").value;
+            fn.tuple_return_fields.emplace_back(type, name);
+            if (peek().type == TokenType::kComma) advance();
+        }
+        expect(TokenType::kRParen, "expected ')'");
+    } else {
+        fn.return_type = parseTypeName();
+    }
     fn.name = expect(TokenType::kIdentifier, "expected function name").value;
     expect(TokenType::kLParen, "expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
@@ -934,6 +1004,8 @@ Program Parser::parse() {
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
             program.slids.push_back(parseSlidDef());
+        } else if (peek().type == TokenType::kLParen) {
+            program.functions.push_back(parseFunctionDef());
         } else {
             program.functions.push_back(parseFunctionDef());
         }
