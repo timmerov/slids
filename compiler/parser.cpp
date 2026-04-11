@@ -1004,6 +1004,29 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
     return em;
 }
 
+void Parser::parseExternalMethodBlock(Program& program) {
+    // TypeName { [returnType] methodName(params) { body } ... }
+    std::string slid_name = expect(TokenType::kIdentifier, "expected class name").value;
+    expect(TokenType::kLBrace, "expected '{'");
+    while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
+        ExternalMethodDef em;
+        em.slid_name = slid_name;
+        em.return_type = parseTypeName();
+        em.method_name = expect(TokenType::kIdentifier, "expected method name").value;
+        expect(TokenType::kLParen, "expected '('");
+        while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+            std::string type = parseTypeName();
+            std::string name = expect(TokenType::kIdentifier, "expected parameter name").value;
+            em.params.emplace_back(type, name);
+            if (peek().type == TokenType::kComma) advance();
+        }
+        expect(TokenType::kRParen, "expected ')'");
+        em.body = parseBlock();
+        program.external_methods.push_back(std::move(em));
+    }
+    expect(TokenType::kRBrace, "expected '}'");
+}
+
 FunctionDef Parser::parseFunctionDef() {
     FunctionDef fn;
     if (peek().type == TokenType::kLParen) {
@@ -1043,6 +1066,12 @@ Program Parser::parse() {
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
             program.slids.push_back(parseSlidDef());
+        }
+        // block-style external methods: TypeName { void method() { ... } ... }
+        else if (isUserTypeName(peek())
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kLBrace) {
+            parseExternalMethodBlock(program);
         } else if (peek().type == TokenType::kLParen) {
             program.functions.push_back(parseFunctionDef());
         } else {

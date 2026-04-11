@@ -368,6 +368,7 @@ private:
     EnumDef parseEnumDef();
     MethodDef parseMethodDef();
     ExternalMethodDef parseExternalMethodDef();
+    void parseExternalMethodBlock(Program& program); // TypeName { method() {...} ... }
     NestedFunctionDef parseNestedFunctionDef();
     FunctionDef parseFunctionDef();
     std::unique_ptr<BlockStmt> parseBlock();

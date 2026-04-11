@@ -21,6 +21,7 @@ SAMPLES = \
 	reference1 reference2 reference3 \
 	reverse_bits \
 	string1 string2 string3 string4 string5 string6 \
+	string7 \
 	switch
 
 .PHONY: all clean $(SAMPLES)
