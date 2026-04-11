@@ -265,6 +265,12 @@ void Codegen::collectSlids() {
         }
         info.has_explicit_ctor = (slid.explicit_ctor_body != nullptr);
         info.has_dtor = (slid.dtor_body != nullptr);
+        // also check external method defs for ctor/dtor
+        for (auto& em : program_.external_methods) {
+            if (em.slid_name != slid.name || !em.body) continue;
+            if (em.method_name == "_") info.has_explicit_ctor = true;
+            if (em.method_name == "~") info.has_dtor = true;
+        }
         slid_info_[slid.name] = std::move(info);
     }
 }
@@ -326,7 +332,12 @@ void Codegen::collectStringConstants() {
         if (slid.dtor_body)
             for (auto& stmt : slid.dtor_body->stmts) collect(*stmt);
         for (auto& m : slid.methods)
-            for (auto& stmt : m.body->stmts) collect(*stmt);
+            if (m.body)
+                for (auto& stmt : m.body->stmts) collect(*stmt);
+    }
+    for (auto& em : program_.external_methods) {
+        if (em.body)
+            for (auto& stmt : em.body->stmts) collect(*stmt);
     }
 }
 
@@ -536,8 +547,17 @@ void Codegen::emitDtors() {
 }
 
 void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
+    // find ctor/dtor bodies — either inline or external
+    const BlockStmt* ctor_body = slid.explicit_ctor_body.get();
+    const BlockStmt* dtor_body = slid.dtor_body.get();
+    for (auto& em : program_.external_methods) {
+        if (em.slid_name != slid.name || !em.body) continue;
+        if (em.method_name == "_")  ctor_body = em.body.get();
+        if (em.method_name == "~")  dtor_body = em.body.get();
+    }
+
     // emit explicit constructor: @ClassName__ctor(ptr %self)
-    if (slid.explicit_ctor_body) {
+    if (ctor_body) {
         locals_.clear();
         local_types_.clear();
         tmp_counter_ = 0;
@@ -547,13 +567,13 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
 
         out_ << "define void @" << slid.name << "__ctor(ptr %self) {\n";
         out_ << "entry:\n";
-        emitBlock(*slid.explicit_ctor_body);
+        emitBlock(*ctor_body);
         if (!block_terminated_) out_ << "    ret void\n";
         out_ << "}\n\n";
     }
 
     // emit destructor: @ClassName__dtor(ptr %self)
-    if (slid.dtor_body) {
+    if (dtor_body) {
         locals_.clear();
         local_types_.clear();
         tmp_counter_ = 0;
@@ -563,7 +583,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
 
         out_ << "define void @" << slid.name << "__dtor(ptr %self) {\n";
         out_ << "entry:\n";
-        emitBlock(*slid.dtor_body);
+        emitBlock(*dtor_body);
         if (!block_terminated_) out_ << "    ret void\n";
         out_ << "}\n\n";
     }
@@ -571,44 +591,57 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     current_slid_ = "";
 }
 
+void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& method_name,
+                              const std::string& return_type,
+                              const std::vector<std::pair<std::string,std::string>>& params,
+                              const BlockStmt& body) {
+    locals_.clear();
+    local_types_.clear();
+    tmp_counter_ = 0;
+    label_counter_ = 0;
+    break_label_ = "";
+    continue_label_ = "";
+    current_slid_ = slid.name;
+    block_terminated_ = false;
+
+    std::string ret_type = llvmType(return_type);
+    current_func_return_type_ = ret_type;
+
+    std::string param_str = "ptr %self";
+    for (auto& [type, name] : params)
+        param_str += ", " + llvmType(type) + " %arg_" + name;
+
+    out_ << "define " << ret_type << " @" << slid.name << "__" << method_name
+         << "(" << param_str << ") {\n";
+    out_ << "entry:\n";
+
+    for (auto& [type, name] : params) {
+        std::string reg = "%var_" + name;
+        out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
+        out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
+        locals_[name] = reg;
+        local_types_[name] = type;
+    }
+
+    emitBlock(body);
+
+    if (return_type == "void" && !block_terminated_)
+        out_ << "    ret void\n";
+
+    out_ << "}\n\n";
+}
+
 void Codegen::emitSlidMethods(const SlidDef& slid) {
+    // emit inline methods that have a body (not forward decls)
     for (auto& m : slid.methods) {
-        locals_.clear();
-        tmp_counter_ = 0;
-        label_counter_ = 0;
-        break_label_ = "";
-        continue_label_ = "";
-        current_slid_ = slid.name;
-        block_terminated_ = false;
-
-        std::string ret_type = llvmType(m.return_type);
-        current_func_return_type_ = ret_type;
-
-        // build param list — self is first
-        std::string param_str = "ptr %self";
-        for (auto& [type, name] : m.params)
-            param_str += ", " + llvmType(type) + " %arg_" + name;
-
-        out_ << "define " << ret_type << " @" << slid.name << "__" << m.name
-             << "(" << param_str << ") {\n";
-        out_ << "entry:\n";
-
-        // alloca/store params
-        for (auto& [type, name] : m.params) {
-            std::string reg = "%var_" + name;
-            out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
-            out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
-            locals_[name] = reg;
-            local_types_[name] = type;
-        }
-
-        emitBlock(*m.body);
-
-        // add implicit ret void if needed
-        if (m.return_type == "void" && !block_terminated_)
-            out_ << "    ret void\n";
-
-        out_ << "}\n\n";
+        if (!m.body) continue; // forward declaration only
+        emitSlidMethod(slid, m.name, m.return_type, m.params, *m.body);
+    }
+    // emit external method definitions for this slid
+    for (auto& em : program_.external_methods) {
+        if (em.slid_name != slid.name || !em.body) continue;
+        if (em.method_name == "_" || em.method_name == "~") continue; // handled by CtorDtor
+        emitSlidMethod(slid, em.method_name, em.return_type, em.params, *em.body);
     }
     current_slid_ = "";
 }

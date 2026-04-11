@@ -96,6 +96,10 @@ private:
 
     void emitFrameStruct(const FunctionDef& fn);
     void emitSlidCtorDtor(const SlidDef& slid);
+    void emitSlidMethod(const SlidDef& slid, const std::string& method_name,
+                        const std::string& return_type,
+                        const std::vector<std::pair<std::string,std::string>>& params,
+                        const BlockStmt& body);
     void emitSlidMethods(const SlidDef& slid);
     void emitFunction(const FunctionDef& fn);
     void emitNestedFunction(const NestedFunctionDef& fn,
