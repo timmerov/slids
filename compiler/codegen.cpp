@@ -77,22 +77,43 @@ void Codegen::collectFunctionSignatures() {
         };
         findNested(*fn.body);
     }
+    // helper: mangling suffix for a single type (used when overloads exist)
+    auto typeToken = [](const std::string& t) -> std::string {
+        if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
+            return t.substr(0, t.size()-2) + "s"; // char[] -> chars, int[] -> ints
+        if (!t.empty() && t.back() == '^')
+            return t.substr(0, t.size()-1) + "r";  // char^ -> charr
+        return t; // int, char, bool, etc.
+    };
+
     for (auto& slid : program_.slids) {
+        // collect all method implementations (inline bodies + external defs), grouped by name
+        struct Entry { std::string ret; std::vector<std::pair<std::string,std::string>> params; };
+        std::map<std::string, std::vector<Entry>> by_name;
         for (auto& m : slid.methods) {
-            std::string mangled = slid.name + "__" + m.name;
-            func_return_types_[mangled] = m.return_type;
-            std::vector<std::string> ptypes;
-            for (auto& [t, n] : m.params) ptypes.push_back(t);
-            func_param_types_[mangled] = ptypes;
+            if (!m.body) continue; // forward decl
+            by_name[m.name].push_back({m.return_type, m.params});
         }
-    }
-    for (auto& em : program_.external_methods) {
-        if (em.method_name == "_" || em.method_name == "~") continue;
-        std::string mangled = em.slid_name + "__" + em.method_name;
-        func_return_types_[mangled] = em.return_type;
-        std::vector<std::string> ptypes;
-        for (auto& [t, n] : em.params) ptypes.push_back(t);
-        func_param_types_[mangled] = ptypes;
+        for (auto& em : program_.external_methods) {
+            if (em.slid_name != slid.name || !em.body) continue;
+            if (em.method_name == "_" || em.method_name == "~") continue;
+            by_name[em.method_name].push_back({em.return_type, em.params});
+        }
+        for (auto& [method_name, entries] : by_name) {
+            std::string base = slid.name + "__" + method_name;
+            bool overloaded = (entries.size() > 1);
+            for (auto& e : entries) {
+                std::string mangled = base;
+                if (overloaded) {
+                    for (auto& [t, n] : e.params) mangled += "__" + typeToken(t);
+                }
+                func_return_types_[mangled] = e.ret;
+                std::vector<std::string> ptypes;
+                for (auto& [t, n] : e.params) ptypes.push_back(t);
+                func_param_types_[mangled] = ptypes;
+                method_overloads_[base].push_back({mangled, ptypes});
+            }
+        }
     }
 }
 
@@ -298,7 +319,14 @@ void Codegen::collectStringConstants() {
                 bool newline = (call->callee == "println");
                 for (auto& arg : call->args)
                     collectExpr(arg.get(), newline);
+            } else {
+                // other function calls may pass string literals as args
+                for (auto& arg : call->args)
+                    collectExpr(arg.get(), false);
             }
+        } else if (auto* mcs = dynamic_cast<const MethodCallStmt*>(&stmt)) {
+            for (auto& arg : mcs->args)
+                collectExpr(arg.get(), false);
         } else if (auto* decl = dynamic_cast<const VarDeclStmt*>(&stmt)) {
             // collect string literals used as initializers (e.g. char[] s = "hello")
             if (decl->init && dynamic_cast<const StringLiteralExpr*>(decl->init.get()))
@@ -591,7 +619,64 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     current_slid_ = "";
 }
 
-void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& method_name,
+std::string Codegen::resolveMethodMangledName(
+    const std::string& slid_name,
+    const std::string& method_name,
+    const std::vector<std::pair<std::string,std::string>>& params)
+{
+    std::string base = slid_name + "__" + method_name;
+    auto it = method_overloads_.find(base);
+    if (it == method_overloads_.end() || it->second.empty()) return base;
+    if (it->second.size() == 1) return it->second[0].first;
+    // multiple overloads: match by exact param types
+    std::vector<std::string> ptypes;
+    for (auto& [t, n] : params) ptypes.push_back(t);
+    for (auto& [mangled, mp] : it->second) {
+        if (mp == ptypes) return mangled;
+    }
+    return base;
+}
+
+std::string Codegen::resolveOverloadForCall(
+    const std::string& base_mangled,
+    const std::vector<std::unique_ptr<Expr>>& args)
+{
+    auto it = method_overloads_.find(base_mangled);
+    if (it == method_overloads_.end() || it->second.empty()) return base_mangled;
+    if (it->second.size() == 1) return it->second[0].first;
+    // multiple overloads: match by pointer-vs-scalar for each arg position
+    for (auto& [mangled, ptypes] : it->second) {
+        if (ptypes.size() != args.size()) continue;
+        bool match = true;
+        for (int i = 0; i < (int)args.size(); i++) {
+            bool param_ptr = isIndirectType(ptypes[i]);
+            bool arg_ptr   = isPointerExpr(*args[i]);
+            if (param_ptr != arg_ptr) { match = false; break; }
+        }
+        if (match) return mangled;
+    }
+    return base_mangled;
+}
+
+bool Codegen::isPointerExpr(const Expr& expr) {
+    if (dynamic_cast<const StringLiteralExpr*>(&expr)) return true;
+    if (dynamic_cast<const NullptrExpr*>(&expr))       return true;
+    if (dynamic_cast<const AddrOfExpr*>(&expr))        return true;
+    if (dynamic_cast<const NewExpr*>(&expr))           return true;
+    if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
+        if (!current_slid_.empty()) {
+            auto& info = slid_info_[current_slid_];
+            auto fit = info.field_index.find(ve->name);
+            if (fit != info.field_index.end())
+                return isIndirectType(info.field_types[fit->second]);
+        }
+        auto tit = local_types_.find(ve->name);
+        if (tit != local_types_.end()) return isIndirectType(tit->second);
+    }
+    return false;
+}
+
+void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& full_mangled,
                               const std::string& return_type,
                               const std::vector<std::pair<std::string,std::string>>& params,
                               const BlockStmt& body) {
@@ -611,7 +696,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& method_name
     for (auto& [type, name] : params)
         param_str += ", " + llvmType(type) + " %arg_" + name;
 
-    out_ << "define " << ret_type << " @" << slid.name << "__" << method_name
+    out_ << "define " << ret_type << " @" << full_mangled
          << "(" << param_str << ") {\n";
     out_ << "entry:\n";
 
@@ -634,14 +719,16 @@ void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& method_name
 void Codegen::emitSlidMethods(const SlidDef& slid) {
     // emit inline methods that have a body (not forward decls)
     for (auto& m : slid.methods) {
-        if (!m.body) continue; // forward declaration only
-        emitSlidMethod(slid, m.name, m.return_type, m.params, *m.body);
+        if (!m.body) continue;
+        std::string mangled = resolveMethodMangledName(slid.name, m.name, m.params);
+        emitSlidMethod(slid, mangled, m.return_type, m.params, *m.body);
     }
     // emit external method definitions for this slid
     for (auto& em : program_.external_methods) {
         if (em.slid_name != slid.name || !em.body) continue;
-        if (em.method_name == "_" || em.method_name == "~") continue; // handled by CtorDtor
-        emitSlidMethod(slid, em.method_name, em.return_type, em.params, *em.body);
+        if (em.method_name == "_" || em.method_name == "~") continue;
+        std::string mangled = resolveMethodMangledName(slid.name, em.method_name, em.params);
+        emitSlidMethod(slid, mangled, em.return_type, em.params, *em.body);
     }
     current_slid_ = "";
 }

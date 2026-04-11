@@ -305,7 +305,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
             }
         }
         if (!slid_name.empty()) {
-            std::string mangled = slid_name + "__" + mc->method;
+            std::string base = slid_name + "__" + mc->method;
+            std::string mangled = resolveOverloadForCall(base, mc->args);
             auto ret_it = func_return_types_.find(mangled);
             if (ret_it == func_return_types_.end())
                 throw std::runtime_error("unknown method: " + mc->method);
@@ -549,6 +550,46 @@ std::string Codegen::emitExpr(const Expr& expr) {
             if (op_type.empty()) op_type = "i32";
         }
 
+        // pointer + int or pointer - int → GEP
+        std::string left_llvm  = exprLlvmType(*b->left);
+        std::string right_llvm = exprLlvmType(*b->right);
+        if ((b->op == "+" || b->op == "-") && (left_llvm == "ptr" || right_llvm == "ptr")) {
+            // figure out pointee type from whichever side is the pointer
+            auto getPt = [&](const Expr& e) -> std::string {
+                if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
+                    if (!current_slid_.empty()) {
+                        auto& info = slid_info_[current_slid_];
+                        auto fit = info.field_index.find(ve->name);
+                        if (fit != info.field_index.end()) {
+                            std::string ft = info.field_types[fit->second];
+                            if (ft.size() >= 2 && ft.substr(ft.size()-2) == "[]")
+                                return llvmType(ft.substr(0, ft.size()-2));
+                        }
+                    }
+                    auto tit = local_types_.find(ve->name);
+                    if (tit != local_types_.end()) {
+                        std::string lt = tit->second;
+                        if (lt.size() >= 2 && lt.substr(lt.size()-2) == "[]")
+                            return llvmType(lt.substr(0, lt.size()-2));
+                    }
+                }
+                return "i8"; // default to byte
+            };
+            bool left_ptr = (left_llvm == "ptr");
+            std::string pointee = left_ptr ? getPt(*b->left) : getPt(*b->right);
+            std::string ptr_val  = emitExpr(left_ptr ? *b->left  : *b->right);
+            std::string off_val  = emitExpr(left_ptr ? *b->right : *b->left);
+            std::string tmp = newTmp();
+            if (b->op == "-") {
+                std::string neg = newTmp();
+                out_ << "    " << neg << " = sub i32 0, " << off_val << "\n";
+                off_val = neg;
+            }
+            out_ << "    " << tmp << " = getelementptr " << pointee
+                 << ", ptr " << ptr_val << ", i32 " << off_val << "\n";
+            return tmp;
+        }
+
         std::string left  = emitExpr(*b->left);
         std::string right = emitExpr(*b->right);
         std::string tmp   = newTmp();
@@ -756,7 +797,9 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             if (tit != local_types_.end()) slid_name = tit->second;
         }
         if (!slid_name.empty()) {
-            auto rit = func_return_types_.find(slid_name + "__" + mc->method);
+            std::string base = slid_name + "__" + mc->method;
+            std::string mangled = resolveOverloadForCall(base, mc->args);
+            auto rit = func_return_types_.find(mangled);
             if (rit != func_return_types_.end()) return llvmType(rit->second);
         }
         return "i32";

@@ -44,6 +44,8 @@ private:
     std::map<std::string, std::vector<std::string>> func_param_types_; // func name -> param types
     std::map<std::string, std::vector<std::pair<std::string,std::string>>> func_tuple_fields_; // func -> [(type,name)]
     std::string current_func_return_type_; // LLVM return type of the function being emitted
+    // overload table: base_mangled -> [(full_mangled, param_types)]
+    std::map<std::string, std::vector<std::pair<std::string, std::vector<std::string>>>> method_overloads_;
     std::map<std::string, SlidInfo>    slid_info_;
     std::vector<std::pair<std::string, std::string>> string_constants_;
 
@@ -96,11 +98,17 @@ private:
 
     void emitFrameStruct(const FunctionDef& fn);
     void emitSlidCtorDtor(const SlidDef& slid);
-    void emitSlidMethod(const SlidDef& slid, const std::string& method_name,
+    void emitSlidMethod(const SlidDef& slid, const std::string& full_mangled,
                         const std::string& return_type,
                         const std::vector<std::pair<std::string,std::string>>& params,
                         const BlockStmt& body);
     void emitSlidMethods(const SlidDef& slid);
+    std::string resolveMethodMangledName(const std::string& slid_name,
+                                         const std::string& method_name,
+                                         const std::vector<std::pair<std::string,std::string>>& params);
+    std::string resolveOverloadForCall(const std::string& base_mangled,
+                                       const std::vector<std::unique_ptr<Expr>>& args);
+    bool isPointerExpr(const Expr& expr);
     void emitFunction(const FunctionDef& fn);
     void emitNestedFunction(const NestedFunctionDef& fn,
                             const std::string& parent_name,

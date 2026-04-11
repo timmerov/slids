@@ -296,7 +296,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
         }
         if (!slid_name.empty()) {
-            std::string mangled = slid_name + "__" + mcs->method;
+            std::string base = slid_name + "__" + mcs->method;
+            std::string mangled = resolveOverloadForCall(base, mcs->args);
             auto ret_it = func_return_types_.find(mangled);
             if (ret_it == func_return_types_.end())
                 throw std::runtime_error("unknown method: " + mcs->method);
@@ -861,7 +862,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
         // implicit self method call — e.g. reserve(len) inside a method
         if (!current_slid_.empty()) {
-            std::string mangled = current_slid_ + "__" + call->callee;
+            std::string base = current_slid_ + "__" + call->callee;
+            std::string mangled = resolveOverloadForCall(base, call->args);
             auto mit = func_return_types_.find(mangled);
             if (mit != func_return_types_.end()) {
                 std::string ret_type = llvmType(mit->second);
