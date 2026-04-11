@@ -334,6 +334,9 @@ void Codegen::collectStringConstants() {
             // collect string literals used as initializers (e.g. char[] s = "hello")
             if (decl->init && dynamic_cast<const StringLiteralExpr*>(decl->init.get()))
                 collectExpr(decl->init.get(), false);
+            // collect string literals in constructor args (e.g. String s("hello"))
+            for (auto& arg : decl->ctor_args)
+                collectExpr(arg.get(), false);
         } else if (auto* b = dynamic_cast<const BlockStmt*>(&stmt)) {
             for (auto& s : b->stmts) collect(*s);
         } else if (auto* i = dynamic_cast<const IfStmt*>(&stmt)) {
@@ -353,9 +356,6 @@ void Codegen::collectStringConstants() {
         }
     };
 
-    for (auto& fn : program_.functions)
-        if (fn.body)
-            for (auto& stmt : fn.body->stmts) collect(*stmt);
     for (auto& slid : program_.slids) {
         if (slid.ctor_body)
             for (auto& stmt : slid.ctor_body->stmts) collect(*stmt);
@@ -371,6 +371,9 @@ void Codegen::collectStringConstants() {
         if (em.body)
             for (auto& stmt : em.body->stmts) collect(*stmt);
     }
+    for (auto& fn : program_.functions)
+        if (fn.body)
+            for (auto& stmt : fn.body->stmts) collect(*stmt);
 }
 
 void Codegen::emit() {
