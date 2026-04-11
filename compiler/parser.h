@@ -197,6 +197,15 @@ struct TupleDestructureStmt : Stmt {
     std::unique_ptr<Expr> init;
 };
 
+// index assign: base[index] = value  (pointer-type arrays and fields)
+struct IndexAssignStmt : Stmt {
+    std::unique_ptr<Expr> base;
+    std::unique_ptr<Expr> index;
+    std::unique_ptr<Expr> value;
+    IndexAssignStmt(std::unique_ptr<Expr> b, std::unique_ptr<Expr> i, std::unique_ptr<Expr> v)
+        : base(std::move(b)), index(std::move(i)), value(std::move(v)) {}
+};
+
 // delete ptr — free heap allocation
 struct DeleteStmt : Stmt {
     std::unique_ptr<Expr> operand;

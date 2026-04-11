@@ -154,6 +154,55 @@ void Codegen::emitStmt(const Stmt& stmt) {
         return;
     }
 
+    if (auto* ia = dynamic_cast<const IndexAssignStmt*>(&stmt)) {
+        // base[index] = value — pointer-type indexed store
+        auto* ve = dynamic_cast<const VarExpr*>(ia->base.get());
+        if (!ve) throw std::runtime_error("IndexAssign: complex base not supported");
+
+        std::string base_ptr;
+        std::string elem_type_str;
+        // check if it's a field in the current slid
+        if (!current_slid_.empty()) {
+            auto& info = slid_info_[current_slid_];
+            auto fit = info.field_index.find(ve->name);
+            if (fit != info.field_index.end()) {
+                std::string ft = info.field_types[fit->second];
+                if (ft.size() >= 2 && ft.substr(ft.size()-2) == "[]") {
+                    elem_type_str = ft.substr(0, ft.size()-2);
+                    std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
+                    std::string fgep = newTmp();
+                    out_ << "    " << fgep << " = getelementptr %struct." << current_slid_
+                         << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
+                    base_ptr = newTmp();
+                    out_ << "    " << base_ptr << " = load ptr, ptr " << fgep << "\n";
+                }
+            }
+        }
+        // check local pointer variable
+        if (base_ptr.empty()) {
+            auto lit = locals_.find(ve->name);
+            auto tit = local_types_.find(ve->name);
+            if (lit != locals_.end() && tit != local_types_.end()) {
+                std::string lt = tit->second;
+                if (lt.size() >= 2 && lt.substr(lt.size()-2) == "[]") {
+                    elem_type_str = lt.substr(0, lt.size()-2);
+                    base_ptr = newTmp();
+                    out_ << "    " << base_ptr << " = load ptr, ptr " << lit->second << "\n";
+                }
+            }
+        }
+        if (base_ptr.empty())
+            throw std::runtime_error("IndexAssign: '" + ve->name + "' is not a pointer type");
+
+        std::string idx_val = emitExpr(*ia->index);
+        std::string elt = llvmType(elem_type_str);
+        std::string gep = newTmp();
+        out_ << "    " << gep << " = getelementptr " << elt << ", ptr " << base_ptr << ", i32 " << idx_val << "\n";
+        std::string rhs = emitExpr(*ia->value);
+        out_ << "    store " << elt << " " << rhs << ", ptr " << gep << "\n";
+        return;
+    }
+
     if (auto* pida = dynamic_cast<const PostIncDerefAssignStmt*>(&stmt)) {
         // ptr++^ = val — store val at current ptr, then advance ptr by one element
         auto* ve = dynamic_cast<const VarExpr*>(pida->ptr.get());

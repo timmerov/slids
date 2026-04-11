@@ -831,6 +831,18 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             return std::make_unique<AssignStmt>(name, std::move(value));
         }
 
+        // index assignment: name[expr] = expr;
+        if (peek().type == TokenType::kLBracket) {
+            advance(); // consume '['
+            auto idx = parseExpr();
+            expect(TokenType::kRBracket, "expected ']'");
+            expect(TokenType::kEquals, "expected '='");
+            auto val = parseExpr();
+            expect(TokenType::kSemicolon, "expected ';'");
+            return std::make_unique<IndexAssignStmt>(
+                std::make_unique<VarExpr>(name), std::move(idx), std::move(val));
+        }
+
         throw std::runtime_error("Line " + std::to_string(peek().line)
             + ": expected '(' or '=' after '" + name + "'");
     }

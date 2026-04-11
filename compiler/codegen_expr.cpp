@@ -51,7 +51,6 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
     if (dynamic_cast<const ArrayIndexExpr*>(&expr)) {
         // support chained indexing: base[i][j] — base may be another ArrayIndexExpr
-        // compute flat linear index and GEP into the alloca
         // collect index chain and base name
         std::vector<const Expr*> indices;
         const Expr* cur = &expr;
@@ -62,28 +61,70 @@ std::string Codegen::emitExpr(const Expr& expr) {
         // cur is now the root VarExpr
         auto* ve = dynamic_cast<const VarExpr*>(cur);
         if (!ve) throw std::runtime_error("complex array base not supported");
+
+        // fixed-size local array: use flat alloca GEP
         auto ait = array_info_.find(ve->name);
-        if (ait == array_info_.end())
-            throw std::runtime_error("undefined array: " + ve->name);
-        auto& ainfo = ait->second;
-        // compute flat index: i*dim1 + j  (for 2D: row*cols + col)
-        std::string flat = emitExpr(*indices[0]);
-        for (int k = 1; k < (int)indices.size(); k++) {
-            int stride = ainfo.dims[k];
-            std::string stride_val = std::to_string(stride);
-            std::string mul = newTmp();
-            out_ << "    " << mul << " = mul i32 " << flat << ", " << stride_val << "\n";
-            std::string idx_val = emitExpr(*indices[k]);
-            std::string add = newTmp();
-            out_ << "    " << add << " = add i32 " << mul << ", " << idx_val << "\n";
-            flat = add;
+        if (ait != array_info_.end()) {
+            auto& ainfo = ait->second;
+            std::string flat = emitExpr(*indices[0]);
+            for (int k = 1; k < (int)indices.size(); k++) {
+                int stride = ainfo.dims[k];
+                std::string mul = newTmp();
+                out_ << "    " << mul << " = mul i32 " << flat << ", " << std::to_string(stride) << "\n";
+                std::string idx_val = emitExpr(*indices[k]);
+                std::string add = newTmp();
+                out_ << "    " << add << " = add i32 " << mul << ", " << idx_val << "\n";
+                flat = add;
+            }
+            int total = 1;
+            for (int d : ainfo.dims) total *= d;
+            std::string elt = llvmType(ainfo.elem_type);
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr [" << total << " x " << elt << "], ptr "
+                 << ainfo.alloca_reg << ", i32 0, i32 " << flat << "\n";
+            std::string val = newTmp();
+            out_ << "    " << val << " = load " << elt << ", ptr " << gep << "\n";
+            return val;
         }
+
+        // pointer-type indexing: char[], int[], etc. — either a field or a local ptr var
+        std::string base_ptr;
+        std::string elem_type_str;
+        if (!current_slid_.empty()) {
+            auto& info = slid_info_[current_slid_];
+            auto fit = info.field_index.find(ve->name);
+            if (fit != info.field_index.end()) {
+                std::string ft = info.field_types[fit->second];
+                if (ft.size() >= 2 && ft.substr(ft.size()-2) == "[]") {
+                    elem_type_str = ft.substr(0, ft.size()-2);
+                    std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
+                    std::string fgep = newTmp();
+                    out_ << "    " << fgep << " = getelementptr %struct." << current_slid_
+                         << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
+                    base_ptr = newTmp();
+                    out_ << "    " << base_ptr << " = load ptr, ptr " << fgep << "\n";
+                }
+            }
+        }
+        if (base_ptr.empty()) {
+            auto lit = locals_.find(ve->name);
+            auto tit = local_types_.find(ve->name);
+            if (lit != locals_.end() && tit != local_types_.end()) {
+                std::string lt = tit->second;
+                if (lt.size() >= 2 && lt.substr(lt.size()-2) == "[]") {
+                    elem_type_str = lt.substr(0, lt.size()-2);
+                    base_ptr = newTmp();
+                    out_ << "    " << base_ptr << " = load ptr, ptr " << lit->second << "\n";
+                }
+            }
+        }
+        if (base_ptr.empty())
+            throw std::runtime_error("undefined array: " + ve->name);
+
+        std::string idx_val = emitExpr(*indices[0]);
+        std::string elt = llvmType(elem_type_str);
         std::string gep = newTmp();
-        int total = 1;
-        for (int d : ainfo.dims) total *= d;
-        std::string elt = llvmType(ainfo.elem_type);
-        out_ << "    " << gep << " = getelementptr [" << total << " x " << elt << "], ptr "
-             << ainfo.alloca_reg << ", i32 0, i32 " << flat << "\n";
+        out_ << "    " << gep << " = getelementptr " << elt << ", ptr " << base_ptr << ", i32 " << idx_val << "\n";
         std::string val = newTmp();
         out_ << "    " << val << " = load " << elt << ", ptr " << gep << "\n";
         return val;
@@ -685,6 +726,23 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
         if (auto* ve = dynamic_cast<const VarExpr*>(cur)) {
             auto ait = array_info_.find(ve->name);
             if (ait != array_info_.end()) return llvmType(ait->second.elem_type);
+            // pointer-type field
+            if (!current_slid_.empty()) {
+                auto& info = slid_info_[current_slid_];
+                auto fit = info.field_index.find(ve->name);
+                if (fit != info.field_index.end()) {
+                    std::string ft = info.field_types[fit->second];
+                    if (ft.size() >= 2 && ft.substr(ft.size()-2) == "[]")
+                        return llvmType(ft.substr(0, ft.size()-2));
+                }
+            }
+            // pointer-type local
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end()) {
+                std::string lt = tit->second;
+                if (lt.size() >= 2 && lt.substr(lt.size()-2) == "[]")
+                    return llvmType(lt.substr(0, lt.size()-2));
+            }
         }
         (void)ai;
         return "i32";
