@@ -35,6 +35,9 @@ String(
     /* append a null-terminated string. */
     void append(char[] s);
 
+    /* append another string. */
+    void append(String^ s);
+
     /* print the string. */
     void print();
     void println();
@@ -105,6 +108,11 @@ String {
     void append(char[] s) {
         int len = strlen(s);
         append(s, len);
+    }
+
+    /* append another string. */
+    void append(String^ s) {
+        append(s^.storage_, s^.size_);
     }
 
     /*
