@@ -20,8 +20,8 @@ SAMPLES = \
 	primes1 \
 	reference1 reference2 reference3 \
 	reverse_bits \
-	string1 string2 string3 string4 string5 string6 \
-	string7 string8 string9 \
+	string01 string02 string03 string04 string05 string06 \
+	string07 string08 string09 \
 	switch
 
 .PHONY: all clean $(SAMPLES)
