@@ -54,7 +54,7 @@ int32 main() {
     char[] null_terminated_string_literal = "Hello, World!";
     String s;
     s.set(null_terminated_string_literal);
-    println("expected: size=13 capacity=13");
-    println("size=" + s.size_ + " capacity=" + s.capacity_);
+    __println("expected: size=13 capacity=13");
+    __println("size=" + s.size_ + " capacity=" + s.capacity_);
     return 0;
 }

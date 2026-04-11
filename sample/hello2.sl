@@ -1,11 +1,11 @@
 
 Speaker() {
     _() {
-        println("Hello, World!");
+        __println("Hello, World!");
     }
 
     ~() {
-        println("Goodbye, World!");
+        __println("Goodbye, World!");
     }
 }
 

@@ -33,7 +33,7 @@ int32 main() {
     }
 
     (int row, int col) = returnTupleMethod();
-    println("Knight found at row " + row + ", col " + col);
+    __println("Knight found at row " + row + ", col " + col);
 
     return 0;
 }

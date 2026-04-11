@@ -8,7 +8,7 @@ print 10 primes per line.
 */
 
 int32 main() {
-    println("all primes less than 1000:");
+    __println("all primes less than 1000:");
     int32 count = 0;
     for int n in (2..1000) {
         bool is_prime = 1;
@@ -23,19 +23,19 @@ int32 main() {
             }
         }
         if (is_prime) {
-            print(n);
+            __print(n);
 
             /** space or newline **/
             count = count + 1;
             if (count % 10 == 0) {
-                println();
+                __println();
             } else {
-                print(" ");
+                __print(" ");
             }
         }
     }
     if (count % 10) {
-        println();
+        __println();
     }
     return 0;
 }

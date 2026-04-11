@@ -1,4 +1,4 @@
 int32 main() {
-    println("Hello, world!");
+    __println("Hello, world!");
     return 0;
 }

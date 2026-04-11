@@ -44,7 +44,7 @@ int32 main() {
     quickSort(0, v.size() - 1);
 
     for int n in v {
-        println(n);
+        __println(n);
     }
 
     return 0;

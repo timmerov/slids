@@ -11,40 +11,40 @@ enum Piece (
 
 int32 main() {
 
-    println("expected: None King Queen Rook Bishop Knight Pawn");
+    __println("expected: None King Queen Rook Bishop Knight Pawn");
     for Piece piece in Piece {
         switch (piece) {
         case kKing:
-            print("King");
+            __print("King");
             break;
 
         case kQueen:
-            print("Queen");
+            __print("Queen");
             break;
 
         case kRook:
-            print("Rook");
+            __print("Rook");
             break;
 
         case kBishop:
-            print("Bishop");
+            __print("Bishop");
             break;
 
         case kKnight:
-            print("Knight");
+            __print("Knight");
             break;
 
         case kPawn:
-            print("Pawn");
+            __print("Pawn");
             break;
 
         default:
-            print("None");
+            __print("None");
             break;
         }
-        print(" ");
+        __print(" ");
     }
-    println();
+    __println();
 
     return 0;
 }

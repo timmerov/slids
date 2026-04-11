@@ -8,7 +8,7 @@ int32 main() {
         byte = byte >> 1;
     }
 
-    println("expected: 53");
-    println(reversed);
+    __println("expected: 53");
+    __println(reversed);
     return 0;
 }

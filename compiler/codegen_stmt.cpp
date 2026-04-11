@@ -723,13 +723,13 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* call = dynamic_cast<const CallStmt*>(&stmt)) {
-        if (call->callee == "println" || call->callee == "print") {
-            bool newline = (call->callee == "println");
+        if (call->callee == "__println" || call->callee == "__print") {
+            bool newline = (call->callee == "__println");
             if (call->args.size() > 1)
                 throw std::runtime_error(call->callee + " expects 0 or 1 arguments");
 
             if (call->args.size() == 0) {
-                if (!newline) throw std::runtime_error("print() requires an argument");
+                if (!newline) throw std::runtime_error("__print() requires an argument");
                 std::string tmp = newTmp();
                 out_ << "    " << tmp << " = getelementptr [2 x i8], ptr @.str_newline, i32 0, i32 0\n";
                 out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";

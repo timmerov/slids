@@ -135,7 +135,7 @@ int32 main() {
     s.append(", ");
     s.append(world);
     s.append('!');
-    println("expected: Hello, World!");
-    println(s.storage_[0..s.size_]);
+    __println("expected: Hello, World!");
+    __println(s.storage_[0..s.size_]);
     return 0;
 }

@@ -61,7 +61,7 @@ int32 main() {
     char[] hello_world = "Hello, World!";
     String s;
     s.set(hello_world);
-    println("expected: Hello, World!");
-    println(s.storage_[0..s.size_]);
+    __println("expected: Hello, World!");
+    __println(s.storage_[0..s.size_]);
     return 0;
 }

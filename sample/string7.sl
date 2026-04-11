@@ -116,9 +116,9 @@ int32 main() {
     String s;
     s.set(hello_world);
     s.append('!');
-    println("expected: Hello, World!");
-    println(s.storage_[0..s.size_]);
-    println("expected: capacity=19");
-    println("capacity=" + s.capacity_);
+    __println("expected: Hello, World!");
+    __println(s.storage_[0..s.size_]);
+    __println("expected: capacity=19");
+    __println("capacity=" + s.capacity_);
     return 0;
 }

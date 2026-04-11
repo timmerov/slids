@@ -30,7 +30,7 @@ int32 main() {
             }
         } :cols
     } :rows
-    println("Knight found at row " + row + ", col " + col);
+    __println("Knight found at row " + row + ", col " + col);
 
     return 0;
 }

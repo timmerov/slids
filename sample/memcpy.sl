@@ -11,8 +11,8 @@ int32 main() {
         to++^ = ch;
     } (ch != 0);
 
-    println("expected: Hello, World!");
-    println(dest);
+    __println("expected: Hello, World!");
+    __println(dest);
 
     return 0;
 }

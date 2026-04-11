@@ -6,7 +6,7 @@ int32 main() {
         bool by400 = year % 400 == 0;
 
         if (by400 || (by4 && !by100)) {
-            println(year);
+            __println(year);
         }
     }
     return 0;

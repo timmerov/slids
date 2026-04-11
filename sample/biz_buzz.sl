@@ -15,21 +15,21 @@ int32 main() {
         bool by3 = (i % 3 == 0);
         bool by5 = (i % 5 == 0);
         if (by3 && by5) {
-            print("biz-buzz");
+            __print("biz-buzz");
         } else if (by3) {
-            print("biz");
+            __print("biz");
         } else if (by5) {
-            print("buzz");
+            __print("buzz");
         } else {
-            print(i);
+            __print(i);
         }
 
         if (i % 10) {
-            print(" ");
+            __print(" ");
         } else {
-            println();
+            __println();
         }
     }
-    println();
+    __println();
     return 0;
 }

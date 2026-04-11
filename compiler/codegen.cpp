@@ -318,8 +318,8 @@ void Codegen::collectStringConstants() {
 
     std::function<void(const Stmt&)> collect = [&](const Stmt& stmt) {
         if (auto* call = dynamic_cast<const CallStmt*>(&stmt)) {
-            if (call->callee == "println" || call->callee == "print") {
-                bool newline = (call->callee == "println");
+            if (call->callee == "__println" || call->callee == "__print") {
+                bool newline = (call->callee == "__println");
                 for (auto& arg : call->args)
                     collectExpr(arg.get(), newline);
             } else {

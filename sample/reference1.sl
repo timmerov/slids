@@ -5,7 +5,7 @@ int32 main() {
     ref^ += 1;
     ref^++;
     ++(ref^);
-    println("expected: 4");
-    println(ref^);
+    __println("expected: 4");
+    __println(ref^);
     return 0;
 }

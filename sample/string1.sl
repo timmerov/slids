@@ -21,7 +21,7 @@ String(
 int32 main() {
     String s;
     s.reserve(100);
-    println("expected: size=0 capacity=100");
-    println("size=" + s.size_ + " capacity=" + s.capacity_);
+    __println("expected: size=0 capacity=100");
+    __println("size=" + s.size_ + " capacity=" + s.capacity_);
     return 0;
 }

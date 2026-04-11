@@ -19,7 +19,7 @@ int32 main() {
 
         if (isPrime()) {
             primes.add(n);
-            println(n);
+            __println(n);
         }
     }
 

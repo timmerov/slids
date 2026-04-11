@@ -28,7 +28,7 @@ int32 main() {
         for int col in (0..8) {
             if (ptr^ == kKnight) {
                 ++counter;
-                println(counter + ": Knight found at row " + row + ", col " + col);
+                __println(counter + ": Knight found at row " + row + ", col " + col);
             }
             ++ptr;
         }

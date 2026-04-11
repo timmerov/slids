@@ -167,7 +167,7 @@ int32 main() {
     s2.append('!');
     String s3;
     s3 = s1 + s2;
-    println("expected: Hello, World!");
-    println(s3.storage_[0..s3.size_]);
+    __println("expected: Hello, World!");
+    __println(s3.storage_[0..s3.size_]);
     return 0;
 }
