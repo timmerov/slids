@@ -84,6 +84,9 @@ enum class TokenType {
     kOrEq,
     kXorXorEq,
 
+    // move operator
+    kArrowLeft,   // <-
+
     // assignment
     kEquals,
     kPlusEq,

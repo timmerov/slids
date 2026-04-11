@@ -26,6 +26,57 @@ void Codegen::emitStmt(const Stmt& stmt) {
     if (auto* ds = dynamic_cast<const DeleteStmt*>(&stmt)) {
         std::string ptr_val = emitExpr(*ds->operand);
         out_ << "    call void @free(ptr " << ptr_val << ")\n";
+        // nullify the pointer variable so it is left in a valid (null) state
+        if (auto* ve = dynamic_cast<const VarExpr*>(ds->operand.get())) {
+            auto it = locals_.find(ve->name);
+            if (it != locals_.end())
+                out_ << "    store ptr null, ptr " << it->second << "\n";
+        } else if (auto* fa = dynamic_cast<const FieldAccessExpr*>(ds->operand.get())) {
+            // delete obj.field_ — write null back through the field GEP
+            // Re-emit the GEP for the field and store null
+            std::string self;
+            if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
+                if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                    auto it = locals_.find(ve2->name);
+                    if (it != locals_.end()) {
+                        std::string loaded = newTmp();
+                        out_ << "    " << loaded << " = load ptr, ptr " << it->second << "\n";
+                        self = loaded;
+                    }
+                }
+            } else if (auto* ve2 = dynamic_cast<const VarExpr*>(fa->object.get())) {
+                auto it = locals_.find(ve2->name);
+                if (it != locals_.end()) self = it->second;
+            }
+            if (!self.empty() && !current_slid_.empty()) {
+                // find the slid type for fa->object
+                std::string stype = current_slid_;
+                if (auto* ve2 = dynamic_cast<const VarExpr*>(fa->object.get())) {
+                    auto tit = local_types_.find(ve2->name);
+                    if (tit != local_types_.end()) stype = tit->second;
+                } else if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
+                    if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                        auto tit = local_types_.find(ve2->name);
+                        if (tit != local_types_.end()) {
+                            std::string t = tit->second;
+                            if (!t.empty() && (t.back() == '^' || (t.size()>=2 && t.substr(t.size()-2)=="[]")))
+                                t = t.substr(0, t.find_first_of("^["));
+                            stype = t;
+                        }
+                    }
+                }
+                auto sit = slid_info_.find(stype);
+                if (sit != slid_info_.end()) {
+                    auto fit = sit->second.field_index.find(fa->field);
+                    if (fit != sit->second.field_index.end()) {
+                        std::string gep = newTmp();
+                        out_ << "    " << gep << " = getelementptr %struct." << stype
+                             << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
+                        out_ << "    store ptr null, ptr " << gep << "\n";
+                    }
+                }
+            }
+        }
         return;
     }
 
@@ -101,9 +152,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 out_ << "    call void @" << decl->type << "__ctor(ptr " << reg << ")\n";
             }
 
-            // if initialized with = expr, call op= method
+            // if initialized with = expr, call op= method; with <- expr, call op<- method
             if (decl->init) {
-                std::string mangled = resolveOpEq(decl->type + "__op=", *decl->init);
+                std::string op_name = decl->is_move ? "op<-" : "op=";
+                std::string mangled = resolveOpEq(decl->type + "__" + op_name, *decl->init);
                 if (!mangled.empty()) {
                     auto& ptypes = func_param_types_[mangled];
                     std::string param_type = ptypes.empty() ? "" : ptypes[0];
@@ -188,9 +240,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             }
         }
-        // check for op= method on slid type
+        // check for op= / op<- method on slid type
         if (tit != local_types_.end() && slid_info_.count(tit->second)) {
-            std::string mangled = resolveOpEq(tit->second + "__op=", *assign->value);
+            std::string op_name = assign->is_move ? "op<-" : "op=";
+            std::string mangled = resolveOpEq(tit->second + "__" + op_name, *assign->value);
             if (!mangled.empty()) {
                 auto& ptypes = func_param_types_[mangled];
                 std::string param_type = ptypes.empty() ? "" : ptypes[0];

@@ -130,18 +130,21 @@ struct VarDeclStmt : Stmt {
     std::string name;
     std::unique_ptr<Expr> init;           // null for default construction
     std::vector<std::unique_ptr<Expr>> ctor_args; // for Counter c(5)
+    bool is_move = false;                 // true for Type name <- expr
     VarDeclStmt(std::string type, std::string name,
                 std::unique_ptr<Expr> init,
-                std::vector<std::unique_ptr<Expr>> ctor_args = {})
+                std::vector<std::unique_ptr<Expr>> ctor_args = {},
+                bool is_move = false)
         : type(std::move(type)), name(std::move(name)),
-          init(std::move(init)), ctor_args(std::move(ctor_args)) {}
+          init(std::move(init)), ctor_args(std::move(ctor_args)), is_move(is_move) {}
 };
 
 struct AssignStmt : Stmt {
     std::string name;
     std::unique_ptr<Expr> value;
-    AssignStmt(std::string name, std::unique_ptr<Expr> value)
-        : name(std::move(name)), value(std::move(value)) {}
+    bool is_move = false;                 // true for name <- expr
+    AssignStmt(std::string name, std::unique_ptr<Expr> value, bool is_move = false)
+        : name(std::move(name)), value(std::move(value)), is_move(is_move) {}
 };
 
 // field assignment: obj.field_ = expr

@@ -607,6 +607,12 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             expect(TokenType::kSemicolon, "expected ';'");
             return std::make_unique<VarDeclStmt>(type, name, std::move(init));
         }
+        if (peek().type == TokenType::kArrowLeft) {
+            advance();
+            auto init = parseExpr();
+            expect(TokenType::kSemicolon, "expected ';'");
+            return std::make_unique<VarDeclStmt>(type, name, std::move(init), std::vector<std::unique_ptr<Expr>>{}, true);
+        }
 
         // array declaration: Type name[d0][d1] = (...)
         if (peek().type == TokenType::kLBracket) {
@@ -804,6 +810,13 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             expect(TokenType::kSemicolon, "expected ';'");
             return std::make_unique<AssignStmt>(name, std::move(value));
         }
+        // move assignment
+        if (peek().type == TokenType::kArrowLeft) {
+            advance();
+            auto value = parseExpr();
+            expect(TokenType::kSemicolon, "expected ';'");
+            return std::make_unique<AssignStmt>(name, std::move(value), true);
+        }
 
         // compound assignment
         static const std::map<TokenType, std::string> compound_ops = {
@@ -884,7 +897,8 @@ MethodDef Parser::parseMethodDef() {
     MethodDef m;
     m.return_type = parseTypeName();
     m.name = expect(TokenType::kIdentifier, "expected method name").value;
-    if (m.name == "op" && peek().type == TokenType::kEquals) { advance(); m.name = "op="; }
+    if (m.name == "op" && peek().type == TokenType::kEquals)     { advance(); m.name = "op="; }
+    else if (m.name == "op" && peek().type == TokenType::kArrowLeft) { advance(); m.name = "op<-"; }
     expect(TokenType::kLParen, "expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         std::string type = parseTypeName();
@@ -964,9 +978,10 @@ SlidDef Parser::parseSlidDef() {
             if (tokens_[pos_ + 1].type != TokenType::kIdentifier) return false;
             if (tokens_[pos_ + 2].type == TokenType::kLParen) return true;
             // op= pattern: void op = (
-            return tokens_[pos_ + 1].value == "op"
-                && tokens_[pos_ + 2].type == TokenType::kEquals
-                && pos_ + 3 < (int)tokens_.size()
+            if (tokens_[pos_ + 1].value != "op") return false;
+            if (pos_ + 3 >= (int)tokens_.size()) return false;
+            // op= or op<-
+            return (tokens_[pos_ + 2].type == TokenType::kEquals || tokens_[pos_ + 2].type == TokenType::kArrowLeft)
                 && tokens_[pos_ + 3].type == TokenType::kLParen;
         };
         if (isMethodDecl()) {
@@ -1034,7 +1049,8 @@ void Parser::parseExternalMethodBlock(Program& program) {
         em.slid_name = slid_name;
         em.return_type = parseTypeName();
         em.method_name = expect(TokenType::kIdentifier, "expected method name").value;
-        if (em.method_name == "op" && peek().type == TokenType::kEquals) { advance(); em.method_name = "op="; }
+        if (em.method_name == "op" && peek().type == TokenType::kEquals)     { advance(); em.method_name = "op="; }
+        else if (em.method_name == "op" && peek().type == TokenType::kArrowLeft) { advance(); em.method_name = "op<-"; }
         expect(TokenType::kLParen, "expected '('");
         while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
             std::string type = parseTypeName();
