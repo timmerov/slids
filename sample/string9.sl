@@ -1,5 +1,5 @@
 
-/* String class. */
+/* String class declaration. */
 String(
     /* length of stored string. */
     int size_ = 0,
@@ -20,6 +20,9 @@ String(
     /* increase capacity. */
     void reserve(int capacity);
 
+    /* set to an array of characters. */
+    void set(char[] arr, int sz);
+
     /* set to a null-terminated string. */
     void set(char[] s);
 
@@ -32,6 +35,12 @@ String(
     /* append a null-terminated string. */
     void append(char[] s);
 }
+
+/* overload + to concatenate strings. */
+String op+(String^ sa, String^ sb);
+
+
+/* String class implementation. */
 
 /* constructor */
 String:_() {
@@ -63,12 +72,17 @@ String {
         storage_ = new_storage;
     }
 
+    /* set to an array of characters. */
+    void set(char[] arr, int sz) {
+        reserve(sz);
+        size_ = sz;
+        copy_chars(storage_, arr, sz);
+    }
+
     /* set to a null terminated string. */
     void set(char[] s) {
         int len = strlen(s);
-        reserve(len);
-        size_ = len;
-        copy_chars(storage_, s, len);
+        set(s, len);
     }
 
     /* append a character. */
@@ -102,6 +116,8 @@ String {
     }
 }
 
+/* helper functions. */
+
 /* return length of null terminated string. */
 int strlen(char[] s) {
     int len = 0;
@@ -128,16 +144,30 @@ void copy_chars(
     }
 }
 
-/* print hello, world! */
+/* concatenate two strings. */
+String op+(String^ sa, String^ sb) {
+    String sc;
+    sc.set(sa^.storage_, sa^.size_);
+    sc.append(sb^.storage_, sb^.size_);
+    return sc;
+}
+
+/*
+test program.
+print hello, world!
+*/
 int32 main() {
     char[] hello = "Hello";
     char[] world = "World";
-    String s;
-    s.set(hello);
-    s.append(", ");
-    s.append(world);
-    s.append('!');
+    String s1;
+    s1.set(hello);
+    s1.append(", ");
+    String s2;
+    s2.set(world);
+    s2.append('!');
+    String s3;
+    s3 = s1 + s2;
     println("expected: Hello, World!");
-    println(s.storage_[0..s.size_]);
+    println(s3.storage_[0..s3.size_]);
     return 0;
 }

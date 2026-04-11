@@ -16,6 +16,16 @@ inline bool isIndirectType(const std::string& t) {
     return isRefType(t) || isPtrType(t);
 }
 
+// Quote a global/function name if it contains non-identifier characters (e.g. "op+")
+inline std::string llvmGlobalName(const std::string& name) {
+    for (char c : name) {
+        if (!isalnum((unsigned char)c) && c != '_' && c != '.') {
+            return "\"" + name + "\"";
+        }
+    }
+    return name;
+}
+
 inline std::string llvmEscape(const std::string& s, int& len) {
     std::string result;
     len = 0;

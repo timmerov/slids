@@ -120,8 +120,44 @@ void Codegen::emitStmt(const Stmt& stmt) {
         auto it = locals_.find(assign->name);
         if (it == locals_.end())
             throw std::runtime_error("undefined variable: " + assign->name);
-        std::string val = emitExpr(*assign->value);
         auto tit = local_types_.find(assign->name);
+        // check for operator overload: lhs is slid type, rhs is BinaryExpr
+        if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+            if (auto* be = dynamic_cast<const BinaryExpr*>(assign->value.get())) {
+                std::string op_func = resolveOperatorOverload(be->op, *be->left, *be->right);
+                if (!op_func.empty()) {
+                    // call op func with sret into lhs alloca
+                    // first call dtor on existing lhs value
+                    const std::string& slid_name = tit->second;
+                    if (slid_info_.at(slid_name).has_dtor) {
+                        out_ << "    call void @" << slid_name << "__dtor(ptr " << it->second << ")\n";
+                        // re-init fields to zero/null
+                        auto& info = slid_info_[slid_name];
+                        for (int i = 0; i < (int)info.field_types.size(); i++) {
+                            std::string ft = llvmType(info.field_types[i]);
+                            std::string gep = newTmp();
+                            out_ << "    " << gep << " = getelementptr %struct." << slid_name << ", ptr " << it->second << ", i32 0, i32 " << i << "\n";
+                            if (isIndirectType(info.field_types[i]))
+                                out_ << "    store ptr null, ptr " << gep << "\n";
+                            else
+                                out_ << "    store " << ft << " 0, ptr " << gep << "\n";
+                        }
+                    }
+                    auto& ptypes = func_param_types_[op_func];
+                    std::string args;
+                    args += "ptr sret(%struct." + slid_name + ") " + it->second;
+                    // left arg
+                    std::string la = emitArgForParam(*be->left, ptypes.size() > 0 ? ptypes[0] : "");
+                    args += ", " + (ptypes.size() > 0 ? llvmType(ptypes[0]) : "ptr") + " " + la;
+                    // right arg
+                    std::string ra = emitArgForParam(*be->right, ptypes.size() > 1 ? ptypes[1] : "");
+                    args += ", " + (ptypes.size() > 1 ? llvmType(ptypes[1]) : "ptr") + " " + ra;
+                    out_ << "    call void @" << llvmGlobalName(op_func) << "(" << args << ")\n";
+                    return;
+                }
+            }
+        }
+        std::string val = emitExpr(*assign->value);
         bool is_ptr = tit != local_types_.end() && isIndirectType(tit->second);
         std::string store_type = is_ptr ? "ptr" : llvmType(tit != local_types_.end() ? tit->second : "int");
         out_ << "    store " << store_type << " " << val << ", ptr " << it->second << "\n";
@@ -321,25 +357,58 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* ret = dynamic_cast<const ReturnStmt*>(&stmt)) {
-        emitDtors();
-        if (ret->value) {
-            if (auto* te = dynamic_cast<const TupleExpr*>(ret->value.get())) {
-                std::string acc = "undef";
-                for (int i = 0; i < (int)te->values.size(); i++) {
-                    std::string val = emitExpr(*te->values[i]);
-                    std::string elem_type = exprLlvmType(*te->values[i]);
-                    std::string tmp = newTmp();
-                    out_ << "    " << tmp << " = insertvalue " << current_func_return_type_
-                         << " " << acc << ", " << elem_type << " " << val << ", " << i << "\n";
-                    acc = tmp;
-                }
-                out_ << "    ret " << current_func_return_type_ << " " << acc << "\n";
-            } else {
-                std::string val = emitExpr(*ret->value);
-                out_ << "    ret " << current_func_return_type_ << " " << val << "\n";
+        if (current_func_uses_sret_ && ret->value) {
+            // sret return: copy fields from local slid var into %retval, null ptr fields, then dtor
+            auto* ve = dynamic_cast<const VarExpr*>(ret->value.get());
+            if (!ve) throw std::runtime_error("sret: return value must be a local variable");
+            auto tit = local_types_.find(ve->name);
+            if (tit == local_types_.end() || !slid_info_.count(tit->second))
+                throw std::runtime_error("sret: return value must be a slid type");
+            const std::string& slid_name = tit->second;
+            auto& info = slid_info_[slid_name];
+            std::string src = locals_.at(ve->name);
+            // copy each field from src to %retval
+            for (int i = 0; i < (int)info.field_types.size(); i++) {
+                std::string ft = llvmType(info.field_types[i]);
+                std::string sp = newTmp();
+                std::string dp = newTmp();
+                std::string fv = newTmp();
+                out_ << "    " << sp << " = getelementptr %struct." << slid_name << ", ptr " << src << ", i32 0, i32 " << i << "\n";
+                out_ << "    " << dp << " = getelementptr %struct." << slid_name << ", ptr %retval, i32 0, i32 " << i << "\n";
+                out_ << "    " << fv << " = load " << ft << ", ptr " << sp << "\n";
+                out_ << "    store " << ft << " " << fv << ", ptr " << dp << "\n";
             }
-        } else {
+            // null out pointer fields in src so its dtor won't double-free
+            for (int i = 0; i < (int)info.field_types.size(); i++) {
+                if (isIndirectType(info.field_types[i])) {
+                    std::string sp = newTmp();
+                    out_ << "    " << sp << " = getelementptr %struct." << slid_name << ", ptr " << src << ", i32 0, i32 " << i << "\n";
+                    out_ << "    store ptr null, ptr " << sp << "\n";
+                }
+            }
+            emitDtors();
             out_ << "    ret void\n";
+        } else {
+            emitDtors();
+            if (ret->value) {
+                if (auto* te = dynamic_cast<const TupleExpr*>(ret->value.get())) {
+                    std::string acc = "undef";
+                    for (int i = 0; i < (int)te->values.size(); i++) {
+                        std::string val = emitExpr(*te->values[i]);
+                        std::string elem_type = exprLlvmType(*te->values[i]);
+                        std::string tmp = newTmp();
+                        out_ << "    " << tmp << " = insertvalue " << current_func_return_type_
+                             << " " << acc << ", " << elem_type << " " << val << ", " << i << "\n";
+                        acc = tmp;
+                    }
+                    out_ << "    ret " << current_func_return_type_ << " " << acc << "\n";
+                } else {
+                    std::string val = emitExpr(*ret->value);
+                    out_ << "    ret " << current_func_return_type_ << " " << val << "\n";
+                }
+            } else {
+                out_ << "    ret void\n";
+            }
         }
         block_terminated_ = true;
         return;

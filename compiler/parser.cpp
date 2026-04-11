@@ -1053,7 +1053,21 @@ FunctionDef Parser::parseFunctionDef() {
     } else {
         fn.return_type = parseTypeName();
     }
-    fn.name = expect(TokenType::kIdentifier, "expected function name").value;
+    {
+        std::string fname = expect(TokenType::kIdentifier, "expected function name").value;
+        if (fname == "op") {
+            static const std::map<TokenType, std::string> op_map = {
+                {TokenType::kPlus, "+"}, {TokenType::kMinus, "-"},
+                {TokenType::kStar, "*"}, {TokenType::kSlash, "/"},
+                {TokenType::kEqEq, "=="}, {TokenType::kNotEq, "!="},
+                {TokenType::kLt, "<"}, {TokenType::kGt, ">"},
+                {TokenType::kLtEq, "<="}, {TokenType::kGtEq, ">="},
+            };
+            auto it = op_map.find(peek().type);
+            if (it != op_map.end()) { advance(); fname = "op" + it->second; }
+        }
+        fn.name = fname;
+    }
     expect(TokenType::kLParen, "expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         std::string type = parseTypeName();
@@ -1062,7 +1076,11 @@ FunctionDef Parser::parseFunctionDef() {
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "expected ')'");
-    fn.body = parseBlock();
+    if (peek().type == TokenType::kSemicolon) {
+        advance(); // forward declaration — body remains null
+    } else {
+        fn.body = parseBlock();
+    }
     return fn;
 }
 

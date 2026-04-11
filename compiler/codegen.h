@@ -54,6 +54,7 @@ private:
     std::string current_slid_;
     std::string self_ptr_;
     bool block_terminated_ = false; // true after br/ret, reset at each new label
+    bool current_func_uses_sret_ = false; // true when current function uses sret for return
 
     // named/numbered break+continue support
     // each entry: {block_label, break_target, continue_target}
@@ -109,6 +110,9 @@ private:
     std::string resolveOverloadForCall(const std::string& base_mangled,
                                        const std::vector<std::unique_ptr<Expr>>& args);
     bool isPointerExpr(const Expr& expr);
+    std::string resolveOperatorOverload(const std::string& op,
+                                        const Expr& left, const Expr& right);
+    std::string emitArgForParam(const Expr& arg, const std::string& param_type);
     void emitFunction(const FunctionDef& fn);
     void emitNestedFunction(const NestedFunctionDef& fn,
                             const std::string& parent_name,

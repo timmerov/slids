@@ -10,6 +10,7 @@ Codegen::Codegen(const Program& program, std::ostream& out)
 std::string Codegen::newTmp() { return "%t" + std::to_string(tmp_counter_++); }
 std::string Codegen::newLabel(const std::string& p) { return p + std::to_string(label_counter_++); }
 
+
 std::string Codegen::llvmType(const std::string& t) {
     if (!t.empty() && t[0] == '{') return t; // pass through LLVM struct types (tuple returns)
     if (t == "int32" || t == "int" || t == "bool") return "i32";
@@ -45,6 +46,8 @@ void Codegen::collectFunctionSignatures() {
         std::vector<std::string> ptypes;
         for (auto& [t, n] : fn.params) ptypes.push_back(t);
         func_param_types_[fn.name] = ptypes;
+
+        if (!fn.body) continue; // forward declaration
 
         // recurse into all blocks to find nested function defs
         std::function<void(const BlockStmt&)> findNested = [&](const BlockStmt& block) {
@@ -351,7 +354,8 @@ void Codegen::collectStringConstants() {
     };
 
     for (auto& fn : program_.functions)
-        for (auto& stmt : fn.body->stmts) collect(*stmt);
+        if (fn.body)
+            for (auto& stmt : fn.body->stmts) collect(*stmt);
     for (auto& slid : program_.slids) {
         if (slid.ctor_body)
             for (auto& stmt : slid.ctor_body->stmts) collect(*stmt);
@@ -385,7 +389,7 @@ void Codegen::emit() {
 
     // analyze nested functions for all top-level functions
     for (auto& fn : program_.functions)
-        analyzeNestedFunctions(fn);
+        if (fn.body) analyzeNestedFunctions(fn);
 
     // emit struct types for classes
     for (auto& slid : program_.slids) {
@@ -400,7 +404,7 @@ void Codegen::emit() {
 
     // emit frame struct types for functions with nested functions
     for (auto& fn : program_.functions)
-        emitFrameStruct(fn);
+        if (fn.body) emitFrameStruct(fn);
 
     if (!program_.slids.empty() || !program_.functions.empty()) out_ << "\n";
 
@@ -673,7 +677,69 @@ bool Codegen::isPointerExpr(const Expr& expr) {
         auto tit = local_types_.find(ve->name);
         if (tit != local_types_.end()) return isIndirectType(tit->second);
     }
+    // field access through ptr dereference: sa^.storage_
+    if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
+        std::string slid_name;
+        if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
+            if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto tit = local_types_.find(ve2->name);
+                if (tit != local_types_.end()) {
+                    slid_name = tit->second;
+                    if (isRefType(slid_name)) slid_name.pop_back();
+                    else if (isPtrType(slid_name)) slid_name.resize(slid_name.size()-2);
+                }
+            }
+        } else if (auto* ve2 = dynamic_cast<const VarExpr*>(fa->object.get())) {
+            auto tit = local_types_.find(ve2->name);
+            if (tit != local_types_.end()) slid_name = tit->second;
+        }
+        if (!slid_name.empty() && slid_info_.count(slid_name)) {
+            auto& info = slid_info_[slid_name];
+            auto fit = info.field_index.find(fa->field);
+            if (fit != info.field_index.end())
+                return isIndirectType(info.field_types[fit->second]);
+        }
+    }
     return false;
+}
+
+// Resolve which free function implements 'left op right'.
+// Returns the function name (e.g. "op+") if found, empty string otherwise.
+// Only matches if the operator's parameters are slid pointer types and the args
+// are slid locals (i.e. it's actually a user-defined type operator, not int arithmetic).
+std::string Codegen::resolveOperatorOverload(const std::string& op,
+                                              const Expr& left, const Expr&) {
+    std::string fname = "op" + op;
+    auto pit = func_param_types_.find(fname);
+    if (pit == func_param_types_.end() || pit->second.empty()) return "";
+    // check if first param is a slid pointer type (e.g. "String^")
+    const std::string& p0 = pit->second[0];
+    std::string slid_name = p0;
+    if (!slid_name.empty() && slid_name.back() == '^') slid_name.pop_back();
+    else if (slid_name.size() >= 2 && slid_name.substr(slid_name.size()-2) == "[]") slid_name.resize(slid_name.size()-2);
+    else return ""; // param is not a pointer — not a slid operator
+    if (!slid_info_.count(slid_name)) return ""; // param type is not a known slid
+    // check that left arg is actually a local of that slid type
+    if (auto* ve = dynamic_cast<const VarExpr*>(&left)) {
+        auto tit = local_types_.find(ve->name);
+        if (tit != local_types_.end() && tit->second == slid_name) return fname;
+    }
+    return "";
+}
+
+// Emit an argument expression, taking pointer-vs-value into account.
+// If param_type ends with '^' and the arg is a slid local, pass its alloca ptr directly.
+std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_type) {
+    bool want_ptr = !param_type.empty() && param_type.back() == '^';
+    if (want_ptr) {
+        if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
+            auto lit = local_types_.find(ve->name);
+            if (lit != local_types_.end() && slid_info_.count(lit->second)) {
+                return locals_.at(ve->name); // pass the alloca ptr
+            }
+        }
+    }
+    return emitExpr(arg);
 }
 
 void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& full_mangled,
@@ -734,10 +800,13 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
 }
 
 void Codegen::emitFunction(const FunctionDef& fn) {
+    if (!fn.body) return; // forward declaration
+
     locals_.clear();
     local_types_.clear();
     array_info_.clear();
     parent_array_info_.clear();
+    dtor_vars_.clear();
     tmp_counter_ = 0;
     label_counter_ = 0;
     break_label_ = "";
@@ -747,15 +816,23 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     frame_ptr_reg_ = "";
     block_terminated_ = false;
 
-    std::string ret_type = llvmType(func_return_types_[fn.name]);
+    // detect sret: return type is a slid type
+    bool uses_sret = !fn.return_type.empty() && slid_info_.count(fn.return_type) > 0;
+    current_func_uses_sret_ = uses_sret;
+
+    std::string ret_type = uses_sret ? "void" : llvmType(func_return_types_[fn.name]);
     current_func_return_type_ = ret_type;
+
     std::string param_str;
+    if (uses_sret) {
+        param_str = "ptr sret(%struct." + fn.return_type + ") %retval";
+    }
     for (int i = 0; i < (int)fn.params.size(); i++) {
-        if (i > 0) param_str += ", ";
+        if (!param_str.empty()) param_str += ", ";
         param_str += llvmType(fn.params[i].first) + " %arg_" + fn.params[i].second;
     }
 
-    out_ << "define " << ret_type << " @" << fn.name << "(" << param_str << ") {\n";
+    out_ << "define " << ret_type << " @" << llvmGlobalName(fn.name) << "(" << param_str << ") {\n";
     out_ << "entry:\n";
 
     for (auto& [type, name] : fn.params) {
@@ -769,7 +846,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     emitBlock(*fn.body);
 
     if (!block_terminated_) {
-        if (fn.return_type == "void") {
+        if (fn.return_type == "void" || uses_sret) {
             emitDtors();
             out_ << "    ret void\n";
         } else {
