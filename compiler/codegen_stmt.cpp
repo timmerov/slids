@@ -48,7 +48,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
     };
 
-    // resolve op= overload: slid var → SlidType^ param, otherwise → char[]/ptr param
+    // resolve op= overload: slid var or slid-producing expr → SlidType^ param, otherwise → char[]/ptr param
     auto resolveOpEq = [&](const std::string& base, const Expr& arg) -> std::string {
         auto oit = method_overloads_.find(base);
         if (oit == method_overloads_.end()) return "";
@@ -57,6 +57,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
             auto tit = local_types_.find(ve->name);
             if (tit != local_types_.end()) arg_is_slid = slid_info_.count(tit->second) > 0;
+        } else if (!exprSlidType(arg).empty()) {
+            arg_is_slid = true; // e.g. result of op+ expression
         }
         for (auto& [m, ptypes] : oit->second) {
             if (ptypes.size() != 1) continue;

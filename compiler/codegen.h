@@ -83,6 +83,10 @@ private:
     // in declaration order — dtors called in reverse on return
     std::vector<std::pair<std::string,std::string>> dtor_vars_;
 
+    // temporaries created during expression evaluation (e.g. implicit String from literal)
+    // flushed at end of each statement in emitBlock
+    std::vector<std::pair<std::string,std::string>> pending_temp_dtors_; // (alloca_reg, type_name)
+
     // nested function support
     std::map<std::string, NestedFuncInfo> nested_info_; // mangled -> info
     std::string current_parent_;   // mangled name of current parent function
@@ -113,6 +117,7 @@ private:
     std::string resolveOperatorOverload(const std::string& op,
                                         const Expr& left, const Expr& right);
     std::string emitArgForParam(const Expr& arg, const std::string& param_type);
+    std::string exprSlidType(const Expr& expr); // return slid type name if expr produces a slid value
     void emitFunction(const FunctionDef& fn);
     void emitNestedFunction(const NestedFunctionDef& fn,
                             const std::string& parent_name,

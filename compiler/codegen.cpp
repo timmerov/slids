@@ -333,8 +333,8 @@ void Codegen::collectStringConstants() {
         } else if (auto* as = dynamic_cast<const AssignStmt*>(&stmt)) {
             collectExpr(as->value.get(), false);
         } else if (auto* decl = dynamic_cast<const VarDeclStmt*>(&stmt)) {
-            // collect string literals used as initializers (e.g. char[] s = "hello")
-            if (decl->init && dynamic_cast<const StringLiteralExpr*>(decl->init.get()))
+            // collect string literals in initializer (direct literal, binary expr, etc.)
+            if (decl->init)
                 collectExpr(decl->init.get(), false);
             // collect string literals in constructor args (e.g. String s("hello"))
             for (auto& arg : decl->ctor_args)
@@ -708,10 +708,31 @@ bool Codegen::isPointerExpr(const Expr& expr) {
     return false;
 }
 
+// Return the slid type name if expr produces a slid-typed value, else "".
+std::string Codegen::exprSlidType(const Expr& expr) {
+    if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
+        auto tit = local_types_.find(ve->name);
+        if (tit != local_types_.end() && slid_info_.count(tit->second))
+            return tit->second;
+    }
+    if (auto* be = dynamic_cast<const BinaryExpr*>(&expr)) {
+        std::string fname = "op" + be->op;
+        auto pit = func_param_types_.find(fname);
+        if (pit != func_param_types_.end() && !pit->second.empty()) {
+            std::string t = pit->second[0];
+            if (!t.empty() && t.back() == '^') t.pop_back();
+            else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
+            if (slid_info_.count(t) && !resolveOperatorOverload(be->op, *be->left, *be->right).empty())
+                return t;
+        }
+    }
+    return "";
+}
+
 // Resolve which free function implements 'left op right'.
 // Returns the function name (e.g. "op+") if found, empty string otherwise.
-// Only matches if the operator's parameters are slid pointer types and the args
-// are slid locals (i.e. it's actually a user-defined type operator, not int arithmetic).
+// Matches when left is a slid local, a chained BinaryExpr, or a string literal
+// that can be implicitly converted to the slid type via op=.
 std::string Codegen::resolveOperatorOverload(const std::string& op,
                                               const Expr& left, const Expr&) {
     std::string fname = "op" + op;
@@ -724,23 +745,73 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
     else if (slid_name.size() >= 2 && slid_name.substr(slid_name.size()-2) == "[]") slid_name.resize(slid_name.size()-2);
     else return ""; // param is not a pointer — not a slid operator
     if (!slid_info_.count(slid_name)) return ""; // param type is not a known slid
-    // check that left arg is actually a local of that slid type
+    // left is a local of that slid type
     if (auto* ve = dynamic_cast<const VarExpr*>(&left)) {
         auto tit = local_types_.find(ve->name);
         if (tit != local_types_.end() && tit->second == slid_name) return fname;
+    }
+    // left is a sub-expression returning the slid type (chained: (a+b)+c)
+    if (dynamic_cast<const BinaryExpr*>(&left)) {
+        if (exprSlidType(left) == slid_name) return fname;
+    }
+    // left is a string literal — allowed if slid type can be constructed from char[]
+    if (dynamic_cast<const StringLiteralExpr*>(&left)) {
+        auto oit = method_overloads_.find(slid_name + "__op=");
+        if (oit != method_overloads_.end()) {
+            for (auto& [m, ptypes] : oit->second)
+                if (!ptypes.empty() && isPtrType(ptypes[0])) return fname;
+        }
     }
     return "";
 }
 
 // Emit an argument expression, taking pointer-vs-value into account.
 // If param_type ends with '^' and the arg is a slid local, pass its alloca ptr directly.
+// If param_type is 'SlidType^' and arg is a string literal, construct an implicit temporary.
 std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_type) {
     bool want_ptr = !param_type.empty() && param_type.back() == '^';
     if (want_ptr) {
+        std::string slid_name = param_type.substr(0, param_type.size() - 1);
+        // implicit temporary: string literal passed to SlidType^ param
+        if (slid_info_.count(slid_name) && dynamic_cast<const StringLiteralExpr*>(&arg)) {
+            std::string tmp_reg = "%tmp_" + std::to_string(tmp_counter_++);
+            out_ << "    " << tmp_reg << " = alloca %struct." << slid_name << "\n";
+            auto& info = slid_info_[slid_name];
+            // zero-init fields
+            for (int i = 0; i < (int)info.field_types.size(); i++) {
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr %struct." << slid_name
+                     << ", ptr " << tmp_reg << ", i32 0, i32 " << i << "\n";
+                if (isIndirectType(info.field_types[i]))
+                    out_ << "    store ptr null, ptr " << gep << "\n";
+                else
+                    out_ << "    store " << llvmType(info.field_types[i]) << " 0, ptr " << gep << "\n";
+            }
+            // call explicit constructor if any
+            if (info.has_explicit_ctor)
+                out_ << "    call void @" << slid_name << "__ctor(ptr " << tmp_reg << ")\n";
+            // call op=(char[]) to initialize from the literal
+            auto oit = method_overloads_.find(slid_name + "__op=");
+            if (oit != method_overloads_.end()) {
+                for (auto& [m, ptypes] : oit->second) {
+                    if (!ptypes.empty() && isPtrType(ptypes[0])) {
+                        std::string str_val = emitExpr(arg);
+                        out_ << "    call void @" << llvmGlobalName(m)
+                             << "(ptr " << tmp_reg << ", ptr " << str_val << ")\n";
+                        break;
+                    }
+                }
+            }
+            // register for dtor at end of enclosing statement
+            if (info.has_dtor)
+                pending_temp_dtors_.push_back({tmp_reg, slid_name});
+            return tmp_reg;
+        }
+        // slid local: pass its alloca ptr directly
         if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
             auto lit = local_types_.find(ve->name);
             if (lit != local_types_.end() && slid_info_.count(lit->second)) {
-                return locals_.at(ve->name); // pass the alloca ptr
+                return locals_.at(ve->name);
             }
         }
     }
@@ -887,7 +958,14 @@ void Codegen::emitFunction(const FunctionDef& fn) {
 void Codegen::emitBlock(const BlockStmt& block) {
     for (auto& stmt : block.stmts) {
         if (block_terminated_) break; // dead code after terminator — skip
+        size_t temp_mark = pending_temp_dtors_.size();
         emitStmt(*stmt);
+        // destroy implicit temporaries created during this statement
+        for (int i = (int)pending_temp_dtors_.size() - 1; i >= (int)temp_mark; i--) {
+            auto& td = pending_temp_dtors_[i];
+            out_ << "    call void @" << td.second << "__dtor(ptr " << td.first << ")\n";
+        }
+        pending_temp_dtors_.resize(temp_mark);
     }
 }
 
