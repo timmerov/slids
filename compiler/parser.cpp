@@ -601,7 +601,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             return (t.size() >= 1 && t.back() == '^') ||
                    (t.size() >= 2 && t.substr(t.size()-2) == "[]");
         };
-        if (isIndirectType(type) && peek().type == TokenType::kEquals) {
+        if (peek().type == TokenType::kEquals) {
             advance();
             auto init = parseExpr();
             expect(TokenType::kSemicolon, "expected ';'");
@@ -884,6 +884,7 @@ MethodDef Parser::parseMethodDef() {
     MethodDef m;
     m.return_type = parseTypeName();
     m.name = expect(TokenType::kIdentifier, "expected method name").value;
+    if (m.name == "op" && peek().type == TokenType::kEquals) { advance(); m.name = "op="; }
     expect(TokenType::kLParen, "expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         std::string type = parseTypeName();
@@ -956,11 +957,19 @@ SlidDef Parser::parseSlidDef() {
             continue;
         }
         // method definition: starts with a type name followed by identifier followed by (
-        if ((isTypeName(peek()) || isUserTypeName(peek()))
-            && pos_ + 1 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kIdentifier
-            && pos_ + 2 < (int)tokens_.size()
-            && tokens_[pos_ + 2].type == TokenType::kLParen) {
+        // also handles operator methods: void op=(...)
+        auto isMethodDecl = [&]() {
+            if (!(isTypeName(peek()) || isUserTypeName(peek()))) return false;
+            if (pos_ + 2 >= (int)tokens_.size()) return false;
+            if (tokens_[pos_ + 1].type != TokenType::kIdentifier) return false;
+            if (tokens_[pos_ + 2].type == TokenType::kLParen) return true;
+            // op= pattern: void op = (
+            return tokens_[pos_ + 1].value == "op"
+                && tokens_[pos_ + 2].type == TokenType::kEquals
+                && pos_ + 3 < (int)tokens_.size()
+                && tokens_[pos_ + 3].type == TokenType::kLParen;
+        };
+        if (isMethodDecl()) {
             slid.methods.push_back(parseMethodDef());
         } else {
             // constructor code
@@ -1025,6 +1034,7 @@ void Parser::parseExternalMethodBlock(Program& program) {
         em.slid_name = slid_name;
         em.return_type = parseTypeName();
         em.method_name = expect(TokenType::kIdentifier, "expected method name").value;
+        if (em.method_name == "op" && peek().type == TokenType::kEquals) { advance(); em.method_name = "op="; }
         expect(TokenType::kLParen, "expected '('");
         while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
             std::string type = parseTypeName();

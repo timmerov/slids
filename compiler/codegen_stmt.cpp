@@ -5,6 +5,24 @@
 #include <stdexcept>
 
 void Codegen::emitStmt(const Stmt& stmt) {
+    // resolve op= overload: slid var → SlidType^ param, otherwise → char[]/ptr param
+    auto resolveOpEq = [&](const std::string& base, const Expr& arg) -> std::string {
+        auto oit = method_overloads_.find(base);
+        if (oit == method_overloads_.end()) return "";
+        if (oit->second.size() == 1) return oit->second[0].first;
+        bool arg_is_slid = false;
+        if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end()) arg_is_slid = slid_info_.count(tit->second) > 0;
+        }
+        for (auto& [m, ptypes] : oit->second) {
+            if (ptypes.size() != 1) continue;
+            if (arg_is_slid  && isRefType(ptypes[0])) return m;
+            if (!arg_is_slid && isPtrType(ptypes[0])) return m;
+        }
+        return oit->second[0].first;
+    };
+
     if (auto* ds = dynamic_cast<const DeleteStmt*>(&stmt)) {
         std::string ptr_val = emitExpr(*ds->operand);
         out_ << "    call void @free(ptr " << ptr_val << ")\n";
@@ -83,6 +101,19 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 out_ << "    call void @" << decl->type << "__ctor(ptr " << reg << ")\n";
             }
 
+            // if initialized with = expr, call op= method
+            if (decl->init) {
+                std::string mangled = resolveOpEq(decl->type + "__op=", *decl->init);
+                if (!mangled.empty()) {
+                    auto& ptypes = func_param_types_[mangled];
+                    std::string param_type = ptypes.empty() ? "" : ptypes[0];
+                    std::string arg_val = emitArgForParam(*decl->init, param_type);
+                    std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
+                    out_ << "    call void @" << llvmGlobalName(mangled)
+                         << "(ptr " << reg << ", " << ptype_str << " " << arg_val << ")\n";
+                }
+            }
+
             // register for dtor call on scope exit
             if (info.has_dtor) {
                 dtor_vars_.push_back({decl->name, decl->type});
@@ -155,6 +186,19 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     out_ << "    call void @" << llvmGlobalName(op_func) << "(" << args << ")\n";
                     return;
                 }
+            }
+        }
+        // check for op= method on slid type
+        if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+            std::string mangled = resolveOpEq(tit->second + "__op=", *assign->value);
+            if (!mangled.empty()) {
+                auto& ptypes = func_param_types_[mangled];
+                std::string param_type = ptypes.empty() ? "" : ptypes[0];
+                std::string arg_val = emitArgForParam(*assign->value, param_type);
+                std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
+                out_ << "    call void @" << llvmGlobalName(mangled)
+                     << "(ptr " << it->second << ", " << ptype_str << " " << arg_val << ")\n";
+                return;
             }
         }
         std::string val = emitExpr(*assign->value);
@@ -345,10 +389,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 arg_str += ", " + ptype + " " + emitExpr(*mcs->args[i]);
             }
             if (ret_type == "void") {
-                out_ << "    call void @" << mangled << "(" << arg_str << ")\n";
+                out_ << "    call void @" << llvmGlobalName(mangled) << "(" << arg_str << ")\n";
             } else {
                 std::string tmp = newTmp();
-                out_ << "    " << tmp << " = call " << ret_type << " @" << mangled
+                out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(mangled)
                      << "(" << arg_str << ")\n";
             }
             return;

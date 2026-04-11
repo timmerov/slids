@@ -22,7 +22,7 @@ SAMPLES = \
 	reverse_bits \
 	string01 string02 string03 string04 string05 \
 	string06 string07 string08 string09 string10 \
-	string11 \
+	string11 string12 \
 	switch
 
 .PHONY: all clean $(SAMPLES)

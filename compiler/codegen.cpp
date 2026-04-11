@@ -330,6 +330,8 @@ void Codegen::collectStringConstants() {
         } else if (auto* mcs = dynamic_cast<const MethodCallStmt*>(&stmt)) {
             for (auto& arg : mcs->args)
                 collectExpr(arg.get(), false);
+        } else if (auto* as = dynamic_cast<const AssignStmt*>(&stmt)) {
+            collectExpr(as->value.get(), false);
         } else if (auto* decl = dynamic_cast<const VarDeclStmt*>(&stmt)) {
             // collect string literals used as initializers (e.g. char[] s = "hello")
             if (decl->init && dynamic_cast<const StringLiteralExpr*>(decl->init.get()))
@@ -765,7 +767,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& full_mangle
     for (auto& [type, name] : params)
         param_str += ", " + llvmType(type) + " %arg_" + name;
 
-    out_ << "define " << ret_type << " @" << full_mangled
+    out_ << "define " << ret_type << " @" << llvmGlobalName(full_mangled)
          << "(" << param_str << ") {\n";
     out_ << "entry:\n";
 
