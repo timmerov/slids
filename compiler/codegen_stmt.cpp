@@ -5,6 +5,49 @@
 #include <stdexcept>
 
 void Codegen::emitStmt(const Stmt& stmt) {
+    // null out the storage location of a source expression after a move
+    auto emitNullOut = [&](const Expr& src) {
+        if (auto* ve = dynamic_cast<const VarExpr*>(&src)) {
+            auto it = locals_.find(ve->name);
+            if (it != locals_.end())
+                out_ << "    store ptr null, ptr " << it->second << "\n";
+        } else if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&src)) {
+            std::string obj_ptr;
+            std::string stype;
+            if (auto* ve2 = dynamic_cast<const VarExpr*>(fa->object.get())) {
+                auto it = locals_.find(ve2->name);
+                auto tit = local_types_.find(ve2->name);
+                if (it != locals_.end()) obj_ptr = it->second;
+                if (tit != local_types_.end()) stype = tit->second;
+            } else if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
+                if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                    auto it = locals_.find(ve2->name);
+                    auto tit = local_types_.find(ve2->name);
+                    if (it != locals_.end()) {
+                        std::string loaded = newTmp();
+                        out_ << "    " << loaded << " = load ptr, ptr " << it->second << "\n";
+                        obj_ptr = loaded;
+                    }
+                    if (tit != local_types_.end()) {
+                        stype = tit->second;
+                        if (!stype.empty() && stype.back() == '^') stype.pop_back();
+                        else if (stype.size() >= 2 && stype.substr(stype.size()-2) == "[]")
+                            stype = stype.substr(0, stype.size()-2);
+                    }
+                }
+            }
+            if (!obj_ptr.empty() && slid_info_.count(stype)) {
+                auto fit = slid_info_[stype].field_index.find(fa->field);
+                if (fit != slid_info_[stype].field_index.end()) {
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr %struct." << stype
+                         << ", ptr " << obj_ptr << ", i32 0, i32 " << fit->second << "\n";
+                    out_ << "    store ptr null, ptr " << gep << "\n";
+                }
+            }
+        }
+    };
+
     // resolve op= overload: slid var → SlidType^ param, otherwise → char[]/ptr param
     auto resolveOpEq = [&](const std::string& base, const Expr& arg) -> std::string {
         auto oit = method_overloads_.find(base);
@@ -181,6 +224,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
         local_types_[decl->name] = decl->type;
         std::string val = emitExpr(*decl->init);
         out_ << "    store " << llvm_t << " " << val << ", ptr " << reg << "\n";
+        // move declaration: null out the source
+        if (decl->is_move && isIndirectType(decl->type))
+            emitNullOut(*decl->init);
         return;
     }
 
@@ -195,8 +241,16 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
                 out_ << "    " << gep << " = getelementptr %struct." << current_slid_
                      << ", ptr " << self << ", i32 0, i32 " << idx << "\n";
+                if (assign->is_move && isIndirectType(info.field_types[idx])) {
+                    // free old field value before stealing
+                    std::string old_val = newTmp();
+                    out_ << "    " << old_val << " = load ptr, ptr " << gep << "\n";
+                    out_ << "    call void @free(ptr " << old_val << ")\n";
+                }
                 std::string val = emitExpr(*assign->value);
                 out_ << "    store " << field_type << " " << val << ", ptr " << gep << "\n";
+                if (assign->is_move && isIndirectType(info.field_types[idx]))
+                    emitNullOut(*assign->value);
                 return;
             }
         }
@@ -253,6 +307,16 @@ void Codegen::emitStmt(const Stmt& stmt) {
                      << "(ptr " << it->second << ", " << ptype_str << " " << arg_val << ")\n";
                 return;
             }
+        }
+        // pointer move: free old value, steal source, null source
+        if (assign->is_move && tit != local_types_.end() && isIndirectType(tit->second)) {
+            std::string old_val = newTmp();
+            out_ << "    " << old_val << " = load ptr, ptr " << it->second << "\n";
+            out_ << "    call void @free(ptr " << old_val << ")\n";
+            std::string src_val = emitExpr(*assign->value);
+            out_ << "    store ptr " << src_val << ", ptr " << it->second << "\n";
+            emitNullOut(*assign->value);
+            return;
         }
         std::string val = emitExpr(*assign->value);
         bool is_ptr = tit != local_types_.end() && isIndirectType(tit->second);

@@ -17,6 +17,7 @@ SAMPLES = \
 	leap_years \
 	math1 math2 \
 	memcpy \
+	move \
 	primes1 \
 	reference1 reference2 reference3 \
 	reverse_bits \

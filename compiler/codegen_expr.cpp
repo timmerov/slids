@@ -539,13 +539,17 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 op_type = lt;
             else {
                 // promote to the wider of the two; treat i8<i16<i32<i64
-                static const std::map<std::string,int> rank = {
-                    {"i8",0},{"i16",1},{"i32",2},{"i64",3}};
-                auto li = rank.find(lt), ri = rank.find(rt);
-                if (li != rank.end() && ri != rank.end())
-                    op_type = (ri->second > li->second) ? rt : lt;
-                else
-                    op_type = "i32"; // fallback for ptr etc.
+                if (lt == "ptr" || rt == "ptr") {
+                    op_type = "ptr";
+                } else {
+                    static const std::map<std::string,int> rank = {
+                        {"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+                    auto li = rank.find(lt), ri = rank.find(rt);
+                    if (li != rank.end() && ri != rank.end())
+                        op_type = (ri->second > li->second) ? rt : lt;
+                    else
+                        op_type = "i32";
+                }
             }
             if (op_type.empty()) op_type = "i32";
         }

@@ -585,6 +585,12 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             return arr;
         }
 
+        if (peek().type == TokenType::kArrowLeft) {
+            advance();
+            auto init = parseExpr();
+            expect(TokenType::kSemicolon, "expected ';'");
+            return std::make_unique<VarDeclStmt>(type, name, std::move(init), std::vector<std::unique_ptr<Expr>>{}, true);
+        }
         expect(TokenType::kEquals, "expected '='");
         auto init = parseExpr();
         expect(TokenType::kSemicolon, "expected ';'");

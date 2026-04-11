@@ -683,6 +683,82 @@ int diff = iter - arr; // distance between two iterators
 
 ---
 
+## Move semantics
+
+The move operator `<-` transfers ownership of a resource from one variable to another. The source is left in a valid, empty state (its pointer is set to `nullptr`). This avoids copying and makes ownership transfer explicit in the code.
+
+### Pointer and iterator move
+
+`p1 <- p2` — move a pointer or iterator:
+
+1. Free `p1`'s current allocation (if any)
+2. Assign `p2`'s value to `p1`
+3. Set `p2` to `nullptr`
+
+```
+char[] p1 = new char[100];
+char[] p2 <- p1;     // p1 is now nullptr; p2 owns the allocation
+
+// declaration move — p1 is a new variable, no old allocation to free
+char[] p3 <- p2;     // p2 is now nullptr; p3 owns the allocation
+
+delete p3;           // free — p3 is set to nullptr automatically
+```
+
+Also works as an assignment into an existing variable:
+```
+char[] buf = new char[64];
+char[] tmp = new char[32];
+buf <- tmp;    // free buf's 64-byte allocation, steal tmp's 32 bytes, tmp = nullptr
+delete buf;
+```
+
+### Class move — `op<-`
+
+For class types, `<-` calls a user-defined `op<-` method. The method is responsible for freeing the destination's existing resources, taking ownership of the source's resources, and leaving the source in a valid empty state.
+
+**Declaring `op<-` in the class:**
+```
+String(int size_ = 0, int capacity_ = 0, char[] storage_ = nullptr) {
+    void op<-(String^ s);
+    // ...
+}
+```
+
+**Implementing `op<-`:**
+```
+String {
+    void op<-(String^ s) {
+        delete storage_;            // free existing storage
+        size_     = s^.size_;
+        capacity_ = s^.capacity_;
+        storage_  = s^.storage_;   // steal the pointer
+        s^.size_     = 0;
+        s^.capacity_ = 0;
+        s^.storage_  = nullptr;    // leave source valid (do NOT delete — we own it now)
+    }
+}
+```
+
+**Using `op<-`:**
+```
+String s1 = "Hello, World!";
+
+String s2 <- s1;     // s2 owns the string data; s1 is now empty
+
+// or as an assignment into an existing variable
+String s3;
+s3 <- s1;            // calls s3.op<-(^s1)
+```
+
+Move rules:
+- For pointer/iterator types, `<-` is built into the language — no method needed
+- For class types, `<-` compiles only if `op<-` is defined; if it is not defined, `<-` is a compiler error
+- After a move, the source is left in a valid state — it can be reassigned or destroyed safely
+- `delete` and `op<-` are the two ways to release ownership; `delete` frees and nulls, `<-` transfers without freeing
+
+---
+
 ## Enums
 
 **Plain:**
