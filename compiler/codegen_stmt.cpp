@@ -250,10 +250,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
         locals_[decl->name] = reg;
         local_types_[decl->name] = decl->type;
         std::string val = emitExpr(*decl->init);
-        // coerce integer widths if necessary (sext or trunc)
+        // coerce integer or float widths if necessary
         if (!isIndirectType(decl->type)) {
-            static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
             std::string src_t = exprLlvmType(*decl->init);
+            // integer width coercion (sext or trunc)
+            static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
             auto sit = rank.find(src_t), dit = rank.find(llvm_t);
             if (sit != rank.end() && dit != rank.end() && sit->second != dit->second) {
                 std::string coerced = newTmp();
@@ -261,6 +262,17 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     out_ << "    " << coerced << " = sext " << src_t << " " << val << " to " << llvm_t << "\n";
                 else
                     out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << llvm_t << "\n";
+                val = coerced;
+            }
+            // float width coercion (fpext or fptrunc)
+            static const std::map<std::string,int> frank = {{"float",0},{"double",1}};
+            auto sf = frank.find(src_t), df = frank.find(llvm_t);
+            if (sf != frank.end() && df != frank.end() && sf->second != df->second) {
+                std::string coerced = newTmp();
+                if (df->second > sf->second)
+                    out_ << "    " << coerced << " = fpext " << src_t << " " << val << " to " << llvm_t << "\n";
+                else
+                    out_ << "    " << coerced << " = fptrunc " << src_t << " " << val << " to " << llvm_t << "\n";
                 val = coerced;
             }
         }
@@ -1027,6 +1039,26 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 (segments.size() == 1 && !dynamic_cast<const StringLiteralExpr*>(segments[0]));
 
             if (!is_concat && segments.size() == 1) {
+                // single float/double expr
+                {
+                    std::string val_type_check = exprLlvmType(*segments[0]);
+                    if (val_type_check == "float" || val_type_check == "double") {
+                        std::string val = emitExpr(*segments[0]);
+                        // printf varargs promote float to double
+                        if (val_type_check == "float") {
+                            std::string ext = newTmp();
+                            out_ << "    " << ext << " = fpext float " << val << " to double\n";
+                            val = ext;
+                        }
+                        std::string fmt = newTmp();
+                        std::string fmt_name = newline ? "@.fmt_double" : "@.fmt_double_nonl";
+                        int fmt_size = newline ? 5 : 4;
+                        out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr "
+                             << fmt_name << ", i32 0, i32 0\n";
+                        out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", double " << val << ")\n";
+                        return;
+                    }
+                }
                 // single string literal
                 if (auto* s = dynamic_cast<const StringLiteralExpr*>(segments[0])) {
                     std::string label = "@.str" + std::to_string(str_counter_++);
@@ -1086,6 +1118,21 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 } else {
                     std::string val = emitExpr(*segments[si]);
                     std::string val_type = exprLlvmType(*segments[si]);
+                    // float/double segment — printf varargs promote float to double
+                    if (val_type == "float" || val_type == "double") {
+                        if (val_type == "float") {
+                            std::string ext = newTmp();
+                            out_ << "    " << ext << " = fpext float " << val << " to double\n";
+                            val = ext;
+                        }
+                        std::string fmt = newTmp();
+                        int fmt_size = (last && newline) ? 5 : 4;
+                        std::string fmt_name = (last && newline) ? "@.fmt_double" : "@.fmt_double_nonl";
+                        out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr "
+                             << fmt_name << ", i32 0, i32 0\n";
+                        out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", double " << val << ")\n";
+                        continue;
+                    }
                     if (val_type != "i32" && val_type != "i64") {
                         std::string ext = newTmp();
                         out_ << "    " << ext << " = zext " << val_type << " " << val << " to i32\n";

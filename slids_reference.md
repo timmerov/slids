@@ -176,6 +176,71 @@ Summary table:
 
 ---
 
+## Type casting
+
+### Numeric casting — `type(expr)`
+
+Converts a value to a different numeric type. The value is converted, not the bits.
+
+```
+int8    b = int8(some_int32);     // narrowing — truncates to low 8 bits
+int64   x = int64(some_int32);   // widening
+float32 f = float32(some_int32); // integer → float
+int32   i = int32(some_float32); // float → integer, truncates toward zero
+uint32  u = uint32(some_int32);  // change signedness — same bit pattern
+```
+
+Integer promotion (widening of the smaller operand in binary expressions) happens automatically — explicit numeric casts are only needed to narrow or to convert between floats and integers.
+
+### Pointer reinterpretation — `<Type^> expr`
+
+Reinterprets a pointer as a pointer to a different type. The address is unchanged; only the type changes. Also applies to iterator types (`<Type[]> expr`).
+
+```
+int8[]     buf = new int8[100];
+ThisClass^ p   = <ThisClass^> buf;
+```
+
+Valid reinterpretations:
+
+| From | To | Reason |
+|---|---|---|
+| any pointer | `void^` / `int8^` / `uint8^` | byte/opaque pointer |
+| `void^` / `int8^` / `uint8^` | any pointer | byte/opaque pointer |
+| `T^` | `T^` (same type) | no-op |
+| `int N ^` | `uint N ^` (same bit width) | sign reinterpretation |
+| any pointer | `intptr` | pointer as integer |
+| `intptr` | any pointer | integer as pointer |
+
+Any other reinterpretation is a compiler error.
+
+**`void^` is cast implicitly.** Assigning a `void^` to any other pointer type, or any pointer type to `void^`, requires no explicit cast:
+
+```
+void^      raw = some_ptr;    // implicit — any pointer → void^
+MyStruct^  obj = raw;         // implicit — void^ → any pointer
+```
+
+**`nullptr` is of type `void^`** and therefore assignable to any pointer type via the same implicit rule:
+
+```
+MyStruct^ p = nullptr;        // valid — nullptr is void^, auto-cast to MyStruct^
+```
+
+**Reinterpreting float bits as an integer** requires two explicit casts through `void^`, which makes the operation visually prominent:
+
+```
+float32 f    = 3.14;
+int32   bits = (<int32^> <void^> ^f)^;
+//              step 2    step 1         dereference
+// step 1: float32^ → void^   (valid — any pointer to void^)
+// step 2: void^    → int32^  (valid — void^ to any pointer)
+```
+
+Direct `float32^` → `int32^` without `void^` as the intermediate is a compiler error.
+
+---
+
 ## Variables
 
 > **TODO:** Needs review — strong type inference will be added after the rest of the syntax is locked in.

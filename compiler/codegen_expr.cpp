@@ -199,6 +199,13 @@ std::string Codegen::emitExpr(const Expr& expr) {
         } else {
             // general case: evaluate operand as expression to get a ptr
             ptr_reg = emitExpr(*de->operand);
+            // derive pointee type from cast target if available
+            if (auto* pc = dynamic_cast<const PtrCastExpr*>(de->operand.get())) {
+                std::string t = pc->target_type;
+                if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
+                else if (!t.empty() && t.back() == '^') t.pop_back();
+                pointee_llvm = llvmType(t);
+            }
         }
 
         std::string tmp = newTmp();
@@ -711,6 +718,85 @@ std::string Codegen::emitExpr(const Expr& expr) {
         return tmp;
     }
 
+    // float literal — emit as double constant
+    if (auto* fl = dynamic_cast<const FloatLiteralExpr*>(&expr)) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.17g", fl->value);
+        std::string s = buf;
+        // LLVM IR requires a decimal point in float constants
+        if (s.find('.') == std::string::npos && s.find('e') == std::string::npos)
+            s += ".0";
+        return s;
+    }
+
+    // numeric cast: type(expr)
+    if (auto* nc = dynamic_cast<const NumericCastExpr*>(&expr)) {
+        std::string src_val  = emitExpr(*nc->operand);
+        std::string src_type = exprLlvmType(*nc->operand);
+        std::string dst_type = llvmType(nc->target_type);
+        if (src_type == dst_type) return src_val;
+
+        bool src_is_float = (src_type == "float" || src_type == "double");
+        bool dst_is_float = (dst_type == "float" || dst_type == "double");
+        static const std::set<std::string> utypes_nc = {"uint","uint8","uint16","uint32","uint64"};
+        bool dst_is_unsigned = utypes_nc.count(nc->target_type) > 0;
+
+        std::string tmp = newTmp();
+        if (!src_is_float && !dst_is_float) {
+            // int → int
+            static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+            auto si = rank.find(src_type), di = rank.find(dst_type);
+            if (si != rank.end() && di != rank.end() && si->second != di->second) {
+                if (di->second > si->second)
+                    out_ << "    " << tmp << " = " << (isUnsignedExpr(*nc->operand) ? "zext" : "sext")
+                         << " " << src_type << " " << src_val << " to " << dst_type << "\n";
+                else
+                    out_ << "    " << tmp << " = trunc " << src_type << " " << src_val << " to " << dst_type << "\n";
+            } else {
+                return src_val; // same width (sign reinterpretation) — no instruction needed
+            }
+        } else if (src_is_float && !dst_is_float) {
+            // float → int
+            out_ << "    " << tmp << " = " << (dst_is_unsigned ? "fptoui" : "fptosi")
+                 << " " << src_type << " " << src_val << " to " << dst_type << "\n";
+        } else if (!src_is_float && dst_is_float) {
+            // int → float
+            out_ << "    " << tmp << " = " << (isUnsignedExpr(*nc->operand) ? "uitofp" : "sitofp")
+                 << " " << src_type << " " << src_val << " to " << dst_type << "\n";
+        } else {
+            // float → float
+            static const std::map<std::string,int> frank = {{"float",0},{"double",1}};
+            auto si = frank.find(src_type), di = frank.find(dst_type);
+            if (si != frank.end() && di != frank.end()) {
+                if (di->second > si->second)
+                    out_ << "    " << tmp << " = fpext " << src_type << " " << src_val << " to " << dst_type << "\n";
+                else
+                    out_ << "    " << tmp << " = fptrunc " << src_type << " " << src_val << " to " << dst_type << "\n";
+            } else {
+                return src_val;
+            }
+        }
+        return tmp;
+    }
+
+    // pointer reinterpret cast: <Type^> expr
+    if (auto* pc = dynamic_cast<const PtrCastExpr*>(&expr)) {
+        std::string src_val  = emitExpr(*pc->operand);
+        std::string src_type = exprLlvmType(*pc->operand);
+        std::string dst_type = llvmType(pc->target_type);
+        if (src_type == dst_type) return src_val;
+        std::string tmp = newTmp();
+        if (src_type == "ptr" && dst_type == "i64") {
+            out_ << "    " << tmp << " = ptrtoint ptr " << src_val << " to i64\n";
+        } else if (src_type == "i64" && dst_type == "ptr") {
+            out_ << "    " << tmp << " = inttoptr i64 " << src_val << " to ptr\n";
+        } else {
+            // ptr → ptr: all pointers are opaque in LLVM — no instruction needed
+            return src_val;
+        }
+        return tmp;
+    }
+
     throw std::runtime_error("unsupported expression type");
 }
 
@@ -912,6 +998,17 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
         if (rit != func_return_types_.end()) return llvmType(rit->second);
         return "i32";
     }
+
+    // float literal — always double internally
+    if (dynamic_cast<const FloatLiteralExpr*>(&expr)) return "double";
+
+    // numeric cast — result is the target type
+    if (auto* nc = dynamic_cast<const NumericCastExpr*>(&expr))
+        return llvmType(nc->target_type);
+
+    // pointer reinterpret cast — result is the target type
+    if (auto* pc = dynamic_cast<const PtrCastExpr*>(&expr))
+        return llvmType(pc->target_type);
 
     return "i32";
 }

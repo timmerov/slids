@@ -4,6 +4,7 @@
 enum class TokenType {
     // literals
     kIntLiteral,
+    kFloatLiteral,
     kStringLiteral,
 
     // identifiers and keywords
@@ -19,6 +20,7 @@ enum class TokenType {
     kUint32,
     kUint64,
     kChar,
+    kIntptr,
     kFloat32,
     kFloat64,
     kBool,

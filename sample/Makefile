@@ -10,6 +10,7 @@ BUILD_DIR = ../build/sample
 SAMPLES = \
 	biz_buzz \
 	bug1 bug2 bug3 \
+	cast \
 	chess1 chess2 chess3 \
 	counter1 counter2 \
 	function1 \

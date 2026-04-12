@@ -27,6 +27,7 @@ bool Parser::isTypeName(const Token& t) {
         case TokenType::kInt32: case TokenType::kInt64:
         case TokenType::kUint: case TokenType::kUint8: case TokenType::kUint16:
         case TokenType::kUint32: case TokenType::kUint64: case TokenType::kChar:
+        case TokenType::kIntptr:
         case TokenType::kFloat32: case TokenType::kFloat64:
         case TokenType::kBool: case TokenType::kVoid:
             return true;
@@ -73,6 +74,19 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     if (t.type == TokenType::kIntLiteral) {
         advance();
         return std::make_unique<IntLiteralExpr>(static_cast<int>(std::stoll(t.value)));
+    }
+    if (t.type == TokenType::kFloatLiteral) {
+        advance();
+        return std::make_unique<FloatLiteralExpr>(std::stod(t.value));
+    }
+    // numeric cast: primitive_type(expr)
+    if (isTypeName(t) && pos_ + 1 < (int)tokens_.size()
+        && tokens_[pos_ + 1].type == TokenType::kLParen) {
+        std::string type_name = advance().value; // consume type keyword
+        advance(); // consume '('
+        auto operand = parseExpr();
+        expect(TokenType::kRParen, "expected ')'");
+        return std::make_unique<NumericCastExpr>(type_name, std::move(operand));
     }
     if (t.type == TokenType::kStringLiteral) {
         advance();
@@ -187,6 +201,22 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
 }
 
 std::unique_ptr<Expr> Parser::parseUnary() {
+    // pointer reinterpret cast: <Type^> expr  or  <Type[]> expr  or  <intptr> expr
+    if (peek().type == TokenType::kLt) {
+        int saved = pos_;
+        advance(); // tentatively consume <
+        if (isTypeName(peek()) || isUserTypeName(peek())) {
+            try {
+                std::string target = parseTypeName(); // consumes type + optional ^/[]
+                if (peek().type == TokenType::kGt) {
+                    advance(); // consume >
+                    auto operand = parseUnary();
+                    return std::make_unique<PtrCastExpr>(target, std::move(operand));
+                }
+            } catch (...) {}
+        }
+        pos_ = saved; // not a cast — restore for comparison operator
+    }
     if (peek().type == TokenType::kMinus) {
         advance();
         return std::make_unique<BinaryExpr>("-",

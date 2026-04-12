@@ -19,6 +19,13 @@ std::string Codegen::llvmType(const std::string& t) {
     if (t == "int16") return "i16";
     if (t == "int8")  return "i8";
     if (t == "uint8" || t == "char") return "i8";
+    if (t == "uint")   return "i32";
+    if (t == "uint16") return "i16";
+    if (t == "uint32") return "i32";
+    if (t == "uint64") return "i64";
+    if (t == "intptr") return "i64";
+    if (t == "float32") return "float";
+    if (t == "float64") return "double";
     if (t == "void")  return "void";
     // reference (^) and pointer ([]) both lower to ptr in LLVM IR
     if (!t.empty() && t.back() == '^') return "ptr";
@@ -460,6 +467,8 @@ void Codegen::emit() {
     out_ << "@.fmt_str_nonl = private constant [3 x i8] c\"%s\\00\"\n";
     out_ << "@.fmt_slice    = private constant [6 x i8] c\"%.*s\\0A\\00\"\n";
     out_ << "@.fmt_slice_nonl = private constant [5 x i8] c\"%.*s\\00\"\n";
+    out_ << "@.fmt_double    = private constant [5 x i8] c\"%lf\\0A\\00\"\n";
+    out_ << "@.fmt_double_nonl = private constant [4 x i8] c\"%lf\\00\"\n";
     out_ << "@.str_newline = private constant [2 x i8] c\"\\0A\\00\"\n\n";
 
     str_counter_ = 0;
@@ -775,6 +784,12 @@ bool Codegen::isUnsignedExpr(const Expr& expr) {
             if (fit != info.field_index.end())
                 return utypes.count(info.field_types[fit->second]) > 0;
         }
+    }
+
+    // numeric cast to an unsigned type
+    if (auto* nc = dynamic_cast<const NumericCastExpr*>(&expr)) {
+        static const std::set<std::string> utypes_nc = {"uint","uint8","uint16","uint32","uint64"};
+        return utypes_nc.count(nc->target_type) > 0;
     }
 
     // binary arithmetic result: unsigned if either operand is unsigned

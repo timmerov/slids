@@ -106,6 +106,28 @@ struct AddrOfExpr : Expr {
 // nullptr literal — null pointer constant
 struct NullptrExpr : Expr {};
 
+// float literal — always double precision internally
+struct FloatLiteralExpr : Expr {
+    double value;
+    FloatLiteralExpr(double v) : value(v) {}
+};
+
+// numeric cast: type(expr) — converts value; int↔int, int↔float, float↔float
+struct NumericCastExpr : Expr {
+    std::string target_type;
+    std::unique_ptr<Expr> operand;
+    NumericCastExpr(std::string t, std::unique_ptr<Expr> op)
+        : target_type(std::move(t)), operand(std::move(op)) {}
+};
+
+// pointer reinterpret cast: <Type^> expr or <Type[]> expr or <intptr> expr
+struct PtrCastExpr : Expr {
+    std::string target_type;
+    std::unique_ptr<Expr> operand;
+    PtrCastExpr(std::string t, std::unique_ptr<Expr> op)
+        : target_type(std::move(t)), operand(std::move(op)) {}
+};
+
 // tuple literal: (expr, expr, ...) — used in return statements
 struct TupleExpr : Expr {
     std::vector<std::unique_ptr<Expr>> values;

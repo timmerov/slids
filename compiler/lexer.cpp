@@ -113,6 +113,15 @@ Token Lexer::readNumber() {
         value += advance();
     std::string clean;
     for (char c : value) if (c != '_') clean += c;
+    // float literal: digits followed by '.' (but not '..' range operator)
+    if (peek() == '.' && peek2() != '.') {
+        clean += advance(); // consume '.'
+        while (pos_ < (int)source_.size() && (isdigit(peek()) || peek() == '_')) {
+            char ch = advance();
+            if (ch != '_') clean += ch;
+        }
+        return Token(TokenType::kFloatLiteral, clean, line_);
+    }
     return Token(TokenType::kIntLiteral, clean, line_);
 }
 
@@ -132,6 +141,7 @@ Token Lexer::readIdentifierOrKeyword() {
     if (value == "uint32")   return Token(TokenType::kUint32,   value, line_);
     if (value == "uint64")   return Token(TokenType::kUint64,   value, line_);
     if (value == "char")     return Token(TokenType::kChar,     value, line_);
+    if (value == "intptr")   return Token(TokenType::kIntptr,   value, line_);
     if (value == "float32")  return Token(TokenType::kFloat32,  value, line_);
     if (value == "float64")  return Token(TokenType::kFloat64,  value, line_);
     if (value == "bool")     return Token(TokenType::kBool,     value, line_);
