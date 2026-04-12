@@ -176,7 +176,6 @@ String {
         }
         int digit_start = size_;
         while (u) {
-            println(u);
             int r = u % 10;
             append('0' + r);
             u /= 10;

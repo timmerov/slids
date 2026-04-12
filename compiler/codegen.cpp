@@ -2,6 +2,7 @@
 #include <sstream>
 #include <functional>
 #include <stdexcept>
+#include <set>
 #include "codegen_helpers.h"
 
 Codegen::Codegen(const Program& program, std::ostream& out)
@@ -733,6 +734,21 @@ bool Codegen::isPointerExpr(const Expr& expr) {
             if (fit != info.field_index.end())
                 return isIndirectType(info.field_types[fit->second]);
         }
+    }
+    return false;
+}
+
+bool Codegen::isUnsignedExpr(const Expr& expr) {
+    static const std::set<std::string> utypes = {"uint","uint8","uint16","uint32","uint64"};
+    if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
+        if (!current_slid_.empty()) {
+            auto& info = slid_info_[current_slid_];
+            auto fit = info.field_index.find(ve->name);
+            if (fit != info.field_index.end())
+                return utypes.count(info.field_types[fit->second]) > 0;
+        }
+        auto tit = local_types_.find(ve->name);
+        if (tit != local_types_.end()) return utypes.count(tit->second) > 0;
     }
     return false;
 }

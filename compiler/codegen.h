@@ -116,6 +116,7 @@ private:
     std::string resolveOverloadForCall(const std::string& base_mangled,
                                        const std::vector<std::unique_ptr<Expr>>& args);
     bool isPointerExpr(const Expr& expr);
+    bool isUnsignedExpr(const Expr& expr);
     std::string resolveOperatorOverload(const std::string& op,
                                         const Expr& left, const Expr& right);
     std::string emitArgForParam(const Expr& arg, const std::string& param_type);

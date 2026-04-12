@@ -634,25 +634,26 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string right = emitExpr(*b->right);
         std::string tmp   = newTmp();
 
+        bool unsig = isUnsignedExpr(*b->left) || isUnsignedExpr(*b->right);
         if      (b->op == "+")  { out_ << "    " << tmp << " = add "  << op_type << " " << left << ", " << right << "\n"; return tmp; }
         else if (b->op == "-")  { out_ << "    " << tmp << " = sub "  << op_type << " " << left << ", " << right << "\n"; return tmp; }
         else if (b->op == "*")  { out_ << "    " << tmp << " = mul "  << op_type << " " << left << ", " << right << "\n"; return tmp; }
-        else if (b->op == "/")  { out_ << "    " << tmp << " = sdiv " << op_type << " " << left << ", " << right << "\n"; return tmp; }
-        else if (b->op == "%")  { out_ << "    " << tmp << " = srem " << op_type << " " << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == "/")  { out_ << "    " << tmp << " = " << (unsig ? "udiv" : "sdiv") << " " << op_type << " " << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == "%")  { out_ << "    " << tmp << " = " << (unsig ? "urem" : "srem") << " " << op_type << " " << left << ", " << right << "\n"; return tmp; }
         else if (b->op == "&")  { out_ << "    " << tmp << " = and "  << op_type << " " << left << ", " << right << "\n"; return tmp; }
         else if (b->op == "|")  { out_ << "    " << tmp << " = or "   << op_type << " " << left << ", " << right << "\n"; return tmp; }
         else if (b->op == "^")  { out_ << "    " << tmp << " = xor "  << op_type << " " << left << ", " << right << "\n"; return tmp; }
         else if (b->op == "<<") { out_ << "    " << tmp << " = shl "  << op_type << " " << left << ", " << right << "\n"; return tmp; }
-        else if (b->op == ">>") { out_ << "    " << tmp << " = ashr " << op_type << " " << left << ", " << right << "\n"; return tmp; }
+        else if (b->op == ">>") { out_ << "    " << tmp << " = " << (unsig ? "lshr" : "ashr") << " " << op_type << " " << left << ", " << right << "\n"; return tmp; }
 
         std::string cmp = newTmp();
         std::string pred;
         if      (b->op == "==") pred = "eq";
         else if (b->op == "!=") pred = "ne";
-        else if (b->op == "<")  pred = "slt";
-        else if (b->op == ">")  pred = "sgt";
-        else if (b->op == "<=") pred = "sle";
-        else if (b->op == ">=") pred = "sge";
+        else if (b->op == "<")  pred = unsig ? "ult" : "slt";
+        else if (b->op == ">")  pred = unsig ? "ugt" : "sgt";
+        else if (b->op == "<=") pred = unsig ? "ule" : "sle";
+        else if (b->op == ">=") pred = unsig ? "uge" : "sge";
         else throw std::runtime_error("unknown operator: " + b->op);
 
         out_ << "    " << cmp << " = icmp " << pred << " " << op_type << " " << left << ", " << right << "\n";
