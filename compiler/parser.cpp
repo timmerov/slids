@@ -1204,6 +1204,10 @@ Program Parser::parse() {
                 if (!fn.body)
                     program.functions.push_back(std::move(fn));
             }
+            // import slid type declarations (needed for struct layout in codegen)
+            for (auto& slid : hdr.slids) {
+                program.slids.push_back(std::move(slid));
+            }
         }
         // enum definition
         else if (peek().type == TokenType::kEnum) {

@@ -4,10 +4,10 @@ use the declared fuction.
 link with the compiled implementation.
 */
 
-import string
+import string;
 
 int32 main() {
     String s1 = "Hello, World!";
-    sl.println();
+    s1.println();
     return 0;
 }

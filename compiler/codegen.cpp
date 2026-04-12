@@ -44,8 +44,15 @@ void Codegen::collectFunctionSignatures() {
     };
 
     // detect which free function names have multiple definitions (overloads)
+    // forward declarations imported from headers don't count toward the overload
+    // total when a bodied definition exists in the same file — otherwise the
+    // implementation file's own functions would get spurious mangled names.
+    std::set<std::string> names_with_body;
+    for (auto& fn : program_.functions)
+        if (fn.body) names_with_body.insert(fn.name);
     std::map<std::string, int> func_name_count;
-    for (auto& fn : program_.functions) func_name_count[fn.name]++;
+    for (auto& fn : program_.functions)
+        if (fn.body || !names_with_body.count(fn.name)) func_name_count[fn.name]++;
 
     // helper: mangling suffix for a single type (duplicated here for use before typeToken lambda)
     auto typeToken2 = [](const std::string& t) -> std::string {
@@ -127,7 +134,6 @@ void Codegen::collectFunctionSignatures() {
         struct Entry { std::string ret; std::vector<std::pair<std::string,std::string>> params; };
         std::map<std::string, std::vector<Entry>> by_name;
         for (auto& m : slid.methods) {
-            if (!m.body) continue; // forward decl
             by_name[m.name].push_back({m.return_type, m.params});
         }
         for (auto& em : program_.external_methods) {
@@ -464,17 +470,80 @@ void Codegen::emit() {
     for (auto& fn : program_.functions)
         if (fn.body) has_body.insert(fn.name);
 
+    std::set<std::string> declared_fns;
     for (auto& fn : program_.functions) {
         if (fn.body) continue;
         if (has_body.count(fn.name)) continue; // defined locally — no declare needed
-        std::string ret = fn.return_type.empty() ? "void" : llvmType(fn.return_type);
-        out_ << "declare " << ret << " @" << fn.name << "(";
-        for (int i = 0; i < (int)fn.params.size(); i++) {
-            if (i > 0) out_ << ", ";
-            out_ << llvmType(fn.params[i].first);
+
+        // use the mangled name from free_func_overloads_ for correct quoting and overload suffix
+        auto foit = free_func_overloads_.find(fn.name);
+        if (foit == free_func_overloads_.end()) continue;
+        for (auto& [mangled, ptypes] : foit->second) {
+            if (!declared_fns.insert(mangled).second) continue; // already emitted
+            std::string ret_type_str = func_return_types_[mangled];
+            bool is_sret = !ret_type_str.empty() && slid_info_.count(ret_type_str);
+            std::string ret = (is_sret || ret_type_str.empty()) ? "void" : llvmType(ret_type_str);
+            out_ << "declare " << ret << " @" << llvmGlobalName(mangled) << "(";
+            bool first = true;
+            if (is_sret) {
+                out_ << "ptr sret(%struct." << ret_type_str << ")";
+                first = false;
+            }
+            for (auto& pt : ptypes) {
+                if (!first) out_ << ", ";
+                out_ << llvmType(pt);
+                first = false;
+            }
+            out_ << ")\n";
         }
-        out_ << ")\n";
     }
+    // emit declares for slid methods defined in other translation units
+    // build set of locally-implemented method mangled names
+    std::set<std::string> local_methods;
+    for (auto& slid : program_.slids) {
+        // inline ctor/dtor bodies count as locally defined
+        if (slid.explicit_ctor_body) local_methods.insert(slid.name + "__ctor");
+        if (slid.dtor_body)          local_methods.insert(slid.name + "__dtor");
+        for (auto& m : slid.methods) {
+            if (!m.body) continue;
+            std::string base = slid.name + "__" + m.name;
+            auto oit = method_overloads_.find(base);
+            if (oit != method_overloads_.end())
+                for (auto& [mn, _] : oit->second) local_methods.insert(mn);
+        }
+    }
+    for (auto& em : program_.external_methods) {
+        if (!em.body) continue;
+        std::string base = em.slid_name + "__" + em.method_name;
+        auto oit = method_overloads_.find(base);
+        if (oit != method_overloads_.end())
+            for (auto& [mn, _] : oit->second) local_methods.insert(mn);
+        // also include ctor/dtor
+        if (em.method_name == "_") local_methods.insert(em.slid_name + "__ctor");
+        if (em.method_name == "~") local_methods.insert(em.slid_name + "__dtor");
+    }
+    for (auto& slid : program_.slids) {
+        // ctor/dtor — declare if not locally defined
+        auto& info = slid_info_[slid.name];
+        if (info.has_explicit_ctor && !local_methods.count(slid.name + "__ctor"))
+            out_ << "declare void @" << slid.name << "__ctor(ptr)\n";
+        if (info.has_dtor && !local_methods.count(slid.name + "__dtor"))
+            out_ << "declare void @" << slid.name << "__dtor(ptr)\n";
+        // regular methods: first arg is always ptr (self)
+        for (auto& [base, overloads] : method_overloads_) {
+            if (base.substr(0, slid.name.size() + 2) != slid.name + "__") continue;
+            for (auto& [mangled, ptypes] : overloads) {
+                if (local_methods.count(mangled)) continue;
+                if (!declared_fns.insert(mangled).second) continue;
+                std::string ret_type_str = func_return_types_[mangled];
+                std::string ret = ret_type_str.empty() ? "void" : llvmType(ret_type_str);
+                out_ << "declare " << ret << " @" << llvmGlobalName(mangled) << "(ptr";
+                for (auto& pt : ptypes) out_ << ", " << llvmType(pt);
+                out_ << ")\n";
+            }
+        }
+    }
+
     out_ << "\n";
     out_ << "@.fmt_int    = private constant [4 x i8] c\"%d\\0A\\00\"\n";
     out_ << "@.fmt_int_nonl = private constant [3 x i8] c\"%d\\00\"\n";

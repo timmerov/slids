@@ -1207,10 +1207,21 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
 
         // regular top-level function call as statement
+        // resolve overloaded free functions by argument count when plain name isn't registered
+        std::string resolved_callee = call->callee;
         auto fit = func_return_types_.find(call->callee);
+        if (fit == func_return_types_.end()) {
+            auto foit = free_func_overloads_.find(call->callee);
+            if (foit != free_func_overloads_.end()) {
+                for (auto& [mn, ptypes] : foit->second) {
+                    if (ptypes.size() == call->args.size()) { resolved_callee = mn; break; }
+                }
+                fit = func_return_types_.find(resolved_callee);
+            }
+        }
         if (fit != func_return_types_.end()) {
             std::string ret_type = llvmType(fit->second);
-            auto& rptypes = func_param_types_[call->callee];
+            auto& rptypes = func_param_types_[resolved_callee];
             std::string arg_str;
             for (int i = 0; i < (int)call->args.size(); i++) {
                 if (i > 0) arg_str += ", ";
@@ -1219,10 +1230,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
             }
             if (ret_type == "void") {
-                out_ << "    call void @" << call->callee << "(" << arg_str << ")\n";
+                out_ << "    call void @" << resolved_callee << "(" << arg_str << ")\n";
             } else {
                 std::string tmp = newTmp();
-                out_ << "    " << tmp << " = call " << ret_type << " @" << call->callee
+                out_ << "    " << tmp << " = call " << ret_type << " @" << resolved_callee
                      << "(" << arg_str << ")\n";
             }
             return;

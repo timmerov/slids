@@ -1,5 +1,11 @@
 /*
 String class implementation.
+
+also included are hellper functions for:
+concatenating strings,
+length of a null terminated string,
+copying null terminated strings,
+copying null terminated strings limited by length.
 */
 
 import string;
@@ -23,7 +29,7 @@ String {
 
     /* assignment from null terminated string. */
     void op=(char[] str) {
-        int len = strlen(s);
+        int len = strlen(str);
         set(str, len);
     }
 
@@ -107,7 +113,7 @@ String {
     void set(char[] arr, int sz) {
         reserve(sz);
         size_ = sz;
-        copy_chars(storage_, arr, sz);
+        strcpy(storage_, arr, sz);
     }
 
     /* append an array of characters. */
@@ -190,7 +196,7 @@ void strcpy(
     int count
 ) {
     while (count > 0) {
-        char ch = dst++^;
+        char ch = src++^;
         dst++^ = ch;
         if (ch == 0) {
             break;
