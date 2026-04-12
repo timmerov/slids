@@ -35,17 +35,42 @@ void Codegen::collectFunctionSignatures() {
         return s + " }";
     };
 
+    // detect which free function names have multiple definitions (overloads)
+    std::map<std::string, int> func_name_count;
+    for (auto& fn : program_.functions) func_name_count[fn.name]++;
+
+    // helper: mangling suffix for a single type (duplicated here for use before typeToken lambda)
+    auto typeToken2 = [](const std::string& t) -> std::string {
+        if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
+            return t.substr(0, t.size()-2) + "s";
+        if (!t.empty() && t.back() == '^')
+            return t.substr(0, t.size()-1) + "r";
+        return t;
+    };
+
     for (auto& fn : program_.functions) {
-        if (!fn.tuple_return_fields.empty()) {
-            std::string st = buildTupleType(fn.tuple_return_fields);
-            func_return_types_[fn.name] = st;
-            func_tuple_fields_[fn.name] = fn.tuple_return_fields;
-        } else {
-            func_return_types_[fn.name] = fn.return_type;
-        }
+        bool overloaded = (func_name_count[fn.name] > 1);
         std::vector<std::string> ptypes;
         for (auto& [t, n] : fn.params) ptypes.push_back(t);
-        func_param_types_[fn.name] = ptypes;
+
+        // compute mangled name (append param type tokens when overloaded)
+        std::string mangled = fn.name;
+        if (overloaded) {
+            for (auto& t : ptypes) mangled += "__" + typeToken2(t);
+        }
+        free_func_overloads_[fn.name].push_back({mangled, ptypes});
+
+        if (!fn.tuple_return_fields.empty()) {
+            std::string st = buildTupleType(fn.tuple_return_fields);
+            func_return_types_[mangled] = st;
+            func_tuple_fields_[mangled] = fn.tuple_return_fields;
+            if (!overloaded) { func_return_types_[fn.name] = st; func_tuple_fields_[fn.name] = fn.tuple_return_fields; }
+        } else {
+            func_return_types_[mangled] = fn.return_type;
+            if (!overloaded) func_return_types_[fn.name] = fn.return_type;
+        }
+        func_param_types_[mangled] = ptypes;
+        if (!overloaded) func_param_types_[fn.name] = ptypes;
 
         if (!fn.body) continue; // forward declaration
 
@@ -715,54 +740,132 @@ std::string Codegen::exprSlidType(const Expr& expr) {
         if (tit != local_types_.end() && slid_info_.count(tit->second))
             return tit->second;
     }
+    // DerefExpr: sa^ where sa: SlidType^ — produces SlidType
+    if (auto* de = dynamic_cast<const DerefExpr*>(&expr)) {
+        if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end()) {
+                std::string t = tit->second;
+                if (!t.empty() && t.back() == '^') { t.pop_back(); if (slid_info_.count(t)) return t; }
+            }
+        }
+    }
     if (auto* be = dynamic_cast<const BinaryExpr*>(&expr)) {
         std::string fname = "op" + be->op;
-        auto pit = func_param_types_.find(fname);
-        if (pit != func_param_types_.end() && !pit->second.empty()) {
-            std::string t = pit->second[0];
-            if (!t.empty() && t.back() == '^') t.pop_back();
-            else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
-            if (slid_info_.count(t) && !resolveOperatorOverload(be->op, *be->left, *be->right).empty())
-                return t;
+        // check free_func_overloads_ first (handles overloaded operators)
+        auto foit = free_func_overloads_.find(fname);
+        if (foit != free_func_overloads_.end()) {
+            std::string mangled = resolveOperatorOverload(be->op, *be->left, *be->right);
+            if (!mangled.empty()) {
+                auto pit = func_param_types_.find(mangled);
+                if (pit != func_param_types_.end() && !pit->second.empty()) {
+                    std::string t = pit->second[0];
+                    if (!t.empty() && t.back() == '^') t.pop_back();
+                    else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
+                    if (slid_info_.count(t)) return t;
+                }
+            }
         }
     }
     return "";
 }
 
 // Resolve which free function implements 'left op right'.
-// Returns the function name (e.g. "op+") if found, empty string otherwise.
-// Matches when left is a slid local, a chained BinaryExpr, or a string literal
-// that can be implicitly converted to the slid type via op=.
+// Returns the mangled function name (e.g. "op+__Stringr__char") if found, empty string otherwise.
+// Matches when left is a slid local, a chained BinaryExpr, a DerefExpr of a slid pointer,
+// or a string literal that can be implicitly converted to the slid type via op=.
 std::string Codegen::resolveOperatorOverload(const std::string& op,
-                                              const Expr& left, const Expr&) {
+                                              const Expr& left, const Expr& right) {
     std::string fname = "op" + op;
-    auto pit = func_param_types_.find(fname);
-    if (pit == func_param_types_.end() || pit->second.empty()) return "";
-    // check if first param is a slid pointer type (e.g. "String^")
-    const std::string& p0 = pit->second[0];
-    std::string slid_name = p0;
-    if (!slid_name.empty() && slid_name.back() == '^') slid_name.pop_back();
-    else if (slid_name.size() >= 2 && slid_name.substr(slid_name.size()-2) == "[]") slid_name.resize(slid_name.size()-2);
-    else return ""; // param is not a pointer — not a slid operator
-    if (!slid_info_.count(slid_name)) return ""; // param type is not a known slid
-    // left is a local of that slid type
-    if (auto* ve = dynamic_cast<const VarExpr*>(&left)) {
-        auto tit = local_types_.find(ve->name);
-        if (tit != local_types_.end() && tit->second == slid_name) return fname;
-    }
-    // left is a sub-expression returning the slid type (chained: (a+b)+c)
-    if (dynamic_cast<const BinaryExpr*>(&left)) {
-        if (exprSlidType(left) == slid_name) return fname;
-    }
-    // left is a string literal — allowed if slid type can be constructed from char[]
-    if (dynamic_cast<const StringLiteralExpr*>(&left)) {
-        auto oit = method_overloads_.find(slid_name + "__op=");
-        if (oit != method_overloads_.end()) {
-            for (auto& [m, ptypes] : oit->second)
-                if (!ptypes.empty() && isPtrType(ptypes[0])) return fname;
+    auto foit = free_func_overloads_.find(fname);
+    if (foit == free_func_overloads_.end() || foit->second.empty()) return "";
+
+    // helper: does this expression match a slid-typed parameter (SlidType^)?
+    auto leftMatchesSlid = [&](const std::string& slid_name) -> bool {
+        // VarExpr: local variable of exact slid type
+        if (auto* ve = dynamic_cast<const VarExpr*>(&left)) {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end() && tit->second == slid_name) return true;
         }
+        // DerefExpr: sa^ where sa: SlidType^
+        if (auto* de = dynamic_cast<const DerefExpr*>(&left)) {
+            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) {
+                    std::string t = tit->second;
+                    if (!t.empty() && t.back() == '^') t.pop_back();
+                    if (t == slid_name) return true;
+                }
+            }
+        }
+        // BinaryExpr: chained op result (e.g. (a+b)+c)
+        if (dynamic_cast<const BinaryExpr*>(&left)) {
+            if (exprSlidType(left) == slid_name) return true;
+        }
+        // StringLiteralExpr: allowed if slid type has op=(char[])
+        if (dynamic_cast<const StringLiteralExpr*>(&left)) {
+            auto oit = method_overloads_.find(slid_name + "__op=");
+            if (oit != method_overloads_.end()) {
+                for (auto& [m, ptypes] : oit->second)
+                    if (!ptypes.empty() && isPtrType(ptypes[0])) return true;
+            }
+        }
+        return false;
+    };
+
+    // helper: does the right operand match param type p1?
+    auto rightMatchesParam = [&](const std::string& p1) -> bool {
+        bool p1_is_slid_ref = isRefType(p1) && slid_info_.count(p1.substr(0, p1.size()-1));
+        bool p1_is_ptr = isIndirectType(p1); // ^ or [] — any pointer/reference type
+        // right is a string literal → matches slid ref (implicit temp) or ptr param
+        if (dynamic_cast<const StringLiteralExpr*>(&right)) return p1_is_slid_ref || p1_is_ptr;
+        // right is an integer/char literal → matches non-pointer param
+        if (dynamic_cast<const IntLiteralExpr*>(&right)) return !p1_is_ptr;
+        // right is a variable
+        if (auto* ve = dynamic_cast<const VarExpr*>(&right)) {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end()) {
+                std::string t = tit->second;
+                bool is_slid = slid_info_.count(t) > 0;
+                bool is_slid_ref = (!t.empty() && t.back() == '^' && slid_info_.count(t.substr(0, t.size()-1)));
+                if (p1_is_slid_ref) return is_slid || is_slid_ref;
+                return !is_slid && !is_slid_ref;
+            }
+        }
+        // right is a DerefExpr → produces slid value
+        if (auto* de = dynamic_cast<const DerefExpr*>(&right)) {
+            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) {
+                    std::string t = tit->second;
+                    if (!t.empty() && t.back() == '^') t.pop_back();
+                    if (slid_info_.count(t) && p1_is_slid_ref) return true;
+                }
+            }
+        }
+        // default: if we can't tell, accept any single-overload or slid-ref param
+        return p1_is_slid_ref;
+    };
+
+    // find the best matching overload
+    std::string best;
+    for (auto& [mangled, ptypes] : foit->second) {
+        if (ptypes.empty()) continue;
+        // check first param is a slid pointer and left matches
+        std::string p0 = ptypes[0];
+        std::string slid_name = p0;
+        if (!slid_name.empty() && slid_name.back() == '^') slid_name.pop_back();
+        else if (slid_name.size() >= 2 && slid_name.substr(slid_name.size()-2) == "[]") slid_name.resize(slid_name.size()-2);
+        else continue;
+        if (!slid_info_.count(slid_name)) continue;
+        if (!leftMatchesSlid(slid_name)) continue;
+        // check right param if present
+        if (ptypes.size() > 1 && !rightMatchesParam(ptypes[1])) continue;
+        // matched: prefer more specific (multi-param) overload
+        if (best.empty() || ptypes.size() > func_param_types_[best].size())
+            best = mangled;
     }
-    return "";
+    return best;
 }
 
 // Emit an argument expression, taking pointer-vs-value into account.
@@ -812,6 +915,21 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
             auto lit = local_types_.find(ve->name);
             if (lit != local_types_.end() && slid_info_.count(lit->second)) {
                 return locals_.at(ve->name);
+            }
+        }
+        // DerefExpr of a slid pointer (sa^): load the pointer value and pass it directly
+        if (auto* de = dynamic_cast<const DerefExpr*>(&arg)) {
+            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto lit = local_types_.find(ve->name);
+                if (lit != local_types_.end()) {
+                    std::string t = lit->second;
+                    if (!t.empty() && t.back() == '^') { t.pop_back(); }
+                    if (slid_info_.count(t)) {
+                        std::string loaded = newTmp();
+                        out_ << "    " << loaded << " = load ptr, ptr " << locals_.at(ve->name) << "\n";
+                        return loaded;
+                    }
+                }
             }
         }
     }
@@ -896,7 +1014,19 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     bool uses_sret = !fn.return_type.empty() && slid_info_.count(fn.return_type) > 0;
     current_func_uses_sret_ = uses_sret;
 
-    std::string ret_type = uses_sret ? "void" : llvmType(func_return_types_[fn.name]);
+    // find mangled name (may differ from fn.name when multiple overloads exist)
+    std::string emit_name = fn.name;
+    auto foit = free_func_overloads_.find(fn.name);
+    if (foit != free_func_overloads_.end()) {
+        // match by param types
+        std::vector<std::string> ptypes;
+        for (auto& [t, n] : fn.params) ptypes.push_back(t);
+        for (auto& [mangled, mptypes] : foit->second) {
+            if (mptypes == ptypes) { emit_name = mangled; break; }
+        }
+    }
+
+    std::string ret_type = uses_sret ? "void" : llvmType(func_return_types_[emit_name]);
     current_func_return_type_ = ret_type;
 
     std::string param_str;
@@ -908,7 +1038,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
         param_str += llvmType(fn.params[i].first) + " %arg_" + fn.params[i].second;
     }
 
-    out_ << "define " << ret_type << " @" << llvmGlobalName(fn.name) << "(" << param_str << ") {\n";
+    out_ << "define " << ret_type << " @" << llvmGlobalName(emit_name) << "(" << param_str << ") {\n";
     out_ << "entry:\n";
 
     for (auto& [type, name] : fn.params) {

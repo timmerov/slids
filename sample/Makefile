@@ -24,6 +24,7 @@ SAMPLES = \
 	string01 string02 string03 string04 string05 \
 	string06 string07 string08 string09 string10 \
 	string11 string12 string13 string14 string15 \
+	string16 \
 	switch
 
 .PHONY: all clean $(SAMPLES)

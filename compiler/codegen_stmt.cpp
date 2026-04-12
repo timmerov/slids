@@ -56,7 +56,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
         bool arg_is_slid = false;
         if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
             auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end()) arg_is_slid = slid_info_.count(tit->second) > 0;
+            if (tit != local_types_.end()) {
+                std::string t = tit->second;
+                if (!t.empty() && t.back() == '^') t.pop_back();
+                else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
+                arg_is_slid = slid_info_.count(t) > 0;
+            }
         } else if (!exprSlidType(arg).empty()) {
             arg_is_slid = true; // e.g. result of op+ expression
         }

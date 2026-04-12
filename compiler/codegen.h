@@ -46,6 +46,8 @@ private:
     std::string current_func_return_type_; // LLVM return type of the function being emitted
     // overload table: base_mangled -> [(full_mangled, param_types)]
     std::map<std::string, std::vector<std::pair<std::string, std::vector<std::string>>>> method_overloads_;
+    // free function overload table: base_name -> [(mangled_name, param_types)]
+    std::map<std::string, std::vector<std::pair<std::string, std::vector<std::string>>>> free_func_overloads_;
     std::map<std::string, SlidInfo>    slid_info_;
     std::vector<std::pair<std::string, std::string>> string_constants_;
 
