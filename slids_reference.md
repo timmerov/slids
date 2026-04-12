@@ -118,16 +118,61 @@ int32 helperSlid() {  // private — not in .slh
 | `int64` | 64-bit signed integer |
 | `uint` | platform-width unsigned integer |
 | `uint8` | 8-bit unsigned integer |
-| `char` | character (alias for `uint8`) |
+| `char` | platform-width character |
 | `uint16` | 16-bit unsigned integer |
 | `uint32` | 32-bit unsigned integer |
 | `uint64` | 64-bit unsigned integer |
+| `intptr` | platform-width pointer-sized integer |
 | `float32` | 32-bit float |
 | `float64` | 64-bit float |
 | `bool` | Boolean (`true` / `false`) |
-| `string` | built-in string type |
+| `string` | built-in string type (temporary) |
 | `void` | no value |
 
+
+---
+
+## Integer promotion
+
+When operands of a binary arithmetic or bitwise operation have different sizes or signedness, they are promoted to a common type before the operation is performed. Promotion follows two steps applied in order:
+
+**Step 1 — match sizes.** If the operands have different bit widths, the smaller one is extended to the larger width:
+- A **signed** operand is **sign-extended** — the sign bit is replicated into the new high bits, preserving the value including negative numbers.
+- An **unsigned** operand is **zero-extended** — the new high bits are filled with `0`, preserving the non-negative value.
+
+**Step 2 — resolve signedness.** After the widths match, if one operand is unsigned and the other is signed, the signed operand is converted to unsigned. The result type is unsigned.
+
+The result of the operation has the common type produced by these two steps.
+
+```
+int8   a = -1;
+uint32 b = 1;
+// Step 1: a (int8) sign-extended to int32 → 0xFFFF_FFFF (-1 as int32)
+// Step 2: int32 converted to uint32 → 0xFFFF_FFFF (4294967295)
+uint32 c = a + b;   // 0xFFFF_FFFF + 1 = 0 (wraps)
+
+int16  x = 1000;
+int32  y = 50000;
+// Step 1: x sign-extended to int32 → 1000
+// Step 2: both signed — no conversion needed
+int32  z = x + y;   // 51000
+
+uint8  flags = 0xFF;
+uint16 mask  = 0x00FF;
+// Step 1: flags zero-extended to uint16 → 0x00FF
+// Step 2: both unsigned — no conversion needed
+uint16 result = flags & mask;   // 0x00FF
+```
+
+Summary table:
+
+| Left | Right | After size match | Result type |
+|---|---|---|---|
+| signed small | signed large | sign-extend small | signed large |
+| unsigned small | unsigned large | zero-extend small | unsigned large |
+| signed small | unsigned large | sign-extend small, then signed→unsigned | unsigned large |
+| unsigned small | signed large | zero-extend small, then signed→unsigned | unsigned large |
+| signed N | unsigned N | (same width — skip step 1) signed→unsigned | unsigned N |
 
 ---
 
