@@ -527,12 +527,12 @@ std::string Codegen::emitExpr(const Expr& expr) {
         // determine operand type before emitting (needed for correctly-typed icmp)
         // integer literals are flexible — they take the type of the other operand.
         // for two non-literals, promote to the wider of the two.
+        bool left_is_literal  = (dynamic_cast<const IntLiteralExpr*>(b->left.get())  != nullptr);
+        bool right_is_literal = (dynamic_cast<const IntLiteralExpr*>(b->right.get()) != nullptr);
+        std::string lt = exprLlvmType(*b->left);
+        std::string rt = exprLlvmType(*b->right);
         std::string op_type;
         {
-            bool left_is_literal  = (dynamic_cast<const IntLiteralExpr*>(b->left.get())  != nullptr);
-            bool right_is_literal = (dynamic_cast<const IntLiteralExpr*>(b->right.get()) != nullptr);
-            std::string lt = exprLlvmType(*b->left);
-            std::string rt = exprLlvmType(*b->right);
             if (left_is_literal && !right_is_literal)
                 op_type = rt;
             else if (right_is_literal && !left_is_literal)
@@ -632,8 +632,29 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
         std::string left  = emitExpr(*b->left);
         std::string right = emitExpr(*b->right);
+
+        // Step 1: extend the narrower operand to op_type.
+        // Signed operands are sign-extended; unsigned operands are zero-extended.
+        // Literals are bare integer constants — LLVM accepts them at any width, no extension needed.
+        {
+            static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+            auto extend = [&](std::string val, const std::string& src, const Expr& e) -> std::string {
+                if (src == op_type || op_type == "ptr" || src == "ptr") return val;
+                auto si = rank.find(src), di = rank.find(op_type);
+                if (si == rank.end() || di == rank.end() || si->second >= di->second) return val;
+                std::string ext = newTmp();
+                out_ << "    " << ext << " = " << (isUnsignedExpr(e) ? "zext" : "sext")
+                     << " " << src << " " << val << " to " << op_type << "\n";
+                return ext;
+            };
+            if (!left_is_literal)  left  = extend(left,  lt, *b->left);
+            if (!right_is_literal) right = extend(right, rt, *b->right);
+        }
+
         std::string tmp   = newTmp();
 
+        // Step 2: signed→unsigned after size match — handled implicitly by choosing
+        // unsigned operations (udiv/urem/ult/ugt etc.) when either operand is unsigned.
         bool unsig = isUnsignedExpr(*b->left) || isUnsignedExpr(*b->right);
         if      (b->op == "+")  { out_ << "    " << tmp << " = add "  << op_type << " " << left << ", " << right << "\n"; return tmp; }
         else if (b->op == "-")  { out_ << "    " << tmp << " = sub "  << op_type << " " << left << ", " << right << "\n"; return tmp; }

@@ -740,6 +740,8 @@ bool Codegen::isPointerExpr(const Expr& expr) {
 
 bool Codegen::isUnsignedExpr(const Expr& expr) {
     static const std::set<std::string> utypes = {"uint","uint8","uint16","uint32","uint64"};
+
+    // local variable or field via self
     if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
         if (!current_slid_.empty()) {
             auto& info = slid_info_[current_slid_];
@@ -750,6 +752,41 @@ bool Codegen::isUnsignedExpr(const Expr& expr) {
         auto tit = local_types_.find(ve->name);
         if (tit != local_types_.end()) return utypes.count(tit->second) > 0;
     }
+
+    // field access: obj^.field_ or obj.field_
+    if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
+        std::string slid_name;
+        if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
+            if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto tit = local_types_.find(ve2->name);
+                if (tit != local_types_.end()) {
+                    slid_name = tit->second;
+                    if (isRefType(slid_name))      slid_name.pop_back();
+                    else if (isPtrType(slid_name)) slid_name.resize(slid_name.size()-2);
+                }
+            }
+        } else if (auto* ve2 = dynamic_cast<const VarExpr*>(fa->object.get())) {
+            auto tit = local_types_.find(ve2->name);
+            if (tit != local_types_.end()) slid_name = tit->second;
+        }
+        if (!slid_name.empty() && slid_info_.count(slid_name)) {
+            auto& info = slid_info_[slid_name];
+            auto fit = info.field_index.find(fa->field);
+            if (fit != info.field_index.end())
+                return utypes.count(info.field_types[fit->second]) > 0;
+        }
+    }
+
+    // binary arithmetic result: unsigned if either operand is unsigned
+    if (auto* be = dynamic_cast<const BinaryExpr*>(&expr)) {
+        // comparisons and logical ops produce a signed i32 0/1
+        if (be->op == "==" || be->op == "!=" || be->op == "<"  ||
+            be->op == ">"  || be->op == "<=" || be->op == ">=" ||
+            be->op == "&&" || be->op == "||" || be->op == "^^")
+            return false;
+        return isUnsignedExpr(*be->left) || isUnsignedExpr(*be->right);
+    }
+
     return false;
 }
 
