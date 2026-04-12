@@ -47,10 +47,18 @@ int main(int argc, char* argv[]) {
             std::filesystem::create_directories(out_path.parent_path());
         }
 
+        // determine directory containing the source file for .slh resolution
+        std::string source_dir;
+        {
+            std::filesystem::path p(input_path);
+            if (p.has_parent_path())
+                source_dir = p.parent_path().string();
+        }
+
         Lexer lexer(source);
         auto tokens = lexer.tokenize();
 
-        Parser parser(std::move(tokens));
+        Parser parser(std::move(tokens), source_dir);
         auto program = parser.parse();
 
         std::ofstream out(output_path);

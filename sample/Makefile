@@ -28,9 +28,12 @@ SAMPLES = \
 	string16 string17 string18 \
 	switch
 
-.PHONY: all clean $(SAMPLES)
+# --- multi-file samples (don't fit the single-file template) ---
+MULTI_SAMPLES = import_test
 
-all: $(SAMPLES)
+.PHONY: all clean $(SAMPLES) $(MULTI_SAMPLES)
+
+all: $(SAMPLES) $(MULTI_SAMPLES)
 
 define SAMPLE_RULES
 $(1): $(BIN_DIR)/$(1)
@@ -48,6 +51,28 @@ endef
 
 $(foreach s,$(SAMPLES),$(eval $(call SAMPLE_RULES,$(s))))
 
+# --- import_test: two source files linked together ---
+import_test: $(BIN_DIR)/import_test
+
+$(BIN_DIR)/import_test: \
+		$(BUILD_DIR)/import_test/import_def.o \
+		$(BUILD_DIR)/import_test/import_test.o
+	$(CXX) $^ -o $@
+
+$(BUILD_DIR)/import_test/import_def.o: $(BUILD_DIR)/import_test/import_def.ll
+	$(LLC) $(LLCFLAGS) $< -o $@
+
+$(BUILD_DIR)/import_test/import_test.o: $(BUILD_DIR)/import_test/import_test.ll
+	$(LLC) $(LLCFLAGS) $< -o $@
+
+$(BUILD_DIR)/import_test/import_def.ll: import_def.sl import_decl.slh $(SLIDSC)
+	mkdir -p $(BUILD_DIR)/import_test
+	$(SLIDSC) $< -o $@
+
+$(BUILD_DIR)/import_test/import_test.ll: import_test.sl import_decl.slh $(SLIDSC)
+	mkdir -p $(BUILD_DIR)/import_test
+	$(SLIDSC) $< -o $@
+
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f $(addprefix $(BIN_DIR)/, $(SAMPLES))
+	rm -f $(addprefix $(BIN_DIR)/, $(SAMPLES) $(MULTI_SAMPLES))

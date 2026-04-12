@@ -1,0 +1,7 @@
+/*
+header file.
+declarations only.
+no code.
+*/
+
+void printHelloWorld();

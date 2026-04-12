@@ -456,7 +456,26 @@ void Codegen::emit() {
     out_ << "\n";
     out_ << "declare i32 @printf(ptr noundef, ...)\n";
     out_ << "declare ptr @malloc(i64)\n";
-    out_ << "declare void @free(ptr)\n\n";
+    out_ << "declare void @free(ptr)\n";
+
+    // emit declares for imported functions (bodyless forward declarations)
+    // skip if a full definition exists in this translation unit
+    std::set<std::string> has_body;
+    for (auto& fn : program_.functions)
+        if (fn.body) has_body.insert(fn.name);
+
+    for (auto& fn : program_.functions) {
+        if (fn.body) continue;
+        if (has_body.count(fn.name)) continue; // defined locally — no declare needed
+        std::string ret = fn.return_type.empty() ? "void" : llvmType(fn.return_type);
+        out_ << "declare " << ret << " @" << fn.name << "(";
+        for (int i = 0; i < (int)fn.params.size(); i++) {
+            if (i > 0) out_ << ", ";
+            out_ << llvmType(fn.params[i].first);
+        }
+        out_ << ")\n";
+    }
+    out_ << "\n";
     out_ << "@.fmt_int    = private constant [4 x i8] c\"%d\\0A\\00\"\n";
     out_ << "@.fmt_int_nonl = private constant [3 x i8] c\"%d\\00\"\n";
     out_ << "@.fmt_uint    = private constant [4 x i8] c\"%u\\0A\\00\"\n";

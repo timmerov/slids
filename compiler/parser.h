@@ -384,12 +384,13 @@ struct Program {
 
 class Parser {
 public:
-    Parser(std::vector<Token> tokens);
+    Parser(std::vector<Token> tokens, std::string source_dir = "");
     Program parse();
 
 private:
     std::vector<Token> tokens_;
     int pos_;
+    std::string source_dir_;
 
     Token& peek();
     Token& advance();

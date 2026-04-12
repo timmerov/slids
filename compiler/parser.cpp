@@ -1,10 +1,13 @@
 #include "parser.h"
+#include "lexer.h"
 #include <stdexcept>
 #include <functional>
+#include <fstream>
+#include <sstream>
 #include <map>
 
-Parser::Parser(std::vector<Token> tokens)
-    : tokens_(std::move(tokens)), pos_(0) {}
+Parser::Parser(std::vector<Token> tokens, std::string source_dir)
+    : tokens_(std::move(tokens)), pos_(0), source_dir_(std::move(source_dir)) {}
 
 Token& Parser::peek() { return tokens_[pos_]; }
 
@@ -1152,8 +1155,34 @@ FunctionDef Parser::parseFunctionDef() {
 Program Parser::parse() {
     Program program;
     while (peek().type != TokenType::kEof) {
+        // import declaration
+        if (peek().type == TokenType::kImport) {
+            advance(); // consume 'import'
+            std::string module = expect(TokenType::kIdentifier, "expected module name after 'import'").value;
+            if (peek().type == TokenType::kSemicolon) advance(); // optional semicolon
+
+            std::string header_path = source_dir_.empty()
+                ? module + ".slh"
+                : source_dir_ + "/" + module + ".slh";
+
+            std::ifstream in(header_path);
+            if (!in) throw std::runtime_error("import: cannot open '" + header_path + "'");
+            std::ostringstream buf;
+            buf << in.rdbuf();
+
+            Lexer hdr_lexer(buf.str());
+            auto hdr_tokens = hdr_lexer.tokenize();
+            Parser hdr_parser(std::move(hdr_tokens), source_dir_);
+            Program hdr = hdr_parser.parse();
+
+            // merge: only import forward declarations (bodyless functions)
+            for (auto& fn : hdr.functions) {
+                if (!fn.body)
+                    program.functions.push_back(std::move(fn));
+            }
+        }
         // enum definition
-        if (peek().type == TokenType::kEnum) {
+        else if (peek().type == TokenType::kEnum) {
             program.enums.push_back(parseEnumDef());
         }
         // slid class definition: UpperCase identifier followed by (
