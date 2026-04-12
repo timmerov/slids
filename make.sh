@@ -7,4 +7,7 @@ make -C compiler/
 echo "building sample code..."
 make -C sample/
 
+echo "building work directory..."
+make -C work/
+
 echo "done!"

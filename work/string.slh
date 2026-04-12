@@ -1,0 +1,74 @@
+/*
+String class declaration.
+
+also included are hellper functions for:
+concatenating strings,
+length of a null terminated string,
+copying null terminated strings,
+copying null terminated strings limited by length.
+*/
+
+String(
+/*
+TODO:
+these should not be exposed.
+they should be private.
+but adding implementation fields to a declared class
+has issues we will address later.
+*/
+    /* length of stored string. */
+    int size_ = 0,
+
+    /* maximum size storable. */
+    int capacity_ = 0,
+
+    /* pointer to stored string. */
+    char[] storage_ = nullptr
+) {
+    /* constructor/destructor */
+    _();
+    ~();
+
+    /* assignment from String. */
+    void op=(String^ s);
+
+    /* assignment from null terminated string. */
+    void op=(char[] s);
+
+    /* assignment from single character. */
+    void op=(char c);
+
+    /* assignment fron int64. */
+    void op=(int64 x);
+
+    /* assignment fron unsigned-int64. */
+    void op=(int64 x);
+
+    /* move operator. */
+    void op<-(String^ s);
+
+    /* set to empty string. */
+    void clear();
+
+    /* increase capacity. */
+    void reserve(int capacity);
+
+    /* reverse the characters in the string. */
+    void reverse();
+
+    /* print the string. */
+    void print();
+    void println();
+}
+
+/* overload + to concatenate String-s. */
+String op+(String^ sa, String^ sb);
+
+/* return length of null terminated string. */
+int strlen(char[] s);
+
+/* copy null terminated string from src to dst. */
+void strcpy(char[] dst, char[] src);
+
+/* copy at most count characters from src to dst. */
+void strcpy(char[] dst, char[] src, int count);

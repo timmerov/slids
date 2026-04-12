@@ -1089,6 +1089,30 @@ void Parser::parseExternalMethodBlock(Program& program) {
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
         ExternalMethodDef em;
         em.slid_name = slid_name;
+        // ctor: _() { ... }
+        if (peek().type == TokenType::kIdentifier && peek().value == "_"
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kLParen) {
+            advance(); // consume _
+            em.method_name = "_";
+            expect(TokenType::kLParen, "expected '('");
+            expect(TokenType::kRParen, "expected ')'");
+            em.body = parseBlock();
+            program.external_methods.push_back(std::move(em));
+            continue;
+        }
+        // dtor: ~() { ... }
+        if (peek().type == TokenType::kBitNot
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kLParen) {
+            advance(); // consume ~
+            em.method_name = "~";
+            expect(TokenType::kLParen, "expected '('");
+            expect(TokenType::kRParen, "expected ')'");
+            em.body = parseBlock();
+            program.external_methods.push_back(std::move(em));
+            continue;
+        }
         em.return_type = parseTypeName();
         em.method_name = expect(TokenType::kIdentifier, "expected method name").value;
         if (em.method_name == "op" && peek().type == TokenType::kEquals)     { advance(); em.method_name = "op="; }
