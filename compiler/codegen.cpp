@@ -451,6 +451,10 @@ void Codegen::emit() {
     out_ << "declare void @free(ptr)\n\n";
     out_ << "@.fmt_int    = private constant [4 x i8] c\"%d\\0A\\00\"\n";
     out_ << "@.fmt_int_nonl = private constant [3 x i8] c\"%d\\00\"\n";
+    out_ << "@.fmt_uint    = private constant [4 x i8] c\"%u\\0A\\00\"\n";
+    out_ << "@.fmt_uint_nonl = private constant [3 x i8] c\"%u\\00\"\n";
+    out_ << "@.fmt_long    = private constant [5 x i8] c\"%ld\\0A\\00\"\n";
+    out_ << "@.fmt_long_nonl = private constant [4 x i8] c\"%ld\\00\"\n";
     out_ << "@.fmt_str    = private constant [4 x i8] c\"%s\\0A\\00\"\n";
     out_ << "@.fmt_str_nonl = private constant [3 x i8] c\"%s\\00\"\n";
     out_ << "@.fmt_slice    = private constant [6 x i8] c\"%.*s\\0A\\00\"\n";
@@ -933,7 +937,23 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
             }
         }
     }
-    return emitExpr(arg);
+    std::string val = emitExpr(arg);
+    // truncate wider integer to narrower param type (e.g. i32/i64 → i8 for char param)
+    if (!param_type.empty() && !isIndirectType(param_type)) {
+        std::string want = llvmType(param_type);
+        if (want == "i8" || want == "i16") {
+            std::string src = exprLlvmType(arg);
+            if (src != want && (src == "i8" || src == "i16" || src == "i32" || src == "i64")) {
+                static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+                if (rank.at(src) > rank.at(want)) {
+                    std::string truncated = newTmp();
+                    out_ << "    " << truncated << " = trunc " << src << " " << val << " to " << want << "\n";
+                    return truncated;
+                }
+            }
+        }
+    }
+    return val;
 }
 
 void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& full_mangled,

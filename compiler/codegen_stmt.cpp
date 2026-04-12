@@ -48,12 +48,16 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
     };
 
-    // resolve op= overload: slid var or slid-producing expr → SlidType^ param, otherwise → char[]/ptr param
+    // resolve op= overload: pick the best matching overload for the arg expression.
+    // Priority: slid ref > scalar exact match > ptr/char[] fallback
     auto resolveOpEq = [&](const std::string& base, const Expr& arg) -> std::string {
         auto oit = method_overloads_.find(base);
         if (oit == method_overloads_.end()) return "";
         if (oit->second.size() == 1) return oit->second[0].first;
+
+        // determine argument category
         bool arg_is_slid = false;
+        bool arg_is_scalar_int = false; // int literal or int-typed variable
         if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
             auto tit = local_types_.find(ve->name);
             if (tit != local_types_.end()) {
@@ -61,14 +65,30 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (!t.empty() && t.back() == '^') t.pop_back();
                 else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
                 arg_is_slid = slid_info_.count(t) > 0;
+                if (!arg_is_slid && !isIndirectType(tit->second))
+                    arg_is_scalar_int = true; // scalar variable (int, char, bool, etc.)
             }
         } else if (!exprSlidType(arg).empty()) {
             arg_is_slid = true; // e.g. result of op+ expression
+        } else {
+            // use inferred LLVM type: integer types are scalar, ptr is string/reference
+            std::string lt = exprLlvmType(arg);
+            if (lt == "i8" || lt == "i16" || lt == "i32" || lt == "i64")
+                arg_is_scalar_int = true;
         }
+
+        // pass 1: exact category match
         for (auto& [m, ptypes] : oit->second) {
             if (ptypes.size() != 1) continue;
-            if (arg_is_slid  && isRefType(ptypes[0])) return m;
-            if (!arg_is_slid && isPtrType(ptypes[0])) return m;
+            if (arg_is_slid       && isRefType(ptypes[0])) return m;
+            if (arg_is_scalar_int && !isIndirectType(ptypes[0])) return m;
+            if (!arg_is_slid && !arg_is_scalar_int && isPtrType(ptypes[0])) return m;
+        }
+        // pass 2: fallback — any ptr param for non-slid arg (e.g. string literal)
+        if (!arg_is_slid) {
+            for (auto& [m, ptypes] : oit->second) {
+                if (ptypes.size() == 1 && isIndirectType(ptypes[0])) return m;
+            }
         }
         return oit->second[0].first;
     };
@@ -230,6 +250,20 @@ void Codegen::emitStmt(const Stmt& stmt) {
         locals_[decl->name] = reg;
         local_types_[decl->name] = decl->type;
         std::string val = emitExpr(*decl->init);
+        // coerce integer widths if necessary (sext or trunc)
+        if (!isIndirectType(decl->type)) {
+            static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+            std::string src_t = exprLlvmType(*decl->init);
+            auto sit = rank.find(src_t), dit = rank.find(llvm_t);
+            if (sit != rank.end() && dit != rank.end() && sit->second != dit->second) {
+                std::string coerced = newTmp();
+                if (dit->second > sit->second)
+                    out_ << "    " << coerced << " = sext " << src_t << " " << val << " to " << llvm_t << "\n";
+                else
+                    out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << llvm_t << "\n";
+                val = coerced;
+            }
+        }
         out_ << "    store " << llvm_t << " " << val << ", ptr " << reg << "\n";
         // move declaration: null out the source
         if (decl->is_move && isIndirectType(decl->type))
@@ -328,6 +362,20 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string val = emitExpr(*assign->value);
         bool is_ptr = tit != local_types_.end() && isIndirectType(tit->second);
         std::string store_type = is_ptr ? "ptr" : llvmType(tit != local_types_.end() ? tit->second : "int");
+        // coerce integer widths if necessary (sext or trunc)
+        if (!is_ptr && tit != local_types_.end()) {
+            static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+            std::string src_t = exprLlvmType(*assign->value);
+            auto sit = rank.find(src_t), dit = rank.find(store_type);
+            if (sit != rank.end() && dit != rank.end() && sit->second != dit->second) {
+                std::string coerced = newTmp();
+                if (dit->second > sit->second)
+                    out_ << "    " << coerced << " = sext " << src_t << " " << val << " to " << store_type << "\n";
+                else
+                    out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << store_type << "\n";
+                val = coerced;
+            }
+        }
         out_ << "    store " << store_type << " " << val << ", ptr " << it->second << "\n";
         return;
     }
@@ -509,8 +557,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
             auto& mptypes = func_param_types_[mangled];
             std::string arg_str = "ptr " + obj_ptr;
             for (int i = 0; i < (int)mcs->args.size(); i++) {
-                std::string ptype = (i < (int)mptypes.size()) ? llvmType(mptypes[i]) : "i32";
-                arg_str += ", " + ptype + " " + emitExpr(*mcs->args[i]);
+                std::string ptype_str = (i < (int)mptypes.size()) ? mptypes[i] : "";
+                std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
+                std::string aval = emitArgForParam(*mcs->args[i], ptype_str);
+                arg_str += ", " + ptype + " " + aval;
             }
             if (ret_type == "void") {
                 out_ << "    call void @" << llvmGlobalName(mangled) << "(" << arg_str << ")\n";
@@ -997,10 +1047,26 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     out_ << "    " << ext << " = zext " << val_type << " " << val << " to i32\n";
                     val = ext;
                 }
+                bool is_uint = false;
+                if (auto* ve = dynamic_cast<const VarExpr*>(segments[0])) {
+                    auto tit = local_types_.find(ve->name);
+                    if (tit != local_types_.end() && tit->second == "uint") is_uint = true;
+                    if (!is_uint && !current_slid_.empty()) {
+                        auto& info = slid_info_[current_slid_];
+                        auto fit = info.field_index.find(ve->name);
+                        if (fit != info.field_index.end() && info.field_types[fit->second] == "uint")
+                            is_uint = true;
+                    }
+                }
                 std::string fmt = newTmp();
-                std::string fmt_name = newline ? "@.fmt_int" : "@.fmt_int_nonl";
-                out_ << "    " << fmt << " = getelementptr [4 x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
-                out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", i32 " << val << ")\n";
+                bool is_i64 = (val_type == "i64");
+                std::string fmt_name = is_i64   ? (newline ? "@.fmt_long" : "@.fmt_long_nonl")
+                                     : is_uint  ? (newline ? "@.fmt_uint" : "@.fmt_uint_nonl")
+                                                : (newline ? "@.fmt_int"  : "@.fmt_int_nonl");
+                std::string fmt_size = is_i64 ? (newline ? "5" : "4") : "4";
+                std::string arg_type = is_i64 ? "i64" : "i32";
+                out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
+                out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", " << arg_type << " " << val << ")\n";
                 return;
             }
 
@@ -1025,10 +1091,26 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         out_ << "    " << ext << " = zext " << val_type << " " << val << " to i32\n";
                         val = ext;
                     }
+                    bool seg_is_uint = false;
+                    if (auto* ve = dynamic_cast<const VarExpr*>(segments[si])) {
+                        auto tit = local_types_.find(ve->name);
+                        if (tit != local_types_.end() && tit->second == "uint") seg_is_uint = true;
+                        if (!seg_is_uint && !current_slid_.empty()) {
+                            auto& info = slid_info_[current_slid_];
+                            auto fit = info.field_index.find(ve->name);
+                            if (fit != info.field_index.end() && info.field_types[fit->second] == "uint")
+                                seg_is_uint = true;
+                        }
+                    }
+                    bool seg_is_i64 = (val_type == "i64");
                     std::string fmt = newTmp();
-                    std::string fmt_name = (last && newline) ? "@.fmt_int" : "@.fmt_int_nonl";
-                    out_ << "    " << fmt << " = getelementptr [4 x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
-                    out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", i32 " << val << ")\n";
+                    std::string fmt_name = seg_is_i64  ? ((last && newline) ? "@.fmt_long" : "@.fmt_long_nonl")
+                                        : seg_is_uint  ? ((last && newline) ? "@.fmt_uint" : "@.fmt_uint_nonl")
+                                                       : ((last && newline) ? "@.fmt_int"  : "@.fmt_int_nonl");
+                    std::string seg_fmt_size = seg_is_i64 ? ((last && newline) ? "5" : "4") : "4";
+                    std::string seg_arg_type = seg_is_i64 ? "i64" : "i32";
+                    out_ << "    " << fmt << " = getelementptr [" << seg_fmt_size << " x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
+                    out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", " << seg_arg_type << " " << val << ")\n";
                 }
             }
             return;
@@ -1062,8 +1144,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
             auto& nptypes_cs = func_param_types_[mangled];
             for (int i = 0; i < (int)call->args.size(); i++) {
                 if (!arg_str.empty()) arg_str += ", ";
-                std::string ptype = (i < (int)nptypes_cs.size()) ? llvmType(nptypes_cs[i]) : "i32";
-                arg_str += ptype + " " + emitExpr(*call->args[i]);
+                std::string ptype_str = (i < (int)nptypes_cs.size()) ? nptypes_cs[i] : "";
+                std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
+                arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
             }
 
             if (ret_type == "void") {
@@ -1084,8 +1167,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string arg_str;
             for (int i = 0; i < (int)call->args.size(); i++) {
                 if (i > 0) arg_str += ", ";
-                std::string ptype = (i < (int)rptypes.size()) ? llvmType(rptypes[i]) : "i32";
-                arg_str += ptype + " " + emitExpr(*call->args[i]);
+                std::string ptype_str = (i < (int)rptypes.size()) ? rptypes[i] : "";
+                std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
+                arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
             }
             if (ret_type == "void") {
                 out_ << "    call void @" << call->callee << "(" << arg_str << ")\n";
@@ -1107,8 +1191,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 auto& mptypes = func_param_types_[mangled];
                 std::string arg_str = "ptr %self";
                 for (int i = 0; i < (int)call->args.size(); i++) {
-                    std::string ptype = (i < (int)mptypes.size()) ? llvmType(mptypes[i]) : "i32";
-                    arg_str += ", " + ptype + " " + emitExpr(*call->args[i]);
+                    std::string ptype_str = (i < (int)mptypes.size()) ? mptypes[i] : "";
+                    std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
+                    arg_str += ", " + ptype + " " + emitArgForParam(*call->args[i], ptype_str);
                 }
                 if (ret_type == "void") {
                     out_ << "    call void @" << mangled << "(" << arg_str << ")\n";

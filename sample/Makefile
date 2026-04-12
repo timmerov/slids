@@ -9,7 +9,7 @@ BUILD_DIR = ../build/sample
 # --- add new samples here ---
 SAMPLES = \
 	biz_buzz \
-	bug1 \
+	bug1 bug2 bug3 \
 	chess1 chess2 chess3 \
 	counter1 counter2 \
 	function1 \
@@ -24,7 +24,7 @@ SAMPLES = \
 	string01 string02 string03 string04 string05 \
 	string06 string07 string08 string09 string10 \
 	string11 string12 string13 string14 string15 \
-	string16 string17 \
+	string16 string17 string18 \
 	switch
 
 .PHONY: all clean $(SAMPLES)

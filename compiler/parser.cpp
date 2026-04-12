@@ -72,7 +72,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     Token t = peek();
     if (t.type == TokenType::kIntLiteral) {
         advance();
-        return std::make_unique<IntLiteralExpr>(std::stoi(t.value));
+        return std::make_unique<IntLiteralExpr>(static_cast<int>(std::stoll(t.value)));
     }
     if (t.type == TokenType::kStringLiteral) {
         advance();

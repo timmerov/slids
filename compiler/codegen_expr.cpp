@@ -788,6 +788,9 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             std::string rt = exprLlvmType(*b->right);
             if (left_is_literal && !right_is_literal) return rt;
             if (right_is_literal && !left_is_literal) return lt;
+            // pointer arithmetic: ptr +/- int → ptr
+            if ((b->op == "+" || b->op == "-") && (lt == "ptr" || rt == "ptr"))
+                return "ptr";
             static const std::map<std::string,int> rank = {
                 {"i8",0},{"i16",1},{"i32",2},{"i64",3}};
             auto li = rank.find(lt), ri = rank.find(rt);
@@ -806,6 +809,34 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // address-of — ptr
     if (dynamic_cast<const AddrOfExpr*>(&expr)) return "ptr";
+
+    // DerefExpr: ptr^ — element type of the pointer
+    if (auto* de = dynamic_cast<const DerefExpr*>(&expr)) {
+        if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end()) {
+                std::string t = tit->second;
+                if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
+                    return llvmType(t.substr(0, t.size()-2));
+                if (!t.empty() && t.back() == '^')
+                    return "ptr"; // dereffing a reference gives the slid (ptr to struct)
+            }
+        }
+        return "i32";
+    }
+
+    // PostIncDerefExpr: ptr++^ — element type of the pointer
+    if (auto* pi = dynamic_cast<const PostIncDerefExpr*>(&expr)) {
+        if (auto* ve = dynamic_cast<const VarExpr*>(pi->operand.get())) {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end()) {
+                std::string t = tit->second;
+                if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
+                    return llvmType(t.substr(0, t.size()-2));
+            }
+        }
+        return "i32";
+    }
 
     // array index — elem type
     if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&expr)) {
