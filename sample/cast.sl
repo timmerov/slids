@@ -80,7 +80,7 @@ int32 main() {
     intptr addr  = <intptr> ibuf;
     int8[] ibuf2 = <int8[]> addr;
     delete ibuf;
-    __println("intptr round-trip:   ok (no crash)");
+    __println("intptr=" + addr + " round-trip:   ok (no crash)");
 
     // float bit reinterpretation through void^ (two explicit casts required)
     // IEEE 754: float32 1.0 = 0x3F800000 = 1065353216
