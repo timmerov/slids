@@ -142,6 +142,12 @@ struct NewExpr : Expr {
         : elem_type(std::move(t)), count(std::move(n)) {}
 };
 
+// sizeof(TypeName) or sizeof(expr) — returns intptr
+struct SizeofExpr : Expr {
+    std::string type_name;           // non-empty for sizeof(TypeName)
+    std::unique_ptr<Expr> operand;   // non-null for sizeof(expr)
+};
+
 // --- Statements ---
 
 struct Stmt {

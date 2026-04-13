@@ -695,6 +695,76 @@ std::string Codegen::emitExpr(const Expr& expr) {
         return "null";
     }
 
+    if (auto* se = dynamic_cast<const SizeofExpr*>(&expr)) {
+        // helper: bytes for a primitive/pointer type name
+        auto sizeofTypeName = [&](const std::string& tn) -> std::string {
+            if (tn == "char" || tn == "int8" || tn == "uint8" || tn == "bool") return "1";
+            if (tn == "int16" || tn == "uint16") return "2";
+            if (tn == "int" || tn == "int32" || tn == "uint" || tn == "uint32" || tn == "float32") return "4";
+            if (tn == "int64" || tn == "uint64" || tn == "float64" || tn == "intptr") return "8";
+            // pointer/iterator types — size of a pointer
+            if (tn.size() >= 1 && tn.back() == '^') return "8";
+            if (tn.size() >= 2 && tn.substr(tn.size()-2) == "[]") return "8";
+            // slid (struct) type — use LLVM GEP null trick: sizeof = ptrtoint(gep(%struct.T, null, 1))
+            if (slid_info_.count(tn)) {
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr %struct." << tn << ", ptr null, i32 1\n";
+                std::string sz = newTmp();
+                out_ << "    " << sz << " = ptrtoint ptr " << gep << " to i64\n";
+                return sz;
+            }
+            return "0";
+        };
+
+        if (!se->type_name.empty()) {
+            return sizeofTypeName(se->type_name);
+        }
+
+        // expression form
+        const Expr& op = *se->operand;
+
+        // string literal → byte length (not including null terminator)
+        if (auto* sl = dynamic_cast<const StringLiteralExpr*>(&op)) {
+            int len; llvmEscape(sl->value, len);
+            return std::to_string(len - 1); // llvmEscape counts the null terminator
+        }
+
+        // variable → look up its type
+        if (auto* ve = dynamic_cast<const VarExpr*>(&op)) {
+            // stack array → total byte size
+            auto ait = array_info_.find(ve->name);
+            if (ait != array_info_.end()) {
+                int64_t total = 1;
+                for (int d : ait->second.dims) total *= d;
+                int64_t elem_bytes = 1;
+                std::string elt = llvmType(ait->second.elem_type);
+                if (elt == "i16") elem_bytes = 2;
+                else if (elt == "i32") elem_bytes = 4;
+                else if (elt == "i64" || elt == "ptr") elem_bytes = 8;
+                return std::to_string(total * elem_bytes);
+            }
+            // ordinary variable → sizeof its declared type
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end()) return sizeofTypeName(tit->second);
+            // field of current slid
+            if (!current_slid_.empty()) {
+                auto& info = slid_info_[current_slid_];
+                auto fit = info.field_index.find(ve->name);
+                if (fit != info.field_index.end())
+                    return sizeofTypeName(info.field_types[fit->second]);
+            }
+        }
+
+        // fallback: derive size from LLVM type of the expression
+        std::string lt = exprLlvmType(op);
+        if (lt == "i8")  return "1";
+        if (lt == "i16") return "2";
+        if (lt == "i32") return "4";
+        if (lt == "i64") return "8";
+        if (lt == "ptr") return "8";
+        return "0";
+    }
+
     if (auto* ne = dynamic_cast<const NewExpr*>(&expr)) {
         std::string elt = llvmType(ne->elem_type);
         std::string count_val = emitExpr(*ne->count);
@@ -1019,6 +1089,9 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
     // pointer reinterpret cast — result is the target type
     if (auto* pc = dynamic_cast<const PtrCastExpr*>(&expr))
         return llvmType(pc->target_type);
+
+    // sizeof always returns intptr (i64 on 64-bit)
+    if (dynamic_cast<const SizeofExpr*>(&expr)) return "i64";
 
     return "i32";
 }

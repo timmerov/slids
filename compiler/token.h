@@ -92,6 +92,9 @@ enum class TokenType {
     kArrowLeft,   // <-
     kArrowBoth,   // <->
 
+    // sizeof
+    kSizeof,
+
     // assignment
     kEquals,
     kPlusEq,

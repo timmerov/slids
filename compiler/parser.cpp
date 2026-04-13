@@ -113,6 +113,19 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         expect(TokenType::kRBracket, "expected ']'");
         return std::make_unique<NewExpr>(elem_type, std::move(count));
     }
+    if (t.type == TokenType::kSizeof) {
+        advance();
+        expect(TokenType::kLParen, "expected '(' after sizeof");
+        auto se = std::make_unique<SizeofExpr>();
+        // type form: sizeof(TypeName) — type keyword or uppercase identifier
+        if (isTypeName(peek()) || isUserTypeName(peek())) {
+            se->type_name = parseTypeName();
+        } else {
+            se->operand = parseExpr();
+        }
+        expect(TokenType::kRParen, "expected ')'");
+        return se;
+    }
     if (t.type == TokenType::kIdentifier) {
         advance();
         if (peek().type == TokenType::kLParen) {
@@ -630,6 +643,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             auto init = parseExpr();
             expect(TokenType::kSemicolon, "expected ';'");
             return std::make_unique<VarDeclStmt>(type, name, std::move(init), std::vector<std::unique_ptr<Expr>>{}, true);
+        }
+        if (peek().type == TokenType::kSemicolon) {
+            advance();
+            return std::make_unique<VarDeclStmt>(type, name, nullptr);
         }
         expect(TokenType::kEquals, "expected '='");
         auto init = parseExpr();

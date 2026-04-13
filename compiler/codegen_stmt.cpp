@@ -267,6 +267,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         out_ << "    " << reg << " = alloca " << llvm_t << "\n";
         locals_[decl->name] = reg;
         local_types_[decl->name] = decl->type;
+        if (!decl->init) return; // uninitialized — alloca only
         std::string val = emitExpr(*decl->init);
         // coerce integer or float widths if necessary
         if (!isIndirectType(decl->type)) {
