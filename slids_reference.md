@@ -867,6 +867,37 @@ Move rules:
 - After a move, the source is left in a valid state — it can be reassigned or destroyed safely
 - `delete` and `op<-` are the two ways to release ownership; `delete` frees and nulls, `<-` transfers without freeing
 
+### Swap — `<->`
+
+`a <-> b` exchanges the values at two lvalue locations without a named temporary.
+
+**Primitive pointer/iterator swap:**
+```
+char[] lo = storage_;
+char[] hi = storage_ + size_ - 1;
+while (lo < hi) {
+    lo++^ <-> hi--^;   // swap chars at lo and hi, advance both
+}
+```
+
+`lo++^` reads the address at `lo` and advances `lo` forward; `hi--^` reads the address at `hi` and advances `hi` backward. The two values are exchanged in place.
+
+**Class swap — `op<->`:**
+
+For class types, `<->` calls a user-defined `op<->` method:
+```
+String {
+    void op<->(String^ s) {
+        // swap size_, capacity_, storage_ with s^.*
+    }
+}
+```
+
+Swap rules:
+- For pointer/iterator element swap (`ptr++^ <-> ptr--^`), `<->` is built into the language
+- For class types, `<->` compiles only if `op<->` is defined
+- Both sides must be the same element type
+
 ---
 
 ## Enums
@@ -1012,6 +1043,57 @@ int32 main() {
     return 0;
 }
 ```
+
+---
+
+## sizeof
+
+`sizeof(x)` returns the size in bytes of a type or expression as an `intptr`.
+
+```
+sizeof(char)       // 1
+sizeof(int)        // 4
+sizeof(int64)      // 8
+sizeof(intptr)     // 8  (on 64-bit platforms)
+sizeof(float32)    // 4
+sizeof(float64)    // 8
+sizeof(void^)      // 8  (any pointer or iterator)
+sizeof(char[])     // 8
+```
+
+**Variable:**
+```
+int32 x;
+sizeof(x)          // 4 — uses the declared type of x
+```
+
+**Stack array:**
+```
+char buf[256];
+sizeof(buf)        // 256 — total bytes (elements × element size)
+```
+
+**Slid (struct) type:**
+```
+Vec3(float32 x_, float32 y_, float32 z_) {}
+
+sizeof(Vec3)       // 12
+Vec3 v;
+sizeof(v)          // 12
+```
+
+**String literal:**
+```
+sizeof("hello")    // 5 — byte length, not including the null terminator
+```
+
+**Address-of expression:**
+```
+int32 x;
+sizeof(^x)         // 8 — size of a pointer, not of the pointed-to type
+```
+
+`sizeof` is evaluated at compile time for all primitive and pointer types. For slid types it uses the LLVM `getelementptr null, 1` / `ptrtoint` pattern, which the optimizer folds to a constant.
 
 ---
 
