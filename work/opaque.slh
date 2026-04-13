@@ -1,0 +1,9 @@
+/*
+Opaque class declaration.
+This class has private fields not declared in the header files.
+*/
+
+/* the ... indicates there are private fields defined in the implementation. */
+Opaque(...) {
+    void printSecretMessage();
+}
