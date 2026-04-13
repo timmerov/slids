@@ -233,7 +233,11 @@ std::vector<Token> Lexer::tokenize() {
                         if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kLShiftEq, "<<=", line_); }
                         else               { tokens.emplace_back(TokenType::kLShift, "<<", line_); }
                     } else if (peek() == '=') { advance(); tokens.emplace_back(TokenType::kLtEq,     "<=", line_); }
-                    else if (peek() == '-') { advance(); tokens.emplace_back(TokenType::kArrowLeft, "<-", line_); }
+                    else if (peek() == '-') {
+                        advance();
+                        if (peek() == '>') { advance(); tokens.emplace_back(TokenType::kArrowBoth, "<->", line_); }
+                        else               { tokens.emplace_back(TokenType::kArrowLeft, "<-", line_); }
+                    }
                     else                   { tokens.emplace_back(TokenType::kLt,        "<",  line_); }
                     break;
                 case '>':

@@ -17,10 +17,10 @@ but adding implementation fields to a declared class
 has issues we will address later.
 */
     /* length of stored string. */
-    int size_ = 0,
+    intptr size_ = 0,
 
     /* maximum size storable. */
-    int capacity_ = 0,
+    intptr capacity_ = 0,
 
     /* pointer to stored string. */
     char[] storage_ = nullptr
@@ -59,7 +59,7 @@ has issues we will address later.
     void clear();
 
     /* increase capacity. */
-    void reserve(int capacity);
+    void reserve(intptr capacity);
 
     /* reverse the characters in the string. */
     void reverse();
@@ -73,10 +73,10 @@ has issues we will address later.
 String op+(String^ sa, String^ sb);
 
 /* return length of null terminated string. */
-int strlen(char[] s);
+intptr strlen(char[] s);
 
 /* copy null terminated string from src to dst. */
 void strcpy(char[] dst, char[] src);
 
 /* copy at most count characters from src to dst. */
-void strcpy(char[] dst, char[] src, int count);
+void strcpy(char[] dst, char[] src, intptr count);

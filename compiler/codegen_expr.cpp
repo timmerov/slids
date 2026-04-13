@@ -624,16 +624,18 @@ std::string Codegen::emitExpr(const Expr& expr) {
             };
             bool left_ptr = (left_llvm == "ptr");
             std::string pointee = left_ptr ? getPt(*b->left) : getPt(*b->right);
+            const Expr& off_expr = left_ptr ? *b->right : *b->left;
             std::string ptr_val  = emitExpr(left_ptr ? *b->left  : *b->right);
-            std::string off_val  = emitExpr(left_ptr ? *b->right : *b->left);
+            std::string off_val  = emitExpr(off_expr);
+            std::string off_type = exprLlvmType(off_expr);
             std::string tmp = newTmp();
             if (b->op == "-") {
                 std::string neg = newTmp();
-                out_ << "    " << neg << " = sub i32 0, " << off_val << "\n";
+                out_ << "    " << neg << " = sub " << off_type << " 0, " << off_val << "\n";
                 off_val = neg;
             }
             out_ << "    " << tmp << " = getelementptr " << pointee
-                 << ", ptr " << ptr_val << ", i32 " << off_val << "\n";
+                 << ", ptr " << ptr_val << ", " << off_type << " " << off_val << "\n";
             return tmp;
         }
 
@@ -696,14 +698,21 @@ std::string Codegen::emitExpr(const Expr& expr) {
     if (auto* ne = dynamic_cast<const NewExpr*>(&expr)) {
         std::string elt = llvmType(ne->elem_type);
         std::string count_val = emitExpr(*ne->count);
+        std::string count_type = exprLlvmType(*ne->count);
         int elem_bytes = 1;
         if (elt == "i32") elem_bytes = 4;
         else if (elt == "i64") elem_bytes = 8;
         else if (elt == "i16") elem_bytes = 2;
-        std::string bytes = newTmp();
-        out_ << "    " << bytes << " = mul i32 " << count_val << ", " << elem_bytes << "\n";
-        std::string bytes64 = newTmp();
-        out_ << "    " << bytes64 << " = zext i32 " << bytes << " to i64\n";
+        std::string bytes64;
+        if (count_type == "i64") {
+            bytes64 = newTmp();
+            out_ << "    " << bytes64 << " = mul i64 " << count_val << ", " << elem_bytes << "\n";
+        } else {
+            std::string bytes = newTmp();
+            out_ << "    " << bytes << " = mul " << count_type << " " << count_val << ", " << elem_bytes << "\n";
+            bytes64 = newTmp();
+            out_ << "    " << bytes64 << " = zext " << count_type << " " << bytes << " to i64\n";
+        }
         std::string tmp = newTmp();
         out_ << "    " << tmp << " = call ptr @malloc(i64 " << bytes64 << ")\n";
         return tmp;

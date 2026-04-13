@@ -825,6 +825,13 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     return std::make_unique<PostIncDerefAssignStmt>(
                         std::make_unique<VarExpr>(name), op, std::move(val));
                 }
+                if (peek().type == TokenType::kArrowBoth) {
+                    advance();
+                    auto lhs = std::make_unique<PostIncDerefExpr>(std::make_unique<VarExpr>(name), op);
+                    auto rhs = parseExpr();
+                    expect(TokenType::kSemicolon, "expected ';'");
+                    return std::make_unique<SwapStmt>(std::move(lhs), std::move(rhs));
+                }
                 // ptr++^ as expression statement (rvalue use)
                 expect(TokenType::kSemicolon, "expected ';'");
                 return std::make_unique<ExprStmt>(
@@ -945,6 +952,7 @@ MethodDef Parser::parseMethodDef() {
     m.name = expect(TokenType::kIdentifier, "expected method name").value;
     if (m.name == "op" && peek().type == TokenType::kEquals)     { advance(); m.name = "op="; }
     else if (m.name == "op" && peek().type == TokenType::kArrowLeft) { advance(); m.name = "op<-"; }
+    else if (m.name == "op" && peek().type == TokenType::kArrowBoth) { advance(); m.name = "op<->"; }
     expect(TokenType::kLParen, "expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         std::string type = parseTypeName();
@@ -1121,6 +1129,7 @@ void Parser::parseExternalMethodBlock(Program& program) {
         em.method_name = expect(TokenType::kIdentifier, "expected method name").value;
         if (em.method_name == "op" && peek().type == TokenType::kEquals)     { advance(); em.method_name = "op="; }
         else if (em.method_name == "op" && peek().type == TokenType::kArrowLeft) { advance(); em.method_name = "op<-"; }
+        else if (em.method_name == "op" && peek().type == TokenType::kArrowBoth) { advance(); em.method_name = "op<->"; }
         expect(TokenType::kLParen, "expected '('");
         while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
             std::string type = parseTypeName();

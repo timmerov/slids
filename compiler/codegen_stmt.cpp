@@ -510,6 +510,41 @@ void Codegen::emitStmt(const Stmt& stmt) {
         return;
     }
 
+    if (auto* sw = dynamic_cast<const SwapStmt*>(&stmt)) {
+        // lhs <-> rhs — swap values at two lvalue locations
+        // both sides must be PostIncDerefExpr (ptr++^ or ptr--^)
+        auto emitPtrAndAdvance = [&](const Expr& e) -> std::pair<std::string, std::string> {
+            // returns (cur_ptr_val, pointee_llvm_type)
+            auto* pide = dynamic_cast<const PostIncDerefExpr*>(&e);
+            if (!pide) throw std::runtime_error("SwapStmt: only ptr++^ / ptr--^ lvalues supported");
+            auto* ve = dynamic_cast<const VarExpr*>(pide->operand.get());
+            if (!ve) throw std::runtime_error("SwapStmt: only simple pointer variables supported");
+            auto it  = locals_.find(ve->name);
+            auto tit = local_types_.find(ve->name);
+            if (it == locals_.end())
+                throw std::runtime_error("SwapStmt: undefined variable '" + ve->name + "'");
+            if (tit == local_types_.end() || !isPtrType(tit->second))
+                throw std::runtime_error("SwapStmt: '" + ve->name + "' is not a pointer ([]) type");
+            std::string pointee_type = tit->second.substr(0, tit->second.size()-2);
+            std::string pointee_llvm = llvmType(pointee_type);
+            int step = (pide->op == "++") ? 1 : -1;
+            std::string cur = newTmp();
+            out_ << "    " << cur << " = load ptr, ptr " << it->second << "\n";
+            std::string nxt = newTmp();
+            out_ << "    " << nxt << " = getelementptr " << pointee_llvm << ", ptr " << cur << ", i32 " << step << "\n";
+            out_ << "    store ptr " << nxt << ", ptr " << it->second << "\n";
+            return {cur, pointee_llvm};
+        };
+        auto [lptr, ltype] = emitPtrAndAdvance(*sw->lhs);
+        auto [rptr, rtype] = emitPtrAndAdvance(*sw->rhs);
+        std::string lval = newTmp(), rval = newTmp();
+        out_ << "    " << lval << " = load " << ltype << ", ptr " << lptr << "\n";
+        out_ << "    " << rval << " = load " << rtype << ", ptr " << rptr << "\n";
+        out_ << "    store " << rtype << " " << rval << ", ptr " << lptr << "\n";
+        out_ << "    store " << ltype << " " << lval << ", ptr " << rptr << "\n";
+        return;
+    }
+
     if (auto* fa = dynamic_cast<const FieldAssignStmt*>(&stmt)) {
         // handle ptr^.field = val — object is a DerefExpr
         if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
@@ -987,16 +1022,36 @@ void Codegen::emitStmt(const Stmt& stmt) {
             auto emitSlice = [&](const SliceExpr* sl, bool nl) {
                 std::string base_ptr = emitExpr(*sl->base);
                 std::string start_val = emitExpr(*sl->start);
-                std::string end_val = emitExpr(*sl->end);
+                std::string end_val   = emitExpr(*sl->end);
+                std::string start_type = exprLlvmType(*sl->start);
+                std::string end_type   = exprLlvmType(*sl->end);
+                // use the wider of start/end types for the subtraction
+                bool is64 = (start_type == "i64" || end_type == "i64");
+                std::string idx_type = is64 ? "i64" : "i32";
+                // widen start/end if needed
+                auto widen = [&](const std::string& val, const std::string& from) -> std::string {
+                    if (!is64 || from == "i64") return val;
+                    std::string w = newTmp();
+                    out_ << "    " << w << " = sext " << from << " " << val << " to i64\n";
+                    return w;
+                };
+                std::string sv = widen(start_val, start_type);
+                std::string ev = widen(end_val, end_type);
                 std::string sliced = newTmp();
-                out_ << "    " << sliced << " = getelementptr i8, ptr " << base_ptr << ", i32 " << start_val << "\n";
+                out_ << "    " << sliced << " = getelementptr i8, ptr " << base_ptr << ", " << idx_type << " " << sv << "\n";
                 std::string len = newTmp();
-                out_ << "    " << len << " = sub i32 " << end_val << ", " << start_val << "\n";
+                out_ << "    " << len << " = sub " << idx_type << " " << ev << ", " << sv << "\n";
+                // printf("%.*s", ...) needs i32 length
+                std::string len32 = len;
+                if (is64) {
+                    len32 = newTmp();
+                    out_ << "    " << len32 << " = trunc i64 " << len << " to i32\n";
+                }
                 std::string fmt = newTmp();
                 std::string fmt_name = nl ? "@.fmt_slice" : "@.fmt_slice_nonl";
                 int fmt_size = nl ? 6 : 5;
                 out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
-                out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", i32 " << len << ", ptr " << sliced << ")\n";
+                out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", i32 " << len32 << ", ptr " << sliced << ")\n";
             };
 
             // Flatten a left-leaning "+" chain into segments.

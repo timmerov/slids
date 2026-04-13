@@ -29,7 +29,7 @@ String {
 
     /* assignment from null terminated string. */
     void op=(char[] str) {
-        int len = strlen(str);
+        intptr len = strlen(str);
         set(str, len);
     }
 
@@ -72,7 +72,7 @@ String {
     }
 
     /* increase capacity. save existing string. */
-    void reserve(int cap) {
+    void reserve(intptr cap) {
         if (cap <= capacity_) {
             return;
         }
@@ -89,11 +89,7 @@ String {
         char[] lo = storage_;
         char[] hi = storage_ + size_ - 1;
         while (lo < hi) {
-            char c = lo^;
-            lo^ = hi^;
-            hi^ = c;
-            ++lo;
-            --hi;
+            lo++^ <-> hi--^;
         }
     }
 
@@ -110,14 +106,14 @@ String {
 /* private functions. */
 
     /* set to an array of characters. */
-    void set(char[] arr, int sz) {
+    void set(char[] arr, intptr sz) {
         reserve(sz);
         size_ = sz;
         strcpy(storage_, arr, sz);
     }
 
     /* append an array of characters. */
-    void append(char[] arr, int sz) {
+    void append(char[] arr, intptr sz) {
         expand(size_ + sz);
         strcpy(storage_ + size_, arr, sz);
         size_ += sz;
@@ -132,7 +128,7 @@ String {
     expect the string to continue growing.
     add more capacity than requested.
     */
-    void expand(int cap) {
+    void expand(intptr cap) {
         if (cap > capacity_) {
             cap += cap / 2;
         }
@@ -162,8 +158,8 @@ String op+(String^ sa, String^ sb) {
 /* helper functions. */
 
 /* return length of null terminated string. */
-int strlen(char[] s) {
-    int len = 0;
+intptr strlen(char[] s) {
+    intptr len = 0;
     while (true) {
         char ch = s^;
         if (ch == 0) {
@@ -193,7 +189,7 @@ void strcpy(
 void strcpy(
     char[] dst,
     char[] src,
-    int count
+    intptr count
 ) {
     while (count > 0) {
         char ch = src++^;

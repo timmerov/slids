@@ -238,6 +238,14 @@ struct DeleteStmt : Stmt {
     DeleteStmt(std::unique_ptr<Expr> op) : operand(std::move(op)) {}
 };
 
+// swap: lhs <-> rhs  — exchange values at two lvalue locations
+struct SwapStmt : Stmt {
+    std::unique_ptr<Expr> lhs;
+    std::unique_ptr<Expr> rhs;
+    SwapStmt(std::unique_ptr<Expr> l, std::unique_ptr<Expr> r)
+        : lhs(std::move(l)), rhs(std::move(r)) {}
+};
+
 // deref assign: ptr^ = expr  or  ptr^.field = expr handled via FieldAssignStmt on DerefExpr
 struct DerefAssignStmt : Stmt {
     std::unique_ptr<Expr> ptr;   // the pointer expression
