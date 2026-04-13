@@ -847,7 +847,7 @@ bool Codegen::isPointerExpr(const Expr& expr) {
 }
 
 bool Codegen::isUnsignedExpr(const Expr& expr) {
-    static const std::set<std::string> utypes = {"uint","uint8","uint16","uint32","uint64"};
+    static const std::set<std::string> utypes = {"uint","uint8","uint16","uint32","uint64","char"};
 
     // local variable or field via self
     if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
@@ -887,7 +887,7 @@ bool Codegen::isUnsignedExpr(const Expr& expr) {
 
     // numeric cast to an unsigned type
     if (auto* nc = dynamic_cast<const NumericCastExpr*>(&expr)) {
-        static const std::set<std::string> utypes_nc = {"uint","uint8","uint16","uint32","uint64"};
+        static const std::set<std::string> utypes_nc = {"uint","uint8","uint16","uint32","uint64","char"};
         return utypes_nc.count(nc->target_type) > 0;
     }
 
@@ -1119,7 +1119,7 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                 return tmp;
             } else {
                 // widen: zext for unsigned source, sext for signed
-                static const std::set<std::string> unsigned_types = {"uint","uint8","uint16","uint32","uint64"};
+                static const std::set<std::string> unsigned_types = {"uint","uint8","uint16","uint32","uint64","char"};
                 bool src_unsigned = false;
                 if (auto* nc = dynamic_cast<const NumericCastExpr*>(&arg))
                     src_unsigned = unsigned_types.count(nc->target_type) > 0;

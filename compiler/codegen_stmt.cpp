@@ -55,7 +55,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (oit == method_overloads_.end()) return "";
         if (oit->second.size() == 1) return oit->second[0].first;
 
-        static const std::set<std::string> unsigned_types = {"uint","uint8","uint16","uint32","uint64"};
+        static const std::set<std::string> unsigned_types = {"uint","uint8","uint16","uint32","uint64","char"};
         static const std::set<std::string> signed_int_types = {"int","int8","int16","int32","int64"};
 
         // determine argument category
@@ -67,8 +67,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
             arg_is_char = ile->is_char_literal;
             arg_is_scalar_int = !ile->is_char_literal;
         } else if (auto* nc = dynamic_cast<const NumericCastExpr*>(&arg)) {
-            arg_is_unsigned = unsigned_types.count(nc->target_type) > 0;
-            arg_is_scalar_int = !arg_is_unsigned;
+            arg_is_char = nc->target_type == "char";
+            arg_is_unsigned = !arg_is_char && unsigned_types.count(nc->target_type) > 0;
+            arg_is_scalar_int = !arg_is_char && !arg_is_unsigned;
         } else if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
             auto tit = local_types_.find(ve->name);
             if (tit != local_types_.end()) {
@@ -97,7 +98,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (ptypes.size() != 1) continue;
             if (arg_is_slid       && isRefType(ptypes[0])) return m;
             if (arg_is_char       && ptypes[0] == "char") return m;
-            if (arg_is_unsigned   && unsigned_types.count(ptypes[0])) return m;
+            if (arg_is_unsigned   && ptypes[0] != "char" && unsigned_types.count(ptypes[0])) return m;
             if (arg_is_scalar_int && !isIndirectType(ptypes[0]) && ptypes[0] != "char" && !unsigned_types.count(ptypes[0])) return m;
             if (!arg_is_slid && !arg_is_char && !arg_is_scalar_int && !arg_is_unsigned && isPtrType(ptypes[0])) return m;
         }

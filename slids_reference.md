@@ -116,13 +116,13 @@ int32 helperSlid() {  // private — not in .slh
 | `int16` | 16-bit signed integer |
 | `int32` | 32-bit signed integer |
 | `int64` | 64-bit signed integer |
-| `intptr` | signed pointer-sized integer (64-bit on 64-bit platforms) |
+| `intptr` | signed pointer-sized integer (64-bit) |
 | `uint` | unsigned integer (32-bit) |
 | `uint8` | 8-bit unsigned integer |
 | `uint16` | 16-bit unsigned integer |
 | `uint32` | 32-bit unsigned integer |
 | `uint64` | 64-bit unsigned integer |
-| `char` | character (8-bit) |
+| `char` | unsigned character-sized integer (8-bit) |
 | `float32` | 32-bit float |
 | `float64` | 64-bit float |
 | `bool` | Boolean (`true` / `false`) |
