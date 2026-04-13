@@ -329,6 +329,31 @@ void Codegen::analyzeNestedFunctions(const FunctionDef& fn) {
 }
 
 
+// Compute byte size of a Slids type for struct layout (LLVM natural alignment rules).
+// Pointers/iterators (types ending in ^ or []) are always 8 bytes on 64-bit.
+static int64_t slidsTypeSize(const std::string& t) {
+    if (t == "bool" || t == "int8" || t == "uint8" || t == "char") return 1;
+    if (t == "int16" || t == "uint16") return 2;
+    if (t == "int" || t == "int32" || t == "uint" || t == "uint32" || t == "float32") return 4;
+    if (t == "int64" || t == "uint64" || t == "intptr" || t == "float64") return 8;
+    // pointer / iterator types — and any unknown type (user struct, etc.)
+    return 8;
+}
+
+static int64_t computeFieldsSize(const std::vector<FieldDef>& fields) {
+    int64_t offset = 0;
+    int64_t max_align = 1;
+    for (auto& f : fields) {
+        int64_t sz = slidsTypeSize(f.type);
+        int64_t al = sz; // natural alignment = size for all primitives/pointers
+        if (al > max_align) max_align = al;
+        offset = (offset + al - 1) & ~(al - 1); // align up
+        offset += sz;
+    }
+    // trailing pad to multiple of max_align
+    return (offset + max_align - 1) & ~(max_align - 1);
+}
+
 void Codegen::collectSlids() {
     for (auto& slid : program_.slids) {
         SlidInfo info;
@@ -337,7 +362,18 @@ void Codegen::collectSlids() {
             info.field_index[slid.fields[i].name] = i;
             info.field_types.push_back(slid.fields[i].type);
         }
-        info.has_explicit_ctor = (slid.explicit_ctor_body != nullptr);
+        // annotated incomplete type: has sizeof annotation and trailing ellipsis
+        if (slid.sizeof_value > 0 && slid.has_ellipsis_suffix) {
+            int64_t public_size = computeFieldsSize(slid.fields);
+            info.sizeof_override = slid.sizeof_value;
+            info.padding_bytes = slid.sizeof_value - public_size;
+            if (info.padding_bytes < 0)
+                throw std::runtime_error("sizeof annotation for '" + slid.name
+                    + "' (" + std::to_string(slid.sizeof_value)
+                    + ") is smaller than its public fields (" + std::to_string(public_size) + ")");
+        }
+        // has_explicit_ctor_decl covers forward declarations too (consumer must call ctor)
+        info.has_explicit_ctor = slid.has_explicit_ctor_decl || (slid.explicit_ctor_body != nullptr);
         info.has_dtor = (slid.dtor_body != nullptr);
         // also check external method defs for ctor/dtor
         for (auto& em : program_.external_methods) {
@@ -450,9 +486,16 @@ void Codegen::emit() {
     for (auto& slid : program_.slids) {
         auto& info = slid_info_[slid.name];
         out_ << "%struct." << slid.name << " = type { ";
+        bool first = true;
         for (int i = 0; i < (int)info.field_types.size(); i++) {
-            if (i > 0) out_ << ", ";
+            if (!first) out_ << ", ";
+            first = false;
             out_ << llvmType(info.field_types[i]);
+        }
+        // for annotated incomplete types: append opaque padding bytes
+        if (info.padding_bytes > 0) {
+            if (!first) out_ << ", ";
+            out_ << "[" << info.padding_bytes << " x i8]";
         }
         out_ << " }\n";
     }

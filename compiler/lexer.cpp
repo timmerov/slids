@@ -155,6 +155,7 @@ Token Lexer::readIdentifierOrKeyword() {
     if (value == "false")    return Token(TokenType::kFalse,    value, line_);
     if (value == "if")       return Token(TokenType::kIf,       value, line_);
     if (value == "else")     return Token(TokenType::kElse,     value, line_);
+    if (value == "transport") return Token(TokenType::kTransport, value, line_);
     if (value == "while")    return Token(TokenType::kWhile,    value, line_);
     if (value == "for")      return Token(TokenType::kFor,      value, line_);
     if (value == "in")       return Token(TokenType::kIn,       value, line_);
@@ -277,8 +278,15 @@ std::vector<Token> Lexer::tokenize() {
                     tokens.emplace_back(TokenType::kBitNot, "~", line_);
                     break;
                 case '.':
-                    if (peek() == '.') { advance(); tokens.emplace_back(TokenType::kDotDot, "..", line_); }
-                    else               { tokens.emplace_back(TokenType::kDot, ".", line_); }
+                    if (peek() == '.' && pos_ + 1 < (int)source_.size() && source_[pos_ + 1] == '.') {
+                        advance(); advance();
+                        tokens.emplace_back(TokenType::kEllipsis, "...", line_);
+                    } else if (peek() == '.') {
+                        advance();
+                        tokens.emplace_back(TokenType::kDotDot, "..", line_);
+                    } else {
+                        tokens.emplace_back(TokenType::kDot, ".", line_);
+                    }
                     break;
                 case ':':
                     tokens.emplace_back(TokenType::kColon, ":", line_);

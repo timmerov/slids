@@ -705,8 +705,14 @@ std::string Codegen::emitExpr(const Expr& expr) {
             // pointer/iterator types — size of a pointer
             if (tn.size() >= 1 && tn.back() == '^') return "8";
             if (tn.size() >= 2 && tn.substr(tn.size()-2) == "[]") return "8";
-            // slid (struct) type — use LLVM GEP null trick: sizeof = ptrtoint(gep(%struct.T, null, 1))
+            // slid (struct) type — use sizeof_override if annotated, else GEP null trick
             if (slid_info_.count(tn)) {
+                auto& sinfo = slid_info_[tn];
+                if (sinfo.sizeof_override > 0) {
+                    std::string reg = newTmp();
+                    out_ << "    " << reg << " = add i64 " << sinfo.sizeof_override << ", 0\n";
+                    return reg;
+                }
                 std::string gep = newTmp();
                 out_ << "    " << gep << " = getelementptr %struct." << tn << ", ptr null, i32 1\n";
                 std::string sz = newTmp();

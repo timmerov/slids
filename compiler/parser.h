@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <map>
 
 // --- Expressions ---
 
@@ -350,6 +351,10 @@ struct MethodDef {
 struct SlidDef {
     std::string name;
     std::vector<FieldDef> fields;
+    bool has_ellipsis_prefix = false;    // tuple starts with ... (implementation file: public fields come from transport source)
+    bool has_ellipsis_suffix = false;    // tuple ends with ...   (header file: private fields defined elsewhere)
+    int64_t sizeof_value = 0;            // 0=absent, -1=sizeof=delete; placeholder, >0=annotated size
+    bool has_explicit_ctor_decl = false; // _() was declared (with or without body); consumer must call ctor
     std::unique_ptr<BlockStmt> ctor_body;          // loose code (implicit ctor), or null
     std::unique_ptr<BlockStmt> explicit_ctor_body; // _() { ... }, or null
     std::unique_ptr<BlockStmt> dtor_body;          // ~() { ... }, or null
@@ -393,19 +398,32 @@ struct Program {
     std::vector<SlidDef> slids;
     std::vector<FunctionDef> functions;
     std::vector<ExternalMethodDef> external_methods;
+
+    struct TransportInfo {
+        std::string module_name;            // e.g. "opaque"
+        std::string source_slh_path;        // path to the unannotated .slh
+        std::vector<std::string> slid_names; // names of slids declared in the .slh
+    };
+    std::vector<TransportInfo> transports; // populated when transport statements are compiled
 };
 
 // --- Parser ---
 
 class Parser {
 public:
-    Parser(std::vector<Token> tokens, std::string source_dir = "");
+    Parser(std::vector<Token> tokens,
+           std::string source_dir = "",
+           std::vector<std::string> import_paths = {},
+           std::string export_path = "");
     Program parse();
 
 private:
     std::vector<Token> tokens_;
     int pos_;
     std::string source_dir_;
+    std::vector<std::string> import_paths_; // --import-path dirs (searched for transport .slh)
+    std::string export_path_;               // --export-path dir (searched first for import .slh)
+    std::map<std::string, SlidDef> transported_slids_; // name -> slid from transport source .slh
 
     Token& peek();
     Token& advance();

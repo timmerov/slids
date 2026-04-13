@@ -13,6 +13,8 @@ struct SlidInfo {
     std::vector<std::string> field_types;
     bool has_explicit_ctor = false;
     bool has_dtor = false;
+    int64_t sizeof_override = 0; // >0: use this value for sizeof() and pad the struct definition
+    int64_t padding_bytes = 0;   // extra opaque bytes appended after known fields in struct type
 };
 
 // info about a nested function's capture set

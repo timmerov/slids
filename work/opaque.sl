@@ -8,7 +8,7 @@ class is size annotated.
 */
 
 /* imports the not-annotated version ./opaque.slh */
-import opaque;
+transport opaque;
 
 /*
 the ... indicates there are public fields defined elsewhere.
@@ -18,6 +18,14 @@ Opaque(
     ...,
     int y_ = 42
 ) {
+    _() {
+        x_ = 0;
+        y_ = 42;
+    }
+
+    ~() {
+    }
+
     void printSecretMessage() {
         __println("The answer is: " + y_ + ", not " + x_ + ".");
     }
