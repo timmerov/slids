@@ -41,9 +41,9 @@ String {
     /* assignment fron int64. */
     void op=(int64 x) {
         if (x >= 0) {
-            fillDigitsBackwards(uint64(x));
+            fillDigitsBackwards(x);
         } else {
-            fillDigitsBackwards(uint64(-x));
+            fillDigitsBackwards(-x);
             append('-');
         }
         reverse();
