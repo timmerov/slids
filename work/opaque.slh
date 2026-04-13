@@ -1,9 +1,37 @@
 /*
 Opaque class declaration.
-This class has private fields not declared in the header files.
+
+this class has private fields declared elsewhere.
+it will be copied as a product of compiling the
+source file that declares the private fields.
 */
 
-/* the ... indicates there are private fields defined in the implementation. */
-Opaque(...) {
+/*
+the ... indicates there are private fields defined elsewhere.
+public fields come before private fields.
+*/
+Opaque(
+    int x_ = 0,
+    ...
+) {
+    /*
+    sizeof also indicates there are private fields.
+    when those are defined the source file will
+    output a copy of this .slh with the rhs filled
+    in with the correct size.
+    this line is optional.
+    is just tells the compiler where to annotate
+    size information.
+    otherwise the compiler could put it anywhere
+    it wants.
+    */
+    sizeof = delete;
+
+    /*
+    generated code adds a hard coded value:
+    sizeof = 8;
+    */
+
+    /* method */
     void printSecretMessage();
 }

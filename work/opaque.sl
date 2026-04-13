@@ -1,13 +1,24 @@
 /*
 Opaque class implementation.
-This class has private fields not declared in the header files.
+
+this class has private fields not declared in the header file.
+when this file is compiled it also writes as an output build/opaque.slh.
+which contains a line for line copy of opaque.slh but the Opaque
+class is size annotated.
 */
 
-/* declare the private fields. */
+/* imports the not-annotated version ./opaque.slh */
+import opaque;
+
+/*
+the ... indicates there are public fields defined elsewhere.
+declare the private fields after.
+*/
 Opaque(
-    int x_ = 42
+    ...,
+    int y_ = 42
 ) {
     void printSecretMessage() {
-        __println("The answer is: " + x_ + ".");
+        __println("The answer is: " + y_ + ", not " + x_ + ".");
     }
 }
