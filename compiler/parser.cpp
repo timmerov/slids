@@ -468,7 +468,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             expect(TokenType::kSemicolon, "expected ';'");
         } else {
             expect(TokenType::kLParen, "expected '('");
-            stmt->cond = parseExpr();
+            if (peek().type == TokenType::kRParen)
+                stmt->cond = std::make_unique<IntLiteralExpr>(1);  // while () == while (true)
+            else
+                stmt->cond = parseExpr();
             expect(TokenType::kRParen, "expected ')'");
             stmt->body = parseBlock();
             if (peek().type == TokenType::kColon) {

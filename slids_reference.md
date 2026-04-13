@@ -643,6 +643,13 @@ while (condition) {
 } :outer   // name can be targeted by break/continue from a nested block
 ```
 
+An empty condition `while ()` is equivalent to `while (true)` — loops forever until a `break` or `return`:
+```
+while () {
+    if (done) break;
+}
+```
+
 Not legal:
 ```
 while (condition) doSomething();  // error — {} required
@@ -690,26 +697,31 @@ for Direction d in Direction {
 }
 ```
 
+Combined with `switch` to dispatch on each value:
+```
+enum Piece (
+    kEmpty,
+    kKing,
+    kQueen,
+    kRook,
+    kBishop,
+    kKnight,
+    kPawn
+)
+
+for Piece piece in Piece {
+    switch (piece) {
+    case kKing:   __print("King");   break;
+    case kQueen:  __print("Queen");  break;
+    case kRook:   __print("Rook");   break;
+    default:      __print("Other");  break;
+    }
+}
+```
+
 Not legal:
 ```
 for int i in (0..10) print(i);  // error — {} required
-```
-
-### For — C-style
-
-> **TODO:** This syntax needs review — not yet finalized.
-
-Curly brackets are always required.
-
-```
-for (int i = 0; i < 10; i++) {
-    print(i);
-} :outer
-```
-
-Not legal:
-```
-for (int i = 0; i < 10; i++) print(i);  // error — {} required
 ```
 
 ### Switch

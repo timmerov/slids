@@ -160,7 +160,7 @@ String op+(String^ sa, String^ sb) {
 /* return length of null terminated string. */
 intptr strlen(char[] s) {
     intptr len = 0;
-    while (true) {
+    while () {
         char ch = s^;
         if (ch == 0) {
             break;
@@ -176,7 +176,7 @@ void strcpy(
     char[] dst,
     char[] src
 ) {
-    while (true) {
+    while () {
         char ch = dst++^;
         dst++^ = ch;
         if (ch == 0) {
