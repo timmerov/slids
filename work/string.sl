@@ -143,10 +143,10 @@ String {
     void fillDigitsBackwards(uint64 x) {
         clear();
         reserve(24);
-        while (x) {
+        while {
             append('0' + x % 10);
             x /= 10;
-        }
+        } (x);
     }
 }
 

@@ -1,4 +1,5 @@
 #include "lexer.h"
+#include <cstdint>
 #include <stdexcept>
 
 Lexer::Lexer(const std::string& source)
@@ -61,7 +62,7 @@ Token Lexer::readCharLiteral() {
         value = (unsigned char)advance();
     }
     if (peek() == '\'') advance(); // consume closing '
-    return Token(TokenType::kIntLiteral, std::to_string(value), line_);
+    return Token(TokenType::kCharLiteral, std::to_string(value), line_);
 }
 
 Token Lexer::readString() {
@@ -97,7 +98,9 @@ Token Lexer::readNumber() {
         // strip underscores and convert hex to decimal
         std::string clean;
         for (char c : digits) if (c != '_') clean += c;
-        return Token(TokenType::kIntLiteral, std::to_string(std::stoll(clean, nullptr, 16)), line_);
+        // use stoull to handle the full unsigned range, then reinterpret as signed
+        uint64_t uval = std::stoull(clean, nullptr, 16);
+        return Token(TokenType::kIntLiteral, std::to_string(static_cast<int64_t>(uval)), line_);
     }
     if (peek() == '0' && (peek2() == 'b' || peek2() == 'B')) {
         advance(); advance(); // consume 0b
@@ -106,7 +109,8 @@ Token Lexer::readNumber() {
             digits += advance();
         std::string clean;
         for (char c : digits) if (c != '_') clean += c;
-        return Token(TokenType::kIntLiteral, std::to_string(std::stoll(clean, nullptr, 2)), line_);
+        uint64_t uval = std::stoull(clean, nullptr, 2);
+        return Token(TokenType::kIntLiteral, std::to_string(static_cast<int64_t>(uval)), line_);
     }
     // decimal
     while (pos_ < (int)source_.size() && (isdigit(peek()) || peek() == '_'))

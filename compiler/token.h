@@ -4,6 +4,7 @@
 enum class TokenType {
     // literals
     kIntLiteral,
+    kCharLiteral,
     kFloatLiteral,
     kStringLiteral,
 

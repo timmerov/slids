@@ -132,8 +132,19 @@ void Codegen::collectFunctionSignatures() {
     for (auto& slid : program_.slids) {
         // collect all method implementations (inline bodies + external defs), grouped by name
         struct Entry { std::string ret; std::vector<std::pair<std::string,std::string>> params; };
+        // build set of method names covered by external implementations
+        // so forward decls from an imported header don't get double-counted as overloads
+        std::set<std::string> covered_by_external;
+        for (auto& em : program_.external_methods) {
+            if (em.slid_name != slid.name || !em.body) continue;
+            if (em.method_name == "_" || em.method_name == "~") continue;
+            covered_by_external.insert(em.method_name);
+        }
+
         std::map<std::string, std::vector<Entry>> by_name;
         for (auto& m : slid.methods) {
+            // skip bodyless forward decls when the external method already provides the impl
+            if (!m.body && covered_by_external.count(m.name)) continue;
             by_name[m.name].push_back({m.return_type, m.params});
         }
         for (auto& em : program_.external_methods) {
@@ -1094,18 +1105,32 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
         }
     }
     std::string val = emitExpr(arg);
-    // truncate wider integer to narrower param type (e.g. i32/i64 → i8 for char param)
+    // widen or truncate integer to match param type
     if (!param_type.empty() && !isIndirectType(param_type)) {
         std::string want = llvmType(param_type);
-        if (want == "i8" || want == "i16") {
-            std::string src = exprLlvmType(arg);
-            if (src != want && (src == "i8" || src == "i16" || src == "i32" || src == "i64")) {
-                static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
-                if (rank.at(src) > rank.at(want)) {
-                    std::string truncated = newTmp();
-                    out_ << "    " << truncated << " = trunc " << src << " " << val << " to " << want << "\n";
-                    return truncated;
+        std::string src  = exprLlvmType(arg);
+        static const std::map<std::string,int> rank = {{"i1",0},{"i8",1},{"i16",2},{"i32",3},{"i64",4}};
+        auto wit = rank.find(want), sit = rank.find(src);
+        if (wit != rank.end() && sit != rank.end() && wit->first != sit->first) {
+            if (wit->second < sit->second) {
+                // truncate: e.g. i32 → i8 for char param
+                std::string tmp = newTmp();
+                out_ << "    " << tmp << " = trunc " << src << " " << val << " to " << want << "\n";
+                return tmp;
+            } else {
+                // widen: zext for unsigned source, sext for signed
+                static const std::set<std::string> unsigned_types = {"uint","uint8","uint16","uint32","uint64"};
+                bool src_unsigned = false;
+                if (auto* nc = dynamic_cast<const NumericCastExpr*>(&arg))
+                    src_unsigned = unsigned_types.count(nc->target_type) > 0;
+                else if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
+                    auto tit = local_types_.find(ve->name);
+                    if (tit != local_types_.end()) src_unsigned = unsigned_types.count(tit->second) > 0;
                 }
+                std::string op = src_unsigned ? "zext" : "sext";
+                std::string tmp = newTmp();
+                out_ << "    " << tmp << " = " << op << " " << src << " " << val << " to " << want << "\n";
+                return tmp;
             }
         }
     }

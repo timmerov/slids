@@ -16,8 +16,9 @@ struct StringLiteralExpr : Expr {
 };
 
 struct IntLiteralExpr : Expr {
-    int value;
-    IntLiteralExpr(int v) : value(v) {}
+    int64_t value;
+    bool is_char_literal = false;
+    IntLiteralExpr(int64_t v, bool is_char = false) : value(v), is_char_literal(is_char) {}
 };
 
 struct VarExpr : Expr {

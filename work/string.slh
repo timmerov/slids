@@ -35,14 +35,22 @@ has issues we will address later.
     /* assignment from null terminated string. */
     void op=(char[] s);
 
-    /* assignment from single character. */
+    /* assignment from character literal. */
     void op=(char c);
 
-    /* assignment fron int64. */
+    /*
+    assignment fron int64.
+    all smaller signed ints should promote to int64.
+    excluding char.
+    */
     void op=(int64 x);
 
-    /* assignment fron unsigned-int64. */
-    void op=(int64 x);
+    /*
+    assignment fron unsigned-int64.
+    all smaller unsigned ints should promote to uint64.
+    excluding char.
+    */
+    void op=(uint64 x);
 
     /* move operator. */
     void op<-(String^ s);

@@ -807,7 +807,8 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
     // integer literal — always i32 (emitExpr returns a bare integer string,
     // and the consumer hardcodes i32 for BinaryExpr; literals used in conditions
     // are compared as i32)
-    if (dynamic_cast<const IntLiteralExpr*>(&expr)) return "i32";
+    if (auto* il = dynamic_cast<const IntLiteralExpr*>(&expr))
+        return (il->value > INT32_MAX || il->value < INT32_MIN) ? "i64" : "i32";
 
     // nullptr — ptr
     if (dynamic_cast<const NullptrExpr*>(&expr)) return "ptr";
