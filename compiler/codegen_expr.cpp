@@ -1143,24 +1143,63 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     if (dynamic_cast<const StringLiteralExpr*>(&expr)) return "char[]";
     // nullptr → intptr
     if (dynamic_cast<const NullptrExpr*>(&expr)) return "intptr";
+    // new Type[n] → Type[]
+    if (auto* ne = dynamic_cast<const NewExpr*>(&expr)) return ne->elem_type + "[]";
+    // ^x → elem_type^ (take address)
+    if (auto* ae = dynamic_cast<const AddrOfExpr*>(&expr)) {
+        std::string inner = inferSlidType(*ae->operand);
+        return inner + "^";
+    }
     // numeric cast — use the target type
     if (auto* nc = dynamic_cast<const NumericCastExpr*>(&expr)) return nc->target_type;
     // pointer reinterpret cast — use the target type
     if (auto* pc = dynamic_cast<const PtrCastExpr*>(&expr)) return pc->target_type;
-    // variable — look up its declared type
+    // variable — look up its declared type, then fall back to current slid's fields
     if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
         auto it = local_types_.find(ve->name);
         if (it != local_types_.end()) return it->second;
+        if (!current_slid_.empty()) {
+            auto& info = slid_info_[current_slid_];
+            auto fit = info.field_index.find(ve->name);
+            if (fit != info.field_index.end())
+                return info.field_types[fit->second];
+        }
+    }
+    // free function call — look up return type
+    if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        auto it = func_return_types_.find(ce->callee);
+        if (it != func_return_types_.end()) return it->second;
+    }
+    // method call — look up return type via slid type of object
+    if (auto* me = dynamic_cast<const MethodCallExpr*>(&expr)) {
+        std::string slid_type = exprSlidType(*me->object);
+        if (!slid_type.empty()) {
+            std::string mangled = slid_type + "__" + me->method;
+            auto it = func_return_types_.find(mangled);
+            if (it != func_return_types_.end()) return it->second;
+        }
+    }
+    // dereference ptr^ → element type (strip trailing ^ or [])
+    if (auto* de = dynamic_cast<const DerefExpr*>(&expr)) {
+        std::string pt = inferSlidType(*de->operand);
+        if (pt.size() >= 2 && pt.substr(pt.size()-2) == "[]") return pt.substr(0, pt.size()-2);
+        if (!pt.empty() && pt.back() == '^') return pt.substr(0, pt.size()-1);
+        return pt;
+    }
+    // ptr++^ / ptr--^ → element type
+    if (auto* pid = dynamic_cast<const PostIncDerefExpr*>(&expr)) {
+        std::string pt = inferSlidType(*pid->operand);
+        if (pt.size() >= 2 && pt.substr(pt.size()-2) == "[]") return pt.substr(0, pt.size()-2);
+        if (!pt.empty() && pt.back() == '^') return pt.substr(0, pt.size()-1);
+        return pt;
     }
     // binary expression — infer from left operand
     if (auto* be = dynamic_cast<const BinaryExpr*>(&expr))
         return inferSlidType(*be->left);
-    // unary negation applied to integer literal (e.g. -5) — treat as signed decimal
+    // unary — propagate through
     if (auto* ue = dynamic_cast<const UnaryExpr*>(&expr)) {
-        if (ue->op == "-" || ue->op == "~" || ue->op == "!") {
-            std::string inner = inferSlidType(*ue->operand);
-            return inner;
-        }
+        if (ue->op == "-" || ue->op == "~" || ue->op == "!")
+            return inferSlidType(*ue->operand);
     }
     // sizeof → intptr
     if (dynamic_cast<const SizeofExpr*>(&expr)) return "intptr";

@@ -40,7 +40,7 @@ String (
 
     /* assignment from null terminated string. */
     void op=(char[] str) {
-        intptr len = strlen(str);
+        len = strlen(str);
         set(str, len);
     }
 
@@ -68,13 +68,14 @@ String (
 
     /* move operator. */
     void op<-(String^ s) {
+        /* steal their resources. */
         delete storage_;
         size_ = s^.size_;
         capacity_ = s^.capacity_;
-        storage_ = s^.storage_;
+        storage_ <- s^.storage_;
+        /* leave them in a valid state. */
         s^.size_ = 0;
         s^.capacity_ = 0;
-        s^.storage_ = nullptr;
     }
 
     /* set to empty string. */
@@ -88,7 +89,7 @@ String (
             return;
         }
 
-        char[] new_storage = new char[cap];
+        new_storage = new char[cap];
         strcpy(new_storage, storage_, size_);
 
         capacity_ = cap;
@@ -97,8 +98,8 @@ String (
 
     /* reverse the order of the characters. */
     void reverse() {
-        char[] lo = storage_;
-        char[] hi = storage_ + size_ - 1;
+        lo = storage_;
+        hi = storage_ + size_ - 1;
         while (lo < hi) {
             lo++^ <-> hi--^;
         }
@@ -188,7 +189,7 @@ void strcpy(
     char[] src
 ) {
     while () {
-        char ch = dst++^;
+        ch = src++^;
         dst++^ = ch;
         if (ch == 0) {
             break;
@@ -203,7 +204,7 @@ void strcpy(
     intptr count
 ) {
     while (count > 0) {
-        char ch = src++^;
+        ch = src++^;
         dst++^ = ch;
         if (ch == 0) {
             break;
