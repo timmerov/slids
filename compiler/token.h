@@ -3,7 +3,8 @@
 
 enum class TokenType {
     // literals
-    kIntLiteral,
+    kIntLiteral,     // decimal integer — infers int/int64/uint64
+    kUintLiteral,    // hex/binary/octal integer — infers uint/uint64
     kCharLiteral,
     kFloatLiteral,
     kStringLiteral,

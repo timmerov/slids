@@ -11,6 +11,17 @@ Parser::Parser(std::vector<Token> tokens, std::string source_dir,
     : tokens_(std::move(tokens)), pos_(0), source_dir_(std::move(source_dir)),
       import_paths_(std::move(import_paths)), export_path_(std::move(export_path)) {}
 
+void Parser::declareVar(const std::string& name) {
+    if (!scope_stack_.empty())
+        scope_stack_.back().insert(name);
+}
+
+bool Parser::isInScope(const std::string& name) const {
+    for (auto it = scope_stack_.rbegin(); it != scope_stack_.rend(); ++it)
+        if (it->count(name)) return true;
+    return false;
+}
+
 Token& Parser::peek() { return tokens_[pos_]; }
 
 Token& Parser::advance() {
@@ -79,6 +90,11 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     if (t.type == TokenType::kIntLiteral) {
         advance();
         return std::make_unique<IntLiteralExpr>(std::stoll(t.value));
+    }
+    if (t.type == TokenType::kUintLiteral) {
+        advance();
+        uint64_t uval = std::stoull(t.value);
+        return std::make_unique<IntLiteralExpr>(static_cast<int64_t>(uval), false, true);
     }
     if (t.type == TokenType::kCharLiteral) {
         advance();
@@ -369,11 +385,15 @@ std::unique_ptr<Expr> Parser::parseExpr() {
 
 // --- Statement parsing ---
 
-std::unique_ptr<BlockStmt> Parser::parseBlock() {
+std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclare) {
     expect(TokenType::kLBrace, "expected '{'");
+    scope_stack_.push_back({});
+    for (auto& n : predeclare)
+        scope_stack_.back().insert(n);
     auto block = std::make_unique<BlockStmt>();
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof)
         block->stmts.push_back(parseStmt());
+    scope_stack_.pop_back();
     expect(TokenType::kRBrace, "expected '}'");
     return block;
 }
@@ -640,6 +660,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 parseInitList();
             }
             expect(TokenType::kSemicolon, "expected ';'");
+            declareVar(arr->name);
             return arr;
         }
 
@@ -647,15 +668,18 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             advance();
             auto init = parseExpr();
             expect(TokenType::kSemicolon, "expected ';'");
+            declareVar(name);
             return std::make_unique<VarDeclStmt>(type, name, std::move(init), std::vector<std::unique_ptr<Expr>>{}, true);
         }
         if (peek().type == TokenType::kSemicolon) {
             advance();
+            declareVar(name);
             return std::make_unique<VarDeclStmt>(type, name, nullptr);
         }
         expect(TokenType::kEquals, "expected '='");
         auto init = parseExpr();
         expect(TokenType::kSemicolon, "expected ';'");
+        declareVar(name);
         return std::make_unique<VarDeclStmt>(type, name, std::move(init));
     }
 
@@ -669,12 +693,14 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             advance();
             auto init = parseExpr();
             expect(TokenType::kSemicolon, "expected ';'");
+            declareVar(name);
             return std::make_unique<VarDeclStmt>(type, name, std::move(init));
         }
         if (peek().type == TokenType::kArrowLeft) {
             advance();
             auto init = parseExpr();
             expect(TokenType::kSemicolon, "expected ';'");
+            declareVar(name);
             return std::make_unique<VarDeclStmt>(type, name, std::move(init), std::vector<std::unique_ptr<Expr>>{}, true);
         }
 
@@ -706,6 +732,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 parseInitList();
             }
             expect(TokenType::kSemicolon, "expected ';'");
+            declareVar(arr->name);
             return arr;
         }
 
@@ -719,6 +746,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             expect(TokenType::kRParen, "expected ')'");
         }
         expect(TokenType::kSemicolon, "expected ';'");
+        declareVar(name);
         return std::make_unique<VarDeclStmt>(type, name, nullptr, std::move(ctor_args));
     }
 
@@ -874,11 +902,15 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             return std::make_unique<CallStmt>(name, std::move(args));
         }
 
-        // plain assignment
+        // plain assignment — or inferred declaration if name is not yet in scope and not a class field
         if (peek().type == TokenType::kEquals) {
             advance();
             auto value = parseExpr();
             expect(TokenType::kSemicolon, "expected ';'");
+            if (!isInScope(name) && !current_slid_fields_.count(name)) {
+                declareVar(name);
+                return std::make_unique<VarDeclStmt>("", name, std::move(value));
+            }
             return std::make_unique<AssignStmt>(name, std::move(value));
         }
         // move assignment
@@ -960,7 +992,9 @@ NestedFunctionDef Parser::parseNestedFunctionDef() {
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "expected ')'");
-    fn.body = parseBlock();
+    std::vector<std::string> param_names;
+    for (auto& p : fn.params) param_names.push_back(p.second);
+    fn.body = parseBlock(param_names);
     return fn;
 }
 
@@ -982,7 +1016,9 @@ MethodDef Parser::parseMethodDef() {
     if (peek().type == TokenType::kSemicolon) {
         advance(); // forward declaration — no body
     } else {
-        m.body = parseBlock();
+        std::vector<std::string> param_names;
+        for (auto& p : m.params) param_names.push_back(p.second);
+        m.body = parseBlock(param_names);
     }
     return m;
 }
@@ -1046,6 +1082,11 @@ SlidDef Parser::parseSlidDef() {
         slid.is_transport_impl = true;        // this slid emits __pinit for the consumer
         slid.has_ellipsis_prefix = false; // resolved — no longer incomplete
     }
+
+    // record field names to prevent method-body field assignments from being mistaken for inferred declarations
+    current_slid_fields_.clear();
+    for (auto& f : slid.fields) current_slid_fields_.insert(f.name);
+    all_slid_fields_[slid.name] = current_slid_fields_;
 
     // parse body: methods and optional constructor code
     expect(TokenType::kLBrace, "expected '{'");
@@ -1126,6 +1167,7 @@ SlidDef Parser::parseSlidDef() {
         slid.ctor_body = std::move(ctor_body);
 
     expect(TokenType::kRBrace, "expected '}'");
+    current_slid_fields_.clear();
     return slid;
 }
 
@@ -1148,6 +1190,11 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
     if (isTypeName(peek())) em.return_type = parseTypeName();
     // TypeName:
     em.slid_name = expect(TokenType::kIdentifier, "expected class name").value;
+    // set field names for this slid so assignments to fields aren't mistaken for inferred declarations
+    {
+        auto fit = all_slid_fields_.find(em.slid_name);
+        current_slid_fields_ = (fit != all_slid_fields_.end()) ? fit->second : std::set<std::string>{};
+    }
     expect(TokenType::kColon, "expected ':'");
     // method name, or _ (ctor), or ~ (dtor)
     if (peek().type == TokenType::kIdentifier && peek().value == "_") {
@@ -1165,13 +1212,22 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "expected ')'");
-    em.body = parseBlock();
+    {
+        std::vector<std::string> param_names;
+        for (auto& p : em.params) param_names.push_back(p.second);
+        em.body = parseBlock(param_names);
+    }
+    current_slid_fields_.clear();
     return em;
 }
 
 void Parser::parseExternalMethodBlock(Program& program) {
     // TypeName { [returnType] methodName(params) { body } ... }
     std::string slid_name = expect(TokenType::kIdentifier, "expected class name").value;
+    {
+        auto fit = all_slid_fields_.find(slid_name);
+        current_slid_fields_ = (fit != all_slid_fields_.end()) ? fit->second : std::set<std::string>{};
+    }
     expect(TokenType::kLBrace, "expected '{'");
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
         ExternalMethodDef em;
@@ -1213,10 +1269,15 @@ void Parser::parseExternalMethodBlock(Program& program) {
             if (peek().type == TokenType::kComma) advance();
         }
         expect(TokenType::kRParen, "expected ')'");
-        em.body = parseBlock();
+        {
+            std::vector<std::string> param_names;
+            for (auto& p : em.params) param_names.push_back(p.second);
+            em.body = parseBlock(param_names);
+        }
         program.external_methods.push_back(std::move(em));
     }
     expect(TokenType::kRBrace, "expected '}'");
+    current_slid_fields_.clear();
 }
 
 FunctionDef Parser::parseFunctionDef() {
@@ -1259,7 +1320,9 @@ FunctionDef Parser::parseFunctionDef() {
     if (peek().type == TokenType::kSemicolon) {
         advance(); // forward declaration — body remains null
     } else {
-        fn.body = parseBlock();
+        std::vector<std::string> param_names;
+        for (auto& p : fn.params) param_names.push_back(p.second);
+        fn.body = parseBlock(param_names);
     }
     return fn;
 }

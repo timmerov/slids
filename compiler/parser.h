@@ -4,6 +4,7 @@
 #include <vector>
 #include <memory>
 #include <map>
+#include <set>
 
 // --- Expressions ---
 
@@ -19,7 +20,9 @@ struct StringLiteralExpr : Expr {
 struct IntLiteralExpr : Expr {
     int64_t value;
     bool is_char_literal = false;
-    IntLiteralExpr(int64_t v, bool is_char = false) : value(v), is_char_literal(is_char) {}
+    bool is_nondecimal = false;  // hex/binary/octal — infers uint/uint64
+    IntLiteralExpr(int64_t v, bool is_char = false, bool is_nondec = false)
+        : value(v), is_char_literal(is_char), is_nondecimal(is_nondec) {}
 };
 
 struct VarExpr : Expr {
@@ -435,6 +438,16 @@ private:
     bool isUserTypeName(const Token& t);
     std::string parseTypeName();
 
+    // scope stack for inferred declarations: tracks declared variable names per block
+    std::vector<std::set<std::string>> scope_stack_;
+    void declareVar(const std::string& name);
+    bool isInScope(const std::string& name) const;
+
+    // field names of the slid currently being parsed (prevents field assignments being inferred as declarations)
+    std::set<std::string> current_slid_fields_;
+    // all parsed slid field names, keyed by slid name (used for external method blocks)
+    std::map<std::string, std::set<std::string>> all_slid_fields_;
+
     SlidDef parseSlidDef();
     EnumDef parseEnumDef();
     MethodDef parseMethodDef();
@@ -442,7 +455,7 @@ private:
     void parseExternalMethodBlock(Program& program); // TypeName { method() {...} ... }
     NestedFunctionDef parseNestedFunctionDef();
     FunctionDef parseFunctionDef();
-    std::unique_ptr<BlockStmt> parseBlock();
+    std::unique_ptr<BlockStmt> parseBlock(std::vector<std::string> predeclare = {});
     std::unique_ptr<Stmt> parseStmt();
     std::unique_ptr<SwitchStmt> parseSwitchStmt();
 

@@ -27,7 +27,8 @@ SAMPLES = \
 	string06 string07 string08 string09 string10 \
 	string11 string12 string13 string14 string15 \
 	string16 string17 string18 \
-	switch
+	switch \
+	type_infer
 
 # --- multi-file samples (don't fit the single-file template) ---
 MULTI_SAMPLES = import_test

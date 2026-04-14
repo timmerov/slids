@@ -100,7 +100,7 @@ Token Lexer::readNumber() {
         for (char c : digits) if (c != '_') clean += c;
         // use stoull to handle the full unsigned range, then reinterpret as signed
         uint64_t uval = std::stoull(clean, nullptr, 16);
-        return Token(TokenType::kIntLiteral, std::to_string(static_cast<int64_t>(uval)), line_);
+        return Token(TokenType::kUintLiteral, std::to_string(uval), line_);
     }
     if (peek() == '0' && (peek2() == 'b' || peek2() == 'B')) {
         advance(); advance(); // consume 0b
@@ -110,7 +110,7 @@ Token Lexer::readNumber() {
         std::string clean;
         for (char c : digits) if (c != '_') clean += c;
         uint64_t uval = std::stoull(clean, nullptr, 2);
-        return Token(TokenType::kIntLiteral, std::to_string(static_cast<int64_t>(uval)), line_);
+        return Token(TokenType::kUintLiteral, std::to_string(uval), line_);
     }
     // decimal
     while (pos_ < (int)source_.size() && (isdigit(peek()) || peek() == '_'))

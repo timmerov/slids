@@ -193,23 +193,32 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* decl = dynamic_cast<const VarDeclStmt*>(&stmt)) {
+        // resolve inferred type (empty string means x = expr; with no explicit type)
+        std::string inferred;
+        if (decl->type.empty()) {
+            if (!decl->init)
+                throw std::runtime_error("inferred variable declaration requires initializer");
+            inferred = inferSlidType(*decl->init);
+        }
+        const std::string& eff_type = decl->type.empty() ? inferred : decl->type;
+
         // class instantiation
-        if (slid_info_.count(decl->type)) {
-            auto& info = slid_info_[decl->type];
+        if (slid_info_.count(eff_type)) {
+            auto& info = slid_info_[eff_type];
             std::string reg = "%var_" + decl->name;
-            out_ << "    " << reg << " = alloca %struct." << decl->type << "\n";
+            out_ << "    " << reg << " = alloca %struct." << eff_type << "\n";
             locals_[decl->name] = reg;
-            local_types_[decl->name] = decl->type;
+            local_types_[decl->name] = eff_type;
 
             // find the SlidDef
             const SlidDef* slid_def = nullptr;
             for (auto& s : program_.slids)
-                if (s.name == decl->type) { slid_def = &s; break; }
+                if (s.name == eff_type) { slid_def = &s; break; }
 
             // initialize fields with defaults or ctor args
             for (int i = 0; i < (int)info.field_types.size(); i++) {
                 std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr %struct." << decl->type
+                out_ << "    " << gep << " = getelementptr %struct." << eff_type
                      << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
 
                 std::string val;
@@ -228,7 +237,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (slid_def && slid_def->ctor_body) {
                 std::string saved_slid = current_slid_;
                 std::string saved_self = self_ptr_;
-                current_slid_ = decl->type;
+                current_slid_ = eff_type;
                 self_ptr_ = reg;
                 emitBlock(*slid_def->ctor_body);
                 current_slid_ = saved_slid;
@@ -238,15 +247,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
             // consumer of incomplete type: call __pinit (initializes private fields, chains to __ctor)
             // complete type with explicit ctor (including transport impl locally): call __ctor directly
             if (info.has_pinit && !info.is_transport_impl) {
-                out_ << "    call void @" << decl->type << "__pinit(ptr " << reg << ")\n";
+                out_ << "    call void @" << eff_type << "__pinit(ptr " << reg << ")\n";
             } else if (info.has_explicit_ctor) {
-                out_ << "    call void @" << decl->type << "__ctor(ptr " << reg << ")\n";
+                out_ << "    call void @" << eff_type << "__ctor(ptr " << reg << ")\n";
             }
 
             // if initialized with = expr, call op= method; with <- expr, call op<- method
             if (decl->init) {
                 std::string op_name = decl->is_move ? "op<-" : "op=";
-                std::string mangled = resolveOpEq(decl->type + "__" + op_name, *decl->init);
+                std::string mangled = resolveOpEq(eff_type + "__" + op_name, *decl->init);
                 if (!mangled.empty()) {
                     auto& ptypes = func_param_types_[mangled];
                     std::string param_type = ptypes.empty() ? "" : ptypes[0];
@@ -259,21 +268,21 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
             // register for dtor call on scope exit
             if (info.has_dtor) {
-                dtor_vars_.push_back({decl->name, decl->type});
+                dtor_vars_.push_back({decl->name, eff_type});
             }
             return;
         }
 
         // primitive or reference variable declaration
         std::string reg = "%var_" + decl->name;
-        std::string llvm_t = llvmType(decl->type);
+        std::string llvm_t = llvmType(eff_type);
         out_ << "    " << reg << " = alloca " << llvm_t << "\n";
         locals_[decl->name] = reg;
-        local_types_[decl->name] = decl->type;
+        local_types_[decl->name] = eff_type;
         if (!decl->init) return; // uninitialized — alloca only
         std::string val = emitExpr(*decl->init);
         // coerce integer or float widths if necessary
-        if (!isIndirectType(decl->type)) {
+        if (!isIndirectType(eff_type)) {
             std::string src_t = exprLlvmType(*decl->init);
             // integer width coercion (sext or trunc)
             static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
@@ -300,7 +309,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
         out_ << "    store " << llvm_t << " " << val << ", ptr " << reg << "\n";
         // move declaration: null out the source
-        if (decl->is_move && isIndirectType(decl->type))
+        if (decl->is_move && isIndirectType(eff_type))
             emitNullOut(*decl->init);
         return;
     }

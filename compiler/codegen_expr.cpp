@@ -1120,3 +1120,50 @@ std::string Codegen::emitCondBool(const Expr& expr) {
     }
     return cond_bool;
 }
+
+// Infer the Slids type string for a type-inferred variable declaration (x = expr;).
+// Returns a Slids type string like "int", "int64", "uint", "float64", "char[]", etc.
+std::string Codegen::inferSlidType(const Expr& expr) {
+    // integer literal
+    if (auto* ile = dynamic_cast<const IntLiteralExpr*>(&expr)) {
+        if (ile->is_char_literal) return "char";
+        if (ile->is_nondecimal) {
+            // hex/binary/octal: prefer uint (uint32), else uint64
+            uint64_t uval = static_cast<uint64_t>(ile->value);
+            return (uval <= 0xFFFFFFFFull) ? "uint" : "uint64";
+        }
+        // decimal: prefer int (int32), else int64, else uint64
+        int64_t val = ile->value;
+        if (val >= -2147483648LL && val <= 2147483647LL) return "int";
+        return "int64";
+    }
+    // float literal → float64
+    if (dynamic_cast<const FloatLiteralExpr*>(&expr)) return "float64";
+    // string literal → char[]
+    if (dynamic_cast<const StringLiteralExpr*>(&expr)) return "char[]";
+    // nullptr → intptr
+    if (dynamic_cast<const NullptrExpr*>(&expr)) return "intptr";
+    // numeric cast — use the target type
+    if (auto* nc = dynamic_cast<const NumericCastExpr*>(&expr)) return nc->target_type;
+    // pointer reinterpret cast — use the target type
+    if (auto* pc = dynamic_cast<const PtrCastExpr*>(&expr)) return pc->target_type;
+    // variable — look up its declared type
+    if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
+        auto it = local_types_.find(ve->name);
+        if (it != local_types_.end()) return it->second;
+    }
+    // binary expression — infer from left operand
+    if (auto* be = dynamic_cast<const BinaryExpr*>(&expr))
+        return inferSlidType(*be->left);
+    // unary negation applied to integer literal (e.g. -5) — treat as signed decimal
+    if (auto* ue = dynamic_cast<const UnaryExpr*>(&expr)) {
+        if (ue->op == "-" || ue->op == "~" || ue->op == "!") {
+            std::string inner = inferSlidType(*ue->operand);
+            return inner;
+        }
+    }
+    // sizeof → intptr
+    if (dynamic_cast<const SizeofExpr*>(&expr)) return "intptr";
+    // default: int
+    return "int";
+}
