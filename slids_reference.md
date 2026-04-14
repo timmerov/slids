@@ -243,14 +243,97 @@ Direct `float32^` → `int32^` without `void^` as the intermediate is a compiler
 
 ## Variables
 
-> **TODO:** Needs review — strong type inference will be added after the rest of the syntax is locked in.
+Variables may be declared with an explicit type or with an inferred type.
+
+**Explicit declaration:**
+```
+int    x = 10;
+float64 y = 3.14;
+bool   flag = true;
+int    z = x + 1;
+char[] buf = new char[64];
+```
+
+**Inferred declaration** — omit the type, let the compiler infer it from the initializer:
+```
+x    = 10;           // int
+y    = 3.14;         // float64
+buf  = new char[64]; // char[]
+len  = strlen(buf);  // return type of strlen — intptr
+```
+
+The two forms are interchangeable. Explicit declarations are preferred when the type needs to be precise or when reading the code benefits from seeing the type spelled out.
+
+---
+
+## Type inference
+
+When a variable name appears on the left of `=` and has not yet been declared in the current scope, the compiler infers its type from the initializer expression. The type is fixed at the point of declaration and cannot change.
 
 ```
-int32 x = 10;
-float64 y = 3.14;
-bool flag = true;
-string name = "Slids";
-int z = x + 1;
+x = 42;          // declares x as int
+x = 100;         // assigns — x is already declared, still int
+```
+
+**Inference rules by expression:**
+
+| Initializer expression | Inferred type |
+|---|---|
+| Decimal integer literal, fits in 32 bits | `int` |
+| Decimal integer literal, larger | `int64` |
+| Hex or binary literal, fits in 32 bits | `uint` |
+| Hex or binary literal, larger | `uint64` |
+| Float literal | `float64` |
+| Character literal `'x'` | `char` |
+| String literal `"..."` | `char[]` |
+| `nullptr` | `intptr` |
+| `new T[n]` | `T[]` |
+| `^x` (address-of) | `T^` where `x` is type `T` |
+| `ptr^` (dereference) | element type of `ptr` |
+| `ptr++^` / `ptr--^` | element type of `ptr` |
+| Variable `y` | declared type of `y` |
+| Function call `f(...)` | return type of `f` |
+| Method call `obj.m(...)` | return type of `m` |
+| Binary expression `a op b` | inferred type of `a` |
+| Numeric cast `int32(e)` | `int32` (the cast target type) |
+| `sizeof(...)` | `intptr` |
+
+**Digit separators** — underscores are allowed anywhere inside a numeric literal and are ignored. They are purely visual:
+```
+big  = 3_000_000;       // int
+mask = 0xFF_00_FF;      // uint
+```
+
+**Decimal vs hex/binary** — decimal literals infer signed types; hex and binary literals infer unsigned types:
+```
+a = 255;     // int  — decimal always signed
+b = 0xFF;    // uint — hex always unsigned
+```
+
+**Assignment vs declaration** — the same `name = expr` syntax is disambiguation by scope:
+- If `name` is not yet declared in the current scope, it is a declaration.
+- If `name` is already declared (local variable, parameter, or class field), it is an assignment.
+
+```
+int main() {
+    x = 0;         // declaration: x is int
+    x = 42;        // assignment: x already declared
+}
+```
+
+Field assignments inside methods are never mistaken for new declarations:
+```
+String(...) {
+    void reserve(intptr cap) {
+        storage_ = new char[cap];   // assignment to field — not a new local
+    }
+}
+```
+
+**Explicit declarations are always valid** and take precedence over inference when you want control over the exact type:
+```
+uint8 flags = 0;    // explicit: uint8, not int
+intptr n = 0;       // explicit: intptr, not int
 ```
 
 ---
@@ -281,11 +364,7 @@ Rules:
 - Leading `+` is valid for any numeric literal
 - Leading `-` is valid for any numeric literal
 
-**Type flexibility of integer literals** — a decimal integer literal is implicitly typed as the smallest signed integer type that can hold its value: `int8`, `int16`, `int32`, or `int64`. So `42` is `int8`, `500` is `int16`, and `100_000` is `int32`. When assigned to a variable with an explicit type, the literal is quietly promoted to match.
-
-Hex (`0x`) and binary (`0b`) literals are always unsigned. Their type is the smallest unsigned type that can hold the value: `uint8`, `uint16`, `uint32`, or `uint64`.
-
-When the type of a literal is made explicit by the variable declaration, the literal takes that type exactly — no implicit narrowing.
+**Type of integer literals** — when used in an inferred declaration (`x = 42;`), decimal literals infer `int` if the value fits in 32 bits, or `int64` otherwise. Hex and binary literals infer `uint` if the value fits in 32 bits, or `uint64` otherwise. When assigned to a variable with an explicit type, the literal is quietly extended to match.
 
 ---
 
