@@ -2,7 +2,7 @@
 
 ## Overview
 
-Slids is a compiled, systems-level programming language with C++-like power, cleaner syntax, and better error messages. Source files compile to `.o` object files compatible with the g++ linker via the LLVM C++ API (Itanium C++ ABI).
+Slids is a compiled, systems-level programming language with C++-like power, cleaner syntax, and better error messages [claude is lying -timmer]. Source files compile to `.o` object files compatible with the g++ linker via the LLVM C++ API (Itanium C++ ABI).
 
 The language has exactly one construct: the **slid**. A slid serves as both function and class. Calling a slid executes its body and returns an instance of itself. Nested slids are methods. Everything — functions, classes, methods, constructors — is a slid.
 
