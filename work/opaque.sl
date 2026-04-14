@@ -18,14 +18,6 @@ Opaque(
     ...,
     int y_ = 42
 ) {
-    _() {
-        x_ = 0;
-        y_ = 42;
-    }
-
-    ~() {
-    }
-
     void printSecretMessage() {
         __println("The answer is: " + y_ + ", not " + x_ + ".");
     }

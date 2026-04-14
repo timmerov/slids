@@ -354,7 +354,10 @@ struct SlidDef {
     bool has_ellipsis_prefix = false;    // tuple starts with ... (implementation file: public fields come from transport source)
     bool has_ellipsis_suffix = false;    // tuple ends with ...   (header file: private fields defined elsewhere)
     int64_t sizeof_value = 0;            // 0=absent, -1=sizeof=delete; placeholder, >0=annotated size
-    bool has_explicit_ctor_decl = false; // _() was declared (with or without body); consumer must call ctor
+    bool has_explicit_ctor_decl = false; // _() was declared (with or without body)
+    bool has_explicit_dtor_decl = false; // ~() was declared (with or without body)
+    bool is_transport_impl = false;      // this slid is the private-fields implementation (had leading ...)
+    int public_field_count = 0;          // number of public fields prepended from transport source (0 = all private)
     std::unique_ptr<BlockStmt> ctor_body;          // loose code (implicit ctor), or null
     std::unique_ptr<BlockStmt> explicit_ctor_body; // _() { ... }, or null
     std::unique_ptr<BlockStmt> dtor_body;          // ~() { ... }, or null

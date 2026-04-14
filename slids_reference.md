@@ -343,6 +343,7 @@ Rules:
 - Required fields (no default) must come before defaulted fields
 - Fields without defaults must be supplied by the caller
 - Fields with defaults may be overridden by the caller
+- Every field is always initialized — to the caller-supplied value, the declared default, or zero
 
 **Aliases** — a tuple field can be aliased to another field or array element within the same tuple. Aliases are read/write and write through to the original.
 
@@ -465,11 +466,21 @@ Constructor/destructor rules:
 - `_` and `~` must always be defined together — having only one is a compiler error
 - When `_` and `~` are present, the body may contain definitions only — no loose executable code
 
+**Field initialization:**
+
+Every field is always initialized when an instance is created, even without a constructor:
+1. Caller-supplied value (from the constructor call)
+2. Otherwise: the declared default value
+3. Otherwise: zero (`0`, `nullptr`, or `false` as appropriate for the type)
+
+`_()` is for additional logic beyond field initialization — heap allocation, registering callbacks, etc. If all you need is sensible defaults, no `_()` is required.
+
 **Instantiation:**
 ```
-Counter c;        // default values
-Counter c(3);     // value_ = 3
+Counter c;        // value_ = 0 (default)
+Counter c(3);     // value_ = 3 (caller-supplied)
 Vec2 v(1.0, 2.0); // x_ = 1.0, y_ = 2.0
+Point p;          // all fields zero-initialized — no constructor needed
 ```
 
 **Adding a single method** — use `:` scope resolution:

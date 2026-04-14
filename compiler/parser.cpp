@@ -665,10 +665,6 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
 
         // pointer or reference variable with initializer: Type[] ptr = expr  or  Type^ ref = expr
-        auto isIndirectType = [](const std::string& t) {
-            return (t.size() >= 1 && t.back() == '^') ||
-                   (t.size() >= 2 && t.substr(t.size()-2) == "[]");
-        };
         if (peek().type == TokenType::kEquals) {
             advance();
             auto init = parseExpr();
@@ -1003,9 +999,14 @@ SlidDef Parser::parseSlidDef() {
 
     // leading ellipsis?
     if (peek().type == TokenType::kEllipsis) {
-        slid.has_ellipsis_prefix = true;
         advance(); // consume ...
-        if (peek().type == TokenType::kComma) advance(); // consume , before private fields
+        if (peek().type == TokenType::kComma) advance(); // consume , before fields
+        // lone (...) means all fields are private — treat as suffix (header case)
+        // (..., field) means public fields come from transport — treat as prefix (impl case)
+        if (peek().type == TokenType::kRParen)
+            slid.has_ellipsis_suffix = true;
+        else
+            slid.has_ellipsis_prefix = true;
     }
 
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
@@ -1034,12 +1035,15 @@ SlidDef Parser::parseSlidDef() {
         if (it == transported_slids_.end())
             throw std::runtime_error("'" + slid.name + "' uses ... prefix but was not declared via transport");
         // prepend public fields from the transport source
+        int num_public = (int)it->second.fields.size();
         std::vector<FieldDef> merged;
         for (auto& pf : it->second.fields)
             merged.push_back({pf.type, pf.name, nullptr}); // defaults not needed for already-declared fields
         for (auto& f : slid.fields)
             merged.push_back(std::move(f));
         slid.fields = std::move(merged);
+        slid.public_field_count = num_public; // record boundary for __pinit generation
+        slid.is_transport_impl = true;        // this slid emits __pinit for the consumer
         slid.has_ellipsis_prefix = false; // resolved — no longer incomplete
     }
 
@@ -1087,6 +1091,7 @@ SlidDef Parser::parseSlidDef() {
             advance(); // consume ~
             expect(TokenType::kLParen, "expected '('");
             expect(TokenType::kRParen, "expected ')'");
+            slid.has_explicit_dtor_decl = true; // declared — consumer must call dtor
             if (peek().type == TokenType::kSemicolon) {
                 advance(); // forward declaration only
             } else {

@@ -8,23 +8,8 @@ copying null terminated strings,
 copying null terminated strings limited by length.
 */
 
-String(
-/*
-TODO:
-these should not be exposed.
-they should be private.
-but adding implementation fields to a declared class
-has issues we will address later.
-*/
-    /* length of stored string. */
-    intptr size_ = 0,
-
-    /* maximum size storable. */
-    intptr capacity_ = 0,
-
-    /* pointer to stored string. */
-    char[] storage_ = nullptr
-) {
+String(...)
+{
     /* constructor/destructor */
     _();
     ~();

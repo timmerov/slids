@@ -362,7 +362,7 @@ void Codegen::collectSlids() {
             info.field_index[slid.fields[i].name] = i;
             info.field_types.push_back(slid.fields[i].type);
         }
-        // annotated incomplete type: has sizeof annotation and trailing ellipsis
+        // annotated incomplete type seen by consumer: use __pinit for all initialization
         if (slid.sizeof_value > 0 && slid.has_ellipsis_suffix) {
             int64_t public_size = computeFieldsSize(slid.fields);
             info.sizeof_override = slid.sizeof_value;
@@ -371,10 +371,16 @@ void Codegen::collectSlids() {
                 throw std::runtime_error("sizeof annotation for '" + slid.name
                     + "' (" + std::to_string(slid.sizeof_value)
                     + ") is smaller than its public fields (" + std::to_string(public_size) + ")");
+            info.has_pinit = true; // consumer always calls __pinit; __pinit chains to __ctor if needed
         }
-        // has_explicit_ctor_decl covers forward declarations too (consumer must call ctor)
+        // transport impl: complete locally; emits __pinit for consumer (does NOT set has_pinit)
+        if (slid.is_transport_impl) {
+            info.is_transport_impl = true;
+            info.public_field_count = slid.public_field_count;
+        }
+        // has_explicit_ctor_decl covers forward declarations too
         info.has_explicit_ctor = slid.has_explicit_ctor_decl || (slid.explicit_ctor_body != nullptr);
-        info.has_dtor = (slid.dtor_body != nullptr);
+        info.has_dtor = (slid.dtor_body != nullptr) || slid.has_explicit_dtor_decl;
         // also check external method defs for ctor/dtor
         for (auto& em : program_.external_methods) {
             if (em.slid_name != slid.name || !em.body) continue;
@@ -558,6 +564,8 @@ void Codegen::emit() {
         // inline ctor/dtor bodies count as locally defined
         if (slid.explicit_ctor_body) local_methods.insert(slid.name + "__ctor");
         if (slid.dtor_body)          local_methods.insert(slid.name + "__dtor");
+        // transport impl slids locally define __pinit
+        if (slid.is_transport_impl) local_methods.insert(slid.name + "__pinit");
         for (auto& m : slid.methods) {
             if (!m.body) continue;
             std::string base = slid.name + "__" + m.name;
@@ -583,6 +591,8 @@ void Codegen::emit() {
             out_ << "declare void @" << slid.name << "__ctor(ptr)\n";
         if (info.has_dtor && !local_methods.count(slid.name + "__dtor"))
             out_ << "declare void @" << slid.name << "__dtor(ptr)\n";
+        if (info.has_pinit && !local_methods.count(slid.name + "__pinit"))
+            out_ << "declare void @" << slid.name << "__pinit(ptr)\n";
         // regular methods: first arg is always ptr (self)
         for (auto& [base, overloads] : method_overloads_) {
             if (base.substr(0, slid.name.size() + 2) != slid.name + "__") continue;
@@ -807,6 +817,45 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     }
 
     current_slid_ = "";
+
+    // emit __pinit for transport slids: initializes private fields, optionally chains to __ctor
+    if (slid.is_transport_impl) {
+        auto& info = slid_info_[slid.name];
+        locals_.clear();
+        local_types_.clear();
+        tmp_counter_ = 0;
+        label_counter_ = 0;
+        block_terminated_ = false;
+        current_slid_ = slid.name;
+        self_ptr_ = "";  // field access uses %self fallback
+
+        out_ << "define void @" << slid.name << "__pinit(ptr %self) {\n";
+        out_ << "entry:\n";
+
+        // store each private field at its struct index
+        for (int i = slid.public_field_count; i < (int)slid.fields.size(); i++) {
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr %struct." << slid.name
+                 << ", ptr %self, i32 0, i32 " << i << "\n";
+            std::string val;
+            if (slid.fields[i].default_val) {
+                val = emitExpr(*slid.fields[i].default_val);
+            } else {
+                val = "0";
+            }
+            out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
+        }
+
+        if (info.has_explicit_ctor) {
+            // chain to explicit ctor with musttail for zero overhead
+            out_ << "    musttail call void @" << slid.name << "__ctor(ptr %self)\n";
+        }
+        out_ << "    ret void\n";
+        out_ << "}\n\n";
+
+        current_slid_ = "";
+        self_ptr_ = "";
+    }
 }
 
 std::string Codegen::resolveMethodMangledName(

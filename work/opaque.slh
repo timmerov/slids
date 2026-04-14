@@ -32,10 +32,6 @@ Opaque(
     sizeof = 8;
     */
 
-    /* constructor initializes private fields; destructor cleans up */
-    _();
-    ~();
-
     /* method */
     void printSecretMessage();
 }

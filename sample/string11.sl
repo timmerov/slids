@@ -14,7 +14,8 @@ String(
     _() {
         __println("size=" + size_ + " capacity=" + capacity_ + " storage_=" + storage_[0..size_]);
     }
-    ~();
+    ~() {
+    }
 }
 
 /*

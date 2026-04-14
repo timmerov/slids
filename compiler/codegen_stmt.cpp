@@ -235,8 +235,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 self_ptr_ = saved_self;
             }
 
-            // call explicit constructor __ctor if defined
-            if (info.has_explicit_ctor) {
+            // consumer of incomplete type: call __pinit (initializes private fields, chains to __ctor)
+            // complete type with explicit ctor (including transport impl locally): call __ctor directly
+            if (info.has_pinit && !info.is_transport_impl) {
+                out_ << "    call void @" << decl->type << "__pinit(ptr " << reg << ")\n";
+            } else if (info.has_explicit_ctor) {
                 out_ << "    call void @" << decl->type << "__ctor(ptr " << reg << ")\n";
             }
 

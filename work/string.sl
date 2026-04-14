@@ -1,18 +1,29 @@
 /*
 String class implementation.
 
-also included are hellper functions for:
+also included are helper functions for:
 concatenating strings,
 length of a null terminated string,
 copying null terminated strings,
 copying null terminated strings limited by length.
 */
 
-import string;
+transport string;
 
 /* block definitions. */
-String {
+String (
+    /* there are no public fields. */
+    ...,
 
+    /* length of stored string. */
+    intptr size_ = 0,
+
+    /* maximum size storable. */
+    intptr capacity_ = 0,
+
+    /* pointer to stored string. */
+    char[] storage_ = nullptr
+) {
     /* constructor */
     _() {
     }
