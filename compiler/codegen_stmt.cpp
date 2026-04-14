@@ -1249,6 +1249,25 @@ void Codegen::emitStmt(const Stmt& stmt) {
             return;
         }
 
+        // template call statement: add<int>(a, b);
+        if (!call->type_args.empty()) {
+            std::string mangled = instantiateTemplate(call->callee, call->type_args);
+            std::string ret_type = llvmType(func_return_types_[mangled]);
+            auto& ptypes = func_param_types_[mangled];
+            std::string arg_str;
+            for (int i = 0; i < (int)call->args.size(); i++) {
+                if (i > 0) arg_str += ", ";
+                std::string ptype = (i < (int)ptypes.size()) ? ptypes[i] : "int";
+                arg_str += llvmType(ptype) + " " + emitArgForParam(*call->args[i], ptype);
+            }
+            if (ret_type == "void")
+                out_ << "    call void @" << llvmGlobalName(mangled) << "(" << arg_str << ")\n";
+            else
+                out_ << "    call " << ret_type << " @" << llvmGlobalName(mangled)
+                     << "(" << arg_str << ")\n";
+            return;
+        }
+
         // check if it's a nested function call
         auto nit = nested_info_.find(call->callee);
         if (nit != nested_info_.end()) {

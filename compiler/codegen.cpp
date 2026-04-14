@@ -64,6 +64,11 @@ void Codegen::collectFunctionSignatures() {
     };
 
     for (auto& fn : program_.functions) {
+        if (!fn.type_params.empty()) {
+            // template function — store for lazy instantiation, skip normal registration
+            template_funcs_[fn.name] = &fn;
+            continue;
+        }
         bool overloaded = (func_name_count[fn.name] > 1);
         std::vector<std::string> ptypes;
         for (auto& [t, n] : fn.params) ptypes.push_back(t);
@@ -466,7 +471,7 @@ void Codegen::collectStringConstants() {
             for (auto& stmt : em.body->stmts) collect(*stmt);
     }
     for (auto& fn : program_.functions)
-        if (fn.body)
+        if (fn.body && fn.type_params.empty())
             for (auto& stmt : fn.body->stmts) collect(*stmt);
 }
 
@@ -484,9 +489,9 @@ void Codegen::emit() {
         enum_sizes_[e.name] = (int)e.values.size();
     }
 
-    // analyze nested functions for all top-level functions
+    // analyze nested functions for all top-level functions (skip templates)
     for (auto& fn : program_.functions)
-        if (fn.body) analyzeNestedFunctions(fn);
+        if (fn.body && fn.type_params.empty()) analyzeNestedFunctions(fn);
 
     // emit struct types for classes
     for (auto& slid : program_.slids) {
@@ -506,9 +511,9 @@ void Codegen::emit() {
         out_ << " }\n";
     }
 
-    // emit frame struct types for functions with nested functions
+    // emit frame struct types for functions with nested functions (skip templates)
     for (auto& fn : program_.functions)
-        if (fn.body) emitFrameStruct(fn);
+        if (fn.body && fn.type_params.empty()) emitFrameStruct(fn);
 
     if (!program_.slids.empty() || !program_.functions.empty()) out_ << "\n";
 
@@ -632,6 +637,10 @@ void Codegen::emit() {
         emitSlidMethods(slid);
 
     for (auto& fn : program_.functions)
+        if (fn.type_params.empty()) emitFunction(fn);
+
+    // emit pending template instantiations (collected during function emission)
+    for (auto& fn : pending_instantiations_)
         emitFunction(fn);
 }
 

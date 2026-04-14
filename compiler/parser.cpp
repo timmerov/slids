@@ -37,7 +37,7 @@ Token& Parser::expect(TokenType type, const std::string& msg) {
     return advance();
 }
 
-bool Parser::isTypeName(const Token& t) {
+bool Parser::isTypeName(const Token& t) const {
     switch (t.type) {
         case TokenType::kInt: case TokenType::kInt8: case TokenType::kInt16:
         case TokenType::kInt32: case TokenType::kInt64:
@@ -51,11 +51,35 @@ bool Parser::isTypeName(const Token& t) {
     }
 }
 
-bool Parser::isUserTypeName(const Token& t) {
+bool Parser::isUserTypeName(const Token& t) const {
     // user-defined type: identifier starting with uppercase
     return t.type == TokenType::kIdentifier
         && !t.value.empty()
         && isupper(t.value[0]);
+}
+
+bool Parser::isTemplateCallLookahead() const {
+    // pos_ points at '<'; scan forward to see if this is name<Type,...>(
+    // Valid: tokens inside <> are type keywords, uppercase idents, ^, [], commas
+    int i = pos_ + 1;
+    while (i < (int)tokens_.size()) {
+        const Token& ti = tokens_[i];
+        if (ti.type == TokenType::kGt) {
+            // found closing >; next must be (
+            return (i + 1 < (int)tokens_.size())
+                && tokens_[i + 1].type == TokenType::kLParen;
+        }
+        // allow type-name tokens and commas inside the angle brackets
+        bool ok = isTypeName(ti)
+               || isUserTypeName(ti)
+               || ti.type == TokenType::kComma
+               || ti.type == TokenType::kBitXor
+               || ti.type == TokenType::kLBracket
+               || ti.type == TokenType::kRBracket;
+        if (!ok) return false;
+        i++;
+    }
+    return false;
 }
 
 std::string Parser::parseTypeName() {
@@ -146,6 +170,26 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     }
     if (t.type == TokenType::kIdentifier) {
         advance();
+        // template call: name<TypeArg,...>(args)
+        if (peek().type == TokenType::kLt && isTemplateCallLookahead()) {
+            advance(); // consume '<'
+            std::vector<std::string> type_args;
+            while (peek().type != TokenType::kGt && peek().type != TokenType::kEof) {
+                type_args.push_back(parseTypeName());
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kGt, "expected '>'");
+            expect(TokenType::kLParen, "expected '('");
+            std::vector<std::unique_ptr<Expr>> args;
+            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                args.push_back(parseExpr());
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kRParen, "expected ')'");
+            auto call = std::make_unique<CallExpr>(t.value, std::move(args));
+            call->type_args = std::move(type_args);
+            return call;
+        }
         if (peek().type == TokenType::kLParen) {
             advance();
             std::vector<std::unique_ptr<Expr>> args;
@@ -889,6 +933,28 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 std::make_unique<UnaryExpr>(uop, std::make_unique<VarExpr>(name)));
         }
 
+        // template call statement: name<Type,...>(args);
+        if (peek().type == TokenType::kLt && isTemplateCallLookahead()) {
+            advance(); // consume '<'
+            std::vector<std::string> type_args;
+            while (peek().type != TokenType::kGt && peek().type != TokenType::kEof) {
+                type_args.push_back(parseTypeName());
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kGt, "expected '>'");
+            expect(TokenType::kLParen, "expected '('");
+            std::vector<std::unique_ptr<Expr>> args;
+            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                args.push_back(parseExpr());
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kSemicolon, "expected ';'");
+            auto stmt = std::make_unique<CallStmt>(name, std::move(args));
+            stmt->type_args = std::move(type_args);
+            return stmt;
+        }
+
         // function call statement
         if (peek().type == TokenType::kLParen) {
             advance();
@@ -1308,6 +1374,16 @@ FunctionDef Parser::parseFunctionDef() {
             if (it != op_map.end()) { advance(); fname = "op" + it->second; }
         }
         fn.name = fname;
+    }
+    // template type params: funcname<T, U, ...>
+    if (peek().type == TokenType::kLt && isTemplateCallLookahead()) {
+        advance(); // consume '<'
+        while (peek().type != TokenType::kGt && peek().type != TokenType::kEof) {
+            fn.type_params.push_back(
+                expect(TokenType::kIdentifier, "expected type parameter name").value);
+            if (peek().type == TokenType::kComma) advance();
+        }
+        expect(TokenType::kGt, "expected '>'");
     }
     expect(TokenType::kLParen, "expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {

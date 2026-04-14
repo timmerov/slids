@@ -6,6 +6,7 @@ LLCFLAGS = --filetype=obj --relocation-model=pic
 BIN_DIR    = ../bin
 BUILD_DIR  = ../build/work
 ST_DIR     = $(BUILD_DIR)/string_test
+TM_DIR     = $(BUILD_DIR)/template
 EXPORT_DIR = $(BUILD_DIR)/inc
 
 # import-path: source directory (for .slh files alongside .sl source)
@@ -13,9 +14,9 @@ EXPORT_DIR = $(BUILD_DIR)/inc
 IMPORT_PATH = .
 EXPORT_PATH = $(EXPORT_DIR)
 
-.PHONY: all clean string_test
+.PHONY: all clean string_test template
 
-all: string_test
+all: string_test template
 
 string_test: $(BIN_DIR)/string_test
 
@@ -41,8 +42,22 @@ $(ST_DIR)/string_test.ll: string_test.sl $(EXPORT_DIR)/string.slh $(SLIDSC)
 # annotated header is produced by compiling string.sl
 $(EXPORT_DIR)/string.slh: $(ST_DIR)/string.ll
 
+# ---- template ----
+
+template: $(BIN_DIR)/template
+
+$(BIN_DIR)/template: $(ST_DIR)/string.o $(TM_DIR)/template.o
+	$(CXX) $^ -o $@
+
+$(TM_DIR)/template.o: $(TM_DIR)/template.ll
+	$(LLC) $(LLCFLAGS) $< -o $@
+
+$(TM_DIR)/template.ll: template.sl $(EXPORT_DIR)/string.slh $(SLIDSC)
+	mkdir -p $(TM_DIR)
+	$(SLIDSC) $< -o $@ --import-path $(IMPORT_PATH) --export-path $(EXPORT_PATH)
+
 # ---- clean ----
 
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f $(BIN_DIR)/string_test
+	rm -f $(BIN_DIR)/string_test $(BIN_DIR)/template

@@ -99,9 +99,18 @@ private:
     std::string current_parent_;   // mangled name of current parent function
     std::string frame_ptr_reg_;    // %frame ptr inside a nested function
 
+    // template function support
+    std::map<std::string, const FunctionDef*> template_funcs_; // name -> template def (not owned)
+    std::set<std::string> emitted_templates_;  // mangled names already emitted
+    std::vector<FunctionDef> pending_instantiations_; // concrete fns to emit after main functions
+
     void collectStringConstants();
     void collectFunctionSignatures();
     void collectSlids();
+    // template instantiation: builds substituted FunctionDef, registers signatures,
+    // adds to pending_instantiations_; returns mangled name (e.g. "add__int")
+    std::string instantiateTemplate(const std::string& name,
+                                    const std::vector<std::string>& type_args);
     void analyzeNestedFunctions(const FunctionDef& fn);
     std::set<std::string> collectCaptures(
         const BlockStmt& body,

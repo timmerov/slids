@@ -372,6 +372,23 @@ std::string Codegen::emitExpr(const Expr& expr) {
             return tmp;
         }
 
+        // template call: instantiate and emit
+        if (!call->type_args.empty()) {
+            std::string mangled = instantiateTemplate(call->callee, call->type_args);
+            std::string ret_type = llvmType(func_return_types_[mangled]);
+            std::string arg_str;
+            auto& ptypes = func_param_types_[mangled];
+            for (int i = 0; i < (int)call->args.size(); i++) {
+                if (i > 0) arg_str += ", ";
+                std::string ptype = (i < (int)ptypes.size()) ? ptypes[i] : "int";
+                arg_str += llvmType(ptype) + " " + emitArgForParam(*call->args[i], ptype);
+            }
+            std::string tmp = newTmp();
+            out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(mangled)
+                 << "(" << arg_str << ")\n";
+            return tmp;
+        }
+
         // regular function call
         auto it = func_return_types_.find(call->callee);
         if (it == func_return_types_.end())
@@ -1080,6 +1097,21 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // function call — look up return type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        if (!ce->type_args.empty()) {
+            // template call: derive return type from template definition
+            auto tit = template_funcs_.find(ce->callee);
+            if (tit != template_funcs_.end()) {
+                const FunctionDef& tmpl = *tit->second;
+                std::map<std::string, std::string> subst;
+                for (int i = 0; i < (int)tmpl.type_params.size() && i < (int)ce->type_args.size(); i++)
+                    subst[tmpl.type_params[i]] = ce->type_args[i];
+                std::string rt = tmpl.return_type;
+                auto it2 = subst.find(rt);
+                if (it2 != subst.end()) rt = it2->second;
+                return llvmType(rt);
+            }
+        }
+        // check if already instantiated
         auto rit = func_return_types_.find(ce->callee);
         if (rit != func_return_types_.end()) return llvmType(rit->second);
         return "i32";
@@ -1167,6 +1199,18 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     }
     // free function call — look up return type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        if (!ce->type_args.empty()) {
+            // template call: substitute return type without instantiating yet
+            auto tit = template_funcs_.find(ce->callee);
+            if (tit != template_funcs_.end()) {
+                const FunctionDef& tmpl = *tit->second;
+                std::map<std::string, std::string> subst;
+                for (int i = 0; i < (int)tmpl.type_params.size() && i < (int)ce->type_args.size(); i++)
+                    subst[tmpl.type_params[i]] = ce->type_args[i];
+                auto it2 = subst.find(tmpl.return_type);
+                return it2 != subst.end() ? it2->second : tmpl.return_type;
+            }
+        }
         auto it = func_return_types_.find(ce->callee);
         if (it != func_return_types_.end()) return it->second;
     }

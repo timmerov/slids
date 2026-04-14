@@ -41,6 +41,7 @@ struct BinaryExpr : Expr {
 struct CallExpr : Expr {
     std::string callee;
     std::vector<std::unique_ptr<Expr>> args;
+    std::vector<std::string> type_args; // non-empty for template calls: add<int>(...)
     CallExpr(std::string callee, std::vector<std::unique_ptr<Expr>> args)
         : callee(std::move(callee)), args(std::move(args)) {}
 };
@@ -198,6 +199,7 @@ struct ReturnStmt : Stmt {
 struct CallStmt : Stmt {
     std::string callee;
     std::vector<std::unique_ptr<Expr>> args;
+    std::vector<std::string> type_args; // non-empty for template calls: add<int>(...)
     CallStmt(std::string callee, std::vector<std::unique_ptr<Expr>> args)
         : callee(std::move(callee)), args(std::move(args)) {}
 };
@@ -387,6 +389,7 @@ struct FunctionDef {
     std::string name;
     std::vector<std::pair<std::string, std::string>> params;
     std::unique_ptr<BlockStmt> body;
+    std::vector<std::string> type_params; // non-empty for template functions: T add<T>(T a, T b)
 };
 
 // method defined outside the class body: void String:clear() { ... }
@@ -434,8 +437,8 @@ private:
     Token& peek();
     Token& advance();
     Token& expect(TokenType type, const std::string& msg);
-    bool isTypeName(const Token& t);
-    bool isUserTypeName(const Token& t);
+    bool isTypeName(const Token& t) const;
+    bool isUserTypeName(const Token& t) const;
     std::string parseTypeName();
 
     // scope stack for inferred declarations: tracks declared variable names per block
@@ -447,6 +450,9 @@ private:
     std::set<std::string> current_slid_fields_;
     // all parsed slid field names, keyed by slid name (used for external method blocks)
     std::map<std::string, std::set<std::string>> all_slid_fields_;
+
+    // lookahead: pos_ is at '<'; returns true if this is a template type-arg list followed by '('
+    bool isTemplateCallLookahead() const;
 
     SlidDef parseSlidDef();
     EnumDef parseEnumDef();
