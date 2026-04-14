@@ -1256,8 +1256,5 @@ int32 main() {
 
 ## Next steps
 
-- [ ] Formal grammar (BNF / EBNF)
-- [ ] Lexer implementation in C++
-- [ ] Parser and AST
-- [ ] LLVM IR codegen
-- [ ] Standard library design
+- [ ] Templates
+- [ ] Auto-generate function signatures in transported headers.
