@@ -10,6 +10,9 @@ copying null terminated strings limited by length.
 
 String(...)
 {
+    /* incomplete class declaration. */
+    sizeof = delete;
+
     /* constructor/destructor */
     _();
     ~();
