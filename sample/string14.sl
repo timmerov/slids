@@ -43,13 +43,13 @@ String(
     void println();
 
     /* assignment from null terminated string. */
-    void op=(char[] s);
+    op=(char[] s);
 
     /* assignment from String. */
-    void op=(String^ s);
+    op=(String^ s);
 
     /* move operator. */
-    void op<-(String^ s);
+    op<-(String^ s);
 }
 
 /* overload + to concatenate strings. */
@@ -147,17 +147,17 @@ String {
     }
 
     /* assignment from null terminated string. */
-    void op=(char[] s) {
+    op=(char[] s) {
         set(s);
     }
 
     /* assignment from String. */
-    void op=(String^ s) {
+    op=(String^ s) {
         set(s^.storage_, s^.size_);
     }
 
     /* move operator. */
-    void op<-(String^ s) {
+    op<-(String^ s) {
         delete storage_;
         size_ = s^.size_;
         capacity_ = s^.capacity_;

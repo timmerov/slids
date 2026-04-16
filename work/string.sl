@@ -34,23 +34,23 @@ String (
     }
 
     /* assignment from String. */
-    void op=(String^ s) {
+    op=(String^ s) {
         set(s^.storage_, s^.size_);
     }
 
     /* assignment from null terminated string. */
-    void op=(char[] str) {
+    op=(char[] str) {
         len = strlen(str);
         set(str, len);
     }
 
     /* assignment from char. */
-    void op=(char c) {
+    op=(char c) {
         set(^c, 1);
     }
 
     /* assignment fron int64. */
-    void op=(int64 x) {
+    op=(int64 x) {
         if (x >= 0) {
             fillDigitsBackwards(x);
         } else {
@@ -61,13 +61,13 @@ String (
     }
 
     /* assignment fron unsigned-int64. */
-    void op=(uint64 x) {
+    op=(uint64 x) {
         fillDigitsBackwards(x);
         reverse();
     }
 
     /* move operator. */
-    void op<-(String^ s) {
+    op<-(String^ s) {
         /* steal their resources. */
         delete storage_;
         size_ = s^.size_;

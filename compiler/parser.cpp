@@ -1066,11 +1066,24 @@ NestedFunctionDef Parser::parseNestedFunctionDef() {
 
 MethodDef Parser::parseMethodDef() {
     MethodDef m;
-    m.return_type = parseTypeName();
+    // new syntax: op overloads have no explicit return type (implied void / self)
+    if (peek().type == TokenType::kIdentifier && peek().value == "op") {
+        m.return_type = "void";
+    } else {
+        m.return_type = parseTypeName();
+    }
     m.name = expect(TokenType::kIdentifier, "expected method name").value;
     if (m.name == "op" && peek().type == TokenType::kEquals)     { advance(); m.name = "op="; }
     else if (m.name == "op" && peek().type == TokenType::kArrowLeft) { advance(); m.name = "op<-"; }
     else if (m.name == "op" && peek().type == TokenType::kArrowBoth) { advance(); m.name = "op<->"; }
+    else if (m.name == "op" && peek().type == TokenType::kPlus)    { advance(); m.name = "op+"; }
+    else if (m.name == "op" && peek().type == TokenType::kMinus)   { advance(); m.name = "op-"; }
+    else if (m.name == "op" && peek().type == TokenType::kStar)    { advance(); m.name = "op*"; }
+    else if (m.name == "op" && peek().type == TokenType::kSlash)   { advance(); m.name = "op/"; }
+    else if (m.name == "op" && peek().type == TokenType::kPlusEq)  { advance(); m.name = "op+="; }
+    else if (m.name == "op" && peek().type == TokenType::kMinusEq) { advance(); m.name = "op-="; }
+    else if (m.name == "op" && peek().type == TokenType::kStarEq)  { advance(); m.name = "op*="; }
+    else if (m.name == "op" && peek().type == TokenType::kSlashEq) { advance(); m.name = "op/="; }
     expect(TokenType::kLParen, "expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         std::string type = parseTypeName();
@@ -1207,16 +1220,31 @@ SlidDef Parser::parseSlidDef() {
             continue;
         }
         // method definition: starts with a type name followed by identifier followed by (
-        // also handles operator methods: void op=(...)
+        // also handles operator methods: op=(...)  op<-(...)  op+(...)  etc.
         auto isMethodDecl = [&]() {
+            // new syntax: op<symbol>( without explicit return type
+            if (peek().type == TokenType::kIdentifier && peek().value == "op") {
+                if (pos_ + 1 >= (int)tokens_.size()) return false;
+                auto t = tokens_[pos_ + 1].type;
+                bool is_op_tok = (t == TokenType::kEquals   || t == TokenType::kArrowLeft
+                    || t == TokenType::kArrowBoth || t == TokenType::kPlus   || t == TokenType::kMinus
+                    || t == TokenType::kStar      || t == TokenType::kSlash  || t == TokenType::kPlusEq
+                    || t == TokenType::kMinusEq   || t == TokenType::kStarEq || t == TokenType::kSlashEq
+                    || t == TokenType::kEqEq      || t == TokenType::kNotEq
+                    || t == TokenType::kLt        || t == TokenType::kGt
+                    || t == TokenType::kLtEq      || t == TokenType::kGtEq);
+                if (!is_op_tok) return false;
+                if (pos_ + 2 >= (int)tokens_.size()) return false;
+                return tokens_[pos_ + 2].type == TokenType::kLParen;
+            }
+            // regular method: return-type name(
             if (!(isTypeName(peek()) || isUserTypeName(peek()))) return false;
             if (pos_ + 2 >= (int)tokens_.size()) return false;
             if (tokens_[pos_ + 1].type != TokenType::kIdentifier) return false;
             if (tokens_[pos_ + 2].type == TokenType::kLParen) return true;
-            // op= pattern: void op = (
+            // old op= pattern: void op = (  (kept for backward compatibility)
             if (tokens_[pos_ + 1].value != "op") return false;
             if (pos_ + 3 >= (int)tokens_.size()) return false;
-            // op= or op<-
             return (tokens_[pos_ + 2].type == TokenType::kEquals || tokens_[pos_ + 2].type == TokenType::kArrowLeft)
                 && tokens_[pos_ + 3].type == TokenType::kLParen;
         };
@@ -1322,11 +1350,24 @@ void Parser::parseExternalMethodBlock(Program& program) {
             program.external_methods.push_back(std::move(em));
             continue;
         }
-        em.return_type = parseTypeName();
+        // new syntax: op overloads have no explicit return type
+        if (peek().type == TokenType::kIdentifier && peek().value == "op") {
+            em.return_type = "void";
+        } else {
+            em.return_type = parseTypeName();
+        }
         em.method_name = expect(TokenType::kIdentifier, "expected method name").value;
         if (em.method_name == "op" && peek().type == TokenType::kEquals)     { advance(); em.method_name = "op="; }
         else if (em.method_name == "op" && peek().type == TokenType::kArrowLeft) { advance(); em.method_name = "op<-"; }
         else if (em.method_name == "op" && peek().type == TokenType::kArrowBoth) { advance(); em.method_name = "op<->"; }
+        else if (em.method_name == "op" && peek().type == TokenType::kPlus)    { advance(); em.method_name = "op+"; }
+        else if (em.method_name == "op" && peek().type == TokenType::kMinus)   { advance(); em.method_name = "op-"; }
+        else if (em.method_name == "op" && peek().type == TokenType::kStar)    { advance(); em.method_name = "op*"; }
+        else if (em.method_name == "op" && peek().type == TokenType::kSlash)   { advance(); em.method_name = "op/"; }
+        else if (em.method_name == "op" && peek().type == TokenType::kPlusEq)  { advance(); em.method_name = "op+="; }
+        else if (em.method_name == "op" && peek().type == TokenType::kMinusEq) { advance(); em.method_name = "op-="; }
+        else if (em.method_name == "op" && peek().type == TokenType::kStarEq)  { advance(); em.method_name = "op*="; }
+        else if (em.method_name == "op" && peek().type == TokenType::kSlashEq) { advance(); em.method_name = "op/="; }
         expect(TokenType::kLParen, "expected '('");
         while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
             std::string type = parseTypeName();

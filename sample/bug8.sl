@@ -1,6 +1,6 @@
 
 Simple() {
-    void op=(int x) {
+    op=(int x) {
         __println("op=(int)");
     }
 }
