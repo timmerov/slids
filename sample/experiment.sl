@@ -1,4 +1,3 @@
-
 /*
 new rules:
 
@@ -12,10 +11,37 @@ as per these examples.
 assignment is a statement, not an expression.
 x = y = 0;
 is not allowed.
-although...
-assignment can be used as an expression for implicit
-type conversions.
-as per these examples.
+if (x = 0) {}
+is not allowed.
+
+type conversion syntax:
+s = (String="x=") + x;
+and yes i know i'm overloading the meaning of =.
+but not by much.
+the parentheses are necessary because = has lower
+precedence than +.
+otherwise we'd have:
+s = String=("x=" + x);
+and this will do VERY bad things.
+String="x="
+means create an unnamed temp object of type String
+with value "x=".
+which is a heck of a lot like an assignment.
+except it's a valid expression.
+
+note:
+to be noted, not implemented now. maybe in the future.
+type conversion implies we should change the syntax for
+built-in types.
+int=3.14;
+(float=5) / 100.0;
+let me cogitate on that.
+i like the pointer casting syntax.
+
+note:
+to be noted, not implemented now. maybe in the future.
+forbid shadowing type names.
+String String = "bad idea.";
 
 temporary variables are interchangeable
 - that's probably not the right word.
@@ -26,7 +52,6 @@ temp1 += int
 and often should be.
 sometimes creating and destroying a temp is expensive.
 for example, the new and delete calls in String.
-
 when the compiler has code generation options...
 it should choose the path that uses the fewest temp
 instantiations of non-built-in classes.
@@ -55,6 +80,8 @@ a = b + c;
 d = e + f;
 both statements should be able to use the same temp String.
 which will be destructed at the end of the code block.
+
+ensure slids_reference.md is up to date.
 */
 
 /*
