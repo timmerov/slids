@@ -175,7 +175,7 @@ Summary table:
 
 Converts a value to a different type. The value is converted — the bits change to represent the same logical value in the target type (or as close as possible). This is distinct from pointer casting, which reinterprets bits without changing them.
 
-`(type=expr)` is a type conversion expression: the type name is followed by `=` and the source expression, enclosed in parentheses. The parentheses are required by convention to distinguish the inner `=` (type conversion) from the outer `=` (assignment).
+The syntax is intentional: `(type=expr)` looks like an assignment because it *is* an assignment — to an anonymous temporary variable of the target type. A named declaration (`int x = expr`) is a statement; an unnamed one (`(int=expr)`) is an expression whose value is the temporary. The parentheses are required by convention to make the two `=` signs visually distinct when a conversion appears inside a larger expression.
 
 ```
 int8    b = (int8=some_int32);     // narrowing — truncates to low 8 bits

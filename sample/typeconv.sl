@@ -2,6 +2,7 @@
 // A simple class that wraps an int32.
 Value(int32 n_ = 0) {
     op=(int32 n);
+    op=(Value^ v);
     int32 get();
 }
 
@@ -9,6 +10,11 @@ Value {
     // convert from int32
     op=(int32 n) {
         n_ = n;
+    }
+
+    // copy from another Value
+    op=(Value^ v) {
+        n_ = v^.n_;
     }
 
     int32 get() {
