@@ -53,13 +53,13 @@ String(
 
     /* move operator. */
     op<-(String^ s);
+
+    /* overload + to concatenate String's. */
+    op+(String^ sa, String^ sb);
+
+    /* overload + to add a character to a String. */
+    op+(String^ s, char c);
 }
-
-/* overload + to concatenate String's. */
-String op+(String^ sa, String^ sb);
-
-/* overload + to add a character to a String. */
-String op+(String^ s, char c);
 
 
 /* String class implementation. */
@@ -202,6 +202,20 @@ String {
         s^.capacity_ = 0;
         s^.storage_ = nullptr;
     }
+
+    /* concatenate two String's. */
+    op+(String^ sa, String^ sb) {
+        reserve(sa^.size_ + sb^.size_);
+        set(sa^.storage_, sa^.size_);
+        append(sb^.storage_, sb^.size_);
+    }
+
+    /* add a character to a String. */
+    op+(String^ s, char c) {
+        reserve(s^.size_ + 1);
+        set(s^.storage_, s^.size_);
+        append(c);
+    }
 }
 
 /* helper functions. */
@@ -230,24 +244,6 @@ void copy_chars(
         dst++^ = src++^;
         --count;
     }
-}
-
-/* concatenate two String's. */
-String op+(String^ sa, String^ sb) {
-    String sc;
-    sc.reserve(sa^.size_ + sb^.size_);
-    sc = sa^;
-    sc.append(sb^.storage_, sb^.size_);
-    return sc;
-}
-
-/* add a character to a String. */
-String op+(String^ s, char c) {
-    String result;
-    result.reserve(s^.size_ + 1);
-    result = s^;
-    result.append(c);
-    return result;
 }
 
 /*

@@ -1023,19 +1023,27 @@ std::string Codegen::exprSlidType(const Expr& expr) {
         }
     }
     if (auto* be = dynamic_cast<const BinaryExpr*>(&expr)) {
-        std::string fname = "op" + be->op;
-        // check free_func_overloads_ first (handles overloaded operators)
-        auto foit = free_func_overloads_.find(fname);
-        if (foit != free_func_overloads_.end()) {
-            std::string mangled = resolveOperatorOverload(be->op, *be->left, *be->right);
-            if (!mangled.empty()) {
-                auto pit = func_param_types_.find(mangled);
-                if (pit != func_param_types_.end() && !pit->second.empty()) {
-                    std::string t = pit->second[0];
-                    if (!t.empty() && t.back() == '^') t.pop_back();
-                    else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
-                    if (slid_info_.count(t)) return t;
+        std::string mangled = resolveOperatorOverload(be->op, *be->left, *be->right);
+        if (!mangled.empty()) {
+            // method overload: return type is void, result slid is encoded in mangled name
+            auto rit = func_return_types_.find(mangled);
+            if (rit != func_return_types_.end() && rit->second == "void") {
+                auto pos = mangled.find("__op");
+                if (pos != std::string::npos) {
+                    std::string slid = mangled.substr(0, pos);
+                    if (slid_info_.count(slid)) return slid;
                 }
+            }
+            // free function overload: return type is the slid name
+            if (rit != func_return_types_.end() && slid_info_.count(rit->second))
+                return rit->second;
+            // fallback: infer from first param type
+            auto pit = func_param_types_.find(mangled);
+            if (pit != func_param_types_.end() && !pit->second.empty()) {
+                std::string t = pit->second[0];
+                if (!t.empty() && t.back() == '^') t.pop_back();
+                else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
+                if (slid_info_.count(t)) return t;
             }
         }
     }
@@ -1049,8 +1057,38 @@ std::string Codegen::exprSlidType(const Expr& expr) {
 std::string Codegen::resolveOperatorOverload(const std::string& op,
                                               const Expr& left, const Expr& right) {
     std::string fname = "op" + op;
-    auto foit = free_func_overloads_.find(fname);
-    if (foit == free_func_overloads_.end() || foit->second.empty()) return "";
+
+    // helper: extract the slid type name from the left operand expression
+    auto leftSlidName = [&]() -> std::string {
+        if (auto* ve = dynamic_cast<const VarExpr*>(&left)) {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end()) {
+                std::string t = tit->second;
+                if (slid_info_.count(t)) return t;
+                if (!t.empty() && t.back() == '^') { t.pop_back(); if (slid_info_.count(t)) return t; }
+            }
+        }
+        if (auto* de = dynamic_cast<const DerefExpr*>(&left)) {
+            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) {
+                    std::string t = tit->second;
+                    if (!t.empty() && t.back() == '^') { t.pop_back(); if (slid_info_.count(t)) return t; }
+                }
+            }
+        }
+        if (dynamic_cast<const BinaryExpr*>(&left)) return exprSlidType(left);
+        // StringLiteralExpr: find a slid type that has op=(char[]) — it can act as that type
+        if (dynamic_cast<const StringLiteralExpr*>(&left)) {
+            for (auto& [slid, info] : slid_info_) {
+                auto oit = method_overloads_.find(slid + "__op=");
+                if (oit == method_overloads_.end()) continue;
+                for (auto& [m, ptypes] : oit->second)
+                    if (!ptypes.empty() && isPtrType(ptypes[0])) return slid;
+            }
+        }
+        return "";
+    };
 
     // helper: does this expression match a slid-typed parameter (SlidType^)?
     auto leftMatchesSlid = [&](const std::string& slid_name) -> bool {
@@ -1119,7 +1157,29 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
         return p1_is_slid_ref;
     };
 
-    // find the best matching overload
+    // prefer in-class method overloads (new-style) over naked free functions (old-style)
+    {
+        std::string slid_name = leftSlidName();
+        if (!slid_name.empty()) {
+            std::string method_base = slid_name + "__" + fname;
+            auto moit = method_overloads_.find(method_base);
+            if (moit != method_overloads_.end() && !moit->second.empty()) {
+                std::string best;
+                for (auto& [mangled, ptypes] : moit->second) {
+                    // method params are (sa, sb) — check right param (index 0 for methods vs 1 for free funcs)
+                    if (!ptypes.empty() && !rightMatchesParam(ptypes[ptypes.size() > 1 ? 1 : 0])) continue;
+                    if (best.empty() || ptypes.size() > func_param_types_[best].size())
+                        best = mangled;
+                }
+                if (!best.empty()) return best;
+            }
+        }
+    }
+
+    // fall back to naked free-function overloads (old-style)
+    auto foit = free_func_overloads_.find(fname);
+    if (foit == free_func_overloads_.end() || foit->second.empty()) return "";
+
     std::string best;
     for (auto& [mangled, ptypes] : foit->second) {
         if (ptypes.empty()) continue;

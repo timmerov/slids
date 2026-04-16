@@ -43,6 +43,9 @@ String(...)
     /* move operator. */
     op<-(String^ s);
 
+    /* overload + to concatenate String-s. */
+    op+(String^ sa, String^ sb);
+
     /* set to empty string. */
     void clear();
 
@@ -56,9 +59,6 @@ String(...)
     void print();
     void println();
 }
-
-/* overload + to concatenate String-s. */
-String op+(String^ sa, String^ sb);
 
 /* return length of null terminated string. */
 intptr strlen(char[] s);

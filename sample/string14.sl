@@ -50,10 +50,10 @@ String(
 
     /* move operator. */
     op<-(String^ s);
-}
 
-/* overload + to concatenate strings. */
-String op+(String^ sa, String^ sb);
+    /* overload + to concatenate strings. */
+    op+(String^ sa, String^ sb);
+}
 
 
 /* String class implementation. */
@@ -166,6 +166,12 @@ String {
         s^.capacity_ = 0;
         s^.storage_ = nullptr;
     }
+
+    /* concatenate two strings. */
+    op+(String^ sa, String^ sb) {
+        set(sa^.storage_, sa^.size_);
+        append(sb^.storage_, sb^.size_);
+    }
 }
 
 /* helper functions. */
@@ -194,14 +200,6 @@ void copy_chars(
         dst++^ = src++^;
         --count;
     }
-}
-
-/* concatenate two strings. */
-String op+(String^ sa, String^ sb) {
-    String sc;
-    sc.set(sa^.storage_, sa^.size_);
-    sc.append(sb^.storage_, sb^.size_);
-    return sc;
 }
 
 /*

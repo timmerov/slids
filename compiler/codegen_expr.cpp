@@ -578,22 +578,30 @@ std::string Codegen::emitExpr(const Expr& expr) {
             if (op_type.empty()) op_type = "i32";
         }
 
-        // operator overload (e.g. String op+(String^ sa, String^ sb))
+        // operator overload — in-class method (op+(sa,sb) stored in self) or free function (sret)
         {
             std::string op_func = resolveOperatorOverload(b->op, *b->left, *b->right);
             if (!op_func.empty()) {
-                // find return slid type
-                std::string ret_slid = func_return_types_.count(op_func) ? func_return_types_[op_func] : "";
-                if (!ret_slid.empty() && slid_info_.count(ret_slid)) {
-                    // alloca a temp struct, call with sret, return the alloca ptr
+                std::string ret = func_return_types_.count(op_func) ? func_return_types_[op_func] : "";
+                bool is_method = (ret == "void");
+                // determine the result slid type
+                std::string res_slid;
+                if (is_method) {
+                    auto pos = op_func.find("__op");
+                    if (pos != std::string::npos) res_slid = op_func.substr(0, pos);
+                } else {
+                    res_slid = ret;
+                }
+                if (!res_slid.empty() && slid_info_.count(res_slid)) {
+                    auto& info = slid_info_[res_slid];
+                    // alloca a temp struct for the result
                     std::string tmp_alloca = newTmp();
-                    out_ << "    " << tmp_alloca << " = alloca %struct." << ret_slid << "\n";
-                    // zero-init
-                    auto& info = slid_info_[ret_slid];
+                    out_ << "    " << tmp_alloca << " = alloca %struct." << res_slid << "\n";
+                    // zero-init fields
                     for (int i = 0; i < (int)info.field_types.size(); i++) {
                         std::string ft = llvmType(info.field_types[i]);
                         std::string gep = newTmp();
-                        out_ << "    " << gep << " = getelementptr %struct." << ret_slid << ", ptr " << tmp_alloca << ", i32 0, i32 " << i << "\n";
+                        out_ << "    " << gep << " = getelementptr %struct." << res_slid << ", ptr " << tmp_alloca << ", i32 0, i32 " << i << "\n";
                         if (isIndirectType(info.field_types[i]))
                             out_ << "    store ptr null, ptr " << gep << "\n";
                         else
@@ -601,13 +609,24 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     }
                     // call ctor if any
                     if (info.has_explicit_ctor)
-                        out_ << "    call void @" << ret_slid << "__ctor(ptr " << tmp_alloca << ")\n";
+                        out_ << "    call void @" << res_slid << "__ctor(ptr " << tmp_alloca << ")\n";
                     auto& ptypes = func_param_types_[op_func];
-                    std::string args = "ptr sret(%struct." + ret_slid + ") " + tmp_alloca;
-                    std::string la = emitArgForParam(*b->left, ptypes.size() > 0 ? ptypes[0] : "");
-                    args += ", " + (ptypes.size() > 0 ? llvmType(ptypes[0]) : "ptr") + " " + la;
-                    std::string ra = emitArgForParam(*b->right, ptypes.size() > 1 ? ptypes[1] : "");
-                    args += ", " + (ptypes.size() > 1 ? llvmType(ptypes[1]) : "ptr") + " " + ra;
+                    std::string args;
+                    if (is_method) {
+                        // method: self = tmp_alloca, then sa and sb
+                        args = "ptr " + tmp_alloca;
+                        std::string la = emitArgForParam(*b->left,  ptypes.size() > 0 ? ptypes[0] : "");
+                        std::string ra = emitArgForParam(*b->right, ptypes.size() > 1 ? ptypes[1] : "");
+                        if (ptypes.size() > 0) args += ", " + llvmType(ptypes[0]) + " " + la;
+                        if (ptypes.size() > 1) args += ", " + llvmType(ptypes[1]) + " " + ra;
+                    } else {
+                        // free function: sret as first arg, then sa and sb
+                        args = "ptr sret(%struct." + res_slid + ") " + tmp_alloca;
+                        std::string la = emitArgForParam(*b->left,  ptypes.size() > 0 ? ptypes[0] : "");
+                        std::string ra = emitArgForParam(*b->right, ptypes.size() > 1 ? ptypes[1] : "");
+                        if (ptypes.size() > 0) args += ", " + llvmType(ptypes[0]) + " " + la;
+                        if (ptypes.size() > 1) args += ", " + llvmType(ptypes[1]) + " " + ra;
+                    }
                     out_ << "    call void @" << llvmGlobalName(op_func) << "(" << args << ")\n";
                     return tmp_alloca;
                 }
@@ -984,7 +1003,8 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             std::string op_func = resolveOperatorOverload(b->op, *b->left, *b->right);
             if (!op_func.empty()) {
                 std::string ret = func_return_types_.count(op_func) ? func_return_types_[op_func] : "";
-                if (!ret.empty() && slid_info_.count(ret)) return "ptr"; // sret alloca
+                if (ret == "void") return "ptr"; // method overload: self is the alloca result
+                if (!ret.empty() && slid_info_.count(ret)) return "ptr"; // free function: sret alloca
             }
         }
         if (b->op == "==" || b->op == "!=" || b->op == "<" ||

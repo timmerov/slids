@@ -78,6 +78,13 @@ String (
         s^.capacity_ = 0;
     }
 
+    /* concatenate two String's. */
+    op+(String^ sa, String^ sb) {
+        reserve(sa^.size_ + sb^.size_);
+        self = sa^;
+        append(sb^.storage_, sb^.size_);
+    }
+
     /* set to empty string. */
     void clear() {
         size_ = 0;
@@ -88,6 +95,9 @@ String (
         if (cap <= capacity_) {
             return;
         }
+
+        /* round up capacity to 16 byte chunks. */
+        cap = (cap + 0x0F) & ~0x0F;
 
         new_storage = new char[cap];
         strcpy(new_storage, storage_, size_);
@@ -156,15 +166,6 @@ String (
             x /= 10;
         } (x);
     }
-}
-
-/* concatenate two String's. */
-String op+(String^ sa, String^ sb) {
-    String sc;
-    sc.reserve(sa^.size_ + sb^.size_);
-    sc = sa^;
-    sc.append(sb^.storage_, sb^.size_);
-    return sc;
 }
 
 /* helper functions. */
