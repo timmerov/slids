@@ -75,7 +75,6 @@ float32 dot(Vec2^ a, Vec2^ b);   // function — no {}
 Vec2(float32 x_, float32 y_) {   // class — {} required, declarations only
     void init(float32 x, float32 y);
     float32 length();
-    Vec2 operator+(Vec2^ other);
 }
 ```
 
@@ -90,10 +89,6 @@ void Vec2:init(float32 x, float32 y) {
 
 float32 Vec2:length() {
     return sqrt(x_ * x_ + y_ * y_);
-}
-
-Vec2 Vec2:operator+(Vec2^ other) {
-    return Vec2(x_ + other^.x_, y_ + other^.y_);
 }
 
 float32 dot(Vec2^ a, Vec2^ b) {
@@ -629,15 +624,45 @@ animal^.speak();   // calls Dog:speak
 
 ## Operator overloading
 
+Operator overloads are defined inside the class body using the `op` keyword followed immediately by the operator symbol. No return type is written — the return value is always `self` (the object being modified).
+
 ```
-Vec2(float32 x_, float32 y_) {
-    Vec2 operator+(Vec2^ other) {
-        return Vec2(x_ + other^.x_, y_ + other^.y_);
+Value(int value_ = 0) {
+    _() {}
+    ~() {}
+
+    op=(Value^ rhs) {
+        value_ = rhs^.value_;
     }
 
-    bool operator==(Vec2^ other) {
-        return x_ == other^.x_ && y_ == other^.y_;
+    op=(int x) {
+        value_ = x;
     }
+
+    op+(Value^ a, Value^ b) {
+        value_ = a^.value_ + b^.value_;
+    }
+
+    op+=(Value^ rhs) {
+        value_ += rhs^.value_;
+    }
+
+    op+=(int x) {
+        value_ += x;
+    }
+}
+```
+
+Supported operators: `=`, `<-`, `<->`, `+`, `-`, `*`, `/`, `+=`, `-=`, `*=`, `/=`, `==`, `!=`, `<`, `>`, `<=`, `>=`.
+
+**Assignment is a statement, not an expression.** Chained assignment (`x = y = 0;`) and assignment inside a condition (`if (x = 0)`) are not allowed.
+
+**Forward declarations** inside the class body omit the body:
+```
+String(int size_ = 0, int capacity_ = 0, char[] storage_ = nullptr) {
+    op=(char[] s);
+    op=(String^ s);
+    op<-(String^ s);
 }
 ```
 
@@ -932,7 +957,7 @@ For class types, `<-` calls a user-defined `op<-` method. The method is responsi
 **Declaring `op<-` in the class:**
 ```
 String(int size_ = 0, int capacity_ = 0, char[] storage_ = nullptr) {
-    void op<-(String^ s);
+    op<-(String^ s);
     // ...
 }
 ```
@@ -940,7 +965,7 @@ String(int size_ = 0, int capacity_ = 0, char[] storage_ = nullptr) {
 **Implementing `op<-`:**
 ```
 String {
-    void op<-(String^ s) {
+    op<-(String^ s) {
         delete storage_;            // free existing storage
         size_     = s^.size_;
         capacity_ = s^.capacity_;
@@ -989,7 +1014,7 @@ while (lo < hi) {
 For class types, `<->` calls a user-defined `op<->` method:
 ```
 String {
-    void op<->(String^ s) {
+    op<->(String^ s) {
         // swap size_, capacity_, storage_ with s^.*
     }
 }
