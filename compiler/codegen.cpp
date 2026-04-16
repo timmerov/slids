@@ -1369,6 +1369,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& full_mangle
                               const BlockStmt& body) {
     locals_.clear();
     local_types_.clear();
+    dtor_vars_.clear();
     tmp_counter_ = 0;
     label_counter_ = 0;
     break_label_ = "";
