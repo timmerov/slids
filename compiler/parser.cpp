@@ -137,6 +137,15 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         expect(TokenType::kRParen, "expected ')'");
         return std::make_unique<TypeConvExpr>(type_name, std::move(operand));
     }
+    // chainable type conversion without outer parens: int=expr, float32=expr, etc.
+    // type keywords can't be variable names, so this is unambiguous in expression position
+    if (isTypeName(t) && pos_ + 1 < (int)tokens_.size()
+        && tokens_[pos_ + 1].type == TokenType::kEquals) {
+        std::string type_name = advance().value; // consume type keyword
+        advance(); // consume '='
+        auto operand = parseExpr();
+        return std::make_unique<TypeConvExpr>(type_name, std::move(operand));
+    }
     if (t.type == TokenType::kStringLiteral) {
         advance();
         std::string value = t.value;

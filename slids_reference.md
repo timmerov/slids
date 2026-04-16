@@ -175,7 +175,9 @@ Summary table:
 
 Converts a value to a different type. The value is converted — the bits change to represent the same logical value in the target type (or as close as possible). This is distinct from pointer casting, which reinterprets bits without changing them.
 
-The syntax is intentional: `(type=expr)` looks like an assignment because it *is* an assignment — to an anonymous temporary variable of the target type. A named declaration (`int x = expr`) is a statement; an unnamed one (`(int=expr)`) is an expression whose value is the temporary. The parentheses are required by convention to make the two `=` signs visually distinct when a conversion appears inside a larger expression.
+The syntax is intentional: `(type=expr)` looks like an assignment because it *is* an assignment — to an anonymous temporary variable of the target type. A named declaration (`int x = expr`) is a statement; an unnamed one (`(int=expr)`) is an expression whose value is the temporary.
+
+The parentheses are required by the parser. This was a deliberate design choice: a type keyword in expression position is otherwise meaningless, and requiring parens keeps the grammar unambiguous and makes the conversion visually distinct from a surrounding assignment. `int x = (int8=a)` clearly shows two separate `=` operations at a glance.
 
 ```
 int8    b = (int8=some_int32);     // narrowing — truncates to low 8 bits
@@ -186,6 +188,12 @@ uint32  u = (uint32=some_int32);  // change signedness — same bit pattern
 ```
 
 Integer promotion (widening of the smaller operand in binary expressions) happens automatically — explicit type conversions are only needed to narrow or to convert between floats and integers.
+
+Type conversions can be chained. Inside an outer `(type=...)`, the inner operand may be another conversion written without its own parentheses:
+
+```
+float32 x = (float32=int=3.14);   // 3.14 → int (3) → float32 (3.0)
+```
 
 Type conversion also works for class types. `(ClassName=expr)` creates a temporary of `ClassName` and calls its `op=` with `expr`:
 

@@ -73,6 +73,10 @@ int32 main() {
     float64 f64 = (float64=f32);
     __println("float64(float32 2.0):" + f64);
 
+    // chained: float64 → int → float32 (3.14 truncated to 3, then back to float)
+    float32 chained = (float32=int=3.14);
+    __println("float32(int(3.14)):   expected 3.000000, got " + chained);
+
     // -------------------------------------------------------
     // Class type conversion
     // -------------------------------------------------------
