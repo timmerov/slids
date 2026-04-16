@@ -34,7 +34,7 @@ int32 main() {
     String s = "x[6]=" + x;
     s.println();
 
-    intptr a = 0x1234;
+    /*intptr a = 0x1234;
     intptr b = 0x5678;
     c = add<intptr>(a, b);
     s = "c[26796]=" + c;
@@ -44,7 +44,7 @@ int32 main() {
     String world = "World!";
     greeting = add<String>(hello, world);
     s = "greeting[Hello, World!]=" + greeting;
-    s.println();
+    s.println();*/
 
     return 0;
 }

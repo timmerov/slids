@@ -1,13 +1,25 @@
 
+this is completely broken:
 
-note: when outer::middle::inner executes outer::return 99;
-execution of inner stops (except for calling destructors of objects going out of scope)
-middle stops
-and outer returns 99.
-middle::return is never called.
+int x = 5;
+String s = "x=" + x;
 
-remove lambdas.
+cause it parses as char* + int -> char* -> String
+and segfaults.
 
-the c interop section needs TODO review.
+we don't allow a = b = c.
+and assignments are statements not expressions.
+verify that with claude.
+
+so we should use different op= syntax.
+
+String:op=(String^ other) {
+    self <- other^;
+}
+
+String:op=(char[] str) {
+    clear();
+    append(str);
+}
 
 

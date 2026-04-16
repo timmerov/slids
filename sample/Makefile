@@ -30,6 +30,9 @@ SAMPLES = \
 	switch \
 	type_infer
 
+#	bug4 bug5 bug6 bug7 bug8 \
+#	experiment \
+
 # --- multi-file samples (don't fit the single-file template) ---
 MULTI_SAMPLES = import_test
 
