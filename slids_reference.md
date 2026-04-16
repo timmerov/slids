@@ -171,11 +171,9 @@ Summary table:
 
 ---
 
-## Type casting
+## Type conversion — `(type=expr)`
 
-### Type conversion — `(type=expr)`
-
-Converts a value to a different numeric type. The value is converted, not the bits.
+Converts a value to a different type. The value is converted — the bits change to represent the same logical value in the target type (or as close as possible). This is distinct from pointer casting, which reinterprets bits without changing them.
 
 `(type=expr)` is a type conversion expression: the type name is followed by `=` and the source expression, enclosed in parentheses. The parentheses are required by convention to distinguish the inner `=` (type conversion) from the outer `=` (assignment).
 
@@ -189,7 +187,15 @@ uint32  u = (uint32=some_int32);  // change signedness — same bit pattern
 
 Integer promotion (widening of the smaller operand in binary expressions) happens automatically — explicit type conversions are only needed to narrow or to convert between floats and integers.
 
-### Pointer reinterpretation — `<Type^> expr`
+Type conversion also works for class types. `(ClassName=expr)` creates a temporary of `ClassName` and calls its `op=` with `expr`:
+
+```
+Value v = (Value=42);    // create a Value from an int32 via op=(int32)
+```
+
+---
+
+## Pointer casting — `<Type^> expr`
 
 Reinterprets a pointer as a pointer to a different type. The address is unchanged; only the type changes. Also applies to iterator types (`<Type[]> expr`).
 
@@ -292,7 +298,7 @@ x = 100;         // assigns — x is already declared, still int
 | Function call `f(...)` | return type of `f` |
 | Method call `obj.m(...)` | return type of `m` |
 | Binary expression `a op b` | inferred type of `a` |
-| Numeric cast `int32(e)` | `int32` (the cast target type) |
+| Type conversion `(int32=e)` | `int32` (the conversion target type) |
 | `sizeof(...)` | `intptr` |
 
 **Digit separators** — underscores are allowed anywhere inside a numeric literal and are ignored. They are purely visual:
