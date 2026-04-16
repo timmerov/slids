@@ -173,19 +173,21 @@ Summary table:
 
 ## Type casting
 
-### Numeric casting — `type(expr)`
+### Type conversion — `(type=expr)`
 
 Converts a value to a different numeric type. The value is converted, not the bits.
 
+`(type=expr)` is a type conversion expression: the type name is followed by `=` and the source expression, enclosed in parentheses. The parentheses are required by convention to distinguish the inner `=` (type conversion) from the outer `=` (assignment).
+
 ```
-int8    b = int8(some_int32);     // narrowing — truncates to low 8 bits
-int64   x = int64(some_int32);   // widening
-float32 f = float32(some_int32); // integer → float
-int32   i = int32(some_float32); // float → integer, truncates toward zero
-uint32  u = uint32(some_int32);  // change signedness — same bit pattern
+int8    b = (int8=some_int32);     // narrowing — truncates to low 8 bits
+int64   x = (int64=some_int32);   // widening
+float32 f = (float32=some_int32); // integer → float
+int32   i = (int32=some_float32); // float → integer, truncates toward zero
+uint32  u = (uint32=some_int32);  // change signedness — same bit pattern
 ```
 
-Integer promotion (widening of the smaller operand in binary expressions) happens automatically — explicit numeric casts are only needed to narrow or to convert between floats and integers.
+Integer promotion (widening of the smaller operand in binary expressions) happens automatically — explicit type conversions are only needed to narrow or to convert between floats and integers.
 
 ### Pointer reinterpretation — `<Type^> expr`
 

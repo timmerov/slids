@@ -986,8 +986,8 @@ bool Codegen::isUnsignedExpr(const Expr& expr) {
         }
     }
 
-    // numeric cast to an unsigned type
-    if (auto* nc = dynamic_cast<const NumericCastExpr*>(&expr)) {
+    // type conversion to an unsigned type
+    if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr)) {
         static const std::set<std::string> utypes_nc = {"uint","uint8","uint16","uint32","uint64","char"};
         return utypes_nc.count(nc->target_type) > 0;
     }
@@ -1007,6 +1007,9 @@ bool Codegen::isUnsignedExpr(const Expr& expr) {
 
 // Return the slid type name if expr produces a slid-typed value, else "".
 std::string Codegen::exprSlidType(const Expr& expr) {
+    // (SlidType=expr) — the result is a ptr to a SlidType temp
+    if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr))
+        if (slid_info_.count(nc->target_type)) return nc->target_type;
     if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
         auto tit = local_types_.find(ve->name);
         if (tit != local_types_.end() && slid_info_.count(tit->second))
@@ -1200,6 +1203,68 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
     return best;
 }
 
+// Resolve the best op= (or op<-) overload for the given argument expression.
+// Priority: slid ref > scalar exact match > ptr/char[] fallback.
+std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
+    auto oit = method_overloads_.find(base);
+    if (oit == method_overloads_.end()) return "";
+    if (oit->second.size() == 1) return oit->second[0].first;
+
+    static const std::set<std::string> unsigned_types = {"uint","uint8","uint16","uint32","uint64","char"};
+
+    // determine argument category
+    bool arg_is_slid = false;
+    bool arg_is_char = false;       // char literal ('x') — prefers char overload
+    bool arg_is_scalar_int = false; // signed integer
+    bool arg_is_unsigned = false;   // unsigned integer — prefers uint64 overload
+    if (auto* ile = dynamic_cast<const IntLiteralExpr*>(&arg)) {
+        arg_is_char = ile->is_char_literal;
+        arg_is_scalar_int = !ile->is_char_literal;
+    } else if (auto* nc = dynamic_cast<const TypeConvExpr*>(&arg)) {
+        arg_is_char = nc->target_type == "char";
+        arg_is_unsigned = !arg_is_char && unsigned_types.count(nc->target_type) > 0;
+        arg_is_scalar_int = !arg_is_char && !arg_is_unsigned;
+    } else if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
+        auto tit = local_types_.find(ve->name);
+        if (tit != local_types_.end()) {
+            std::string t = tit->second;
+            if (!t.empty() && t.back() == '^') t.pop_back();
+            else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
+            arg_is_slid = slid_info_.count(t) > 0;
+            arg_is_char = !arg_is_slid && (tit->second == "char");
+            arg_is_unsigned = !arg_is_slid && !arg_is_char && unsigned_types.count(tit->second) > 0;
+            if (!arg_is_slid && !arg_is_char && !arg_is_unsigned && !isIndirectType(tit->second))
+                arg_is_scalar_int = true;
+        }
+    } else if (!exprSlidType(arg).empty()) {
+        arg_is_slid = true; // e.g. result of op+ expression
+    } else {
+        // use inferred LLVM type: integer types are scalar, ptr is string/reference
+        std::string lt = exprLlvmType(arg);
+        if (lt == "i8")
+            arg_is_char = true;
+        else if (lt == "i16" || lt == "i32" || lt == "i64")
+            arg_is_scalar_int = true;
+    }
+
+    // pass 1: exact category match
+    for (auto& [m, ptypes] : oit->second) {
+        if (ptypes.size() != 1) continue;
+        if (arg_is_slid       && isRefType(ptypes[0])) return m;
+        if (arg_is_char       && ptypes[0] == "char") return m;
+        if (arg_is_unsigned   && ptypes[0] != "char" && unsigned_types.count(ptypes[0])) return m;
+        if (arg_is_scalar_int && !isIndirectType(ptypes[0]) && ptypes[0] != "char" && !unsigned_types.count(ptypes[0])) return m;
+        if (!arg_is_slid && !arg_is_char && !arg_is_scalar_int && !arg_is_unsigned && isPtrType(ptypes[0])) return m;
+    }
+    // pass 2: fallback — any ptr param for non-slid arg (e.g. string literal)
+    if (!arg_is_slid) {
+        for (auto& [m, ptypes] : oit->second) {
+            if (ptypes.size() == 1 && isIndirectType(ptypes[0])) return m;
+        }
+    }
+    return oit->second[0].first;
+}
+
 // Emit an argument expression, taking pointer-vs-value into account.
 // If param_type ends with '^' and the arg is a slid local, pass its alloca ptr directly.
 // If param_type is 'SlidType^' and arg is a string literal, construct an implicit temporary.
@@ -1282,7 +1347,7 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                 // widen: zext for unsigned source, sext for signed
                 static const std::set<std::string> unsigned_types = {"uint","uint8","uint16","uint32","uint64","char"};
                 bool src_unsigned = false;
-                if (auto* nc = dynamic_cast<const NumericCastExpr*>(&arg))
+                if (auto* nc = dynamic_cast<const TypeConvExpr*>(&arg))
                     src_unsigned = unsigned_types.count(nc->target_type) > 0;
                 else if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
                     auto tit = local_types_.find(ve->name);

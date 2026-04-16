@@ -118,11 +118,11 @@ struct FloatLiteralExpr : Expr {
     FloatLiteralExpr(double v) : value(v) {}
 };
 
-// numeric cast: type(expr) — converts value; int↔int, int↔float, float↔float
-struct NumericCastExpr : Expr {
+// type conversion expression: (type=expr) — converts value; int↔int, int↔float, float↔float
+struct TypeConvExpr : Expr {
     std::string target_type;
     std::unique_ptr<Expr> operand;
-    NumericCastExpr(std::string t, std::unique_ptr<Expr> op)
+    TypeConvExpr(std::string t, std::unique_ptr<Expr> op)
         : target_type(std::move(t)), operand(std::move(op)) {}
 };
 

@@ -128,14 +128,14 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         advance();
         return std::make_unique<FloatLiteralExpr>(std::stod(t.value));
     }
-    // numeric cast: primitive_type(expr)
+    // type conversion: primitive_type(expr) — legacy form
     if (isTypeName(t) && pos_ + 1 < (int)tokens_.size()
         && tokens_[pos_ + 1].type == TokenType::kLParen) {
         std::string type_name = advance().value; // consume type keyword
         advance(); // consume '('
         auto operand = parseExpr();
         expect(TokenType::kRParen, "expected ')'");
-        return std::make_unique<NumericCastExpr>(type_name, std::move(operand));
+        return std::make_unique<TypeConvExpr>(type_name, std::move(operand));
     }
     if (t.type == TokenType::kStringLiteral) {
         advance();
@@ -201,6 +201,22 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
             return std::make_unique<CallExpr>(t.value, std::move(args));
         }
         return std::make_unique<VarExpr>(t.value);
+    }
+    // type conversion expression: (Type=expr)
+    // distinguished from grouped expression by TypeName immediately followed by =
+    if (t.type == TokenType::kLParen
+        && pos_ + 1 < (int)tokens_.size()
+        && (isTypeName(tokens_[pos_ + 1]) || isUserTypeName(tokens_[pos_ + 1]))) {
+        int saved = pos_;
+        advance(); // consume '('
+        std::string type_name = parseTypeName();
+        if (peek().type == TokenType::kEquals) {
+            advance(); // consume '='
+            auto operand = parseExpr();
+            expect(TokenType::kRParen, "expected ')' after type conversion");
+            return std::make_unique<TypeConvExpr>(type_name, std::move(operand));
+        }
+        pos_ = saved; // not a type conversion — backtrack and fall through
     }
     if (t.type == TokenType::kLParen) {
         advance();

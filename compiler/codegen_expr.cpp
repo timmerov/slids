@@ -850,8 +850,51 @@ std::string Codegen::emitExpr(const Expr& expr) {
         return s;
     }
 
-    // numeric cast: type(expr)
-    if (auto* nc = dynamic_cast<const NumericCastExpr*>(&expr)) {
+    // type conversion: (type=expr)
+    if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr)) {
+        // slid type conversion: (SlidType=expr) — alloca a temp, init fields, call op=, return ptr
+        if (slid_info_.count(nc->target_type)) {
+            const std::string& stype = nc->target_type;
+            auto& info = slid_info_[stype];
+
+            std::string tmp_reg = newTmp();
+            out_ << "    " << tmp_reg << " = alloca %struct." << stype << "\n";
+
+            // find SlidDef for default field values
+            const SlidDef* slid_def = nullptr;
+            for (auto& s : program_.slids)
+                if (s.name == stype) { slid_def = &s; break; }
+
+            // initialize fields to defaults
+            for (int i = 0; i < (int)info.field_types.size(); i++) {
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr %struct." << stype
+                     << ", ptr " << tmp_reg << ", i32 0, i32 " << i << "\n";
+                std::string val = (slid_def && slid_def->fields[i].default_val)
+                                  ? emitExpr(*slid_def->fields[i].default_val) : "0";
+                out_ << "    store " << llvmType(info.field_types[i])
+                     << " " << val << ", ptr " << gep << "\n";
+            }
+
+            // call ctor if any
+            if (info.has_pinit && !info.is_transport_impl)
+                out_ << "    call void @" << stype << "__pinit(ptr " << tmp_reg << ")\n";
+            else if (info.has_explicit_ctor)
+                out_ << "    call void @" << stype << "__ctor(ptr " << tmp_reg << ")\n";
+
+            // call op= with the operand
+            std::string mangled = resolveOpEq(stype + "__op=", *nc->operand);
+            if (!mangled.empty()) {
+                auto& ptypes = func_param_types_[mangled];
+                std::string param_type = ptypes.empty() ? "" : ptypes[0];
+                std::string arg_val = emitArgForParam(*nc->operand, param_type);
+                std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
+                out_ << "    call void @" << llvmGlobalName(mangled)
+                     << "(ptr " << tmp_reg << ", " << ptype_str << " " << arg_val << ")\n";
+            }
+            return tmp_reg;
+        }
+
         std::string src_val  = emitExpr(*nc->operand);
         std::string src_type = exprLlvmType(*nc->operand);
         std::string dst_type = llvmType(nc->target_type);
@@ -1140,8 +1183,8 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
     // float literal — always double internally
     if (dynamic_cast<const FloatLiteralExpr*>(&expr)) return "double";
 
-    // numeric cast — result is the target type
-    if (auto* nc = dynamic_cast<const NumericCastExpr*>(&expr))
+    // type conversion — result is the target type
+    if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr))
         return llvmType(nc->target_type);
 
     // pointer reinterpret cast — result is the target type
@@ -1202,8 +1245,8 @@ std::string Codegen::inferSlidType(const Expr& expr) {
         std::string inner = inferSlidType(*ae->operand);
         return inner + "^";
     }
-    // numeric cast — use the target type
-    if (auto* nc = dynamic_cast<const NumericCastExpr*>(&expr)) return nc->target_type;
+    // type conversion — use the target type
+    if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr)) return nc->target_type;
     // pointer reinterpret cast — use the target type
     if (auto* pc = dynamic_cast<const PtrCastExpr*>(&expr)) return pc->target_type;
     // variable — look up its declared type, then fall back to current slid's fields

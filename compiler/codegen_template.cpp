@@ -84,9 +84,9 @@ static std::unique_ptr<Expr> cloneExpr(const Expr& expr,
             e->start ? cloneExpr(*e->start, subst) : nullptr,
             e->end   ? cloneExpr(*e->end,   subst) : nullptr);
 
-    if (auto* e = dynamic_cast<const NumericCastExpr*>(&expr))
-        return std::make_unique<NumericCastExpr>(subTypeSuffix(e->target_type, subst),
-                                                  cloneExpr(*e->operand, subst));
+    if (auto* e = dynamic_cast<const TypeConvExpr*>(&expr))
+        return std::make_unique<TypeConvExpr>(subTypeSuffix(e->target_type, subst),
+                                               cloneExpr(*e->operand, subst));
 
     if (auto* e = dynamic_cast<const PtrCastExpr*>(&expr))
         return std::make_unique<PtrCastExpr>(subTypeSuffix(e->target_type, subst),

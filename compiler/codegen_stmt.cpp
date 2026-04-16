@@ -48,68 +48,6 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
     };
 
-    // resolve op= overload: pick the best matching overload for the arg expression.
-    // Priority: slid ref > scalar exact match > ptr/char[] fallback
-    auto resolveOpEq = [&](const std::string& base, const Expr& arg) -> std::string {
-        auto oit = method_overloads_.find(base);
-        if (oit == method_overloads_.end()) return "";
-        if (oit->second.size() == 1) return oit->second[0].first;
-
-        static const std::set<std::string> unsigned_types = {"uint","uint8","uint16","uint32","uint64","char"};
-        static const std::set<std::string> signed_int_types = {"int","int8","int16","int32","int64"};
-
-        // determine argument category
-        bool arg_is_slid = false;
-        bool arg_is_char = false;       // char literal ('x') — prefers char overload
-        bool arg_is_scalar_int = false; // signed integer
-        bool arg_is_unsigned = false;   // unsigned integer — prefers uint64 overload
-        if (auto* ile = dynamic_cast<const IntLiteralExpr*>(&arg)) {
-            arg_is_char = ile->is_char_literal;
-            arg_is_scalar_int = !ile->is_char_literal;
-        } else if (auto* nc = dynamic_cast<const NumericCastExpr*>(&arg)) {
-            arg_is_char = nc->target_type == "char";
-            arg_is_unsigned = !arg_is_char && unsigned_types.count(nc->target_type) > 0;
-            arg_is_scalar_int = !arg_is_char && !arg_is_unsigned;
-        } else if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
-            auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end()) {
-                std::string t = tit->second;
-                if (!t.empty() && t.back() == '^') t.pop_back();
-                else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
-                arg_is_slid = slid_info_.count(t) > 0;
-                arg_is_char = !arg_is_slid && (tit->second == "char");
-                arg_is_unsigned = !arg_is_slid && !arg_is_char && unsigned_types.count(tit->second) > 0;
-                if (!arg_is_slid && !arg_is_char && !arg_is_unsigned && !isIndirectType(tit->second))
-                    arg_is_scalar_int = true;
-            }
-        } else if (!exprSlidType(arg).empty()) {
-            arg_is_slid = true; // e.g. result of op+ expression
-        } else {
-            // use inferred LLVM type: integer types are scalar, ptr is string/reference
-            std::string lt = exprLlvmType(arg);
-            if (lt == "i8")
-                arg_is_char = true;
-            else if (lt == "i16" || lt == "i32" || lt == "i64")
-                arg_is_scalar_int = true;
-        }
-
-        // pass 1: exact category match
-        for (auto& [m, ptypes] : oit->second) {
-            if (ptypes.size() != 1) continue;
-            if (arg_is_slid       && isRefType(ptypes[0])) return m;
-            if (arg_is_char       && ptypes[0] == "char") return m;
-            if (arg_is_unsigned   && ptypes[0] != "char" && unsigned_types.count(ptypes[0])) return m;
-            if (arg_is_scalar_int && !isIndirectType(ptypes[0]) && ptypes[0] != "char" && !unsigned_types.count(ptypes[0])) return m;
-            if (!arg_is_slid && !arg_is_char && !arg_is_scalar_int && !arg_is_unsigned && isPtrType(ptypes[0])) return m;
-        }
-        // pass 2: fallback — any ptr param for non-slid arg (e.g. string literal)
-        if (!arg_is_slid) {
-            for (auto& [m, ptypes] : oit->second) {
-                if (ptypes.size() == 1 && isIndirectType(ptypes[0])) return m;
-            }
-        }
-        return oit->second[0].first;
-    };
 
     if (auto* ds = dynamic_cast<const DeleteStmt*>(&stmt)) {
         std::string ptr_val = emitExpr(*ds->operand);
@@ -255,11 +193,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
             // if initialized with = expr, call op= method; with <- expr, call op<- method
             if (decl->init) {
                 std::string op_name = decl->is_move ? "op<-" : "op=";
-                std::string mangled = resolveOpEq(eff_type + "__" + op_name, *decl->init);
+                // peel (SameType=inner): Value v = (Value=42) → call op= with inner (42)
+                const Expr* init_expr = decl->init.get();
+                if (auto* tc = dynamic_cast<const TypeConvExpr*>(init_expr))
+                    if (tc->target_type == eff_type) init_expr = tc->operand.get();
+                std::string mangled = resolveOpEq(eff_type + "__" + op_name, *init_expr);
                 if (!mangled.empty()) {
                     auto& ptypes = func_param_types_[mangled];
                     std::string param_type = ptypes.empty() ? "" : ptypes[0];
-                    std::string arg_val = emitArgForParam(*decl->init, param_type);
+                    std::string arg_val = emitArgForParam(*init_expr, param_type);
                     std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
                     out_ << "    call void @" << llvmGlobalName(mangled)
                          << "(ptr " << reg << ", " << ptype_str << " " << arg_val << ")\n";

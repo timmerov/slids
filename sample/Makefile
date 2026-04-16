@@ -28,6 +28,7 @@ SAMPLES = \
 	string11 string12 string13 string14 string15 \
 	string16 string17 string18 \
 	switch \
+	typeconv \
 	type_infer
 
 #	bug4 bug5 bug6 bug7 bug8 \

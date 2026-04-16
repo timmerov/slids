@@ -134,6 +134,7 @@ private:
     std::string resolveOperatorOverload(const std::string& op,
                                         const Expr& left, const Expr& right);
     std::string emitArgForParam(const Expr& arg, const std::string& param_type);
+    std::string resolveOpEq(const std::string& base, const Expr& arg);
     std::string exprSlidType(const Expr& expr); // return slid type name if expr produces a slid value
     void emitFunction(const FunctionDef& fn);
     void emitNestedFunction(const NestedFunctionDef& fn,
