@@ -56,6 +56,9 @@ String(...)
     */
     op=(uint64 x);
 
+    /* overload += to append a string. */
+    op+=(String^ s);
+
     /* overload += to append a string literal. */
     op+=(char[] s);
 

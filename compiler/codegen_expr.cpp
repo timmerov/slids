@@ -9,6 +9,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
         return std::to_string(i->value);
 
     if (auto* v = dynamic_cast<const VarExpr*>(&expr)) {
+        // self — pointer to the current object
+        if (v->name == "self" && !current_slid_.empty())
+            return self_ptr_.empty() ? "%self" : self_ptr_;
         // check if it's a field access via self in a method
         if (!current_slid_.empty()) {
             auto& info = slid_info_[current_slid_];

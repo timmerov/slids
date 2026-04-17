@@ -107,6 +107,19 @@ String (
         reverse();
     }
 
+    /* overload += to append a string. */
+    op+=(String^ s)  {
+        /* we can append ourselves to ourselves. */
+        if (s == ^self) {
+            /*
+            ensure there is enough capacity
+            before appending ourselves.
+            */
+            expand(2 * size_);
+        }
+        append(s^.storage_, s^.size_);
+    }
+
     /* overload += to append a string literal. */
     op+=(char[] s)  {
         intptr len = strlen(s);

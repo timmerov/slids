@@ -338,6 +338,20 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* assign = dynamic_cast<const AssignStmt*>(&stmt)) {
+        // self = expr — call op= on the current object
+        if (assign->name == "self" && !current_slid_.empty()) {
+            std::string op_func = resolveOpEq(current_slid_ + "__op=", *assign->value);
+            if (!op_func.empty()) {
+                auto& ptypes = func_param_types_[op_func];
+                std::string param_type = ptypes.empty() ? "" : ptypes[0];
+                std::string arg_val = emitArgForParam(*assign->value, param_type);
+                std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
+                std::string self_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
+                out_ << "    call void @" << llvmGlobalName(op_func)
+                     << "(ptr " << self_ptr << ", " << ptype_str << " " << arg_val << ")\n";
+            }
+            return;
+        }
         // check if it's a field via self in a method
         if (!current_slid_.empty()) {
             auto& info = slid_info_[current_slid_];

@@ -66,5 +66,12 @@ int32 main() {
     /* strlen works if the above work. */
     /* strcpy works if the above work. */
 
+    /* fancier features. */
+    int x = 42;
+    String s;
+    s += "x=";
+    /*s += x;
+    /*println(s);*/
+
     return 0;
 }

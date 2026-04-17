@@ -1063,6 +1063,7 @@ std::string Codegen::exprSlidType(const Expr& expr) {
     if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr))
         if (slid_info_.count(nc->target_type)) return nc->target_type;
     if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
+        if (ve->name == "self" && !current_slid_.empty()) return current_slid_;
         auto tit = local_types_.find(ve->name);
         if (tit != local_types_.end() && slid_info_.count(tit->second))
             return tit->second;
@@ -1429,6 +1430,11 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
             if (info.has_dtor)
                 pending_temp_dtors_.push_back({tmp_reg, slid_name});
             return tmp_reg;
+        }
+        // self — implicit object pointer, pass as current_slid_^ reference
+        if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
+            if (ve->name == "self" && !current_slid_.empty())
+                return self_ptr_.empty() ? "%self" : self_ptr_;
         }
         // ^s — explicit address-of a slid local: pass its alloca ptr directly
         if (auto* ao = dynamic_cast<const AddrOfExpr*>(&arg)) {
