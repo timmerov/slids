@@ -165,7 +165,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 } else if (slid_def && slid_def->fields[i].default_val) {
                     val = emitExpr(*slid_def->fields[i].default_val);
                 } else {
-                    val = "0";
+                    // inline array fields use zeroinitializer; scalars use 0
+                    val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer" : "0";
                 }
                 out_ << "    store " << llvmType(info.field_types[i])
                      << " " << val << ", ptr " << gep << "\n";

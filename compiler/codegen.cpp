@@ -30,6 +30,13 @@ std::string Codegen::llvmType(const std::string& t) {
     // reference (^) and pointer ([]) both lower to ptr in LLVM IR
     if (!t.empty() && t.back() == '^') return "ptr";
     if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return "ptr";
+    // inline fixed-size array: T[N] → [N x llvmType(T)]
+    auto lb = t.rfind('[');
+    if (lb != std::string::npos && lb > 0 && t.back() == ']') {
+        std::string sz = t.substr(lb + 1, t.size() - lb - 2);
+        if (!sz.empty() && std::all_of(sz.begin(), sz.end(), ::isdigit))
+            return "[" + sz + " x " + llvmType(t.substr(0, lb)) + "]";
+    }
     return "i32";
 }
 

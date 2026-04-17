@@ -874,7 +874,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 out_ << "    " << gep << " = getelementptr %struct." << stype
                      << ", ptr " << tmp_reg << ", i32 0, i32 " << i << "\n";
                 std::string val = (slid_def && slid_def->fields[i].default_val)
-                                  ? emitExpr(*slid_def->fields[i].default_val) : "0";
+                                  ? emitExpr(*slid_def->fields[i].default_val)
+                                  : (isInlineArrayType(info.field_types[i]) ? "zeroinitializer" : "0");
                 out_ << "    store " << llvmType(info.field_types[i])
                      << " " << val << ", ptr " << gep << "\n";
             }

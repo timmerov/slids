@@ -2,6 +2,7 @@
 #include "parser.h"
 #include <string>
 #include <map>
+#include <algorithm>
 
 // type ends in ^ — reference, no arithmetic
 inline bool isRefType(const std::string& t) {
@@ -11,9 +12,16 @@ inline bool isRefType(const std::string& t) {
 inline bool isPtrType(const std::string& t) {
     return t.size() >= 2 && t.substr(t.size()-2) == "[]";
 }
+// inline fixed-size array: T[N]
+inline bool isInlineArrayType(const std::string& t) {
+    auto lb = t.rfind('[');
+    if (lb == std::string::npos || lb == 0 || t.back() != ']') return false;
+    auto sz = t.substr(lb + 1, t.size() - lb - 2);
+    return !sz.empty() && std::all_of(sz.begin(), sz.end(), ::isdigit);
+}
 // either indirect type
 inline bool isIndirectType(const std::string& t) {
-    return isRefType(t) || isPtrType(t);
+    return isRefType(t) || isPtrType(t) || isInlineArrayType(t);
 }
 
 // Quote a global/function name if it contains non-identifier characters (e.g. "op+")

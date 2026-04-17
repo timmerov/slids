@@ -9,5 +9,7 @@ Record(
 
 int32 main() {
     Record record;
+    intptr size = sizeof(record);
+    __println("sizeof(record) should be: 16 is: "+size);
     return 0;
 }

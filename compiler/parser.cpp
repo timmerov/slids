@@ -1160,6 +1160,15 @@ SlidDef Parser::parseSlidDef() {
         FieldDef f;
         f.type = parseTypeName();
         f.name = expect(TokenType::kIdentifier, "expected field name").value;
+        // inline fixed-size array field: char name_[16]
+        if (peek().type == TokenType::kLBracket
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kIntLiteral) {
+            advance(); // consume [
+            std::string sz = advance().value; // consume N
+            expect(TokenType::kRBracket, "expected ']'");
+            f.type += "[" + sz + "]";
+        }
         if (peek().type == TokenType::kEquals) {
             advance();
             f.default_val = parseExpr();
