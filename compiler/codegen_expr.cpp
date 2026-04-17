@@ -585,8 +585,18 @@ std::string Codegen::emitExpr(const Expr& expr) {
         }
 
         // operator overload — in-class method (op+(sa,sb) stored in self) or free function (sret)
+        // skip op+ when op+= is also defined: Phase 3 handles it more efficiently
         {
             std::string op_func = resolveOperatorOverload(b->op, *b->left, *b->right);
+            if (!op_func.empty()) {
+                std::string left_slid = exprSlidType(*b->left);
+                if (!left_slid.empty()) {
+                    std::string compound_base = left_slid + "__op" + b->op + "=";
+                    if (method_overloads_.count(compound_base)
+                            && !resolveOpEq(compound_base, *b->right).empty())
+                        op_func = ""; // defer to Phase 3
+                }
+            }
             if (!op_func.empty()) {
                 std::string ret = func_return_types_.count(op_func) ? func_return_types_[op_func] : "";
                 bool is_method = (ret == "void");
@@ -641,10 +651,18 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
         // Phase 2: implicit right-operand coercion
         // left is a slid type, right doesn't match any overload — try coercing right via op=
+        // skip when op+= is available: Phase 3 handles it more efficiently
         {
             std::string left_slid = exprSlidType(*b->left);
             if (!left_slid.empty()) {
                 std::string coerce_mangled = resolveOpEq(left_slid + "__op=", *b->right);
+                if (!coerce_mangled.empty()) {
+                    // skip if op+= also matches
+                    std::string compound_base = left_slid + "__op" + b->op + "=";
+                    if (method_overloads_.count(compound_base)
+                            && !resolveOpEq(compound_base, *b->right).empty())
+                        coerce_mangled = ""; // defer to Phase 3
+                }
                 if (!coerce_mangled.empty()) {
                     // find the op overload on left_slid that accepts (left_slid^, left_slid^)
                     std::string op_func;
@@ -1359,6 +1377,8 @@ std::string Codegen::inferSlidType(const Expr& expr) {
             if (fit != info.field_index.end())
                 return info.field_types[fit->second];
         }
+        // type name used as anonymous temporary (e.g. ValueBoth in ValueBoth + 10)
+        if (slid_info_.count(ve->name)) return ve->name;
     }
     // free function call — look up return type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
@@ -1400,9 +1420,12 @@ std::string Codegen::inferSlidType(const Expr& expr) {
         if (!pt.empty() && pt.back() == '^') return pt.substr(0, pt.size()-1);
         return pt;
     }
-    // binary expression — infer from left operand
-    if (auto* be = dynamic_cast<const BinaryExpr*>(&expr))
+    // binary expression — use exprSlidType if it produces a slid, else infer from left
+    if (auto* be = dynamic_cast<const BinaryExpr*>(&expr)) {
+        std::string slid = exprSlidType(expr);
+        if (!slid.empty()) return slid;
         return inferSlidType(*be->left);
+    }
     // unary — propagate through
     if (auto* ue = dynamic_cast<const UnaryExpr*>(&expr)) {
         if (ue->op == "-" || ue->op == "~" || ue->op == "!")

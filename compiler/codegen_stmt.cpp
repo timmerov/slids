@@ -143,6 +143,26 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // class instantiation
         if (slid_info_.count(eff_type)) {
             auto& info = slid_info_[eff_type];
+
+            // identity optimization: when init produces a fresh temp of the same type,
+            // adopt that temp as the declared variable — no separate alloca, ctor, or copy.
+            // Phase 1 (direct op+ overload) is excluded because it already emits into the
+            // target alloca directly and is more efficient.
+            if (decl->init && decl->ctor_args.empty() && !decl->is_move) {
+                bool phase1_handles = false;
+                if (auto* be = dynamic_cast<const BinaryExpr*>(decl->init.get()))
+                    phase1_handles = !resolveOperatorOverload(be->op, *be->left, *be->right).empty();
+                if (!phase1_handles && isFreshSlidTemp(*decl->init)
+                        && exprSlidType(*decl->init) == eff_type) {
+                    std::string temp_ptr = emitExpr(*decl->init);
+                    locals_[decl->name] = temp_ptr;
+                    local_types_[decl->name] = eff_type;
+                    if (info.has_dtor)
+                        dtor_vars_.push_back({decl->name, eff_type});
+                    return;
+                }
+            }
+
             std::string reg = "%var_" + decl->name;
             out_ << "    " << reg << " = alloca %struct." << eff_type << "\n";
             locals_[decl->name] = reg;

@@ -164,6 +164,45 @@ ValuePlusEquals(
     }
 }
 
+/*
+ValueBoth defines both.
+*/
+ValueBoth(
+    int value_ = 0
+) {
+    _() {
+        __println("created ValueBoth");
+    }
+    ~() {}
+
+    op=(ValueBoth^ rhs) {
+        value_ = rhs^.value_;
+        __println("assignment to ValueBoth " + value_);
+    }
+
+    op=(int x) {
+        value_ = x;
+        __println("assignment to int " + value_);
+    }
+
+    op+(ValueBoth^ a, ValueBoth^ b) {
+        value_ = a^.value_ + b^.value_;
+        __println("binary addition " + a^.value_ + " + " + b^.value_ + " = " + value_);
+    }
+
+    op+=(ValueBoth^ rhs) {
+        int left = value_;
+        value_ += rhs^.value_;
+        __println("plus equals ValueBoth " + left + " += " + rhs^.value_ + " = " + value_);
+    }
+
+    op+=(int x) {
+        int left = value_;
+        value_ += x;
+        __println("plus equals int " + left + " += " + x + " = " + value_);
+    }
+}
+
 int32 main() {
     __println("part 1 assignments:");
     /* assign to int. */
@@ -226,6 +265,26 @@ int32 main() {
     assign value 170.
     */
     ValuePlusEquals v8 = ValuePlusEquals + 80 + 90;
+
+    __println("part 6 class defines both + and +=. ");
+    /*
+    create.
+    create a temp.
+    plus equals 100.
+    plus equals 110.
+    assign value 210.
+    */
+    ValueBoth v9 = ValueBoth + 100 + 110;
+
+    __println("part 7 type inference with += fall-forward ");
+    /*
+    create.
+    create a temp.
+    plus equals 120.
+    plus equals 130.
+    assign value 250.
+    */
+    v10 = ValueBoth + 120 + 130;
 
     return 0;
 }
