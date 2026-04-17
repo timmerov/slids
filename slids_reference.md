@@ -493,6 +493,25 @@ int add(int a, int b) {
 }
 ```
 
+**Passing class objects to functions:**
+
+Class objects must be passed by reference using `^`. Passing by value is a compile error.
+
+```
+void print(String^ s);     // correct
+void print(String s);      // compile error: cannot pass class object by value
+```
+
+At the call site, use `^s` (explicit address-of) or just `s` (auto-promotes):
+
+```
+String s = "hello";
+print(^s);    // explicit — syntactically clearest
+print(s);     // also valid — compiler auto-promotes s to ^s
+```
+
+Both forms are equivalent. `^s` is preferred when you want to make the pass-by-reference explicit.
+
 **Returning a tuple:**
 ```
 (bool success, int handle) openFile(string^ file_name) {

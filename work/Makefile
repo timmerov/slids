@@ -16,7 +16,7 @@ EXPORT_PATH = $(EXPORT_DIR)
 
 .PHONY: all clean string_test template
 
-all: string_test template
+all: string_test
 
 string_test: $(BIN_DIR)/string_test
 

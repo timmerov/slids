@@ -33,7 +33,11 @@ String (
         delete storage_;
     }
 
-    /* assignment from String. */
+    /*
+    assignment from String.
+    copy operator.
+    rhs may be self.
+    */
     op=(String^ s) {
         /* don't copy ourself. */
         if (s == ^self) {
@@ -42,35 +46,10 @@ String (
         set(s^.storage_, s^.size_);
     }
 
-    /* assignment from null terminated string. */
-    op=(char[] str) {
-        len = strlen(str);
-        set(str, len);
-    }
-
-    /* assignment from char. */
-    op=(char c) {
-        set(^c, 1);
-    }
-
-    /* assignment fron int64. */
-    op=(int64 x) {
-        if (x >= 0) {
-            fillDigitsBackwards(x);
-        } else {
-            fillDigitsBackwards(-x);
-            append('-');
-        }
-        reverse();
-    }
-
-    /* assignment fron unsigned-int64. */
-    op=(uint64 x) {
-        fillDigitsBackwards(x);
-        reverse();
-    }
-
-    /* move operator. */
+    /*
+    move operator.
+    rhs may be self.
+    */
     op<-(String^ s) {
         /* don't steal our own resources. */
         if (s == ^self) {
@@ -86,7 +65,60 @@ String (
         s^.capacity_ = 0;
     }
 
-    /* concatenate two String's. */
+    /*
+    assignment and type conversion from
+    null terminated string literal.
+    */
+    op=(char[] str) {
+        len = strlen(str);
+        set(str, len);
+    }
+
+    /*
+    assignment and type conversion from
+    character literal.
+    */
+    op=(char c) {
+        set(^c, 1);
+    }
+
+    /*
+    assignment and type conversion from int64.
+    all smaller signed ints should promote to int64.
+    excluding char.
+    */
+    op=(int64 x) {
+        if (x >= 0) {
+            fillDigitsBackwards(x);
+        } else {
+            fillDigitsBackwards(-x);
+            append('-');
+        }
+        reverse();
+    }
+
+    /*
+    assignment and type conversion from unsigned-int64.
+    all smaller unsigned ints should promote to uint64.
+    excluding char.
+    */
+    op=(uint64 x) {
+        fillDigitsBackwards(x);
+        reverse();
+    }
+
+    /* overload += to append a string literal. */
+    op+=(char[] s)  {
+        intptr len = strlen(s);
+        append(s, len);
+    }
+
+    /* overload += to append a character. */
+    op+=(char c) {
+        append(^c, 1);
+    }
+
+    /* overload + to concatenate two String-s. */
     op+(String^ sa, String^ sb) {
         reserve(sa^.size_ + sb^.size_);
         self = sa^;
@@ -98,7 +130,10 @@ String (
         size_ = 0;
     }
 
-    /* increase capacity. save existing string. */
+    /*
+    increase capacity.
+    preserves existing value.
+    */
     void reserve(intptr cap) {
         if (cap <= capacity_) {
             return;
@@ -121,16 +156,6 @@ String (
         while (lo < hi) {
             lo++^ <-> hi--^;
         }
-    }
-
-    /* print the string. */
-    void print() {
-        __print(storage_[0..size_]);
-    }
-
-    /** print the string on a line. */
-    void println() {
-        __println(storage_[0..size_]);
     }
 
 /* private functions. */
@@ -174,6 +199,16 @@ String (
             x /= 10;
         } (x);
     }
+}
+
+/* print the string. */
+void print(String^ s) {
+    __print(s^.storage_[0..s^.size_]);
+}
+
+/** print the string on a line. */
+void println(String^ s) {
+    __println(s^.storage_[0..s^.size_]);
 }
 
 /* helper functions. */

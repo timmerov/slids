@@ -26,40 +26,40 @@ int32 main() {
 
     /* assignment from string literal. */
     String s1 = "Hello, World!";
-    s1.println();
+    println(s1);
 
     /* assignement from string. */
     String s2 = s1;
-    s2.println();
+    println(s2);
 
     /* assignment from character. */
     String s3 = 'X';
-    s3.println();
+    println(s3);
 
     /* assignment from ints. */
     String s4 = 0;
-    s4.println();
+    println(s4);
     s4 = 137;
-    s4.println();
+    println(s4);
     s4 = -42;
-    s4.println();
+    println(s4);
     s4 = int32(0x8000_0000);
-    s4.println();
+    println(s4);
     s4 = uint32(0x8000_0000);
-    s4.println();
+    println(s4);
     s4 = int64(0x8000_0000_0000_0000);
-    s4.println();
+    println(s4);
     s4 = uint64(0x8000_0000_0000_0000);
-    s4.println();
+    println(s4);
 
     /* move operator. */
     String s5 <- s4;
-    s4.println();
-    s5.println();
+    println(s4);
+    println(s5);
 
     /* clear. */
     s5.clear();
-    s5.println();
+    println(s5);
 
     /* reserve works if the above works. */
     /* reverse works if number assignment works. */

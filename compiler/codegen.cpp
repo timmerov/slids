@@ -497,6 +497,25 @@ void Codegen::emit() {
 
     collectFunctionSignatures();
     collectSlids();
+
+    // validate: class objects cannot be passed by value
+    auto checkParams = [&](const std::string& ctx,
+                           const std::vector<std::pair<std::string,std::string>>& params) {
+        for (auto& [type, name] : params) {
+            if (slid_info_.count(type) > 0)
+                throw std::runtime_error(ctx + ": parameter '" + name +
+                    "' has class type '" + type + "' — cannot pass by value; use '" + type + "^'");
+        }
+    };
+    for (auto& fn : program_.functions)
+        checkParams(fn.name, fn.params);
+    for (auto& slid : program_.slids) {
+        for (auto& m : slid.methods)
+            checkParams(slid.name + "." + m.name, m.params);
+    }
+    for (auto& em : program_.external_methods)
+        checkParams(em.slid_name + "." + em.method_name, em.params);
+
     collectStringConstants();
 
     // collect enum values
@@ -1411,7 +1430,16 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                 pending_temp_dtors_.push_back({tmp_reg, slid_name});
             return tmp_reg;
         }
-        // slid local: pass its alloca ptr directly
+        // ^s — explicit address-of a slid local: pass its alloca ptr directly
+        if (auto* ao = dynamic_cast<const AddrOfExpr*>(&arg)) {
+            if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
+                auto lit = local_types_.find(ve->name);
+                if (lit != local_types_.end() && slid_info_.count(lit->second))
+                    return locals_.at(ve->name);
+            }
+            return emitExpr(arg);
+        }
+        // s — implicit address-of (auto-promote slid local to ref)
         if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
             auto lit = local_types_.find(ve->name);
             if (lit != local_types_.end() && slid_info_.count(lit->second)) {

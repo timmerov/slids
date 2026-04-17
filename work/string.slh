@@ -17,48 +17,70 @@ String(...)
     _();
     ~();
 
-    /* assignment from String. */
+    /*
+    assignment from String.
+    copy operator.
+    rhs may be self.
+    */
     op=(String^ s);
 
-    /* assignment from null terminated string. */
+    /*
+    move operator.
+    rhs may be self.
+    */
+    op<-(String^ s);
+
+    /*
+    assignment and type conversion from
+    null terminated string literal.
+    */
     op=(char[] s);
 
-    /* assignment from character literal. */
+    /*
+    assignment and type conversion from
+    character literal.
+    */
     op=(char c);
 
     /*
-    assignment fron int64.
+    assignment and type conversion from int64.
     all smaller signed ints should promote to int64.
     excluding char.
     */
     op=(int64 x);
 
     /*
-    assignment fron unsigned-int64.
+    assignment and type conversion from unsigned-int64.
     all smaller unsigned ints should promote to uint64.
     excluding char.
     */
     op=(uint64 x);
 
-    /* move operator. */
-    op<-(String^ s);
+    /* overload += to append a string literal. */
+    op+=(char[] s);
 
-    /* overload + to concatenate String-s. */
+    /* overload += to append a character. */
+    op+=(char c);
+
+    /* overload + to concatenate two String-s. */
     op+(String^ sa, String^ sb);
 
     /* set to empty string. */
     void clear();
 
-    /* increase capacity. */
+    /*
+    increase capacity.
+    preserves existing value.
+    */
     void reserve(intptr capacity);
 
     /* reverse the characters in the string. */
     void reverse();
-
-    /* print the string. */
-    void print();
-    void println();
 }
+
+/* print the string. */
+void print(String^ s);
+void println(String^ s);
 
 /* return length of null terminated string. */
 intptr strlen(char[] s);
