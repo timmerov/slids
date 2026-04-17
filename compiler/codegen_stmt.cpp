@@ -193,19 +193,67 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
             // if initialized with = expr, call op= method; with <- expr, call op<- method
             if (decl->init) {
-                std::string op_name = decl->is_move ? "op<-" : "op=";
-                // peel (SameType=inner): Value v = (Value=42) → call op= with inner (42)
-                const Expr* init_expr = decl->init.get();
-                if (auto* tc = dynamic_cast<const TypeConvExpr*>(init_expr))
-                    if (tc->target_type == eff_type) init_expr = tc->operand.get();
-                std::string mangled = resolveOpEq(eff_type + "__" + op_name, *init_expr);
-                if (!mangled.empty()) {
-                    auto& ptypes = func_param_types_[mangled];
-                    std::string param_type = ptypes.empty() ? "" : ptypes[0];
-                    std::string arg_val = emitArgForParam(*init_expr, param_type);
-                    std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
-                    out_ << "    call void @" << llvmGlobalName(mangled)
-                         << "(ptr " << reg << ", " << ptype_str << " " << arg_val << ")\n";
+                bool init_handled = false;
+                // if init is a binary op, try to dispatch via op overload directly into reg
+                if (!decl->is_move) {
+                    if (auto* be = dynamic_cast<const BinaryExpr*>(decl->init.get())) {
+                        std::string op_func = resolveOperatorOverload(be->op, *be->left, *be->right);
+                        if (!op_func.empty()) {
+                            std::string ret = func_return_types_.count(op_func) ? func_return_types_[op_func] : "";
+                            bool is_method = (ret == "void");
+                            auto& ptypes = func_param_types_[op_func];
+                            std::string args;
+                            if (is_method) {
+                                args = "ptr " + reg;
+                                std::string la = emitArgForParam(*be->left,  ptypes.size() > 0 ? ptypes[0] : "");
+                                std::string ra = emitArgForParam(*be->right, ptypes.size() > 1 ? ptypes[1] : "");
+                                if (ptypes.size() > 0) args += ", " + llvmType(ptypes[0]) + " " + la;
+                                if (ptypes.size() > 1) args += ", " + llvmType(ptypes[1]) + " " + ra;
+                            } else {
+                                args = "ptr sret(%struct." + eff_type + ") " + reg;
+                                std::string la = emitArgForParam(*be->left,  ptypes.size() > 0 ? ptypes[0] : "");
+                                std::string ra = emitArgForParam(*be->right, ptypes.size() > 1 ? ptypes[1] : "");
+                                if (ptypes.size() > 0) args += ", " + llvmType(ptypes[0]) + " " + la;
+                                if (ptypes.size() > 1) args += ", " + llvmType(ptypes[1]) + " " + ra;
+                            }
+                            out_ << "    call void @" << llvmGlobalName(op_func) << "(" << args << ")\n";
+                            init_handled = true;
+                        }
+                    }
+                }
+                if (!init_handled) {
+                    std::string op_name = decl->is_move ? "op<-" : "op=";
+                    // peel (SameType=inner): Value v = (Value=42) → call op= with inner (42)
+                    const Expr* init_expr = decl->init.get();
+                    if (auto* tc = dynamic_cast<const TypeConvExpr*>(init_expr))
+                        if (tc->target_type == eff_type) init_expr = tc->operand.get();
+                    std::string mangled = resolveOpEq(eff_type + "__" + op_name, *init_expr);
+                    if (!mangled.empty()) {
+                        auto& ptypes = func_param_types_[mangled];
+                        std::string param_type = ptypes.empty() ? "" : ptypes[0];
+                        std::string arg_val = emitArgForParam(*init_expr, param_type);
+                        std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
+                        out_ << "    call void @" << llvmGlobalName(mangled)
+                             << "(ptr " << reg << ", " << ptype_str << " " << arg_val << ")\n";
+                    } else if (!decl->is_move) {
+                        // no matching op= found: synthesize a default field-by-field copy
+                        // when init is the same slid type (value or reference)
+                        std::string src_ptr;
+                        if (auto* ve = dynamic_cast<const VarExpr*>(init_expr)) {
+                            auto tit2 = local_types_.find(ve->name);
+                            auto lit  = locals_.find(ve->name);
+                            if (tit2 != local_types_.end() && lit != locals_.end()) {
+                                if (tit2->second == eff_type) {
+                                    src_ptr = lit->second;
+                                } else if (tit2->second == eff_type + "^") {
+                                    std::string loaded = newTmp();
+                                    out_ << "    " << loaded << " = load ptr, ptr " << lit->second << "\n";
+                                    src_ptr = loaded;
+                                }
+                            }
+                        }
+                        if (!src_ptr.empty()) emitSlidCopy(eff_type, reg, src_ptr);
+                    }
                 }
             }
 
@@ -217,6 +265,18 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
 
         // primitive or reference variable declaration
+        // reject unknown types (not a slid, not a primitive, not a pointer)
+        {
+            static const std::set<std::string> known_primitives = {
+                "int","int8","int16","int32","int64",
+                "uint","uint8","uint16","uint32","uint64",
+                "char","bool","float32","float64","void","intptr"
+            };
+            bool is_ptr = (!eff_type.empty() && eff_type.back() == '^')
+                       || (eff_type.size() >= 2 && eff_type.substr(eff_type.size()-2) == "[]");
+            if (!known_primitives.count(eff_type) && !is_ptr)
+                throw std::runtime_error("unknown type '" + eff_type + "'");
+        }
         std::string reg = "%var_" + decl->name;
         std::string llvm_t = llvmType(eff_type);
         out_ << "    " << reg << " = alloca " << llvm_t << "\n";
@@ -307,15 +367,21 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                 out_ << "    store " << ft << " 0, ptr " << gep << "\n";
                         }
                     }
+                    std::string ret2 = func_return_types_.count(op_func) ? func_return_types_[op_func] : "";
+                    bool is_method2 = (ret2 == "void");
                     auto& ptypes = func_param_types_[op_func];
                     std::string args;
-                    args += "ptr sret(%struct." + slid_name + ") " + it->second;
+                    if (is_method2) {
+                        args = "ptr " + it->second;
+                    } else {
+                        args = "ptr sret(%struct." + slid_name + ") " + it->second;
+                    }
                     // left arg
                     std::string la = emitArgForParam(*be->left, ptypes.size() > 0 ? ptypes[0] : "");
-                    args += ", " + (ptypes.size() > 0 ? llvmType(ptypes[0]) : "ptr") + " " + la;
+                    if (ptypes.size() > 0) args += ", " + llvmType(ptypes[0]) + " " + la;
                     // right arg
                     std::string ra = emitArgForParam(*be->right, ptypes.size() > 1 ? ptypes[1] : "");
-                    args += ", " + (ptypes.size() > 1 ? llvmType(ptypes[1]) : "ptr") + " " + ra;
+                    if (ptypes.size() > 1) args += ", " + llvmType(ptypes[1]) + " " + ra;
                     out_ << "    call void @" << llvmGlobalName(op_func) << "(" << args << ")\n";
                     return;
                 }
@@ -333,6 +399,25 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 out_ << "    call void @" << llvmGlobalName(mangled)
                      << "(ptr " << it->second << ", " << ptype_str << " " << arg_val << ")\n";
                 return;
+            }
+            // no matching op= found: synthesize a default field-by-field copy
+            if (!assign->is_move) {
+                const std::string& slid_name = tit->second;
+                std::string src_ptr;
+                if (auto* ve = dynamic_cast<const VarExpr*>(assign->value.get())) {
+                    auto tit2 = local_types_.find(ve->name);
+                    auto lit  = locals_.find(ve->name);
+                    if (tit2 != local_types_.end() && lit != locals_.end()) {
+                        if (tit2->second == slid_name) {
+                            src_ptr = lit->second;
+                        } else if (tit2->second == slid_name + "^") {
+                            std::string loaded = newTmp();
+                            out_ << "    " << loaded << " = load ptr, ptr " << lit->second << "\n";
+                            src_ptr = loaded;
+                        }
+                    }
+                }
+                if (!src_ptr.empty()) { emitSlidCopy(slid_name, it->second, src_ptr); return; }
             }
         }
         // pointer move: free old value, steal source, null source

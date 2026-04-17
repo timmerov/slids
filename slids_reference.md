@@ -671,6 +671,8 @@ Value(int value_ = 0) {
 
 Supported operators: `=`, `<-`, `<->`, `+`, `-`, `*`, `/`, `+=`, `-=`, `*=`, `/=`, `==`, `!=`, `<`, `>`, `<=`, `>=`.
 
+**Default copy operator.** If a class does not define `op=(SameType^)`, the compiler synthesizes one that copies each field by value. This means `Foo b = a;` always does the right thing for plain data types. Define your own `op=(Foo^)` to override — for example, when a field is a heap pointer that requires a deep copy.
+
 **Assignment is a statement, not an expression.** Chained assignment (`x = y = 0;`) and assignment inside a condition (`if (x = 0)`) are not allowed.
 
 **Forward declarations** inside the class body omit the body:

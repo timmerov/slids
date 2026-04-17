@@ -459,6 +459,10 @@ void Codegen::collectStringConstants() {
                 for (auto& s : sc.stmts) collect(*s);
         } else if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) {
             for (auto& s : nfs->def.body->stmts) collect(*s);
+        } else if (auto* ret = dynamic_cast<const ReturnStmt*>(&stmt)) {
+            if (ret->value) collectExpr(ret->value.get(), false);
+        } else if (auto* es = dynamic_cast<const ExprStmt*>(&stmt)) {
+            collectExpr(es->expr.get(), false);
         }
     };
 
@@ -1215,7 +1219,6 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
 std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
     auto oit = method_overloads_.find(base);
     if (oit == method_overloads_.end()) return "";
-    if (oit->second.size() == 1) return oit->second[0].first;
 
     static const std::set<std::string> unsigned_types = {"uint","uint8","uint16","uint32","uint64","char"};
 
@@ -1269,7 +1272,28 @@ std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
             if (ptypes.size() == 1 && isIndirectType(ptypes[0])) return m;
         }
     }
+    // slid arg with no matching slid-ref overload: return "" so the caller can synthesize a copy
+    if (arg_is_slid) return "";
+    // non-slid arg: fall back to first available overload
     return oit->second[0].first;
+}
+
+// Copy all fields of slid_name from src_ptr into dst_ptr (synthesized default copy).
+void Codegen::emitSlidCopy(const std::string& slid_name,
+                            const std::string& dst_ptr, const std::string& src_ptr) {
+    auto& info = slid_info_[slid_name];
+    for (int i = 0; i < (int)info.field_types.size(); i++) {
+        std::string ft = llvmType(info.field_types[i]);
+        std::string src_gep = newTmp();
+        out_ << "    " << src_gep << " = getelementptr %struct." << slid_name
+             << ", ptr " << src_ptr << ", i32 0, i32 " << i << "\n";
+        std::string val = newTmp();
+        out_ << "    " << val << " = load " << ft << ", ptr " << src_gep << "\n";
+        std::string dst_gep = newTmp();
+        out_ << "    " << dst_gep << " = getelementptr %struct." << slid_name
+             << ", ptr " << dst_ptr << ", i32 0, i32 " << i << "\n";
+        out_ << "    store " << ft << " " << val << ", ptr " << dst_gep << "\n";
+    }
 }
 
 // Emit an argument expression, taking pointer-vs-value into account.

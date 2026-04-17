@@ -1,11 +1,8 @@
 
 Simple() {
-}
-
-Simple op+(Simple^ sa, Simple^ sb) {
-    __println("op+");
-    Simple sc;
-    return sc;
+    op+(Simple^ sa, Simple^ sb) {
+        __println("op+");
+    }
 }
 
 int32 main() {
