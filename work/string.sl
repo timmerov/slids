@@ -35,6 +35,10 @@ String (
 
     /* assignment from String. */
     op=(String^ s) {
+        /* don't copy ourself. */
+        if (s == ^self) {
+            return;
+        }
         set(s^.storage_, s^.size_);
     }
 
@@ -68,6 +72,10 @@ String (
 
     /* move operator. */
     op<-(String^ s) {
+        /* don't steal our own resources. */
+        if (s == ^self) {
+            return;
+        }
         /* steal their resources. */
         delete storage_;
         size_ = s^.size_;

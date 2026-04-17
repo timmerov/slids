@@ -133,6 +133,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
     if (auto* ao = dynamic_cast<const AddrOfExpr*>(&expr)) {
         // ^x — return the alloca register (its address)
         if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
+            // ^self — address of the current object (implicit method parameter)
+            if (ve->name == "self")
+                return self_ptr_.empty() ? "%self" : self_ptr_;
             auto it = locals_.find(ve->name);
             if (it == locals_.end())
                 throw std::runtime_error("AddrOf: undefined variable '" + ve->name + "'");
