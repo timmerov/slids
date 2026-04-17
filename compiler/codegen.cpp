@@ -1022,6 +1022,22 @@ bool Codegen::isUnsignedExpr(const Expr& expr) {
     return false;
 }
 
+// True when emitExpr on this expression returns a ptr to a freshly constructed
+// temp alloca that we own and can mutate (e.g. call op+= on directly).
+// Named variables are NOT fresh temps — they belong to the caller.
+bool Codegen::isFreshSlidTemp(const Expr& expr) {
+    // type name used as anonymous temporary (not bound in locals_)
+    if (auto* ve = dynamic_cast<const VarExpr*>(&expr))
+        return locals_.find(ve->name) == locals_.end() && slid_info_.count(ve->name) > 0;
+    // (SlidType=expr) always allocates a fresh temp
+    if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr))
+        return slid_info_.count(nc->target_type) > 0;
+    // any binary expression that produces a slid result owns a fresh temp alloca
+    if (dynamic_cast<const BinaryExpr*>(&expr))
+        return !exprSlidType(expr).empty();
+    return false;
+}
+
 // Return the slid type name if expr produces a slid-typed value, else "".
 std::string Codegen::exprSlidType(const Expr& expr) {
     // (SlidType=expr) — the result is a ptr to a SlidType temp

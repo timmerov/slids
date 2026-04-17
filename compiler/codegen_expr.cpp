@@ -690,6 +690,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
         // Phase 3: op+= fallback — no op+ defined, but op+= exists
         // semantics: temp = copy(left); temp op= right; return temp
+        // optimization: if left is a fresh temp we own, skip the copy and call op+= in place
         {
             std::string left_slid = exprSlidType(*b->left);
             if (!left_slid.empty()) {
@@ -698,19 +699,25 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 if (compound_it != method_overloads_.end()) {
                     std::string compound_mangled = resolveOpEq(compound_base, *b->right);
                     if (!compound_mangled.empty()) {
-                        // alloca the result temp and copy left into it
-                        std::string res_tmp = emitSlidAlloca(left_slid);
-                        std::string copy_mangled = resolveOpEq(left_slid + "__op=", *b->left);
-                        if (!copy_mangled.empty()) {
-                            auto& cptypes = func_param_types_[copy_mangled];
-                            std::string carg = emitArgForParam(*b->left,
-                                cptypes.empty() ? "" : cptypes[0]);
-                            std::string cptype = cptypes.empty() ? "ptr" : llvmType(cptypes[0]);
-                            out_ << "    call void @" << llvmGlobalName(copy_mangled)
-                                 << "(ptr " << res_tmp << ", " << cptype << " " << carg << ")\n";
+                        std::string res_tmp;
+                        if (isFreshSlidTemp(*b->left)) {
+                            // left is a fresh temp we own — call op+= on it directly
+                            res_tmp = emitExpr(*b->left);
                         } else {
-                            std::string src = emitArgForParam(*b->left, left_slid + "^");
-                            emitSlidCopy(left_slid, res_tmp, src);
+                            // left is a named variable — alloca new temp and copy left into it
+                            res_tmp = emitSlidAlloca(left_slid);
+                            std::string copy_mangled = resolveOpEq(left_slid + "__op=", *b->left);
+                            if (!copy_mangled.empty()) {
+                                auto& cptypes = func_param_types_[copy_mangled];
+                                std::string carg = emitArgForParam(*b->left,
+                                    cptypes.empty() ? "" : cptypes[0]);
+                                std::string cptype = cptypes.empty() ? "ptr" : llvmType(cptypes[0]);
+                                out_ << "    call void @" << llvmGlobalName(copy_mangled)
+                                     << "(ptr " << res_tmp << ", " << cptype << " " << carg << ")\n";
+                            } else {
+                                std::string src = emitArgForParam(*b->left, left_slid + "^");
+                                emitSlidCopy(left_slid, res_tmp, src);
+                            }
                         }
                         // call op+= on result with right
                         auto& iptypes = func_param_types_[compound_mangled];
