@@ -136,6 +136,7 @@ private:
     std::string emitArgForParam(const Expr& arg, const std::string& param_type);
     std::string resolveOpEq(const std::string& base, const Expr& arg);
     void emitSlidCopy(const std::string& slid_name, const std::string& dst_ptr, const std::string& src_ptr);
+    std::string emitSlidAlloca(const std::string& slid_name); // alloca + default-init fields + ctor
     std::string exprSlidType(const Expr& expr); // return slid type name if expr produces a slid value
     void emitFunction(const FunctionDef& fn);
     void emitNestedFunction(const NestedFunctionDef& fn,

@@ -97,7 +97,9 @@ then we can do the binary +.
 ValueBinary(
     int value_ = 0
 ) {
-    _() {}
+    _() {
+        __println("created ValueBinary");
+    }
     ~() {}
 
     op=(ValueBinary^ rhs) {
@@ -112,7 +114,7 @@ ValueBinary(
 
     op+(ValueBinary^ a, ValueBinary^ b) {
         value_ = a^.value_ + b^.value_;
-        __println("binary addition " + value_);
+        __println("binary addition " + a^.value_ + " + " + b^.value_ + " = " + value_);
     }
 }
 
@@ -134,12 +136,14 @@ must do:
 ValuePlusEquals(
     int value_ = 0
 ) {
-    _() {}
+    _() {
+        __println("created ValuePlusEquals");
+    }
     ~() {}
 
     op=(ValuePlusEquals^ rhs) {
         value_ = rhs^.value_;
-        __println("assignment to ValueBinary " + value_);
+        __println("assignment to ValuePlusEquals " + value_);
     }
 
     op=(int x) {
@@ -148,22 +152,26 @@ ValuePlusEquals(
     }
 
     op+=(ValuePlusEquals^ rhs) {
+        int left = value_;
         value_ += rhs^.value_;
-        __println("plus equals " + value_);
+        __println("plus equals ValuePlusEquals " + left + " += " + rhs^.value_ + " = " + value_);
     }
 
     op+=(int x) {
+        int left = value_;
         value_ += x;
-        __println("plus equals " + value_);
+        __println("plus equals int " + left + " += " + x + " = " + value_);
     }
 }
 
 int32 main() {
+    __println("part 1 assignments:");
     /* assign to int. */
     ValueBinary v0 = 10;
     /* assign to Value. */
     ValueBinary v1 = v0;
-    /* binary addition. */
+
+    __println("part 2 binary addition:");
     /*
     not sure what happens here.
     naively, there should be a temp Value
@@ -178,22 +186,46 @@ int32 main() {
     */
     ValueBinary v2 = v0 + v1;
 
+    __println("part 3 explicit temporary in expression:");
     /*
     create a temp. assign int 20.
-    create a temp. binary addition = 20.
+    create a temp. binary addition 0 + 20 = 20.
     create a temp. assign int 30.
     create a temp. binary addition = 50.
     assign value 50.
     */
     ValueBinary v3 = ValueBinary + 20 + 30;
 
+    __println("part 3 plus equals:");
     /*
-    create a temp.
-    plus equals 40.
-    plus equals 90.
-    assign value 90.
+    create.
+    assign int 40;
+    plus equals 40 + 50 = 90.
     */
-    ValuePlusEquals v4 = ValuePlusEquals + 40 + 50;
+    ValuePlusEquals v4 = 40;
+    v4 += 50;
+
+    __println("part 4 plus equals fallback:");
+    /*
+    create. assign int 60.
+    create. assign int 70.
+    create. assign value 60.
+    create. plus equals value 60 + 70 = 130.
+    create. assign value 130.
+    */
+    ValuePlusEquals v5 = 60;
+    ValuePlusEquals v6 = 70;
+    ValuePlusEquals v7 = v5 + v6;
+
+    __println("part 5 explicit temporary with += fallback.");
+    /*
+    create.
+    create a temp.
+    plus equals 80.
+    plus equals 90.
+    assign value 170.
+    */
+    ValuePlusEquals v8 = ValuePlusEquals + 80 + 90;
 
     return 0;
 }

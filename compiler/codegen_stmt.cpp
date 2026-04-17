@@ -345,6 +345,27 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (it == locals_.end())
             throw std::runtime_error("undefined variable: " + assign->name);
         auto tit = local_types_.find(assign->name);
+        // compound assignment: x = x op rhs → detect and dispatch to op{op}= directly
+        // (parser desugars x += rhs into x = x + rhs; we undo that here for slid types)
+        if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+            if (auto* be = dynamic_cast<const BinaryExpr*>(assign->value.get())) {
+                if (auto* lve = dynamic_cast<const VarExpr*>(be->left.get())) {
+                    if (lve->name == assign->name) {
+                        std::string compound_base = tit->second + "__op" + be->op + "=";
+                        std::string mangled = resolveOpEq(compound_base, *be->right);
+                        if (!mangled.empty()) {
+                            auto& ptypes = func_param_types_[mangled];
+                            std::string param_type = ptypes.empty() ? "" : ptypes[0];
+                            std::string arg_val = emitArgForParam(*be->right, param_type);
+                            std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
+                            out_ << "    call void @" << llvmGlobalName(mangled)
+                                 << "(ptr " << it->second << ", " << ptype_str << " " << arg_val << ")\n";
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         // check for operator overload: lhs is slid type, rhs is BinaryExpr
         if (tit != local_types_.end() && slid_info_.count(tit->second)) {
             if (auto* be = dynamic_cast<const BinaryExpr*>(assign->value.get())) {

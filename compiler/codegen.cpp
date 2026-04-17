@@ -466,6 +466,10 @@ void Codegen::collectStringConstants() {
         }
     };
 
+    // collection order must match emission order exactly:
+    // 1. all ctor/dtor bodies (emitSlidCtorDtor loop)
+    // 2. all method bodies   (emitSlidMethods loop)
+    // 3. all free functions  (emitFunction loop)
     for (auto& slid : program_.slids) {
         if (slid.ctor_body)
             for (auto& stmt : slid.ctor_body->stmts) collect(*stmt);
@@ -473,6 +477,8 @@ void Codegen::collectStringConstants() {
             for (auto& stmt : slid.explicit_ctor_body->stmts) collect(*stmt);
         if (slid.dtor_body)
             for (auto& stmt : slid.dtor_body->stmts) collect(*stmt);
+    }
+    for (auto& slid : program_.slids) {
         for (auto& m : slid.methods)
             if (m.body)
                 for (auto& stmt : m.body->stmts) collect(*stmt);
@@ -1025,6 +1031,9 @@ std::string Codegen::exprSlidType(const Expr& expr) {
         auto tit = local_types_.find(ve->name);
         if (tit != local_types_.end() && slid_info_.count(tit->second))
             return tit->second;
+        // type name used directly as an anonymous temp (not in locals_)
+        if (tit == local_types_.end() && slid_info_.count(ve->name))
+            return ve->name;
     }
     // DerefExpr: sa^ where sa: SlidType^ — produces SlidType
     if (auto* de = dynamic_cast<const DerefExpr*>(&expr)) {
@@ -1060,6 +1069,16 @@ std::string Codegen::exprSlidType(const Expr& expr) {
                 if (slid_info_.count(t)) return t;
             }
         }
+        // Phase 2: exact overload not found, but left is a slid and right can be coerced via op=
+        std::string left_slid = exprSlidType(*be->left);
+        if (!left_slid.empty()) {
+            std::string coerce = resolveOpEq(left_slid + "__op=", *be->right);
+            if (!coerce.empty() && method_overloads_.count(left_slid + "__op" + be->op))
+                return left_slid;
+        }
+        // Phase 3: no op+, but op+= exists — temp = copy(left); temp op= right
+        if (!left_slid.empty() && method_overloads_.count(left_slid + "__op" + be->op + "="))
+            return left_slid;
     }
     return "";
 }
@@ -1081,6 +1100,8 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
                 if (slid_info_.count(t)) return t;
                 if (!t.empty() && t.back() == '^') { t.pop_back(); if (slid_info_.count(t)) return t; }
             }
+            // type name used as anonymous temp
+            else if (slid_info_.count(ve->name)) return ve->name;
         }
         if (auto* de = dynamic_cast<const DerefExpr*>(&left)) {
             if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
@@ -1106,10 +1127,11 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
 
     // helper: does this expression match a slid-typed parameter (SlidType^)?
     auto leftMatchesSlid = [&](const std::string& slid_name) -> bool {
-        // VarExpr: local variable of exact slid type
+        // VarExpr: local variable of exact slid type, or type name used as anonymous temp
         if (auto* ve = dynamic_cast<const VarExpr*>(&left)) {
             auto tit = local_types_.find(ve->name);
             if (tit != local_types_.end() && tit->second == slid_name) return true;
+            if (tit == local_types_.end() && ve->name == slid_name) return true;
         }
         // DerefExpr: sa^ where sa: SlidType^
         if (auto* de = dynamic_cast<const DerefExpr*>(&left)) {
@@ -1294,6 +1316,41 @@ void Codegen::emitSlidCopy(const std::string& slid_name,
              << ", ptr " << dst_ptr << ", i32 0, i32 " << i << "\n";
         out_ << "    store " << ft << " " << val << ", ptr " << dst_gep << "\n";
     }
+}
+
+// Alloca a fresh instance of slid_name, default-init all fields, run ctor body, call __ctor.
+// Returns the alloca register. Does NOT register for dtor (caller's responsibility if needed).
+std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
+    auto& info = slid_info_[slid_name];
+    std::string reg = newTmp();
+    out_ << "    " << reg << " = alloca %struct." << slid_name << "\n";
+    const SlidDef* slid_def = nullptr;
+    for (auto& s : program_.slids) if (s.name == slid_name) { slid_def = &s; break; }
+    for (int i = 0; i < (int)info.field_types.size(); i++) {
+        std::string gep = newTmp();
+        out_ << "    " << gep << " = getelementptr %struct." << slid_name
+             << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
+        std::string val;
+        if (slid_def && i < (int)slid_def->fields.size() && slid_def->fields[i].default_val)
+            val = emitExpr(*slid_def->fields[i].default_val);
+        else
+            val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer" : "0";
+        out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
+    }
+    if (slid_def && slid_def->ctor_body) {
+        std::string saved_slid = current_slid_;
+        std::string saved_self = self_ptr_;
+        current_slid_ = slid_name;
+        self_ptr_ = reg;
+        emitBlock(*slid_def->ctor_body);
+        current_slid_ = saved_slid;
+        self_ptr_ = saved_self;
+    }
+    if (info.has_pinit && !info.is_transport_impl)
+        out_ << "    call void @" << slid_name << "__pinit(ptr " << reg << ")\n";
+    else if (info.has_explicit_ctor)
+        out_ << "    call void @" << slid_name << "__ctor(ptr " << reg << ")\n";
+    return reg;
 }
 
 // Emit an argument expression, taking pointer-vs-value into account.

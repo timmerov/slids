@@ -13,6 +13,7 @@ SAMPLES = \
 	cast \
 	chess1 chess2 chess3 \
 	counter1 counter2 \
+	experiment \
 	function1 \
 	hello1 hello2 \
 	leap_years \

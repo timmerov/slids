@@ -40,6 +40,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
                      << ait->second.alloca_reg << ", i32 0, i32 0\n";
                 return gep;
             }
+            // Phase 1: type name used as anonymous temporary — alloca, init, ctor
+            if (slid_info_.count(v->name))
+                return emitSlidAlloca(v->name);
             throw std::runtime_error("undefined variable: " + v->name);
         }
         std::string tmp = newTmp();
@@ -632,6 +635,92 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     }
                     out_ << "    call void @" << llvmGlobalName(op_func) << "(" << args << ")\n";
                     return tmp_alloca;
+                }
+            }
+        }
+
+        // Phase 2: implicit right-operand coercion
+        // left is a slid type, right doesn't match any overload — try coercing right via op=
+        {
+            std::string left_slid = exprSlidType(*b->left);
+            if (!left_slid.empty()) {
+                std::string coerce_mangled = resolveOpEq(left_slid + "__op=", *b->right);
+                if (!coerce_mangled.empty()) {
+                    // find the op overload on left_slid that accepts (left_slid^, left_slid^)
+                    std::string op_func;
+                    auto moit = method_overloads_.find(left_slid + "__op" + b->op);
+                    if (moit != method_overloads_.end()) {
+                        for (auto& [m, ptypes] : moit->second) {
+                            if (ptypes.size() >= 2
+                                && isRefType(ptypes[1])
+                                && ptypes[1].substr(0, ptypes[1].size()-1) == left_slid) {
+                                op_func = m; break;
+                            }
+                        }
+                    }
+                    if (!op_func.empty()) {
+                        auto& op_ptypes = func_param_types_[op_func];
+                        // emit left first so evaluation order matches source order
+                        std::string la = emitArgForParam(*b->left,
+                            op_ptypes.size() > 0 ? op_ptypes[0] : "");
+                        // coerce right into a temp of left_slid type
+                        std::string coerce_tmp = emitSlidAlloca(left_slid);
+                        auto& coerce_ptypes = func_param_types_[coerce_mangled];
+                        std::string coerce_arg = emitArgForParam(*b->right,
+                            coerce_ptypes.empty() ? "" : coerce_ptypes[0]);
+                        std::string coerce_ptype = coerce_ptypes.empty() ? "ptr"
+                            : llvmType(coerce_ptypes[0]);
+                        out_ << "    call void @" << llvmGlobalName(coerce_mangled)
+                             << "(ptr " << coerce_tmp << ", " << coerce_ptype
+                             << " " << coerce_arg << ")\n";
+                        // alloca result and call op with (left, coerce_tmp) as args
+                        std::string res_tmp = emitSlidAlloca(left_slid);
+                        std::string args = "ptr " + res_tmp;
+                        if (op_ptypes.size() > 0)
+                            args += ", " + llvmType(op_ptypes[0]) + " " + la;
+                        if (op_ptypes.size() > 1)
+                            args += ", ptr " + coerce_tmp;
+                        out_ << "    call void @" << llvmGlobalName(op_func)
+                             << "(" << args << ")\n";
+                        return res_tmp;
+                    }
+                }
+            }
+        }
+
+        // Phase 3: op+= fallback — no op+ defined, but op+= exists
+        // semantics: temp = copy(left); temp op= right; return temp
+        {
+            std::string left_slid = exprSlidType(*b->left);
+            if (!left_slid.empty()) {
+                std::string compound_base = left_slid + "__op" + b->op + "=";
+                auto compound_it = method_overloads_.find(compound_base);
+                if (compound_it != method_overloads_.end()) {
+                    std::string compound_mangled = resolveOpEq(compound_base, *b->right);
+                    if (!compound_mangled.empty()) {
+                        // alloca the result temp and copy left into it
+                        std::string res_tmp = emitSlidAlloca(left_slid);
+                        std::string copy_mangled = resolveOpEq(left_slid + "__op=", *b->left);
+                        if (!copy_mangled.empty()) {
+                            auto& cptypes = func_param_types_[copy_mangled];
+                            std::string carg = emitArgForParam(*b->left,
+                                cptypes.empty() ? "" : cptypes[0]);
+                            std::string cptype = cptypes.empty() ? "ptr" : llvmType(cptypes[0]);
+                            out_ << "    call void @" << llvmGlobalName(copy_mangled)
+                                 << "(ptr " << res_tmp << ", " << cptype << " " << carg << ")\n";
+                        } else {
+                            std::string src = emitArgForParam(*b->left, left_slid + "^");
+                            emitSlidCopy(left_slid, res_tmp, src);
+                        }
+                        // call op+= on result with right
+                        auto& iptypes = func_param_types_[compound_mangled];
+                        std::string iarg = emitArgForParam(*b->right,
+                            iptypes.empty() ? "" : iptypes[0]);
+                        std::string iptype = iptypes.empty() ? "ptr" : llvmType(iptypes[0]);
+                        out_ << "    call void @" << llvmGlobalName(compound_mangled)
+                             << "(ptr " << res_tmp << ", " << iptype << " " << iarg << ")\n";
+                        return res_tmp;
+                    }
                 }
             }
         }
