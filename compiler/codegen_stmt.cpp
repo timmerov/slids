@@ -606,6 +606,39 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string val = emitExpr(*assign->value);
         bool is_ptr = tit != local_types_.end() && isIndirectType(tit->second);
         std::string store_type = is_ptr ? "ptr" : llvmType(tit != local_types_.end() ? tit->second : "int");
+        // catch assigning a non-pointer result (e.g. ptr - ptr → intptr) into a pointer variable
+        // also catch mismatched pointer types (e.g. char[] into int[])
+        if (is_ptr) {
+            std::string rhs_t = exprLlvmType(*assign->value);
+            if (rhs_t != "ptr")
+                throw std::runtime_error("cannot assign non-pointer value to pointer variable '" + assign->name + "'");
+            // check pointee type compatibility (void^ is compatible with any pointer)
+            auto ptrBase = [](const std::string& t) -> std::string {
+                if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return t.substr(0, t.size()-2);
+                if (!t.empty() && t.back() == '^') return t.substr(0, t.size()-1);
+                return "";
+            };
+            std::string lhs_base = ptrBase(tit->second);
+            std::string rhs_slids;
+            if (auto* ve = dynamic_cast<const VarExpr*>(assign->value.get())) {
+                auto rit = local_types_.find(ve->name);
+                if (rit != local_types_.end()) rhs_slids = rit->second;
+            }
+            if (!rhs_slids.empty()) {
+                std::string rhs_base = ptrBase(rhs_slids);
+                if (!lhs_base.empty() && !rhs_base.empty()
+                    && lhs_base != "void" && rhs_base != "void"
+                    && lhs_base != rhs_base)
+                    throw std::runtime_error("cannot assign '" + rhs_slids + "' to '"
+                        + tit->second + "' variable '" + assign->name + "'");
+                // reference cannot promote to iterator
+                if (isPtrType(tit->second) && isRefType(rhs_slids)
+                    && lhs_base != "void" && rhs_base != "void")
+                    throw std::runtime_error("cannot assign reference '" + rhs_slids
+                        + "' to iterator '" + tit->second + "' variable '" + assign->name
+                        + "': references cannot promote to iterators");
+            }
+        }
         // coerce integer widths if necessary (sext or trunc)
         if (!is_ptr && tit != local_types_.end()) {
             static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};

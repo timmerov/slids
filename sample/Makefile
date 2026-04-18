@@ -21,6 +21,7 @@ SAMPLES = \
 	memcpy \
 	move \
 	primes1 \
+	pointer \
 	reference1 reference2 reference3 \
 	reverse_bits \
 	sizeof \

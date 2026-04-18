@@ -15,13 +15,6 @@ does not exist.
 import missing_header
 
 /*
-also tell claude to rename the bugN files
-to include leading 0s.
-
-tell claude to copy template.sl
-to template1.sl and template2.sl
-and update the Makefile.
-
 tell timmer we're working on template type inference.
 remove the <type> from the usages in main.
 

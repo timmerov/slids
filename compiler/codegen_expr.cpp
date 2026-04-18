@@ -778,6 +778,66 @@ std::string Codegen::emitExpr(const Expr& expr) {
         // pointer + int or pointer - int → GEP
         std::string left_llvm  = exprLlvmType(*b->left);
         std::string right_llvm = exprLlvmType(*b->right);
+
+        // reference (^) type restrictions: only == and != are allowed
+        if (left_llvm == "ptr" || right_llvm == "ptr") {
+            auto getVarSlidsType = [&](const Expr& e) -> std::string {
+                if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
+                    auto tit = local_types_.find(ve->name);
+                    if (tit != local_types_.end()) return tit->second;
+                }
+                return "";
+            };
+            std::string lslids = getVarSlidsType(*b->left);
+            std::string rslids = getVarSlidsType(*b->right);
+            bool left_ref  = isRefType(lslids);
+            bool right_ref = isRefType(rslids);
+            if (left_ref || right_ref) {
+                if (b->op != "==" && b->op != "!=")
+                    throw std::runtime_error("operator '" + b->op + "' is not allowed on reference type '"
+                        + (left_ref ? lslids : rslids) + "': references only support '==' and '!='");
+                // == and != require same base type (strip either ^ or [] suffix)
+                auto refBase = [](const std::string& t) -> std::string {
+                    if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return t.substr(0, t.size()-2);
+                    if (!t.empty() && t.back() == '^') return t.substr(0, t.size()-1);
+                    return t;
+                };
+                std::string lb = refBase(lslids), rb = refBase(rslids);
+                if (!lb.empty() && !rb.empty() && lb != "void" && rb != "void" && lb != rb)
+                    throw std::runtime_error("reference comparison requires same type: '"
+                        + lslids + "' vs '" + rslids + "'");
+            }
+        }
+
+        // pointer comparisons require same pointee type
+        static const std::set<std::string> cmp_ops = {"==","!=","<","<=",">",">="};
+        if (cmp_ops.count(b->op) && left_llvm == "ptr" && right_llvm == "ptr") {
+            auto getPtBase = [&](const Expr& e) -> std::string {
+                if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
+                    auto tit = local_types_.find(ve->name);
+                    if (tit != local_types_.end()) {
+                        const std::string& t = tit->second;
+                        if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
+                            return t.substr(0, t.size()-2);
+                    }
+                }
+                return "";
+            };
+            std::string lb = getPtBase(*b->left);
+            std::string rb = getPtBase(*b->right);
+            if (!lb.empty() && !rb.empty() && lb != rb)
+                throw std::runtime_error("pointer comparison requires same pointee type: '"
+                    + lb + "[]' vs '" + rb + "[]'");
+        }
+
+        // invalid pointer arithmetic
+        if (left_llvm == "ptr" || right_llvm == "ptr") {
+            if (b->op == "+" && left_llvm == "ptr" && right_llvm == "ptr")
+                throw std::runtime_error("pointer + pointer is not allowed");
+            if (b->op == "*" || b->op == "/" || b->op == "%")
+                throw std::runtime_error("operator '" + b->op + "' is not allowed on pointer types");
+        }
+
         if ((b->op == "+" || b->op == "-") && (left_llvm == "ptr" || right_llvm == "ptr")) {
             // figure out pointee type from whichever side is the pointer
             auto getPt = [&](const Expr& e) -> std::string {
@@ -801,6 +861,42 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 return "i8"; // default to byte
             };
             bool left_ptr = (left_llvm == "ptr");
+            bool right_ptr = (right_llvm == "ptr");
+
+            // ptr - ptr → intptr (ptrtoint both, subtract bytes, divide by element size)
+            if (b->op == "-" && left_ptr && right_ptr) {
+                // both pointers must have the same pointee type
+                auto getSlidsBase = [&](const Expr& e) -> std::string {
+                    if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
+                        auto tit = local_types_.find(ve->name);
+                        if (tit != local_types_.end()) {
+                            const std::string& t = tit->second;
+                            if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
+                                return t.substr(0, t.size()-2);
+                        }
+                    }
+                    return "";
+                };
+                std::string lb = getSlidsBase(*b->left);
+                std::string rb = getSlidsBase(*b->right);
+                if (!lb.empty() && !rb.empty() && lb != rb)
+                    throw std::runtime_error("pointer subtraction requires same pointee type: '"
+                        + lb + "[]' vs '" + rb + "[]'");
+                std::string pointee = getPt(*b->left);
+                std::string lv = emitExpr(*b->left);
+                std::string rv = emitExpr(*b->right);
+                std::string li = newTmp(), ri = newTmp(), diff = newTmp(), tmp = newTmp();
+                out_ << "    " << li << " = ptrtoint ptr " << lv << " to i64\n";
+                out_ << "    " << ri << " = ptrtoint ptr " << rv << " to i64\n";
+                out_ << "    " << diff << " = sub i64 " << li << ", " << ri << "\n";
+                // divide by sizeof(pointee) using a null-based GEP trick
+                std::string szgep = newTmp(), sz = newTmp();
+                out_ << "    " << szgep << " = getelementptr " << pointee << ", ptr null, i32 1\n";
+                out_ << "    " << sz << " = ptrtoint ptr " << szgep << " to i64\n";
+                out_ << "    " << tmp << " = sdiv i64 " << diff << ", " << sz << "\n";
+                return tmp;
+            }
+
             std::string pointee = left_ptr ? getPt(*b->left) : getPt(*b->right);
             const Expr& off_expr = left_ptr ? *b->right : *b->left;
             std::string ptr_val  = emitExpr(left_ptr ? *b->left  : *b->right);
@@ -1205,7 +1301,8 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             std::string rt = exprLlvmType(*b->right);
             if (left_is_literal && !right_is_literal) return rt;
             if (right_is_literal && !left_is_literal) return lt;
-            // pointer arithmetic: ptr +/- int → ptr
+            // pointer arithmetic: ptr - ptr → intptr (i64); ptr +/- int → ptr
+            if (b->op == "-" && lt == "ptr" && rt == "ptr") return "i64";
             if ((b->op == "+" || b->op == "-") && (lt == "ptr" || rt == "ptr"))
                 return "ptr";
             static const std::map<std::string,int> rank = {
