@@ -14,6 +14,8 @@ EXPORT_DIR = $(BUILD_DIR)/inc
 IMPORT_PATH = .
 EXPORT_PATH = $(EXPORT_DIR)
 
+SLIDSC_FLAGS = --import-path $(IMPORT_PATH) --export-path $(EXPORT_PATH)
+
 .PHONY: all clean string_test template
 
 all: string_test
@@ -31,13 +33,13 @@ $(ST_DIR)/string.o: $(ST_DIR)/string.ll
 $(ST_DIR)/string_test.o: $(ST_DIR)/string_test.ll
 	$(LLC) $(LLCFLAGS) $< -o $@
 
-$(ST_DIR)/string.ll: string.sl string.slh $(SLIDSC)
+$(ST_DIR)/string.ll: string.sl $(SLIDSC)
 	mkdir -p $(ST_DIR) $(EXPORT_DIR)
-	$(SLIDSC) $< -o $@ --import-path $(IMPORT_PATH) --export-path $(EXPORT_PATH)
+	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS) -MF $(ST_DIR)/string.d
 
-$(ST_DIR)/string_test.ll: string_test.sl $(EXPORT_DIR)/string.slh $(SLIDSC)
+$(ST_DIR)/string_test.ll: string_test.sl $(SLIDSC)
 	mkdir -p $(ST_DIR) $(EXPORT_DIR)
-	$(SLIDSC) $< -o $@ --import-path $(IMPORT_PATH) --export-path $(EXPORT_PATH)
+	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS) -MF $(ST_DIR)/string_test.d
 
 # annotated header is produced by compiling string.sl
 $(EXPORT_DIR)/string.slh: $(ST_DIR)/string.ll
@@ -52,9 +54,15 @@ $(BIN_DIR)/template: $(ST_DIR)/string.o $(TM_DIR)/template.o
 $(TM_DIR)/template.o: $(TM_DIR)/template.ll
 	$(LLC) $(LLCFLAGS) $< -o $@
 
-$(TM_DIR)/template.ll: template.sl $(EXPORT_DIR)/string.slh $(SLIDSC)
+$(TM_DIR)/template.ll: template.sl $(SLIDSC)
 	mkdir -p $(TM_DIR)
-	$(SLIDSC) $< -o $@ --import-path $(IMPORT_PATH) --export-path $(EXPORT_PATH)
+	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS) -MF $(TM_DIR)/template.d
+
+# ---- auto-generated dependencies ----
+
+-include $(ST_DIR)/string.d
+-include $(ST_DIR)/string_test.d
+-include $(TM_DIR)/template.d
 
 # ---- clean ----
 

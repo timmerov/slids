@@ -1509,6 +1509,7 @@ Program Parser::parse() {
             if (header_path.empty())
                 throw std::runtime_error("import: cannot find '" + module + ".slh'");
 
+            program.imported_headers.push_back(header_path);
             std::ifstream in(header_path);
             std::ostringstream buf; buf << in.rdbuf();
             Lexer hdr_lexer(buf.str());
@@ -1543,6 +1544,7 @@ Program Parser::parse() {
             if (header_path.empty())
                 throw std::runtime_error("transport: cannot find '" + module + ".slh'");
 
+            program.imported_headers.push_back(header_path);
             std::ifstream in(header_path);
             std::ostringstream buf; buf << in.rdbuf();
             Lexer hdr_lexer(buf.str());

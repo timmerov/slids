@@ -414,6 +414,7 @@ struct Program {
         std::vector<std::string> slid_names; // names of slids declared in the .slh
     };
     std::vector<TransportInfo> transports; // populated when transport statements are compiled
+    std::vector<std::string> imported_headers; // resolved .slh paths, for -MF dep output
 };
 
 // --- Parser ---

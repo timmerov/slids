@@ -25,7 +25,7 @@ static int64_t computeStructSize(const std::vector<FieldDef>& fields) {
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "usage: slidsc <source.sl> [-o <output.ll>] [--import-path <dir>]... [--export-path <dir>]\n";
+        std::cerr << "usage: slidsc <source.sl> [-o <output.ll>] [--import-path <dir>]... [--export-path <dir>] [-MF <deps.d>|-M]\n";
         return 1;
     }
 
@@ -33,6 +33,8 @@ int main(int argc, char* argv[]) {
     std::string output_path;
     std::vector<std::string> import_paths;
     std::string export_path;
+    std::string deps_path;   // -MF <file>
+    bool deps_stdout = false; // -M
 
     for (int i = 2; i < argc; i++) {
         std::string arg = argv[i];
@@ -42,6 +44,10 @@ int main(int argc, char* argv[]) {
             import_paths.push_back(argv[++i]);
         else if (arg == "--export-path" && i + 1 < argc)
             export_path = argv[++i];
+        else if (arg == "-MF" && i + 1 < argc)
+            deps_path = argv[++i];
+        else if (arg == "-M")
+            deps_stdout = true;
     }
 
     if (output_path.empty()) {
@@ -92,6 +98,29 @@ int main(int argc, char* argv[]) {
         std::cout << "slidsc: wrote " << output_path << "\n";
         std::error_code ec;
         std::filesystem::remove(output_path + ".err", ec);
+
+        // emit dependency info (-MF file or -M to stdout)
+        if (!deps_path.empty() || deps_stdout) {
+            // build dep line: target: source.sl [header.slh ...]
+            std::ostringstream dep;
+            dep << output_path << ": " << input_path;
+            for (auto& h : program.imported_headers)
+                dep << " " << h;
+            dep << "\n";
+
+            if (deps_stdout) {
+                std::cout << dep.str();
+            } else {
+                std::filesystem::path dp(deps_path);
+                if (dp.has_parent_path())
+                    std::filesystem::create_directories(dp.parent_path());
+                std::ofstream df(deps_path);
+                if (!df)
+                    std::cerr << "slidsc: warning: cannot write deps file '" << deps_path << "'\n";
+                else
+                    df << dep.str();
+            }
+        }
 
         // emit annotated .slh for each transported module
         for (auto& ti : program.transports) {
