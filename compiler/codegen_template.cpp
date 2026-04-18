@@ -316,8 +316,12 @@ std::string Codegen::instantiateTemplate(const std::string& name,
     FunctionDef concrete;
     concrete.name = mangled;
     concrete.return_type = subTypeSuffix(tmpl.return_type, subst);
-    for (auto& [ptype, pname] : tmpl.params)
-        concrete.params.emplace_back(subTypeSuffix(ptype, subst), pname);
+    for (auto& [ptype, pname] : tmpl.params) {
+        std::string pt = subTypeSuffix(ptype, subst);
+        // class types can't be passed by value: auto-promote to reference
+        if (slid_info_.count(pt)) pt += "^";
+        concrete.params.emplace_back(pt, pname);
+    }
     concrete.body = cloneBlock(*tmpl.body, subst);
 
     // register signatures so call sites work

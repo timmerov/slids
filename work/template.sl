@@ -5,7 +5,8 @@ define how function templates work in a source file.
 import string
 
 T add<T>(T a, T b) {
-    return a + b;
+    T c = a + b;
+    return c;
 }
 
 String foo() {
@@ -43,10 +44,10 @@ int32 main() {
     c = add<intptr>(a, b);
     println(String + "c[26796]=" + c);
 
-    /*String hello = "Hello, ";
+    String hello = "Hello, ";
     String world = "World!";
     greeting = add<String>(hello, world);
-    println(String + "greeting[Hello, World!]=" + greeting);*/
+    println(String + "greeting[Hello, World!]=" + greeting);
 
     String s = foo();
     println(String + "foo[Hello, World!]=" + s);

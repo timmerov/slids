@@ -384,14 +384,24 @@ std::string Codegen::emitExpr(const Expr& expr) {
         // template call: instantiate and emit
         if (!call->type_args.empty()) {
             std::string mangled = instantiateTemplate(call->callee, call->type_args);
-            std::string ret_type = llvmType(func_return_types_[mangled]);
-            std::string arg_str;
+            std::string ret_slid = func_return_types_[mangled];
             auto& ptypes = func_param_types_[mangled];
+            std::string arg_str;
             for (int i = 0; i < (int)call->args.size(); i++) {
                 if (i > 0) arg_str += ", ";
                 std::string ptype = (i < (int)ptypes.size()) ? ptypes[i] : "int";
                 arg_str += llvmType(ptype) + " " + emitArgForParam(*call->args[i], ptype);
             }
+            // sret if return type is a slid
+            if (slid_info_.count(ret_slid)) {
+                std::string tmp = "%tmp_" + std::to_string(tmp_counter_++);
+                out_ << "    " << tmp << " = alloca %struct." << ret_slid << "\n";
+                std::string sret_arg = "ptr sret(%struct." + ret_slid + ") " + tmp;
+                if (!arg_str.empty()) sret_arg += ", " + arg_str;
+                out_ << "    call void @" << llvmGlobalName(mangled) << "(" << sret_arg << ")\n";
+                return tmp;
+            }
+            std::string ret_type = llvmType(ret_slid);
             std::string tmp = newTmp();
             out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(mangled)
                  << "(" << arg_str << ")\n";
