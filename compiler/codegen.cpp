@@ -1051,6 +1051,9 @@ bool Codegen::isFreshSlidTemp(const Expr& expr) {
     // (SlidType=expr) always allocates a fresh temp
     if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr))
         return slid_info_.count(nc->target_type) > 0;
+    // function call returning a slid type produces a fresh temp alloca
+    if (dynamic_cast<const CallExpr*>(&expr))
+        return !exprSlidType(expr).empty();
     // any binary expression that produces a slid result owns a fresh temp alloca
     if (dynamic_cast<const BinaryExpr*>(&expr))
         return !exprSlidType(expr).empty();
@@ -1080,6 +1083,12 @@ std::string Codegen::exprSlidType(const Expr& expr) {
                 if (!t.empty() && t.back() == '^') { t.pop_back(); if (slid_info_.count(t)) return t; }
             }
         }
+    }
+    // function call returning a slid type
+    if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        auto rit = func_return_types_.find(ce->callee);
+        if (rit != func_return_types_.end() && slid_info_.count(rit->second))
+            return rit->second;
     }
     if (auto* be = dynamic_cast<const BinaryExpr*>(&expr)) {
         std::string mangled = resolveOperatorOverload(be->op, *be->left, *be->right);

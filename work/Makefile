@@ -18,7 +18,7 @@ EXPORT_PATH = $(EXPORT_DIR)
 
 all: string_test
 
-string_test: $(BIN_DIR)/string_test
+string_test: $(BIN_DIR)/string_test template
 
 # ---- string_test ----
 

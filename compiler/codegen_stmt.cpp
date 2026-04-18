@@ -864,23 +864,48 @@ void Codegen::emitStmt(const Stmt& stmt) {
             const std::string& slid_name = tit->second;
             auto& info = slid_info_[slid_name];
             std::string src = locals_.at(ve->name);
-            // copy each field from src to %retval
-            for (int i = 0; i < (int)info.field_types.size(); i++) {
-                std::string ft = llvmType(info.field_types[i]);
-                std::string sp = newTmp();
-                std::string dp = newTmp();
-                std::string fv = newTmp();
-                out_ << "    " << sp << " = getelementptr %struct." << slid_name << ", ptr " << src << ", i32 0, i32 " << i << "\n";
-                out_ << "    " << dp << " = getelementptr %struct." << slid_name << ", ptr %retval, i32 0, i32 " << i << "\n";
-                out_ << "    " << fv << " = load " << ft << ", ptr " << sp << "\n";
-                out_ << "    store " << ft << " " << fv << ", ptr " << dp << "\n";
-            }
-            // null out pointer fields in src so its dtor won't double-free
-            for (int i = 0; i < (int)info.field_types.size(); i++) {
-                if (isIndirectType(info.field_types[i])) {
+            if (!info.field_types.empty()) {
+                // known fields: field-by-field move into %retval (implicit move — steal + null src ptrs)
+                for (int i = 0; i < (int)info.field_types.size(); i++) {
+                    std::string ft = llvmType(info.field_types[i]);
                     std::string sp = newTmp();
+                    std::string dp = newTmp();
+                    std::string fv = newTmp();
                     out_ << "    " << sp << " = getelementptr %struct." << slid_name << ", ptr " << src << ", i32 0, i32 " << i << "\n";
-                    out_ << "    store ptr null, ptr " << sp << "\n";
+                    out_ << "    " << dp << " = getelementptr %struct." << slid_name << ", ptr %retval, i32 0, i32 " << i << "\n";
+                    out_ << "    " << fv << " = load " << ft << ", ptr " << sp << "\n";
+                    out_ << "    store " << ft << " " << fv << ", ptr " << dp << "\n";
+                }
+                // null out pointer fields in src so its dtor won't double-free
+                for (int i = 0; i < (int)info.field_types.size(); i++) {
+                    if (isIndirectType(info.field_types[i])) {
+                        std::string sp = newTmp();
+                        out_ << "    " << sp << " = getelementptr %struct." << slid_name << ", ptr " << src << ", i32 0, i32 " << i << "\n";
+                        out_ << "    store ptr null, ptr " << sp << "\n";
+                    }
+                }
+            } else {
+                // opaque (transport) type: init %retval, then move or copy from src
+                if (info.has_pinit && !info.is_transport_impl)
+                    out_ << "    call void @" << slid_name << "__pinit(ptr %retval)\n";
+                else if (info.has_explicit_ctor)
+                    out_ << "    call void @" << slid_name << "__ctor(ptr %retval)\n";
+                // prefer op<- (move), fallback to op= (copy)
+                std::string move_func;
+                auto mit = method_overloads_.find(slid_name + "__op<-");
+                if (mit != method_overloads_.end())
+                    for (auto& [m, ptypes] : mit->second)
+                        if (ptypes.size() == 1 && isRefType(ptypes[0])) { move_func = m; break; }
+                if (!move_func.empty()) {
+                    out_ << "    call void @" << llvmGlobalName(move_func)
+                         << "(ptr %retval, ptr " << src << ")\n";
+                } else {
+                    std::string copy_func = resolveOpEq(slid_name + "__op=", *ret->value);
+                    if (!copy_func.empty()) {
+                        auto& cptypes = func_param_types_[copy_func];
+                        out_ << "    call void @" << llvmGlobalName(copy_func)
+                             << "(ptr %retval, " << llvmType(cptypes[0]) << " " << src << ")\n";
+                    }
                 }
             }
             emitDtors();

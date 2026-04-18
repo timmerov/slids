@@ -8,6 +8,11 @@ T add<T>(T a, T b) {
     return a + b;
 }
 
+String foo() {
+    String s = "Hello, World!";
+    return s;
+}
+
 int32 main() {
     x = add<int>(2, 4);
     /*
@@ -31,20 +36,20 @@ int32 main() {
     hrm...
     sigh.
     */
-    String s = "x[6]=" + x;
-    s.println();
+    println(String + "x[6]=" + x);
 
-    /*intptr a = 0x1234;
+    intptr a = 0x1234;
     intptr b = 0x5678;
     c = add<intptr>(a, b);
-    s = "c[26796]=" + c;
-    s.println();
+    println(String + "c[26796]=" + c);
 
-    String hello = "Hello, ";
+    /*String hello = "Hello, ";
     String world = "World!";
     greeting = add<String>(hello, world);
-    s = "greeting[Hello, World!]=" + greeting;
-    s.println();*/
+    println(String + "greeting[Hello, World!]=" + greeting);*/
+
+    String s = foo();
+    println(String + "foo[Hello, World!]=" + s);
 
     return 0;
 }

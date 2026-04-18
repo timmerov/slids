@@ -402,16 +402,26 @@ std::string Codegen::emitExpr(const Expr& expr) {
         auto it = func_return_types_.find(call->callee);
         if (it == func_return_types_.end())
             throw std::runtime_error("undefined function: " + call->callee);
-        std::string ret_type = llvmType(it->second);
-        std::string arg_str;
         auto& ptypes = func_param_types_[call->callee];
+        std::string arg_str;
         for (int i = 0; i < (int)call->args.size(); i++) {
             if (i > 0) arg_str += ", ";
-            std::string ptype = (i < (int)ptypes.size()) ? llvmType(ptypes[i]) : "i32";
-            arg_str += ptype + " " + emitExpr(*call->args[i]);
+            std::string ptype_str = (i < (int)ptypes.size()) ? ptypes[i] : "";
+            std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
+            arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
         }
+        // sret: callee returns a slid type — allocate temp, call with ptr sret, return temp
+        if (slid_info_.count(it->second)) {
+            std::string tmp = "%tmp_" + std::to_string(tmp_counter_++);
+            out_ << "    " << tmp << " = alloca %struct." << it->second << "\n";
+            std::string sret_arg = "ptr sret(%struct." + it->second + ") " + tmp;
+            if (!arg_str.empty()) sret_arg += ", " + arg_str;
+            out_ << "    call void @" << llvmGlobalName(call->callee) << "(" << sret_arg << ")\n";
+            return tmp;
+        }
+        std::string ret_type = llvmType(it->second);
         std::string tmp = newTmp();
-        out_ << "    " << tmp << " = call " << ret_type << " @" << call->callee
+        out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(call->callee)
              << "(" << arg_str << ")\n";
         return tmp;
     }
