@@ -1304,6 +1304,19 @@ std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
             if (!arg_is_slid && !arg_is_char && !arg_is_unsigned && !isIndirectType(tit->second))
                 arg_is_scalar_int = true;
         }
+    } else if (auto* ao = dynamic_cast<const AddrOfExpr*>(&arg)) {
+        // ^x: addr-of x
+        // ^x where x: SlidType (non-indirect) → SlidType^ — valid slid ref arg
+        // ^x where x: SlidType^ or char[] → double-indirect — no match for any overload
+        if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end()) {
+                if (isIndirectType(tit->second))
+                    return "";  // ^ref is double-indirect: type error
+                if (slid_info_.count(tit->second))
+                    arg_is_slid = true;  // ^slid_var is a valid slid ref
+            }
+        }
     } else if (!exprSlidType(arg).empty()) {
         arg_is_slid = true; // e.g. result of op+ expression
     } else {
