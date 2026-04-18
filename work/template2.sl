@@ -24,5 +24,21 @@ int32 main() {
     greeting = add(hello, world);
     println(String + "greeting[Hello, World!]=" + greeting);
 
+    /* test mismatches */
+
+    int8 i8 = 8;
+    int32 i32 = 32 + 1000;
+    should_be_int32 = add(i8, i32);
+    println(String + "should_be_int32[1040]=" + should_be_int32);
+
+    String s = "y[42]=";
+    int y = 42;
+    s = add(s, y);
+    println(s);
+
+    s = "=y[42]";
+    s = add(y, s);
+    println(s);
+
     return 0;
 }

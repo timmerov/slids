@@ -308,7 +308,7 @@ std::vector<std::string> Codegen::inferTypeArgs(
             base = ptype;
         }
 
-        if (!type_param_set.count(base) || inferred.count(base)) continue;
+        if (!type_param_set.count(base)) continue;
 
         // get Slids type of actual argument
         std::string arg_slids;
@@ -329,6 +329,19 @@ std::vector<std::string> Codegen::inferTypeArgs(
         else if (suffix == "^" && !arg_slids.empty() && arg_slids.back() == '^')
             concrete = arg_slids.substr(0, arg_slids.size()-1);
 
+        // mismatched types: widen integers; prefer slid over primitive
+        if (inferred.count(base)) {
+            static const std::map<std::string,int> irank =
+                {{"int8",1},{"int16",2},{"int",3},{"int32",3},{"int64",4},{"intptr",4},
+                 {"uint8",1},{"uint16",2},{"uint32",3},{"uint64",4}};
+            auto ait = irank.find(inferred[base]);
+            auto bit = irank.find(concrete);
+            if (ait != irank.end() && bit != irank.end() && bit->second > ait->second)
+                inferred[base] = concrete;  // widen integer
+            else if (!slid_info_.count(inferred[base]) && slid_info_.count(concrete))
+                inferred[base] = concrete;  // prefer slid type: primitive can be constructed as slid
+            continue;
+        }
         inferred[base] = concrete;
     }
 

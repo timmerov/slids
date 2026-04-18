@@ -1241,6 +1241,8 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
         if (enum_values_.count(v->name)) return "i32";
         // array name used as pointer — ptr
         if (array_info_.count(v->name)) return "ptr";
+        // type name used as anonymous slid temp — ptr
+        if (slid_info_.count(v->name)) return "ptr";
         return "i32";
     }
 
@@ -1416,6 +1418,7 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             std::string rt = tmpl.return_type;
             auto it2 = subst.find(rt);
             if (it2 != subst.end()) rt = it2->second;
+            if (slid_info_.count(rt)) return "ptr";
             return llvmType(rt);
         }
         // check if already instantiated

@@ -26,8 +26,12 @@ int32 main() {
 
     int8 i8 = 8;
     int32 i32 = 32;
-    b = add<int64>(i8, i32);
-    println(String + "b[40]=" + b);
+    int64 i64 = add<int64>(i8, i32);
+    println(String + "i64[40]=" + i64);
+
+    i64 = 64;
+    i8 = add<int64>(i32, i64);
+    println(String + "i8[96]=" + i8);
 
     char[] ptr = "y[42]=";
     int y = 42;

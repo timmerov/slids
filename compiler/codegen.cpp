@@ -812,7 +812,13 @@ void Codegen::emitNestedFunction(
 
 
 void Codegen::emitDtors() {
-    // call dtors in reverse declaration order
+    // flush expression-level temporaries first (before named locals)
+    for (int i = (int)pending_temp_dtors_.size() - 1; i >= 0; i--) {
+        auto& td = pending_temp_dtors_[i];
+        out_ << "    call void @" << td.second << "__dtor(ptr " << td.first << ")\n";
+    }
+    pending_temp_dtors_.clear();
+    // call named-local dtors in reverse declaration order
     for (int i = (int)dtor_vars_.size() - 1; i >= 0; i--) {
         auto& [var_name, slid_type] = dtor_vars_[i];
         out_ << "    call void @" << slid_type << "__dtor(ptr " << locals_[var_name] << ")\n";
@@ -1504,6 +1510,68 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
             }
         }
     }
+    // implicit construction: non-slid value passed to SlidType^ param — find matching op=
+    if (want_ptr) {
+        std::string slid_name = param_type.substr(0, param_type.size() - 1);
+        if (slid_info_.count(slid_name)) {
+            auto& info = slid_info_[slid_name];
+            std::string arg_llvm = exprLlvmType(arg);
+            static const std::map<std::string,int> irank = {{"i8",1},{"i16",2},{"i32",3},{"i64",4}};
+            auto ait = irank.find(arg_llvm);
+            auto oit = method_overloads_.find(slid_name + "__op=");
+            if (oit != method_overloads_.end()) {
+                for (auto& [m, ptypes2] : oit->second) {
+                    if (ptypes2.empty()) continue;
+                    std::string p_llvm = llvmType(ptypes2[0]);
+                    auto pit = irank.find(p_llvm);
+                    // get raw Slids type of arg (works for non-slid types like char[] too)
+                    std::string arg_slids;
+                    if (auto* ve2 = dynamic_cast<const VarExpr*>(&arg)) {
+                        auto tit2 = local_types_.find(ve2->name);
+                        if (tit2 != local_types_.end()) arg_slids = tit2->second;
+                    }
+                    if (arg_slids.empty()) arg_slids = exprSlidType(arg);
+                    if (arg_slids.empty() && dynamic_cast<const StringLiteralExpr*>(&arg)) arg_slids = "char[]";
+                    // scalars: exact llvm type; pointers: exact Slids type (char[] != String^)
+                    bool exact  = (p_llvm == arg_llvm && p_llvm != "ptr")
+                               || (arg_llvm == "ptr" && ptypes2[0] == arg_slids);
+                    bool widen  = (ait != irank.end() && pit != irank.end()
+                                   && pit->second >= ait->second);
+                    if (!exact && !widen) continue;
+                    std::string tmp = "%tmp_" + std::to_string(tmp_counter_++);
+                    out_ << "    " << tmp << " = alloca %struct." << slid_name << "\n";
+                    if (info.has_pinit) {
+                        // transport type: __pinit zeros private fields and chains to __ctor
+                        out_ << "    call void @" << slid_name << "__pinit(ptr " << tmp << ")\n";
+                    } else {
+                        for (int i2 = 0; i2 < (int)info.field_types.size(); i2++) {
+                            std::string gep = newTmp();
+                            out_ << "    " << gep << " = getelementptr %struct." << slid_name
+                                 << ", ptr " << tmp << ", i32 0, i32 " << i2 << "\n";
+                            if (isIndirectType(info.field_types[i2]))
+                                out_ << "    store ptr null, ptr " << gep << "\n";
+                            else
+                                out_ << "    store " << llvmType(info.field_types[i2]) << " 0, ptr " << gep << "\n";
+                        }
+                        if (info.has_explicit_ctor)
+                            out_ << "    call void @" << slid_name << "__ctor(ptr " << tmp << ")\n";
+                    }
+                    std::string av = emitExpr(arg);
+                    if (widen && !exact) {
+                        std::string ext = newTmp();
+                        out_ << "    " << ext << " = sext " << arg_llvm << " " << av << " to " << p_llvm << "\n";
+                        av = ext;
+                    }
+                    out_ << "    call void @" << llvmGlobalName(m)
+                         << "(ptr " << tmp << ", " << p_llvm << " " << av << ")\n";
+                    if (info.has_dtor)
+                        pending_temp_dtors_.push_back({tmp, slid_name});
+                    return tmp;
+                }
+            }
+        }
+    }
+
     std::string val = emitExpr(arg);
     // widen or truncate integer to match param type
     if (!param_type.empty() && !isIndirectType(param_type)) {
