@@ -285,6 +285,64 @@ static std::unique_ptr<BlockStmt> cloneBlock(const BlockStmt& block,
     return r;
 }
 
+// --- Codegen::inferTypeArgs ---
+
+std::vector<std::string> Codegen::inferTypeArgs(
+    const FunctionDef& tmpl,
+    const std::vector<std::unique_ptr<Expr>>& args)
+{
+    std::set<std::string> type_param_set(tmpl.type_params.begin(), tmpl.type_params.end());
+    std::map<std::string, std::string> inferred;
+
+    for (int i = 0; i < (int)tmpl.params.size() && i < (int)args.size(); i++) {
+        const std::string& ptype = tmpl.params[i].first;
+
+        // strip pointer/reference suffix to get the base type param name
+        std::string base;
+        std::string suffix;
+        if (ptype.size() >= 2 && ptype.substr(ptype.size()-2) == "[]") {
+            base = ptype.substr(0, ptype.size()-2); suffix = "[]";
+        } else if (!ptype.empty() && ptype.back() == '^') {
+            base = ptype.substr(0, ptype.size()-1); suffix = "^";
+        } else {
+            base = ptype;
+        }
+
+        if (!type_param_set.count(base) || inferred.count(base)) continue;
+
+        // get Slids type of actual argument
+        std::string arg_slids;
+        if (auto* ve = dynamic_cast<const VarExpr*>(args[i].get())) {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end()) arg_slids = tit->second;
+        } else if (dynamic_cast<const IntLiteralExpr*>(args[i].get())) {
+            arg_slids = "int";
+        } else if (dynamic_cast<const FloatLiteralExpr*>(args[i].get())) {
+            arg_slids = "float64";
+        }
+        if (arg_slids.empty()) continue;
+
+        // strip the matching suffix to get the concrete type
+        std::string concrete = arg_slids;
+        if (suffix == "[]" && arg_slids.size() >= 2 && arg_slids.substr(arg_slids.size()-2) == "[]")
+            concrete = arg_slids.substr(0, arg_slids.size()-2);
+        else if (suffix == "^" && !arg_slids.empty() && arg_slids.back() == '^')
+            concrete = arg_slids.substr(0, arg_slids.size()-1);
+
+        inferred[base] = concrete;
+    }
+
+    std::vector<std::string> result;
+    for (auto& tp : tmpl.type_params) {
+        auto it = inferred.find(tp);
+        if (it == inferred.end())
+            throw std::runtime_error("cannot infer template type '" + tp
+                + "' for '" + tmpl.name + "': provide explicit type argument");
+        result.push_back(it->second);
+    }
+    return result;
+}
+
 // --- Codegen::instantiateTemplate ---
 
 std::string Codegen::instantiateTemplate(const std::string& name,

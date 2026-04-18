@@ -1086,18 +1086,17 @@ std::string Codegen::exprSlidType(const Expr& expr) {
     }
     // function call returning a slid type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
-        if (!ce->type_args.empty()) {
-            // template call: derive return type from template definition
-            auto tit = template_funcs_.find(ce->callee);
-            if (tit != template_funcs_.end()) {
-                const FunctionDef& tmpl = *tit->second;
-                std::map<std::string,std::string> subst;
-                for (int i = 0; i < (int)tmpl.type_params.size() && i < (int)ce->type_args.size(); i++)
-                    subst[tmpl.type_params[i]] = ce->type_args[i];
-                auto it2 = subst.find(tmpl.return_type);
-                std::string rt = (it2 != subst.end()) ? it2->second : tmpl.return_type;
-                if (slid_info_.count(rt)) return rt;
-            }
+        auto tit = template_funcs_.find(ce->callee);
+        if (tit != template_funcs_.end()) {
+            const FunctionDef& tmpl = *tit->second;
+            std::vector<std::string> targs = ce->type_args.empty()
+                ? inferTypeArgs(tmpl, ce->args) : ce->type_args;
+            std::map<std::string,std::string> subst;
+            for (int i = 0; i < (int)tmpl.type_params.size() && i < (int)targs.size(); i++)
+                subst[tmpl.type_params[i]] = targs[i];
+            auto it2 = subst.find(tmpl.return_type);
+            std::string rt = (it2 != subst.end()) ? it2->second : tmpl.return_type;
+            if (slid_info_.count(rt)) return rt;
         }
         auto rit = func_return_types_.find(ce->callee);
         if (rit != func_return_types_.end() && slid_info_.count(rit->second))

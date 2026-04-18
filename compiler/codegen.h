@@ -111,6 +111,9 @@ private:
     // adds to pending_instantiations_; returns mangled name (e.g. "add__int")
     std::string instantiateTemplate(const std::string& name,
                                     const std::vector<std::string>& type_args);
+    // infer type args from actual call arguments when no explicit <T> is given
+    std::vector<std::string> inferTypeArgs(const FunctionDef& tmpl,
+                                           const std::vector<std::unique_ptr<Expr>>& args);
     void analyzeNestedFunctions(const FunctionDef& fn);
     std::set<std::string> collectCaptures(
         const BlockStmt& body,

@@ -22,5 +22,17 @@ int32 main() {
     greeting = add<String>(hello, world);
     println(String + "greeting[Hello, World!]=" + greeting);
 
+    /* test mismatches */
+
+    int8 i8 = 8;
+    int32 i32 = 32;
+    b = add<int64>(i8, i32);
+    println(String + "b[40]=" + b);
+
+    char[] ptr = "y[42]=";
+    int y = 42;
+    s = add<String>(ptr, y);
+    println(s);
+
     return 0;
 }
