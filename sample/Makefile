@@ -9,7 +9,7 @@ BUILD_DIR = ../build/sample
 # --- add new samples here ---
 SAMPLES = \
 	biz_buzz \
-	bug1 bug2 bug3 bug4 bug5 bug6 bug8 bug9 \
+	bug1 bug2 bug3 bug4 bug5 bug6 bug8 bug9 bug10 \
 	cast \
 	chess1 chess2 chess3 \
 	counter1 counter2 \
