@@ -9,7 +9,7 @@ BUILD_DIR = ../build/sample
 # --- add new samples here ---
 SAMPLES = \
 	biz_buzz \
-	bug01 bug02 bug03 bug04 bug05 bug06 bug08 bug09 bug10 \
+	bug01 bug02 bug03 bug04 bug05 bug06 bug08 bug09 \
 	cast \
 	chess1 chess2 chess3 \
 	counter1 counter2 \
@@ -33,7 +33,7 @@ SAMPLES = \
 	type_infer
 
 # these should not compile:
-#   bug07
+#   bug07 bug10
 
 # --- multi-file samples (don't fit the single-file template) ---
 MULTI_SAMPLES = import_test

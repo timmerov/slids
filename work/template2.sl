@@ -2,7 +2,7 @@
 define how function templates work in a source file.
 */
 
-import string
+import string;
 
 T add<T>(T a, T b) {
     return a + b;

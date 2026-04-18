@@ -4,7 +4,7 @@ use the declared fuction.
 link with the compiled implementation.
 */
 
-import import_decl
+import import_decl;
 
 int32 main() {
     printHelloWorld();

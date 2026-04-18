@@ -1496,7 +1496,7 @@ Program Parser::parse() {
         if (peek().type == TokenType::kImport) {
             advance(); // consume 'import'
             std::string module = expect(TokenType::kIdentifier, "expected module name after 'import'").value;
-            if (peek().type == TokenType::kSemicolon) advance();
+            expect(TokenType::kSemicolon, "expected ';' after import");
 
             // build search order: export_path first, then import_paths, then source_dir
             std::vector<std::string> search;
@@ -1532,7 +1532,7 @@ Program Parser::parse() {
         else if (peek().type == TokenType::kTransport) {
             advance(); // consume 'transport'
             std::string module = expect(TokenType::kIdentifier, "expected module name after 'transport'").value;
-            if (peek().type == TokenType::kSemicolon) advance();
+            expect(TokenType::kSemicolon, "expected ';' after transport");
 
             // search import_paths only (not export_path — we're producing the annotated version)
             std::vector<std::string> search;
