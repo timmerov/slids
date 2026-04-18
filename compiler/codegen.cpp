@@ -1324,14 +1324,16 @@ std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
         if (arg_is_scalar_int && !isIndirectType(ptypes[0]) && ptypes[0] != "char" && !unsigned_types.count(ptypes[0])) return m;
         if (!arg_is_slid && !arg_is_char && !arg_is_scalar_int && !arg_is_unsigned && isPtrType(ptypes[0])) return m;
     }
-    // pass 2: fallback — any ptr param for non-slid arg (e.g. string literal)
-    if (!arg_is_slid) {
+    // pass 2: fallback — any ptr param for non-slid, non-scalar arg (e.g. string literal / char[])
+    if (!arg_is_slid && !arg_is_scalar_int && !arg_is_unsigned) {
         for (auto& [m, ptypes] : oit->second) {
             if (ptypes.size() == 1 && isIndirectType(ptypes[0])) return m;
         }
     }
     // slid arg with no matching slid-ref overload: return "" so the caller can synthesize a copy
     if (arg_is_slid) return "";
+    // scalar int/unsigned with no matching scalar overload: return "" so caller can coerce via temp
+    if (arg_is_scalar_int || arg_is_unsigned) return "";
     // non-slid arg: fall back to first available overload
     return oit->second[0].first;
 }

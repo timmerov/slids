@@ -68,10 +68,7 @@ int32 main() {
 
     /* fancier features. */
     int x = 42;
-    String s;
-    s += "x=";
-    /*s += x;
-    /*println(s);*/
+    println(String + "x=" + x);
 
     return 0;
 }

@@ -998,7 +998,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             advance();
             auto value = parseExpr();
             expect(TokenType::kSemicolon, "expected ';'");
-            if (!isInScope(name) && !current_slid_fields_.count(name)) {
+            if (!isInScope(name) && !current_slid_fields_.count(name) && name != "self") {
                 declareVar(name);
                 return std::make_unique<VarDeclStmt>("", name, std::move(value));
             }

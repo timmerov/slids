@@ -55,8 +55,20 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // nullify the pointer variable so it is left in a valid (null) state
         if (auto* ve = dynamic_cast<const VarExpr*>(ds->operand.get())) {
             auto it = locals_.find(ve->name);
-            if (it != locals_.end())
+            if (it != locals_.end()) {
                 out_ << "    store ptr null, ptr " << it->second << "\n";
+            } else if (!current_slid_.empty()) {
+                // bare field name inside a method: GEP through self and store null
+                auto& info = slid_info_[current_slid_];
+                auto fit = info.field_index.find(ve->name);
+                if (fit != info.field_index.end()) {
+                    std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr %struct." << current_slid_
+                         << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
+                    out_ << "    store ptr null, ptr " << gep << "\n";
+                }
+            }
         } else if (auto* fa = dynamic_cast<const FieldAccessExpr*>(ds->operand.get())) {
             // delete obj.field_ — write null back through the field GEP
             // Re-emit the GEP for the field and store null
@@ -150,13 +162,75 @@ void Codegen::emitStmt(const Stmt& stmt) {
             // target alloca directly and is more efficient.
             if (decl->init && decl->ctor_args.empty() && !decl->is_move) {
                 bool phase1_handles = false;
-                if (auto* be = dynamic_cast<const BinaryExpr*>(decl->init.get()))
-                    phase1_handles = !resolveOperatorOverload(be->op, *be->left, *be->right).empty();
-                if (!phase1_handles && isFreshSlidTemp(*decl->init)
+                bool is_empty_plus = false;  // Type + rhs pattern: use op+= instead
+                if (auto* be = dynamic_cast<const BinaryExpr*>(decl->init.get())) {
+                    // detect "EffType + rhs" — left side is the type name itself (not a variable)
+                    if (be->op == "+") {
+                        if (auto* lve = dynamic_cast<const VarExpr*>(be->left.get())) {
+                            if (lve->name == eff_type && !locals_.count(lve->name)) {
+                                // check that op+= exists for the rhs
+                                std::string compound_base = eff_type + "__op+=";
+                                std::string mangled = resolveOpEq(compound_base, *be->right);
+                                if (!mangled.empty())
+                                    is_empty_plus = true;
+                            }
+                        }
+                    }
+                    if (!is_empty_plus)
+                        phase1_handles = !resolveOperatorOverload(be->op, *be->left, *be->right).empty();
+                }
+                if (!phase1_handles && !is_empty_plus && isFreshSlidTemp(*decl->init)
                         && exprSlidType(*decl->init) == eff_type) {
                     std::string temp_ptr = emitExpr(*decl->init);
                     locals_[decl->name] = temp_ptr;
                     local_types_[decl->name] = eff_type;
+                    if (info.has_dtor)
+                        dtor_vars_.push_back({decl->name, eff_type});
+                    return;
+                }
+                if (is_empty_plus) {
+                    // emit: alloca, init fields, pinit/ctor, then op+=(rhs) — no empty temp
+                    auto* be = dynamic_cast<const BinaryExpr*>(decl->init.get());
+                    std::string reg = "%var_" + decl->name;
+                    out_ << "    " << reg << " = alloca %struct." << eff_type << "\n";
+                    locals_[decl->name] = reg;
+                    local_types_[decl->name] = eff_type;
+                    const SlidDef* slid_def2 = nullptr;
+                    for (auto& s : program_.slids)
+                        if (s.name == eff_type) { slid_def2 = &s; break; }
+                    for (int i = 0; i < (int)info.field_types.size(); i++) {
+                        std::string gep = newTmp();
+                        out_ << "    " << gep << " = getelementptr %struct." << eff_type
+                             << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
+                        std::string val;
+                        if (slid_def2 && slid_def2->fields[i].default_val)
+                            val = emitExpr(*slid_def2->fields[i].default_val);
+                        else
+                            val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer" : "0";
+                        out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
+                    }
+                    if (slid_def2 && slid_def2->ctor_body) {
+                        std::string saved_slid = current_slid_;
+                        std::string saved_self = self_ptr_;
+                        current_slid_ = eff_type;
+                        self_ptr_ = reg;
+                        emitBlock(*slid_def2->ctor_body);
+                        current_slid_ = saved_slid;
+                        self_ptr_ = saved_self;
+                    }
+                    if (info.has_pinit && !info.is_transport_impl)
+                        out_ << "    call void @" << eff_type << "__pinit(ptr " << reg << ")\n";
+                    else if (info.has_explicit_ctor)
+                        out_ << "    call void @" << eff_type << "__ctor(ptr " << reg << ")\n";
+                    // call op+=(rhs)
+                    std::string compound_base = eff_type + "__op+=";
+                    std::string mangled = resolveOpEq(compound_base, *be->right);
+                    auto& ptypes = func_param_types_[mangled];
+                    std::string param_type = ptypes.empty() ? "" : ptypes[0];
+                    std::string arg_val = emitArgForParam(*be->right, param_type);
+                    std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
+                    out_ << "    call void @" << llvmGlobalName(mangled)
+                         << "(ptr " << reg << ", " << ptype_str << " " << arg_val << ")\n";
                     if (info.has_dtor)
                         dtor_vars_.push_back({decl->name, eff_type});
                     return;
@@ -362,12 +436,6 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
                 out_ << "    " << gep << " = getelementptr %struct." << current_slid_
                      << ", ptr " << self << ", i32 0, i32 " << idx << "\n";
-                if (assign->is_move && isIndirectType(info.field_types[idx])) {
-                    // free old field value before stealing
-                    std::string old_val = newTmp();
-                    out_ << "    " << old_val << " = load ptr, ptr " << gep << "\n";
-                    out_ << "    call void @free(ptr " << old_val << ")\n";
-                }
                 std::string val = emitExpr(*assign->value);
                 out_ << "    store " << field_type << " " << val << ", ptr " << gep << "\n";
                 if (assign->is_move && isIndirectType(info.field_types[idx]))
@@ -385,7 +453,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (auto* be = dynamic_cast<const BinaryExpr*>(assign->value.get())) {
                 if (auto* lve = dynamic_cast<const VarExpr*>(be->left.get())) {
                     if (lve->name == assign->name) {
-                        std::string compound_base = tit->second + "__op" + be->op + "=";
+                        const std::string& slid_name = tit->second;
+                        std::string compound_base = slid_name + "__op" + be->op + "=";
                         std::string mangled = resolveOpEq(compound_base, *be->right);
                         if (!mangled.empty()) {
                             auto& ptypes = func_param_types_[mangled];
@@ -394,6 +463,58 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
                             out_ << "    call void @" << llvmGlobalName(mangled)
                                  << "(ptr " << it->second << ", " << ptype_str << " " << arg_val << ")\n";
+                            return;
+                        }
+                        // no direct op{op}=: try coercing rhs to the slid type via op=,
+                        // then call op{op}=(slid^) — or fall back to op{op}(slid^, slid^).
+                        std::string coerce = resolveOpEq(slid_name + "__op=", *be->right);
+                        if (!coerce.empty()) {
+                            auto& sinfo = slid_info_[slid_name];
+                            std::string tmp = "%synth_" + std::to_string(tmp_counter_++);
+                            out_ << "    " << tmp << " = alloca %struct." << slid_name << "\n";
+                            for (int i = 0; i < (int)sinfo.field_types.size(); i++) {
+                                std::string gep = newTmp();
+                                out_ << "    " << gep << " = getelementptr %struct." << slid_name
+                                     << ", ptr " << tmp << ", i32 0, i32 " << i << "\n";
+                                if (isIndirectType(sinfo.field_types[i]))
+                                    out_ << "    store ptr null, ptr " << gep << "\n";
+                                else
+                                    out_ << "    store " << llvmType(sinfo.field_types[i]) << " 0, ptr " << gep << "\n";
+                            }
+                            if (sinfo.has_pinit && !sinfo.is_transport_impl)
+                                out_ << "    call void @" << slid_name << "__pinit(ptr " << tmp << ")\n";
+                            else if (sinfo.has_explicit_ctor)
+                                out_ << "    call void @" << slid_name << "__ctor(ptr " << tmp << ")\n";
+                            auto& cptypes = func_param_types_[coerce];
+                            std::string cptype = cptypes.empty() ? "" : cptypes[0];
+                            std::string carg = emitArgForParam(*be->right, cptype);
+                            out_ << "    call void @" << llvmGlobalName(coerce)
+                                 << "(ptr " << tmp << ", " << (cptypes.empty() ? "ptr" : llvmType(cptype))
+                                 << " " << carg << ")\n";
+                            // prefer op{op}=(slid^)
+                            std::string via_ref;
+                            auto opit = method_overloads_.find(compound_base);
+                            if (opit != method_overloads_.end())
+                                for (auto& [m, ptypes] : opit->second)
+                                    if (ptypes.size() == 1 && isRefType(ptypes[0])) { via_ref = m; break; }
+                            if (!via_ref.empty()) {
+                                out_ << "    call void @" << llvmGlobalName(via_ref)
+                                     << "(ptr " << it->second << ", ptr " << tmp << ")\n";
+                            } else {
+                                // fall back to op{op}(slid^, slid^) — result stored into lhs (sret)
+                                std::string op_base = slid_name + "__op" + be->op;
+                                auto oppit = method_overloads_.find(op_base);
+                                if (oppit != method_overloads_.end())
+                                    for (auto& [m, ptypes] : oppit->second)
+                                        if (ptypes.size() == 2 && isRefType(ptypes[0]) && isRefType(ptypes[1])) {
+                                            out_ << "    call void @" << llvmGlobalName(m)
+                                                 << "(ptr " << it->second << ", ptr " << it->second
+                                                 << ", ptr " << tmp << ")\n";
+                                            break;
+                                        }
+                            }
+                            if (sinfo.has_dtor)
+                                out_ << "    call void @" << slid_name << "__dtor(ptr " << tmp << ")\n";
                             return;
                         }
                     }
@@ -475,11 +596,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (!src_ptr.empty()) { emitSlidCopy(slid_name, it->second, src_ptr); return; }
             }
         }
-        // pointer move: free old value, steal source, null source
+        // pointer move: copy source to dest, null source
         if (assign->is_move && tit != local_types_.end() && isIndirectType(tit->second)) {
-            std::string old_val = newTmp();
-            out_ << "    " << old_val << " = load ptr, ptr " << it->second << "\n";
-            out_ << "    call void @free(ptr " << old_val << ")\n";
             std::string src_val = emitExpr(*assign->value);
             out_ << "    store ptr " << src_val << ", ptr " << it->second << "\n";
             emitNullOut(*assign->value);

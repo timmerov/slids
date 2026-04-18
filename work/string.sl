@@ -122,7 +122,7 @@ String (
 
     /* overload += to append a string literal. */
     op+=(char[] s)  {
-        intptr len = strlen(s);
+        len = strlen(s);
         append(s, len);
     }
 
@@ -133,9 +133,16 @@ String (
 
     /* overload + to concatenate two String-s. */
     op+(String^ sa, String^ sb) {
-        reserve(sa^.size_ + sb^.size_);
-        self = sa^;
-        append(sb^.storage_, sb^.size_);
+        /* special case if sb is self. */
+        if (sb == ^self) {
+            sc = sb;
+            self = sa + sc;
+        } else {
+            /* this works even if sa is self. */
+            reserve(sa^.size_ + sb^.size_);
+            self = sa^;
+            append(sb^.storage_, sb^.size_);
+        }
     }
 
     /* set to empty string. */

@@ -965,26 +965,27 @@ The move operator `<-` transfers ownership of a resource from one variable to an
 
 `p1 <- p2` — move a pointer or iterator:
 
-1. Free `p1`'s current allocation (if any)
-2. Assign `p2`'s value to `p1`
-3. Set `p2` to `nullptr`
+1. Assign `p2`'s value to `p1`
+2. Set `p2` to `nullptr`
+
+`<-` does **not** free `p1`'s current allocation. If `p1` already owns memory, free it explicitly with `delete` first.
 
 ```
 char[] p1 = new char[100];
-char[] p2 <- p1;     // p1 is now nullptr; p2 owns the allocation
+char[] p2 <- p1;     // p2 = p1; p1 = nullptr — p2 now owns the allocation
 
-// declaration move — p1 is a new variable, no old allocation to free
-char[] p3 <- p2;     // p2 is now nullptr; p3 owns the allocation
+// declaration move — p2 is a new variable, so no existing allocation to worry about
+char[] p3 <- p2;     // p3 = p2; p2 = nullptr
 
 delete p3;           // free — p3 is set to nullptr automatically
 ```
 
-Also works as an assignment into an existing variable:
+Transferring into an existing pointer that owns memory:
 ```
 char[] buf = new char[64];
 char[] tmp = new char[32];
-buf <- tmp;    // free buf's 64-byte allocation, steal tmp's 32 bytes, tmp = nullptr
-delete buf;
+delete buf;    // free buf's allocation first
+buf <- tmp;    // buf = tmp; tmp = nullptr — buf now owns the 32-byte block
 ```
 
 ### Class move — `op<-`
@@ -1003,13 +1004,10 @@ String(int size_ = 0, int capacity_ = 0, char[] storage_ = nullptr) {
 ```
 String {
     op<-(String^ s) {
-        delete storage_;            // free existing storage
+        delete storage_;            // free existing storage (delete, not <-)
         size_     = s^.size_;
         capacity_ = s^.capacity_;
-        storage_  = s^.storage_;   // steal the pointer
-        s^.size_     = 0;
-        s^.capacity_ = 0;
-        s^.storage_  = nullptr;    // leave source valid (do NOT delete — we own it now)
+        storage_ <- s^.storage_;   // steal pointer; s^.storage_ set to nullptr automatically
     }
 }
 ```
@@ -1029,7 +1027,7 @@ Move rules:
 - For pointer/iterator types, `<-` is built into the language — no method needed
 - For class types, `<-` compiles only if `op<-` is defined; if it is not defined, `<-` is a compiler error
 - After a move, the source is left in a valid state — it can be reassigned or destroyed safely
-- `delete` and `op<-` are the two ways to release ownership; `delete` frees and nulls, `<-` transfers without freeing
+- `delete` frees and nullifies; `<-` transfers ownership without freeing — use `delete` first if the destination already owns memory
 
 ### Swap — `<->`
 
