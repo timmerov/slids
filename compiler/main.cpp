@@ -90,6 +90,8 @@ int main(int argc, char* argv[]) {
         codegen.emit();
 
         std::cout << "slidsc: wrote " << output_path << "\n";
+        std::error_code ec;
+        std::filesystem::remove(output_path + ".err", ec);
 
         // emit annotated .slh for each transported module
         for (auto& ti : program.transports) {
@@ -162,6 +164,13 @@ int main(int argc, char* argv[]) {
 
     } catch (const std::exception& e) {
         std::cerr << "slidsc: error: " << e.what() << "\n";
+        // rename partial output so make doesn't treat it as up-to-date,
+        // but preserve it for debugging
+        std::string err_path = output_path + ".err";
+        std::error_code ec;
+        std::filesystem::rename(output_path, err_path, ec);
+        if (!ec)
+            std::cerr << "slidsc: partial output saved as " << err_path << "\n";
         return 1;
     }
 
