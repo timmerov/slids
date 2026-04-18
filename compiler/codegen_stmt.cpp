@@ -855,15 +855,26 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
     if (auto* ret = dynamic_cast<const ReturnStmt*>(&stmt)) {
         if (current_func_uses_sret_ && ret->value) {
-            // sret return: copy fields from local slid var into %retval, null ptr fields, then dtor
+            // sret return: move return value into %retval, dtor locals, ret void
             auto* ve = dynamic_cast<const VarExpr*>(ret->value.get());
-            if (!ve) throw std::runtime_error("sret: return value must be a local variable");
-            auto tit = local_types_.find(ve->name);
-            if (tit == local_types_.end() || !slid_info_.count(tit->second))
-                throw std::runtime_error("sret: return value must be a slid type");
-            const std::string& slid_name = tit->second;
+            std::string slid_name;
+            std::string src;
+            bool src_is_fresh_temp = false;  // true if src is a new alloca not in dtor_vars_
+            if (ve) {
+                auto tit = local_types_.find(ve->name);
+                if (tit == local_types_.end() || !slid_info_.count(tit->second))
+                    throw std::runtime_error("sret: return value must be a slid type");
+                slid_name = tit->second;
+                src = locals_.at(ve->name);
+            } else {
+                // expression: emit it (BinaryExpr/CallExpr produce a fresh alloca)
+                slid_name = exprSlidType(*ret->value);
+                if (slid_name.empty())
+                    throw std::runtime_error("sret: return expression must produce a slid type");
+                src = emitExpr(*ret->value);
+                src_is_fresh_temp = true;
+            }
             auto& info = slid_info_[slid_name];
-            std::string src = locals_.at(ve->name);
             if (!info.field_types.empty()) {
                 // known fields: field-by-field move into %retval (implicit move — steal + null src ptrs)
                 for (int i = 0; i < (int)info.field_types.size(); i++) {
@@ -908,6 +919,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     }
                 }
             }
+            // if src was a fresh temp (not a named local), dtor it now
+            // (its ptr fields are already null after the move, so dtor is a no-op for resources)
+            if (src_is_fresh_temp && info.has_dtor)
+                out_ << "    call void @" << slid_name << "__dtor(ptr " << src << ")\n";
             emitDtors();
             out_ << "    ret void\n";
         } else {

@@ -646,8 +646,10 @@ std::string Codegen::emitExpr(const Expr& expr) {
                         else
                             out_ << "    store " << ft << " 0, ptr " << gep << "\n";
                     }
-                    // call ctor if any
-                    if (info.has_explicit_ctor)
+                    // init: pinit (for imported transport types) or ctor
+                    if (info.has_pinit && !info.is_transport_impl)
+                        out_ << "    call void @" << res_slid << "__pinit(ptr " << tmp_alloca << ")\n";
+                    else if (info.has_explicit_ctor)
                         out_ << "    call void @" << res_slid << "__ctor(ptr " << tmp_alloca << ")\n";
                     auto& ptypes = func_param_types_[op_func];
                     std::string args;
