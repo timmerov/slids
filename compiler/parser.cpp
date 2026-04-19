@@ -7,9 +7,12 @@
 #include <map>
 
 Parser::Parser(std::vector<Token> tokens, std::string source_dir,
-               std::vector<std::string> import_paths, std::string export_path)
+               std::vector<std::string> import_paths, std::string export_path,
+               std::shared_ptr<std::set<std::string>> imported_once)
     : tokens_(std::move(tokens)), pos_(0), source_dir_(std::move(source_dir)),
-      import_paths_(std::move(import_paths)), export_path_(std::move(export_path)) {}
+      import_paths_(std::move(import_paths)), export_path_(std::move(export_path)),
+      imported_once_(imported_once ? std::move(imported_once)
+                                   : std::make_shared<std::set<std::string>>()) {}
 
 void Parser::declareVar(const std::string& name) {
     if (!scope_stack_.empty())
@@ -1509,11 +1512,15 @@ Program Parser::parse() {
             if (header_path.empty())
                 throw std::runtime_error("import: cannot find '" + module + ".slh'");
 
+            // import-once: skip if this header has already been loaded in this compile
+            if (!imported_once_->insert(header_path).second) continue;
+
             program.imported_headers.push_back(header_path);
             std::ifstream in(header_path);
             std::ostringstream buf; buf << in.rdbuf();
             Lexer hdr_lexer(buf.str());
-            Parser hdr_parser(hdr_lexer.tokenize(), source_dir_, import_paths_, export_path_);
+            Parser hdr_parser(hdr_lexer.tokenize(), source_dir_, import_paths_, export_path_,
+                              imported_once_);
             Program hdr = hdr_parser.parse();
 
             // fatal error if any imported slid is incomplete (has ... but no sizeof annotation)
@@ -1523,10 +1530,32 @@ Program Parser::parse() {
                         + slid.name + "' — compile " + module + ".sl first");
             }
 
+            // check before moving whether any functions are template declarations
+            bool has_templates = false;
+            for (auto& fn : hdr.functions)
+                if (!fn.type_params.empty()) { has_templates = true; break; }
+
             for (auto& fn : hdr.functions)
                 if (!fn.body) program.functions.push_back(std::move(fn));
             for (auto& slid : hdr.slids)
                 program.slids.push_back(std::move(slid));
+
+            // load template bodies from impl file: foo.slh -> foo.sl
+            if (has_templates) {
+                std::string impl_path = header_path.substr(0, header_path.size() - 4) + ".sl";
+                std::ifstream impl_in(impl_path);
+                if (impl_in) {
+                    program.imported_headers.push_back(impl_path);
+                    std::ostringstream impl_buf; impl_buf << impl_in.rdbuf();
+                    Lexer impl_lexer(impl_buf.str());
+                    Parser impl_parser(impl_lexer.tokenize(), source_dir_, import_paths_, export_path_,
+                                      imported_once_);
+                    Program impl_prog = impl_parser.parse();
+                    for (auto& fn : impl_prog.functions)
+                        if (!fn.type_params.empty() && fn.body)
+                            program.functions.push_back(std::move(fn));
+                }
+            }
         }
         // transport declaration: like import but allows incomplete types; merges fields
         else if (peek().type == TokenType::kTransport) {
@@ -1548,7 +1577,8 @@ Program Parser::parse() {
             std::ifstream in(header_path);
             std::ostringstream buf; buf << in.rdbuf();
             Lexer hdr_lexer(buf.str());
-            Parser hdr_parser(hdr_lexer.tokenize(), source_dir_, import_paths_, export_path_);
+            Parser hdr_parser(hdr_lexer.tokenize(), source_dir_, import_paths_, export_path_,
+                              imported_once_);
             Program hdr = hdr_parser.parse();
 
             // import function forward declarations (same as import)

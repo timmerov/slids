@@ -424,7 +424,8 @@ public:
     Parser(std::vector<Token> tokens,
            std::string source_dir = "",
            std::vector<std::string> import_paths = {},
-           std::string export_path = "");
+           std::string export_path = "",
+           std::shared_ptr<std::set<std::string>> imported_once = nullptr);
     Program parse();
 
 private:
@@ -433,6 +434,7 @@ private:
     std::string source_dir_;
     std::vector<std::string> import_paths_; // --import-path dirs (searched for transport .slh)
     std::string export_path_;               // --export-path dir (searched first for import .slh)
+    std::shared_ptr<std::set<std::string>> imported_once_; // shared across nested parsers; import-once guard
     std::map<std::string, SlidDef> transported_slids_; // name -> slid from transport source .slh
 
     Token& peek();

@@ -8,6 +8,7 @@ BUILD_DIR  = ../build/work
 ST_DIR     = $(BUILD_DIR)/string_test
 TM1_DIR    = $(BUILD_DIR)/template1
 TM2_DIR    = $(BUILD_DIR)/template2
+TMT_DIR    = $(BUILD_DIR)/template_test
 EXPORT_DIR = $(BUILD_DIR)/inc
 
 # import-path: source directory (for .slh files alongside .sl source)
@@ -17,11 +18,11 @@ EXPORT_PATH = $(EXPORT_DIR)
 
 SLIDSC_FLAGS = --import-path $(IMPORT_PATH) --export-path $(EXPORT_PATH)
 
-.PHONY: all clean string_test template1 template2
+.PHONY: all clean string_test template1 template2 template_test
 
 all: string_test
 
-string_test: $(BIN_DIR)/string_test template1 template2
+string_test: $(BIN_DIR)/string_test template1 template2 template_test
 
 # ---- string_test ----
 
@@ -73,15 +74,30 @@ $(TM2_DIR)/template2.ll: template2.sl $(SLIDSC)
 	mkdir -p $(TM2_DIR)
 	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS) -MF $(TM2_DIR)/template2.d
 
+# ---- template_test ----
+
+template_test: $(BIN_DIR)/template_test
+
+$(BIN_DIR)/template_test: $(ST_DIR)/string.o $(TMT_DIR)/template_test.o
+	$(CXX) $^ -o $@
+
+$(TMT_DIR)/template_test.o: $(TMT_DIR)/template_test.ll
+	$(LLC) $(LLCFLAGS) $< -o $@
+
+$(TMT_DIR)/template_test.ll: template_test.sl template_add.slh template_add.sl $(SLIDSC)
+	mkdir -p $(TMT_DIR)
+	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS) -MF $(TMT_DIR)/template_test.d
+
 # ---- auto-generated dependencies ----
 
 -include $(ST_DIR)/string.d
 -include $(ST_DIR)/string_test.d
 -include $(TM1_DIR)/template1.d
 -include $(TM2_DIR)/template2.d
+-include $(TMT_DIR)/template_test.d
 
 # ---- clean ----
 
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f $(BIN_DIR)/string_test $(BIN_DIR)/template1 $(BIN_DIR)/template2
+	rm -f $(BIN_DIR)/string_test $(BIN_DIR)/template1 $(BIN_DIR)/template2 $(BIN_DIR)/template_test
