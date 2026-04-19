@@ -40,31 +40,33 @@ static int runInstantiate(const std::string& dir, const std::string& out_path) {
         if (entry.path().extension() != ".sli") continue;
         std::ifstream f(entry.path());
         std::string line;
+        enum class Section { None, Class, Template, Instantiations } section = Section::None;
         while (std::getline(f, line)) {
-            // strip leading whitespace
             auto s = line.find_first_not_of(" \t");
             if (s == std::string::npos) continue;
             line = line.substr(s);
+            if (line == "/* class declarations. */")            { section = Section::Class; continue; }
+            if (line == "/* template declarations. */")         { section = Section::Template; continue; }
+            if (line == "/* explicit template instantiations. */") { section = Section::Instantiations; continue; }
             if (line.rfind("import ", 0) == 0) {
                 auto semi = line.find(';');
                 if (semi == std::string::npos) continue;
                 std::string mod = line.substr(7, semi - 7);
-                // trim
                 auto ms = mod.find_first_not_of(" \t");
                 auto me = mod.find_last_not_of(" \t");
                 if (ms == std::string::npos) continue;
                 mod = mod.substr(ms, me - ms + 1);
-                bool is_tmpl = line.find("/* template */") != std::string::npos;
+                bool is_tmpl = (section == Section::Template);
                 if (import_set.insert(mod).second)
                     imports.push_back({mod, is_tmpl});
             } else if (line.rfind("instantiate ", 0) == 0) {
                 auto semi = line.find(';');
                 if (semi == std::string::npos) continue;
                 std::string inst = line.substr(12, semi - 12);
-                auto is = inst.find_first_not_of(" \t");
-                auto ie = inst.find_last_not_of(" \t");
-                if (is == std::string::npos) continue;
-                inst = inst.substr(is, ie - is + 1);
+                auto is2 = inst.find_first_not_of(" \t");
+                auto ie  = inst.find_last_not_of(" \t");
+                if (is2 == std::string::npos) continue;
+                inst = inst.substr(is2, ie - is2 + 1);
                 if (inst_set.insert(inst).second)
                     insts.push_back(inst);
             }
@@ -89,9 +91,15 @@ static int runInstantiate(const std::string& dir, const std::string& out_path) {
         std::cerr << "slidsc: cannot write '" << out_path << "'\n";
         return 1;
     }
+    out << "/* class declarations. */\n";
     for (auto& [mod, is_tmpl] : imports)
-        out << "import " << mod << ";\t\t/* " << (is_tmpl ? "template" : "class") << " */\n";
+        if (!is_tmpl) out << "import " << mod << ";\n";
     out << "\n";
+    out << "/* template declarations. */\n";
+    for (auto& [mod, is_tmpl] : imports)
+        if (is_tmpl) out << "import " << mod << ";\n";
+    out << "\n";
+    out << "/* explicit template instantiations. */\n";
     for (auto& inst : insts)
         out << "instantiate " << inst << ";\n";
 

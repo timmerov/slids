@@ -414,8 +414,17 @@ void Codegen::recordSliEntry(const std::string& func_name,
 // --- Codegen::writeSliFile ---
 
 void Codegen::writeSliFile(std::ostream& out) const {
+    out << "/* class declarations. */\n";
     for (auto& [module, is_tmpl] : sli_imports_)
-        out << "import " << module << ";\t\t/* " << (is_tmpl ? "template" : "class") << " */\n";
+        if (!is_tmpl) out << "import " << module << ";\n";
+    out << "\n";
+
+    out << "/* template declarations. */\n";
+    for (auto& [module, is_tmpl] : sli_imports_)
+        if (is_tmpl) out << "import " << module << ";\n";
+    out << "\n";
+
+    out << "/* explicit template instantiations. */\n";
     for (auto& [func, type_args] : sli_instantiations_) {
         out << "instantiate " << func << "<";
         for (int i = 0; i < (int)type_args.size(); i++) {
