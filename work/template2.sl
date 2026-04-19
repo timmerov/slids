@@ -40,5 +40,10 @@ int32 main() {
     s = add(y, s);
     println(s);
 
+    /* compile error: T inferred as String^ from ^s; int cannot match String^ */
+    /* s = "y[42]="; */
+    /* s = add(^s, y); */
+    /* println(s); */
+
     return 0;
 }

@@ -1,5 +1,6 @@
 // Template function instantiation — AST cloning + type substitution
 #include "codegen.h"
+#include "codegen_helpers.h"
 #include "parser.h"
 #include <map>
 #include <stdexcept>
@@ -315,6 +316,11 @@ std::vector<std::string> Codegen::inferTypeArgs(
         if (auto* ve = dynamic_cast<const VarExpr*>(args[i].get())) {
             auto tit = local_types_.find(ve->name);
             if (tit != local_types_.end()) arg_slids = tit->second;
+        } else if (auto* ao = dynamic_cast<const AddrOfExpr*>(args[i].get())) {
+            if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) arg_slids = tit->second + "^";
+            }
         } else if (dynamic_cast<const IntLiteralExpr*>(args[i].get())) {
             arg_slids = "int";
         } else if (dynamic_cast<const FloatLiteralExpr*>(args[i].get())) {
@@ -334,6 +340,11 @@ std::vector<std::string> Codegen::inferTypeArgs(
             static const std::map<std::string,int> irank =
                 {{"int8",1},{"int16",2},{"int",3},{"int32",3},{"int64",4},{"intptr",4},
                  {"uint8",1},{"uint16",2},{"uint32",3},{"uint64",4}};
+            // if T was inferred as a reference/iterator, all args must match exactly
+            if ((isRefType(inferred[base]) || isPtrType(inferred[base])) && concrete != inferred[base])
+                throw std::runtime_error("cannot match type '" + concrete
+                    + "' to template parameter '" + base
+                    + "' (inferred as reference type '" + inferred[base] + "')");
             auto ait = irank.find(inferred[base]);
             auto bit = irank.find(concrete);
             if (ait != irank.end() && bit != irank.end() && bit->second > ait->second)
