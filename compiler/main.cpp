@@ -196,6 +196,7 @@ int main(int argc, char* argv[]) {
         std::error_code ec;
         std::filesystem::remove(output_path + ".err", ec);
 
+        // TODO: the instantiator should not create a .sli file
         // write .sli file (adjacent to .ll) if there are imported template instantiations
         {
             std::string sli_path = output_path;

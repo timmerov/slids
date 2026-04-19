@@ -77,3 +77,5 @@
   **Inlining**: template instantiations should be emitted with `alwaysinline` or `inlinehint` LLVM attribute — they're type-specific and typically small. LTO handles cross-`.o` inlining; the attribute covers the non-LTO case.
 
   **Result**: each concrete instantiation (`add__int`, `add__String`) compiled exactly once, regardless of how many TUs use it. No linker deduplication needed. Local-type instantiations live in their own TU where the type is visible.
+
+  **Known issue**: the instantiator (`slidsc --instantiate`) currently produces a `.sli` file for `__instantiations.sl` — it should not.
