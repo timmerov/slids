@@ -35,6 +35,7 @@ class Codegen {
 public:
     Codegen(const Program& program, std::ostream& out);
     void emit();
+    void writeSliFile(std::ostream& out) const;
 
 private:
     const Program& program_;
@@ -103,14 +104,30 @@ private:
     std::map<std::string, const FunctionDef*> template_funcs_; // name -> template def (not owned)
     std::set<std::string> emitted_templates_;  // mangled names already emitted
     std::vector<FunctionDef> pending_instantiations_; // concrete fns to emit after main functions
+    std::vector<FunctionDef> pending_declares_;        // imported templates: declare at module scope
+    std::set<std::string> local_template_names_;       // templates defined in this TU (inline always)
+    std::map<std::string, std::string> template_func_modules_; // imported template name -> module
+
+    // .sli tracking (for imported template instantiations)
+    struct SliImport { std::string module; bool is_template; };
+    std::vector<SliImport> sli_imports_;
+    std::set<std::string> sli_import_set_;
+    struct SliInstantiation { std::string func_name; std::vector<std::string> type_args; };
+    std::vector<SliInstantiation> sli_instantiations_;
+    std::set<std::string> sli_instantiation_set_;
 
     void collectStringConstants();
     void collectFunctionSignatures();
     void collectSlids();
-    // template instantiation: builds substituted FunctionDef, registers signatures,
-    // adds to pending_instantiations_; returns mangled name (e.g. "add__int")
+    // template instantiation: builds substituted FunctionDef, registers signatures.
+    // force=true: always emit define (for explicit instantiate statements).
+    // force=false: inline if local template, else emit declare + record .sli entry.
+    // returns mangled name (e.g. "add__int")
     std::string instantiateTemplate(const std::string& name,
-                                    const std::vector<std::string>& type_args);
+                                    const std::vector<std::string>& type_args,
+                                    bool force = false);
+    void emitTemplateDeclare(const FunctionDef& fn);
+    void recordSliEntry(const std::string& func_name, const std::vector<std::string>& type_args);
     // infer type args from actual call arguments when no explicit <T> is given
     std::vector<std::string> inferTypeArgs(const FunctionDef& tmpl,
                                            const std::vector<std::unique_ptr<Expr>>& args);

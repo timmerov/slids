@@ -390,6 +390,8 @@ struct FunctionDef {
     std::vector<std::pair<std::string, std::string>> params;
     std::unique_ptr<BlockStmt> body;
     std::vector<std::string> type_params; // non-empty for template functions: T add<T>(T a, T b)
+    bool is_local = true;        // false when body loaded from a separate impl file
+    std::string impl_module;     // module name of the impl file (when !is_local)
 };
 
 // method defined outside the class body: void String:clear() { ... }
@@ -415,6 +417,9 @@ struct Program {
     };
     std::vector<TransportInfo> transports; // populated when transport statements are compiled
     std::vector<std::string> imported_headers; // resolved .slh paths, for -MF dep output
+    std::map<std::string, std::string> slid_modules; // slid name -> module that provides it
+    struct InstantiateRequest { std::string func_name; std::vector<std::string> type_args; };
+    std::vector<InstantiateRequest> instantiations; // explicit instantiate statements
 };
 
 // --- Parser ---

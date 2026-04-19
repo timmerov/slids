@@ -1537,8 +1537,10 @@ Program Parser::parse() {
 
             for (auto& fn : hdr.functions)
                 if (!fn.body) program.functions.push_back(std::move(fn));
-            for (auto& slid : hdr.slids)
+            for (auto& slid : hdr.slids) {
+                program.slid_modules[slid.name] = module;
                 program.slids.push_back(std::move(slid));
+            }
 
             // load template bodies from impl file: foo.slh -> foo.sl
             if (has_templates) {
@@ -1551,9 +1553,14 @@ Program Parser::parse() {
                     Parser impl_parser(impl_lexer.tokenize(), source_dir_, import_paths_, export_path_,
                                       imported_once_);
                     Program impl_prog = impl_parser.parse();
-                    for (auto& fn : impl_prog.functions)
-                        if (!fn.type_params.empty() && fn.body)
+                    for (size_t i = 0; i < impl_prog.functions.size(); i++) {
+                        auto& fn = impl_prog.functions[i];
+                        if (!fn.type_params.empty() && fn.body) {
+                            fn.is_local = false;
+                            fn.impl_module = module;
                             program.functions.push_back(std::move(fn));
+                        }
+                    }
                 }
             }
         }
@@ -1597,6 +1604,18 @@ Program Parser::parse() {
             // NOTE: SlidDef is move-only (has unique_ptr members); move each out of hdr.slids
             for (auto& slid : hdr.slids)
                 transported_slids_[slid.name] = std::move(slid);
+        }
+        // explicit template instantiation: instantiate add<int>;
+        else if (peek().type == TokenType::kInstantiate) {
+            advance();
+            std::string func_name = expect(TokenType::kIdentifier, "expected function name after 'instantiate'").value;
+            expect(TokenType::kLt, "expected '<' after function name in instantiate");
+            std::vector<std::string> type_args;
+            type_args.push_back(parseTypeName());
+            while (peek().type == TokenType::kComma) { advance(); type_args.push_back(parseTypeName()); }
+            expect(TokenType::kGt, "expected '>' in instantiate");
+            expect(TokenType::kSemicolon, "expected ';' after instantiate");
+            program.instantiations.push_back({func_name, std::move(type_args)});
         }
         // enum definition
         else if (peek().type == TokenType::kEnum) {

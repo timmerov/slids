@@ -168,7 +168,8 @@ Token Lexer::readIdentifierOrKeyword() {
     if (value == "new")      return Token(TokenType::kNew,      value, line_);
     if (value == "delete")   return Token(TokenType::kDelete,   value, line_);
     if (value == "nullptr")  return Token(TokenType::kNullptr,  value, line_);
-    if (value == "import")   return Token(TokenType::kImport,   value, line_);
+    if (value == "import")      return Token(TokenType::kImport,      value, line_);
+    if (value == "instantiate") return Token(TokenType::kInstantiate, value, line_);
     if (value == "sizeof")   return Token(TokenType::kSizeof,   value, line_);
 
     return Token(TokenType::kIdentifier, value, line_);

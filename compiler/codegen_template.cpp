@@ -367,10 +367,70 @@ std::vector<std::string> Codegen::inferTypeArgs(
     return result;
 }
 
+// --- Codegen::emitTemplateDeclare ---
+
+void Codegen::emitTemplateDeclare(const FunctionDef& fn) {
+    bool is_sret = !fn.return_type.empty() && slid_info_.count(fn.return_type);
+    std::string ret = (is_sret || fn.return_type.empty()) ? "void" : llvmType(fn.return_type);
+    out_ << "declare " << ret << " @" << llvmGlobalName(fn.name) << "(";
+    bool first = true;
+    if (is_sret) {
+        out_ << "ptr sret(%struct." << fn.return_type << ")";
+        first = false;
+    }
+    for (auto& [pt, _] : fn.params) {
+        if (!first) out_ << ", ";
+        out_ << llvmType(pt);
+        first = false;
+    }
+    out_ << ")\n";
+}
+
+// --- Codegen::recordSliEntry ---
+
+void Codegen::recordSliEntry(const std::string& func_name,
+                              const std::vector<std::string>& type_args) {
+    // template module
+    auto mit = template_func_modules_.find(func_name);
+    if (mit != template_func_modules_.end()) {
+        if (sli_import_set_.insert("t:" + mit->second).second)
+            sli_imports_.push_back({mit->second, true});
+    }
+    // class modules for slid type args
+    for (auto& ta : type_args) {
+        auto sit = program_.slid_modules.find(ta);
+        if (sit != program_.slid_modules.end()) {
+            if (sli_import_set_.insert("c:" + sit->second).second)
+                sli_imports_.push_back({sit->second, false});
+        }
+    }
+    // instantiation record
+    std::string key = func_name;
+    for (auto& ta : type_args) key += "__" + ta;
+    if (sli_instantiation_set_.insert(key).second)
+        sli_instantiations_.push_back({func_name, type_args});
+}
+
+// --- Codegen::writeSliFile ---
+
+void Codegen::writeSliFile(std::ostream& out) const {
+    for (auto& [module, is_tmpl] : sli_imports_)
+        out << "import " << module << ";\t\t/* " << (is_tmpl ? "template" : "class") << " */\n";
+    for (auto& [func, type_args] : sli_instantiations_) {
+        out << "instantiate " << func << "<";
+        for (int i = 0; i < (int)type_args.size(); i++) {
+            if (i > 0) out << ", ";
+            out << type_args[i];
+        }
+        out << ">;\n";
+    }
+}
+
 // --- Codegen::instantiateTemplate ---
 
 std::string Codegen::instantiateTemplate(const std::string& name,
-                                          const std::vector<std::string>& type_args) {
+                                          const std::vector<std::string>& type_args,
+                                          bool force) {
     auto tit = template_funcs_.find(name);
     if (tit == template_funcs_.end())
         throw std::runtime_error("unknown template function: " + name);
@@ -412,8 +472,14 @@ std::string Codegen::instantiateTemplate(const std::string& name,
     func_return_types_[mangled] = concrete.return_type;
     func_param_types_[mangled]  = ptypes;
 
-    // queue for emission after regular functions
-    pending_instantiations_.push_back(std::move(concrete));
+    if (force || local_template_names_.count(name)) {
+        // inline: emit full definition
+        pending_instantiations_.push_back(std::move(concrete));
+    } else {
+        // imported template: defer declare to module scope + record .sli entry
+        recordSliEntry(name, type_args);
+        pending_declares_.push_back(std::move(concrete));
+    }
 
     return mangled;
 }

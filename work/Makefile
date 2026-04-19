@@ -10,6 +10,9 @@ TM1_DIR    = $(BUILD_DIR)/template1
 TM2_DIR    = $(BUILD_DIR)/template2
 TMT_DIR    = $(BUILD_DIR)/template_test
 EXPORT_DIR = $(BUILD_DIR)/inc
+INST_SL    = $(BUILD_DIR)/__instantiations.sl
+INST_LL    = $(BUILD_DIR)/__instantiations.ll
+INST_OBJ   = $(BUILD_DIR)/__instantiations.o
 
 # import-path: source directory (for .slh files alongside .sl source)
 # export-path: build directory (annotated .slh files written here; searched first by import)
@@ -78,7 +81,7 @@ $(TM2_DIR)/template2.ll: template2.sl $(SLIDSC)
 
 template_test: $(BIN_DIR)/template_test
 
-$(BIN_DIR)/template_test: $(ST_DIR)/string.o $(TMT_DIR)/template_test.o
+$(BIN_DIR)/template_test: $(ST_DIR)/string.o $(TMT_DIR)/template_test.o $(INST_OBJ)
 	$(CXX) $^ -o $@
 
 $(TMT_DIR)/template_test.o: $(TMT_DIR)/template_test.ll
@@ -87,6 +90,18 @@ $(TMT_DIR)/template_test.o: $(TMT_DIR)/template_test.ll
 $(TMT_DIR)/template_test.ll: template_test.sl template_add.slh template_add.sl $(SLIDSC)
 	mkdir -p $(TMT_DIR)
 	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS) -MF $(TMT_DIR)/template_test.d
+
+# ---- instantiations ----
+
+$(INST_OBJ): $(INST_LL)
+	$(LLC) $(LLCFLAGS) $< -o $@
+
+$(INST_LL): $(INST_SL) $(SLIDSC)
+	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS)
+
+# rebuild __instantiations.sl whenever any .sli file changes
+$(INST_SL): $(wildcard $(BUILD_DIR)/**/*.sli) $(SLIDSC)
+	$(SLIDSC) --instantiate $(BUILD_DIR) -o $@
 
 # ---- auto-generated dependencies ----
 
@@ -100,4 +115,4 @@ $(TMT_DIR)/template_test.ll: template_test.sl template_add.slh template_add.sl $
 
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f $(BIN_DIR)/string_test $(BIN_DIR)/template1 $(BIN_DIR)/template2 $(BIN_DIR)/template_test
+	rm -f $(BIN_DIR)/string_test $(BIN_DIR)/template1 $(BIN_DIR)/template2 $(BIN_DIR)/template_test $(BIN_DIR)/string_test

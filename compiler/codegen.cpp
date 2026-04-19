@@ -74,6 +74,13 @@ void Codegen::collectFunctionSignatures() {
         if (!fn.type_params.empty()) {
             // template function — store for lazy instantiation, skip normal registration
             template_funcs_[fn.name] = &fn;
+            // only bodies determine locality (forward decls from .slh are not authoritative)
+            if (fn.body) {
+                if (fn.is_local)
+                    local_template_names_.insert(fn.name);
+                else
+                    template_func_modules_[fn.name] = fn.impl_module;
+            }
             continue;
         }
         bool overloaded = (func_name_count[fn.name] > 1);
@@ -675,9 +682,17 @@ void Codegen::emit() {
     for (auto& fn : program_.functions)
         if (fn.type_params.empty()) emitFunction(fn);
 
-    // emit pending template instantiations (collected during function emission)
+    // process explicit instantiate statements (force inline define)
+    for (auto& req : program_.instantiations)
+        instantiateTemplate(req.func_name, req.type_args, true);
+
+    // emit all pending template instantiations (inline calls + explicit instantiate)
     for (auto& fn : pending_instantiations_)
         emitFunction(fn);
+
+    // emit declares for imported template instantiations (deferred to module scope)
+    for (auto& fn : pending_declares_)
+        emitTemplateDeclare(fn);
 }
 
 void Codegen::emitFrameStruct(const FunctionDef& fn) {

@@ -5,6 +5,8 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <algorithm>
+#include <set>
 
 // Compute byte size of a struct's fields using LLVM natural-alignment rules.
 static int64_t computeStructSize(const std::vector<FieldDef>& fields) {
@@ -23,10 +25,97 @@ static int64_t computeStructSize(const std::vector<FieldDef>& fields) {
     return (offset + max_align - 1) & ~(max_align - 1);
 }
 
+// --instantiate <dir>: read all .sli files, deduplicate, write __instantiations.sl
+static int runInstantiate(const std::string& dir, const std::string& out_path) {
+    // collect unique imports (preserving first-seen order) and instantiations
+    struct Import { std::string module; bool is_template; };
+    std::vector<Import> imports;
+    std::set<std::string> import_set;
+    std::vector<std::string> insts;
+    std::set<std::string> inst_set;
+
+    std::error_code ec;
+    for (auto& entry : std::filesystem::recursive_directory_iterator(dir, ec)) {
+        if (!entry.is_regular_file()) continue;
+        if (entry.path().extension() != ".sli") continue;
+        std::ifstream f(entry.path());
+        std::string line;
+        while (std::getline(f, line)) {
+            // strip leading whitespace
+            auto s = line.find_first_not_of(" \t");
+            if (s == std::string::npos) continue;
+            line = line.substr(s);
+            if (line.rfind("import ", 0) == 0) {
+                auto semi = line.find(';');
+                if (semi == std::string::npos) continue;
+                std::string mod = line.substr(7, semi - 7);
+                // trim
+                auto ms = mod.find_first_not_of(" \t");
+                auto me = mod.find_last_not_of(" \t");
+                if (ms == std::string::npos) continue;
+                mod = mod.substr(ms, me - ms + 1);
+                bool is_tmpl = line.find("/* template */") != std::string::npos;
+                if (import_set.insert(mod).second)
+                    imports.push_back({mod, is_tmpl});
+            } else if (line.rfind("instantiate ", 0) == 0) {
+                auto semi = line.find(';');
+                if (semi == std::string::npos) continue;
+                std::string inst = line.substr(12, semi - 12);
+                auto is = inst.find_first_not_of(" \t");
+                auto ie = inst.find_last_not_of(" \t");
+                if (is == std::string::npos) continue;
+                inst = inst.substr(is, ie - is + 1);
+                if (inst_set.insert(inst).second)
+                    insts.push_back(inst);
+            }
+        }
+    }
+    if (ec) {
+        std::cerr << "slidsc: --instantiate: cannot read directory '" << dir << "'\n";
+        return 1;
+    }
+    if (insts.empty()) {
+        std::cout << "slidsc: --instantiate: no instantiations found\n";
+        return 0;
+    }
+
+    // sort instantiations for deterministic output
+    std::sort(insts.begin(), insts.end());
+
+    std::filesystem::path op(out_path);
+    std::filesystem::create_directories(op.parent_path(), ec);
+    std::ofstream out(out_path);
+    if (!out) {
+        std::cerr << "slidsc: cannot write '" << out_path << "'\n";
+        return 1;
+    }
+    for (auto& [mod, is_tmpl] : imports)
+        out << "import " << mod << ";\t\t/* " << (is_tmpl ? "template" : "class") << " */\n";
+    out << "\n";
+    for (auto& inst : insts)
+        out << "instantiate " << inst << ";\n";
+
+    std::cout << "slidsc: wrote " << out_path << "\n";
+    return 0;
+}
+
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "usage: slidsc <source.sl> [-o <output.ll>] [--import-path <dir>]... [--export-path <dir>] [-MF <deps.d>|-M]\n";
+        std::cerr << "usage: slidsc <source.sl> [-o <output.ll>] [--import-path <dir>]... [--export-path <dir>] [-MF <deps.d>|-M]\n"
+                  << "       slidsc --instantiate <build-dir> -o <output.sl>\n";
         return 1;
+    }
+
+    // --instantiate mode
+    if (std::string(argv[1]) == "--instantiate") {
+        if (argc < 3) { std::cerr << "slidsc: --instantiate requires a directory\n"; return 1; }
+        std::string inst_dir = argv[2];
+        std::string inst_out = inst_dir + "/__instantiations.sl";
+        for (int i = 3; i < argc; i++) {
+            if (std::string(argv[i]) == "-o" && i + 1 < argc)
+                inst_out = argv[++i];
+        }
+        return runInstantiate(inst_dir, inst_out);
     }
 
     std::string input_path = argv[1];
@@ -98,6 +187,26 @@ int main(int argc, char* argv[]) {
         std::cout << "slidsc: wrote " << output_path << "\n";
         std::error_code ec;
         std::filesystem::remove(output_path + ".err", ec);
+
+        // write .sli file (adjacent to .ll) if there are imported template instantiations
+        {
+            std::string sli_path = output_path;
+            auto dot = sli_path.rfind(".ll");
+            if (dot != std::string::npos) sli_path.replace(dot, 3, ".sli");
+            else sli_path += ".sli";
+            std::ostringstream sli_buf;
+            codegen.writeSliFile(sli_buf);
+            std::string sli_content = sli_buf.str();
+            if (!sli_content.empty()) {
+                std::ofstream sli_out(sli_path);
+                if (sli_out) {
+                    sli_out << sli_content;
+                    std::cout << "slidsc: wrote " << sli_path << "\n";
+                }
+            } else {
+                std::filesystem::remove(sli_path, ec); // clean up stale .sli if no longer needed
+            }
+        }
 
         // emit dependency info (-MF file or -M to stdout)
         if (!deps_path.empty() || deps_stdout) {
