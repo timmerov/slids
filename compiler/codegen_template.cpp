@@ -97,6 +97,12 @@ static std::unique_ptr<Expr> cloneExpr(const Expr& expr,
         return std::make_unique<NewExpr>(subTypeSuffix(e->elem_type, subst),
                                           cloneExpr(*e->count, subst));
 
+    if (auto* e = dynamic_cast<const NewScalarExpr*>(&expr)) {
+        std::vector<std::unique_ptr<Expr>> args;
+        for (auto& a : e->args) args.push_back(cloneExpr(*a, subst));
+        return std::make_unique<NewScalarExpr>(subTypeSuffix(e->elem_type, subst), std::move(args));
+    }
+
     if (auto* e = dynamic_cast<const SizeofExpr*>(&expr)) {
         auto se = std::make_unique<SizeofExpr>();
         se->type_name = e->type_name.empty() ? "" : subTypeSuffix(e->type_name, subst);

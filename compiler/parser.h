@@ -139,12 +139,20 @@ struct TupleExpr : Expr {
     std::vector<std::unique_ptr<Expr>> values;
 };
 
-// new T[n] — heap allocation, returns ptr
+// new T[n] — heap array allocation, returns ptr
 struct NewExpr : Expr {
     std::string elem_type;
     std::unique_ptr<Expr> count;
     NewExpr(std::string t, std::unique_ptr<Expr> n)
         : elem_type(std::move(t)), count(std::move(n)) {}
+};
+
+// new T(args) — heap scalar allocation, returns ptr
+struct NewScalarExpr : Expr {
+    std::string elem_type;
+    std::vector<std::unique_ptr<Expr>> args;
+    NewScalarExpr(std::string t, std::vector<std::unique_ptr<Expr>> a)
+        : elem_type(std::move(t)), args(std::move(a)) {}
 };
 
 // sizeof(TypeName) or sizeof(expr) — returns intptr

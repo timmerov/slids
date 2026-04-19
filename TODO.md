@@ -16,66 +16,40 @@
 
 - **Forbid shadowing type names with variable names**: Using a class name as a variable name should be a compile error. `String String = "..."` is currently not caught and causes ambiguities and vexing parses — the parser cannot tell whether `String` in expression position refers to the type or the variable. Builtin type keywords (`int`, `float32`, etc.) are already safe since they are reserved tokens; user-defined class names are identifiers and need an explicit check.
 
-- **Templates across translation units**: Allow template functions defined in one `.sl` file to be instantiated by consumers in other `.sl` files, with each concrete instantiation compiled exactly once. Design:
+- **Templates across translation units**: ✅ **Implemented.** Template functions defined in one `.sl` file are instantiated by consumers in other `.sl` files, with each concrete instantiation compiled exactly once.
 
   **Files:**
   - `template.slh` — forward-declares the template: `T add<T>(T a, T b);`
-  - `template.sl` — provides the body (same base name as `.slh`, found by convention; or override with `@impl "other"` annotation in the `.slh`)
+  - `template.sl` — provides the body (same base name as `.slh`, found by convention)
   - `consumer.sl` — imports `template.slh`, calls `add<int>`, `add<String>`, etc.
 
-  **Compile phase** (per TU): When the compiler encounters a template call where the type arg is an imported type (not defined in the current `.sl`):
-  - Emit `declare @add__String` in the `.ll` (external reference, no body)
-  - Queue the import and instantiation: `import string;` + `add<String>;`
-  - At end of compilation, flush the queue to `build/consumer.inst`
-
-  When the type arg is a local type (defined in the current `.sl`):
-  - The only TU that knows the type is this one — must instantiate here
-  - Ingest `template.sl` on the spot (parse it, including its imports)
-  - Emit `define @add__Value` in the current `.ll`
-
-  **`.inst` file format** (three sections, one item per line):
-  ```
-  class string
-  class matrix
-  template template_decl
-  template math_decl
-  instantiate add<String>
-  instantiate add<int>
-  instantiate dot<Matrix>
-  ```
-  - `class` lines: slid types used as template args — imported first so types are known
-  - `template` lines: headers declaring the template functions — imported after classes
-  - `instantiate` lines: the explicit instantiation calls
-  - Builtins (`int`, `float`, etc.) need no `class` line
-  - `--instantiate` unions all three sections across `.inst` files (deduplicating each)
-  - **Name conflict**: if two `.inst` files both list `instantiate add<Value>` but source `Value` from different class headers (e.g. `class value1` vs `class value2`), `--instantiate` emits a compile error — same mangled name `add__Value` would result from two different types. Fix by renaming one of the `Value` types.
-  - Then emits:
+  **Compile phase** (per TU): When the compiler encounters a template call where the template body is imported (not defined in the current `.sl`):
+  - Emit `declare @add__int` in the `.ll` (external reference, no body)
+  - At end of compilation, flush to `consumer.sli` (adjacent to `consumer.ll`):
     ```
+    /* class declarations. */
     import string;
-    import matrix;
-    import template_decl;
-    import math_decl;
-    add<String>;
-    add<int>;
-    dot<Matrix>;
+
+    /* template declarations. */
+    import template_add;
+
+    /* explicit template instantiations. */
+    instantiate add<int>;
+    instantiate add<String>;
     ```
+
+  When the template body is defined in the current `.sl` (local template):
+  - Always instantiate inline regardless of type args — emit `define` directly.
 
   **Instantiation pass** (`slidsc --instantiate build/`):
-  - Read all `*.inst` files from the build directory
-  - Union all `import` lines (deduplicated), collect all instantiation lines (deduplicated)
-  - Emit a synthetic `__instantiations.sl`, compile it to `__instantiations.o`
-  - When compiling the synthetic file, `add<String>;` outside a code block is an explicit instantiation: ingest `template.sl`, emit `define @add__String`
+  - Read all `*.sli` files from the build directory
+  - Deduplicate and sort; emit `__instantiations.sl` in the same sectioned format
+  - Compile `__instantiations.sl` normally; `instantiate foo<T>;` at top level forces inline `define`
 
   **Link phase**: `g++ *.o __instantiations.o -o program` — all symbols resolve normally.
 
-  **Makefile integration**:
-  ```makefile
-  __instantiations.o: $(wildcard build/*.inst)
-      slidsc --instantiate build/ -o __instantiations.o
-  ```
-
-  **Inlining**: template instantiations should be emitted with `alwaysinline` or `inlinehint` LLVM attribute — they're type-specific and typically small. LTO handles cross-`.o` inlining; the attribute covers the non-LTO case.
-
-  **Result**: each concrete instantiation (`add__int`, `add__String`) compiled exactly once, regardless of how many TUs use it. No linker deduplication needed. Local-type instantiations live in their own TU where the type is visible.
-
-  **Known issue**: the instantiator (`slidsc --instantiate`) currently produces a `.sli` file for `__instantiations.sl` — it should not.
+  **Remaining work:**
+  - `@impl "other"` annotation in `.slh` to override the same-name convention for the impl file
+  - Name conflict detection: if two `.sli` files list `instantiate add<Value>` but `Value` comes from different class headers, `--instantiate` should emit a compile error (same mangled name `add__Value` from two different types)
+  - Emit `alwaysinline` or `inlinehint` LLVM attribute on template instantiations
+  - The instantiator (`slidsc --instantiate`) currently produces a `.sli` file for `__instantiations.sl` — it should not

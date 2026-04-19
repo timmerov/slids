@@ -968,6 +968,7 @@ bool Codegen::isPointerExpr(const Expr& expr) {
     if (dynamic_cast<const NullptrExpr*>(&expr))       return true;
     if (dynamic_cast<const AddrOfExpr*>(&expr))        return true;
     if (dynamic_cast<const NewExpr*>(&expr))           return true;
+    if (dynamic_cast<const NewScalarExpr*>(&expr))    return true;
     if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
         if (!current_slid_.empty()) {
             auto& info = slid_info_[current_slid_];

@@ -162,10 +162,24 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     if (t.type == TokenType::kNew) {
         advance();
         std::string elem_type = parseTypeName();
-        expect(TokenType::kLBracket, "expected '[' after type in new");
-        auto count = parseExpr();
-        expect(TokenType::kRBracket, "expected ']'");
-        return std::make_unique<NewExpr>(elem_type, std::move(count));
+        if (peek().type == TokenType::kLBracket) {
+            advance();
+            auto count = parseExpr();
+            expect(TokenType::kRBracket, "expected ']'");
+            return std::make_unique<NewExpr>(elem_type, std::move(count));
+        } else if (peek().type == TokenType::kLParen) {
+            advance();
+            std::vector<std::unique_ptr<Expr>> args;
+            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                args.push_back(parseExpr());
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kRParen, "expected ')'");
+            return std::make_unique<NewScalarExpr>(elem_type, std::move(args));
+        } else {
+            throw std::runtime_error("Line " + std::to_string(peek().line)
+                + ": expected '(' or '[' after type in new, got '" + peek().value + "'");
+        }
     }
     if (t.type == TokenType::kSizeof) {
         advance();

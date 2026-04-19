@@ -1,0 +1,30 @@
+/*
+define how class templates work
+within a single source file.
+*/
+
+import string;
+
+Vector<T>(
+    intptr size_ = 0,
+    T[] storage_ = nullptr
+) {
+    _() {
+    }
+    ~() {
+        delete storage_;
+    }
+
+    void resize(intptr new_size) {
+        delete storage_;
+        size_ = new_size;
+        storage_ = new T[new_size];
+    }
+}
+
+int32 main() {
+    Vector<int> v;
+    v.resize(10);
+
+    return 0;
+}

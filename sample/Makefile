@@ -20,6 +20,7 @@ SAMPLES = \
 	math1 math2 \
 	memcpy \
 	move \
+	new_delete \
 	primes1 \
 	pointer \
 	reference1 reference2 reference3 \
