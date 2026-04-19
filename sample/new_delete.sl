@@ -16,11 +16,11 @@ Simple(
 int32 main() {
 
     __println("expected 1 con 1 des");
-    one = new String;
+    one = new Simple;
     delete one;
 
     __println("expected 3 con 3 des");
-    many = new String[3];
+    many = new Simple[3];
     delete many;
 
     return 0;

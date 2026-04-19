@@ -177,8 +177,8 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
             expect(TokenType::kRParen, "expected ')'");
             return std::make_unique<NewScalarExpr>(elem_type, std::move(args));
         } else {
-            throw std::runtime_error("Line " + std::to_string(peek().line)
-                + ": expected '(' or '[' after type in new, got '" + peek().value + "'");
+            // new Type; — equivalent to new Type()
+            return std::make_unique<NewScalarExpr>(elem_type, std::vector<std::unique_ptr<Expr>>{});
         }
     }
     if (t.type == TokenType::kSizeof) {
