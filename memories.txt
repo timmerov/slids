@@ -1,0 +1,89 @@
+# Memory Export — timmer (timmerov+claude@gmail.com)
+# Exported: 2026-04-18
+
+---
+
+## 1. Instructions
+
+[2026-04-11] - Always save session notes to memory at the end of each work session without waiting
+  to be asked. After completing a significant task or at natural session endpoints, write memory
+  files covering what was built, patterns discovered, and gotchas — before the context is lost.
+
+[2026-04-16] - When the user gives positive feedback in survey form ("you got another 3",
+  "you got straight 3s", etc.), respond with: "aw, shucks."
+
+---
+
+## 2. Identity
+
+(none stored)
+
+---
+
+## 3. Career
+
+(none stored)
+
+---
+
+## 4. Projects
+
+[unknown] - **Slids** — a compiled, systems-level programming language. Source files (.sl)
+  compile to LLVM IR (.ll) via slidsc (written in C++17), then to native binaries via llc + g++.
+
+  **Status:** Active development. Compiler is working with a substantial feature set.
+
+  **Key language decisions:**
+  - Everything is a "slid" — one unified construct for functions, classes, methods, constructors
+  - `^` = reference (no arithmetic); `[]` = iterator (arithmetic allowed)
+  - `()` signifies data; `{}` indicates code — consistent throughout
+  - .slh files are declarations only — no code, no template bodies
+  - No lambdas, no recursive functions
+  - `int` always 32-bit; `intptr` is pointer-sized signed (not size_t); `char` is unsigned
+  - `delete` nullifies pointer after freeing; `<-` is explicit pointer theft (move)
+  - `sizeof` returns signed `intptr` (not unsigned size_t — avoids underflow bugs)
+  - `(type=expr)` for explicit type conversion; `transport` keyword for opaque/pimpl types
+
+  **Implemented features (each has a sample file as regression test):**
+  - Basic class, constructor/destructor, methods, slices, copy_chars (string01–string05)
+  - External method definitions, block-style external methods, IndexAssignStmt (string06–07)
+  - Method overloading by type-suffix mangling (string08)
+  - Operator overloading with sret calling convention; forward declarations with `;` (string09)
+  - Pointer-as-array indexing; pointer arithmetic; move/memcpy semantics (string10–14)
+  - Free function overloads with mangled names (string15–16)
+  - String literal + char concatenation; int-to-string conversion; uint arithmetic (string17–18)
+  - sizeof(type), sizeof(expr) — returns intptr; GEP null trick for structs (sizeof.sl)
+  - Strong type inference: `x = 0;` infers int; hex/binary → uint; digit separators (type_infer.sl)
+  - `(type=expr)` conversion syntax; class conversion `(Value=42)`; chained `(float32=int=3.14)` (typeconv.sl)
+  - Pointer reinterpretation casting (cast.sl)
+  - Swap operator `<->` (SwapStmt) (string.sl reverse method)
+  - Templates with explicit type args `add<int>` (template1.sl)
+  - Templates with inferred type args; int widening; slid-over-primitive; reference type errors (template2.sl)
+  - `transport` / incomplete classes / private fields; `__pinit`; annotated .slh export (opaque_test.sl)
+  - `-MF`/`-M` dependency file generation for Makefile auto-dep tracking
+  - `-M` flag: `Program.imported_headers` in parser, written to `.d` file in make-compatible format
+
+  **Template instantiation across TUs (designed, not yet implemented):**
+  - Template bodies in .sl files (never .slh) — no per-TU recompilation
+  - .slh forward-declares template; impl found by naming convention (foo.slh → foo.sl) or `@impl "name"`
+  - Compile phase: imported type args → emit `declare` + write `.inst` file; local type args → ingest impl, emit `define`
+  - .inst file format: `class string` / `template template_decl` / `instantiate add<String>`
+  - `slidsc --instantiate build/` reads all *.inst, deduplicates, emits synthetic .sl, compiles to __instantiations.o
+  - Name conflict (same mangled name from two different class headers) → compile error
+
+  **Codegen internals tracked in memory:**
+  - sret calling convention for functions returning slid types
+  - dtor_vars_ must be cleared at start of each function/method emit
+  - pending_temp_dtors_ flushed before dtor_vars_ in emitDtors() — fixes ret-before-dtor
+  - exprLlvmType(VarExpr): slid type names return "ptr" not "i32"
+  - emitArgForParam: transport types use __pinit not __ctor; ptr args matched by Slids type not LLVM type
+  - Template inferTypeArgs: integer widening, slid-over-primitive, AddrOfExpr → ref type, ref-type conflict throws
+
+  **File layout:** compiler/ (slidsc C++17 source), sample/ (regression tests), work/ (multi-file
+  development area for String class + templates), bin/ (built binaries), build/ (intermediates).
+
+---
+
+## 5. Preferences
+
+(none stored beyond instructions above)
