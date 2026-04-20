@@ -1588,10 +1588,13 @@ Program Parser::parse() {
                         + slid.name + "' — compile " + module + ".sl first");
             }
 
-            // check before moving whether any functions are template declarations
+            // check before moving whether any functions or slids are template declarations
             bool has_templates = false;
             for (auto& fn : hdr.functions)
                 if (!fn.type_params.empty()) { has_templates = true; break; }
+            if (!has_templates)
+                for (auto& slid : hdr.slids)
+                    if (!slid.type_params.empty()) { has_templates = true; break; }
 
             for (auto& fn : hdr.functions)
                 if (!fn.body) program.functions.push_back(std::move(fn));
@@ -1618,6 +1621,20 @@ Program Parser::parse() {
                             fn.impl_module = module;
                             program.functions.push_back(std::move(fn));
                         }
+                    }
+                    for (size_t i = 0; i < impl_prog.slids.size(); i++) {
+                        auto& impl_slid = impl_prog.slids[i];
+                        if (impl_slid.type_params.empty()) continue;
+                        bool replaced = false;
+                        for (auto& prog_slid : program.slids) {
+                            if (prog_slid.name == impl_slid.name && !prog_slid.type_params.empty()) {
+                                prog_slid = std::move(impl_slid);
+                                replaced = true;
+                                break;
+                            }
+                        }
+                        if (!replaced)
+                            program.slids.push_back(std::move(impl_slid));
                     }
                 }
             }

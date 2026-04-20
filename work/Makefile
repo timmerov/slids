@@ -10,10 +10,10 @@ TM1_DIR    = $(BUILD_DIR)/template1
 TM2_DIR    = $(BUILD_DIR)/template2
 TMT_DIR    = $(BUILD_DIR)/template_test
 VEC_DIR    = $(BUILD_DIR)/vector1
-EXPORT_DIR = $(BUILD_DIR)/inc
-INST_SL    = $(BUILD_DIR)/__instantiations.sl
-INST_LL    = $(BUILD_DIR)/__instantiations.ll
-INST_OBJ   = $(BUILD_DIR)/__instantiations.o
+EXPORT_DIR  = $(BUILD_DIR)/inc
+TMT_INST_SL = $(TMT_DIR)/__instantiations.sl
+TMT_INST_LL = $(TMT_DIR)/__instantiations.ll
+TMT_INST_OBJ = $(TMT_DIR)/__instantiations.o
 
 # import-path: source directory (for .slh files alongside .sl source)
 # export-path: build directory (annotated .slh files written here; searched first by import)
@@ -82,7 +82,7 @@ $(TM2_DIR)/template2.ll: template2.sl $(SLIDSC)
 
 template_test: $(BIN_DIR)/template_test
 
-$(BIN_DIR)/template_test: $(ST_DIR)/string.o $(TMT_DIR)/template_test.o $(INST_OBJ)
+$(BIN_DIR)/template_test: $(ST_DIR)/string.o $(TMT_DIR)/template_test.o $(TMT_INST_OBJ)
 	$(CXX) $^ -o $@
 
 $(TMT_DIR)/template_test.o: $(TMT_DIR)/template_test.ll
@@ -102,21 +102,20 @@ $(BIN_DIR)/vector1: $(VEC_DIR)/vector1.o
 $(VEC_DIR)/vector1.o: $(VEC_DIR)/vector1.ll
 	$(LLC) $(LLCFLAGS) $< -o $@
 
-$(VEC_DIR)/vector1.ll: vector1.sl $(SLIDSC)
+$(VEC_DIR)/vector1.ll: vector1.sl vector.slh vector.sl $(SLIDSC)
 	mkdir -p $(VEC_DIR)
 	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS) -MF $(VEC_DIR)/vector1.d
 
-# ---- instantiations ----
+# ---- instantiations (per-target) ----
 
-$(INST_OBJ): $(INST_LL)
+$(TMT_INST_OBJ): $(TMT_INST_LL)
 	$(LLC) $(LLCFLAGS) $< -o $@
 
-$(INST_LL): $(INST_SL) $(SLIDSC)
+$(TMT_INST_LL): $(TMT_INST_SL) $(SLIDSC)
 	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS)
 
-# rebuild __instantiations.sl whenever any .sli file changes
-$(INST_SL): $(wildcard $(BUILD_DIR)/**/*.sli) $(SLIDSC)
-	$(SLIDSC) --instantiate $(BUILD_DIR) -o $@
+$(TMT_INST_SL): $(wildcard $(TMT_DIR)/*.sli) $(SLIDSC)
+	$(SLIDSC) --instantiate $(TMT_DIR) -o $@
 
 # ---- auto-generated dependencies ----
 
