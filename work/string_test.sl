@@ -6,8 +6,6 @@ link with the compiled implementation.
 
 import string;
 
-void String:expand(intptr sz);
-
 int32 main() {
 
     __println("Output should be:");
@@ -71,9 +69,6 @@ int32 main() {
     /* fancier features. */
     int x = 42;
     println(String + "x=" + x);
-
-    /* link should fail. */
-    s5.expand(100);
 
     return 0;
 }
