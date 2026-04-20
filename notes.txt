@@ -1,42 +1,4 @@
 
-this is completely broken:
-
-int x = 5;
-String s = "x=" + x;
-
-cause it parses as char* + int -> char* -> String
-and segfaults.
-
-we don't allow a = b = c.
-and assignments are statements not expressions.
-verify that with claude.
-
-so we should use different op= syntax.
-
-String:op=(String^ other) {
-    self <- other^;
-}
-
-String:op=(char[] str) {
-    clear();
-    append(str);
-}
-
-
 TODO list:
 
-no more naked ops.
-move String op+ and Simple op+ into their classes.
-
-= as an assignment is a statement, not an expression.
-String s = 5;
-however = as type conversion is an expression.
-String = 5
-the precedence of assignment is low.
-String s = x + 5;
-means:
-String s = (x + 5);
-the precedence of conversion is high.
-String=5 + x;
-means
-(String=5) + x;
+see TODO.md
