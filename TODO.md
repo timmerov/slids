@@ -21,3 +21,4 @@
 - **Testing:**
   - Need unit tests and regression tests for pretty much everything.
   - Naming conventions: Claude used naming conventions in the parser. Test to ensure the user can use lower case classes and upper case functions.
+  - Functions declared in `.slh` are public entry points in `.o` files. Functions defined in `.sl` files are private and not exported in `.o` files. `main` and `__pinit` are exceptions. Explicit template instantiation is also public. Test this by trying to access a private imported class method.
