@@ -24,7 +24,7 @@ SLIDSC_FLAGS = --import-path $(IMPORT_PATH) --export-path $(EXPORT_PATH)
 
 .PHONY: all clean string_test template1 template2 template_test vector
 
-all: string_test
+all: string_test vector
 
 string_test: $(BIN_DIR)/string_test template1 template2 template_test
 

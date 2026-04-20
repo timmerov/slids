@@ -65,6 +65,17 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
         if (is_array && is_slid) {
             // array of user structs: count stored 8 bytes before the data pointer
+            // guard with null check — free(null) is safe but reading ptr-8 is not
+            std::string null_lbl = newLabel("del_null");
+            std::string body_lbl_outer = newLabel("del_body");
+            std::string end_lbl_outer  = newLabel("del_end");
+            std::string null_cmp = newTmp();
+            out_ << "    " << null_cmp << " = icmp ne ptr " << ptr_val << ", null\n";
+            out_ << "    br i1 " << null_cmp << ", label %" << body_lbl_outer
+                 << ", label %" << end_lbl_outer << "\n";
+            block_terminated_ = false;
+            out_ << body_lbl_outer << ":\n";
+
             auto& info = slid_info_[elem_type];
             std::string hdr = newTmp();
             out_ << "    " << hdr << " = getelementptr i8, ptr " << ptr_val << ", i64 -8\n";
@@ -77,8 +88,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 out_ << "    store i64 " << count << ", ptr " << idx_reg << "\n";
 
                 std::string cond_lbl = newLabel("del_dtor_cond");
-                std::string body_lbl = newLabel("del_dtor_body");
-                std::string end_lbl  = newLabel("del_dtor_end");
+                std::string dtor_body_lbl = newLabel("del_dtor_body");
+                std::string dtor_end_lbl  = newLabel("del_dtor_end");
 
                 out_ << "    br label %" << cond_lbl << "\n";
                 block_terminated_ = false;
@@ -87,10 +98,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 out_ << "    " << idx << " = load i64, ptr " << idx_reg << "\n";
                 std::string cmp = newTmp();
                 out_ << "    " << cmp << " = icmp ugt i64 " << idx << ", 0\n";
-                out_ << "    br i1 " << cmp << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
+                out_ << "    br i1 " << cmp << ", label %" << dtor_body_lbl << ", label %" << dtor_end_lbl << "\n";
 
                 block_terminated_ = false;
-                out_ << body_lbl << ":\n";
+                out_ << dtor_body_lbl << ":\n";
                 std::string idx_prev = newTmp();
                 out_ << "    " << idx_prev << " = sub i64 " << idx << ", 1\n";
                 out_ << "    store i64 " << idx_prev << ", ptr " << idx_reg << "\n";
@@ -101,9 +112,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 out_ << "    br label %" << cond_lbl << "\n";
 
                 block_terminated_ = false;
-                out_ << end_lbl << ":\n";
+                out_ << dtor_end_lbl << ":\n";
             }
             out_ << "    call void @free(ptr " << hdr << ")\n";
+            out_ << "    br label %" << end_lbl_outer << "\n";
+            block_terminated_ = false;
+            out_ << end_lbl_outer << ":\n";
         } else {
             if (is_slid && slid_info_[elem_type].has_dtor)
                 out_ << "    call void @" << elem_type << "__dtor(ptr " << ptr_val << ")\n";
