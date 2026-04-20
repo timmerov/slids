@@ -59,14 +59,14 @@ static int runInstantiate(const std::string& dir, const std::string& out_path) {
                 bool is_tmpl = (section == Section::Template);
                 if (import_set.insert(mod).second)
                     imports.push_back({mod, is_tmpl});
-            } else if (line.rfind("instantiate ", 0) == 0) {
+            } else if (line.find('<') != std::string::npos) {
+                // instantiation line: Name<Types>;
                 auto semi = line.find(';');
                 if (semi == std::string::npos) continue;
-                std::string inst = line.substr(12, semi - 12);
-                auto is2 = inst.find_first_not_of(" \t");
-                auto ie  = inst.find_last_not_of(" \t");
-                if (is2 == std::string::npos) continue;
-                inst = inst.substr(is2, ie - is2 + 1);
+                std::string inst = line.substr(0, semi);
+                auto ie = inst.find_last_not_of(" \t");
+                if (ie == std::string::npos) continue;
+                inst = inst.substr(0, ie + 1);
                 if (inst_set.insert(inst).second)
                     insts.push_back(inst);
             }
@@ -101,7 +101,7 @@ static int runInstantiate(const std::string& dir, const std::string& out_path) {
     out << "\n";
     out << "/* explicit template instantiations. */\n";
     for (auto& inst : insts)
-        out << "instantiate " << inst << ";\n";
+        out << inst << ";\n";
 
     std::cout << "slidsc: wrote " << out_path << "\n";
     return 0;

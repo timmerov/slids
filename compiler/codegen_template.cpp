@@ -439,7 +439,7 @@ void Codegen::writeSliFile(std::ostream& out) const {
 
     out << "/* explicit template instantiations. */\n";
     for (auto& [func, type_args] : sli_instantiations_) {
-        out << "instantiate " << func << "<";
+        out << func << "<";
         for (int i = 0; i < (int)type_args.size(); i++) {
             if (i > 0) out << ", ";
             out << type_args[i];

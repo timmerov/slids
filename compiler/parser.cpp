@@ -85,6 +85,24 @@ bool Parser::isTemplateCallLookahead() const {
     return false;
 }
 
+bool Parser::isInstantiationLookahead() const {
+    // pos_ is at identifier; pos_+1 is '<'; scan type args and require '>' followed by ';'
+    int i = pos_ + 2;
+    while (i < (int)tokens_.size()) {
+        const Token& ti = tokens_[i];
+        if (ti.type == TokenType::kGt)
+            return (i + 1 < (int)tokens_.size()) && tokens_[i + 1].type == TokenType::kSemicolon;
+        bool ok = isTypeName(ti) || isUserTypeName(ti)
+               || ti.type == TokenType::kComma
+               || ti.type == TokenType::kBitXor
+               || ti.type == TokenType::kLBracket
+               || ti.type == TokenType::kRBracket;
+        if (!ok) return false;
+        i++;
+    }
+    return false;
+}
+
 bool Parser::isTemplateTypeArgLookahead() const {
     // pos_ is at '<'; scan forward to see if this is a template type-arg list.
     // Valid contents: type keywords, uppercase idents, ^, [], commas.
@@ -1682,21 +1700,23 @@ Program Parser::parse() {
             for (auto& slid : hdr.slids)
                 transported_slids_[slid.name] = std::move(slid);
         }
-        // explicit template instantiation: instantiate add<int>;
-        else if (peek().type == TokenType::kInstantiate) {
-            advance();
-            std::string func_name = expect(TokenType::kIdentifier, "expected function name after 'instantiate'").value;
-            expect(TokenType::kLt, "expected '<' after function name in instantiate");
-            std::vector<std::string> type_args;
-            type_args.push_back(parseTypeName());
-            while (peek().type == TokenType::kComma) { advance(); type_args.push_back(parseTypeName()); }
-            expect(TokenType::kGt, "expected '>' in instantiate");
-            expect(TokenType::kSemicolon, "expected ';' after instantiate");
-            program.instantiations.push_back({func_name, std::move(type_args)});
-        }
         // enum definition
         else if (peek().type == TokenType::kEnum) {
             program.enums.push_back(parseEnumDef());
+        }
+        // explicit template instantiation: Name<Types>;
+        else if (peek().type == TokenType::kIdentifier
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kLt
+            && isInstantiationLookahead()) {
+            std::string name = advance().value;
+            advance(); // '<'
+            std::vector<std::string> type_args;
+            type_args.push_back(parseTypeName());
+            while (peek().type == TokenType::kComma) { advance(); type_args.push_back(parseTypeName()); }
+            expect(TokenType::kGt, "expected '>'");
+            expect(TokenType::kSemicolon, "expected ';'");
+            program.instantiations.push_back({name, std::move(type_args)});
         }
         // slid class definition: UpperCase identifier followed by ( or <T>(
         else if (isUserTypeName(peek())

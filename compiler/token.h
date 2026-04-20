@@ -46,7 +46,6 @@ enum class TokenType {
     kNullptr,
     kImport,
     kTransport,
-    kInstantiate,
     kEllipsis,
 
     // comparison operators

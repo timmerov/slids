@@ -474,6 +474,8 @@ private:
     bool isTemplateCallLookahead() const;
     // lookahead: pos_ is at '<'; returns true if this is a template type-arg list (not a comparison)
     bool isTemplateTypeArgLookahead() const;
+    // lookahead: pos_ is at identifier, pos_+1 is '<'; returns true if Name<Types>; pattern
+    bool isInstantiationLookahead() const;
 
     SlidDef parseSlidDef();
     EnumDef parseEnumDef();
