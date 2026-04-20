@@ -116,7 +116,7 @@ void Codegen::collectFunctionSignatures() {
         func_param_types_[mangled] = ptypes;
         if (!overloaded) func_param_types_[fn.name] = ptypes;
 
-        if (!fn.body) continue; // forward declaration
+        if (!fn.body) { exported_symbols_.insert(mangled); continue; } // forward declaration = exported
 
         // recurse into all blocks to find nested function defs
         std::function<void(const BlockStmt&)> findNested = [&](const BlockStmt& block) {
@@ -200,9 +200,29 @@ void Codegen::collectFunctionSignatures() {
                 std::vector<std::string> ptypes;
                 for (auto& [t, n] : e.params) ptypes.push_back(t);
                 func_param_types_[mangled] = ptypes;
-                method_overloads_[base].push_back({mangled, ptypes});
+                // avoid duplicate overload entries (transport slid + impl slid both contribute)
+                auto& overloads = method_overloads_[base];
+                if (std::none_of(overloads.begin(), overloads.end(),
+                        [&](const auto& p){ return p.second == ptypes; }))
+                    overloads.push_back({mangled, ptypes});
             }
         }
+
+        // mark exported: methods with a bodyless declaration (from header)
+        for (auto& m : slid.methods) {
+            if (m.body || m.name == "_" || m.name == "~") continue;
+            std::string base = slid.name + "__" + m.name;
+            std::vector<std::string> mptypes;
+            for (auto& [t, n] : m.params) mptypes.push_back(t);
+            auto it = method_overloads_.find(base);
+            if (it != method_overloads_.end()) {
+                for (auto& [mangled, ptypes] : it->second)
+                    if (ptypes == mptypes) exported_symbols_.insert(mangled);
+            }
+        }
+        if (slid.has_explicit_ctor_decl) exported_symbols_.insert(slid.name + "__ctor");
+        if (slid.has_explicit_dtor_decl) exported_symbols_.insert(slid.name + "__dtor");
+        if (slid.is_transport_impl)      exported_symbols_.insert(slid.name + "__pinit");
     }
 }
 
@@ -616,6 +636,18 @@ void Codegen::emit() {
             instantiateTemplate(req.func_name, req.type_args, true);
     }
 
+    // explicit instantiations are linkable entry points — export all their symbols
+    for (auto* slid : pending_slid_instantiations_) {
+        exported_symbols_.insert(slid->name + "__ctor");
+        exported_symbols_.insert(slid->name + "__dtor");
+        std::string prefix = slid->name + "__";
+        for (auto& [base, overloads] : method_overloads_) {
+            if (base.substr(0, prefix.size()) != prefix) continue;
+            for (auto& [mangled, ptypes] : overloads)
+                exported_symbols_.insert(mangled);
+        }
+    }
+
     // validate: class objects cannot be passed by value
     auto checkParams = [&](const std::string& ctx,
                            const std::vector<std::pair<std::string,std::string>>& params) {
@@ -649,8 +681,10 @@ void Codegen::emit() {
         if (fn.body && fn.type_params.empty()) analyzeNestedFunctions(fn);
 
     // emit struct types for classes
+    std::set<std::string> emitted_structs;
     for (auto& slid : program_.slids) {
         if (!slid.type_params.empty()) continue; // template slids emitted on demand
+        if (!emitted_structs.insert(slid.name).second) continue; // deduplicate
         auto& info = slid_info_[slid.name];
         out_ << "%struct." << slid.name << " = type { ";
         bool first = true;
@@ -869,6 +903,11 @@ void Codegen::emit() {
         emitTemplateDeclare(fn);
 }
 
+bool Codegen::isExported(const std::string& mangled) const {
+    if (mangled == "main") return true;
+    return exported_symbols_.count(mangled) > 0;
+}
+
 void Codegen::emitFrameStruct(const FunctionDef& fn) {
     bool has_frame = false;
     std::set<std::string> all_captures;
@@ -950,7 +989,7 @@ void Codegen::emitNestedFunction(
         param_str += llvmType(type) + " %arg_" + name;
     }
 
-    out_ << "define " << ret_type << " @" << mangled << "(" << param_str << ") {\n";
+    out_ << "define internal " << ret_type << " @" << mangled << "(" << param_str << ") {\n";
     out_ << "entry:\n";
 
     // helper: after restoring a capture ptr, also restore array_info if it was a parent array
@@ -1035,7 +1074,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         block_terminated_ = false;
         current_slid_ = slid.name;
 
-        out_ << "define void @" << slid.name << "__ctor(ptr %self) {\n";
+        out_ << "define " << (isExported(slid.name + "__ctor") ? "" : "internal ") << "void @" << slid.name << "__ctor(ptr %self) {\n";
         out_ << "entry:\n";
         emitBlock(*ctor_body);
         if (!block_terminated_) out_ << "    ret void\n";
@@ -1052,7 +1091,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         block_terminated_ = false;
         current_slid_ = slid.name;
 
-        out_ << "define void @" << slid.name << "__dtor(ptr %self) {\n";
+        out_ << "define " << (isExported(slid.name + "__dtor") ? "" : "internal ") << "void @" << slid.name << "__dtor(ptr %self) {\n";
         out_ << "entry:\n";
         emitBlock(*dtor_body);
         if (!block_terminated_) out_ << "    ret void\n";
@@ -1073,7 +1112,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         current_slid_ = slid.name;
         self_ptr_ = "";  // field access uses %self fallback
 
-        out_ << "define void @" << slid.name << "__pinit(ptr %self) {\n";
+        out_ << "define " << (isExported(slid.name + "__pinit") ? "" : "internal ") << "void @" << slid.name << "__pinit(ptr %self) {\n";
         out_ << "entry:\n";
 
         // store each private field at its struct index
@@ -1821,7 +1860,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& full_mangle
     for (auto& [type, name] : params)
         param_str += ", " + llvmType(type) + " %arg_" + name;
 
-    out_ << "define " << ret_type << " @" << llvmGlobalName(full_mangled)
+    out_ << "define " << (isExported(full_mangled) ? "" : "internal ") << ret_type << " @" << llvmGlobalName(full_mangled)
          << "(" << param_str << ") {\n";
     out_ << "entry:\n";
 
@@ -1903,7 +1942,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
         param_str += llvmType(fn.params[i].first) + " %arg_" + fn.params[i].second;
     }
 
-    out_ << "define " << ret_type << " @" << llvmGlobalName(emit_name) << "(" << param_str << ") {\n";
+    out_ << "define " << (isExported(emit_name) ? "" : "internal ") << ret_type << " @" << llvmGlobalName(emit_name) << "(" << param_str << ") {\n";
     out_ << "entry:\n";
 
     for (auto& [type, name] : fn.params) {

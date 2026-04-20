@@ -496,6 +496,7 @@ std::string Codegen::instantiateTemplate(const std::string& name,
 
     if (force || local_template_names_.count(name)) {
         // inline: emit full definition
+        if (force) exported_symbols_.insert(mangled); // explicit instantiation = linkable entry point
         pending_instantiations_.push_back(std::move(concrete));
     } else {
         // imported template: defer declare to module scope + record .sli entry

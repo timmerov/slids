@@ -451,7 +451,8 @@ private:
     std::vector<std::string> import_paths_; // --import-path dirs (searched for transport .slh)
     std::string export_path_;               // --export-path dir (searched first for import .slh)
     std::shared_ptr<std::set<std::string>> imported_once_; // shared across nested parsers; import-once guard
-    std::map<std::string, SlidDef> transported_slids_; // name -> slid from transport source .slh
+    // name -> [(type, field_name)] from transport source .slh (only fields needed for merge)
+    std::map<std::string, std::vector<std::pair<std::string,std::string>>> transported_slids_;
 
     Token& peek();
     Token& advance();

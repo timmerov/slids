@@ -126,9 +126,12 @@ private:
     std::vector<SliInstantiation> sli_instantiations_;
     std::set<std::string> sli_instantiation_set_;
 
+    std::set<std::string> exported_symbols_; // mangled names with external linkage
+
     void collectStringConstants();
     void collectFunctionSignatures();
     void collectSlids();
+    bool isExported(const std::string& mangled) const;
     std::string instantiateSlidTemplate(const std::string& name,
                                         const std::vector<std::string>& type_args,
                                         bool force = false);

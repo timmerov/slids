@@ -1281,10 +1281,10 @@ SlidDef Parser::parseSlidDef() {
         if (it == transported_slids_.end())
             throw std::runtime_error("'" + slid.name + "' uses ... prefix but was not declared via transport");
         // prepend public fields from the transport source
-        int num_public = (int)it->second.fields.size();
+        int num_public = (int)it->second.size();
         std::vector<FieldDef> merged;
-        for (auto& pf : it->second.fields)
-            merged.push_back({pf.type, pf.name, nullptr}); // defaults not needed for already-declared fields
+        for (auto& [type, name] : it->second)
+            merged.push_back({type, name, nullptr}); // defaults not needed for already-declared fields
         for (auto& f : slid.fields)
             merged.push_back(std::move(f));
         slid.fields = std::move(merged);
@@ -1717,10 +1717,14 @@ Program Parser::parse() {
                 ti.slid_names.push_back(slid.name);
             program.transports.push_back(std::move(ti));
 
-            // store transported slids for field-merge when we see Opaque(..., priv_field)
-            // NOTE: SlidDef is move-only (has unique_ptr members); move each out of hdr.slids
-            for (auto& slid : hdr.slids)
-                transported_slids_[slid.name] = std::move(slid);
+            // push slids into program.slids so codegen sees bodyless methods for export tracking;
+            // also record just the fields in transported_slids_ for the field-merge in parseSlidDef
+            for (auto& slid : hdr.slids) {
+                std::vector<std::pair<std::string,std::string>> fields;
+                for (auto& f : slid.fields) fields.emplace_back(f.type, f.name);
+                transported_slids_[slid.name] = std::move(fields);
+                program.slids.push_back(std::move(slid));
+            }
         }
         // enum definition
         else if (peek().type == TokenType::kEnum) {
