@@ -1718,15 +1718,16 @@ Program Parser::parse() {
             expect(TokenType::kSemicolon, "expected ';'");
             program.instantiations.push_back({name, std::move(type_args)});
         }
-        // slid class definition: UpperCase identifier followed by ( or <T>(
-        else if (isUserTypeName(peek())
+        // slid class definition: bare identifier immediately followed by ( or <
+        // (no return type prefix — that's what makes it a class, not a function)
+        else if (peek().type == TokenType::kIdentifier
             && pos_ + 1 < (int)tokens_.size()
             && (tokens_[pos_ + 1].type == TokenType::kLParen
                 || tokens_[pos_ + 1].type == TokenType::kLt)) {
             program.slids.push_back(parseSlidDef());
         }
         // block-style external methods: TypeName { void method() { ... } ... }
-        else if (isUserTypeName(peek())
+        else if (peek().type == TokenType::kIdentifier
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLBrace) {
             parseExternalMethodBlock(program);
@@ -1734,10 +1735,13 @@ Program Parser::parse() {
             program.functions.push_back(parseFunctionDef());
         } else {
             // detect external method: [returnType] TypeName:
+            // advance past return type (primitive or user type) when followed by another identifier
             int p = pos_;
-            if (isTypeName(tokens_[p]) && !isUserTypeName(tokens_[p])) p++;
+            if ((isTypeName(tokens_[p]) || tokens_[p].type == TokenType::kIdentifier)
+                && p + 1 < (int)tokens_.size()
+                && tokens_[p + 1].type == TokenType::kIdentifier) p++;
             if (p + 1 < (int)tokens_.size()
-                && isUserTypeName(tokens_[p])
+                && tokens_[p].type == TokenType::kIdentifier
                 && tokens_[p + 1].type == TokenType::kColon) {
                 program.external_methods.push_back(parseExternalMethodDef());
             } else {
