@@ -2,6 +2,7 @@
 use a template class declared in a heeader.
 */
 
+import string;
 import vector;
 
 Value(
@@ -16,17 +17,23 @@ Value(
 }
 
 int32 main() {
-    /*{
+    {
         __println("Vector<int>:");
-        Vector<int> vint;
-        vint.resize(10);
-    }*/
+        Vector<int> v;
+        v.resize(10);
+    }
 
     {
         __println("Vector<Value>:");
-        Vector<Value> vval;
-        vval.resize(3);
+        Vector<Value> v;
+        v.resize(3);
     }
+
+    /*{
+        __println("Vector<String>:");
+        Vector<String> v;
+        v.resize(3);
+    }*/
 
     return 0;
 }

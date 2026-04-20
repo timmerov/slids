@@ -262,7 +262,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (is_empty_plus) {
                     // emit: alloca, init fields, pinit/ctor, then op+=(rhs) — no empty temp
                     auto* be = dynamic_cast<const BinaryExpr*>(decl->init.get());
-                    std::string reg = "%var_" + decl->name;
+                    std::string reg = uniqueAllocaReg(decl->name);
                     out_ << "    " << reg << " = alloca %struct." << eff_type << "\n";
                     locals_[decl->name] = reg;
                     local_types_[decl->name] = eff_type;
@@ -312,7 +312,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             }
 
-            std::string reg = "%var_" + decl->name;
+            std::string reg = uniqueAllocaReg(decl->name);
             out_ << "    " << reg << " = alloca %struct." << eff_type << "\n";
             locals_[decl->name] = reg;
             local_types_[decl->name] = eff_type;
@@ -1748,8 +1748,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* block = dynamic_cast<const BlockStmt*>(&stmt)) {
-        // naked block — save dtor depth and restore on exit for block-scoped cleanup
+        // naked block — save dtor depth and locals snapshot; restore on exit for block-scoped RAII
         size_t dtor_mark = dtor_vars_.size();
+        auto saved_locals = locals_;
+        auto saved_local_types = local_types_;
         emitBlock(*block);
         // destroy block-scoped variables in reverse declaration order
         if (!block_terminated_) {
@@ -1759,6 +1761,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
         }
         dtor_vars_.resize(dtor_mark);
+        locals_ = saved_locals;
+        local_types_ = saved_local_types;
         return;
     }
 

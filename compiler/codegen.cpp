@@ -10,6 +10,16 @@ Codegen::Codegen(const Program& program, std::ostream& out)
 
 std::string Codegen::newTmp() { return "%t" + std::to_string(tmp_counter_++); }
 std::string Codegen::newLabel(const std::string& p) { return p + std::to_string(label_counter_++); }
+std::string Codegen::uniqueAllocaReg(const std::string& var_name) {
+    std::string base = "%var_" + var_name;
+    if (!emitted_alloca_regs_.count(base)) {
+        emitted_alloca_regs_.insert(base);
+        return base;
+    }
+    std::string unique = base + "_" + std::to_string(tmp_counter_++);
+    emitted_alloca_regs_.insert(unique);
+    return unique;
+}
 
 
 std::string Codegen::llvmType(const std::string& t) {
@@ -855,6 +865,7 @@ void Codegen::emitNestedFunction(
 {
     locals_.clear();
     local_types_.clear();
+    emitted_alloca_regs_.clear();
     array_info_.clear();
     dtor_vars_.clear();
     tmp_counter_ = 0;
@@ -970,6 +981,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     if (ctor_body) {
         locals_.clear();
         local_types_.clear();
+        emitted_alloca_regs_.clear();
         tmp_counter_ = 0;
         label_counter_ = 0;
         block_terminated_ = false;
@@ -986,6 +998,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     if (dtor_body) {
         locals_.clear();
         local_types_.clear();
+        emitted_alloca_regs_.clear();
         tmp_counter_ = 0;
         label_counter_ = 0;
         block_terminated_ = false;
@@ -1005,6 +1018,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         auto& info = slid_info_[slid.name];
         locals_.clear();
         local_types_.clear();
+        emitted_alloca_regs_.clear();
         tmp_counter_ = 0;
         label_counter_ = 0;
         block_terminated_ = false;
@@ -1743,6 +1757,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& full_mangle
                               const BlockStmt& body) {
     locals_.clear();
     local_types_.clear();
+    emitted_alloca_regs_.clear();
     dtor_vars_.clear();
     tmp_counter_ = 0;
     label_counter_ = 0;

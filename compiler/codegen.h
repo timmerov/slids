@@ -46,6 +46,7 @@ private:
 
     std::map<std::string, std::string> locals_;      // var name -> alloca reg
     std::map<std::string, std::string> local_types_; // var name -> declared type (slid name or "int^" etc)
+    std::set<std::string> emitted_alloca_regs_;      // all alloca register names emitted in current function
     std::map<std::string, std::string> func_return_types_;
     std::map<std::string, std::vector<std::string>> func_param_types_; // func name -> param types
     std::map<std::string, std::vector<std::pair<std::string,std::string>>> func_tuple_fields_; // func -> [(type,name)]
@@ -183,5 +184,6 @@ private:
     std::string emitFieldPtr(const std::string& obj_name, const std::string& field);
     std::string newTmp();
     std::string newLabel(const std::string& prefix);
+    std::string uniqueAllocaReg(const std::string& var_name);
     std::string llvmType(const std::string& slids_type);
 };
