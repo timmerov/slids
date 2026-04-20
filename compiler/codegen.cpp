@@ -387,6 +387,10 @@ void Codegen::collectSlids() {
     for (auto& slid : program_.slids) {
         if (!slid.type_params.empty()) {
             template_slids_[slid.name] = &slid;
+            if (slid.is_local)
+                local_slid_template_names_.insert(slid.name);
+            else if (!slid.impl_module.empty())
+                slid_template_modules_[slid.name] = slid.impl_module;
             continue;
         }
         SlidInfo info;
@@ -596,6 +600,15 @@ void Codegen::emit() {
     collectSlids();
     scanForSlidTemplateUses();
 
+    // process explicit instantiate statements before string-constant collection so
+    // their bodies are included in the pre-scan and in the ctor/dtor/method emit loops
+    for (auto& req : program_.instantiations) {
+        if (template_slids_.count(req.func_name))
+            instantiateSlidTemplate(req.func_name, req.type_args, true);
+        else
+            instantiateTemplate(req.func_name, req.type_args, true);
+    }
+
     // validate: class objects cannot be passed by value
     auto checkParams = [&](const std::string& ctx,
                            const std::vector<std::pair<std::string,std::string>>& params) {
@@ -648,6 +661,18 @@ void Codegen::emit() {
     }
     // emit struct types for template class instantiations
     for (auto* slid : pending_slid_instantiations_) {
+        auto& info = slid_info_[slid->name];
+        out_ << "%struct." << slid->name << " = type { ";
+        bool first = true;
+        for (auto& ft : info.field_types) {
+            if (!first) out_ << ", ";
+            out_ << llvmType(ft);
+            first = false;
+        }
+        out_ << " }\n";
+    }
+    // emit struct types for imported template class instantiations (deferred)
+    for (auto* slid : pending_slid_declares_) {
         auto& info = slid_info_[slid->name];
         out_ << "%struct." << slid->name << " = type { ";
         bool first = true;
@@ -739,6 +764,26 @@ void Codegen::emit() {
                 for (auto& [mn, _] : oit->second) local_methods.insert(mn);
         }
     }
+    // imported template instantiations: emit declares for ctor/dtor/methods
+    for (auto* slid : pending_slid_declares_) {
+        auto& info = slid_info_[slid->name];
+        if (info.has_explicit_ctor)
+            out_ << "declare void @" << slid->name << "__ctor(ptr)\n";
+        if (info.has_dtor)
+            out_ << "declare void @" << slid->name << "__dtor(ptr)\n";
+        for (auto& [base, overloads] : method_overloads_) {
+            std::string prefix = slid->name + "__";
+            if (base.substr(0, prefix.size()) != prefix) continue;
+            for (auto& [mangled, ptypes] : overloads) {
+                if (!declared_fns.insert(mangled).second) continue;
+                std::string ret_type_str = func_return_types_[mangled];
+                std::string ret = ret_type_str.empty() ? "void" : llvmType(ret_type_str);
+                out_ << "declare " << ret << " @" << llvmGlobalName(mangled) << "(ptr";
+                for (auto& pt : ptypes) out_ << ", " << llvmType(pt);
+                out_ << ")\n";
+            }
+        }
+    }
     for (auto& em : program_.external_methods) {
         if (!em.body) continue;
         std::string base = em.slid_name + "__" + em.method_name;
@@ -807,10 +852,6 @@ void Codegen::emit() {
 
     for (auto& fn : program_.functions)
         if (fn.type_params.empty()) emitFunction(fn);
-
-    // process explicit instantiate statements (force inline define)
-    for (auto& req : program_.instantiations)
-        instantiateTemplate(req.func_name, req.type_args, true);
 
     // emit all pending template instantiations (inline calls + explicit instantiate)
     for (auto& fn : pending_instantiations_)

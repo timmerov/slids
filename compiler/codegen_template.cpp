@@ -396,11 +396,16 @@ void Codegen::emitTemplateDeclare(const FunctionDef& fn) {
 
 void Codegen::recordSliEntry(const std::string& func_name,
                               const std::vector<std::string>& type_args) {
-    // template module
+    // template module (function or class template)
     auto mit = template_func_modules_.find(func_name);
     if (mit != template_func_modules_.end()) {
         if (sli_import_set_.insert("t:" + mit->second).second)
             sli_imports_.push_back({mit->second, true});
+    }
+    auto sit2 = slid_template_modules_.find(func_name);
+    if (sit2 != slid_template_modules_.end()) {
+        if (sli_import_set_.insert("t:" + sit2->second).second)
+            sli_imports_.push_back({sit2->second, true});
     }
     // class modules for slid type args
     for (auto& ta : type_args) {
@@ -502,7 +507,8 @@ std::string Codegen::instantiateTemplate(const std::string& name,
 // --- Codegen::instantiateSlidTemplate ---
 
 std::string Codegen::instantiateSlidTemplate(const std::string& name,
-                                              const std::vector<std::string>& type_args) {
+                                              const std::vector<std::string>& type_args,
+                                              bool force) {
     auto tit = template_slids_.find(name);
     if (tit == template_slids_.end())
         throw std::runtime_error("unknown template class: " + name);
@@ -571,9 +577,25 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
         method_overloads_[base].push_back({base, ptypes});
     }
 
-    // store in the stable map and enqueue for emission
+    // store in the stable map
     concrete_slid_template_defs_[mangled] = std::move(concrete);
-    pending_slid_instantiations_.push_back(&concrete_slid_template_defs_[mangled]);
+    SlidDef* concrete_ptr = &concrete_slid_template_defs_[mangled];
+
+    // decide inline vs deferred: inline if forced, local template, or any type arg is a
+    // non-importable local slid (can't be reconstructed in __instantiations.sl)
+    bool any_local_type_arg = false;
+    for (auto& ta : type_args) {
+        if (slid_info_.count(ta) && !program_.slid_modules.count(ta)) {
+            any_local_type_arg = true;
+            break;
+        }
+    }
+    if (force || local_slid_template_names_.count(name) || any_local_type_arg) {
+        pending_slid_instantiations_.push_back(concrete_ptr);
+    } else {
+        recordSliEntry(name, type_args);
+        pending_slid_declares_.push_back(concrete_ptr);
+    }
 
     return mangled;
 }

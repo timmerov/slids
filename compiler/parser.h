@@ -372,6 +372,8 @@ struct SlidDef {
     bool has_explicit_dtor_decl = false; // ~() was declared (with or without body)
     bool is_transport_impl = false;      // this slid is the private-fields implementation (had leading ...)
     int public_field_count = 0;          // number of public fields prepended from transport source (0 = all private)
+    bool is_local = true;                // false when template body loaded from an imported .sl file
+    std::string impl_module;             // module name of the impl file (when !is_local)
     std::unique_ptr<BlockStmt> ctor_body;          // loose code (implicit ctor), or null
     std::unique_ptr<BlockStmt> explicit_ctor_body; // _() { ... }, or null
     std::unique_ptr<BlockStmt> dtor_body;          // ~() { ... }, or null

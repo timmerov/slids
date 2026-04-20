@@ -10,6 +10,9 @@ TM1_DIR    = $(BUILD_DIR)/template1
 TM2_DIR    = $(BUILD_DIR)/template2
 TMT_DIR    = $(BUILD_DIR)/template_test
 VEC_DIR    = $(BUILD_DIR)/vector1
+VEC_INST_SL  = $(VEC_DIR)/__instantiations.sl
+VEC_INST_LL  = $(VEC_DIR)/__instantiations.ll
+VEC_INST_OBJ = $(VEC_DIR)/__instantiations.o
 EXPORT_DIR  = $(BUILD_DIR)/inc
 TMT_INST_SL = $(TMT_DIR)/__instantiations.sl
 TMT_INST_LL = $(TMT_DIR)/__instantiations.ll
@@ -96,7 +99,7 @@ $(TMT_DIR)/template_test.ll: template_test.sl template_add.slh template_add.sl $
 
 vector1: $(BIN_DIR)/vector1
 
-$(BIN_DIR)/vector1: $(VEC_DIR)/vector1.o
+$(BIN_DIR)/vector1: $(ST_DIR)/string.o $(VEC_DIR)/vector1.o $(VEC_INST_OBJ)
 	$(CXX) $^ -o $@
 
 $(VEC_DIR)/vector1.o: $(VEC_DIR)/vector1.ll
@@ -105,6 +108,15 @@ $(VEC_DIR)/vector1.o: $(VEC_DIR)/vector1.ll
 $(VEC_DIR)/vector1.ll: vector1.sl vector.slh vector.sl $(SLIDSC)
 	mkdir -p $(VEC_DIR)
 	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS) -MF $(VEC_DIR)/vector1.d
+
+$(VEC_INST_OBJ): $(VEC_INST_LL)
+	$(LLC) $(LLCFLAGS) $< -o $@
+
+$(VEC_INST_LL): $(VEC_INST_SL) $(SLIDSC)
+	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS)
+
+$(VEC_INST_SL): $(wildcard $(VEC_DIR)/*.sli) $(SLIDSC)
+	$(SLIDSC) --instantiate $(VEC_DIR) -o $@
 
 # ---- instantiations (per-target) ----
 
@@ -125,6 +137,7 @@ $(TMT_INST_SL): $(wildcard $(TMT_DIR)/*.sli) $(SLIDSC)
 -include $(TM2_DIR)/template2.d
 -include $(TMT_DIR)/template_test.d
 -include $(VEC_DIR)/vector1.d
+-include $(VEC_DIR)/__instantiations.d
 
 # ---- clean ----
 

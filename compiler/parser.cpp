@@ -1625,6 +1625,8 @@ Program Parser::parse() {
                     for (size_t i = 0; i < impl_prog.slids.size(); i++) {
                         auto& impl_slid = impl_prog.slids[i];
                         if (impl_slid.type_params.empty()) continue;
+                        impl_slid.is_local = false;
+                        impl_slid.impl_module = module;
                         bool replaced = false;
                         for (auto& prog_slid : program.slids) {
                             if (prog_slid.name == impl_slid.name && !prog_slid.type_params.empty()) {
