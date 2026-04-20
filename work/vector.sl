@@ -1,18 +1,8 @@
 /*
-define how class templates work
-within a single source file.
+define a vector class declared in a header file.
 */
 
-Value(
-    int x_
-) {
-    _() {
-        __println("Value:ctor");
-    }
-    ~() {
-        __println("Value:dtor");
-    }
-}
+import vector;
 
 Vector<T>(
     intptr size_ = 0,
@@ -32,20 +22,4 @@ Vector<T>(
         size_ = new_size;
         storage_ = new T[new_size];
     }
-}
-
-int32 main() {
-    {
-        __println("Vector<int>:");
-        Vector<int> vint;
-        vint.resize(10);
-    }
-
-    {
-        __println("Vector<Value>:");
-        Vector<Value> vval;
-        vval.resize(3);
-    }
-
-    return 0;
 }

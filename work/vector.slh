@@ -1,0 +1,13 @@
+/*
+declare a template class in a header file.
+*/
+
+Vector<T>(
+    intptr size_ = 0,
+    T[] storage_ = nullptr
+) {
+    _() {}
+    ~() {}
+
+    void resize(intptr new_size);
+}
