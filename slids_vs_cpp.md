@@ -16,11 +16,12 @@
 - `self` object instead of `this` pointer.
 
 ## Memory and pointers
-- `^` = reference (no arithmetic), `[]` = iterator (arithmetic) — two distinct pointer types vs C++'s one
+- Pointers are either reference `^` (no arithmetic) or iterator `[]` (arithmetic)
+- References can be `nullptr` and can be reassigned
 - `^` before takes the address instead of `&` - `^` after a pointer dereferences instead of `*` before or `->` after
 - `delete` sets the deleted pointer to nullptr
-- Move operator `<-` - sets rhs to nullptr
-- Builtin swap operator '<->'
+- Move operator `<-` - sets rhs pointer to nullptr
+- Builtin swap operator `<->`
 - `size_t` is `intptr` — is signed, not unsigned.
 
 ## Type system
@@ -40,7 +41,7 @@
 - Can return tuples - `(int a, int b) foo();`
 
 ## Templates
-- Templates compiled exactly once - even if in different source files.
+- Templates compiled exactly once - even if in different source files
 
 ## Operators
 - Logical exclusive or `^^`
