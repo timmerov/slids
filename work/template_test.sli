@@ -1,7 +1,0 @@
-/* class declarations. */
-
-/* template declarations. */
-import template_add;
-
-/* explicit template instantiations. */
-instantiate add<int>;
