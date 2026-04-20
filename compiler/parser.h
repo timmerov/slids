@@ -476,6 +476,8 @@ private:
     bool isTemplateTypeArgLookahead() const;
     // lookahead: pos_ is at identifier, pos_+1 is '<'; returns true if Name<Types>; pattern
     bool isInstantiationLookahead() const;
+    // lookahead: pos_ is at identifier used as a type name; returns true if a var-name identifier follows
+    bool isVarDeclLookahead() const;
 
     SlidDef parseSlidDef();
     EnumDef parseEnumDef();

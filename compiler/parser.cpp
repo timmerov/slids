@@ -55,10 +55,28 @@ bool Parser::isTypeName(const Token& t) const {
 }
 
 bool Parser::isUserTypeName(const Token& t) const {
-    // user-defined type: identifier starting with uppercase
-    return t.type == TokenType::kIdentifier
-        && !t.value.empty()
-        && isupper(t.value[0]);
+    return t.type == TokenType::kIdentifier;
+}
+
+bool Parser::isVarDeclLookahead() const {
+    // pos_ is at an identifier that might be a type name.
+    // scan past it (plus optional template args and pointer/iterator suffix)
+    // and check that an identifier (the variable name) follows.
+    int i = pos_ + 1; // skip base type name
+    // optional template args: <Types>
+    if (i < (int)tokens_.size() && tokens_[i].type == TokenType::kLt) {
+        i++;
+        while (i < (int)tokens_.size() && tokens_[i].type != TokenType::kGt
+               && tokens_[i].type != TokenType::kEof) i++;
+        if (i >= (int)tokens_.size() || tokens_[i].type != TokenType::kGt) return false;
+        i++;
+    }
+    // optional ^ or []
+    if (i < (int)tokens_.size() && tokens_[i].type == TokenType::kBitXor) i++;
+    else if (i + 1 < (int)tokens_.size()
+             && tokens_[i].type == TokenType::kLBracket
+             && tokens_[i+1].type == TokenType::kRBracket) i += 2;
+    return i < (int)tokens_.size() && tokens_[i].type == TokenType::kIdentifier;
 }
 
 bool Parser::isTemplateCallLookahead() const {
@@ -820,8 +838,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         return std::make_unique<VarDeclStmt>(type, name, std::move(init));
     }
 
-    // user-defined type variable declaration: Counter c; or Counter c(5); or Piece board[8][8] = ... or Piece[] ptr = ...
-    if (isUserTypeName(t)) {
+    // user-defined type variable declaration: counter c; or counter c(5); or piece board[8][8] = ...
+    if (t.type == TokenType::kIdentifier && isVarDeclLookahead()) {
         std::string type = parseTypeName(); // consumes Name plus any trailing ^ or []
         std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
 
