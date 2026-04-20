@@ -1054,23 +1054,123 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string elt = llvmType(ne->elem_type);
         std::string count_val = emitExpr(*ne->count);
         std::string count_type = exprLlvmType(*ne->count);
-        int elem_bytes = 1;
-        if (elt == "i32") elem_bytes = 4;
-        else if (elt == "i64") elem_bytes = 8;
-        else if (elt == "i16") elem_bytes = 2;
-        std::string bytes64;
+
+        // normalize count to i64
+        std::string count64;
         if (count_type == "i64") {
-            bytes64 = newTmp();
-            out_ << "    " << bytes64 << " = mul i64 " << count_val << ", " << elem_bytes << "\n";
+            count64 = count_val;
         } else {
-            std::string bytes = newTmp();
-            out_ << "    " << bytes << " = mul " << count_type << " " << count_val << ", " << elem_bytes << "\n";
-            bytes64 = newTmp();
-            out_ << "    " << bytes64 << " = zext " << count_type << " " << bytes << " to i64\n";
+            count64 = newTmp();
+            out_ << "    " << count64 << " = zext " << count_type << " " << count_val << " to i64\n";
         }
-        std::string tmp = newTmp();
-        out_ << "    " << tmp << " = call ptr @malloc(i64 " << bytes64 << ")\n";
-        return tmp;
+
+        bool is_slid = slid_info_.count(ne->elem_type) > 0;
+
+        // compute element size
+        std::string elem_size;
+        if (is_slid) {
+            auto& sinfo = slid_info_[ne->elem_type];
+            if (sinfo.sizeof_override > 0) {
+                elem_size = std::to_string(sinfo.sizeof_override);
+            } else {
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr %struct." << ne->elem_type << ", ptr null, i32 1\n";
+                std::string sz = newTmp();
+                out_ << "    " << sz << " = ptrtoint ptr " << gep << " to i64\n";
+                elem_size = sz;
+            }
+        } else {
+            int eb = 1;
+            if (elt == "i16") eb = 2;
+            else if (elt == "i32" || elt == "float") eb = 4;
+            else if (elt == "i64" || elt == "double" || elt == "ptr") eb = 8;
+            elem_size = std::to_string(eb);
+        }
+
+        std::string data_bytes = newTmp();
+        out_ << "    " << data_bytes << " = mul i64 " << count64 << ", " << elem_size << "\n";
+
+        std::string elem_ptr;
+        if (is_slid) {
+            // prepend 8-byte count header so delete can loop destructors
+            std::string total = newTmp();
+            out_ << "    " << total << " = add i64 8, " << data_bytes << "\n";
+            std::string mptr = newTmp();
+            out_ << "    " << mptr << " = call ptr @malloc(i64 " << total << ")\n";
+            out_ << "    store i64 " << count64 << ", ptr " << mptr << "\n";
+            elem_ptr = newTmp();
+            out_ << "    " << elem_ptr << " = getelementptr i8, ptr " << mptr << ", i64 8\n";
+
+            // call ctor on each element
+            auto& info = slid_info_[ne->elem_type];
+            const SlidDef* slid_def = nullptr;
+            for (auto& s : program_.slids)
+                if (s.name == ne->elem_type) { slid_def = &s; break; }
+
+            bool has_any_ctor = info.has_explicit_ctor || (slid_def && slid_def->ctor_body) || info.has_pinit;
+            if (has_any_ctor) {
+                std::string idx_reg = newTmp();
+                out_ << "    " << idx_reg << " = alloca i64\n";
+                out_ << "    store i64 0, ptr " << idx_reg << "\n";
+
+                std::string cond_lbl = newLabel("new_ctor_cond");
+                std::string body_lbl = newLabel("new_ctor_body");
+                std::string end_lbl  = newLabel("new_ctor_end");
+
+                out_ << "    br label %" << cond_lbl << "\n";
+                block_terminated_ = false;
+                out_ << cond_lbl << ":\n";
+                std::string idx = newTmp();
+                out_ << "    " << idx << " = load i64, ptr " << idx_reg << "\n";
+                std::string cmp = newTmp();
+                out_ << "    " << cmp << " = icmp ult i64 " << idx << ", " << count64 << "\n";
+                out_ << "    br i1 " << cmp << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
+
+                block_terminated_ = false;
+                out_ << body_lbl << ":\n";
+                std::string elem = newTmp();
+                out_ << "    " << elem << " = getelementptr %struct." << ne->elem_type
+                     << ", ptr " << elem_ptr << ", i64 " << idx << "\n";
+
+                // initialize fields to defaults
+                for (int i = 0; i < (int)info.field_types.size(); i++) {
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr %struct." << ne->elem_type
+                         << ", ptr " << elem << ", i32 0, i32 " << i << "\n";
+                    std::string val;
+                    if (slid_def && slid_def->fields[i].default_val)
+                        val = emitExpr(*slid_def->fields[i].default_val);
+                    else
+                        val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer" : "0";
+                    out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
+                }
+                if (slid_def && slid_def->ctor_body) {
+                    std::string saved_slid = current_slid_;
+                    std::string saved_self = self_ptr_;
+                    current_slid_ = ne->elem_type;
+                    self_ptr_ = elem;
+                    emitBlock(*slid_def->ctor_body);
+                    current_slid_ = saved_slid;
+                    self_ptr_ = saved_self;
+                }
+                if (info.has_pinit && !info.is_transport_impl)
+                    out_ << "    call void @" << ne->elem_type << "__pinit(ptr " << elem << ")\n";
+                else if (info.has_explicit_ctor)
+                    out_ << "    call void @" << ne->elem_type << "__ctor(ptr " << elem << ")\n";
+
+                std::string idx_next = newTmp();
+                out_ << "    " << idx_next << " = add i64 " << idx << ", 1\n";
+                out_ << "    store i64 " << idx_next << ", ptr " << idx_reg << "\n";
+                out_ << "    br label %" << cond_lbl << "\n";
+
+                block_terminated_ = false;
+                out_ << end_lbl << ":\n";
+            }
+        } else {
+            elem_ptr = newTmp();
+            out_ << "    " << elem_ptr << " = call ptr @malloc(i64 " << data_bytes << ")\n";
+        }
+        return elem_ptr;
     }
 
     if (auto* ne = dynamic_cast<const NewScalarExpr*>(&expr)) {

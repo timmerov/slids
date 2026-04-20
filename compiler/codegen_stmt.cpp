@@ -51,7 +51,64 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
     if (auto* ds = dynamic_cast<const DeleteStmt*>(&stmt)) {
         std::string ptr_val = emitExpr(*ds->operand);
-        out_ << "    call void @free(ptr " << ptr_val << ")\n";
+
+        // determine element type of the pointer
+        std::string ptr_type = inferSlidType(*ds->operand);
+        bool is_array = ptr_type.size() >= 2 && ptr_type.substr(ptr_type.size() - 2) == "[]";
+        std::string elem_type = ptr_type;
+        if (is_array)
+            elem_type = elem_type.substr(0, elem_type.size() - 2);
+        else if (!elem_type.empty() && elem_type.back() == '^')
+            elem_type.pop_back();
+
+        bool is_slid = slid_info_.count(elem_type) > 0;
+
+        if (is_array && is_slid) {
+            // array of user structs: count stored 8 bytes before the data pointer
+            auto& info = slid_info_[elem_type];
+            std::string hdr = newTmp();
+            out_ << "    " << hdr << " = getelementptr i8, ptr " << ptr_val << ", i64 -8\n";
+            if (info.has_dtor) {
+                std::string count = newTmp();
+                out_ << "    " << count << " = load i64, ptr " << hdr << "\n";
+                // call dtor in reverse order
+                std::string idx_reg = newTmp();
+                out_ << "    " << idx_reg << " = alloca i64\n";
+                out_ << "    store i64 " << count << ", ptr " << idx_reg << "\n";
+
+                std::string cond_lbl = newLabel("del_dtor_cond");
+                std::string body_lbl = newLabel("del_dtor_body");
+                std::string end_lbl  = newLabel("del_dtor_end");
+
+                out_ << "    br label %" << cond_lbl << "\n";
+                block_terminated_ = false;
+                out_ << cond_lbl << ":\n";
+                std::string idx = newTmp();
+                out_ << "    " << idx << " = load i64, ptr " << idx_reg << "\n";
+                std::string cmp = newTmp();
+                out_ << "    " << cmp << " = icmp ugt i64 " << idx << ", 0\n";
+                out_ << "    br i1 " << cmp << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
+
+                block_terminated_ = false;
+                out_ << body_lbl << ":\n";
+                std::string idx_prev = newTmp();
+                out_ << "    " << idx_prev << " = sub i64 " << idx << ", 1\n";
+                out_ << "    store i64 " << idx_prev << ", ptr " << idx_reg << "\n";
+                std::string elem = newTmp();
+                out_ << "    " << elem << " = getelementptr %struct." << elem_type
+                     << ", ptr " << ptr_val << ", i64 " << idx_prev << "\n";
+                out_ << "    call void @" << elem_type << "__dtor(ptr " << elem << ")\n";
+                out_ << "    br label %" << cond_lbl << "\n";
+
+                block_terminated_ = false;
+                out_ << end_lbl << ":\n";
+            }
+            out_ << "    call void @free(ptr " << hdr << ")\n";
+        } else {
+            if (is_slid && slid_info_[elem_type].has_dtor)
+                out_ << "    call void @" << elem_type << "__dtor(ptr " << ptr_val << ")\n";
+            out_ << "    call void @free(ptr " << ptr_val << ")\n";
+        }
         // nullify the pointer variable so it is left in a valid (null) state
         if (auto* ve = dynamic_cast<const VarExpr*>(ds->operand.get())) {
             auto it = locals_.find(ve->name);
