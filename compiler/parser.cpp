@@ -1437,7 +1437,9 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "expected ')'");
-    {
+    if (peek().type == TokenType::kSemicolon) {
+        advance(); // forward declaration — no body
+    } else {
         std::vector<std::string> param_names;
         for (auto& p : em.params) param_names.push_back(p.second);
         em.body = parseBlock(param_names);
@@ -1507,7 +1509,9 @@ void Parser::parseExternalMethodBlock(Program& program) {
             if (peek().type == TokenType::kComma) advance();
         }
         expect(TokenType::kRParen, "expected ')'");
-        {
+        if (peek().type == TokenType::kSemicolon) {
+            advance(); // forward declaration — no body
+        } else {
             std::vector<std::string> param_names;
             for (auto& p : em.params) param_names.push_back(p.second);
             em.body = parseBlock(param_names);
