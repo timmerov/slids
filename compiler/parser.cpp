@@ -567,6 +567,11 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             std::make_unique<UnaryExpr>(op, std::move(operand)));
     }
 
+    // naked block: { stmt; stmt; ... }
+    if (t.type == TokenType::kLBrace) {
+        return parseBlock();
+    }
+
     if (t.type == TokenType::kIf) {
         advance();
         auto stmt = std::make_unique<IfStmt>();

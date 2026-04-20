@@ -1747,5 +1747,20 @@ void Codegen::emitStmt(const Stmt& stmt) {
         return;
     }
 
+    if (auto* block = dynamic_cast<const BlockStmt*>(&stmt)) {
+        // naked block — save dtor depth and restore on exit for block-scoped cleanup
+        size_t dtor_mark = dtor_vars_.size();
+        emitBlock(*block);
+        // destroy block-scoped variables in reverse declaration order
+        if (!block_terminated_) {
+            for (int i = (int)dtor_vars_.size() - 1; i >= (int)dtor_mark; i--) {
+                auto& [var_name, slid_type] = dtor_vars_[i];
+                out_ << "    call void @" << slid_type << "__dtor(ptr " << locals_[var_name] << ")\n";
+            }
+        }
+        dtor_vars_.resize(dtor_mark);
+        return;
+    }
+
     throw std::runtime_error("unsupported statement type");
 }

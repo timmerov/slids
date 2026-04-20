@@ -3,15 +3,26 @@ define how class templates work
 within a single source file.
 */
 
+Value(
+    int x_
+) {
+    _() {
+        __println("Value:ctor");
+    }
+    ~() {
+        __println("Value:dtor");
+    }
+}
+
 Vector<T>(
     intptr size_ = 0,
     T[] storage_ = nullptr
 ) {
     _() {
-        __println("ctor");
+        __println("Vector:ctor");
     }
     ~() {
-        __println("dtor");
+        __println("Vector:dtor");
         delete storage_;
     }
 
@@ -24,8 +35,17 @@ Vector<T>(
 }
 
 int32 main() {
-    Vector<int> v;
-    v.resize(10);
+    {
+        __println("Vector<int>:");
+        Vector<int> vint;
+        vint.resize(10);
+    }
+
+    {
+        __println("Vector<Value>:");
+        Vector<Value> vval;
+        vval.resize(3);
+    }
 
     return 0;
 }
