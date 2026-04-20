@@ -32,6 +32,8 @@ g++ foo.o -o foo
 
 There is no automated test suite. Sample programs in `sample/` are the regression tests. Build them with `cd sample && make` and run the binaries in `bin/`. Each sample exercises specific language features (see the Makefile for the full list).
 
+Work-in-progress tests live in `work/`. Build with `cd work && make`. The `vector1` target exercises cross-TU template class instantiation.
+
 ## Compiler pipeline
 
 ```
@@ -56,15 +58,28 @@ There is no automated test suite. Sample programs in `sample/` are the regressio
 
 **File model:** `.slh` headers are public contracts; `.sl` files are private implementations. No forward declarations needed within a `.sl` file — the compiler does two passes.
 
+**Templates across translation units:** When a template function or class is imported, its body is loaded from the adjacent `.sl` impl file at import time. Uses in the consumer TU emit only struct type definitions and `declare` stubs; the compiler records needed instantiations in a `.sli` file. After all sources are compiled, `slidsc --instantiate <build-dir> -o __instantiations.sl` aggregates the `.sli` files and writes a source file with explicit `instantiate Foo<Bar>;` statements. Compiling that file emits the full method bodies. Empty `.sli` files are not written. Exception: if any type argument is a locally-defined (non-importable) slid, that instantiation is emitted inline in the consumer TU instead.
+
 **Enums, operator overloading, nested functions with capture, labeled break/continue, and `@foreign` for C interop** are all supported. See `slids_reference.md` for full syntax.
 
 ## Codegen internals
 
 The codegen class tracks:
 - `locals_` — map from variable name to alloca register
-- `slid_fields_` — field name → index and type for each slid type
-- `func_types_` — function signatures
-- `destructors_` — stack of variables needing cleanup on return
+- `slid_info_` — field name → index and type for each slid type
+- `func_return_types_` / `func_param_types_` — function signatures
+- `dtor_vars_` — stack of variables needing cleanup on return
 - `captures_` — variables captured by nested functions
+
+Template support:
+- `template_funcs_` / `template_slids_` — template definitions indexed by base name
+- `local_template_names_` / `local_slid_template_names_` — templates whose body is defined in this TU (always inlined)
+- `template_func_modules_` / `slid_template_modules_` — imported template name → module (deferred to instantiator)
+- `pending_slid_instantiations_` — concrete class template instances to emit full bodies for
+- `pending_slid_declares_` — imported class template instances: emit struct type + declares only
+- `pending_instantiations_` — concrete function template instances to emit
+- `pending_declares_` — imported function template instances: emit declares only
+
+The explicit-instantiation dispatch (`program_.instantiations`) runs before `collectStringConstants()` so that instantiated bodies are included in the string-constant pre-scan and in the ctor/dtor/method emit loops.
 
 Type mapping: `int` → `i32`, `int64` → `i64`, `bool` → `i1`, `float32` → `float`, `float64` → `double`, pointer types → `ptr`.
