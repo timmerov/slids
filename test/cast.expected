@@ -1,0 +1,6 @@
+nullptr → int32^:    ok (no crash)
+int8[] → void^:      ok
+void^ → int8[]:      ok
+round-trip void^:    expected 99, got 99
+intptr=ADDR round-trip:   ok (no crash)
+bits of 1.0f:        expected 1065353216, got 1065353216

@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BIN_DIR="$SCRIPT_DIR/bin"
+TEST_DIR="$SCRIPT_DIR/test"
+
+SAMPLES=(
+    cast class constructor function1
+    math1 math2 move new_delete parsing
+    pointer sizeof switch type_conv type_infer
+)
+
+UPDATE=0
+if [[ "${1:-}" == "--update" ]]; then
+    UPDATE=1
+fi
+
+normalize() {
+    sed 's/intptr=[0-9][0-9]*/intptr=ADDR/g'
+}
+
+pass=0
+fail=0
+errors=()
+
+for t in "${SAMPLES[@]}"; do
+    bin="$BIN_DIR/$t"
+    expected="$TEST_DIR/$t.expected"
+
+    if [[ ! -x "$bin" ]]; then
+        echo "SKIP $t (binary not found)"
+        continue
+    fi
+
+    actual=$("$bin" 2>&1 | normalize)
+
+    if [[ $UPDATE -eq 1 ]]; then
+        printf '%s\n' "$actual" > "$expected"
+        echo "UPDATE $t"
+        continue
+    fi
+
+    if [[ ! -f "$expected" ]]; then
+        echo "FAIL $t (no .expected file)"
+        ((fail++)) || true
+        errors+=("$t")
+        continue
+    fi
+
+    expected_content=$(normalize < "$expected")
+
+    if [[ "$actual" == "$expected_content" ]]; then
+        echo "PASS $t"
+        ((pass++)) || true
+    else
+        echo "FAIL $t"
+        diff <(printf '%s\n' "$expected_content") <(printf '%s\n' "$actual") | head -20
+        ((fail++)) || true
+        errors+=("$t")
+    fi
+done
+
+if [[ $UPDATE -eq 1 ]]; then
+    echo "Updated ${#SAMPLES[@]} expected files."
+    exit 0
+fi
+
+echo ""
+echo "$pass passed, $fail failed"
+[[ $fail -eq 0 ]]

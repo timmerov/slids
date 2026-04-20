@@ -21,9 +21,15 @@ SAMPLES = \
 	type_conv \
 	type_infer
 
-.PHONY: all clean $(SAMPLES)
+.PHONY: all clean test update $(SAMPLES)
 
 all: $(SAMPLES)
+
+test: all
+	@../run_tests.sh
+
+update: all
+	@../run_tests.sh --update
 
 define SAMPLE_RULES
 $(1): $(BIN_DIR)/$(1)

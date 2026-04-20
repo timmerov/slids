@@ -1,0 +1,4 @@
+p1 == nullptr
+p2 != nullptr
+p1 == nullptr
+p2 == nullptr

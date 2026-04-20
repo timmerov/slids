@@ -1,0 +1,12 @@
+int8(300):           expected 44,  got 44
+int32(int8 -50):     expected -50, got -50
+uint32(uint8 200):   expected 200, got 200
+uint32(int32 65535): expected 65535, got 65535
+float64 3.14159:     3.141590
+int32(3.14159):      expected 3,   got 3
+float64(42):         42.000000
+float32(2.0):        2.000000
+float64(float32 2.0):2.000000
+float32(int(3.14)):   expected 3.000000, got 3.000000
+Value(42):            expected 42,  got 42
+Value(-50):           expected -50, got -50

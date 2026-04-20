@@ -1,0 +1,32 @@
+^ptr<0>=0
+^ptr<1>=1
+^ptr<2>=2
+^ptr<1>=1
+^ptr<0>=0
+^ptr<5>=5
+^ptr<7>=7
+^ptr<2>=2
+^ptr<0>=0
+^other<8>=8
+diff<8>=8
+ptr==other<false>=false
+ptr!=other<true>=true
+ptr<other<true>=true
+ptr<=other<true>=true
+ptr>other<false>=false
+ptr>=other<false>=false
+void^ = int^ pass
+int^ = void^ pass
+ref^<3>=3
+ref^<99>=99
+ref^<3>=3
+ref^<5>=5
+ref==ref2<false>=false
+ref!=ref2<true>=true
+null_ref==nullptr<true>=true
+null_ref!=nullptr<false>=false
+ref^<0>=0
+ref==ptr<true>=true
+ref!=ptr<false>=false
+ref==ref2<false>=false
+ref!=ref2<true>=true
