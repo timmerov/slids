@@ -9,33 +9,14 @@ BUILD_DIR = ../build/sample
 # --- add new samples here ---
 SAMPLES = \
 	biz_buzz \
-	bug01 bug02 bug03 bug04 bug05 bug06 bug08 bug09 \
-	cast \
 	chess1 chess2 chess3 \
 	counter1 counter2 \
-	experiment \
-	function1 \
-	hello1 hello2 \
+	hello1 \
 	leap_years \
-	math1 math2 \
 	memcpy \
-	move \
-	new_delete \
 	primes1 \
-	pointer \
 	reference1 reference2 reference3 \
-	reverse_bits \
-	sizeof \
-	string01 string02 string03 string04 string05 \
-	string06 string07 string08 string09 string10 \
-	string11 string12 string13 string14 string15 \
-	string16 string17 string18 \
-	switch \
-	typeconv \
-	type_infer
-
-# these should not compile:
-#   bug07 bug10
+	reverse_bits
 
 # --- multi-file samples (don't fit the single-file template) ---
 MULTI_SAMPLES = import_test

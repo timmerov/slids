@@ -138,9 +138,10 @@ $(TMT_INST_SL): $(wildcard $(TMT_DIR)/*.sli) $(SLIDSC)
 -include $(TMT_DIR)/template_test.d
 -include $(VEC_DIR)/vector1.d
 -include $(VEC_DIR)/__instantiations.d
+-include $(TMT_DIR)/__instantiations.d
 
 # ---- clean ----
 
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f $(BIN_DIR)/string_test $(BIN_DIR)/template1 $(BIN_DIR)/template2 $(BIN_DIR)/template_test $(BIN_DIR)/string_test $(BIN_DIR)/vector1
+	rm -f $(BIN_DIR)/string_test $(BIN_DIR)/template1 $(BIN_DIR)/template2 $(BIN_DIR)/template_test $(BIN_DIR)/vector1

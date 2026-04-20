@@ -1,19 +1,4 @@
 /*
-new rules:
-
-no more naked op overloads.
-op overloads must be in the class definition.
-the return value of _ and all op overloads is self.
-that's implied.
-we don't need it to be part of the syntax.
-as per these examples.
-
-assignment is a statement, not an expression.
-x = y = 0;
-is not allowed.
-if (x = 0) {}
-is not allowed.
-
 type conversion syntax:
 s = (String="x=") + x;
 and yes i know i'm overloading the meaning of =.
@@ -28,15 +13,6 @@ means create an unnamed temp object of type String
 with value "x=".
 which is a heck of a lot like an assignment.
 except it's a valid expression.
-
-note:
-to be noted, not implemented now. maybe in the future.
-type conversion implies we should change the syntax for
-built-in types.
-int=3.14;
-(float=5) / 100.0;
-let me cogitate on that.
-i like the pointer casting syntax.
 
 note:
 to be noted, not implemented now. maybe in the future.
@@ -80,8 +56,6 @@ a = b + c;
 d = e + f;
 both statements should be able to use the same temp String.
 which will be destructed at the end of the code block.
-
-ensure slids_reference.md is up to date.
 */
 
 /*
