@@ -8,6 +8,7 @@ BUILD_DIR = ../build/test
 
 SAMPLES = \
 	cast \
+	class \
 	constructor \
 	function1 \
 	math1 math2 \
