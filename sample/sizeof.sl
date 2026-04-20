@@ -9,6 +9,8 @@ Vector3(
 int32 main() {
     int x;
     Vector3 vec;
+    int arr[5];
+
     __println("sizeof(char) = 1 = " + sizeof(char));
     __println("sizeof(int) = 4 = " + sizeof(int));
     __println("sizeof(intptr) = 8 = " + sizeof(intptr));
@@ -21,5 +23,7 @@ int32 main() {
     __println("sizeof(x) = 4 = " + sizeof(x));
     __println("sizeof(^x) = 8 = " + sizeof(^x));
     __println("sizeof(vec) = 12 = " + sizeof(vec));
+    __println("sizeof(arr) = 20 = " + sizeof(arr));
+
     return 0;
 }
