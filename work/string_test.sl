@@ -6,7 +6,7 @@ link with the compiled implementation.
 
 import string;
 
-//void String:expand_other(intptr sz);
+void String:expand_other(intptr sz);
 
 int32 main() {
 
@@ -73,7 +73,7 @@ int32 main() {
     println(String + "x=" + x);
 
     /* link should fail. */
-    //s5.expand_other(100);
+    s5.expand_other(100);
 
     return 0;
 }

@@ -181,6 +181,13 @@ void Codegen::collectFunctionSignatures() {
             if (em.method_name == "_" || em.method_name == "~") continue;
             by_name[em.method_name].push_back({em.return_type, em.params});
         }
+        // external forward decls: register signature for methods not defined in this TU
+        for (auto& em : program_.external_methods) {
+            if (em.slid_name != slid.name || em.body) continue;
+            if (em.method_name == "_" || em.method_name == "~") continue;
+            if (!by_name.count(em.method_name))
+                by_name[em.method_name].push_back({em.return_type, em.params});
+        }
         for (auto& [method_name, entries] : by_name) {
             std::string base = slid.name + "__" + method_name;
             bool overloaded = (entries.size() > 1);
