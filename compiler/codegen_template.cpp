@@ -425,6 +425,8 @@ void Codegen::recordSliEntry(const std::string& func_name,
 // --- Codegen::writeSliFile ---
 
 void Codegen::writeSliFile(std::ostream& out) const {
+    if (sli_imports_.empty() && sli_instantiations_.empty()) return;
+
     out << "/* class declarations. */\n";
     for (auto& [module, is_tmpl] : sli_imports_)
         if (!is_tmpl) out << "import " << module << ";\n";
