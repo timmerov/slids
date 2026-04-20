@@ -255,6 +255,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     const SlidDef* slid_def2 = nullptr;
                     for (auto& s : program_.slids)
                         if (s.name == eff_type) { slid_def2 = &s; break; }
+                    if (!slid_def2) {
+                        auto it = concrete_slid_template_defs_.find(eff_type);
+                        if (it != concrete_slid_template_defs_.end()) slid_def2 = &it->second;
+                    }
                     for (int i = 0; i < (int)info.field_types.size(); i++) {
                         std::string gep = newTmp();
                         out_ << "    " << gep << " = getelementptr %struct." << eff_type
@@ -299,10 +303,14 @@ void Codegen::emitStmt(const Stmt& stmt) {
             locals_[decl->name] = reg;
             local_types_[decl->name] = eff_type;
 
-            // find the SlidDef
+            // find the SlidDef (check program slids first, then template instantiations)
             const SlidDef* slid_def = nullptr;
             for (auto& s : program_.slids)
                 if (s.name == eff_type) { slid_def = &s; break; }
+            if (!slid_def) {
+                auto it = concrete_slid_template_defs_.find(eff_type);
+                if (it != concrete_slid_template_defs_.end()) slid_def = &it->second;
+            }
 
             // initialize fields with defaults or ctor args
             for (int i = 0; i < (int)info.field_types.size(); i++) {

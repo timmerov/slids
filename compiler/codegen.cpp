@@ -375,6 +375,10 @@ static int64_t computeFieldsSize(const std::vector<FieldDef>& fields) {
 
 void Codegen::collectSlids() {
     for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) {
+            template_slids_[slid.name] = &slid;
+            continue;
+        }
         SlidInfo info;
         info.name = slid.name;
         for (int i = 0; i < (int)slid.fields.size(); i++) {
@@ -407,6 +411,67 @@ void Codegen::collectSlids() {
             if (em.method_name == "~") info.has_dtor = true;
         }
         slid_info_[slid.name] = std::move(info);
+    }
+}
+
+void Codegen::ensureSlidInstantiated(const std::string& type) {
+    if (slid_info_.count(type) || emitted_slid_templates_.count(type)) return;
+    for (auto& [base, def] : template_slids_) {
+        std::string prefix = base + "__";
+        if (type.size() <= prefix.size() || type.substr(0, prefix.size()) != prefix) continue;
+        std::string rest = type.substr(prefix.size());
+        std::vector<std::string> type_args;
+        std::string cur;
+        for (size_t i = 0; i <= rest.size(); i++) {
+            if (i == rest.size()
+                || (rest[i] == '_' && i + 1 < rest.size() && rest[i + 1] == '_')) {
+                if (!cur.empty()) type_args.push_back(cur);
+                cur.clear();
+                i++; // skip second '_'
+            } else {
+                cur += rest[i];
+            }
+        }
+        if (type_args.size() == def->type_params.size()) {
+            instantiateSlidTemplate(base, type_args);
+            return;
+        }
+    }
+}
+
+void Codegen::scanForSlidTemplateUses() {
+    if (template_slids_.empty()) return;
+
+    std::function<void(const Stmt&)> scanStmt;
+    std::function<void(const BlockStmt&)> scanBlock = [&](const BlockStmt& b) {
+        for (auto& s : b.stmts) scanStmt(*s);
+    };
+    scanStmt = [&](const Stmt& stmt) {
+        if (auto* d = dynamic_cast<const VarDeclStmt*>(&stmt)) {
+            ensureSlidInstantiated(d->type);
+        } else if (auto* b = dynamic_cast<const BlockStmt*>(&stmt)) {
+            scanBlock(*b);
+        } else if (auto* i = dynamic_cast<const IfStmt*>(&stmt)) {
+            scanBlock(*i->then_block);
+            if (i->else_block) scanBlock(*i->else_block);
+        } else if (auto* w = dynamic_cast<const WhileStmt*>(&stmt)) {
+            scanBlock(*w->body);
+        } else if (auto* f = dynamic_cast<const ForRangeStmt*>(&stmt)) {
+            scanBlock(*f->body);
+        } else if (auto* sw = dynamic_cast<const SwitchStmt*>(&stmt)) {
+            for (auto& sc : sw->cases)
+                for (auto& s : sc.stmts) scanStmt(*s);
+        }
+    };
+    for (auto& fn : program_.functions)
+        if (fn.body && fn.type_params.empty()) scanBlock(*fn.body);
+    for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) continue;
+        if (slid.ctor_body)          scanBlock(*slid.ctor_body);
+        if (slid.explicit_ctor_body) scanBlock(*slid.explicit_ctor_body);
+        if (slid.dtor_body)          scanBlock(*slid.dtor_body);
+        for (auto& m : slid.methods)
+            if (m.body) scanBlock(*m.body);
     }
 }
 
@@ -474,10 +539,11 @@ void Codegen::collectStringConstants() {
     };
 
     // collection order must match emission order exactly:
-    // 1. all ctor/dtor bodies (emitSlidCtorDtor loop)
-    // 2. all method bodies   (emitSlidMethods loop)
+    // 1. all ctor/dtor bodies (emitSlidCtorDtor loop, then template instantiations)
+    // 2. all method bodies   (emitSlidMethods loop, then template instantiations)
     // 3. all free functions  (emitFunction loop)
     for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) continue; // template slids emitted on demand
         if (slid.ctor_body)
             for (auto& stmt : slid.ctor_body->stmts) collect(*stmt);
         if (slid.explicit_ctor_body)
@@ -485,8 +551,22 @@ void Codegen::collectStringConstants() {
         if (slid.dtor_body)
             for (auto& stmt : slid.dtor_body->stmts) collect(*stmt);
     }
+    for (auto* slid : pending_slid_instantiations_) {
+        if (slid->ctor_body)
+            for (auto& stmt : slid->ctor_body->stmts) collect(*stmt);
+        if (slid->explicit_ctor_body)
+            for (auto& stmt : slid->explicit_ctor_body->stmts) collect(*stmt);
+        if (slid->dtor_body)
+            for (auto& stmt : slid->dtor_body->stmts) collect(*stmt);
+    }
     for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) continue; // template slids emitted on demand
         for (auto& m : slid.methods)
+            if (m.body)
+                for (auto& stmt : m.body->stmts) collect(*stmt);
+    }
+    for (auto* slid : pending_slid_instantiations_) {
+        for (auto& m : slid->methods)
             if (m.body)
                 for (auto& stmt : m.body->stmts) collect(*stmt);
     }
@@ -504,6 +584,7 @@ void Codegen::emit() {
 
     collectFunctionSignatures();
     collectSlids();
+    scanForSlidTemplateUses();
 
     // validate: class objects cannot be passed by value
     auto checkParams = [&](const std::string& ctx,
@@ -517,6 +598,7 @@ void Codegen::emit() {
     for (auto& fn : program_.functions)
         checkParams(fn.name, fn.params);
     for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) continue; // skip template slids
         for (auto& m : slid.methods)
             checkParams(slid.name + "." + m.name, m.params);
     }
@@ -538,6 +620,7 @@ void Codegen::emit() {
 
     // emit struct types for classes
     for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) continue; // template slids emitted on demand
         auto& info = slid_info_[slid.name];
         out_ << "%struct." << slid.name << " = type { ";
         bool first = true;
@@ -550,6 +633,18 @@ void Codegen::emit() {
         if (info.padding_bytes > 0) {
             if (!first) out_ << ", ";
             out_ << "[" << info.padding_bytes << " x i8]";
+        }
+        out_ << " }\n";
+    }
+    // emit struct types for template class instantiations
+    for (auto* slid : pending_slid_instantiations_) {
+        auto& info = slid_info_[slid->name];
+        out_ << "%struct." << slid->name << " = type { ";
+        bool first = true;
+        for (auto& ft : info.field_types) {
+            if (!first) out_ << ", ";
+            out_ << llvmType(ft);
+            first = false;
         }
         out_ << " }\n";
     }
@@ -609,6 +704,7 @@ void Codegen::emit() {
     // build set of locally-implemented method mangled names
     std::set<std::string> local_methods;
     for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) continue; // skip template slids
         // inline ctor/dtor bodies count as locally defined
         if (slid.explicit_ctor_body) local_methods.insert(slid.name + "__ctor");
         if (slid.dtor_body)          local_methods.insert(slid.name + "__dtor");
@@ -617,6 +713,17 @@ void Codegen::emit() {
         for (auto& m : slid.methods) {
             if (!m.body) continue;
             std::string base = slid.name + "__" + m.name;
+            auto oit = method_overloads_.find(base);
+            if (oit != method_overloads_.end())
+                for (auto& [mn, _] : oit->second) local_methods.insert(mn);
+        }
+    }
+    // template instantiations are always locally defined
+    for (auto* slid : pending_slid_instantiations_) {
+        local_methods.insert(slid->name + "__ctor");
+        local_methods.insert(slid->name + "__dtor");
+        for (auto& m : slid->methods) {
+            std::string base = slid->name + "__" + m.name;
             auto oit = method_overloads_.find(base);
             if (oit != method_overloads_.end())
                 for (auto& [mn, _] : oit->second) local_methods.insert(mn);
@@ -633,6 +740,7 @@ void Codegen::emit() {
         if (em.method_name == "~") local_methods.insert(em.slid_name + "__dtor");
     }
     for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) continue; // skip template slids
         // ctor/dtor — declare if not locally defined
         auto& info = slid_info_[slid.name];
         if (info.has_explicit_ctor && !local_methods.count(slid.name + "__ctor"))
@@ -673,11 +781,19 @@ void Codegen::emit() {
 
     str_counter_ = 0;
 
-    for (auto& slid : program_.slids)
+    for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) continue;
         emitSlidCtorDtor(slid);
+    }
+    for (auto* slid : pending_slid_instantiations_)
+        emitSlidCtorDtor(*slid);
 
-    for (auto& slid : program_.slids)
+    for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) continue;
         emitSlidMethods(slid);
+    }
+    for (auto* slid : pending_slid_instantiations_)
+        emitSlidMethods(*slid);
 
     for (auto& fn : program_.functions)
         if (fn.type_params.empty()) emitFunction(fn);

@@ -85,12 +85,40 @@ bool Parser::isTemplateCallLookahead() const {
     return false;
 }
 
+bool Parser::isTemplateTypeArgLookahead() const {
+    // pos_ is at '<'; scan forward to see if this is a template type-arg list.
+    // Valid contents: type keywords, uppercase idents, ^, [], commas.
+    int i = pos_ + 1;
+    while (i < (int)tokens_.size()) {
+        const Token& ti = tokens_[i];
+        if (ti.type == TokenType::kGt) return true; // found closing '>'
+        bool ok = isTypeName(ti) || isUserTypeName(ti)
+               || ti.type == TokenType::kComma
+               || ti.type == TokenType::kBitXor
+               || ti.type == TokenType::kLBracket
+               || ti.type == TokenType::kRBracket;
+        if (!ok) return false;
+        i++;
+    }
+    return false;
+}
+
 std::string Parser::parseTypeName() {
     std::string base;
     if (isTypeName(peek())) base = advance().value;
     else if (isUserTypeName(peek())) base = advance().value;
     else throw std::runtime_error("Line " + std::to_string(peek().line)
         + ": expected type name, got '" + peek().value + "'");
+    // template type instantiation in type position: Name<Type> → mangled as Name__Type
+    if (peek().type == TokenType::kLt && isTemplateTypeArgLookahead()) {
+        advance(); // consume '<'
+        while (peek().type != TokenType::kGt && peek().type != TokenType::kEof) {
+            std::string ta = parseTypeName();
+            base += "__" + ta;
+            if (peek().type == TokenType::kComma) advance();
+        }
+        expect(TokenType::kGt, "expected '>' after template type args");
+    }
     // consume trailing ^ or [] for pointer/reference types — kept distinct:
     //   ^ = reference (no arithmetic allowed)
     //   [] = pointer  (arithmetic allowed: ++, --, +, -)
@@ -1149,6 +1177,17 @@ SlidDef Parser::parseSlidDef() {
     slid.name = peek().value;
     advance(); // consume class name
 
+    // template type parameters: Vector<T> or Pair<K, V>
+    if (peek().type == TokenType::kLt) {
+        advance(); // consume '<'
+        while (peek().type != TokenType::kGt && peek().type != TokenType::kEof) {
+            slid.type_params.push_back(
+                expect(TokenType::kIdentifier, "expected type parameter name").value);
+            if (peek().type == TokenType::kComma) advance();
+        }
+        expect(TokenType::kGt, "expected '>' after type parameters");
+    }
+
     // parse tuple: (type field_ = default, ...)
     // ... at start = has_ellipsis_prefix (implementation: public fields from transport source)
     // ... at end   = has_ellipsis_suffix (header: private fields defined elsewhere)
@@ -1635,10 +1674,11 @@ Program Parser::parse() {
         else if (peek().type == TokenType::kEnum) {
             program.enums.push_back(parseEnumDef());
         }
-        // slid class definition: UpperCase identifier followed by (
+        // slid class definition: UpperCase identifier followed by ( or <T>(
         else if (isUserTypeName(peek())
             && pos_ + 1 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kLParen) {
+            && (tokens_[pos_ + 1].type == TokenType::kLParen
+                || tokens_[pos_ + 1].type == TokenType::kLt)) {
             program.slids.push_back(parseSlidDef());
         }
         // block-style external methods: TypeName { void method() { ... } ... }

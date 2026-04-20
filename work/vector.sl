@@ -3,19 +3,20 @@ define how class templates work
 within a single source file.
 */
 
-import string;
-
 Vector<T>(
     intptr size_ = 0,
     T[] storage_ = nullptr
 ) {
     _() {
+        __println("ctor");
     }
     ~() {
+        __println("dtor");
         delete storage_;
     }
 
     void resize(intptr new_size) {
+        __println("resize: " + new_size);
         delete storage_;
         size_ = new_size;
         storage_ = new T[new_size];

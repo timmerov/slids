@@ -498,3 +498,82 @@ std::string Codegen::instantiateTemplate(const std::string& name,
 
     return mangled;
 }
+
+// --- Codegen::instantiateSlidTemplate ---
+
+std::string Codegen::instantiateSlidTemplate(const std::string& name,
+                                              const std::vector<std::string>& type_args) {
+    auto tit = template_slids_.find(name);
+    if (tit == template_slids_.end())
+        throw std::runtime_error("unknown template class: " + name);
+    const SlidDef& tmpl = *tit->second;
+
+    if (tmpl.type_params.size() != type_args.size())
+        throw std::runtime_error("template class '" + name + "': expected "
+            + std::to_string(tmpl.type_params.size()) + " type argument(s), got "
+            + std::to_string(type_args.size()));
+
+    std::map<std::string, std::string> subst;
+    for (int i = 0; i < (int)tmpl.type_params.size(); i++)
+        subst[tmpl.type_params[i]] = type_args[i];
+
+    std::string mangled = name;
+    for (auto& t : type_args) mangled += "__" + t;
+
+    if (emitted_slid_templates_.count(mangled)) return mangled;
+    emitted_slid_templates_.insert(mangled);
+
+    // build concrete SlidDef with type substitution
+    SlidDef concrete;
+    concrete.name = mangled;
+    concrete.has_explicit_ctor_decl = tmpl.has_explicit_ctor_decl;
+    concrete.has_explicit_dtor_decl = tmpl.has_explicit_dtor_decl;
+
+    for (auto& f : tmpl.fields) {
+        FieldDef fd;
+        fd.type = subTypeSuffix(f.type, subst);
+        fd.name = f.name;
+        if (f.default_val) fd.default_val = cloneExpr(*f.default_val, subst);
+        concrete.fields.push_back(std::move(fd));
+    }
+    if (tmpl.ctor_body)          concrete.ctor_body          = cloneBlock(*tmpl.ctor_body, subst);
+    if (tmpl.explicit_ctor_body) concrete.explicit_ctor_body = cloneBlock(*tmpl.explicit_ctor_body, subst);
+    if (tmpl.dtor_body)          concrete.dtor_body          = cloneBlock(*tmpl.dtor_body, subst);
+
+    for (auto& m : tmpl.methods) {
+        MethodDef md;
+        md.name        = m.name;
+        md.return_type = subTypeSuffix(m.return_type, subst);
+        for (auto& [pt, pn] : m.params)
+            md.params.emplace_back(subTypeSuffix(pt, subst), pn);
+        if (m.body) md.body = cloneBlock(*m.body, subst);
+        concrete.methods.push_back(std::move(md));
+    }
+
+    // register SlidInfo for the concrete type
+    SlidInfo info;
+    info.name = mangled;
+    for (int i = 0; i < (int)concrete.fields.size(); i++) {
+        info.field_index[concrete.fields[i].name] = i;
+        info.field_types.push_back(concrete.fields[i].type);
+    }
+    info.has_explicit_ctor = concrete.has_explicit_ctor_decl || (concrete.explicit_ctor_body != nullptr);
+    info.has_dtor          = (concrete.dtor_body != nullptr) || concrete.has_explicit_dtor_decl;
+    slid_info_[mangled] = info;
+
+    // register method signatures so call sites resolve correctly
+    for (auto& m : concrete.methods) {
+        std::string base = mangled + "__" + m.name;
+        std::vector<std::string> ptypes;
+        for (auto& [pt, _] : m.params) ptypes.push_back(pt);
+        func_return_types_[base] = m.return_type;
+        func_param_types_[base]  = ptypes;
+        method_overloads_[base].push_back({base, ptypes});
+    }
+
+    // store in the stable map and enqueue for emission
+    concrete_slid_template_defs_[mangled] = std::move(concrete);
+    pending_slid_instantiations_.push_back(&concrete_slid_template_defs_[mangled]);
+
+    return mangled;
+}

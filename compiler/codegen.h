@@ -108,6 +108,12 @@ private:
     std::set<std::string> local_template_names_;       // templates defined in this TU (inline always)
     std::map<std::string, std::string> template_func_modules_; // imported template name -> module
 
+    // template slid (class template) support
+    std::map<std::string, const SlidDef*> template_slids_;       // base name -> template def (not owned)
+    std::set<std::string> emitted_slid_templates_;               // mangled names already processed
+    std::map<std::string, SlidDef> concrete_slid_template_defs_; // mangled name -> owned concrete SlidDef
+    std::vector<SlidDef*> pending_slid_instantiations_;          // ordered list of instantiated slids
+
     // .sli tracking (for imported template instantiations)
     struct SliImport { std::string module; bool is_template; };
     std::vector<SliImport> sli_imports_;
@@ -119,6 +125,10 @@ private:
     void collectStringConstants();
     void collectFunctionSignatures();
     void collectSlids();
+    std::string instantiateSlidTemplate(const std::string& name,
+                                        const std::vector<std::string>& type_args);
+    void ensureSlidInstantiated(const std::string& type);
+    void scanForSlidTemplateUses();
     // template instantiation: builds substituted FunctionDef, registers signatures.
     // force=true: always emit define (for explicit instantiate statements).
     // force=false: inline if local template, else emit declare + record .sli entry.

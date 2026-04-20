@@ -363,6 +363,7 @@ struct MethodDef {
 
 struct SlidDef {
     std::string name;
+    std::vector<std::string> type_params; // non-empty for template slids: Vector<T>
     std::vector<FieldDef> fields;
     bool has_ellipsis_prefix = false;    // tuple starts with ... (implementation file: public fields come from transport source)
     bool has_ellipsis_suffix = false;    // tuple ends with ...   (header file: private fields defined elsewhere)
@@ -469,6 +470,8 @@ private:
 
     // lookahead: pos_ is at '<'; returns true if this is a template type-arg list followed by '('
     bool isTemplateCallLookahead() const;
+    // lookahead: pos_ is at '<'; returns true if this is a template type-arg list (not a comparison)
+    bool isTemplateTypeArgLookahead() const;
 
     SlidDef parseSlidDef();
     EnumDef parseEnumDef();
