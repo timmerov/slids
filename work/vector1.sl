@@ -29,11 +29,11 @@ int32 main() {
         v.resize(3);
     }
 
-    /*{
+    {
         __println("Vector<String>:");
         Vector<String> v;
         v.resize(3);
-    }*/
+    }
 
     return 0;
 }
