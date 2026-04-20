@@ -16,6 +16,4 @@
   - `@impl "other"` annotation in `.slh` to override the same-name convention for the impl file
   - Name conflict detection: if two `.sli` files list `instantiate add<Value>` but `Value` comes from different class headers, `--instantiate` should emit a compile error (same mangled name `add__Value` from two different types)
   - Emit `alwaysinline` or `inlinehint` LLVM attribute on template instantiations
-  - The instantiator (`slidsc --instantiate`) currently produces a `.sli` file for `__instantiations.sl` — it should not
-  - Don't write empty `.sli` files
   - The instantiator should internally build the `.sl` file contents and only overwrite the existing `.sl` file if the contents differ; also ensure the build system (Makefile) does not treat an unchanged file as dirty (so `make` does not unnecessarily rebuild dependents)
