@@ -405,6 +405,10 @@ std::unique_ptr<Expr> Parser::parseUnary() {
         }
         pos_ = saved; // not a cast — restore for comparison operator
     }
+    if (peek().type == TokenType::kPlus) {
+        advance();
+        return parsePrimary();
+    }
     if (peek().type == TokenType::kMinus) {
         advance();
         return std::make_unique<BinaryExpr>("-",

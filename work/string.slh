@@ -79,7 +79,23 @@ String(...)
 
     /* reverse the characters in the string. */
     void reverse();
+
+    /*
+    compare this string to another. results:
+        -1: self <  other
+         0: self == other
+        +1: self >  other
+    */
+    int compare(String^ other);
 }
+
+/* binary comparisons */
+bool op==(String^ sa, String^ sb);
+bool op!=(String^ sa, String^ sb);
+bool op<=(String^ sa, String^ sb);
+bool op>=(String^ sa, String^ sb);
+bool op<(String^ sa, String^ sb);
+bool op>(String^ sa, String^ sb);
 
 /* print the string. */
 void print(String^ s);
@@ -93,3 +109,19 @@ void strcpy(char[] dst, char[] src);
 
 /* copy at most count characters from src to dst. */
 void strcpy(char[] dst, char[] src, intptr count);
+
+/*
+compare null terminated strings. return:
+    0: sa == sb
+    +1: sa > sb
+    -1: sa < sb
+*/
+int strcmp(char[] sa, char[] sb);
+
+/*
+compare at most count characters. return:
+    0: sa == sb
+    +1: sa > sb
+    -1: sa < sb
+*/
+int strcmp(char[] sa, char[] sb, int count);

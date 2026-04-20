@@ -178,6 +178,46 @@ String (
         }
     }
 
+    /*
+    compare this string to another. results:
+        -1: self <  other
+         0: self == other
+        +1: self >  other
+    */
+    int compare(String^ other) {
+        if (other == ^self) {
+            return 0;
+        }
+        sizea = size_;
+        sizeb = other.size_;
+        ptra = storage_;
+        ptrb = other.storage_;
+        while () {
+            if (sizea == 0 && sizeb == 0) {
+                return 0;
+            }
+            if (sizea == 0) {
+                return -1;
+            }
+            if (sizeb == 0) {
+                return +1;
+            }
+            ca = ptra++^;
+            cb = ptrb++^;
+            if (ca > cb) {
+                return +1;
+            }
+            if (ca < cb) {
+                return -1;
+            }
+            if (ca == 0) {
+                return 0;
+            }
+            --sizea;
+            --sizeb;
+        }
+    }
+
 /* private functions. */
 
     /* set to an array of characters. */
@@ -219,6 +259,60 @@ String (
             x /= 10;
         } (x);
     }
+}
+
+/* binary equals */
+bool op==(
+    String^ sa,
+    String^ sb
+) {
+    cmp = sa^.compare(sb);
+    return (cmp == 0);
+}
+
+/* binary not equals */
+bool op!=(
+    String^ sa,
+    String^ sb
+) {
+    cmp = sa^.compare(sb);
+    return (cmp != 0);
+}
+
+/* binary less than or equals */
+bool op<=(
+    String^ sa,
+    String^ sb
+) {
+    cmp = sa^.compare(sb);
+    return (cmp <= 0);
+}
+
+/* binary greater than or equals. */
+bool op>=(
+    String^ sa,
+    String^ sb
+) {
+    cmp = sa^.compare(sb);
+    return (cmp >= 0);
+}
+
+/* binary less than. */
+bool op<(
+    String^ sa,
+    String^ sb
+) {
+    cmp = sa^.compare(sb);
+    return (cmp < 0);
+}
+
+/* binary greater than */
+bool op>(
+    String^ sa,
+    String^ sb
+) {
+    cmp = sa^.compare(sb);
+    return (cmp > 0);
 }
 
 /* print the string. */

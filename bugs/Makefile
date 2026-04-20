@@ -7,7 +7,8 @@ BIN_DIR   = ../bin
 BUILD_DIR = ../build/bugs
 
 # these should not compile: bug07 bug10
-SAMPLES = bug01 bug02 bug03 bug04 bug05 bug06 bug08 bug09
+SAMPLES = bug01 bug02 bug03 bug04 bug05 bug06 bug08 bug09 \
+	bug11
 
 .PHONY: all clean $(SAMPLES)
 

@@ -70,5 +70,9 @@ int32 main() {
     int x = 42;
     println(String + "x=" + x);
 
+    /* comparisons. */
+    b1 = (s1 == s2);
+    println(String + "b1=" + b1);
+
     return 0;
 }
