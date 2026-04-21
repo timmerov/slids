@@ -1677,6 +1677,29 @@ std::string Codegen::inferSlidType(const Expr& expr) {
         // type name used as anonymous temporary (e.g. ValueBoth in ValueBoth + 10)
         if (slid_info_.count(ve->name)) return ve->name;
     }
+    // field access — resolve object's slid type, return raw field type
+    if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
+        std::string slid_name;
+        if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
+            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) {
+                    slid_name = isPtrType(tit->second)
+                        ? tit->second.substr(0, tit->second.size()-2)
+                        : tit->second.substr(0, tit->second.size()-1);
+                }
+            }
+        } else if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end()) slid_name = tit->second;
+        }
+        if (!slid_name.empty() && slid_info_.count(slid_name)) {
+            auto& info = slid_info_[slid_name];
+            auto fit = info.field_index.find(fa->field);
+            if (fit != info.field_index.end())
+                return info.field_types[fit->second];
+        }
+    }
     // free function call — look up return type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
         auto tit = template_funcs_.find(ce->callee);

@@ -1874,8 +1874,12 @@ void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& full_mangle
 
     emitBlock(body);
 
-    if (return_type == "void" && !block_terminated_)
-        out_ << "    ret void\n";
+    if (!block_terminated_) {
+        if (return_type == "void")
+            out_ << "    ret void\n";
+        else
+            out_ << "    unreachable\n";
+    }
 
     out_ << "}\n\n";
 }

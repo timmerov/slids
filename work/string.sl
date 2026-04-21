@@ -189,9 +189,9 @@ String (
             return 0;
         }
         sizea = size_;
-        sizeb = other.size_;
+        sizeb = other^.size_;
         ptra = storage_;
-        ptrb = other.storage_;
+        ptrb = other^.storage_;
         while () {
             if (sizea == 0 && sizeb == 0) {
                 return 0;
