@@ -12,6 +12,7 @@ SAMPLES = \
 	chess1 chess2 chess3 \
 	counter1 counter2 \
 	hello1 \
+	indexop \
 	leap_years \
 	memcpy \
 	primes1 \

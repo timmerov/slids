@@ -775,8 +775,87 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
     if (auto* ia = dynamic_cast<const IndexAssignStmt*>(&stmt)) {
         // base[index] = value — pointer-type indexed store
+
+        // obj.field[index] = value — inline array field on an external object
+        if (auto* fa = dynamic_cast<const FieldAccessExpr*>(ia->base.get())) {
+            auto* ove = dynamic_cast<const VarExpr*>(fa->object.get());
+            if (!ove) throw std::runtime_error("IndexAssign: complex field object not supported");
+            auto tit = local_types_.find(ove->name);
+            if (tit == local_types_.end()) throw std::runtime_error("IndexAssign: unknown type for '" + ove->name + "'");
+            std::string slid_name = tit->second;
+            auto& info = slid_info_[slid_name];
+            auto fit = info.field_index.find(fa->field);
+            if (fit == info.field_index.end()) throw std::runtime_error("IndexAssign: unknown field '" + fa->field + "'");
+            std::string ft = info.field_types[fit->second];
+            if (!isInlineArrayType(ft)) throw std::runtime_error("IndexAssign: field '" + fa->field + "' is not an inline array");
+            auto lb = ft.rfind('[');
+            std::string elem_type = ft.substr(0, lb);
+            std::string sz_str = ft.substr(lb + 1, ft.size() - lb - 2);
+            std::string elt = llvmType(elem_type);
+            std::string obj_ptr = locals_[ove->name];
+            std::string field_gep = newTmp();
+            out_ << "    " << field_gep << " = getelementptr %struct." << slid_name
+                 << ", ptr " << obj_ptr << ", i32 0, i32 " << fit->second << "\n";
+            std::string idx_llvm = exprLlvmType(*ia->index);
+            std::string idx_val = emitExpr(*ia->index);
+            std::string elem_gep = newTmp();
+            out_ << "    " << elem_gep << " = getelementptr [" << sz_str << " x " << elt
+                 << "], ptr " << field_gep << ", i32 0, " << idx_llvm << " " << idx_val << "\n";
+            std::string rhs_val = emitExpr(*ia->value);
+            out_ << "    store " << elt << " " << rhs_val << ", ptr " << elem_gep << "\n";
+            return;
+        }
+
         auto* ve = dynamic_cast<const VarExpr*>(ia->base.get());
         if (!ve) throw std::runtime_error("IndexAssign: complex base not supported");
+
+        // slid op[]= dispatch
+        {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+                std::string slid_name = tit->second;
+                std::string base_name = slid_name + "__op[]=";
+                auto oit = method_overloads_.find(base_name);
+                if (oit != method_overloads_.end() && !oit->second.empty()) {
+                    std::string mangled = oit->second[0].first;
+                    std::string obj_ptr = locals_[ve->name];
+                    auto& mptypes = func_param_types_[mangled];
+                    std::string idx_llvm = mptypes.empty() ? "i32" : llvmType(mptypes[0]);
+                    std::string rhs_llvm = (mptypes.size() < 2) ? "i32" : llvmType(mptypes[1]);
+                    std::string idx_val = emitExpr(*ia->index);
+                    std::string rhs_val = emitExpr(*ia->value);
+                    out_ << "    call void @" << llvmGlobalName(mangled)
+                         << "(ptr " << obj_ptr << ", " << idx_llvm << " " << idx_val
+                         << ", " << rhs_llvm << " " << rhs_val << ")\n";
+                    return;
+                }
+            }
+        }
+
+        // fixed-size array field store inside method body (e.g. int rgb_[3])
+        if (!current_slid_.empty()) {
+            auto& info = slid_info_[current_slid_];
+            auto fit = info.field_index.find(ve->name);
+            if (fit != info.field_index.end() && isInlineArrayType(info.field_types[fit->second])) {
+                std::string ft = info.field_types[fit->second];
+                auto lb = ft.rfind('[');
+                std::string elem_type = ft.substr(0, lb);
+                std::string sz_str = ft.substr(lb + 1, ft.size() - lb - 2);
+                std::string elt = llvmType(elem_type);
+                std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
+                std::string field_gep = newTmp();
+                out_ << "    " << field_gep << " = getelementptr %struct." << current_slid_
+                     << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
+                std::string idx_llvm = exprLlvmType(*ia->index);
+                std::string idx_val = emitExpr(*ia->index);
+                std::string elem_gep = newTmp();
+                out_ << "    " << elem_gep << " = getelementptr [" << sz_str << " x " << elt
+                     << "], ptr " << field_gep << ", i32 0, " << idx_llvm << " " << idx_val << "\n";
+                std::string rhs_val = emitExpr(*ia->value);
+                out_ << "    store " << elt << " " << rhs_val << ", ptr " << elem_gep << "\n";
+                return;
+            }
+        }
 
         std::string base_ptr;
         std::string elem_type_str;

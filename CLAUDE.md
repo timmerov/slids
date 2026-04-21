@@ -5,15 +5,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Rules
 
 - Never run any git command unless the user explicitly asks.
-
-## Workflow
-
-- Scope is the test code or specific lines named. Do not expand scope — do not read other samples, other files, or other lines.
-- **Discussion is not permission to change code. Explicit instruction is required.**
-  - During discussion, you may read files and summarize findings. Nothing else.
-  - After reading, state what needs to change — then stop. Do not ask if you can proceed.
-  - Wait for an explicit instruction to act: "do it", "make the changes", "go ahead", etc.
-  - "We will do X" and "X needs to happen" are not instructions to act.
+- **Scope is strictly limited to the test file or specific lines named. Reading or modifying anything outside that scope is not permitted.**
+- **Do not build or run anything outside the named scope.** If the scope is a single sample, build and run only that sample. If the scope is specific lines, do not consider issues outside those lines.
+- **Discussion is not permission to change code.** Explicit instruction is required: "do it", "make the changes", "go ahead", etc. "We will do X" and "X needs to happen" are not instructions to act.
+- During discussion, reading files and summarizing findings is permitted. Nothing else.
+- After reading, state what needs to change — then stop.
 - Do not ask for permission to change code. Ask clarifying questions about intent instead.
 - Test code may have unrelated issues. Ignore them. Fix one thing at a time.
 

@@ -1011,6 +1011,12 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     std::string field = fa->field;
                     return std::make_unique<FieldAssignStmt>(std::move(obj), field, std::move(val));
                 }
+                // unwrap obj.field[idx] = val -> IndexAssignStmt
+                if (auto* ai = dynamic_cast<ArrayIndexExpr*>(base.get())) {
+                    auto b = std::move(ai->base);
+                    auto idx = std::move(ai->index);
+                    return std::make_unique<IndexAssignStmt>(std::move(b), std::move(idx), std::move(val));
+                }
                 throw std::runtime_error("invalid assignment target");
             }
 
@@ -1207,6 +1213,12 @@ MethodDef Parser::parseMethodDef() {
     else if (m.name == "op" && peek().type == TokenType::kMinusEq) { advance(); m.name = "op-="; }
     else if (m.name == "op" && peek().type == TokenType::kStarEq)  { advance(); m.name = "op*="; }
     else if (m.name == "op" && peek().type == TokenType::kSlashEq) { advance(); m.name = "op/="; }
+    else if (m.name == "op" && peek().type == TokenType::kBracketAssign) { advance(); m.name = "op[]="; }
+    else if (m.name == "op" && peek().type == TokenType::kLBracket) {
+        advance();
+        expect(TokenType::kRBracket, "expected ']'");
+        m.name = "op[]";
+    }
     expect(TokenType::kLParen, "expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         std::string type = parseTypeName();
@@ -1344,6 +1356,16 @@ SlidDef Parser::parseSlidDef() {
             if (peek().type == TokenType::kIdentifier && peek().value == "op") {
                 if (pos_ + 1 >= (int)tokens_.size()) return false;
                 auto t = tokens_[pos_ + 1].type;
+                // op[]= : op + []= + (
+                if (t == TokenType::kBracketAssign) {
+                    return pos_ + 2 < (int)tokens_.size() && tokens_[pos_ + 2].type == TokenType::kLParen;
+                }
+                // op[] : op + [ + ] + (
+                if (t == TokenType::kLBracket) {
+                    return pos_ + 3 < (int)tokens_.size()
+                        && tokens_[pos_ + 2].type == TokenType::kRBracket
+                        && tokens_[pos_ + 3].type == TokenType::kLParen;
+                }
                 bool is_op_tok = (t == TokenType::kEquals   || t == TokenType::kArrowLeft
                     || t == TokenType::kArrowBoth || t == TokenType::kPlus   || t == TokenType::kMinus
                     || t == TokenType::kStar      || t == TokenType::kSlash  || t == TokenType::kPlusEq
@@ -1360,6 +1382,12 @@ SlidDef Parser::parseSlidDef() {
             if (pos_ + 2 >= (int)tokens_.size()) return false;
             if (tokens_[pos_ + 1].type != TokenType::kIdentifier) return false;
             if (tokens_[pos_ + 2].type == TokenType::kLParen) return true;
+            // int op[]( pattern
+            if (tokens_[pos_ + 1].value == "op"
+                    && tokens_[pos_ + 2].type == TokenType::kLBracket
+                    && pos_ + 4 < (int)tokens_.size()
+                    && tokens_[pos_ + 3].type == TokenType::kRBracket
+                    && tokens_[pos_ + 4].type == TokenType::kLParen) return true;
             // old op= pattern: void op = (  (kept for backward compatibility)
             if (tokens_[pos_ + 1].value != "op") return false;
             if (pos_ + 3 >= (int)tokens_.size()) return false;

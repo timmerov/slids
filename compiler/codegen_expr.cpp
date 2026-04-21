@@ -68,6 +68,29 @@ std::string Codegen::emitExpr(const Expr& expr) {
         auto* ve = dynamic_cast<const VarExpr*>(cur);
         if (!ve) throw std::runtime_error("complex array base not supported");
 
+        // slid op[] dispatch
+        {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+                std::string slid_name = tit->second;
+                std::string base_name = slid_name + "__op[]";
+                auto oit = method_overloads_.find(base_name);
+                if (oit != method_overloads_.end() && !oit->second.empty()) {
+                    std::string mangled = oit->second[0].first;
+                    auto rit = func_return_types_.find(mangled);
+                    std::string ret_type = (rit != func_return_types_.end()) ? llvmType(rit->second) : "i32";
+                    std::string obj_ptr = locals_[ve->name];
+                    auto& mptypes = func_param_types_[mangled];
+                    std::string idx_llvm = mptypes.empty() ? "i32" : llvmType(mptypes[0]);
+                    std::string idx_val = emitExpr(*indices[0]);
+                    std::string tmp = newTmp();
+                    out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(mangled)
+                         << "(ptr " << obj_ptr << ", " << idx_llvm << " " << idx_val << ")\n";
+                    return tmp;
+                }
+            }
+        }
+
         // fixed-size local array: use flat alloca GEP
         auto ait = array_info_.find(ve->name);
         if (ait != array_info_.end()) {
@@ -91,6 +114,31 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string val = newTmp();
             out_ << "    " << val << " = load " << elt << ", ptr " << gep << "\n";
             return val;
+        }
+
+        // fixed-size array field read inside method body (e.g. int rgb_[3])
+        if (!current_slid_.empty()) {
+            auto& info = slid_info_[current_slid_];
+            auto fit = info.field_index.find(ve->name);
+            if (fit != info.field_index.end() && isInlineArrayType(info.field_types[fit->second])) {
+                std::string ft = info.field_types[fit->second];
+                auto lb = ft.rfind('[');
+                std::string elem_type = ft.substr(0, lb);
+                std::string sz_str = ft.substr(lb + 1, ft.size() - lb - 2);
+                std::string elt = llvmType(elem_type);
+                std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
+                std::string field_gep = newTmp();
+                out_ << "    " << field_gep << " = getelementptr %struct." << current_slid_
+                     << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
+                std::string idx_llvm = exprLlvmType(*indices[0]);
+                std::string idx_val = emitExpr(*indices[0]);
+                std::string elem_gep = newTmp();
+                out_ << "    " << elem_gep << " = getelementptr [" << sz_str << " x " << elt
+                     << "], ptr " << field_gep << ", i32 0, " << idx_llvm << " " << idx_val << "\n";
+                std::string val = newTmp();
+                out_ << "    " << val << " = load " << elt << ", ptr " << elem_gep << "\n";
+                return val;
+            }
         }
 
         // pointer-type indexing: char[], int[], etc. — either a field or a local ptr var
@@ -1541,7 +1589,19 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
         if (auto* ve = dynamic_cast<const VarExpr*>(cur)) {
             auto ait = array_info_.find(ve->name);
             if (ait != array_info_.end()) return llvmType(ait->second.elem_type);
-            // pointer-type field
+            // slid op[] return type
+            {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+                    std::string base_name = tit->second + "__op[]";
+                    auto oit = method_overloads_.find(base_name);
+                    if (oit != method_overloads_.end() && !oit->second.empty()) {
+                        auto rit = func_return_types_.find(oit->second[0].first);
+                        if (rit != func_return_types_.end()) return llvmType(rit->second);
+                    }
+                }
+            }
+            // field type (pointer or inline array)
             if (!current_slid_.empty()) {
                 auto& info = slid_info_[current_slid_];
                 auto fit = info.field_index.find(ve->name);
@@ -1549,6 +1609,10 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
                     std::string ft = info.field_types[fit->second];
                     if (ft.size() >= 2 && ft.substr(ft.size()-2) == "[]")
                         return llvmType(ft.substr(0, ft.size()-2));
+                    if (isInlineArrayType(ft)) {
+                        auto lb = ft.rfind('[');
+                        return llvmType(ft.substr(0, lb));
+                    }
                 }
             }
             // pointer-type local

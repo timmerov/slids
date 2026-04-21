@@ -291,7 +291,12 @@ std::vector<Token> Lexer::tokenize() {
                     tokens.emplace_back(TokenType::kColon, ":", line_);
                     break;
                 case '[':
-                    tokens.emplace_back(TokenType::kLBracket, "[", line_);
+                    if (peek() == ']' && peek2() == '=') {
+                        advance(); advance();
+                        tokens.emplace_back(TokenType::kBracketAssign, "[]=", line_);
+                    } else {
+                        tokens.emplace_back(TokenType::kLBracket, "[", line_);
+                    }
                     break;
                 case ']':
                     tokens.emplace_back(TokenType::kRBracket, "]", line_);
