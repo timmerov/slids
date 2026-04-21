@@ -185,6 +185,16 @@ String (
         return size_;
     }
 
+    /* begin iterator */
+    char[] begin() {
+        return storage_;
+    }
+
+    /* end iterator */
+    char[] end() {
+        return storage_ + size_;
+    }
+
     /* set to empty string. */
     void clear() {
         size_ = 0;

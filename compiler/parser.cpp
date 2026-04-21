@@ -1378,21 +1378,34 @@ SlidDef Parser::parseSlidDef() {
                 return tokens_[pos_ + 2].type == TokenType::kLParen;
             }
             // regular method: return-type name(
+            // return type may include pointer/iterator suffixes: ^ or []
             if (!(isTypeName(peek()) || isUserTypeName(peek()))) return false;
-            if (pos_ + 2 >= (int)tokens_.size()) return false;
-            if (tokens_[pos_ + 1].type != TokenType::kIdentifier) return false;
-            if (tokens_[pos_ + 2].type == TokenType::kLParen) return true;
+            int name_pos = pos_ + 1;
+            while (name_pos < (int)tokens_.size()) {
+                if (tokens_[name_pos].type == TokenType::kBitXor) {
+                    name_pos++;
+                } else if (tokens_[name_pos].type == TokenType::kLBracket
+                           && name_pos + 1 < (int)tokens_.size()
+                           && tokens_[name_pos + 1].type == TokenType::kRBracket) {
+                    name_pos += 2;
+                } else {
+                    break;
+                }
+            }
+            if (name_pos + 1 >= (int)tokens_.size()) return false;
+            if (tokens_[name_pos].type != TokenType::kIdentifier) return false;
+            if (tokens_[name_pos + 1].type == TokenType::kLParen) return true;
             // int op[]( pattern
-            if (tokens_[pos_ + 1].value == "op"
-                    && tokens_[pos_ + 2].type == TokenType::kLBracket
-                    && pos_ + 4 < (int)tokens_.size()
-                    && tokens_[pos_ + 3].type == TokenType::kRBracket
-                    && tokens_[pos_ + 4].type == TokenType::kLParen) return true;
+            if (tokens_[name_pos].value == "op"
+                    && tokens_[name_pos + 1].type == TokenType::kLBracket
+                    && name_pos + 3 < (int)tokens_.size()
+                    && tokens_[name_pos + 2].type == TokenType::kRBracket
+                    && tokens_[name_pos + 3].type == TokenType::kLParen) return true;
             // old op= pattern: void op = (  (kept for backward compatibility)
-            if (tokens_[pos_ + 1].value != "op") return false;
-            if (pos_ + 3 >= (int)tokens_.size()) return false;
-            return (tokens_[pos_ + 2].type == TokenType::kEquals || tokens_[pos_ + 2].type == TokenType::kArrowLeft)
-                && tokens_[pos_ + 3].type == TokenType::kLParen;
+            if (tokens_[name_pos].value != "op") return false;
+            if (name_pos + 2 >= (int)tokens_.size()) return false;
+            return (tokens_[name_pos + 1].type == TokenType::kEquals || tokens_[name_pos + 1].type == TokenType::kArrowLeft)
+                && tokens_[name_pos + 2].type == TokenType::kLParen;
         };
         if (isMethodDecl()) {
             slid.methods.push_back(parseMethodDef());

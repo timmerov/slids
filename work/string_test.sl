@@ -94,5 +94,13 @@ int32 main() {
     s1[1] = 'E';
     println(String + "s1<HEllo, World!>" + s1);
 
+    /* iterators */
+    String s6 = "ABC";
+    it = s6.begin();
+    while (it < s6.end()) {
+        println(String + "it^<ABC>=" + it^);
+        ++it;
+    }
+
     return 0;
 }

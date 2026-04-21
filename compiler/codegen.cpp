@@ -1749,7 +1749,16 @@ std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
         out_ << "    call void @" << slid_name << "__pinit(ptr " << reg << ")\n";
     else if (info.has_explicit_ctor)
         out_ << "    call void @" << slid_name << "__ctor(ptr " << reg << ")\n";
+    if (info.has_dtor)
+        pending_temp_dtors_.push_back({reg, slid_name});
     return reg;
+}
+
+void Codegen::emitStackRestore(int to_frame) {
+    for (int i = (int)loop_stack_.size() - 1; i >= to_frame; i--) {
+        if (!loop_stack_[i].stack_ptr_reg.empty())
+            out_ << "    call void @llvm.stackrestore(ptr " << loop_stack_[i].stack_ptr_reg << ")\n";
+    }
 }
 
 // Emit an argument expression, taking pointer-vs-value into account.

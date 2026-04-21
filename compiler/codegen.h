@@ -72,6 +72,7 @@ private:
         std::string block_label;   // user label, or "" if unnamed
         std::string break_target;
         std::string continue_target; // "" for switch/plain blocks
+        std::string stack_ptr_reg;  // @llvm.stacksave result for this loop body, or ""
     };
     std::vector<LoopFrame> loop_stack_;
 
@@ -184,6 +185,7 @@ private:
     void emitBlock(const BlockStmt& block);
     void emitStmt(const Stmt& stmt);
     void emitDtors(); // call dtors for all in-scope slid vars that have one
+    void emitStackRestore(int to_frame); // emit stackrestore for frames [top..to_frame]
     std::string emitExpr(const Expr& expr);
     std::string emitCondBool(const Expr& expr); // emit expr then icmp ne <type> val, 0 -> i1
     std::string exprLlvmType(const Expr& expr); // infer LLVM type without emitting IR

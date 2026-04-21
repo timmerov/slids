@@ -1174,11 +1174,13 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
     if (auto* brk = dynamic_cast<const BreakStmt*>(&stmt)) {
         std::string target;
+        int target_frame = (int)loop_stack_.size() - 1;
         if (!brk->label.empty()) {
             // named break: find the frame with this label
             for (int i = (int)loop_stack_.size() - 1; i >= 0; i--) {
                 if (loop_stack_[i].block_label == brk->label) {
                     target = loop_stack_[i].break_target;
+                    target_frame = i;
                     break;
                 }
             }
@@ -1191,6 +1193,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 count++;
                 if (count == brk->number) {
                     target = loop_stack_[i].break_target;
+                    target_frame = i;
                     break;
                 }
             }
@@ -1200,6 +1203,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (break_label_.empty()) throw std::runtime_error("break outside of loop");
             target = break_label_;
         }
+        emitStackRestore(target_frame);
         out_ << "    br label %" << target << "\n";
         block_terminated_ = true;
         return;
@@ -1207,10 +1211,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
     if (auto* cont = dynamic_cast<const ContinueStmt*>(&stmt)) {
         std::string target;
+        int target_frame = (int)loop_stack_.size() - 1;
         if (!cont->label.empty()) {
             for (int i = (int)loop_stack_.size() - 1; i >= 0; i--) {
                 if (loop_stack_[i].block_label == cont->label) {
                     target = loop_stack_[i].continue_target;
+                    target_frame = i;
                     break;
                 }
             }
@@ -1223,6 +1229,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     count++;
                     if (count == cont->number) {
                         target = loop_stack_[i].continue_target;
+                        target_frame = i;
                         break;
                     }
                 }
@@ -1233,6 +1240,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (continue_label_.empty()) throw std::runtime_error("continue outside of loop");
             target = continue_label_;
         }
+        emitStackRestore(target_frame);
         out_ << "    br label %" << target << "\n";
         block_terminated_ = true;
         return;
@@ -1266,14 +1274,21 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string end_lbl  = newLabel("while_end");
         std::string saved_break = break_label_, saved_continue = continue_label_;
         break_label_ = end_lbl; continue_label_ = cond_lbl;
-        loop_stack_.push_back({w->block_label, end_lbl, cond_lbl});
+        loop_stack_.push_back({w->block_label, end_lbl, cond_lbl, ""});
         if (w->bottom_condition) {
             // do-while: body first, condition at bottom
             out_ << "    br label %" << body_lbl << "\n";
             block_terminated_ = false;
             out_ << body_lbl << ":\n";
-            emitBlock(*w->body);
-            if (!block_terminated_) out_ << "    br label %" << cond_lbl << "\n";
+            { std::string sp = newTmp();
+              out_ << "    " << sp << " = call ptr @llvm.stacksave()\n";
+              loop_stack_.back().stack_ptr_reg = sp;
+              emitBlock(*w->body);
+              if (!block_terminated_) {
+                  out_ << "    call void @llvm.stackrestore(ptr " << sp << ")\n";
+                  out_ << "    br label %" << cond_lbl << "\n";
+              }
+            }
             block_terminated_ = false;
             out_ << cond_lbl << ":\n";
             std::string cond_bool = emitCondBool(*w->cond);
@@ -1286,8 +1301,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
             out_ << "    br i1 " << cond_bool << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
             block_terminated_ = false;
             out_ << body_lbl << ":\n";
-            emitBlock(*w->body);
-            if (!block_terminated_) out_ << "    br label %" << cond_lbl << "\n";
+            { std::string sp = newTmp();
+              out_ << "    " << sp << " = call ptr @llvm.stacksave()\n";
+              loop_stack_.back().stack_ptr_reg = sp;
+              emitBlock(*w->body);
+              if (!block_terminated_) {
+                  out_ << "    call void @llvm.stackrestore(ptr " << sp << ")\n";
+                  out_ << "    br label %" << cond_lbl << "\n";
+              }
+            }
         }
         block_terminated_ = false;
         out_ << end_lbl << ":\n";
@@ -1304,7 +1326,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string end_lbl  = newLabel("for_end");
         std::string saved_break = break_label_, saved_continue = continue_label_;
         break_label_ = end_lbl; continue_label_ = incr_lbl;
-        loop_stack_.push_back({f->block_label, end_lbl, incr_lbl});
+        loop_stack_.push_back({f->block_label, end_lbl, incr_lbl, ""});
 
         std::string var_reg;
         bool new_var = !f->var_type.empty();
@@ -1344,8 +1366,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
         block_terminated_ = false;
         out_ << body_lbl << ":\n";
-        emitBlock(*f->body);
-        if (!block_terminated_) out_ << "    br label %" << incr_lbl << "\n";
+        { std::string sp = newTmp();
+          out_ << "    " << sp << " = call ptr @llvm.stacksave()\n";
+          loop_stack_.back().stack_ptr_reg = sp;
+          emitBlock(*f->body);
+          if (!block_terminated_) {
+              out_ << "    call void @llvm.stackrestore(ptr " << sp << ")\n";
+              out_ << "    br label %" << incr_lbl << "\n";
+          }
+        }
 
         block_terminated_ = false;
         out_ << incr_lbl << ":\n";
@@ -1379,7 +1408,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string end_lbl  = newLabel("for_end");
         std::string saved_break = break_label_, saved_continue = continue_label_;
         break_label_ = end_lbl; continue_label_ = incr_lbl;
-        loop_stack_.push_back({f->block_label, end_lbl, incr_lbl});
+        loop_stack_.push_back({f->block_label, end_lbl, incr_lbl, ""});
 
         std::string var_reg = "%var_" + f->var_name;
         out_ << "    " << var_reg << " = alloca i32\n";
@@ -1402,8 +1431,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
         block_terminated_ = false;
         out_ << body_lbl << ":\n";
-        emitBlock(*f->body);
-        if (!block_terminated_) out_ << "    br label %" << incr_lbl << "\n";
+        { std::string sp = newTmp();
+          out_ << "    " << sp << " = call ptr @llvm.stacksave()\n";
+          loop_stack_.back().stack_ptr_reg = sp;
+          emitBlock(*f->body);
+          if (!block_terminated_) {
+              out_ << "    call void @llvm.stackrestore(ptr " << sp << ")\n";
+              out_ << "    br label %" << incr_lbl << "\n";
+          }
+        }
 
         block_terminated_ = false;
         out_ << incr_lbl << ":\n";
@@ -1425,7 +1461,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string end_lbl = newLabel("sw_end");
         std::string saved_break = break_label_;
         break_label_ = end_lbl;
-        loop_stack_.push_back({sw->block_label, end_lbl, ""});
+        loop_stack_.push_back({sw->block_label, end_lbl, "", ""});
 
         std::string disc = emitExpr(*sw->expr);
 
