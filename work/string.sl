@@ -8,7 +8,7 @@ copying null terminated strings,
 copying null terminated strings limited by length.
 */
 
-transport string;
+import string;
 
 /* block definitions. */
 String (

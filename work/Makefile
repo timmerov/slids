@@ -23,8 +23,7 @@ SLIDSC_FLAGS = --import-path $(IMPORT_PATH)
 
 .PHONY: all clean incomplete string_test template1 template2 template_test #vector1
 
-#all: string_test #vector1
-all: incomplete
+all: incomplete string_test #vector1
 
 # ---- incomplete ----
 
