@@ -6,9 +6,21 @@ BIN_DIR="$SCRIPT_DIR/bin"
 TEST_DIR="$SCRIPT_DIR/test"
 
 SAMPLES=(
-    cast class constructor function1 indexop
-    math1 math2 move new_delete parsing
-    pointer sizeof switch type_conv type_infer
+    cast
+    class
+    constructor
+    function1
+    indexop
+    math1 math2
+    move
+    new_delete
+    parsing
+    pointer
+    rangedfor
+    sizeof
+    switch
+    type_conv
+    type_infer
 )
 
 UPDATE=0

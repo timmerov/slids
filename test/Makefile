@@ -17,6 +17,7 @@ SAMPLES = \
 	new_delete \
 	parsing \
 	pointer \
+	rangedfor \
 	sizeof \
 	switch \
 	type_conv \
