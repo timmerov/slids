@@ -8,6 +8,8 @@
 
 - **Deleted operators**: Allow marking an operator as deleted to prevent its use. `op=(SameType^) = delete;` inside a class body disables the synthesized default copy — `SameType x; SameType y = x;` becomes a compile error. Applies to any operator, not just copy.
 
+- **Improve compiler error messages**: Error messages currently report only a line number and a token-level surprise (e.g. "expected '=', got '('""). They should also report the source file name, show the offending source line, and — where possible — give a higher-level description of what construct was being parsed (e.g. "in slid method declaration").
+
 - **Bounds check fixed-size arrays indexed by literals**: When a fixed-size array field or local (e.g. `int rgb_[3]`) is indexed by an integer literal (e.g. `rgb_[3]`), the compiler has enough information to catch the out-of-bounds access at compile time and emit an error. Currently it silently writes past the end of the array.
 
 - **Revisit array handling**: Review how arrays are declared, passed, indexed, and iterated — including whether `int` pointer arithmetic increments correctly and whether pointer math in general is correct. Make a sample file to exercise these cases.
