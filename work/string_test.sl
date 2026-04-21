@@ -72,7 +72,17 @@ int32 main() {
 
     /* comparisons. */
     beq = (s1 == s2);
+    bne = (s1 != s2);
+    bge = (s1 >= s2);
+    ble = (s1 <= s2);
+    bgt = (s1 > s2);
+    blt = (s1 < s2);
     println(String + "beq=" + beq);
+    println(String + "bne=" + bne);
+    println(String + "bge=" + bge);
+    println(String + "ble=" + ble);
+    println(String + "bgt=" + bgt);
+    println(String + "blt=" + blt);
 
     return 0;
 }
