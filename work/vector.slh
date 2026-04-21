@@ -3,9 +3,6 @@ declare a template class in a header file.
 */
 
 Vector<T>(...) {
-    /* incomplete class declaration. */
-    sizeof = delete;
-
     _();
     ~();
 

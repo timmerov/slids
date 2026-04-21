@@ -2,7 +2,7 @@
 define a vector class declared in a header file.
 */
 
-transport vector;
+import vector;
 
 Vector<T>(
     ...,

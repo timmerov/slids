@@ -457,7 +457,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (!known_primitives.count(eff_type) && !is_ptr)
                 throw std::runtime_error("unknown type '" + eff_type + "'");
         }
-        std::string reg = "%var_" + decl->name;
+        std::string reg = uniqueAllocaReg(decl->name);
         std::string llvm_t = llvmType(eff_type);
         out_ << "    " << reg << " = alloca " << llvm_t << "\n";
         locals_[decl->name] = reg;

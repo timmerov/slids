@@ -612,6 +612,7 @@ void Codegen::emit() {
     for (auto* slid : pending_slid_instantiations_) {
         exported_symbols_.insert(slid->name + "__ctor");
         exported_symbols_.insert(slid->name + "__dtor");
+        exported_symbols_.insert(slid->name + "__sizeof");
         std::string prefix = slid->name + "__";
         for (auto& [base, overloads] : method_overloads_) {
             if (base.substr(0, prefix.size()) != prefix) continue;
@@ -799,13 +800,14 @@ void Codegen::emit() {
                 for (auto& [mn, _] : oit->second) local_methods.insert(mn);
         }
     }
-    // imported template instantiations: emit declares for ctor/dtor/methods
+    // imported template instantiations: emit declares for ctor/dtor/sizeof/methods
     for (auto* slid : pending_slid_declares_) {
         auto& info = slid_info_[slid->name];
         if (info.has_explicit_ctor)
             out_ << "declare void @" << slid->name << "__ctor(ptr)\n";
         if (info.has_dtor)
             out_ << "declare void @" << slid->name << "__dtor(ptr)\n";
+        out_ << "declare i64 @" << slid->name << "__sizeof()\n";
         for (auto& [base, overloads] : method_overloads_) {
             std::string prefix = slid->name + "__";
             if (base.substr(0, prefix.size()) != prefix) continue;
