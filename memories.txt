@@ -1,86 +1,149 @@
-# Memory Export — timmer (timmerov+claude@gmail.com)
-# Exported: 2026-04-18
+========================================
+MEMORY INDEX
+========================================
 
----
+- feedback_session_notes.md       — always write memory at session end without being asked
+- feedback_read_modified_files.md — read files before working on them, don't assume contents from prior context
+- feedback_stay_focused.md        — don't investigate tangential areas when user has named the specific construct to fix
+- feedback_build_scope.md         — never build a slids target outside the named scope
 
-## 1. Instructions
 
-[2026-04-11] - Always save session notes to memory at the end of each work session without waiting
-  to be asked. After completing a significant task or at natural session endpoints, write memory
-  files covering what was built, patterns discovered, and gotchas — before the context is lost.
+========================================
+feedback_session_notes.md
+========================================
+Always save session notes to memory at the end of each work session without waiting to be asked. After completing a significant task or at natural session endpoints, write memory files covering what was built, patterns discovered, and gotchas — before the context is lost.
 
----
+Why: Context is lost between sessions; user wants continuity without having to prompt for it.
+How to apply: At session end or after significant task completion, write memory files proactively.
 
-## 2. Identity
 
-(none stored)
+========================================
+feedback_read_modified_files.md
+========================================
+Always read the actual files when working on them. Do not assume file contents from earlier in the conversation or from prior sessions — the user may have edited them.
 
----
+Why: User was frustrated when I worked with stale assumptions about file contents that the user had since modified.
+How to apply: Before reasoning about code in a file, read it. Don't assume it matches what was shown earlier in the session.
 
-## 3. Career
 
-(none stored)
+========================================
+feedback_stay_focused.md
+========================================
+When investigating a bug, don't broaden the search to adjacent areas that are explicitly not the problem. If the user says "focus on X", stop investigating Y even if Y looks related.
 
----
+Why: User had to interrupt a spurious investigation of foo() redefinition (which was in a comment and not the issue) to redirect focus to ctor/dtor only.
+How to apply: Read the bug file carefully before searching broadly. If the user's description names specific constructs (_(), ~()), scope all investigation to those constructs only.
 
-## 4. Projects
 
-[unknown] - **Slids** — a compiled, systems-level programming language. Source files (.sl)
-  compile to LLVM IR (.ll) via slidsc (written in C++17), then to native binaries via llc + g++.
+========================================
+feedback_build_scope.md
+========================================
+Never build a slids target outside the named scope, even to verify nothing is broken.
 
-  **Status:** Active development. Compiler is working with a substantial feature set.
+Why: Scope was sample/rangedfor; I ran make in work/ and built vector1 and other out-of-scope targets. CLAUDE.md already prohibits this explicitly.
+How to apply: If scope is sample/foo, only run `make foo` in sample/. Do not cd to other directories and run make under any circumstance.
 
-  **Key language decisions:**
-  - Everything is a "slid" — one unified construct for functions, classes, methods, constructors
-  - `^` = reference (no arithmetic); `[]` = iterator (arithmetic allowed)
-  - `()` signifies data; `{}` indicates code — consistent throughout
-  - .slh files are declarations only — no code, no template bodies
-  - No lambdas, no recursive functions
-  - `int` always 32-bit; `intptr` is pointer-sized signed (not size_t); `char` is unsigned
-  - `delete` nullifies pointer after freeing; `<-` is explicit pointer theft (move)
-  - `sizeof` returns signed `intptr` (not unsigned size_t — avoids underflow bugs)
-  - `(type=expr)` for explicit type conversion; `transport` keyword for opaque/pimpl types
 
-  **Implemented features (each has a sample file as regression test):**
-  - Basic class, constructor/destructor, methods, slices, copy_chars (string01–string05)
-  - External method definitions, block-style external methods, IndexAssignStmt (string06–07)
-  - Method overloading by type-suffix mangling (string08)
-  - Operator overloading with sret calling convention; forward declarations with `;` (string09)
-  - Pointer-as-array indexing; pointer arithmetic; move/memcpy semantics (string10–14)
-  - Free function overloads with mangled names (string15–16)
-  - String literal + char concatenation; int-to-string conversion; uint arithmetic (string17–18)
-  - sizeof(type), sizeof(expr) — returns intptr; GEP null trick for structs (sizeof.sl)
-  - Strong type inference: `x = 0;` infers int; hex/binary → uint; digit separators (type_infer.sl)
-  - `(type=expr)` conversion syntax; class conversion `(Value=42)`; chained `(float32=int=3.14)` (typeconv.sl)
-  - Pointer reinterpretation casting (cast.sl)
-  - Swap operator `<->` (SwapStmt) (string.sl reverse method)
-  - Templates with explicit type args `add<int>` (template1.sl)
-  - Templates with inferred type args; int widening; slid-over-primitive; reference type errors (template2.sl)
-  - `transport` / incomplete classes / private fields; `__pinit`; annotated .slh export (opaque_test.sl)
-  - `-MF`/`-M` dependency file generation for Makefile auto-dep tracking
-  - `-M` flag: `Program.imported_headers` in parser, written to `.d` file in make-compatible format
+========================================
+project_slids_overview.md
+========================================
+Slids is a compiled, systems-level programming language. Source files (.sl) compile to LLVM IR (.ll) via slidsc (written in C++17), then to native binaries via llc + g++.
 
-  **Template instantiation across TUs (designed, not yet implemented):**
-  - Template bodies in .sl files (never .slh) — no per-TU recompilation
-  - .slh forward-declares template; impl found by naming convention (foo.slh → foo.sl) or `@impl "name"`
-  - Compile phase: imported type args → emit `declare` + write `.inst` file; local type args → ingest impl, emit `define`
-  - .inst file format: `class string` / `template template_decl` / `instantiate add<String>`
-  - `slidsc --instantiate build/` reads all *.inst, deduplicates, emits synthetic .sl, compiles to __instantiations.o
-  - Name conflict (same mangled name from two different class headers) → compile error
+Status: Active development. Compiler is working with a substantial feature set.
 
-  **Codegen internals tracked in memory:**
-  - sret calling convention for functions returning slid types
-  - dtor_vars_ must be cleared at start of each function/method emit
-  - pending_temp_dtors_ flushed before dtor_vars_ in emitDtors() — fixes ret-before-dtor
-  - exprLlvmType(VarExpr): slid type names return "ptr" not "i32"
-  - emitArgForParam: transport types use __pinit not __ctor; ptr args matched by Slids type not LLVM type
-  - Template inferTypeArgs: integer widening, slid-over-primitive, AddrOfExpr → ref type, ref-type conflict throws
+Why: User is building a new language with intentional design trade-offs distinct from C++.
+How to apply: Use these decisions when suggesting features, syntax, or implementation approaches — don't suggest features that conflict with these choices.
 
-  **File layout:** compiler/ (slidsc C++17 source), sample/ (regression tests), work/ (multi-file
-  development area for String class + templates), bin/ (built binaries), build/ (intermediates).
+KEY LANGUAGE DECISIONS
+- Everything is a "slid" — one unified construct for functions, classes, methods, constructors
+- ^ = reference (no arithmetic); [] = iterator (arithmetic allowed)
+- () signifies data; {} indicates code — consistent throughout
+- .slh files are declarations only — no code, no template bodies
+- No lambdas, no recursive functions
+- int always 32-bit; intptr is pointer-sized signed (not size_t); char is unsigned
+- delete nullifies pointer after freeing; <- is explicit pointer theft (move)
+- sizeof returns signed intptr (not unsigned size_t — avoids underflow bugs)
+- (type=expr) for explicit type conversion; incomplete classes via ... prefix/suffix
 
----
+IMPLEMENTED FEATURES (each has a sample file as regression test)
+- Basic class, constructor/destructor, methods, slices, copy_chars (string01-string05)
+- External method definitions, block-style external methods, IndexAssignStmt (string06-07)
+- Method overloading by type-suffix mangling (string08)
+- Operator overloading with sret calling convention; forward declarations with ; (string09)
+- Pointer-as-array indexing; pointer arithmetic; move/memcpy semantics (string10-14)
+- Free function overloads with mangled names (string15-16)
+- String literal + char concatenation; int-to-string conversion; uint arithmetic (string17-18)
+- sizeof(type), sizeof(expr), obj.sizeof(), TypeName.sizeof() — returns intptr; compiler-generated __sizeof function for every complete slid (sizeof.sl)
+- Strong type inference: x = 0; infers int; hex/binary → uint; digit separators (type_infer.sl)
+- (type=expr) conversion syntax; class conversion (Value=42); chained (float32=int=3.14) (typeconv.sl)
+- Pointer reinterpretation casting (cast.sl)
+- Swap operator <-> (SwapStmt) (string.sl reverse method)
+- Templates with explicit type args add<int> (template1.sl)
+- Templates with inferred type args; int widening; slid-over-primitive; reference type errors (template2.sl)
+- Incomplete classes via Foo(...) declaration and Foo(..., fields) implementation; __pinit chains to __ctor; __sizeof enables consumer allocation without knowing private fields
+- -MF/-M dependency file generation for Makefile auto-dep tracking
+- -M flag: Program.imported_headers in parser, written to .d file in make-compatible format
+- new/delete for user-defined types (new_delete.sl)
+- new T[N] stores hidden 8-byte count header; delete T[] reads count, reverse dtor loop, frees header ptr
 
-## 5. Preferences
+TEMPLATE INSTANTIATION ACROSS TUs
+- Template bodies in .sl files (never .slh); impl file found by naming convention
+- Local templates: always define inline
+- Imported templates: emit declare + write .sli file
+- slidsc --instantiate <dir>: reads all *.sli, deduplicates, writes __instantiations.sl
+- instantiate foo<T>; top-level keyword forces inline define
+- Import-once guard via shared_ptr<set<string>>
+- pending_declares_ deferred to module scope
 
-(none stored beyond instructions above)
+LINKAGE MODEL
+- Functions/methods in .slh → external linkage (define)
+- Functions/methods only in .sl → define internal
+- main → always external
+- Nested functions → always define internal
+- exported_symbols_ set tracks what gets external linkage
+
+FORWARD DECLARATIONS OF CLASS METHODS
+- void Simple:hello(); (colon-style) — body=null, codegen skips
+- Simple { void goodbye(); } (block-style) — same null-body treatment
+
+TEMPLATE CLASS SUPPORT
+- Vector<T>(fields) { methods } syntax
+- scanForSlidTemplateUses() pre-pass; instantiateSlidTemplate() in codegen_template.cpp
+- Naked block { } is valid statement with RAII scoping
+
+TRANSPORT REMOVAL + __SIZEOF
+- transport keyword and --export-path flag removed entirely
+- __sizeof compiler-generated for every locally-complete slid
+- sizeof(var) parser fix: isSizeofTypeName checks uppercase initial letter
+
+RANGED FOR LOOPS (session 2026-04-21)
+- for x in (1, 2, 3) — ForTupleStmt: flat array alloca + index; stacksave/stackrestore per iteration
+- for ch in "Hello" / for x in arr — ForArrayStmt: string literal iterates len-1 chars (skipping null); fixed-size array T[N] uses GEP into [N x llvmType(T)]
+- for a in lp (class with begin()/end()) — same ForArrayStmt AST node; codegen detects slid_info_.count(arr_type), emits begin()/end() calls, counter-increments loop var each iteration
+- All three for-in forms: new loop variable scoped to loop (erased from locals_/local_types_ at end)
+- Parser: after 'in', kStringLiteral or kIdentifier → ForArrayStmt; '(' → range/tuple path
+- ForArrayStmt added to all 9 scan sites in codegen.cpp; collectStringConstants also calls collectExpr on array_expr
+
+COMPILER ERROR DETECTION
+- Duplicate ctor _() or dtor ~() in a slid body → compile error
+
+REMAINING TEMPLATE WORK
+- @impl "other" annotation in .slh to override same-name impl convention
+- Name conflict detection for same mangled name from two headers
+- Emit alwaysinline/inlinehint on template instantiations
+
+MAKEFILE STRUCTURE
+- bugs/ — bug regression tests
+- test/ — language feature tests
+- sample/ — sample programs
+- work/ — multi-file development area: string, templates, vector
+
+CODEGEN INTERNALS
+- sret calling convention for functions returning slid types
+- dtor_vars_ cleared at start of each function/method emit
+- pending_temp_dtors_ flushed before dtor_vars_ in emitDtors()
+- exprLlvmType(VarExpr): slid type names return "ptr" not "i32"
+- pinit rule: ALL struct initialization through __pinit — never skip it
+
+FILE LAYOUT
+compiler/ (slidsc C++17 source), sample/ (regression tests), work/ (multi-file dev area), bin/ (binaries), build/ (intermediates)
