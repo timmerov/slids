@@ -1,7 +1,7 @@
 /*
 String class declaration.
 
-also included are hellper functions for:
+also included are helper functions for:
 concatenating strings,
 length of a null terminated string,
 copying null terminated strings,

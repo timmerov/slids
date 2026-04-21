@@ -1,4 +1,65 @@
 
-TODO list:
+consider incomplete template classes:
 
-see TODO.md
+demo.slh:
+
+Simple<T> (...) {
+    _();
+    ~();
+    void print();
+    /* this is optional because we know it's an incomplete class. */
+    intptr sizeof();
+}
+
+demo.sl:
+
+Simple<T>(
+    ...,
+    T x_
+) {
+    _() {
+        __println("Simple:ctor");
+    }
+    ~() {
+        __println("Simple:dtor");
+    }
+    void print() {
+        println("value=" + x);
+    }
+    intptr sizeof() = auto;
+}
+
+user.sl:
+
+int32 main() {
+    Simple<int> sint = 42;
+    Simple<String> sstr = "Hello, World!";
+
+    println(String + "sizeof(sint)<4>=" + sizeof(sint));
+    println(String + "sizeof(sstr)<24>=" + sizeof(sstr));
+
+    println(String + "sint=<42>" + sint);
+    println(String + "sstr=<Hello, World!>" + sstr);
+}
+
+thoughts:
+
+we could transport incomplete template classes.
+but what's the format?
+repeat the class line by line N times?
+blech.
+
+better solution is for the instantiator to export a function
+that returns the size of the instantiated class.
+equivalent to:
+
+intptr Simple<int>:sizeof() { return 4; }
+intptr Simple<String>:sizeof() { return 24; }
+
+and... we should do this for all classes.
+in other words, we don't need the transport feature.
+
+so string.sl would import string.slh.
+and export the compiler generated function:
+
+intptr String:sizeof() { return 24; }

@@ -2,9 +2,10 @@
 define a vector class declared in a header file.
 */
 
-import vector;
+transport vector;
 
 Vector<T>(
+    ...,
     intptr size_ = 0,
     T[] storage_ = nullptr
 ) {
