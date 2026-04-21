@@ -71,8 +71,8 @@ int32 main() {
     println(String + "x=" + x);
 
     /* comparisons. */
-    b1 = (s1 == s2);
-    println(String + "b1=" + b1);
+    beq = (s1 == s2);
+    println(String + "beq=" + beq);
 
     return 0;
 }

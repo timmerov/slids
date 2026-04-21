@@ -1356,7 +1356,10 @@ std::string Codegen::exprSlidType(const Expr& expr) {
             // free function overload: return type is the slid name
             if (rit != func_return_types_.end() && slid_info_.count(rit->second))
                 return rit->second;
-            // fallback: infer from first param type
+            // return type is a known primitive — this expression is not slid-typed
+            if (rit != func_return_types_.end() && !rit->second.empty() && rit->second != "void")
+                return "";
+            // fallback: infer from first param type (for overloads with unknown return type)
             auto pit = func_param_types_.find(mangled);
             if (pit != func_param_types_.end() && !pit->second.empty()) {
                 std::string t = pit->second[0];

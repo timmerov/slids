@@ -676,6 +676,19 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     out_ << "    call void @" << llvmGlobalName(op_func) << "(" << args << ")\n";
                     return tmp_alloca;
                 }
+                // free function returning a primitive type (e.g. bool op==(String^, String^))
+                if (!res_slid.empty() && res_slid != "void") {
+                    auto& ptypes = func_param_types_[op_func];
+                    std::string la = emitArgForParam(*b->left,  ptypes.size() > 0 ? ptypes[0] : "");
+                    std::string ra = emitArgForParam(*b->right, ptypes.size() > 1 ? ptypes[1] : "");
+                    std::string args;
+                    if (ptypes.size() > 0) args = llvmType(ptypes[0]) + " " + la;
+                    if (ptypes.size() > 1) args += (args.empty() ? "" : ", ") + llvmType(ptypes[1]) + " " + ra;
+                    std::string ret_llvm = llvmType(res_slid);
+                    std::string tmp = newTmp();
+                    out_ << "    " << tmp << " = call " << ret_llvm << " @" << llvmGlobalName(op_func) << "(" << args << ")\n";
+                    return tmp;
+                }
             }
         }
 
@@ -1743,6 +1756,11 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     if (auto* be = dynamic_cast<const BinaryExpr*>(&expr)) {
         std::string slid = exprSlidType(expr);
         if (!slid.empty()) return slid;
+        // comparison and logical operators always produce bool, not the operand type
+        if (be->op == "==" || be->op == "!=" || be->op == "<" ||
+            be->op == ">"  || be->op == "<=" || be->op == ">=" ||
+            be->op == "&&" || be->op == "||" || be->op == "^^")
+            return "bool";
         return inferSlidType(*be->left);
     }
     // unary — propagate through
