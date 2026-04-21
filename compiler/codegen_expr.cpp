@@ -298,6 +298,21 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
+        // obj.sizeof() and TypeName.sizeof() — compiler-generated __sizeof, no self arg
+        if (mc->method == "sizeof") {
+            std::string slid_name;
+            if (auto* ve = dynamic_cast<const VarExpr*>(mc->object.get())) {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) slid_name = tit->second;
+                else if (slid_info_.count(ve->name)) slid_name = ve->name; // TypeName.sizeof()
+            }
+            if (slid_name.empty())
+                throw std::runtime_error("sizeof(): cannot determine slid type");
+            std::string reg = newTmp();
+            out_ << "    " << reg << " = call i64 @" << slid_name << "__sizeof()\n";
+            return reg;
+        }
+
         // helper to get slid_name and obj_ptr from any object expression
         std::string slid_name, obj_ptr;
         if (auto* ve = dynamic_cast<const VarExpr*>(mc->object.get())) {
@@ -997,19 +1012,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
             // pointer/iterator types — size of a pointer
             if (tn.size() >= 1 && tn.back() == '^') return "8";
             if (tn.size() >= 2 && tn.substr(tn.size()-2) == "[]") return "8";
-            // slid (struct) type — use sizeof_override if annotated, else GEP null trick
+            // slid (struct) type — call __sizeof
             if (slid_info_.count(tn)) {
-                auto& sinfo = slid_info_[tn];
-                if (sinfo.sizeof_override > 0) {
-                    std::string reg = newTmp();
-                    out_ << "    " << reg << " = add i64 " << sinfo.sizeof_override << ", 0\n";
-                    return reg;
-                }
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr %struct." << tn << ", ptr null, i32 1\n";
-                std::string sz = newTmp();
-                out_ << "    " << sz << " = ptrtoint ptr " << gep << " to i64\n";
-                return sz;
+                std::string reg = newTmp();
+                out_ << "    " << reg << " = call i64 @" << tn << "__sizeof()\n";
+                return reg;
             }
             return "0";
         };
@@ -1082,14 +1089,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
         // compute element size
         std::string elem_size;
         if (is_slid) {
-            auto& sinfo = slid_info_[ne->elem_type];
-            if (sinfo.sizeof_override > 0) {
-                elem_size = std::to_string(sinfo.sizeof_override);
-            } else {
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr %struct." << ne->elem_type << ", ptr null, i32 1\n";
+            {
                 std::string sz = newTmp();
-                out_ << "    " << sz << " = ptrtoint ptr " << gep << " to i64\n";
+                out_ << "    " << sz << " = call i64 @" << ne->elem_type << "__sizeof()\n";
                 elem_size = sz;
             }
         } else {
@@ -1191,16 +1193,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
         // compute sizeof(stype) and malloc
         std::string size_val;
         if (slid_info_.count(stype)) {
-            auto& sinfo = slid_info_[stype];
-            if (sinfo.sizeof_override > 0) {
-                size_val = std::to_string(sinfo.sizeof_override);
-            } else {
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr %struct." << stype << ", ptr null, i32 1\n";
-                std::string sz = newTmp();
-                out_ << "    " << sz << " = ptrtoint ptr " << gep << " to i64\n";
-                size_val = sz;
-            }
+            std::string sz = newTmp();
+            out_ << "    " << sz << " = call i64 @" << stype << "__sizeof()\n";
+            size_val = sz;
         } else {
             // primitive type
             std::string elt = llvmType(stype);
@@ -1570,6 +1565,7 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // method call — look up return type
     if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
+        if (mc->method == "sizeof") return "i64";
         std::string slid_name;
         if (auto* ve = dynamic_cast<const VarExpr*>(mc->object.get())) {
             auto tit = local_types_.find(ve->name);

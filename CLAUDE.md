@@ -6,6 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Never run any git command unless the user explicitly asks.
 
+## Workflow
+
+- Scope is the test code or specific lines named. Do not expand scope — do not read other samples, other files, or other lines.
+- **Discussion is not permission to change code. Explicit instruction is required.**
+  - During discussion, you may read files and summarize findings. Nothing else.
+  - After reading, state what needs to change — then stop. Do not ask if you can proceed.
+  - Wait for an explicit instruction to act: "do it", "make the changes", "go ahead", etc.
+  - "We will do X" and "X needs to happen" are not instructions to act.
+- Do not ask for permission to change code. Ask clarifying questions about intent instead.
+- Test code may have unrelated issues. Ignore them. Fix one thing at a time.
+
 ## What this is
 
 Slids is a compiled, systems-level programming language. Source files (`.sl`) compile to LLVM IR (`.ll`), then to native object files via `llc`, then linked with `g++`. The compiler (`slidsc`) is written in C++17.

@@ -155,7 +155,6 @@ Token Lexer::readIdentifierOrKeyword() {
     if (value == "false")    return Token(TokenType::kFalse,    value, line_);
     if (value == "if")       return Token(TokenType::kIf,       value, line_);
     if (value == "else")     return Token(TokenType::kElse,     value, line_);
-    if (value == "transport") return Token(TokenType::kTransport, value, line_);
     if (value == "while")    return Token(TokenType::kWhile,    value, line_);
     if (value == "for")      return Token(TokenType::kFor,      value, line_);
     if (value == "in")       return Token(TokenType::kIn,       value, line_);

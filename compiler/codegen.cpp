@@ -223,7 +223,10 @@ void Codegen::collectFunctionSignatures() {
         }
         if (slid.has_explicit_ctor_decl) exported_symbols_.insert(slid.name + "__ctor");
         if (slid.has_explicit_dtor_decl) exported_symbols_.insert(slid.name + "__dtor");
-        if (slid.is_transport_impl)      exported_symbols_.insert(slid.name + "__pinit");
+        if (slid.is_transport_impl) {
+            exported_symbols_.insert(slid.name + "__pinit");
+            exported_symbols_.insert(slid.name + "__sizeof");
+        }
     }
 }
 
@@ -386,30 +389,6 @@ void Codegen::analyzeNestedFunctions(const FunctionDef& fn) {
 }
 
 
-// Compute byte size of a Slids type for struct layout (LLVM natural alignment rules).
-// Pointers/iterators (types ending in ^ or []) are always 8 bytes on 64-bit.
-static int64_t slidsTypeSize(const std::string& t) {
-    if (t == "bool" || t == "int8" || t == "uint8" || t == "char") return 1;
-    if (t == "int16" || t == "uint16") return 2;
-    if (t == "int" || t == "int32" || t == "uint" || t == "uint32" || t == "float32") return 4;
-    if (t == "int64" || t == "uint64" || t == "intptr" || t == "float64") return 8;
-    // pointer / iterator types — and any unknown type (user struct, etc.)
-    return 8;
-}
-
-static int64_t computeFieldsSize(const std::vector<FieldDef>& fields) {
-    int64_t offset = 0;
-    int64_t max_align = 1;
-    for (auto& f : fields) {
-        int64_t sz = slidsTypeSize(f.type);
-        int64_t al = sz; // natural alignment = size for all primitives/pointers
-        if (al > max_align) max_align = al;
-        offset = (offset + al - 1) & ~(al - 1); // align up
-        offset += sz;
-    }
-    // trailing pad to multiple of max_align
-    return (offset + max_align - 1) & ~(max_align - 1);
-}
 
 void Codegen::collectSlids() {
     for (auto& slid : program_.slids) {
@@ -427,18 +406,10 @@ void Codegen::collectSlids() {
             info.field_index[slid.fields[i].name] = i;
             info.field_types.push_back(slid.fields[i].type);
         }
-        // annotated incomplete type seen by consumer: use __pinit for all initialization
-        if (slid.sizeof_value > 0 && slid.has_ellipsis_suffix) {
-            int64_t public_size = computeFieldsSize(slid.fields);
-            info.sizeof_override = slid.sizeof_value;
-            info.padding_bytes = slid.sizeof_value - public_size;
-            if (info.padding_bytes < 0)
-                throw std::runtime_error("sizeof annotation for '" + slid.name
-                    + "' (" + std::to_string(slid.sizeof_value)
-                    + ") is smaller than its public fields (" + std::to_string(public_size) + ")");
-            info.has_pinit = true; // consumer always calls __pinit; __pinit chains to __ctor if needed
-        }
-        // transport impl: complete locally; emits __pinit for consumer (does NOT set has_pinit)
+        // declaration of incomplete class: consumer calls __pinit and __sizeof
+        if (slid.has_ellipsis_suffix)
+            info.has_pinit = true;
+        // impl side: complete locally; emits __pinit and __sizeof for consumer
         if (slid.is_transport_impl) {
             info.is_transport_impl = true;
             info.public_field_count = slid.public_field_count;
@@ -682,10 +653,12 @@ void Codegen::emit() {
         if (fn.body && fn.type_params.empty()) analyzeNestedFunctions(fn);
 
     // emit struct types for classes
-    std::set<std::string> emitted_structs;
-    for (auto& slid : program_.slids) {
-        if (!slid.type_params.empty()) continue; // template slids emitted on demand
-        if (!emitted_structs.insert(slid.name).second) continue; // deduplicate
+    // collect which names have an implementation slid in this TU
+    std::set<std::string> has_impl_slid;
+    for (auto& slid : program_.slids)
+        if (slid.is_transport_impl) has_impl_slid.insert(slid.name);
+
+    auto emitStructType = [&](const SlidDef& slid) {
         auto& info = slid_info_[slid.name];
         out_ << "%struct." << slid.name << " = type { ";
         bool first = true;
@@ -694,12 +667,27 @@ void Codegen::emit() {
             first = false;
             out_ << llvmType(info.field_types[i]);
         }
-        // for annotated incomplete types: append opaque padding bytes
         if (info.padding_bytes > 0) {
             if (!first) out_ << ", ";
             out_ << "[" << info.padding_bytes << " x i8]";
         }
         out_ << " }\n";
+    };
+
+    std::set<std::string> emitted_structs;
+    // first pass: emit implementation slids (complete field layout)
+    for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) continue;
+        if (!slid.is_transport_impl) continue;
+        if (!emitted_structs.insert(slid.name).second) continue;
+        emitStructType(slid);
+    }
+    // second pass: emit remaining slids (skip names already covered by impl)
+    for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) continue;
+        if (slid.is_transport_impl) continue;
+        if (!emitted_structs.insert(slid.name).second) continue;
+        emitStructType(slid);
     }
     // emit struct types for template class instantiations
     for (auto* slid : pending_slid_instantiations_) {
@@ -785,8 +773,13 @@ void Codegen::emit() {
         // inline ctor/dtor bodies count as locally defined
         if (slid.explicit_ctor_body) local_methods.insert(slid.name + "__ctor");
         if (slid.dtor_body)          local_methods.insert(slid.name + "__dtor");
-        // transport impl slids locally define __pinit
-        if (slid.is_transport_impl) local_methods.insert(slid.name + "__pinit");
+        // impl slids locally define __pinit and __sizeof
+        if (slid.is_transport_impl) {
+            local_methods.insert(slid.name + "__pinit");
+            local_methods.insert(slid.name + "__sizeof");
+        }
+        // all non-declaration slids define __sizeof locally
+        if (!slid.has_ellipsis_suffix) local_methods.insert(slid.name + "__sizeof");
         for (auto& m : slid.methods) {
             if (!m.body) continue;
             std::string base = slid.name + "__" + m.name;
@@ -846,6 +839,8 @@ void Codegen::emit() {
             out_ << "declare void @" << slid.name << "__dtor(ptr)\n";
         if (info.has_pinit && !local_methods.count(slid.name + "__pinit"))
             out_ << "declare void @" << slid.name << "__pinit(ptr)\n";
+        if (info.has_pinit && !local_methods.count(slid.name + "__sizeof"))
+            out_ << "declare i64 @" << slid.name << "__sizeof()\n";
         // regular methods: first arg is always ptr (self)
         for (auto& [base, overloads] : method_overloads_) {
             if (base.substr(0, slid.name.size() + 2) != slid.name + "__") continue;
@@ -1139,6 +1134,17 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
 
         current_slid_ = "";
         self_ptr_ = "";
+    }
+
+    // emit __sizeof for every locally-complete slid (not for consumer-side declarations)
+    if (!slid.has_ellipsis_suffix) {
+        std::string linkage = isExported(slid.name + "__sizeof") ? "" : "internal ";
+        out_ << "define " << linkage << "i64 @" << slid.name << "__sizeof() {\n";
+        out_ << "entry:\n";
+        out_ << "    %gep0 = getelementptr %struct." << slid.name << ", ptr null, i32 1\n";
+        out_ << "    %sz0 = ptrtoint ptr %gep0 to i64\n";
+        out_ << "    ret i64 %sz0\n";
+        out_ << "}\n\n";
     }
 }
 
@@ -1700,9 +1706,16 @@ void Codegen::emitSlidCopy(const std::string& slid_name,
 std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
     auto& info = slid_info_[slid_name];
     std::string reg = newTmp();
-    out_ << "    " << reg << " = alloca %struct." << slid_name << "\n";
+    if (info.has_pinit) {
+        std::string sz = newTmp();
+        out_ << "    " << sz << " = call i64 @" << slid_name << "__sizeof()\n";
+        out_ << "    " << reg << " = alloca i8, i64 " << sz << "\n";
+    } else {
+        out_ << "    " << reg << " = alloca %struct." << slid_name << "\n";
+    }
     const SlidDef* slid_def = nullptr;
     for (auto& s : program_.slids) if (s.name == slid_name) { slid_def = &s; break; }
+    if (!info.has_pinit) {
     for (int i = 0; i < (int)info.field_types.size(); i++) {
         std::string gep = newTmp();
         out_ << "    " << gep << " = getelementptr %struct." << slid_name
@@ -1714,6 +1727,7 @@ std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
             val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer" : "0";
         out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
     }
+    } // !has_pinit
     if (slid_def && slid_def->ctor_body) {
         std::string saved_slid = current_slid_;
         std::string saved_self = self_ptr_;

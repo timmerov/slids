@@ -5,6 +5,7 @@ LLCFLAGS = --filetype=obj --relocation-model=pic
 
 BIN_DIR    = ../bin
 BUILD_DIR  = ../build/work
+INC_DIR    = $(BUILD_DIR)/incomplete
 ST_DIR     = $(BUILD_DIR)/string_test
 TM1_DIR    = $(BUILD_DIR)/template1
 TM2_DIR    = $(BUILD_DIR)/template2
@@ -13,21 +14,31 @@ TMT_DIR    = $(BUILD_DIR)/template_test
 VEC_INST_SL  = $(VEC_DIR)/__instantiations.sl
 VEC_INST_LL  = $(VEC_DIR)/__instantiations.ll
 VEC_INST_OBJ = $(VEC_DIR)/__instantiations.o
-EXPORT_DIR  = $(BUILD_DIR)/inc
 TMT_INST_SL = $(TMT_DIR)/__instantiations.sl
 TMT_INST_LL = $(TMT_DIR)/__instantiations.ll
 TMT_INST_OBJ = $(TMT_DIR)/__instantiations.o
 
-# import-path: source directory (for .slh files alongside .sl source)
-# export-path: build directory (annotated .slh files written here; searched first by import)
 IMPORT_PATH = .
-EXPORT_PATH = $(EXPORT_DIR)
+SLIDSC_FLAGS = --import-path $(IMPORT_PATH)
 
-SLIDSC_FLAGS = --import-path $(IMPORT_PATH) --export-path $(EXPORT_PATH)
+.PHONY: all clean incomplete string_test template1 template2 template_test #vector1
 
-.PHONY: all clean string_test template1 template2 template_test #vector1
+#all: string_test #vector1
+all: incomplete
 
-all: string_test #vector1
+# ---- incomplete ----
+
+incomplete: $(BIN_DIR)/incomplete
+
+$(BIN_DIR)/incomplete: $(INC_DIR)/incomplete.o
+	$(CXX) $^ -o $@
+
+$(INC_DIR)/incomplete.o: $(INC_DIR)/incomplete.ll
+	$(LLC) $(LLCFLAGS) $< -o $@
+
+$(INC_DIR)/incomplete.ll: incomplete.sl $(SLIDSC)
+	mkdir -p $(INC_DIR)
+	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS)
 
 string_test: $(BIN_DIR)/string_test template1 template2 template_test
 
@@ -144,4 +155,4 @@ $(TMT_INST_SL): $(wildcard $(TMT_DIR)/*.sli) $(SLIDSC)
 
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f $(BIN_DIR)/string_test $(BIN_DIR)/template1 $(BIN_DIR)/template2 $(BIN_DIR)/template_test #$(BIN_DIR)/vector1
+	rm -f $(BIN_DIR)/incomplete $(BIN_DIR)/string_test $(BIN_DIR)/template1 $(BIN_DIR)/template2 $(BIN_DIR)/template_test #$(BIN_DIR)/vector1

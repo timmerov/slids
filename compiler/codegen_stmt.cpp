@@ -313,20 +313,27 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
 
             std::string reg = uniqueAllocaReg(decl->name);
-            out_ << "    " << reg << " = alloca %struct." << eff_type << "\n";
+            if (info.has_pinit) {
+                std::string sz = newTmp();
+                out_ << "    " << sz << " = call i64 @" << eff_type << "__sizeof()\n";
+                out_ << "    " << reg << " = alloca i8, i64 " << sz << "\n";
+            } else {
+                out_ << "    " << reg << " = alloca %struct." << eff_type << "\n";
+            }
             locals_[decl->name] = reg;
             local_types_[decl->name] = eff_type;
 
             // find the SlidDef (check program slids first, then template instantiations)
             const SlidDef* slid_def = nullptr;
             for (auto& s : program_.slids)
-                if (s.name == eff_type) { slid_def = &s; break; }
+                if (s.name == eff_type) slid_def = &s; // last match = implementation slid
             if (!slid_def) {
                 auto it = concrete_slid_template_defs_.find(eff_type);
                 if (it != concrete_slid_template_defs_.end()) slid_def = &it->second;
             }
 
-            // initialize fields with defaults or ctor args
+            // initialize fields with defaults or ctor args (skip for incomplete types)
+            if (!info.has_pinit) {
             for (int i = 0; i < (int)info.field_types.size(); i++) {
                 std::string gep = newTmp();
                 out_ << "    " << gep << " = getelementptr %struct." << eff_type
@@ -338,7 +345,6 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 } else if (slid_def && slid_def->fields[i].default_val) {
                     val = emitExpr(*slid_def->fields[i].default_val);
                 } else {
-                    // inline array fields use zeroinitializer; scalars use 0
                     val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer" : "0";
                 }
                 out_ << "    store " << llvmType(info.field_types[i])
@@ -355,9 +361,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 current_slid_ = saved_slid;
                 self_ptr_ = saved_self;
             }
+            } // !has_pinit
 
             // consumer of incomplete type: call __pinit (initializes private fields, chains to __ctor)
-            // complete type with explicit ctor (including transport impl locally): call __ctor directly
+            // complete type with explicit ctor: call __ctor directly
             if (info.has_pinit) {
                 out_ << "    call void @" << eff_type << "__pinit(ptr " << reg << ")\n";
             } else if (info.has_explicit_ctor) {
@@ -919,6 +926,21 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* mcs = dynamic_cast<const MethodCallStmt*>(&stmt)) {
+        // TypeName.sizeof() as a statement — call __sizeof, discard result
+        if (mcs->method == "sizeof") {
+            std::string slid_name;
+            if (auto* ve = dynamic_cast<const VarExpr*>(mcs->object.get())) {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) slid_name = tit->second;
+                else if (slid_info_.count(ve->name)) slid_name = ve->name;
+            }
+            if (!slid_name.empty()) {
+                std::string tmp = newTmp();
+                out_ << "    " << tmp << " = call i64 @" << slid_name << "__sizeof()\n";
+                return;
+            }
+        }
+
         std::string slid_name, obj_ptr;
         if (auto* ve = dynamic_cast<const VarExpr*>(mcs->object.get())) {
             auto type_it = local_types_.find(ve->name);

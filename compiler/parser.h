@@ -365,13 +365,12 @@ struct SlidDef {
     std::string name;
     std::vector<std::string> type_params; // non-empty for template slids: Vector<T>
     std::vector<FieldDef> fields;
-    bool has_ellipsis_prefix = false;    // tuple starts with ... (implementation file: public fields come from transport source)
-    bool has_ellipsis_suffix = false;    // tuple ends with ...   (header file: private fields defined elsewhere)
-    int64_t sizeof_value = 0;            // 0=absent, -1=sizeof=delete; placeholder, >0=annotated size
+    bool has_ellipsis_prefix = false;    // tuple starts with ... (implementation of incomplete class)
+    bool has_ellipsis_suffix = false;    // tuple ends with ...   (declaration of incomplete class)
     bool has_explicit_ctor_decl = false; // _() was declared (with or without body)
     bool has_explicit_dtor_decl = false; // ~() was declared (with or without body)
-    bool is_transport_impl = false;      // this slid is the private-fields implementation (had leading ...)
-    int public_field_count = 0;          // number of public fields prepended from transport source (0 = all private)
+    bool is_transport_impl = false;      // this slid emits __pinit for the consumer
+    int public_field_count = 0;          // number of public fields before private ones (for __pinit)
     bool is_local = true;                // false when template body loaded from an imported .sl file
     std::string impl_module;             // module name of the impl file (when !is_local)
     std::unique_ptr<BlockStmt> ctor_body;          // loose code (implicit ctor), or null
@@ -421,12 +420,6 @@ struct Program {
     std::vector<FunctionDef> functions;
     std::vector<ExternalMethodDef> external_methods;
 
-    struct TransportInfo {
-        std::string module_name;            // e.g. "opaque"
-        std::string source_slh_path;        // path to the unannotated .slh
-        std::vector<std::string> slid_names; // names of slids declared in the .slh
-    };
-    std::vector<TransportInfo> transports; // populated when transport statements are compiled
     std::vector<std::string> imported_headers; // resolved .slh paths, for -MF dep output
     std::map<std::string, std::string> slid_modules; // slid name -> module that provides it
     struct InstantiateRequest { std::string func_name; std::vector<std::string> type_args; };
@@ -440,7 +433,6 @@ public:
     Parser(std::vector<Token> tokens,
            std::string source_dir = "",
            std::vector<std::string> import_paths = {},
-           std::string export_path = "",
            std::shared_ptr<std::set<std::string>> imported_once = nullptr);
     Program parse();
 
@@ -448,11 +440,8 @@ private:
     std::vector<Token> tokens_;
     int pos_;
     std::string source_dir_;
-    std::vector<std::string> import_paths_; // --import-path dirs (searched for transport .slh)
-    std::string export_path_;               // --export-path dir (searched first for import .slh)
+    std::vector<std::string> import_paths_; // --import-path dirs (searched for .slh headers)
     std::shared_ptr<std::set<std::string>> imported_once_; // shared across nested parsers; import-once guard
-    // name -> [(type, field_name)] from transport source .slh (only fields needed for merge)
-    std::map<std::string, std::vector<std::pair<std::string,std::string>>> transported_slids_;
 
     Token& peek();
     Token& advance();

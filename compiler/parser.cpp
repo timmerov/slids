@@ -7,10 +7,10 @@
 #include <map>
 
 Parser::Parser(std::vector<Token> tokens, std::string source_dir,
-               std::vector<std::string> import_paths, std::string export_path,
+               std::vector<std::string> import_paths,
                std::shared_ptr<std::set<std::string>> imported_once)
     : tokens_(std::move(tokens)), pos_(0), source_dir_(std::move(source_dir)),
-      import_paths_(std::move(import_paths)), export_path_(std::move(export_path)),
+      import_paths_(std::move(import_paths)),
       imported_once_(imported_once ? std::move(imported_once)
                                    : std::make_shared<std::set<std::string>>()) {}
 
@@ -249,8 +249,13 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         advance();
         expect(TokenType::kLParen, "expected '(' after sizeof");
         auto se = std::make_unique<SizeofExpr>();
-        // type form: sizeof(TypeName) — type keyword or uppercase identifier
-        if (isTypeName(peek()) || isUserTypeName(peek())) {
+        // type form: sizeof(TypeName) — type keyword or uppercase-initial identifier
+        auto isSizeofTypeName = [&](const Token& t) {
+            if (isTypeName(t)) return true;
+            return t.type == TokenType::kIdentifier && !t.value.empty()
+                   && std::isupper((unsigned char)t.value[0]);
+        };
+        if (isSizeofTypeName(peek())) {
             se->type_name = parseTypeName();
         } else {
             se->operand = parseExpr();
@@ -333,7 +338,10 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
     while (true) {
         if (peek().type == TokenType::kDot) {
             advance();
-            std::string member = expect(TokenType::kIdentifier, "expected field or method name").value;
+            // allow sizeof as a method name: obj.sizeof()
+            std::string member;
+            if (peek().type == TokenType::kSizeof) { advance(); member = "sizeof"; }
+            else member = expect(TokenType::kIdentifier, "expected field or method name").value;
             if (peek().type == TokenType::kLParen) {
                 advance();
                 std::vector<std::unique_ptr<Expr>> args;
@@ -1234,20 +1242,22 @@ SlidDef Parser::parseSlidDef() {
     }
 
     // parse tuple: (type field_ = default, ...)
-    // ... at start = has_ellipsis_prefix (implementation: public fields from transport source)
-    // ... at end   = has_ellipsis_suffix (header: private fields defined elsewhere)
+    // ... at start = has_ellipsis_prefix (implementation of incomplete class)
+    // ... at end   = has_ellipsis_suffix (declaration of incomplete class)
     expect(TokenType::kLParen, "expected '('");
 
     // leading ellipsis?
     if (peek().type == TokenType::kEllipsis) {
         advance(); // consume ...
         if (peek().type == TokenType::kComma) advance(); // consume , before fields
-        // lone (...) means all fields are private — treat as suffix (header case)
-        // (..., field) means public fields come from transport — treat as prefix (impl case)
+        // lone (...) means all fields are private — treat as suffix (declaration case)
+        // (..., field) means this is the implementation of an incomplete class
         if (peek().type == TokenType::kRParen)
             slid.has_ellipsis_suffix = true;
-        else
+        else {
             slid.has_ellipsis_prefix = true;
+            slid.is_transport_impl = true;  // emits __pinit and __sizeof for the consumer
+        }
     }
 
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
@@ -1279,24 +1289,6 @@ SlidDef Parser::parseSlidDef() {
     }
     expect(TokenType::kRParen, "expected ')'");
 
-    // if this is an implementation slid (has_ellipsis_prefix), merge public fields from transport source
-    if (slid.has_ellipsis_prefix) {
-        auto it = transported_slids_.find(slid.name);
-        if (it == transported_slids_.end())
-            throw std::runtime_error("'" + slid.name + "' uses ... prefix but was not declared via transport");
-        // prepend public fields from the transport source
-        int num_public = (int)it->second.size();
-        std::vector<FieldDef> merged;
-        for (auto& [type, name] : it->second)
-            merged.push_back({type, name, nullptr}); // defaults not needed for already-declared fields
-        for (auto& f : slid.fields)
-            merged.push_back(std::move(f));
-        slid.fields = std::move(merged);
-        slid.public_field_count = num_public; // record boundary for __pinit generation
-        slid.is_transport_impl = true;        // this slid emits __pinit for the consumer
-        slid.has_ellipsis_prefix = false; // resolved — no longer incomplete
-    }
-
     // record field names to prevent method-body field assignments from being mistaken for inferred declarations
     current_slid_fields_.clear();
     for (auto& f : slid.fields) current_slid_fields_.insert(f.name);
@@ -1309,21 +1301,6 @@ SlidDef Parser::parseSlidDef() {
     bool has_ctor_code = false;
 
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
-        // sizeof annotation: sizeof = delete;  or  sizeof = N;
-        if (peek().type == TokenType::kSizeof) {
-            advance(); // consume sizeof
-            expect(TokenType::kEquals, "expected '='");
-            if (peek().type == TokenType::kDelete) {
-                advance();
-                slid.sizeof_value = -1; // placeholder — will be filled in by transport compilation
-            } else {
-                auto val_tok = expect(TokenType::kIntLiteral, "expected integer or 'delete'");
-                slid.sizeof_value = std::stoll(val_tok.value);
-            }
-            expect(TokenType::kSemicolon, "expected ';'");
-            continue;
-        }
-
         // explicit constructor: _() { ... }  or forward decl: _();
         if (peek().type == TokenType::kIdentifier && peek().value == "_"
             && pos_ + 1 < (int)tokens_.size()
@@ -1609,9 +1586,7 @@ Program Parser::parse() {
             std::string module = expect(TokenType::kIdentifier, "expected module name after 'import'").value;
             expect(TokenType::kSemicolon, "expected ';' after import");
 
-            // build search order: export_path first, then import_paths, then source_dir
             std::vector<std::string> search;
-            if (!export_path_.empty()) search.push_back(export_path_);
             for (auto& p : import_paths_) search.push_back(p);
             if (!source_dir_.empty()) search.push_back(source_dir_);
             if (search.empty()) search.push_back("");
@@ -1627,16 +1602,8 @@ Program Parser::parse() {
             std::ifstream in(header_path);
             std::ostringstream buf; buf << in.rdbuf();
             Lexer hdr_lexer(buf.str());
-            Parser hdr_parser(hdr_lexer.tokenize(), source_dir_, import_paths_, export_path_,
-                              imported_once_);
+            Parser hdr_parser(hdr_lexer.tokenize(), source_dir_, import_paths_, imported_once_);
             Program hdr = hdr_parser.parse();
-
-            // fatal error if any imported slid is incomplete (has ... but no sizeof annotation)
-            for (auto& slid : hdr.slids) {
-                if (slid.has_ellipsis_suffix && slid.sizeof_value == 0)
-                    throw std::runtime_error("import: '" + module + ".slh' contains incomplete type '"
-                        + slid.name + "' — compile " + module + ".sl first");
-            }
 
             // check before moving whether any functions or slids are template declarations
             bool has_templates = false;
@@ -1661,8 +1628,7 @@ Program Parser::parse() {
                     program.imported_headers.push_back(impl_path);
                     std::ostringstream impl_buf; impl_buf << impl_in.rdbuf();
                     Lexer impl_lexer(impl_buf.str());
-                    Parser impl_parser(impl_lexer.tokenize(), source_dir_, import_paths_, export_path_,
-                                      imported_once_);
+                    Parser impl_parser(impl_lexer.tokenize(), source_dir_, import_paths_, imported_once_);
                     Program impl_prog = impl_parser.parse();
                     for (size_t i = 0; i < impl_prog.functions.size(); i++) {
                         auto& fn = impl_prog.functions[i];
@@ -1689,51 +1655,6 @@ Program Parser::parse() {
                             program.slids.push_back(std::move(impl_slid));
                     }
                 }
-            }
-        }
-        // transport declaration: like import but allows incomplete types; merges fields
-        else if (peek().type == TokenType::kTransport) {
-            advance(); // consume 'transport'
-            std::string module = expect(TokenType::kIdentifier, "expected module name after 'transport'").value;
-            expect(TokenType::kSemicolon, "expected ';' after transport");
-
-            // search import_paths only (not export_path — we're producing the annotated version)
-            std::vector<std::string> search;
-            for (auto& p : import_paths_) search.push_back(p);
-            if (!source_dir_.empty()) search.push_back(source_dir_);
-            if (search.empty()) search.push_back("");
-
-            std::string header_path = findHeader(module, search);
-            if (header_path.empty())
-                throw std::runtime_error("transport: cannot find '" + module + ".slh'");
-
-            program.imported_headers.push_back(header_path);
-            std::ifstream in(header_path);
-            std::ostringstream buf; buf << in.rdbuf();
-            Lexer hdr_lexer(buf.str());
-            Parser hdr_parser(hdr_lexer.tokenize(), source_dir_, import_paths_, export_path_,
-                              imported_once_);
-            Program hdr = hdr_parser.parse();
-
-            // import function forward declarations (same as import)
-            for (auto& fn : hdr.functions)
-                if (!fn.body) program.functions.push_back(std::move(fn));
-
-            // record for annotated .slh emission in main.cpp (capture names before moving)
-            Program::TransportInfo ti;
-            ti.module_name = module;
-            ti.source_slh_path = header_path;
-            for (auto& slid : hdr.slids)
-                ti.slid_names.push_back(slid.name);
-            program.transports.push_back(std::move(ti));
-
-            // push slids into program.slids so codegen sees bodyless methods for export tracking;
-            // also record just the fields in transported_slids_ for the field-merge in parseSlidDef
-            for (auto& slid : hdr.slids) {
-                std::vector<std::pair<std::string,std::string>> fields;
-                for (auto& f : slid.fields) fields.emplace_back(f.type, f.name);
-                transported_slids_[slid.name] = std::move(fields);
-                program.slids.push_back(std::move(slid));
             }
         }
         // enum definition
