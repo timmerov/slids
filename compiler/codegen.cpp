@@ -1611,7 +1611,11 @@ std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
         if      (lt == "i1")  classify_int("bool");
         else if (lt == "i8")  classify_int("char");
         else if (lt == "i16") classify_int("int16");
-        else if (lt == "i32") classify_int("int32");
+        else if (lt == "i32") {
+            // bool maps to i32 in LLVM; use Slids type to distinguish bool from int32
+            std::string slids_t = inferSlidType(arg);
+            classify_int(slids_t == "bool" ? "bool" : "int32");
+        }
         else if (lt == "i64") classify_int("int64");
     }
 
@@ -1853,11 +1857,13 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                     }
                     if (arg_slids.empty()) arg_slids = exprSlidType(arg);
                     if (arg_slids.empty() && dynamic_cast<const StringLiteralExpr*>(&arg)) arg_slids = "char[]";
+                    if (arg_slids.empty()) arg_slids = inferSlidType(arg);
                     // scalars: exact llvm type; pointers: exact Slids type (char[] != String^)
                     bool exact  = (p_llvm == arg_llvm && p_llvm != "ptr")
                                || (arg_llvm == "ptr" && ptypes2[0] == arg_slids);
                     bool widen  = (ait != irank.end() && pit != irank.end()
-                                   && pit->second >= ait->second);
+                                   && pit->second >= ait->second)
+                               && (arg_slids != "bool" || ptypes2[0] == "bool");
                     if (!exact && !widen) continue;
                     std::string tmp = "%tmp_" + std::to_string(tmp_counter_++);
                     out_ << "    " << tmp << " = alloca %struct." << slid_name << "\n";

@@ -71,8 +71,14 @@ String(...)
     /* overload + to concatenate two String-s. */
     op+(String^ sa, String^ sb);
 
+    /* return size of string. */
+    intptr size();
+
     /* set to empty string. */
     void clear();
+
+    /* return true if the string is empty. */
+    bool empty();
 
     /*
     increase capacity.

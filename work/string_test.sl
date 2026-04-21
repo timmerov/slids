@@ -84,5 +84,9 @@ int32 main() {
     println(String + "bgt=" + bgt);
     println(String + "blt=" + blt);
 
+    /* api tests. */
+    println(String + "s1.size()<13>=" + s1.size());
+    println(String + "s1.empty()<false>=" + s1.empty());
+
     return 0;
 }

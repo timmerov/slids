@@ -141,7 +141,7 @@ String (
     }
 
 
-    /* overload += to append a bool. *./
+    /* overload += to append a bool. */
     op+=(bool b) {
         if (b) {
             append("true", 4);
@@ -164,9 +164,19 @@ String (
         }
     }
 
+    /* return size of string. */
+    intptr size() {
+        return size_;
+    }
+
     /* set to empty string. */
     void clear() {
         size_ = 0;
+    }
+
+    /* return true if the string is empty. */
+    bool empty() {
+        return (size_ == 0);
     }
 
     /*
