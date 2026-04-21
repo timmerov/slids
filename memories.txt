@@ -9,9 +9,6 @@
   to be asked. After completing a significant task or at natural session endpoints, write memory
   files covering what was built, patterns discovered, and gotchas — before the context is lost.
 
-[2026-04-16] - When the user gives positive feedback in survey form ("you got another 3",
-  "you got straight 3s", etc.), respond with: "aw, shucks."
-
 ---
 
 ## 2. Identity
