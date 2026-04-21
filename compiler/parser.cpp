@@ -1331,6 +1331,9 @@ SlidDef Parser::parseSlidDef() {
             advance(); // consume _
             expect(TokenType::kLParen, "expected '('");
             expect(TokenType::kRParen, "expected ')'");
+            if (slid.has_explicit_ctor_decl)
+                throw std::runtime_error("Line " + std::to_string(peek().line)
+                    + ": constructor already defined in '" + slid.name + "'");
             slid.has_explicit_ctor_decl = true; // declared — consumer must call ctor
             if (peek().type == TokenType::kSemicolon) {
                 advance(); // forward declaration only
@@ -1346,6 +1349,9 @@ SlidDef Parser::parseSlidDef() {
             advance(); // consume ~
             expect(TokenType::kLParen, "expected '('");
             expect(TokenType::kRParen, "expected ')'");
+            if (slid.has_explicit_dtor_decl)
+                throw std::runtime_error("Line " + std::to_string(peek().line)
+                    + ": destructor already defined in '" + slid.name + "'");
             slid.has_explicit_dtor_decl = true; // declared — consumer must call dtor
             if (peek().type == TokenType::kSemicolon) {
                 advance(); // forward declaration only
