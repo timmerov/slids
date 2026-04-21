@@ -71,6 +71,18 @@ String(...)
     /* overload + to concatenate two String-s. */
     op+(String^ sa, String^ sb);
 
+    /*
+    overload index operation to fetch the indexed character.
+    char ch = str[3];
+    */
+    char op[](intptr index);
+
+    /*
+    overload index assignment operation to set the indexed character.
+    str[3] = '!';
+    */
+    op[]=(intptr index, char rhs);
+
     /* return size of string. */
     intptr size();
 

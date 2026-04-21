@@ -175,10 +175,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
         if (base_ptr.empty())
             throw std::runtime_error("undefined array: " + ve->name);
 
+        std::string idx_llvm = exprLlvmType(*indices[0]);
         std::string idx_val = emitExpr(*indices[0]);
         std::string elt = llvmType(elem_type_str);
         std::string gep = newTmp();
-        out_ << "    " << gep << " = getelementptr " << elt << ", ptr " << base_ptr << ", i32 " << idx_val << "\n";
+        out_ << "    " << gep << " = getelementptr " << elt << ", ptr " << base_ptr << ", " << idx_llvm << " " << idx_val << "\n";
         std::string val = newTmp();
         out_ << "    " << val << " = load " << elt << ", ptr " << gep << "\n";
         return val;
@@ -1811,6 +1812,30 @@ std::string Codegen::inferSlidType(const Expr& expr) {
         if (pt.size() >= 2 && pt.substr(pt.size()-2) == "[]") return pt.substr(0, pt.size()-2);
         if (!pt.empty() && pt.back() == '^') return pt.substr(0, pt.size()-1);
         return pt;
+    }
+    // array index — return type of op[] if base is a slid, else element type of pointer/array
+    if (dynamic_cast<const ArrayIndexExpr*>(&expr)) {
+        const Expr* cur = &expr;
+        while (auto* a = dynamic_cast<const ArrayIndexExpr*>(cur))
+            cur = a->base.get();
+        if (auto* ve = dynamic_cast<const VarExpr*>(cur)) {
+            // slid op[] return type
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+                std::string base_name = tit->second + "__op[]";
+                auto oit = method_overloads_.find(base_name);
+                if (oit != method_overloads_.end() && !oit->second.empty()) {
+                    auto rit = func_return_types_.find(oit->second[0].first);
+                    if (rit != func_return_types_.end()) return rit->second;
+                }
+            }
+            // pointer/array element type
+            auto ait = array_info_.find(ve->name);
+            if (ait != array_info_.end()) return ait->second.elem_type;
+            if (tit != local_types_.end() && isPtrType(tit->second))
+                return tit->second.substr(0, tit->second.size()-2);
+        }
+        return "int";
     }
     // binary expression — use exprSlidType if it produces a slid, else infer from left
     if (auto* be = dynamic_cast<const BinaryExpr*>(&expr)) {

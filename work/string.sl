@@ -164,6 +164,22 @@ String (
         }
     }
 
+    /*
+    overload index operation to fetch the indexed character.
+    char ch = str[3];
+    */
+    char op[](intptr index) {
+        return storage_[index];
+    }
+
+    /*
+    overload index assignment operation to set the indexed character.
+    str[3] = '!';
+    */
+    op[]=(intptr index, char rhs) {
+        storage_[index] = rhs;
+    }
+
     /* return size of string. */
     intptr size() {
         return size_;

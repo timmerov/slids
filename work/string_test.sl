@@ -88,5 +88,11 @@ int32 main() {
     println(String + "s1.size()<13>=" + s1.size());
     println(String + "s1.empty()<false>=" + s1.empty());
 
+    /* indexing. */
+    ch = s1[1];
+    println(String + "s1[1]<'e'>=" + ch);
+    s1[1] = 'E';
+    println(String + "s1<HEllo, World!>" + s1);
+
     return 0;
 }

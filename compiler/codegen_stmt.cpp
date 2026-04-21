@@ -892,10 +892,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (base_ptr.empty())
             throw std::runtime_error("IndexAssign: '" + ve->name + "' is not a pointer type");
 
+        std::string idx_llvm = exprLlvmType(*ia->index);
         std::string idx_val = emitExpr(*ia->index);
         std::string elt = llvmType(elem_type_str);
         std::string gep = newTmp();
-        out_ << "    " << gep << " = getelementptr " << elt << ", ptr " << base_ptr << ", i32 " << idx_val << "\n";
+        out_ << "    " << gep << " = getelementptr " << elt << ", ptr " << base_ptr << ", " << idx_llvm << " " << idx_val << "\n";
         std::string rhs = emitExpr(*ia->value);
         out_ << "    store " << elt << " " << rhs << ", ptr " << gep << "\n";
         return;
