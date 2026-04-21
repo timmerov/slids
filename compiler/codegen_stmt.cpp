@@ -1457,6 +1457,285 @@ void Codegen::emitStmt(const Stmt& stmt) {
         return;
     }
 
+    if (auto* ft = dynamic_cast<const ForTupleStmt*>(&stmt)) {
+        std::string cond_lbl = newLabel("for_cond");
+        std::string body_lbl = newLabel("for_body");
+        std::string incr_lbl = newLabel("for_incr");
+        std::string end_lbl  = newLabel("for_end");
+        std::string saved_break = break_label_, saved_continue = continue_label_;
+        break_label_ = end_lbl; continue_label_ = incr_lbl;
+        loop_stack_.push_back({ft->block_label, end_lbl, incr_lbl, ""});
+
+        int n = (int)ft->elements.size();
+        std::string elem_llvm = exprLlvmType(*ft->elements[0]);
+        std::string elem_slids = inferSlidType(*ft->elements[0]);
+
+        // allocate flat array and store each element
+        std::string arr_reg = newTmp();
+        out_ << "    " << arr_reg << " = alloca [" << n << " x " << elem_llvm << "]\n";
+        for (int i = 0; i < n; i++) {
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr [" << n << " x " << elem_llvm
+                 << "], ptr " << arr_reg << ", i32 0, i32 " << i << "\n";
+            std::string val = emitExpr(*ft->elements[i]);
+            out_ << "    store " << elem_llvm << " " << val << ", ptr " << gep << "\n";
+        }
+
+        // allocate hidden loop index
+        std::string idx_reg = newTmp();
+        out_ << "    " << idx_reg << " = alloca i32\n";
+        out_ << "    store i32 0, ptr " << idx_reg << "\n";
+
+        // allocate loop variable if new
+        bool new_var = !locals_.count(ft->var_name);
+        std::string var_reg;
+        if (new_var) {
+            var_reg = "%var_" + ft->var_name;
+            out_ << "    " << var_reg << " = alloca " << elem_llvm << "\n";
+            locals_[ft->var_name] = var_reg;
+            local_types_[ft->var_name] = elem_slids;
+        } else {
+            var_reg = locals_[ft->var_name];
+        }
+
+        out_ << "    br label %" << cond_lbl << "\n";
+
+        block_terminated_ = false;
+        out_ << cond_lbl << ":\n";
+        std::string cur = newTmp();
+        out_ << "    " << cur << " = load i32, ptr " << idx_reg << "\n";
+        std::string cmp = newTmp();
+        out_ << "    " << cmp << " = icmp slt i32 " << cur << ", " << n << "\n";
+        out_ << "    br i1 " << cmp << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
+
+        block_terminated_ = false;
+        out_ << body_lbl << ":\n";
+        { std::string sp = newTmp();
+          out_ << "    " << sp << " = call ptr @llvm.stacksave()\n";
+          loop_stack_.back().stack_ptr_reg = sp;
+          // load element[idx] into loop variable
+          std::string cur2 = newTmp();
+          out_ << "    " << cur2 << " = load i32, ptr " << idx_reg << "\n";
+          std::string elem_gep = newTmp();
+          out_ << "    " << elem_gep << " = getelementptr [" << n << " x " << elem_llvm
+               << "], ptr " << arr_reg << ", i32 0, i32 " << cur2 << "\n";
+          std::string elem_val = newTmp();
+          out_ << "    " << elem_val << " = load " << elem_llvm << ", ptr " << elem_gep << "\n";
+          out_ << "    store " << elem_llvm << " " << elem_val << ", ptr " << var_reg << "\n";
+          emitBlock(*ft->body);
+          if (!block_terminated_) {
+              out_ << "    call void @llvm.stackrestore(ptr " << sp << ")\n";
+              out_ << "    br label %" << incr_lbl << "\n";
+          }
+        }
+
+        block_terminated_ = false;
+        out_ << incr_lbl << ":\n";
+        std::string old_idx = newTmp();
+        out_ << "    " << old_idx << " = load i32, ptr " << idx_reg << "\n";
+        std::string new_idx = newTmp();
+        out_ << "    " << new_idx << " = add i32 " << old_idx << ", 1\n";
+        out_ << "    store i32 " << new_idx << ", ptr " << idx_reg << "\n";
+        out_ << "    br label %" << cond_lbl << "\n";
+
+        block_terminated_ = false;
+        out_ << end_lbl << ":\n";
+        if (new_var) {
+            locals_.erase(ft->var_name);
+            local_types_.erase(ft->var_name);
+        }
+        loop_stack_.pop_back();
+        break_label_ = saved_break; continue_label_ = saved_continue;
+        return;
+    }
+
+    if (auto* fa = dynamic_cast<const ForArrayStmt*>(&stmt)) {
+        std::string cond_lbl = newLabel("for_cond");
+        std::string body_lbl = newLabel("for_body");
+        std::string incr_lbl = newLabel("for_incr");
+        std::string end_lbl  = newLabel("for_end");
+        std::string saved_break = break_label_, saved_continue = continue_label_;
+        break_label_ = end_lbl; continue_label_ = incr_lbl;
+        loop_stack_.push_back({fa->block_label, end_lbl, incr_lbl, ""});
+
+        std::string elem_slids, elem_llvm, arr_llvm, arr_ptr;
+        int arr_count = 0;
+        bool is_class_iter = false;
+        std::string class_ptr, begin_fn, end_fn;
+
+        if (auto* sl = dynamic_cast<const StringLiteralExpr*>(fa->array_expr.get())) {
+            std::string label = "@.str" + std::to_string(str_counter_++);
+            int len; llvmEscape(sl->value, len);
+            arr_count  = len - 1;  // skip null terminator
+            elem_slids = "char";
+            elem_llvm  = "i8";
+            arr_llvm   = "[" + std::to_string(len) + " x i8]";
+            arr_ptr    = label;
+        } else if (auto* ve = dynamic_cast<const VarExpr*>(fa->array_expr.get())) {
+            auto tit = local_types_.find(ve->name);
+            if (tit == local_types_.end())
+                throw std::runtime_error("for-in: unknown variable '" + ve->name + "'");
+            std::string arr_type = tit->second;
+            auto lb = arr_type.rfind('[');
+            if (lb != std::string::npos && lb > 0 && arr_type.back() == ']') {
+                elem_slids = arr_type.substr(0, lb);
+                std::string sz_str = arr_type.substr(lb + 1, arr_type.size() - lb - 2);
+                arr_count  = std::stoi(sz_str);
+                elem_llvm  = llvmType(elem_slids);
+                arr_llvm   = "[" + sz_str + " x " + elem_llvm + "]";
+                arr_ptr    = locals_[ve->name];
+            } else if (slid_info_.count(arr_type)) {
+                is_class_iter = true;
+                class_ptr = locals_[ve->name];
+                begin_fn  = arr_type + "__begin";
+                end_fn    = arr_type + "__end";
+                auto rit  = func_return_types_.find(begin_fn);
+                if (rit == func_return_types_.end())
+                    throw std::runtime_error("for-in: '" + arr_type + "' has no begin() method");
+                elem_slids = rit->second;
+                elem_llvm  = llvmType(elem_slids);
+            } else {
+                throw std::runtime_error("for-in: '" + ve->name + "' is not a fixed-size array or iterable class");
+            }
+        } else {
+            throw std::runtime_error("for-in: expected string literal or array variable");
+        }
+
+        if (is_class_iter) {
+            std::string init_lbl = newLabel("for_init");
+            std::string end_reg  = newTmp() + "_end";
+            out_ << "    " << end_reg << " = alloca " << elem_llvm << "\n";
+
+            bool new_var = !locals_.count(fa->var_name);
+            std::string var_reg;
+            if (new_var) {
+                var_reg = "%var_" + fa->var_name;
+                out_ << "    " << var_reg << " = alloca " << elem_llvm << "\n";
+                locals_[fa->var_name] = var_reg;
+                local_types_[fa->var_name] = elem_slids;
+            } else {
+                var_reg = locals_[fa->var_name];
+            }
+
+            out_ << "    br label %" << init_lbl << "\n";
+            block_terminated_ = false;
+            out_ << init_lbl << ":\n";
+            std::string bv = newTmp();
+            out_ << "    " << bv << " = call " << elem_llvm << " @" << begin_fn << "(ptr " << class_ptr << ")\n";
+            out_ << "    store " << elem_llvm << " " << bv << ", ptr " << var_reg << "\n";
+            std::string ev = newTmp();
+            out_ << "    " << ev << " = call " << elem_llvm << " @" << end_fn << "(ptr " << class_ptr << ")\n";
+            out_ << "    store " << elem_llvm << " " << ev << ", ptr " << end_reg << "\n";
+            out_ << "    br label %" << cond_lbl << "\n";
+
+            block_terminated_ = false;
+            out_ << cond_lbl << ":\n";
+            std::string cur = newTmp();
+            out_ << "    " << cur << " = load " << elem_llvm << ", ptr " << var_reg << "\n";
+            std::string lim = newTmp();
+            out_ << "    " << lim << " = load " << elem_llvm << ", ptr " << end_reg << "\n";
+            std::string cmp = newTmp();
+            out_ << "    " << cmp << " = icmp slt " << elem_llvm << " " << cur << ", " << lim << "\n";
+            out_ << "    br i1 " << cmp << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
+
+            block_terminated_ = false;
+            out_ << body_lbl << ":\n";
+            { std::string sp = newTmp();
+              out_ << "    " << sp << " = call ptr @llvm.stacksave()\n";
+              loop_stack_.back().stack_ptr_reg = sp;
+              emitBlock(*fa->body);
+              if (!block_terminated_) {
+                  out_ << "    call void @llvm.stackrestore(ptr " << sp << ")\n";
+                  out_ << "    br label %" << incr_lbl << "\n";
+              }
+            }
+
+            block_terminated_ = false;
+            out_ << incr_lbl << ":\n";
+            std::string ov = newTmp();
+            out_ << "    " << ov << " = load " << elem_llvm << ", ptr " << var_reg << "\n";
+            std::string nv = newTmp();
+            out_ << "    " << nv << " = add " << elem_llvm << " " << ov << ", 1\n";
+            out_ << "    store " << elem_llvm << " " << nv << ", ptr " << var_reg << "\n";
+            out_ << "    br label %" << cond_lbl << "\n";
+
+            block_terminated_ = false;
+            out_ << end_lbl << ":\n";
+            if (new_var) {
+                locals_.erase(fa->var_name);
+                local_types_.erase(fa->var_name);
+            }
+            loop_stack_.pop_back();
+            break_label_ = saved_break; continue_label_ = saved_continue;
+            return;
+        }
+
+        // string literal or fixed-size array: index into flat array
+        std::string idx_reg = newTmp();
+        out_ << "    " << idx_reg << " = alloca i32\n";
+        out_ << "    store i32 0, ptr " << idx_reg << "\n";
+
+        bool new_var = !locals_.count(fa->var_name);
+        std::string var_reg;
+        if (new_var) {
+            var_reg = "%var_" + fa->var_name;
+            out_ << "    " << var_reg << " = alloca " << elem_llvm << "\n";
+            locals_[fa->var_name] = var_reg;
+            local_types_[fa->var_name] = elem_slids;
+        } else {
+            var_reg = locals_[fa->var_name];
+        }
+
+        out_ << "    br label %" << cond_lbl << "\n";
+
+        block_terminated_ = false;
+        out_ << cond_lbl << ":\n";
+        std::string cur = newTmp();
+        out_ << "    " << cur << " = load i32, ptr " << idx_reg << "\n";
+        std::string cmp = newTmp();
+        out_ << "    " << cmp << " = icmp slt i32 " << cur << ", " << arr_count << "\n";
+        out_ << "    br i1 " << cmp << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
+
+        block_terminated_ = false;
+        out_ << body_lbl << ":\n";
+        { std::string sp = newTmp();
+          out_ << "    " << sp << " = call ptr @llvm.stacksave()\n";
+          loop_stack_.back().stack_ptr_reg = sp;
+          std::string cur2 = newTmp();
+          out_ << "    " << cur2 << " = load i32, ptr " << idx_reg << "\n";
+          std::string elem_gep = newTmp();
+          out_ << "    " << elem_gep << " = getelementptr " << arr_llvm
+               << ", ptr " << arr_ptr << ", i32 0, i32 " << cur2 << "\n";
+          std::string elem_val = newTmp();
+          out_ << "    " << elem_val << " = load " << elem_llvm << ", ptr " << elem_gep << "\n";
+          out_ << "    store " << elem_llvm << " " << elem_val << ", ptr " << var_reg << "\n";
+          emitBlock(*fa->body);
+          if (!block_terminated_) {
+              out_ << "    call void @llvm.stackrestore(ptr " << sp << ")\n";
+              out_ << "    br label %" << incr_lbl << "\n";
+          }
+        }
+
+        block_terminated_ = false;
+        out_ << incr_lbl << ":\n";
+        std::string old_idx = newTmp();
+        out_ << "    " << old_idx << " = load i32, ptr " << idx_reg << "\n";
+        std::string new_idx = newTmp();
+        out_ << "    " << new_idx << " = add i32 " << old_idx << ", 1\n";
+        out_ << "    store i32 " << new_idx << ", ptr " << idx_reg << "\n";
+        out_ << "    br label %" << cond_lbl << "\n";
+
+        block_terminated_ = false;
+        out_ << end_lbl << ":\n";
+        if (new_var) {
+            locals_.erase(fa->var_name);
+            local_types_.erase(fa->var_name);
+        }
+        loop_stack_.pop_back();
+        break_label_ = saved_break; continue_label_ = saved_continue;
+        return;
+    }
+
     if (auto* sw = dynamic_cast<const SwitchStmt*>(&stmt)) {
         std::string end_lbl = newLabel("sw_end");
         std::string saved_break = break_label_;

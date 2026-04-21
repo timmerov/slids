@@ -310,6 +310,22 @@ struct ForRangeStmt : Stmt {
     std::string block_label; // optional :name after }
 };
 
+// for var in (expr, expr, ...) — tuple iteration
+struct ForTupleStmt : Stmt {
+    std::string var_name;
+    std::vector<std::unique_ptr<Expr>> elements;
+    std::unique_ptr<BlockStmt> body;
+    std::string block_label;
+};
+
+// for var in "string" or for var in fixed_size_array_var
+struct ForArrayStmt : Stmt {
+    std::string var_name;
+    std::unique_ptr<Expr> array_expr;   // StringLiteralExpr or VarExpr
+    std::unique_ptr<BlockStmt> body;
+    std::string block_label;
+};
+
 // for EnumType var in EnumType { ... }
 struct ForEnumStmt : Stmt {
     std::string var_type;   // the enum type name

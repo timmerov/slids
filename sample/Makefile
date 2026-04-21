@@ -15,6 +15,7 @@ SAMPLES = \
 	leap_years \
 	memcpy \
 	primes1 \
+	rangedfor \
 	reference1 reference2 reference3 \
 	reverse_bits
 

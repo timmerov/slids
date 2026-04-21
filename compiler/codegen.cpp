@@ -140,6 +140,10 @@ void Codegen::collectFunctionSignatures() {
                     func_param_types_[nfs->def.name] = nptypes;
                 } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
                     findNested(*f->body);
+                } else if (auto* ft = dynamic_cast<const ForTupleStmt*>(stmt.get())) {
+                    findNested(*ft->body);
+                } else if (auto* fa = dynamic_cast<const ForArrayStmt*>(stmt.get())) {
+                    findNested(*fa->body);
                 } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get())) {
                     findNested(*w->body);
                 } else if (auto* i = dynamic_cast<const IfStmt*>(stmt.get())) {
@@ -300,6 +304,12 @@ std::set<std::string> Codegen::collectCaptures(
         } else if (auto* f = dynamic_cast<const ForRangeStmt*>(&stmt)) {
             scanExpr(*f->range_start); scanExpr(*f->range_end);
             for (auto& s : f->body->stmts) scanStmt(*s);
+        } else if (auto* ft = dynamic_cast<const ForTupleStmt*>(&stmt)) {
+            for (auto& e : ft->elements) scanExpr(*e);
+            for (auto& s : ft->body->stmts) scanStmt(*s);
+        } else if (auto* fa = dynamic_cast<const ForArrayStmt*>(&stmt)) {
+            scanExpr(*fa->array_expr);
+            for (auto& s : fa->body->stmts) scanStmt(*s);
         } else if (auto* td = dynamic_cast<const TupleDestructureStmt*>(&stmt)) {
             scanExpr(*td->init);
         } else if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) {
@@ -328,6 +338,12 @@ void Codegen::analyzeNestedFunctions(const FunctionDef& fn) {
             } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
                 parent_locals.insert(f->var_name);
                 collectLocals(*f->body);
+            } else if (auto* ft = dynamic_cast<const ForTupleStmt*>(stmt.get())) {
+                parent_locals.insert(ft->var_name);
+                collectLocals(*ft->body);
+            } else if (auto* fa = dynamic_cast<const ForArrayStmt*>(stmt.get())) {
+                parent_locals.insert(fa->var_name);
+                collectLocals(*fa->body);
             } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get()))
                 collectLocals(*w->body);
             else if (auto* i = dynamic_cast<const IfStmt*>(stmt.get())) {
@@ -356,6 +372,12 @@ void Codegen::analyzeNestedFunctions(const FunctionDef& fn) {
                         else if (auto* f2 = dynamic_cast<const ForRangeStmt*>(s.get())) {
                             own_params.insert(f2->var_name);
                             collectNested(*f2->body);
+                        } else if (auto* ft2 = dynamic_cast<const ForTupleStmt*>(s.get())) {
+                            own_params.insert(ft2->var_name);
+                            collectNested(*ft2->body);
+                        } else if (auto* fa2 = dynamic_cast<const ForArrayStmt*>(s.get())) {
+                            own_params.insert(fa2->var_name);
+                            collectNested(*fa2->body);
                         } else if (auto* w2 = dynamic_cast<const WhileStmt*>(s.get()))
                             collectNested(*w2->body);
                         else if (auto* i2 = dynamic_cast<const IfStmt*>(s.get())) {
@@ -377,6 +399,10 @@ void Codegen::analyzeNestedFunctions(const FunctionDef& fn) {
                 nested_info_[mangled] = info;
             } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
                 findNested(*f->body);
+            } else if (auto* ft = dynamic_cast<const ForTupleStmt*>(stmt.get())) {
+                findNested(*ft->body);
+            } else if (auto* fa = dynamic_cast<const ForArrayStmt*>(stmt.get())) {
+                findNested(*fa->body);
             } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get())) {
                 findNested(*w->body);
             } else if (auto* i = dynamic_cast<const IfStmt*>(stmt.get())) {
@@ -471,6 +497,10 @@ void Codegen::scanForSlidTemplateUses() {
             scanBlock(*w->body);
         } else if (auto* f = dynamic_cast<const ForRangeStmt*>(&stmt)) {
             scanBlock(*f->body);
+        } else if (auto* ft = dynamic_cast<const ForTupleStmt*>(&stmt)) {
+            scanBlock(*ft->body);
+        } else if (auto* fa = dynamic_cast<const ForArrayStmt*>(&stmt)) {
+            scanBlock(*fa->body);
         } else if (auto* sw = dynamic_cast<const SwitchStmt*>(&stmt)) {
             for (auto& sc : sw->cases)
                 for (auto& s : sc.stmts) scanStmt(*s);
@@ -537,6 +567,11 @@ void Codegen::collectStringConstants() {
             for (auto& s : w->body->stmts) collect(*s);
         } else if (auto* f = dynamic_cast<const ForRangeStmt*>(&stmt)) {
             for (auto& s : f->body->stmts) collect(*s);
+        } else if (auto* ft = dynamic_cast<const ForTupleStmt*>(&stmt)) {
+            for (auto& s : ft->body->stmts) collect(*s);
+        } else if (auto* fa = dynamic_cast<const ForArrayStmt*>(&stmt)) {
+            collectExpr(fa->array_expr.get(), false);
+            for (auto& s : fa->body->stmts) collect(*s);
         } else if (auto* f = dynamic_cast<const ForEnumStmt*>(&stmt)) {
             for (auto& s : f->body->stmts) collect(*s);
         } else if (auto* sw = dynamic_cast<const SwitchStmt*>(&stmt)) {
@@ -921,6 +956,10 @@ void Codegen::emitFrameStruct(const FunctionDef& fn) {
                 }
             } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
                 scan(*f->body);
+            } else if (auto* ft = dynamic_cast<const ForTupleStmt*>(stmt.get())) {
+                scan(*ft->body);
+            } else if (auto* fa = dynamic_cast<const ForArrayStmt*>(stmt.get())) {
+                scan(*fa->body);
             } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get())) {
                 scan(*w->body);
             } else if (auto* i = dynamic_cast<const IfStmt*>(stmt.get())) {
@@ -2082,6 +2121,10 @@ void Codegen::emitFunction(const FunctionDef& fn) {
                     emitNestedFunction(nfs->def, fn.name, it->second);
             } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
                 emitNested(*f->body);
+            } else if (auto* ft = dynamic_cast<const ForTupleStmt*>(stmt.get())) {
+                emitNested(*ft->body);
+            } else if (auto* fa = dynamic_cast<const ForArrayStmt*>(stmt.get())) {
+                emitNested(*fa->body);
             } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get())) {
                 emitNested(*w->body);
             } else if (auto* i = dynamic_cast<const IfStmt*>(stmt.get())) {

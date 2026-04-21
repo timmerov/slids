@@ -703,30 +703,64 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             // not an enum-for — backtrack and fall through to range for
             pos_ = saved;
         }
-        auto stmt = std::make_unique<ForRangeStmt>();
         // type is optional — "for int i in" vs "for i in" (reuse existing var)
+        std::string for_var_type, for_var_name;
         if (isTypeName(peek())) {
-            stmt->var_type = parseTypeName();
-            stmt->var_name = expect(TokenType::kIdentifier, "expected variable name").value;
+            for_var_type = parseTypeName();
+            for_var_name = expect(TokenType::kIdentifier, "expected variable name").value;
         } else if (peek().type == TokenType::kIdentifier) {
-            stmt->var_type = ""; // reuse existing variable
-            stmt->var_name = advance().value;
+            for_var_type = ""; // reuse existing variable
+            for_var_name = advance().value;
         } else {
             throw std::runtime_error("Line " + std::to_string(peek().line)
                 + ": expected variable name in for loop");
         }
         expect(TokenType::kIn, "expected 'in'");
-        expect(TokenType::kLParen, "expected '('");
-        stmt->range_start = parseExpr();
-        expect(TokenType::kDotDot, "expected '..'");
-        stmt->range_end = parseExpr();
-        expect(TokenType::kRParen, "expected ')'");
-        stmt->body = parseBlock();
-        if (peek().type == TokenType::kColon) {
-            advance();
-            stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+        if (peek().type == TokenType::kStringLiteral || peek().type == TokenType::kIdentifier) {
+            auto stmt = std::make_unique<ForArrayStmt>();
+            stmt->var_name = for_var_name;
+            stmt->array_expr = parseExpr();
+            stmt->body = parseBlock();
+            if (peek().type == TokenType::kColon) {
+                advance();
+                stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+            }
+            return stmt;
         }
-        return stmt;
+        expect(TokenType::kLParen, "expected '('");
+        auto first_expr = parseExpr();
+        if (peek().type == TokenType::kDotDot) {
+            // for var in (start..end) — numeric range
+            advance(); // consume '..'
+            auto stmt = std::make_unique<ForRangeStmt>();
+            stmt->var_type = for_var_type;
+            stmt->var_name = for_var_name;
+            stmt->range_start = std::move(first_expr);
+            stmt->range_end = parseExpr();
+            expect(TokenType::kRParen, "expected ')'");
+            stmt->body = parseBlock();
+            if (peek().type == TokenType::kColon) {
+                advance();
+                stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+            }
+            return stmt;
+        } else {
+            // for var in (expr, expr, ...) — tuple iteration
+            auto stmt = std::make_unique<ForTupleStmt>();
+            stmt->var_name = for_var_name;
+            stmt->elements.push_back(std::move(first_expr));
+            while (peek().type == TokenType::kComma) {
+                advance(); // consume ','
+                stmt->elements.push_back(parseExpr());
+            }
+            expect(TokenType::kRParen, "expected ')'");
+            stmt->body = parseBlock();
+            if (peek().type == TokenType::kColon) {
+                advance();
+                stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+            }
+            return stmt;
+        }
     }
 
     // tuple return nested function or tuple destructure: starts with '('
