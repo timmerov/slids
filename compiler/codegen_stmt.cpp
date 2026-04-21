@@ -293,7 +293,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         current_slid_ = saved_slid;
                         self_ptr_ = saved_self;
                     }
-                    if (info.has_pinit && !info.is_transport_impl)
+                    if (info.has_pinit)
                         out_ << "    call void @" << eff_type << "__pinit(ptr " << reg << ")\n";
                     else if (info.has_explicit_ctor)
                         out_ << "    call void @" << eff_type << "__ctor(ptr " << reg << ")\n";
@@ -358,7 +358,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
             // consumer of incomplete type: call __pinit (initializes private fields, chains to __ctor)
             // complete type with explicit ctor (including transport impl locally): call __ctor directly
-            if (info.has_pinit && !info.is_transport_impl) {
+            if (info.has_pinit) {
                 out_ << "    call void @" << eff_type << "__pinit(ptr " << reg << ")\n";
             } else if (info.has_explicit_ctor) {
                 out_ << "    call void @" << eff_type << "__ctor(ptr " << reg << ")\n";
@@ -1009,7 +1009,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             } else {
                 // opaque (transport) type: init %retval, then move or copy from src
-                if (info.has_pinit && !info.is_transport_impl)
+                if (info.has_pinit)
                     out_ << "    call void @" << slid_name << "__pinit(ptr %retval)\n";
                 else if (info.has_explicit_ctor)
                     out_ << "    call void @" << slid_name << "__ctor(ptr %retval)\n";

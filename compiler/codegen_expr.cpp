@@ -652,7 +652,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                             out_ << "    store " << ft << " 0, ptr " << gep << "\n";
                     }
                     // init: pinit (for imported transport types) or ctor
-                    if (info.has_pinit && !info.is_transport_impl)
+                    if (info.has_pinit)
                         out_ << "    call void @" << res_slid << "__pinit(ptr " << tmp_alloca << ")\n";
                     else if (info.has_explicit_ctor)
                         out_ << "    call void @" << res_slid << "__ctor(ptr " << tmp_alloca << ")\n";
@@ -1153,7 +1153,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     current_slid_ = saved_slid;
                     self_ptr_ = saved_self;
                 }
-                if (info.has_pinit && !info.is_transport_impl)
+                if (info.has_pinit)
                     out_ << "    call void @" << ne->elem_type << "__pinit(ptr " << elem << ")\n";
                 else if (info.has_explicit_ctor)
                     out_ << "    call void @" << ne->elem_type << "__ctor(ptr " << elem << ")\n";
@@ -1230,7 +1230,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 current_slid_ = saved_slid;
                 self_ptr_ = saved_self;
             }
-            if (info.has_pinit && !info.is_transport_impl)
+            if (info.has_pinit)
                 out_ << "    call void @" << stype << "__pinit(ptr " << ptr << ")\n";
             else if (info.has_explicit_ctor)
                 out_ << "    call void @" << stype << "__ctor(ptr " << ptr << ")\n";
@@ -1286,7 +1286,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             }
 
             // call ctor if any
-            if (info.has_pinit && !info.is_transport_impl)
+            if (info.has_pinit)
                 out_ << "    call void @" << stype << "__pinit(ptr " << tmp_reg << ")\n";
             else if (info.has_explicit_ctor)
                 out_ << "    call void @" << stype << "__ctor(ptr " << tmp_reg << ")\n";

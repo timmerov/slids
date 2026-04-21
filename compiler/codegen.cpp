@@ -1657,7 +1657,7 @@ std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
         current_slid_ = saved_slid;
         self_ptr_ = saved_self;
     }
-    if (info.has_pinit && !info.is_transport_impl)
+    if (info.has_pinit)
         out_ << "    call void @" << slid_name << "__pinit(ptr " << reg << ")\n";
     else if (info.has_explicit_ctor)
         out_ << "    call void @" << slid_name << "__ctor(ptr " << reg << ")\n";
@@ -1676,19 +1676,23 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
             std::string tmp_reg = "%tmp_" + std::to_string(tmp_counter_++);
             out_ << "    " << tmp_reg << " = alloca %struct." << slid_name << "\n";
             auto& info = slid_info_[slid_name];
-            // zero-init fields
-            for (int i = 0; i < (int)info.field_types.size(); i++) {
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr %struct." << slid_name
-                     << ", ptr " << tmp_reg << ", i32 0, i32 " << i << "\n";
-                if (isIndirectType(info.field_types[i]))
-                    out_ << "    store ptr null, ptr " << gep << "\n";
-                else
-                    out_ << "    store " << llvmType(info.field_types[i]) << " 0, ptr " << gep << "\n";
+            if (info.has_pinit) {
+                out_ << "    call void @" << slid_name << "__pinit(ptr " << tmp_reg << ")\n";
+            } else {
+                // zero-init fields
+                for (int i = 0; i < (int)info.field_types.size(); i++) {
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr %struct." << slid_name
+                         << ", ptr " << tmp_reg << ", i32 0, i32 " << i << "\n";
+                    if (isIndirectType(info.field_types[i]))
+                        out_ << "    store ptr null, ptr " << gep << "\n";
+                    else
+                        out_ << "    store " << llvmType(info.field_types[i]) << " 0, ptr " << gep << "\n";
+                }
+                // call explicit constructor if any
+                if (info.has_explicit_ctor)
+                    out_ << "    call void @" << slid_name << "__ctor(ptr " << tmp_reg << ")\n";
             }
-            // call explicit constructor if any
-            if (info.has_explicit_ctor)
-                out_ << "    call void @" << slid_name << "__ctor(ptr " << tmp_reg << ")\n";
             // call op=(char[]) to initialize from the literal
             auto oit = method_overloads_.find(slid_name + "__op=");
             if (oit != method_overloads_.end()) {
