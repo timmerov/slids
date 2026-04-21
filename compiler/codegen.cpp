@@ -1122,7 +1122,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
             if (slid.fields[i].default_val) {
                 val = emitExpr(*slid.fields[i].default_val);
             } else {
-                val = "0";
+                val = (info.field_types[i] == "float32" || info.field_types[i] == "float64") ? "0.0" : "0";
             }
             out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
         }
@@ -1726,7 +1726,9 @@ std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
         if (slid_def && i < (int)slid_def->fields.size() && slid_def->fields[i].default_val)
             val = emitExpr(*slid_def->fields[i].default_val);
         else
-            val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer" : "0";
+            val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer"
+                : (info.field_types[i] == "float32" || info.field_types[i] == "float64") ? "0.0"
+                : "0";
         out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
     }
     } // !has_pinit

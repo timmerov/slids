@@ -6,10 +6,15 @@ Vector3(
 ) {
 }
 
+Temple<T>(T a_) {
+}
+
 int32 main() {
     int x;
     Vector3 vec;
     int arr[5];
+    Temple<int> tint;
+    Temple<float64> tf64;
 
     __println("sizeof(char) = 1 = " + sizeof(char));
     __println("sizeof(int) = 4 = " + sizeof(int));
@@ -24,6 +29,8 @@ int32 main() {
     __println("sizeof(^x) = 8 = " + sizeof(^x));
     __println("sizeof(vec) = 12 = " + sizeof(vec));
     __println("sizeof(arr) = 20 = " + sizeof(arr));
+    __println("sizeof(tint) = 4 = " + sizeof(tint));
+    __println("sizeof(tf64) = 8 = " + sizeof(tf64));
 
     return 0;
 }

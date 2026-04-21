@@ -281,7 +281,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         if (slid_def2 && slid_def2->fields[i].default_val)
                             val = emitExpr(*slid_def2->fields[i].default_val);
                         else
-                            val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer" : "0";
+                            val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer"
+                                : (info.field_types[i] == "float32" || info.field_types[i] == "float64") ? "0.0"
+                                : "0";
                         out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
                     }
                     if (slid_def2 && slid_def2->ctor_body) {
@@ -345,7 +347,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 } else if (slid_def && slid_def->fields[i].default_val) {
                     val = emitExpr(*slid_def->fields[i].default_val);
                 } else {
-                    val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer" : "0";
+                    val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer"
+                        : (info.field_types[i] == "float32" || info.field_types[i] == "float64") ? "0.0"
+                        : "0";
                 }
                 out_ << "    store " << llvmType(info.field_types[i])
                      << " " << val << ", ptr " << gep << "\n";
