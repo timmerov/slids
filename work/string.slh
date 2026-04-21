@@ -56,6 +56,9 @@ String(...)
     */
     op=(uint64 x);
 
+    /* assignment and type converstion from bool. */
+    op=(bool b);
+
     /* overload += to append a string. */
     op+=(String^ s);
 
@@ -64,6 +67,9 @@ String(...)
 
     /* overload += to append a character. */
     op+=(char c);
+
+    /* overload += to append a bool. *./
+    op+=(bool b);
 
     /* overload + to concatenate two String-s. */
     op+(String^ sa, String^ sb);

@@ -3,6 +3,7 @@
 #include <functional>
 #include <stdexcept>
 #include <set>
+#include <climits>
 #include "codegen_helpers.h"
 
 Codegen::Codegen(const Program& program, std::ostream& out)
@@ -1536,25 +1537,41 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
 }
 
 // Resolve the best op= (or op<-) overload for the given argument expression.
-// Priority: slid ref > scalar exact match > ptr/char[] fallback.
+// Priority: slid ref > exact type name match > best-fit (smallest rank >= arg rank) > ptr/char[] fallback.
 std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
     auto oit = method_overloads_.find(base);
     if (oit == method_overloads_.end()) return "";
 
     static const std::set<std::string> unsigned_types = {"uint","uint8","uint16","uint32","uint64","char"};
+    // Integer rank for best-fit selection: bool=0, i8=1, i16=2, i32=3, i64=4
+    static const std::map<std::string,int> int_rank = {
+        {"bool",0},
+        {"int8",1},{"uint8",1},{"char",1},
+        {"int16",2},{"uint16",2},
+        {"int32",3},{"uint32",3},{"int",3},{"uint",3},
+        {"int64",4},{"uint64",4}
+    };
 
-    // determine argument category
+    // determine argument category and specific type
     bool arg_is_slid = false;
-    bool arg_is_char = false;       // char literal ('x') — prefers char overload
-    bool arg_is_scalar_int = false; // signed integer
-    bool arg_is_unsigned = false;   // unsigned integer — prefers uint64 overload
+    bool arg_is_char = false;
+    bool arg_is_scalar_int = false; // signed integer (including bool)
+    bool arg_is_unsigned = false;
+    std::string arg_int_type;       // specific type name when known (enables exact + best-fit matching)
+
+    auto classify_int = [&](const std::string& t) {
+        if (t == "char") { arg_is_char = true; arg_int_type = "char"; }
+        else if (unsigned_types.count(t)) { arg_is_unsigned = true; arg_int_type = t; }
+        else { arg_is_scalar_int = true; arg_int_type = t; } // bool, int8, int16, int32, int64, int, ...
+    };
+
     if (auto* ile = dynamic_cast<const IntLiteralExpr*>(&arg)) {
         arg_is_char = ile->is_char_literal;
         arg_is_scalar_int = !ile->is_char_literal;
+        if (ile->is_char_literal) arg_int_type = "char";
+        // untyped integer literal: arg_int_type left empty — any signed int overload is acceptable
     } else if (auto* nc = dynamic_cast<const TypeConvExpr*>(&arg)) {
-        arg_is_char = nc->target_type == "char";
-        arg_is_unsigned = !arg_is_char && unsigned_types.count(nc->target_type) > 0;
-        arg_is_scalar_int = !arg_is_char && !arg_is_unsigned;
+        classify_int(nc->target_type);
     } else if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
         auto tit = local_types_.find(ve->name);
         if (tit != local_types_.end()) {
@@ -1562,10 +1579,8 @@ std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
             if (!t.empty() && t.back() == '^') t.pop_back();
             else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
             arg_is_slid = slid_info_.count(t) > 0;
-            arg_is_char = !arg_is_slid && (tit->second == "char");
-            arg_is_unsigned = !arg_is_slid && !arg_is_char && unsigned_types.count(tit->second) > 0;
-            if (!arg_is_slid && !arg_is_char && !arg_is_unsigned && !isIndirectType(tit->second))
-                arg_is_scalar_int = true;
+            if (!arg_is_slid && !isIndirectType(tit->second))
+                classify_int(tit->second);
         }
     } else if (auto* ao = dynamic_cast<const AddrOfExpr*>(&arg)) {
         // ^x: addr-of x
@@ -1583,32 +1598,80 @@ std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
     } else if (!exprSlidType(arg).empty()) {
         arg_is_slid = true; // e.g. result of op+ expression
     } else {
-        // use inferred LLVM type: integer types are scalar, ptr is string/reference
+        // use inferred LLVM type: map back to canonical type name for rank-based matching
         std::string lt = exprLlvmType(arg);
-        if (lt == "i8")
-            arg_is_char = true;
-        else if (lt == "i16" || lt == "i32" || lt == "i64")
-            arg_is_scalar_int = true;
+        if      (lt == "i1")  classify_int("bool");
+        else if (lt == "i8")  classify_int("char");
+        else if (lt == "i16") classify_int("int16");
+        else if (lt == "i32") classify_int("int32");
+        else if (lt == "i64") classify_int("int64");
     }
 
-    // pass 1: exact category match
+    auto is_signed_int_param = [&](const std::string& pt) {
+        return !isIndirectType(pt) && pt != "char" && !unsigned_types.count(pt);
+    };
+
+    // pass 1: slid ref exact match
     for (auto& [m, ptypes] : oit->second) {
         if (ptypes.size() != 1) continue;
-        if (arg_is_slid       && isRefType(ptypes[0])) return m;
-        if (arg_is_char       && ptypes[0] == "char") return m;
-        if (arg_is_unsigned   && ptypes[0] != "char" && unsigned_types.count(ptypes[0])) return m;
-        if (arg_is_scalar_int && !isIndirectType(ptypes[0]) && ptypes[0] != "char" && !unsigned_types.count(ptypes[0])) return m;
-        if (!arg_is_slid && !arg_is_char && !arg_is_scalar_int && !arg_is_unsigned && isPtrType(ptypes[0])) return m;
+        if (arg_is_slid && isRefType(ptypes[0])) return m;
     }
-    // pass 2: fallback — any ptr param for non-slid, non-scalar arg (e.g. string literal / char[])
-    if (!arg_is_slid && !arg_is_scalar_int && !arg_is_unsigned) {
+
+    // pass 2: exact type name match for char/int/uint
+    if (!arg_int_type.empty()) {
+        for (auto& [m, ptypes] : oit->second) {
+            if (ptypes.size() == 1 && ptypes[0] == arg_int_type) return m;
+        }
+    }
+
+    // pass 3: best-fit — smallest overload rank >= arg rank (avoids picking int64 when int32 exists)
+    if ((arg_is_scalar_int || arg_is_unsigned) && !arg_int_type.empty()) {
+        auto rit = int_rank.find(arg_int_type);
+        if (rit != int_rank.end()) {
+            int arg_r = rit->second;
+            std::string best_m;
+            int best_r = INT_MAX;
+            for (auto& [m, ptypes] : oit->second) {
+                if (ptypes.size() != 1) continue;
+                bool sign_ok = arg_is_unsigned ? (ptypes[0] != "char" && unsigned_types.count(ptypes[0]) > 0)
+                                               : is_signed_int_param(ptypes[0]);
+                if (!sign_ok) continue;
+                auto pit = int_rank.find(ptypes[0]);
+                if (pit == int_rank.end()) continue;
+                if (pit->second >= arg_r && pit->second < best_r) {
+                    best_r = pit->second;
+                    best_m = m;
+                }
+            }
+            if (!best_m.empty()) return best_m;
+        }
+    }
+
+    // pass 4: untyped scalar int literal — any signed int overload, or any unsigned overload
+    if (arg_is_scalar_int && arg_int_type.empty()) {
+        for (auto& [m, ptypes] : oit->second) {
+            if (ptypes.size() == 1 && is_signed_int_param(ptypes[0])) return m;
+        }
+    }
+    if (arg_is_unsigned && arg_int_type.empty()) {
+        for (auto& [m, ptypes] : oit->second) {
+            if (ptypes.size() == 1 && ptypes[0] != "char" && unsigned_types.count(ptypes[0])) return m;
+        }
+    }
+
+    // pass 5: non-slid, non-int arg — ptr/indirect param (e.g. string literal / char[])
+    if (!arg_is_slid && !arg_is_char && !arg_is_scalar_int && !arg_is_unsigned) {
+        for (auto& [m, ptypes] : oit->second) {
+            if (ptypes.size() == 1 && isPtrType(ptypes[0])) return m;
+        }
         for (auto& [m, ptypes] : oit->second) {
             if (ptypes.size() == 1 && isIndirectType(ptypes[0])) return m;
         }
     }
+
     // slid arg with no matching slid-ref overload: return "" so the caller can synthesize a copy
     if (arg_is_slid) return "";
-    // scalar int/unsigned with no matching scalar overload: return "" so caller can coerce via temp
+    // scalar int/unsigned with no matching overload: return "" so caller can coerce via temp
     if (arg_is_scalar_int || arg_is_unsigned) return "";
     // non-slid arg: fall back to first available overload
     return oit->second[0].first;

@@ -107,6 +107,15 @@ String (
         reverse();
     }
 
+    /* assignment and type converstion from bool. */
+    op=(bool b) {
+        if (b) {
+            set("true", 4);
+        } else {
+            set("false", 5);
+        }
+    }
+
     /* overload += to append a string. */
     op+=(String^ s)  {
         /* we can append ourselves to ourselves. */
@@ -129,6 +138,16 @@ String (
     /* overload += to append a character. */
     op+=(char c) {
         append(^c, 1);
+    }
+
+
+    /* overload += to append a bool. *./
+    op+=(bool b) {
+        if (b) {
+            append("true", 4);
+        } else {
+            append("false", 5);
+        }
     }
 
     /* overload + to concatenate two String-s. */
