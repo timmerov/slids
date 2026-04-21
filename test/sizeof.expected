@@ -7,7 +7,9 @@ sizeof(int32) = 4 = 4
 sizeof(int64) = 8 = 8
 sizeof(void^) = 8 = 8
 sizeof(Vector3) = 12 = 12
-sizeof(x) = 4 = 0
+sizeof(x) = 4 = 4
 sizeof(^x) = 8 = 8
-sizeof(vec) = 12 = 0
-sizeof(arr) = 20 = 0
+sizeof(vec) = 12 = 12
+sizeof(arr) = 20 = 20
+sizeof(tint) = 4 = 4
+sizeof(tf64) = 8 = 8
