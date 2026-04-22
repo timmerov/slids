@@ -28,4 +28,7 @@
   - Functions declared in `.slh` are public entry points in `.o` files. Functions defined in `.sl` files are private and not exported in `.o` files. `main` and `__pinit` are exceptions. Explicit template instantiation is also public. Test this by trying to access a private imported class method.
 
 - **Returning:** Currently, a non-void function must end with a return statement - which is flawed but it kinda sorta works. We need to ensure every possible code path returns. And don't require a return if the end of block is unreachable.
-  
+
+- **Optimize returning objects:**
+  - Currently, a function returning an object copies the object to its retval. The retval should be the object.
+  - Copying objects about to be destructed should use move semantics.
