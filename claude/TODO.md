@@ -30,5 +30,5 @@
 - **Returning:** Currently, a non-void function must end with a return statement - which is flawed but it kinda sorta works. We need to ensure every possible code path returns. And don't require a return if the end of block is unreachable.
 
 - **Optimize returning objects:**
-  - Currently, a function returning an object copies the object to its retval. The retval should be the object.
+  - Currently, a function returning an object copies the object to its retval. The retval should be the object - named value return optimization (NRVO).
   - Copying objects about to be destructed should use move semantics.
