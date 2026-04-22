@@ -1,0 +1,17 @@
+
+i moved claude into a subdirectory.
+expected everything to just work.
+silly me.
+
+there's a .claude hidden file that needs to be moved.
+in there are a bunch of files with hard coded paths.
+this allowed claude to access forbidden files.
+
+there are also hidden files in the home directory.
+~/.claude/
+has a bunch of stuff.
+grep for the old path.
+most of that can be deleted.
+projects, history, backups...
+some of them should be edited.
+like settings.
