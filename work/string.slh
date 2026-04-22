@@ -116,7 +116,7 @@ String(...)
     int compare(String^ other);
 
     /* return the substring. */
-    String slice(int start, int count);
+    String slice(intptr start, intptr count);
 }
 
 /* binary comparisons */

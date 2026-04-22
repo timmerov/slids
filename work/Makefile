@@ -53,15 +53,12 @@ $(ST_DIR)/string_test.o: $(ST_DIR)/string_test.ll
 	$(LLC) $(LLCFLAGS) $< -o $@
 
 $(ST_DIR)/string.ll: string.sl $(SLIDSC)
-	mkdir -p $(ST_DIR) $(EXPORT_DIR)
+	mkdir -p $(ST_DIR)
 	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS) -MF $(ST_DIR)/string.d
 
 $(ST_DIR)/string_test.ll: string_test.sl $(SLIDSC)
-	mkdir -p $(ST_DIR) $(EXPORT_DIR)
+	mkdir -p $(ST_DIR)
 	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS) -MF $(ST_DIR)/string_test.d
-
-# annotated header is produced by compiling string.sl
-$(EXPORT_DIR)/string.slh: $(ST_DIR)/string.ll
 
 # ---- template1 ----
 

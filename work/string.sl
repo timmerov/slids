@@ -276,10 +276,10 @@ String (
     }
 
     /* return the substring. */
-    String slice(int start, int count) {
+    String slice(intptr start, intptr count) {
         String s;
         s.reserve(count);
-        strcpy(s.storage_, storage_ + start, count);
+        s.append(storage_ + start, count);
         return s;
     }
 

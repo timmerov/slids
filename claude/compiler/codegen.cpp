@@ -1214,13 +1214,25 @@ std::string Codegen::resolveOverloadForCall(
     auto it = method_overloads_.find(base_mangled);
     if (it == method_overloads_.end() || it->second.empty()) return base_mangled;
     if (it->second.size() == 1) return it->second[0].first;
-    // multiple overloads: match by pointer-vs-scalar for each arg position
+    // Pass 1: exact type match
+    for (auto& [mangled, ptypes] : it->second) {
+        if (ptypes.size() != args.size()) continue;
+        bool match = true;
+        for (int i = 0; i < (int)args.size(); i++) {
+            if (exprType(*args[i]) != ptypes[i]) { match = false; break; }
+        }
+        if (match) return mangled;
+    }
+    // Pass 2: indirect-type match (pointer vs scalar)
     for (auto& [mangled, ptypes] : it->second) {
         if (ptypes.size() != args.size()) continue;
         bool match = true;
         for (int i = 0; i < (int)args.size(); i++) {
             bool param_ptr = isIndirectType(ptypes[i]);
-            bool arg_ptr   = isPointerExpr(*args[i]);
+            std::string at = exprType(*args[i]);
+            bool arg_ptr = (at == "nullptr") ? true
+                         : (!at.empty()      ? isIndirectType(at)
+                                             : isPointerExpr(*args[i]));
             if (param_ptr != arg_ptr) { match = false; break; }
         }
         if (match) return mangled;
@@ -1446,6 +1458,153 @@ std::string Codegen::exprSlidType(const Expr& expr) {
         // Phase 3: no op+, but op+= exists — temp = copy(left); temp op= right
         if (!left_slid.empty() && method_overloads_.count(left_slid + "__op" + be->op + "="))
             return left_slid;
+    }
+    return "";
+}
+
+// Return the Slids type string of expr (e.g. "char[]", "int", "String").
+// Returns "" when the type cannot be statically determined.
+std::string Codegen::exprType(const Expr& expr) {
+    if (dynamic_cast<const StringLiteralExpr*>(&expr)) return "char[]";
+    if (auto* il = dynamic_cast<const IntLiteralExpr*>(&expr)) {
+        if (il->is_char_literal) return "char";
+        if (il->is_nondecimal)   return "uint64";
+        return "int";
+    }
+    if (dynamic_cast<const FloatLiteralExpr*>(&expr)) return "float64";
+    if (dynamic_cast<const NullptrExpr*>(&expr))      return "nullptr";
+    if (dynamic_cast<const SizeofExpr*>(&expr))       return "intptr";
+    if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr))  return nc->target_type;
+    if (auto* pc = dynamic_cast<const PtrCastExpr*>(&expr))   return pc->target_type;
+    if (auto* ne = dynamic_cast<const NewScalarExpr*>(&expr)) return ne->elem_type + "^";
+    if (auto* ne = dynamic_cast<const NewExpr*>(&expr))       return ne->elem_type + "[]";
+    if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
+        if (!current_slid_.empty()) {
+            auto& info = slid_info_[current_slid_];
+            auto fit = info.field_index.find(ve->name);
+            if (fit != info.field_index.end())
+                return info.field_types[fit->second];
+        }
+        auto tit = local_types_.find(ve->name);
+        if (tit != local_types_.end()) return tit->second;
+        if (slid_info_.count(ve->name)) return ve->name;
+        return "";
+    }
+    if (auto* ao = dynamic_cast<const AddrOfExpr*>(&expr)) {
+        std::string t = exprType(*ao->operand);
+        return t.empty() ? "" : t + "^";
+    }
+    if (auto* de = dynamic_cast<const DerefExpr*>(&expr)) {
+        std::string t = exprType(*de->operand);
+        if (isRefType(t)) return t.substr(0, t.size() - 1);
+        if (isPtrType(t)) return t.substr(0, t.size() - 2);
+        return "";
+    }
+    if (auto* pi = dynamic_cast<const PostIncDerefExpr*>(&expr)) {
+        std::string t = exprType(*pi->operand);
+        if (isPtrType(t)) return t.substr(0, t.size() - 2);
+        return "";
+    }
+    if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&expr)) {
+        std::string t = exprType(*ai->base);
+        if (isPtrType(t)) return t.substr(0, t.size() - 2);
+        auto lb = t.rfind('[');
+        if (lb != std::string::npos && lb > 0) return t.substr(0, lb);
+        return "";
+    }
+    if (auto* se = dynamic_cast<const SliceExpr*>(&expr)) return exprType(*se->base);
+    if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
+        std::string obj_slid;
+        if (auto* ve2 = dynamic_cast<const VarExpr*>(fa->object.get())) {
+            if (!current_slid_.empty()) {
+                auto& info = slid_info_[current_slid_];
+                auto fit = info.field_index.find(ve2->name);
+                if (fit != info.field_index.end()) {
+                    obj_slid = info.field_types[fit->second];
+                    if (isRefType(obj_slid)) obj_slid.pop_back();
+                    else if (isPtrType(obj_slid)) obj_slid.resize(obj_slid.size()-2);
+                    if (!slid_info_.count(obj_slid)) obj_slid.clear();
+                }
+            }
+            if (obj_slid.empty()) {
+                auto tit = local_types_.find(ve2->name);
+                if (tit != local_types_.end()) obj_slid = tit->second;
+            }
+        } else if (auto* de2 = dynamic_cast<const DerefExpr*>(fa->object.get())) {
+            if (auto* ve2 = dynamic_cast<const VarExpr*>(de2->operand.get())) {
+                auto tit = local_types_.find(ve2->name);
+                if (tit != local_types_.end()) {
+                    obj_slid = tit->second;
+                    if (isRefType(obj_slid)) obj_slid.pop_back();
+                    else if (isPtrType(obj_slid)) obj_slid.resize(obj_slid.size()-2);
+                }
+            }
+        } else {
+            obj_slid = exprSlidType(*fa->object);
+        }
+        if (!obj_slid.empty() && slid_info_.count(obj_slid)) {
+            auto& info = slid_info_[obj_slid];
+            auto fit = info.field_index.find(fa->field);
+            if (fit != info.field_index.end())
+                return info.field_types[fit->second];
+        }
+        return "";
+    }
+    if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        auto nit = nested_info_.find(ce->callee);
+        if (nit != nested_info_.end()) {
+            std::string mangled = nit->second.parent_name + "__" + ce->callee;
+            auto rit = func_return_types_.find(mangled);
+            if (rit != func_return_types_.end()) return rit->second;
+        }
+        auto rit = func_return_types_.find(ce->callee);
+        if (rit != func_return_types_.end()) return rit->second;
+        return "";
+    }
+    if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
+        std::string obj_slid;
+        if (auto* ve = dynamic_cast<const VarExpr*>(mc->object.get())) {
+            if (ve->name == "self" && !current_slid_.empty())
+                obj_slid = current_slid_;
+            else {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) obj_slid = tit->second;
+            }
+        } else {
+            obj_slid = exprSlidType(*mc->object);
+        }
+        if (!obj_slid.empty()) {
+            std::string mangled = resolveOverloadForCall(obj_slid + "__" + mc->method, mc->args);
+            auto rit = func_return_types_.find(mangled);
+            if (rit != func_return_types_.end()) return rit->second;
+        }
+        return "";
+    }
+    if (auto* u = dynamic_cast<const UnaryExpr*>(&expr)) {
+        if (u->op == "!") return "bool";
+        return exprType(*u->operand);
+    }
+    if (auto* be = dynamic_cast<const BinaryExpr*>(&expr)) {
+        if (be->op == "==" || be->op == "!=" || be->op == "<"  ||
+            be->op == ">"  || be->op == "<=" || be->op == ">=" ||
+            be->op == "&&" || be->op == "||" || be->op == "^^")
+            return "bool";
+        std::string mangled = resolveOperatorOverload(be->op, *be->left, *be->right);
+        if (!mangled.empty()) {
+            auto rit = func_return_types_.find(mangled);
+            if (rit != func_return_types_.end() && !rit->second.empty() && rit->second != "void")
+                return rit->second;
+        }
+        // pointer arithmetic: +/- with a pointer operand preserves the pointer type
+        if (be->op == "+" || be->op == "-") {
+            std::string lt = exprType(*be->left);
+            if (isIndirectType(lt)) return lt;
+            if (be->op == "+") {
+                std::string rt = exprType(*be->right);
+                if (isIndirectType(rt)) return rt;
+            }
+        }
+        return exprType(*be->left);
     }
     return "";
 }
