@@ -2017,10 +2017,12 @@ void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& full_mangle
     emitBlock(body);
 
     if (!block_terminated_) {
-        if (return_type == "void")
+        if (return_type == "void") {
+            emitDtors();
             out_ << "    ret void\n";
-        else
-            out_ << "    unreachable\n";
+        } else {
+            throw std::runtime_error("method '" + full_mangled + "' is missing a return statement");
+        }
     }
 
     out_ << "}\n\n";

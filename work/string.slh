@@ -114,6 +114,9 @@ String(...)
         +1: self >  other
     */
     int compare(String^ other);
+
+    /* return the substring. */
+    String slice(int start, int count);
 }
 
 /* binary comparisons */

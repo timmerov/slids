@@ -273,6 +273,14 @@ String (
         }
     }
 
+    /* return the substring. */
+    String slice(int start, int count) {
+        String s;
+        s.reserve(count);
+        strcpy(s.storage_, storage_ + start, count);
+        return s;
+    }
+
 /* private functions. */
 
     /* set to an array of characters. */

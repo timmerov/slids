@@ -102,5 +102,9 @@ int32 main() {
         ++it;
     }
 
+    /* slicing */
+    String s7 = s2.slice(7, 5);
+    println(String + "s7<World>=" + s7);
+
     return 0;
 }
