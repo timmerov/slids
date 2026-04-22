@@ -18,6 +18,7 @@ SAMPLES = \
 	parsing \
 	pointer \
 	rangedfor \
+	returnslid \
 	sizeof \
 	strlitcat \
 	switch \

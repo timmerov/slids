@@ -396,16 +396,24 @@ std::string Codegen::emitExpr(const Expr& expr) {
             auto ret_it = func_return_types_.find(mangled);
             if (ret_it == func_return_types_.end())
                 throw std::runtime_error("unknown method: " + mc->method);
-            std::string ret_type = llvmType(ret_it->second);
-            std::string arg_str = "ptr " + obj_ptr;
             auto& mptypes = func_param_types_[mangled];
+            std::string method_args;
             for (int i = 0; i < (int)mc->args.size(); i++) {
                 std::string ptype = (i < (int)mptypes.size()) ? llvmType(mptypes[i]) : "i32";
-                arg_str += ", " + ptype + " " + emitExpr(*mc->args[i]);
+                method_args += ", " + ptype + " " + emitExpr(*mc->args[i]);
             }
+            if (slid_info_.count(ret_it->second)) {
+                std::string tmp = "%tmp_" + std::to_string(tmp_counter_++);
+                out_ << "    " << tmp << " = alloca %struct." << ret_it->second << "\n";
+                out_ << "    call void @" << llvmGlobalName(mangled)
+                     << "(ptr " << obj_ptr << ", ptr sret(%struct." << ret_it->second << ") " << tmp
+                     << method_args << ")\n";
+                return tmp;
+            }
+            std::string ret_type = llvmType(ret_it->second);
             std::string tmp = newTmp();
-            out_ << "    " << tmp << " = call " << ret_type << " @" << mangled
-                 << "(" << arg_str << ")\n";
+            out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(mangled)
+                 << "(ptr " << obj_ptr << method_args << ")\n";
             return tmp;
         }
         throw std::runtime_error("complex method call not yet supported");

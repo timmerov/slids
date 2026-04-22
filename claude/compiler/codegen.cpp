@@ -1338,8 +1338,10 @@ bool Codegen::isFreshSlidTemp(const Expr& expr) {
     // (SlidType=expr) always allocates a fresh temp
     if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr))
         return slid_info_.count(nc->target_type) > 0;
-    // function call returning a slid type produces a fresh temp alloca
+    // function or method call returning a slid type produces a fresh temp alloca
     if (dynamic_cast<const CallExpr*>(&expr))
+        return !exprSlidType(expr).empty();
+    if (dynamic_cast<const MethodCallExpr*>(&expr))
         return !exprSlidType(expr).empty();
     // any binary expression that produces a slid result owns a fresh temp alloca
     if (dynamic_cast<const BinaryExpr*>(&expr))
@@ -1388,6 +1390,24 @@ std::string Codegen::exprSlidType(const Expr& expr) {
         auto rit = func_return_types_.find(ce->callee);
         if (rit != func_return_types_.end() && slid_info_.count(rit->second))
             return rit->second;
+    }
+    if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
+        std::string obj_slid;
+        if (auto* ve = dynamic_cast<const VarExpr*>(mc->object.get())) {
+            if (ve->name == "self" && !current_slid_.empty())
+                obj_slid = current_slid_;
+            else {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) obj_slid = tit->second;
+            }
+        }
+        if (!obj_slid.empty()) {
+            std::string mangled = resolveOverloadForCall(obj_slid + "__" + mc->method, mc->args);
+            auto rit = func_return_types_.find(mangled);
+            if (rit != func_return_types_.end() && slid_info_.count(rit->second))
+                return rit->second;
+        }
+        return "";
     }
     if (auto* be = dynamic_cast<const BinaryExpr*>(&expr)) {
         std::string mangled = resolveOperatorOverload(be->op, *be->left, *be->right);
@@ -1995,10 +2015,14 @@ void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& full_mangle
     current_slid_ = slid.name;
     block_terminated_ = false;
 
-    std::string ret_type = llvmType(return_type);
+    bool uses_sret = !return_type.empty() && slid_info_.count(return_type) > 0;
+    current_func_uses_sret_ = uses_sret;
+    std::string ret_type = uses_sret ? "void" : llvmType(return_type);
     current_func_return_type_ = ret_type;
 
     std::string param_str = "ptr %self";
+    if (uses_sret)
+        param_str += ", ptr sret(%struct." + return_type + ") %retval";
     for (auto& [type, name] : params)
         param_str += ", " + llvmType(type) + " %arg_" + name;
 
@@ -2017,7 +2041,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& full_mangle
     emitBlock(body);
 
     if (!block_terminated_) {
-        if (return_type == "void") {
+        if (return_type == "void" || uses_sret) {
             emitDtors();
             out_ << "    ret void\n";
         } else {

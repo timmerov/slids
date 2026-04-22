@@ -435,6 +435,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                     src_ptr = loaded;
                                 }
                             }
+                            if (src_ptr.empty() && ve->name == "self"
+                                    && !current_slid_.empty() && current_slid_ == eff_type)
+                                src_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
                         }
                         if (!src_ptr.empty()) emitSlidCopy(eff_type, reg, src_ptr);
                     }
