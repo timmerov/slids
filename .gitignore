@@ -1,4 +1,7 @@
 bin
 build
 *.zip
-
+claude/bugs
+claude/sample
+claude/test
+claude/work
