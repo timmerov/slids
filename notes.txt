@@ -3,3 +3,53 @@ claude needs to fix the compile bug in sample/move.sl
 test to see if the compiler moves a class field by field.
 like the copy operator.
 
+string literal concatenation:
+    char[] s = "Hello" ", " "World" "!";
+and escapes:
+    char[] s = "Hello, \
+World!";
+
+import paths.
+
+string api:
+String slice(start, count) {
+    String sub;
+    /* can we return a class object? */
+    return sub;
+}
+usage?
+s2 = s1.slice(1, 5);
+
+implement vector api:
+T[] begin()
+T[] end()
+T op[](3) --> T x = vec[3] --> T x = (T=vec[3])
+op[]=(3, x)  --> vec[3] = x
+T^ at(3)
+size()
+resize(5)
+reserve(10)
+append(T^)
+insert(T^, where)
+T^ emplace(where)
+remove(which)
+remove(start, count)
+
+check if this works:
+vec[2] <-> vec[4];
+
+do we need the op^[] ?
+it returns a reference to the indexed value.
+T^ op^[](index) {
+    // cast pointer [] to reference ^ is automagic.
+    T^ ref = storage_ + index;
+    // alternatively:
+    T^ ref = begin() + index;
+    return ref;
+}
+how would we use it?
+these are probably impossible to parse as intended.
+T^ ref = ^vec[3];
+T^ ref = vec^[3];
+maybe just api.
+T^ ref = vec.at(3);

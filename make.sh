@@ -1,8 +1,10 @@
 #!/bin/bash
 set -e
 
+OPTS="-j 4"
+
 echo "building slids compiler..."
-make -C compiler/
+make ${OPTS} -C compiler/
 
 echo "building bugs code..."
 make -C bugs/
