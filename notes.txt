@@ -1,15 +1,6 @@
 
 import paths.
 
-string api:
-String slice(start, count) {
-    String sub;
-    /* can we return a class object? */
-    return sub;
-}
-usage?
-s2 = s1.slice(1, 5);
-
 implement vector api:
 T[] begin()
 T[] end()
