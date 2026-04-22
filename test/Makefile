@@ -19,6 +19,7 @@ SAMPLES = \
 	pointer \
 	rangedfor \
 	sizeof \
+	strlitcat \
 	switch \
 	type_conv \
 	type_infer

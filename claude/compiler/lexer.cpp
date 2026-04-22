@@ -77,6 +77,7 @@ Token Lexer::readString() {
                 case 't':  value += '\t'; break;
                 case '\\': value += '\\'; break;
                 case '"':  value += '"';  break;
+                case '\n': break;
                 default:   value += esc;  break;
             }
         } else {

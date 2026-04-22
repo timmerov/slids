@@ -1,14 +1,4 @@
 
-claude needs to fix the compile bug in sample/move.sl
-test to see if the compiler moves a class field by field.
-like the copy operator.
-
-string literal concatenation:
-    char[] s = "Hello" ", " "World" "!";
-and escapes:
-    char[] s = "Hello, \
-World!";
-
 import paths.
 
 string api:
