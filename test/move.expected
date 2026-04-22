@@ -2,3 +2,12 @@ p1 == nullptr
 p2 != nullptr
 p1 == nullptr
 p2 == nullptr
+NoMove before: from=42 to=0
+NoMove after : from=42 to=42
+Move before: from=42 to=0
+Move:<-=42
+Move after : from=42 to=42
+NestedMove:before from: a=42 b=37 c=2026
+NestedMove:before to  : a=0 b=0 c=0
+NestedMove:after  from: a=42 b=37 c=2026
+NestedMove:after  to  : a=42 b=37 c=2026

@@ -78,7 +78,7 @@ int32 main() {
     /* move with nested move operator. */
     {
         NestedMove from(42, 37, 2026);
-        Move to;
+        NestedMove to;
         from.print("before from");
         to.print("before to  ");
         to <- from;

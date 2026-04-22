@@ -334,8 +334,14 @@ std::string Codegen::emitExpr(const Expr& expr) {
         }
         if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
             std::string gep = emitFieldPtr(ve->name, fa->field);
+            std::string slid_name;
             auto type_it = local_types_.find(ve->name);
-            std::string slid_name = type_it->second;
+            if (type_it != local_types_.end()) {
+                slid_name = type_it->second;
+            } else if (!current_slid_.empty()) {
+                auto& parent_info = slid_info_[current_slid_];
+                slid_name = parent_info.field_types[parent_info.field_index.at(ve->name)];
+            }
             auto& info = slid_info_[slid_name];
             int idx = info.field_index[fa->field];
             std::string field_type = llvmType(info.field_types[idx]);

@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Rules
 
 - Never run any git command unless the user explicitly asks.
+- Do not read or access any file outside of /home/timmer/Documents/code/slids/claude ever.
 - **Scope is strictly limited to the test file or specific lines named. Reading or modifying anything outside that scope is not permitted.**
 - **Do not build or run anything outside the named scope.** If the scope is a single sample, build and run only that sample. If the scope is specific lines, do not consider issues outside those lines.
 - **Discussion is not permission to change code.** Explicit instruction is required: "do it", "make the changes", "go ahead", etc. "We will do X" and "X needs to happen" are not instructions to act.
@@ -41,9 +42,7 @@ g++ foo.o -o foo
 
 ## Testing
 
-There is no automated test suite. Sample programs in `sample/` are the regression tests. Build them with `cd sample && make` and run the binaries in `bin/`. Each sample exercises specific language features (see the Makefile for the full list).
-
-Work-in-progress tests live in `work/`. Build with `cd work && make`. The `vector1` target exercises cross-TU template class instantiation.
+Test nothing other than the test files in scope.
 
 ## Compiler pipeline
 

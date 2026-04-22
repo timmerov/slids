@@ -666,8 +666,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                      << "(ptr " << it->second << ", " << ptype_str << " " << arg_val << ")\n";
                 return;
             }
-            // no matching op= found: synthesize a default field-by-field copy
-            if (!assign->is_move) {
+            // no matching op= / op<- found: synthesize a default field-by-field copy
+            {
                 const std::string& slid_name = tit->second;
                 std::string src_ptr;
                 if (auto* ve = dynamic_cast<const VarExpr*>(assign->value.get())) {
@@ -997,8 +997,14 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
         if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
             std::string gep = emitFieldPtr(ve->name, fa->field);
+            std::string slid_name;
             auto type_it = local_types_.find(ve->name);
-            std::string slid_name = type_it->second;
+            if (type_it != local_types_.end()) {
+                slid_name = type_it->second;
+            } else if (!current_slid_.empty()) {
+                auto& parent_info = slid_info_[current_slid_];
+                slid_name = parent_info.field_types[parent_info.field_index.at(ve->name)];
+            }
             auto& info = slid_info_[slid_name];
             int idx = info.field_index[fa->field];
             std::string field_type = llvmType(info.field_types[idx]);
@@ -1991,6 +1997,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr "
                              << fmt_name << ", i32 0, i32 0\n";
                         out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", double " << val << ")\n";
+                        continue;
+                    }
+                    if (val_type == "ptr") {
+                        std::string fmt = newTmp();
+                        int fmt_size = (last && newline) ? 4 : 3;
+                        std::string fmt_name = (last && newline) ? "@.fmt_str" : "@.fmt_str_nonl";
+                        out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr "
+                             << fmt_name << ", i32 0, i32 0\n";
+                        out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", ptr " << val << ")\n";
                         continue;
                     }
                     if (val_type != "i32" && val_type != "i64") {

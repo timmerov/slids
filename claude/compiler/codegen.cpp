@@ -2155,11 +2155,32 @@ void Codegen::emitBlock(const BlockStmt& block) {
 
 // returns the ptr to a field in a struct instance
 std::string Codegen::emitFieldPtr(const std::string& obj_name, const std::string& field) {
-    // find the slid type for this object
+    std::string slid_name;
+    std::string obj_ptr;
+
     auto type_it = local_types_.find(obj_name);
-    if (type_it == local_types_.end())
+    if (type_it != local_types_.end()) {
+        slid_name = type_it->second;
+        auto loc_it = locals_.find(obj_name);
+        if (loc_it == locals_.end())
+            throw std::runtime_error("undefined variable: " + obj_name);
+        obj_ptr = loc_it->second;
+    } else if (!current_slid_.empty()) {
+        // obj_name may be a field of the current slid, accessed via %self
+        auto& parent_info = slid_info_[current_slid_];
+        auto parent_it = parent_info.field_index.find(obj_name);
+        if (parent_it == parent_info.field_index.end())
+            throw std::runtime_error("unknown type for variable: " + obj_name);
+        int parent_idx = parent_it->second;
+        slid_name = parent_info.field_types[parent_idx];
+        std::string self_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
+        std::string parent_gep = newTmp();
+        out_ << "    " << parent_gep << " = getelementptr %struct." << current_slid_
+             << ", ptr " << self_ptr << ", i32 0, i32 " << parent_idx << "\n";
+        obj_ptr = parent_gep;
+    } else {
         throw std::runtime_error("unknown type for variable: " + obj_name);
-    std::string slid_name = type_it->second;
+    }
 
     auto& info = slid_info_[slid_name];
     auto field_it = info.field_index.find(field);
@@ -2167,16 +2188,6 @@ std::string Codegen::emitFieldPtr(const std::string& obj_name, const std::string
         throw std::runtime_error("unknown field: " + field + " in " + slid_name);
 
     int idx = field_it->second;
-    std::string field_type = llvmType(info.field_types[idx]);
-
-    std::string obj_ptr;
-    auto loc_it = locals_.find(obj_name);
-    if (loc_it != locals_.end()) {
-        obj_ptr = loc_it->second;
-    } else {
-        throw std::runtime_error("undefined variable: " + obj_name);
-    }
-
     std::string gep = newTmp();
     out_ << "    " << gep << " = getelementptr %struct." << slid_name
          << ", ptr " << obj_ptr << ", i32 0, i32 " << idx << "\n";
