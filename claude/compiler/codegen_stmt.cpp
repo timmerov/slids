@@ -421,22 +421,45 @@ void Codegen::emitStmt(const Stmt& stmt) {
             return;
         }
 
-        // anonymous tuple local: tuple = (a, b, c); — alloca struct, store each element
+        // anonymous tuple local: tuple = (a, b, c); or tuple2 = otherTuple;
         if (isAnonTupleType(eff_type)) {
-            auto* te = dynamic_cast<const TupleExpr*>(decl->init.get());
-            if (!te) throw std::runtime_error("tuple-typed declaration requires a tuple literal initializer");
             auto elems = anonTupleElems(eff_type);
             std::string struct_llvm = llvmType(eff_type);
             std::string reg = uniqueAllocaReg(decl->name);
             out_ << "    " << reg << " = alloca " << struct_llvm << "\n";
             locals_[decl->name] = reg;
             local_types_[decl->name] = eff_type;
-            for (int i = 0; i < (int)elems.size() && i < (int)te->values.size(); i++) {
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr " << struct_llvm
+            if (auto* te = dynamic_cast<const TupleExpr*>(decl->init.get())) {
+                for (int i = 0; i < (int)elems.size() && i < (int)te->values.size(); i++) {
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr " << struct_llvm
+                         << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
+                    std::string val = emitExpr(*te->values[i]);
+                    out_ << "    store " << llvmType(elems[i]) << " " << val << ", ptr " << gep << "\n";
+                }
+                return;
+            }
+            // non-literal initializer — require a same-typed tuple source and field-by-field copy
+            std::string src_slids = inferSlidType(*decl->init);
+            if (src_slids != eff_type)
+                throw std::runtime_error("cannot initialize tuple '" + eff_type
+                    + "' from expression of type '" + src_slids + "'");
+            auto* ve = dynamic_cast<const VarExpr*>(decl->init.get());
+            if (!ve) throw std::runtime_error("tuple copy from non-variable source not supported");
+            auto lit = locals_.find(ve->name);
+            if (lit == locals_.end()) throw std::runtime_error("undefined tuple source: " + ve->name);
+            const std::string& src_ptr = lit->second;
+            for (int i = 0; i < (int)elems.size(); i++) {
+                std::string elem_llvm = llvmType(elems[i]);
+                std::string src_gep = newTmp();
+                out_ << "    " << src_gep << " = getelementptr " << struct_llvm
+                     << ", ptr " << src_ptr << ", i32 0, i32 " << i << "\n";
+                std::string val = newTmp();
+                out_ << "    " << val << " = load " << elem_llvm << ", ptr " << src_gep << "\n";
+                std::string dst_gep = newTmp();
+                out_ << "    " << dst_gep << " = getelementptr " << struct_llvm
                      << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
-                std::string val = emitExpr(*te->values[i]);
-                out_ << "    store " << llvmType(elems[i]) << " " << val << ", ptr " << gep << "\n";
+                out_ << "    store " << elem_llvm << " " << val << ", ptr " << dst_gep << "\n";
             }
             return;
         }

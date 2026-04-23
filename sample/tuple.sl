@@ -34,8 +34,8 @@ int32 main() {
     Simple d(30, 31, 32) = (40, 41, 42);
     d.print("d");
 
-    /*d = (50, 51, 52);
-    d.print("d*");*/
+    d = (50, 51, 52);
+    d.print("d*");
 
     /* accessing. */
     tuple = (1, 2, 3);
@@ -44,6 +44,10 @@ int32 main() {
     tuple[2] = 10;
     ten = tuple[2];
     __println("tuple = (" + one + "," + two + "," + ten + ")");
+
+    /* copying. */
+    tuple2 = tuple;
+    __println("tuple2 = (" + tuple2[0] + "," + tuple2[1] + "," + tuple2[2] + ")");
 
     /* destructuring. */
     /*(int x, int y) = (-1, -2);
