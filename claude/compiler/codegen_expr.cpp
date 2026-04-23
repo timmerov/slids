@@ -1255,42 +1255,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string ptr = newTmp();
         out_ << "    " << ptr << " = call ptr @malloc(i64 " << size_val << ")\n";
 
-        // initialize fields and call constructor (struct types only)
-        if (slid_info_.count(stype)) {
-            auto& info = slid_info_[stype];
-            const SlidDef* slid_def = nullptr;
-            for (auto& s : program_.slids)
-                if (s.name == stype) { slid_def = &s; break; }
-
-            for (int i = 0; i < (int)info.field_types.size(); i++) {
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr %struct." << stype
-                     << ", ptr " << ptr << ", i32 0, i32 " << i << "\n";
-                std::string val;
-                if (i < (int)ne->args.size()) {
-                    val = emitExpr(*ne->args[i]);
-                } else if (slid_def && slid_def->fields[i].default_val) {
-                    val = emitExpr(*slid_def->fields[i].default_val);
-                } else {
-                    val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer" : "0";
-                }
-                out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
-            }
-
-            if (slid_def && slid_def->ctor_body) {
-                std::string saved_slid = current_slid_;
-                std::string saved_self = self_ptr_;
-                current_slid_ = stype;
-                self_ptr_ = ptr;
-                emitBlock(*slid_def->ctor_body);
-                current_slid_ = saved_slid;
-                self_ptr_ = saved_self;
-            }
-            if (info.has_pinit)
-                out_ << "    call void @" << stype << "__pinit(ptr " << ptr << ")\n";
-            else if (info.has_explicit_ctor)
-                out_ << "    call void @" << stype << "__ctor(ptr " << ptr << ")\n";
-        }
+        emitConstructAt(stype, ptr, ne->args);
         return ptr;
     }
 
@@ -1303,38 +1268,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         if (!allowed_addr_types.count(addr_type))
             throw std::runtime_error("placement new: address must be void, int8, or uint8 pointer, got '" + addr_type + "'");
         std::string ptr = emitExpr(*pne->addr);
-        if (slid_info_.count(stype)) {
-            auto& info = slid_info_[stype];
-            const SlidDef* slid_def = nullptr;
-            for (auto& s : program_.slids)
-                if (s.name == stype) { slid_def = &s; break; }
-            for (int i = 0; i < (int)info.field_types.size(); i++) {
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr %struct." << stype
-                     << ", ptr " << ptr << ", i32 0, i32 " << i << "\n";
-                std::string val;
-                if (i < (int)pne->args.size()) {
-                    val = emitExpr(*pne->args[i]);
-                } else if (slid_def && slid_def->fields[i].default_val) {
-                    val = emitExpr(*slid_def->fields[i].default_val);
-                } else {
-                    val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer"
-                        : isIndirectType(info.field_types[i]) ? "null" : "0";
-                }
-                out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
-            }
-            if (slid_def && slid_def->ctor_body) {
-                std::string saved_slid = current_slid_;
-                std::string saved_self = self_ptr_;
-                current_slid_ = stype;
-                self_ptr_ = ptr;
-                emitBlock(*slid_def->ctor_body);
-                current_slid_ = saved_slid;
-                self_ptr_ = saved_self;
-            } else if (info.has_explicit_ctor) {
-                out_ << "    call void @" << stype << "__ctor(ptr " << ptr << ")\n";
-            }
-        }
+        emitConstructAt(stype, ptr, pne->args);
         return ptr;
     }
 

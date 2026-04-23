@@ -333,55 +333,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             locals_[decl->name] = reg;
             local_types_[decl->name] = eff_type;
 
-            // find the SlidDef (check program slids first, then template instantiations)
-            const SlidDef* slid_def = nullptr;
-            for (auto& s : program_.slids)
-                if (s.name == eff_type) slid_def = &s; // last match = implementation slid
-            if (!slid_def) {
-                auto it = concrete_slid_template_defs_.find(eff_type);
-                if (it != concrete_slid_template_defs_.end()) slid_def = &it->second;
-            }
-
-            // initialize fields with defaults or ctor args (skip for incomplete types)
-            if (!info.has_pinit) {
-            for (int i = 0; i < (int)info.field_types.size(); i++) {
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr %struct." << eff_type
-                     << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
-
-                std::string val;
-                if (i < (int)decl->ctor_args.size()) {
-                    val = emitExpr(*decl->ctor_args[i]);
-                } else if (slid_def && slid_def->fields[i].default_val) {
-                    val = emitExpr(*slid_def->fields[i].default_val);
-                } else {
-                    val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer"
-                        : (info.field_types[i] == "float32" || info.field_types[i] == "float64") ? "0.0"
-                        : "0";
-                }
-                out_ << "    store " << llvmType(info.field_types[i])
-                     << " " << val << ", ptr " << gep << "\n";
-            }
-
-            // run implicit constructor body if any (loose code in slid body)
-            if (slid_def && slid_def->ctor_body) {
-                std::string saved_slid = current_slid_;
-                std::string saved_self = self_ptr_;
-                current_slid_ = eff_type;
-                self_ptr_ = reg;
-                emitBlock(*slid_def->ctor_body);
-                current_slid_ = saved_slid;
-                self_ptr_ = saved_self;
-            }
-            } // !has_pinit
-
-            // consumer of incomplete type: call __pinit (initializes private fields, chains to __ctor)
-            // complete type with explicit ctor: call __ctor directly
-            if (info.has_pinit) {
-                out_ << "    call void @" << eff_type << "__pinit(ptr " << reg << ")\n";
-            } else if (info.has_explicit_ctor) {
-                out_ << "    call void @" << eff_type << "__ctor(ptr " << reg << ")\n";
-            }
+            emitConstructAt(eff_type, reg, decl->ctor_args);
 
             // if initialized with = expr, call op= method; with <- expr, call op<- method
             if (decl->init) {

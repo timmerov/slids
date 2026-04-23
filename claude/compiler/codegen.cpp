@@ -1986,6 +1986,50 @@ std::string Codegen::emitRawSlidAlloca(const std::string& slid_name) {
     return reg;
 }
 
+void Codegen::emitConstructAt(const std::string& stype, const std::string& ptr,
+                              const std::vector<std::unique_ptr<Expr>>& args) {
+    if (!slid_info_.count(stype)) return;
+    auto& info = slid_info_[stype];
+    if (info.has_pinit) {
+        out_ << "    call void @" << stype << "__pinit(ptr " << ptr << ")\n";
+        return;
+    }
+    const SlidDef* slid_def = nullptr;
+    for (auto& s : program_.slids) if (s.name == stype) slid_def = &s;
+    if (!slid_def) {
+        auto it = concrete_slid_template_defs_.find(stype);
+        if (it != concrete_slid_template_defs_.end()) slid_def = &it->second;
+    }
+    for (int i = 0; i < (int)info.field_types.size(); i++) {
+        std::string gep = newTmp();
+        out_ << "    " << gep << " = getelementptr %struct." << stype
+             << ", ptr " << ptr << ", i32 0, i32 " << i << "\n";
+        std::string val;
+        if (i < (int)args.size()) {
+            val = emitExpr(*args[i]);
+        } else if (slid_def && i < (int)slid_def->fields.size() && slid_def->fields[i].default_val) {
+            val = emitExpr(*slid_def->fields[i].default_val);
+        } else {
+            val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer"
+                : isIndirectType(info.field_types[i]) ? "null"
+                : (info.field_types[i] == "float32" || info.field_types[i] == "float64") ? "0.0"
+                : "0";
+        }
+        out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
+    }
+    if (slid_def && slid_def->ctor_body) {
+        std::string saved_slid = current_slid_;
+        std::string saved_self = self_ptr_;
+        current_slid_ = stype;
+        self_ptr_ = ptr;
+        emitBlock(*slid_def->ctor_body);
+        current_slid_ = saved_slid;
+        self_ptr_ = saved_self;
+    } else if (info.has_explicit_ctor) {
+        out_ << "    call void @" << stype << "__ctor(ptr " << ptr << ")\n";
+    }
+}
+
 void Codegen::emitStackRestore(int to_frame) {
     for (int i = (int)loop_stack_.size() - 1; i >= to_frame; i--) {
         if (!loop_stack_[i].stack_ptr_reg.empty())
