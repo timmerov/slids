@@ -21,7 +21,12 @@ Vector<T>(
         return size_;
     }
 
+    /*
+    change the number of elements.
+    preserve existing elements.
+    */
     void resize(intptr new_size) {
+        //reserve(new_size);
         delete storage_;
         size_ = new_size;
         storage_ = new T[new_size];

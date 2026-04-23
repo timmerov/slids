@@ -10,6 +10,11 @@ Vector<T>(...) {
     intptr size();
 
     /*
+    reserve space for more elements.
+    preserve existing elements.
+    */
+
+    /*
     change the number of elements.
     preserve existing elements.
     */

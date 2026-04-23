@@ -155,6 +155,15 @@ struct NewScalarExpr : Expr {
         : elem_type(std::move(t)), args(std::move(a)) {}
 };
 
+// new(addr) T(args) — placement new: construct T at given address, returns T^
+struct PlacementNewExpr : Expr {
+    std::unique_ptr<Expr> addr;
+    std::string elem_type;
+    std::vector<std::unique_ptr<Expr>> args;
+    PlacementNewExpr(std::unique_ptr<Expr> a, std::string t, std::vector<std::unique_ptr<Expr>> args)
+        : addr(std::move(a)), elem_type(std::move(t)), args(std::move(args)) {}
+};
+
 // sizeof(TypeName) or sizeof(expr) — returns intptr
 struct SizeofExpr : Expr {
     std::string type_name;           // non-empty for sizeof(TypeName)

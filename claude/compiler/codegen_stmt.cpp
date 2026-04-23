@@ -1062,6 +1062,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 obj_ptr = loaded;
             }
         }
+        if (!slid_name.empty() && mcs->method == "~") {
+            auto& info = slid_info_[slid_name];
+            if (info.has_dtor || info.has_pinit)
+                out_ << "    call void @" << slid_name << "__dtor(ptr " << obj_ptr << ")\n";
+            return;
+        }
         if (!slid_name.empty()) {
             std::string base = slid_name + "__" + mcs->method;
             std::string mangled = resolveOverloadForCall(base, mcs->args);

@@ -225,6 +225,23 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     if (t.type == TokenType::kNullptr) { advance(); return std::make_unique<NullptrExpr>(); }
     if (t.type == TokenType::kNew) {
         advance();
+        // placement new: new(addr) Type(args)
+        if (peek().type == TokenType::kLParen) {
+            advance();
+            auto addr = parseExpr();
+            expect(TokenType::kRParen, "expected ')'");
+            std::string elem_type = parseTypeName();
+            std::vector<std::unique_ptr<Expr>> args;
+            if (peek().type == TokenType::kLParen) {
+                advance();
+                while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                    args.push_back(parseExpr());
+                    if (peek().type == TokenType::kComma) advance();
+                }
+                expect(TokenType::kRParen, "expected ')'");
+            }
+            return std::make_unique<PlacementNewExpr>(std::move(addr), elem_type, std::move(args));
+        }
         std::string elem_type = parseTypeName();
         if (peek().type == TokenType::kLBracket) {
             advance();
@@ -338,9 +355,10 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
     while (true) {
         if (peek().type == TokenType::kDot) {
             advance();
-            // allow sizeof as a method name: obj.sizeof()
+            // allow sizeof and ~ as method names
             std::string member;
-            if (peek().type == TokenType::kSizeof) { advance(); member = "sizeof"; }
+            if (peek().type == TokenType::kSizeof)  { advance(); member = "sizeof"; }
+            else if (peek().type == TokenType::kBitNot) { advance(); member = "~"; }
             else member = expect(TokenType::kIdentifier, "expected field or method name").value;
             if (peek().type == TokenType::kLParen) {
                 advance();

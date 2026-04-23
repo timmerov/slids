@@ -1,8 +1,15 @@
+new Simple;
+constructor
+Simple: x=1 y=2 z=3
+destructor
+new Simple[3];
+constructor
+constructor
 constructor
 destructor
-constructor
-constructor
-constructor
 destructor
 destructor
+placement new
+constructor
+Simple: x=10 y=11 z=12
 destructor

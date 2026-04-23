@@ -390,6 +390,12 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 obj_ptr = loaded;
             }
         }
+        if (!slid_name.empty() && mc->method == "~") {
+            auto& info = slid_info_[slid_name];
+            if (info.has_dtor || info.has_pinit)
+                out_ << "    call void @" << slid_name << "__dtor(ptr " << obj_ptr << ")\n";
+            return "";
+        }
         if (!slid_name.empty()) {
             std::string base = slid_name + "__" + mc->method;
             std::string mangled = resolveOverloadForCall(base, mc->args);
@@ -1288,6 +1294,50 @@ std::string Codegen::emitExpr(const Expr& expr) {
         return ptr;
     }
 
+    if (auto* pne = dynamic_cast<const PlacementNewExpr*>(&expr)) {
+        const std::string& stype = pne->elem_type;
+        static const std::set<std::string> allowed_addr_types = {
+            "void^", "void[]", "int8^", "int8[]", "uint8^", "uint8[]"
+        };
+        std::string addr_type = exprType(*pne->addr);
+        if (!allowed_addr_types.count(addr_type))
+            throw std::runtime_error("placement new: address must be void, int8, or uint8 pointer, got '" + addr_type + "'");
+        std::string ptr = emitExpr(*pne->addr);
+        if (slid_info_.count(stype)) {
+            auto& info = slid_info_[stype];
+            const SlidDef* slid_def = nullptr;
+            for (auto& s : program_.slids)
+                if (s.name == stype) { slid_def = &s; break; }
+            for (int i = 0; i < (int)info.field_types.size(); i++) {
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr %struct." << stype
+                     << ", ptr " << ptr << ", i32 0, i32 " << i << "\n";
+                std::string val;
+                if (i < (int)pne->args.size()) {
+                    val = emitExpr(*pne->args[i]);
+                } else if (slid_def && slid_def->fields[i].default_val) {
+                    val = emitExpr(*slid_def->fields[i].default_val);
+                } else {
+                    val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer"
+                        : isIndirectType(info.field_types[i]) ? "null" : "0";
+                }
+                out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
+            }
+            if (slid_def && slid_def->ctor_body) {
+                std::string saved_slid = current_slid_;
+                std::string saved_self = self_ptr_;
+                current_slid_ = stype;
+                self_ptr_ = ptr;
+                emitBlock(*slid_def->ctor_body);
+                current_slid_ = saved_slid;
+                self_ptr_ = saved_self;
+            } else if (info.has_explicit_ctor) {
+                out_ << "    call void @" << stype << "__ctor(ptr " << ptr << ")\n";
+            }
+        }
+        return ptr;
+    }
+
     if (auto* s = dynamic_cast<const StringLiteralExpr*>(&expr)) {
         std::string label = "@.str" + std::to_string(str_counter_++);
         int len; llvmEscape(s->value, len);
@@ -1438,8 +1488,9 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
     if (dynamic_cast<const NullptrExpr*>(&expr)) return "ptr";
 
     // new expr — ptr
-    if (dynamic_cast<const NewExpr*>(&expr))       return "ptr";
-    if (dynamic_cast<const NewScalarExpr*>(&expr)) return "ptr";
+    if (dynamic_cast<const NewExpr*>(&expr))          return "ptr";
+    if (dynamic_cast<const NewScalarExpr*>(&expr))    return "ptr";
+    if (dynamic_cast<const PlacementNewExpr*>(&expr)) return "ptr";
 
     // string literal — ptr
     if (dynamic_cast<const StringLiteralExpr*>(&expr)) return "ptr";
@@ -1720,9 +1771,11 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     // nullptr → intptr
     if (dynamic_cast<const NullptrExpr*>(&expr)) return "intptr";
     // new Type[n] → Type[]
-    if (auto* ne = dynamic_cast<const NewExpr*>(&expr))       return ne->elem_type + "[]";
+    if (auto* ne = dynamic_cast<const NewExpr*>(&expr))        return ne->elem_type + "[]";
     // new Type(args) → Type^
-    if (auto* ne = dynamic_cast<const NewScalarExpr*>(&expr)) return ne->elem_type + "^";
+    if (auto* ne = dynamic_cast<const NewScalarExpr*>(&expr))  return ne->elem_type + "^";
+    // new(addr) Type(args) → Type^
+    if (auto* ne = dynamic_cast<const PlacementNewExpr*>(&expr)) return ne->elem_type + "^";
     // ^x → elem_type^ (take address)
     if (auto* ae = dynamic_cast<const AddrOfExpr*>(&expr)) {
         std::string inner = inferSlidType(*ae->operand);
