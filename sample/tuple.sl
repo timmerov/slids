@@ -12,6 +12,17 @@ Simple(
     }
 }
 
+Action(
+    int x_
+) {
+    _() {
+        __println("Action:ctor");
+    }
+    ~() {
+        __println("Action:dtor");
+    }
+}
+
 NameValue(char[] name_, int value_) {}
 
 void foo(NameValue^ nv) {
@@ -68,6 +79,25 @@ int32 main() {
     /* destructuring. */
     (int x, int y) = (-1, -2);
     __println("x=" + x + " y= " + y);
+    (a1, b1) = (42, "weird");
+    __println("a1=" + a1 + " b1=" + b1);
+    weird_tuple = (42, "weird");
+    (c1, ) = weird_tuple;
+    (, d1) = weird_tuple;
+    __println("c1=" + c1 + " d1=" + d1);
+
+    /* slid tuples. */
+    slid_tuple = (a, b);
+    slid_tuple[0].print("slid_tuple[0]");
+    slid_tuple[1].print("slid_tuple[1]");
+    slid_tuple = (Simple(1,2,3), Simple(4,5,6));
+    slid_tuple[0].print("slid_tuple[0]");
+    slid_tuple[1].print("slid_tuple[1]");
+
+    /* constructables. */
+    {
+        xtor_tuple = (Action(0), Action(2));
+    }
 
     /* functions */
     /*NameValue nv("x", 42);

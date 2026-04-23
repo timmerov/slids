@@ -434,6 +434,23 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     std::string gep = newTmp();
                     out_ << "    " << gep << " = getelementptr " << struct_llvm
                          << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
+                    // slid-typed element: copy fields from a same-typed source (var or ctor call)
+                    if (slid_info_.count(elems[i])) {
+                        std::string src_type = inferSlidType(*te->values[i]);
+                        if (src_type != elems[i])
+                            throw std::runtime_error("slid tuple element type mismatch: expected '"
+                                + elems[i] + "', got '" + src_type + "'");
+                        std::string src_ptr;
+                        if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
+                            src_ptr = locals_[ve->name];
+                        } else {
+                            src_ptr = emitExpr(*te->values[i]);
+                        }
+                        emitSlidCopy(elems[i], gep, src_ptr);
+                        if (slid_info_[elems[i]].has_dtor)
+                            dtor_vars_.push_back({decl->name, elems[i], i});
+                        continue;
+                    }
                     std::string val = emitExpr(*te->values[i]);
                     out_ << "    store " << llvmType(elems[i]) << " " << val << ", ptr " << gep << "\n";
                 }
@@ -569,6 +586,21 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     std::string gep = newTmp();
                     out_ << "    " << gep << " = getelementptr " << struct_llvm
                          << ", ptr " << it->second << ", i32 0, i32 " << i << "\n";
+                    // slid-typed element: copy fields from a same-typed source
+                    if (slid_info_.count(ft)) {
+                        std::string src_type = inferSlidType(*te->values[i]);
+                        if (src_type != ft)
+                            throw std::runtime_error("slid tuple element type mismatch: expected '"
+                                + ft + "', got '" + src_type + "'");
+                        std::string src_ptr;
+                        if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
+                            src_ptr = locals_[ve->name];
+                        } else {
+                            src_ptr = emitExpr(*te->values[i]);
+                        }
+                        emitSlidCopy(ft, gep, src_ptr);
+                        continue;
+                    }
                     std::string val = emitExpr(*te->values[i]);
                     std::string src_t = exprLlvmType(*te->values[i]);
                     if (src_t != elem_llvm) {
@@ -1171,6 +1203,29 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 throw std::runtime_error("unknown type for: " + ve->name);
             slid_name = type_it->second;
             obj_ptr = locals_[ve->name];
+        } else if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(mcs->object.get())) {
+            // method call on tuple element: tuple[i].method(args)
+            auto* bve = dynamic_cast<const VarExpr*>(ai->base.get());
+            if (bve) {
+                auto tit = local_types_.find(bve->name);
+                if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
+                    auto elems = anonTupleElems(tit->second);
+                    int idx;
+                    if (!constExprToInt(*ai->index, enum_values_, idx))
+                        throw std::runtime_error("tuple index must be a constant integer");
+                    if (idx < 0 || idx >= (int)elems.size())
+                        throw std::runtime_error("tuple index " + std::to_string(idx)
+                            + " out of range (size " + std::to_string(elems.size()) + ")");
+                    if (!slid_info_.count(elems[idx]))
+                        throw std::runtime_error("tuple element " + std::to_string(idx)
+                            + " is not a slid type");
+                    slid_name = elems[idx];
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr " << llvmType(tit->second)
+                         << ", ptr " << locals_[bve->name] << ", i32 0, i32 " << idx << "\n";
+                    obj_ptr = gep;
+                }
+            }
         } else if (auto* de = dynamic_cast<const DerefExpr*>(mcs->object.get())) {
             if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
                 auto type_it = local_types_.find(ve2->name);
@@ -2306,10 +2361,94 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* td = dynamic_cast<const TupleDestructureStmt*>(&stmt)) {
+        // tuple literal rhs: desugar (t1 a, t2 b) = (x, y); into t1 a = x; t2 b = y;
+        if (auto* te = dynamic_cast<const TupleExpr*>(td->init.get())) {
+            if (te->values.size() != td->fields.size())
+                throw std::runtime_error("destructure size mismatch: "
+                    + std::to_string(td->fields.size()) + " targets, "
+                    + std::to_string(te->values.size()) + " values");
+            for (int i = 0; i < (int)td->fields.size(); i++) {
+                auto& [type, name] = td->fields[i];
+                if (name.empty()) continue; // empty slot — skip this element
+                std::string eff_type = type.empty() ? inferSlidType(*te->values[i]) : type;
+                std::string llvm_t = llvmType(eff_type);
+                std::string reg = "%var_" + name;
+                out_ << "    " << reg << " = alloca " << llvm_t << "\n";
+                std::string val = emitExpr(*te->values[i]);
+                std::string src_t = exprLlvmType(*te->values[i]);
+                if (src_t != llvm_t) {
+                    static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+                    auto sit = rank.find(src_t), dit = rank.find(llvm_t);
+                    if (sit != rank.end() && dit != rank.end()) {
+                        std::string coerced = newTmp();
+                        if (dit->second > sit->second)
+                            out_ << "    " << coerced << " = sext " << src_t << " " << val << " to " << llvm_t << "\n";
+                        else
+                            out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << llvm_t << "\n";
+                        val = coerced;
+                    } else {
+                        throw std::runtime_error("type mismatch: cannot destructure '"
+                            + inferSlidType(*te->values[i]) + "' into '" + eff_type + " " + name + "'");
+                    }
+                }
+                out_ << "    store " << llvm_t << " " << val << ", ptr " << reg << "\n";
+                locals_[name] = reg;
+                local_types_[name] = eff_type;
+            }
+            return;
+        }
+        // VarExpr of anon-tuple type: extract from the source struct, with type inference & empty-slot skip.
+        if (auto* ve = dynamic_cast<const VarExpr*>(td->init.get())) {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
+                auto elems = anonTupleElems(tit->second);
+                if (elems.size() != td->fields.size())
+                    throw std::runtime_error("destructure size mismatch: "
+                        + std::to_string(td->fields.size()) + " targets, "
+                        + std::to_string(elems.size()) + " elements in '" + ve->name + "'");
+                std::string struct_llvm = llvmType(tit->second);
+                std::string result = newTmp();
+                out_ << "    " << result << " = load " << struct_llvm << ", ptr " << locals_[ve->name] << "\n";
+                for (int i = 0; i < (int)td->fields.size(); i++) {
+                    auto& [type, name] = td->fields[i];
+                    if (name.empty()) continue; // empty slot
+                    std::string eff_type = type.empty() ? elems[i] : type;
+                    std::string elem_llvm = llvmType(elems[i]);
+                    std::string dst_llvm = llvmType(eff_type);
+                    std::string extracted = newTmp();
+                    out_ << "    " << extracted << " = extractvalue " << struct_llvm
+                         << " " << result << ", " << i << "\n";
+                    if (elem_llvm != dst_llvm) {
+                        static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+                        auto sit = rank.find(elem_llvm), dit = rank.find(dst_llvm);
+                        if (sit != rank.end() && dit != rank.end()) {
+                            std::string coerced = newTmp();
+                            if (dit->second > sit->second)
+                                out_ << "    " << coerced << " = sext " << elem_llvm << " " << extracted << " to " << dst_llvm << "\n";
+                            else
+                                out_ << "    " << coerced << " = trunc " << elem_llvm << " " << extracted << " to " << dst_llvm << "\n";
+                            extracted = coerced;
+                        } else {
+                            throw std::runtime_error("type mismatch: cannot destructure '"
+                                + elems[i] + "' into '" + eff_type + " " + name + "'");
+                        }
+                    }
+                    std::string reg = "%var_" + name;
+                    out_ << "    " << reg << " = alloca " << dst_llvm << "\n";
+                    out_ << "    store " << dst_llvm << " " << extracted << ", ptr " << reg << "\n";
+                    locals_[name] = reg;
+                    local_types_[name] = eff_type;
+                }
+                return;
+            }
+        }
         std::string result = emitExpr(*td->init);
         std::string tuple_type = exprLlvmType(*td->init);
         for (int i = 0; i < (int)td->fields.size(); i++) {
             auto& [type, name] = td->fields[i];
+            if (name.empty()) continue; // empty slot
+            if (type.empty())
+                throw std::runtime_error("destructure type inference from non-tuple-variable source not supported yet");
             std::string llvm_t = llvmType(type);
             std::string reg = "%var_" + name;
             out_ << "    " << reg << " = alloca " << llvm_t << "\n";
@@ -2331,8 +2470,18 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // destroy block-scoped variables in reverse declaration order
         if (!block_terminated_) {
             for (int i = (int)dtor_vars_.size() - 1; i >= (int)dtor_mark; i--) {
-                auto& [var_name, slid_type] = dtor_vars_[i];
-                out_ << "    call void @" << slid_type << "__dtor(ptr " << locals_[var_name] << ")\n";
+                auto& e = dtor_vars_[i];
+                std::string target;
+                if (e.tuple_index >= 0) {
+                    std::string tuple_type = local_types_[e.var_name];
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr " << llvmType(tuple_type)
+                         << ", ptr " << locals_[e.var_name] << ", i32 0, i32 " << e.tuple_index << "\n";
+                    target = gep;
+                } else {
+                    target = locals_[e.var_name];
+                }
+                out_ << "    call void @" << e.slid_type << "__dtor(ptr " << target << ")\n";
             }
         }
         dtor_vars_.resize(dtor_mark);

@@ -60,6 +60,8 @@ std::string Codegen::llvmType(const std::string& t) {
     if (t == "float32") return "float";
     if (t == "float64") return "double";
     if (t == "void")  return "void";
+    // slid type name → named struct
+    if (slid_info_.count(t)) return "%struct." + t;
     // reference (^) and pointer ([]) both lower to ptr in LLVM IR
     if (!t.empty() && t.back() == '^') return "ptr";
     if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return "ptr";
@@ -550,6 +552,10 @@ void Codegen::collectStringConstants() {
                 return;
             }
         }
+        if (auto* t = dynamic_cast<const TupleExpr*>(e)) {
+            for (auto& v : t->values) collectExpr(v.get(), false);
+            return;
+        }
         if (auto* s = dynamic_cast<const StringLiteralExpr*>(e)) {
             std::string full = newline_on_last ? s->value + "\n" : s->value;
             string_constants_.emplace_back("@.str" + std::to_string(str_counter_++), full);
@@ -605,6 +611,8 @@ void Codegen::collectStringConstants() {
             if (ret->value) collectExpr(ret->value.get(), false);
         } else if (auto* es = dynamic_cast<const ExprStmt*>(&stmt)) {
             collectExpr(es->expr.get(), false);
+        } else if (auto* td = dynamic_cast<const TupleDestructureStmt*>(&stmt)) {
+            if (td->init) collectExpr(td->init.get(), false);
         }
     };
 
@@ -1108,8 +1116,18 @@ void Codegen::emitDtors() {
     pending_temp_dtors_.clear();
     // call named-local dtors in reverse declaration order
     for (int i = (int)dtor_vars_.size() - 1; i >= 0; i--) {
-        auto& [var_name, slid_type] = dtor_vars_[i];
-        out_ << "    call void @" << slid_type << "__dtor(ptr " << locals_[var_name] << ")\n";
+        auto& e = dtor_vars_[i];
+        std::string target;
+        if (e.tuple_index >= 0) {
+            std::string tuple_type = local_types_[e.var_name];
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr " << llvmType(tuple_type)
+                 << ", ptr " << locals_[e.var_name] << ", i32 0, i32 " << e.tuple_index << "\n";
+            target = gep;
+        } else {
+            target = locals_[e.var_name];
+        }
+        out_ << "    call void @" << e.slid_type << "__dtor(ptr " << target << ")\n";
     }
 }
 

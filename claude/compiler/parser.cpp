@@ -802,13 +802,32 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         } else if (scan < (int)tokens_.size()
                    && tokens_[scan].type == TokenType::kEquals) {
             // (type name, ...) = expr; — tuple destructure
+            // slots may be: empty (skip), bare name (infer type), or type + name (declared).
             advance(); // consume '('
             auto td = std::make_unique<TupleDestructureStmt>();
-            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
-                std::string type = parseTypeName();
-                std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
-                td->fields.emplace_back(type, name);
-                if (peek().type == TokenType::kComma) advance();
+            if (peek().type != TokenType::kRParen) {
+                while (true) {
+                    // empty slot — next is ',' or ')' where a field should start
+                    if (peek().type == TokenType::kComma || peek().type == TokenType::kRParen) {
+                        td->fields.emplace_back("", "");
+                    } else {
+                        std::string type;
+                        std::string name;
+                        // bare name form: identifier followed by ',' or ')'
+                        if (peek().type == TokenType::kIdentifier
+                            && pos_ + 1 < (int)tokens_.size()
+                            && (tokens_[pos_ + 1].type == TokenType::kComma
+                                || tokens_[pos_ + 1].type == TokenType::kRParen)) {
+                            name = advance().value;
+                        } else {
+                            type = parseTypeName();
+                            name = expect(TokenType::kIdentifier, "expected variable name").value;
+                        }
+                        td->fields.emplace_back(type, name);
+                    }
+                    if (peek().type == TokenType::kComma) { advance(); continue; }
+                    break;
+                }
             }
             expect(TokenType::kRParen, "expected ')'");
             expect(TokenType::kEquals, "expected '='");
@@ -1199,16 +1218,45 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             return std::make_unique<AssignStmt>(name, std::move(value));
         }
 
-        // index assignment: name[expr] = expr;
+        // indexed statement: name[expr]... — may be simple assign, method call on element, etc.
         if (peek().type == TokenType::kLBracket) {
             advance(); // consume '['
             auto idx = parseExpr();
             expect(TokenType::kRBracket, "expected ']'");
-            expect(TokenType::kEquals, "expected '='");
-            auto val = parseExpr();
+            // simple index assignment
+            if (peek().type == TokenType::kEquals) {
+                advance();
+                auto val = parseExpr();
+                expect(TokenType::kSemicolon, "expected ';'");
+                return std::make_unique<IndexAssignStmt>(
+                    std::make_unique<VarExpr>(name), std::move(idx), std::move(val));
+            }
+            // chained: name[idx].field = val, name[idx].method(), name[idx][j]..., etc.
+            auto base = parsePostfix(std::make_unique<ArrayIndexExpr>(
+                std::make_unique<VarExpr>(name), std::move(idx)));
+            if (peek().type == TokenType::kEquals) {
+                advance();
+                auto val = parseExpr();
+                expect(TokenType::kSemicolon, "expected ';'");
+                if (auto* fa = dynamic_cast<FieldAccessExpr*>(base.get())) {
+                    auto obj = std::move(fa->object);
+                    std::string field = fa->field;
+                    return std::make_unique<FieldAssignStmt>(std::move(obj), field, std::move(val));
+                }
+                if (auto* ai = dynamic_cast<ArrayIndexExpr*>(base.get())) {
+                    auto b = std::move(ai->base);
+                    auto ix = std::move(ai->index);
+                    return std::make_unique<IndexAssignStmt>(std::move(b), std::move(ix), std::move(val));
+                }
+                throw std::runtime_error("invalid indexed assignment target");
+            }
+            if (auto* mc = dynamic_cast<MethodCallExpr*>(base.get())) {
+                expect(TokenType::kSemicolon, "expected ';'");
+                return std::make_unique<MethodCallStmt>(
+                    std::move(mc->object), mc->method, std::move(mc->args));
+            }
             expect(TokenType::kSemicolon, "expected ';'");
-            return std::make_unique<IndexAssignStmt>(
-                std::make_unique<VarExpr>(name), std::move(idx), std::move(val));
+            return std::make_unique<ExprStmt>(std::move(base));
         }
 
         throw std::runtime_error("Line " + std::to_string(peek().line)

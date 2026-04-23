@@ -89,9 +89,15 @@ private:
     std::map<std::string, ArrayInfo> array_info_;
     std::map<std::string, ArrayInfo> parent_array_info_; // array info from parent, used in nested functions
 
-    // dtor tracking: ordered list of (var_name, slid_type) for locals with dtors
-    // in declaration order — dtors called in reverse on return
-    std::vector<std::pair<std::string,std::string>> dtor_vars_;
+    // dtor tracking: ordered list for locals (and tuple elements) with dtors
+    // in declaration order — dtors called in reverse on return.
+    // tuple_index >= 0 means: dtor target is GEP of tuple var at that index.
+    struct DtorVar {
+        std::string var_name;
+        std::string slid_type;
+        int tuple_index = -1;
+    };
+    std::vector<DtorVar> dtor_vars_;
 
     // temporaries created during expression evaluation (e.g. implicit String from literal)
     // flushed at end of each statement in emitBlock

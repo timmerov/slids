@@ -448,6 +448,13 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* call = dynamic_cast<const CallExpr*>(&expr)) {
+        // slid ctor call as expression: SlidName(args) → alloca temp + construct, return ptr
+        if (slid_info_.count(call->callee)) {
+            std::string slid_name = call->callee;
+            std::string tmp = emitRawSlidAlloca(slid_name);
+            emitConstructAt(slid_name, tmp, call->args);
+            return tmp;
+        }
         // check nested function first
         auto nit = nested_info_.find(call->callee);
         if (nit != nested_info_.end()) {
@@ -1799,6 +1806,8 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     }
     // free function call — look up return type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        // slid ctor call: SlidName(args) → type is SlidName
+        if (slid_info_.count(ce->callee)) return ce->callee;
         auto tit = template_funcs_.find(ce->callee);
         if (tit != template_funcs_.end()) {
             const FunctionDef& tmpl = *tit->second;
