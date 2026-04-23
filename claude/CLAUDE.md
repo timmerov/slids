@@ -14,6 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - After reading, state what needs to change — then stop.
 - Do not ask for permission to change code. Ask clarifying questions about intent instead.
 - Test code may have unrelated issues. Ignore them. Fix one thing at a time.
+- Do not edit any files outside of the compiler directory unless specifically instructed.
 
 ## What this is
 
