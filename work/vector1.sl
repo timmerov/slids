@@ -18,12 +18,15 @@ Value(
 
 int32 main() {
     Vector<int> intvec;
-    Vector<Value> valuevec;
-    Vector<String> stringvec;
+    Vector<Value> valvec;
+    Vector<String> strvec;
 
-    intvec.resize(10);
-    intptr size = intvec.size();
-    println(String + "intvec.size()<10>=" + size);
+    intvec.resize(3);
+    valvec.resize(3);
+    strvec.resize(3);
+    println(String + "intvec.size()<10>=" + intvec.size());
+    println(String + "valvec.size()<10>=" + valvec.size());
+    println(String + "strvec.size()<10>=" + strvec.size());
 
     return 0;
 }

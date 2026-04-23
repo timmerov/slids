@@ -39,9 +39,9 @@ $(INC_DIR)/incomplete.ll: incomplete.sl $(SLIDSC)
 	mkdir -p $(INC_DIR)
 	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS)
 
-string_test: $(BIN_DIR)/string_test template1 template2 template_test
-
 # ---- string_test ----
+
+string_test: $(BIN_DIR)/string_test
 
 $(BIN_DIR)/string_test: $(ST_DIR)/string.o $(ST_DIR)/string_test.o
 	$(CXX) $^ -o $@

@@ -263,7 +263,13 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     // emit: alloca, init fields, pinit/ctor, then op+=(rhs) — no empty temp
                     auto* be = dynamic_cast<const BinaryExpr*>(decl->init.get());
                     std::string reg = uniqueAllocaReg(decl->name);
-                    out_ << "    " << reg << " = alloca %struct." << eff_type << "\n";
+                    if (info.has_pinit) {
+                        std::string sz = newTmp();
+                        out_ << "    " << sz << " = call i64 @" << eff_type << "__sizeof()\n";
+                        out_ << "    " << reg << " = alloca i8, i64 " << sz << "\n";
+                    } else {
+                        out_ << "    " << reg << " = alloca %struct." << eff_type << "\n";
+                    }
                     locals_[decl->name] = reg;
                     local_types_[decl->name] = eff_type;
                     const SlidDef* slid_def2 = nullptr;
@@ -273,6 +279,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         auto it = concrete_slid_template_defs_.find(eff_type);
                         if (it != concrete_slid_template_defs_.end()) slid_def2 = &it->second;
                     }
+                    if (!info.has_pinit) {
                     for (int i = 0; i < (int)info.field_types.size(); i++) {
                         std::string gep = newTmp();
                         out_ << "    " << gep << " = getelementptr %struct." << eff_type
@@ -286,6 +293,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                 : "0";
                         out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
                     }
+                    } // !has_pinit
                     if (slid_def2 && slid_def2->ctor_body) {
                         std::string saved_slid = current_slid_;
                         std::string saved_self = self_ptr_;
@@ -563,16 +571,17 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         std::string coerce = resolveOpEq(slid_name + "__op=", *be->right);
                         if (!coerce.empty()) {
                             auto& sinfo = slid_info_[slid_name];
-                            std::string tmp = "%synth_" + std::to_string(tmp_counter_++);
-                            out_ << "    " << tmp << " = alloca %struct." << slid_name << "\n";
-                            for (int i = 0; i < (int)sinfo.field_types.size(); i++) {
-                                std::string gep = newTmp();
-                                out_ << "    " << gep << " = getelementptr %struct." << slid_name
-                                     << ", ptr " << tmp << ", i32 0, i32 " << i << "\n";
-                                if (isIndirectType(sinfo.field_types[i]))
-                                    out_ << "    store ptr null, ptr " << gep << "\n";
-                                else
-                                    out_ << "    store " << llvmType(sinfo.field_types[i]) << " 0, ptr " << gep << "\n";
+                            std::string tmp = emitRawSlidAlloca(slid_name);
+                            if (!sinfo.has_pinit) {
+                                for (int i = 0; i < (int)sinfo.field_types.size(); i++) {
+                                    std::string gep = newTmp();
+                                    out_ << "    " << gep << " = getelementptr %struct." << slid_name
+                                         << ", ptr " << tmp << ", i32 0, i32 " << i << "\n";
+                                    if (isIndirectType(sinfo.field_types[i]))
+                                        out_ << "    store ptr null, ptr " << gep << "\n";
+                                    else
+                                        out_ << "    store " << llvmType(sinfo.field_types[i]) << " 0, ptr " << gep << "\n";
+                                }
                             }
                             if (sinfo.has_pinit && !sinfo.is_transport_impl)
                                 out_ << "    call void @" << slid_name << "__pinit(ptr " << tmp << ")\n";

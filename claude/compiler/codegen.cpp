@@ -1949,6 +1949,7 @@ std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
             val = emitExpr(*slid_def->fields[i].default_val);
         else
             val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer"
+                : isIndirectType(info.field_types[i]) ? "null"
                 : (info.field_types[i] == "float32" || info.field_types[i] == "float64") ? "0.0"
                 : "0";
         out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
@@ -1972,6 +1973,19 @@ std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
     return reg;
 }
 
+std::string Codegen::emitRawSlidAlloca(const std::string& slid_name) {
+    auto& info = slid_info_[slid_name];
+    std::string reg = newTmp();
+    if (info.has_pinit) {
+        std::string sz = newTmp();
+        out_ << "    " << sz << " = call i64 @" << slid_name << "__sizeof()\n";
+        out_ << "    " << reg << " = alloca i8, i64 " << sz << "\n";
+    } else {
+        out_ << "    " << reg << " = alloca %struct." << slid_name << "\n";
+    }
+    return reg;
+}
+
 void Codegen::emitStackRestore(int to_frame) {
     for (int i = (int)loop_stack_.size() - 1; i >= to_frame; i--) {
         if (!loop_stack_[i].stack_ptr_reg.empty())
@@ -1988,8 +2002,7 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
         std::string slid_name = param_type.substr(0, param_type.size() - 1);
         // implicit temporary: string literal passed to SlidType^ param
         if (slid_info_.count(slid_name) && dynamic_cast<const StringLiteralExpr*>(&arg)) {
-            std::string tmp_reg = "%tmp_" + std::to_string(tmp_counter_++);
-            out_ << "    " << tmp_reg << " = alloca %struct." << slid_name << "\n";
+            std::string tmp_reg = emitRawSlidAlloca(slid_name);
             auto& info = slid_info_[slid_name];
             if (info.has_pinit) {
                 out_ << "    call void @" << slid_name << "__pinit(ptr " << tmp_reg << ")\n";
@@ -2092,8 +2105,7 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                                    && pit->second >= ait->second)
                                && (arg_slids != "bool" || ptypes2[0] == "bool");
                     if (!exact && !widen) continue;
-                    std::string tmp = "%tmp_" + std::to_string(tmp_counter_++);
-                    out_ << "    " << tmp << " = alloca %struct." << slid_name << "\n";
+                    std::string tmp = emitRawSlidAlloca(slid_name);
                     if (info.has_pinit) {
                         // transport type: __pinit zeros private fields and chains to __ctor
                         out_ << "    call void @" << slid_name << "__pinit(ptr " << tmp << ")\n";

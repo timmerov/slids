@@ -403,8 +403,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 method_args += ", " + ptype + " " + emitExpr(*mc->args[i]);
             }
             if (slid_info_.count(ret_it->second)) {
-                std::string tmp = "%tmp_" + std::to_string(tmp_counter_++);
-                out_ << "    " << tmp << " = alloca %struct." << ret_it->second << "\n";
+                std::string tmp = emitRawSlidAlloca(ret_it->second);
                 out_ << "    call void @" << llvmGlobalName(mangled)
                      << "(ptr " << obj_ptr << ", ptr sret(%struct." << ret_it->second << ") " << tmp
                      << method_args << ")\n";
@@ -476,8 +475,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 }
                 // sret if return type is a slid
                 if (slid_info_.count(ret_slid)) {
-                    std::string tmp = "%tmp_" + std::to_string(tmp_counter_++);
-                    out_ << "    " << tmp << " = alloca %struct." << ret_slid << "\n";
+                    std::string tmp = emitRawSlidAlloca(ret_slid);
                     std::string sret_arg = "ptr sret(%struct." + ret_slid + ") " + tmp;
                     if (!arg_str.empty()) sret_arg += ", " + arg_str;
                     out_ << "    call void @" << llvmGlobalName(mangled) << "(" << sret_arg << ")\n";
@@ -505,8 +503,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         }
         // sret: callee returns a slid type — allocate temp, call with ptr sret, return temp
         if (slid_info_.count(it->second)) {
-            std::string tmp = "%tmp_" + std::to_string(tmp_counter_++);
-            out_ << "    " << tmp << " = alloca %struct." << it->second << "\n";
+            std::string tmp = emitRawSlidAlloca(it->second);
             std::string sret_arg = "ptr sret(%struct." + it->second + ") " + tmp;
             if (!arg_str.empty()) sret_arg += ", " + arg_str;
             out_ << "    call void @" << llvmGlobalName(call->callee) << "(" << sret_arg << ")\n";
@@ -715,25 +712,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     res_slid = ret;
                 }
                 if (!res_slid.empty() && slid_info_.count(res_slid)) {
-                    auto& info = slid_info_[res_slid];
-                    // alloca a temp struct for the result
-                    std::string tmp_alloca = newTmp();
-                    out_ << "    " << tmp_alloca << " = alloca %struct." << res_slid << "\n";
-                    // zero-init fields
-                    for (int i = 0; i < (int)info.field_types.size(); i++) {
-                        std::string ft = llvmType(info.field_types[i]);
-                        std::string gep = newTmp();
-                        out_ << "    " << gep << " = getelementptr %struct." << res_slid << ", ptr " << tmp_alloca << ", i32 0, i32 " << i << "\n";
-                        if (isIndirectType(info.field_types[i]))
-                            out_ << "    store ptr null, ptr " << gep << "\n";
-                        else
-                            out_ << "    store " << ft << " 0, ptr " << gep << "\n";
-                    }
-                    // init: pinit (for imported transport types) or ctor
-                    if (info.has_pinit)
-                        out_ << "    call void @" << res_slid << "__pinit(ptr " << tmp_alloca << ")\n";
-                    else if (info.has_explicit_ctor)
-                        out_ << "    call void @" << res_slid << "__ctor(ptr " << tmp_alloca << ")\n";
+                    std::string tmp_alloca = emitSlidAlloca(res_slid);
                     auto& ptypes = func_param_types_[op_func];
                     std::string args;
                     if (is_method) {
@@ -1336,24 +1315,25 @@ std::string Codegen::emitExpr(const Expr& expr) {
             const std::string& stype = nc->target_type;
             auto& info = slid_info_[stype];
 
-            std::string tmp_reg = newTmp();
-            out_ << "    " << tmp_reg << " = alloca %struct." << stype << "\n";
+            std::string tmp_reg = emitRawSlidAlloca(stype);
 
             // find SlidDef for default field values
             const SlidDef* slid_def = nullptr;
             for (auto& s : program_.slids)
                 if (s.name == stype) { slid_def = &s; break; }
 
-            // initialize fields to defaults
-            for (int i = 0; i < (int)info.field_types.size(); i++) {
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr %struct." << stype
-                     << ", ptr " << tmp_reg << ", i32 0, i32 " << i << "\n";
-                std::string val = (slid_def && slid_def->fields[i].default_val)
-                                  ? emitExpr(*slid_def->fields[i].default_val)
-                                  : (isInlineArrayType(info.field_types[i]) ? "zeroinitializer" : "0");
-                out_ << "    store " << llvmType(info.field_types[i])
-                     << " " << val << ", ptr " << gep << "\n";
+            if (!info.has_pinit) {
+                // initialize fields to defaults
+                for (int i = 0; i < (int)info.field_types.size(); i++) {
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr %struct." << stype
+                         << ", ptr " << tmp_reg << ", i32 0, i32 " << i << "\n";
+                    std::string val = (slid_def && slid_def->fields[i].default_val)
+                                      ? emitExpr(*slid_def->fields[i].default_val)
+                                      : (isInlineArrayType(info.field_types[i]) ? "zeroinitializer" : "0");
+                    out_ << "    store " << llvmType(info.field_types[i])
+                         << " " << val << ", ptr " << gep << "\n";
+                }
             }
 
             // call ctor if any

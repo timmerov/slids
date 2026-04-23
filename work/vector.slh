@@ -9,5 +9,9 @@ Vector<T>(...) {
     /* return the number of elements. */
     intptr size();
 
+    /*
+    change the number of elements.
+    preserve existing elements.
+    */
     void resize(intptr new_size);
 }
