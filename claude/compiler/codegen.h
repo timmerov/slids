@@ -178,7 +178,8 @@ private:
     std::string emitSlidAlloca(const std::string& slid_name); // alloca + default-init fields + ctor
     std::string emitRawSlidAlloca(const std::string& slid_name); // alloca only, no init, no dtor
     void emitConstructAt(const std::string& stype, const std::string& ptr,
-                         const std::vector<std::unique_ptr<Expr>>& args); // init fields + ctor at ptr
+                         const std::vector<std::unique_ptr<Expr>>& args,
+                         const std::vector<std::unique_ptr<Expr>>& overrides = {}); // init fields + ctor at ptr; overrides[i] wins over args[i]
     bool isFreshSlidTemp(const Expr& expr); // true if expr produces a fresh temp alloca we can mutate
     std::string exprSlidType(const Expr& expr); // return slid type name if expr produces a slid value
     std::string exprType(const Expr& expr);     // return full Slids type string of expr, or ""

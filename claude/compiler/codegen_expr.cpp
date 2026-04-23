@@ -68,6 +68,29 @@ std::string Codegen::emitExpr(const Expr& expr) {
         auto* ve = dynamic_cast<const VarExpr*>(cur);
         if (!ve) throw std::runtime_error("complex array base not supported");
 
+        // anonymous tuple element read: tuple[N] — N must be a compile-time constant
+        {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
+                if (indices.size() != 1)
+                    throw std::runtime_error("tuple supports only single-level indexing");
+                auto elems = anonTupleElems(tit->second);
+                int idx;
+                if (!constExprToInt(*indices[0], enum_values_, idx))
+                    throw std::runtime_error("tuple index must be a constant integer");
+                if (idx < 0 || idx >= (int)elems.size())
+                    throw std::runtime_error("tuple index " + std::to_string(idx)
+                        + " out of range (size " + std::to_string(elems.size()) + ")");
+                std::string elem_llvm = llvmType(elems[idx]);
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr " << llvmType(tit->second)
+                     << ", ptr " << locals_[ve->name] << ", i32 0, i32 " << idx << "\n";
+                std::string val = newTmp();
+                out_ << "    " << val << " = load " << elem_llvm << ", ptr " << gep << "\n";
+                return val;
+            }
+        }
+
         // slid op[] dispatch
         {
             auto tit = local_types_.find(ve->name);
@@ -1567,6 +1590,16 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
         while (auto* a = dynamic_cast<const ArrayIndexExpr*>(cur))
             cur = a->base.get();
         if (auto* ve = dynamic_cast<const VarExpr*>(cur)) {
+            // anonymous tuple element — index must be a compile-time constant
+            auto ttit = local_types_.find(ve->name);
+            if (ttit != local_types_.end() && isAnonTupleType(ttit->second)) {
+                auto elems = anonTupleElems(ttit->second);
+                int idx;
+                if (constExprToInt(*ai->index, enum_values_, idx)
+                    && idx >= 0 && idx < (int)elems.size())
+                    return llvmType(elems[idx]);
+                return "i32";
+            }
             auto ait = array_info_.find(ve->name);
             if (ait != array_info_.end()) return llvmType(ait->second.elem_type);
             // slid op[] return type
@@ -1704,6 +1737,15 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     if (dynamic_cast<const StringLiteralExpr*>(&expr)) return "char[]";
     // nullptr → intptr
     if (dynamic_cast<const NullptrExpr*>(&expr)) return "intptr";
+    // tuple literal (a, b, c) → anonymous tuple type (ta,tb,tc)
+    if (auto* te = dynamic_cast<const TupleExpr*>(&expr)) {
+        std::string s = "(";
+        for (int i = 0; i < (int)te->values.size(); i++) {
+            if (i > 0) s += ",";
+            s += inferSlidType(*te->values[i]);
+        }
+        return s + ")";
+    }
     // new Type[n] → Type[]
     if (auto* ne = dynamic_cast<const NewExpr*>(&expr))        return ne->elem_type + "[]";
     // new Type(args) → Type^
@@ -1795,13 +1837,22 @@ std::string Codegen::inferSlidType(const Expr& expr) {
         return pt;
     }
     // array index — return type of op[] if base is a slid, else element type of pointer/array
-    if (dynamic_cast<const ArrayIndexExpr*>(&expr)) {
+    if (auto* aie = dynamic_cast<const ArrayIndexExpr*>(&expr)) {
         const Expr* cur = &expr;
         while (auto* a = dynamic_cast<const ArrayIndexExpr*>(cur))
             cur = a->base.get();
         if (auto* ve = dynamic_cast<const VarExpr*>(cur)) {
-            // slid op[] return type
+            // anonymous tuple indexing: require constant index
             auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
+                auto elems = anonTupleElems(tit->second);
+                int idx;
+                if (constExprToInt(*aie->index, enum_values_, idx)
+                    && idx >= 0 && idx < (int)elems.size())
+                    return elems[idx];
+                return "int";
+            }
+            // slid op[] return type
             if (tit != local_types_.end() && slid_info_.count(tit->second)) {
                 std::string base_name = tit->second + "__op[]";
                 auto oit = method_overloads_.find(base_name);

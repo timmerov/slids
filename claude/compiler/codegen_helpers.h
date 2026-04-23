@@ -2,6 +2,7 @@
 #include "parser.h"
 #include <string>
 #include <map>
+#include <vector>
 #include <algorithm>
 
 // type ends in ^ — reference, no arithmetic
@@ -50,6 +51,28 @@ inline std::string llvmEscape(const std::string& s, int& len) {
     return result;
 }
 
+// true if `t` is an anonymous tuple type: "(t1,t2,...)"
+inline bool isAnonTupleType(const std::string& t) {
+    return t.size() >= 2 && t.front() == '(' && t.back() == ')';
+}
+
+// split "(t1,t2,...)" into element type strings, respecting nested parens.
+inline std::vector<std::string> anonTupleElems(const std::string& t) {
+    std::vector<std::string> out;
+    if (!isAnonTupleType(t)) return out;
+    std::string inner = t.substr(1, t.size() - 2);
+    int depth = 0;
+    std::string cur;
+    for (char c : inner) {
+        if (c == '(') { depth++; cur += c; }
+        else if (c == ')') { depth--; cur += c; }
+        else if (c == ',' && depth == 0) { out.push_back(cur); cur.clear(); }
+        else cur += c;
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+
 // Resolve a constant expression (integer literal or enum value) to an int
 // without emitting any IR. Returns false if not constant.
 inline bool constExprToInt(const Expr& expr,
@@ -65,6 +88,27 @@ inline bool constExprToInt(const Expr& expr,
     if (auto* ue = dynamic_cast<const UnaryExpr*>(&expr)) {
         if (ue->op == "-") {
             int v; if (constExprToInt(*ue->operand, enum_values, v)) { out = -v; return true; }
+        }
+        if (ue->op == "+") {
+            int v; if (constExprToInt(*ue->operand, enum_values, v)) { out = v; return true; }
+        }
+        if (ue->op == "~") {
+            int v; if (constExprToInt(*ue->operand, enum_values, v)) { out = ~v; return true; }
+        }
+    }
+    if (auto* be = dynamic_cast<const BinaryExpr*>(&expr)) {
+        int l, r;
+        if (constExprToInt(*be->left, enum_values, l) && constExprToInt(*be->right, enum_values, r)) {
+            if (be->op == "+") { out = l + r; return true; }
+            if (be->op == "-") { out = l - r; return true; }
+            if (be->op == "*") { out = l * r; return true; }
+            if (be->op == "/") { if (r == 0) return false; out = l / r; return true; }
+            if (be->op == "%") { if (r == 0) return false; out = l % r; return true; }
+            if (be->op == "&") { out = l & r; return true; }
+            if (be->op == "|") { out = l | r; return true; }
+            if (be->op == "^") { out = l ^ r; return true; }
+            if (be->op == "<<") { out = l << r; return true; }
+            if (be->op == ">>") { out = l >> r; return true; }
         }
     }
     return false;

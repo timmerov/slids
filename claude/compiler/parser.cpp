@@ -964,9 +964,14 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             }
             expect(TokenType::kRParen, "expected ')'");
         }
+        std::unique_ptr<Expr> init;
+        if (peek().type == TokenType::kEquals) {
+            advance();
+            init = parseExpr();
+        }
         expect(TokenType::kSemicolon, "expected ';'");
         declareVar(name);
-        return std::make_unique<VarDeclStmt>(type, name, nullptr, std::move(ctor_args));
+        return std::make_unique<VarDeclStmt>(type, name, std::move(init), std::move(ctor_args));
     }
 
     // identifier — assignment, compound assignment, method call, or function call

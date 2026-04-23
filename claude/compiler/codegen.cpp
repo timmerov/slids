@@ -25,6 +25,28 @@ std::string Codegen::uniqueAllocaReg(const std::string& var_name) {
 
 std::string Codegen::llvmType(const std::string& t) {
     if (!t.empty() && t[0] == '{') return t; // pass through LLVM struct types (tuple returns)
+    // anonymous tuple type: "(t1,t2,...)" → "{ llvm(t1), llvm(t2), ... }"
+    if (t.size() >= 2 && t.front() == '(' && t.back() == ')') {
+        std::string s = "{ ";
+        std::string inner = t.substr(1, t.size() - 2);
+        int depth = 0;
+        std::string cur;
+        bool first = true;
+        auto flush = [&]() {
+            if (!first) s += ", ";
+            s += llvmType(cur);
+            first = false;
+            cur.clear();
+        };
+        for (char c : inner) {
+            if (c == '(') { depth++; cur += c; }
+            else if (c == ')') { depth--; cur += c; }
+            else if (c == ',' && depth == 0) { flush(); }
+            else cur += c;
+        }
+        if (!cur.empty()) flush();
+        return s + " }";
+    }
     if (t == "int32" || t == "int" || t == "bool") return "i32";
     if (t == "int64") return "i64";
     if (t == "int16") return "i16";
@@ -1987,7 +2009,8 @@ std::string Codegen::emitRawSlidAlloca(const std::string& slid_name) {
 }
 
 void Codegen::emitConstructAt(const std::string& stype, const std::string& ptr,
-                              const std::vector<std::unique_ptr<Expr>>& args) {
+                              const std::vector<std::unique_ptr<Expr>>& args,
+                              const std::vector<std::unique_ptr<Expr>>& overrides) {
     if (!slid_info_.count(stype)) return;
     auto& info = slid_info_[stype];
     if (info.has_pinit) {
@@ -2005,7 +2028,9 @@ void Codegen::emitConstructAt(const std::string& stype, const std::string& ptr,
         out_ << "    " << gep << " = getelementptr %struct." << stype
              << ", ptr " << ptr << ", i32 0, i32 " << i << "\n";
         std::string val;
-        if (i < (int)args.size()) {
+        if (i < (int)overrides.size()) {
+            val = emitExpr(*overrides[i]);
+        } else if (i < (int)args.size()) {
             val = emitExpr(*args[i]);
         } else if (slid_def && i < (int)slid_def->fields.size() && slid_def->fields[i].default_val) {
             val = emitExpr(*slid_def->fields[i].default_val);

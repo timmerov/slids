@@ -1,6 +1,4 @@
 
-import paths.
-
 implement vector api:
 T[] begin()
 T[] end()
@@ -34,3 +32,22 @@ T^ ref = ^vec[3];
 T^ ref = vec^[3];
 maybe just api.
 T^ ref = vec.at(3);
+
+import paths.
+
+const correctness:
+objects are passed by reference.
+the current implementation is mutable.
+but the intention is for the default to be const.
+we will need a way to make a reference mutable.
+void strcpy(mutable char[] dst, char[] src);
+self is always mutable.
+we might want to be able to make self const.
+
+tuple:
+assignment:
+Simple x(1,2,3) = (4, 5, 6);
+as parameters:
+void foo( (int a, int b), int c);
+with templates:
+void bar<T>( (char[] name, char[] type, T value) );

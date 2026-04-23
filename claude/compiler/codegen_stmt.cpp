@@ -333,10 +333,20 @@ void Codegen::emitStmt(const Stmt& stmt) {
             locals_[decl->name] = reg;
             local_types_[decl->name] = eff_type;
 
-            emitConstructAt(eff_type, reg, decl->ctor_args);
+            // Type name = (a, b, c);  or  Type name(a, b) = (c, d);
+            // rhs tuple overrides lhs ctor_args per position; missing rhs positions fall back to lhs.
+            bool tuple_init_handled = false;
+            if (!decl->is_move) {
+                if (auto* te = dynamic_cast<const TupleExpr*>(decl->init.get())) {
+                    emitConstructAt(eff_type, reg, decl->ctor_args, te->values);
+                    tuple_init_handled = true;
+                }
+            }
+            if (!tuple_init_handled)
+                emitConstructAt(eff_type, reg, decl->ctor_args);
 
             // if initialized with = expr, call op= method; with <- expr, call op<- method
-            if (decl->init) {
+            if (decl->init && !tuple_init_handled) {
                 bool init_handled = false;
                 // if init is a binary op, try to dispatch via op overload directly into reg
                 if (!decl->is_move) {
@@ -407,6 +417,26 @@ void Codegen::emitStmt(const Stmt& stmt) {
             // register for dtor call on scope exit
             if (info.has_dtor) {
                 dtor_vars_.push_back({decl->name, eff_type});
+            }
+            return;
+        }
+
+        // anonymous tuple local: tuple = (a, b, c); — alloca struct, store each element
+        if (isAnonTupleType(eff_type)) {
+            auto* te = dynamic_cast<const TupleExpr*>(decl->init.get());
+            if (!te) throw std::runtime_error("tuple-typed declaration requires a tuple literal initializer");
+            auto elems = anonTupleElems(eff_type);
+            std::string struct_llvm = llvmType(eff_type);
+            std::string reg = uniqueAllocaReg(decl->name);
+            out_ << "    " << reg << " = alloca " << struct_llvm << "\n";
+            locals_[decl->name] = reg;
+            local_types_[decl->name] = eff_type;
+            for (int i = 0; i < (int)elems.size() && i < (int)te->values.size(); i++) {
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr " << struct_llvm
+                     << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
+                std::string val = emitExpr(*te->values[i]);
+                out_ << "    store " << llvmType(elems[i]) << " " << val << ", ptr " << gep << "\n";
             }
             return;
         }
@@ -772,6 +802,42 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
         auto* ve = dynamic_cast<const VarExpr*>(ia->base.get());
         if (!ve) throw std::runtime_error("IndexAssign: complex base not supported");
+
+        // anonymous tuple element write: tuple[N] = val — N must be a compile-time constant
+        {
+            auto tit = local_types_.find(ve->name);
+            if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
+                auto elems = anonTupleElems(tit->second);
+                int idx;
+                if (!constExprToInt(*ia->index, enum_values_, idx))
+                    throw std::runtime_error("tuple index must be a constant integer");
+                if (idx < 0 || idx >= (int)elems.size())
+                    throw std::runtime_error("tuple index " + std::to_string(idx)
+                        + " out of range (size " + std::to_string(elems.size()) + ")");
+                std::string elem_slids = elems[idx];
+                std::string elem_llvm = llvmType(elem_slids);
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr " << llvmType(tit->second)
+                     << ", ptr " << locals_[ve->name] << ", i32 0, i32 " << idx << "\n";
+                std::string rhs_val = emitExpr(*ia->value);
+                // width-coerce integer widths (sext/trunc) to match the field type
+                if (!isIndirectType(elem_slids)) {
+                    std::string src_t = exprLlvmType(*ia->value);
+                    static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+                    auto sit = rank.find(src_t), dit = rank.find(elem_llvm);
+                    if (sit != rank.end() && dit != rank.end() && sit->second != dit->second) {
+                        std::string coerced = newTmp();
+                        if (dit->second > sit->second)
+                            out_ << "    " << coerced << " = sext " << src_t << " " << rhs_val << " to " << elem_llvm << "\n";
+                        else
+                            out_ << "    " << coerced << " = trunc " << src_t << " " << rhs_val << " to " << elem_llvm << "\n";
+                        rhs_val = coerced;
+                    }
+                }
+                out_ << "    store " << elem_llvm << " " << rhs_val << ", ptr " << gep << "\n";
+                return;
+            }
+        }
 
         // slid op[]= dispatch
         {

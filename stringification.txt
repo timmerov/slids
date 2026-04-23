@@ -1,0 +1,36 @@
+
+new feature: stringification the # operator.
+# turns things into string literals.
+
+variables:
+int your_name_here;
+#your_name_here -> "your_name_here"
+
+types:
+#typeof(your_name_here) -> "int"
+
+enums:
+a bit of a reach goal.
+this one needs runtime code.
+even if it's just looking up the name in a table.
+we don't know in advance the value of piece.
+enum Piece { kKing }
+Piece piece = kKing;
+#__value(kKing) -> "kKing"
+#__value(piece) -> "kKing"
+
+bools:
+same issues as enums.
+bool yes = true;
+bool no = false;
+#__value(true) -> "true";
+#__value(no) -> "false";
+
+c++ parity:
+#__line -> current line in the file
+#__filename -> "stringification.txt"
+#__pathname -> "/home/timmer/Documents/slids/stringification.txt"
+#__function -> "foo"
+#__function_mangled -> "String__foo"
+#__date -> "Apr 22 2026"
+#__time -> "21:52:02"
