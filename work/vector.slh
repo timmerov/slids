@@ -6,5 +6,8 @@ Vector<T>(...) {
     _();
     ~();
 
+    /* return the number of elements. */
+    intptr size();
+
     void resize(intptr new_size);
 }

@@ -7,18 +7,21 @@ import vector;
 Vector<T>(
     ...,
     intptr size_ = 0,
+    intptr capacity_ = 0,
     T[] storage_ = nullptr
 ) {
     _() {
-        __println("Vector:ctor");
     }
     ~() {
-        __println("Vector:dtor");
         delete storage_;
     }
 
+    /* return the number of elements. */
+    intptr size() {
+        return size_;
+    }
+
     void resize(intptr new_size) {
-        __println("resize: " + new_size);
         delete storage_;
         size_ = new_size;
         storage_ = new T[new_size];

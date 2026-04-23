@@ -1,5 +1,5 @@
 /*
-use a template class declared in a heeader.
+use a template class declared in a header.
 */
 
 import string;
@@ -17,29 +17,13 @@ Value(
 }
 
 int32 main() {
-    {
-        __println("Vector<int>:");
-        Vector<int> v;
-        v.resize(10);
-        size = sizeof(v);
-        __println("sizeof(v)<16>=" + size);
-    }
+    Vector<int> intvec;
+    Vector<Value> valuevec;
+    Vector<String> stringvec;
 
-    {
-        __println("Vector<Value>:");
-        Vector<Value> v;
-        v.resize(3);
-        size = sizeof(v);
-        __println("sizeof(v)<16>=" + size);
-    }
-
-    {
-        __println("Vector<String>:");
-        Vector<String> v;
-        v.resize(3);
-        size = sizeof(v);
-        __println("sizeof(v)<16>=" + size);
-    }
+    intvec.resize(10);
+    intptr size = intvec.size();
+    println(String + "intvec.size()<10>=" + size);
 
     return 0;
 }

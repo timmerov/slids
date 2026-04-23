@@ -1775,7 +1775,7 @@ std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
         {"int8",1},{"uint8",1},{"char",1},
         {"int16",2},{"uint16",2},
         {"int32",3},{"uint32",3},{"int",3},{"uint",3},
-        {"int64",4},{"uint64",4}
+        {"int64",4},{"uint64",4},{"intptr",4}
     };
 
     // determine argument category and specific type
