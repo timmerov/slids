@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Do not build or run anything outside the named scope.** If the scope is a single sample, build and run only that sample. If the scope is specific lines, do not consider issues outside those lines.
 - **Discussion is not permission to change code.** Explicit instruction is required: "do it", "make the changes", "go ahead", etc. "We will do X" and "X needs to happen" are not instructions to act.
 - During discussion, reading files and summarizing findings is permitted. Nothing else.
+- Always go to discussion mode when the user changes the scope or context.
 - After reading, state what needs to change — then stop.
 - Do not ask for permission to change code. Ask clarifying questions about intent instead.
 - Test code may have unrelated issues. Ignore them. Fix one thing at a time.
