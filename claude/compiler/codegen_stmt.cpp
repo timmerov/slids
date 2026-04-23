@@ -647,6 +647,42 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             }
         }
+        // tuple literal rhs: d = (a, b, c); desugars to per-field writes.
+        if (tit != local_types_.end() && slid_info_.count(tit->second) && !assign->is_move) {
+            if (auto* te = dynamic_cast<const TupleExpr*>(assign->value.get())) {
+                const std::string& slid_name = tit->second;
+                auto& info = slid_info_[slid_name];
+                int nfields = (int)info.field_types.size();
+                if ((int)te->values.size() > nfields)
+                    throw std::runtime_error("tuple has " + std::to_string(te->values.size())
+                        + " values but '" + slid_name + "' has " + std::to_string(nfields)
+                        + " accessible fields");
+                for (int i = 0; i < (int)te->values.size(); i++) {
+                    const std::string& ft = info.field_types[i];
+                    std::string elem_llvm = llvmType(ft);
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr %struct." << slid_name
+                         << ", ptr " << it->second << ", i32 0, i32 " << i << "\n";
+                    std::string val = emitExpr(*te->values[i]);
+                    if (!isIndirectType(ft)) {
+                        std::string src_t = exprLlvmType(*te->values[i]);
+                        static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+                        auto sit = rank.find(src_t), dit = rank.find(elem_llvm);
+                        if (sit != rank.end() && dit != rank.end() && sit->second != dit->second) {
+                            std::string coerced = newTmp();
+                            if (dit->second > sit->second)
+                                out_ << "    " << coerced << " = sext " << src_t << " " << val << " to " << elem_llvm << "\n";
+                            else
+                                out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << elem_llvm << "\n";
+                            val = coerced;
+                        }
+                    }
+                    out_ << "    store " << elem_llvm << " " << val << ", ptr " << gep << "\n";
+                }
+                return;
+            }
+        }
+
         // check for op= / op<- method on slid type
         if (tit != local_types_.end() && slid_info_.count(tit->second)) {
             std::string op_name = assign->is_move ? "op<-" : "op=";
