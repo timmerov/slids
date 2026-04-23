@@ -2013,6 +2013,13 @@ void Codegen::emitConstructAt(const std::string& stype, const std::string& ptr,
                               const std::vector<std::unique_ptr<Expr>>& overrides) {
     if (!slid_info_.count(stype)) return;
     auto& info = slid_info_[stype];
+    int nfields = (int)info.field_types.size();
+    if ((int)args.size() > nfields)
+        throw std::runtime_error("too many initializers: '" + stype + "' has "
+            + std::to_string(nfields) + " fields, got " + std::to_string(args.size()));
+    if ((int)overrides.size() > nfields)
+        throw std::runtime_error("too many tuple values: '" + stype + "' has "
+            + std::to_string(nfields) + " fields, got " + std::to_string(overrides.size()));
     if (info.has_pinit) {
         out_ << "    call void @" << stype << "__pinit(ptr " << ptr << ")\n";
         return;

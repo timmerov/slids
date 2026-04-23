@@ -37,21 +37,37 @@ int32 main() {
     d = (50, 51, 52);
     d.print("d*");
 
-    /* accessing. */
+    /* compile errors. */
+    //Simple e(1, 2, 3, 4, 5);
+    //d = (1, 2, 3, 4, 5);
+
+    /* creating accessing. */
     tuple = (1, 2, 3);
     one = tuple[0];
     two = tuple[1];
     tuple[2] = 10;
     ten = tuple[2];
     __println("tuple = (" + one + "," + two + "," + ten + ")");
-
-    /* copying. */
     tuple2 = tuple;
     __println("tuple2 = (" + tuple2[0] + "," + tuple2[1] + "," + tuple2[2] + ")");
 
+    /* overwriting */
+    tuple2 = (100, 200);
+    __println("tuple2 = (" + tuple2[0] + "," + tuple2[1] + "," + tuple2[2] + ")");
+    tuple = tuple2;
+    __println("tuple = (" + tuple[0] + "," + tuple[1] + "," + tuple[2] + ")");
+
+    /* compile errors */
+    //tuple = (1, 2, 3, 4, 5);
+    //tuple = (1, "Hello", 3);
+    big_tuple = (1, 2, 3, 4, 5);
+    //tuple = big_tuple;
+    wrong_tuple = (1, "Hello", 3);
+    //tuple = wrong_tuple;
+
     /* destructuring. */
-    /*(int x, int y) = (-1, -2);
-    __println("x=" + x + " y= " + y);*/
+    (int x, int y) = (-1, -2);
+    __println("x=" + x + " y= " + y);
 
     /* functions */
     /*NameValue nv("x", 42);

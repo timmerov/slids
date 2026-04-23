@@ -553,6 +553,50 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (it == locals_.end())
             throw std::runtime_error("undefined variable: " + assign->name);
         auto tit = local_types_.find(assign->name);
+        // tuple rhs into an anonymous-tuple local: tuple2 = (a, b); — partial overwrite, stop when rhs runs out
+        if (tit != local_types_.end() && isAnonTupleType(tit->second) && !assign->is_move) {
+            if (auto* te = dynamic_cast<const TupleExpr*>(assign->value.get())) {
+                auto elems = anonTupleElems(tit->second);
+                int nfields = (int)elems.size();
+                if ((int)te->values.size() > nfields)
+                    throw std::runtime_error("tuple has " + std::to_string(te->values.size())
+                        + " values but '" + assign->name + "' has " + std::to_string(nfields)
+                        + " elements");
+                std::string struct_llvm = llvmType(tit->second);
+                for (int i = 0; i < (int)te->values.size(); i++) {
+                    const std::string& ft = elems[i];
+                    std::string elem_llvm = llvmType(ft);
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr " << struct_llvm
+                         << ", ptr " << it->second << ", i32 0, i32 " << i << "\n";
+                    std::string val = emitExpr(*te->values[i]);
+                    std::string src_t = exprLlvmType(*te->values[i]);
+                    if (src_t != elem_llvm) {
+                        static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+                        auto sit = rank.find(src_t), dit = rank.find(elem_llvm);
+                        if (sit != rank.end() && dit != rank.end()) {
+                            std::string coerced = newTmp();
+                            if (dit->second > sit->second)
+                                out_ << "    " << coerced << " = sext " << src_t << " " << val << " to " << elem_llvm << "\n";
+                            else
+                                out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << elem_llvm << "\n";
+                            val = coerced;
+                        } else {
+                            throw std::runtime_error("type mismatch: cannot assign '"
+                                + inferSlidType(*te->values[i]) + "' to tuple element "
+                                + std::to_string(i) + " of type '" + ft + "'");
+                        }
+                    }
+                    out_ << "    store " << elem_llvm << " " << val << ", ptr " << gep << "\n";
+                }
+                return;
+            }
+            // non-literal rhs into a tuple lhs: require exact tuple-type match
+            std::string src_slids = inferSlidType(*assign->value);
+            if (src_slids != tit->second)
+                throw std::runtime_error("type mismatch: cannot assign '" + src_slids
+                    + "' to tuple variable '" + assign->name + "' of type '" + tit->second + "'");
+        }
         // compound assignment: x = x op rhs → detect and dispatch to op{op}= directly
         // (parser desugars x += rhs into x = x + rhs; we undo that here for slid types)
         if (tit != local_types_.end() && slid_info_.count(tit->second)) {
