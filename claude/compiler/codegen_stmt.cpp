@@ -1556,8 +1556,40 @@ void Codegen::emitStmt(const Stmt& stmt) {
                          << ", ptr " << ret_tup << "\n";
                     out_ << "    ret " << current_func_return_type_ << " " << loaded << "\n";
                 } else {
-                    std::string val = emitExpr(*ret->value);
-                    out_ << "    ret " << current_func_return_type_ << " " << val << "\n";
+                    // If any slot is a slid or nested anon-tuple, dispatch element-wise
+                    // via emitSlidAssign on the source ptr (copy — no `return <-` syntax).
+                    bool has_struct_slot = false;
+                    for (auto& [ft, fn] : current_func_tuple_fields_)
+                        if (slid_info_.count(ft) || isAnonTupleType(ft)) { has_struct_slot = true; break; }
+                    if (has_struct_slot) {
+                        std::string src_ptr;
+                        if (auto* ve = dynamic_cast<const VarExpr*>(ret->value.get())) {
+                            src_ptr = locals_[ve->name];
+                        } else {
+                            std::string val = emitExpr(*ret->value);
+                            src_ptr = newTmp();
+                            out_ << "    " << src_ptr << " = alloca " << current_func_return_type_ << "\n";
+                            out_ << "    store " << current_func_return_type_ << " " << val
+                                 << ", ptr " << src_ptr << "\n";
+                        }
+                        std::string ret_tup = newTmp();
+                        out_ << "    " << ret_tup << " = alloca " << current_func_return_type_ << "\n";
+                        // reconstruct Slids-form tuple type string from fields for emitSlidAssign
+                        std::string slids_tuple_type = "(";
+                        for (size_t i = 0; i < current_func_tuple_fields_.size(); i++) {
+                            if (i) slids_tuple_type += ",";
+                            slids_tuple_type += current_func_tuple_fields_[i].first;
+                        }
+                        slids_tuple_type += ")";
+                        emitSlidAssign(slids_tuple_type, ret_tup, src_ptr, /*is_move=*/false);
+                        std::string loaded = newTmp();
+                        out_ << "    " << loaded << " = load " << current_func_return_type_
+                             << ", ptr " << ret_tup << "\n";
+                        out_ << "    ret " << current_func_return_type_ << " " << loaded << "\n";
+                    } else {
+                        std::string val = emitExpr(*ret->value);
+                        out_ << "    ret " << current_func_return_type_ << " " << val << "\n";
+                    }
                 }
             } else {
                 out_ << "    ret void\n";

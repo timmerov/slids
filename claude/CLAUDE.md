@@ -10,8 +10,7 @@ Three modes govern how I work. The user sets the mode by what they ask for. I de
 
 ### Tool preferences
 
-- Use of `git` and `cd` is not permitted. Use `make -C <dir>` instead of `cd <dir> && make`.
-- Avoid piping Bash output through `head`/`tail`/`wc`. If output is long, redirect to a file and `Read` it, or rerun with a narrower scope.
+- Use of `cd` is not permitted. Use `make -C <dir>` instead of `cd <dir> && make`.
 
 ### Modes
 
@@ -41,13 +40,13 @@ Slids is a compiled, systems-level programming language. Source files (`.sl`) co
 ```bash
 
 # Build only the compiler
-cd compiler && make
+make -C compiler
 
 # Build only samples
-cd sample && make
+make -C sample
 
 # Build a single sample
-cd sample && make hello1
+make -C sample hello1
 
 # Manually compile a .sl file end-to-end
 ./bin/slidsc foo.sl -o foo.ll
