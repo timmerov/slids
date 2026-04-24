@@ -796,6 +796,8 @@ Supported operators: `=`, `<-`, `<->`, `+`, `-`, `*`, `/`, `+=`, `-=`, `*=`, `/=
 
 **Default copy operator.** If a class does not define `op=(SameType^)`, the compiler synthesizes one that copies each field by value. This means `Foo b = a;` always does the right thing for plain data types. Define your own `op=(Foo^)` to override — for example, when a field is a heap pointer that requires a deep copy.
 
+**Default move operator.** If a class does not define `op<-(SameType^)`, the compiler synthesizes one that moves each field. Value-typed fields (ints, floats, embedded structs with no dtor) are copied; pointer and iterator fields are transferred — their value is copied to the destination and the source is set to `nullptr`. This means `Foo b <- a;` works for plain data types without any user code. Define your own `op<-(Foo^)` to override — for example, when a heap resource needs extra bookkeeping, or when the source must be left in a non-default state.
+
 **Assignment is a statement, not an expression.** Chained assignment (`x = y = 0;`) and assignment inside a condition (`if (x = 0)`) are not allowed.
 
 **Forward declarations** inside the class body omit the body:
@@ -1129,7 +1131,7 @@ s3 <- s1;            // calls s3.op<-(^s1)
 
 Move rules:
 - For pointer/iterator types, `<-` is built into the language — no method needed
-- For class types, `<-` compiles only if `op<-` is defined; if it is not defined, `<-` is a compiler error
+- For class types, `<-` calls `op<-` if one is defined; otherwise it calls the compiler-synthesized default move (see Operator overloading)
 - After a move, the source is left in a valid state — it can be reassigned or destroyed safely
 - `delete` frees and nullifies; `<-` transfers ownership without freeing — use `delete` first if the destination already owns memory
 
