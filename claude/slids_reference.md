@@ -121,8 +121,9 @@ int32 helperSlid() {  // private — not in .slh
 | `float32` | 32-bit float |
 | `float64` | 64-bit float |
 | `bool` | Boolean (`true` / `false`) |
-| `string` | built-in string type (temporary) |
 | `void` | no value |
+
+String literals have type `char[]`. A dedicated `string` type is not a primitive — it may be provided later as a library type.
 
 
 ---
@@ -719,6 +720,8 @@ Rules:
 
 ## Inheritance
 
+> **TODO:** Not yet implemented. The design described below is aspirational.
+
 Methods are non-virtual by default — no vtable overhead unless `virtual` is explicitly used. `virtual` must be declared on the base class method and on every override in derived classes. Omitting `virtual` in a derived class when the base declares it virtual is a compiler error.
 
 A virtual class is one that has at least one virtual method. For virtual classes:
@@ -789,7 +792,7 @@ Value(int value_ = 0) {
 }
 ```
 
-Supported operators: `=`, `<-`, `<->`, `+`, `-`, `*`, `/`, `+=`, `-=`, `*=`, `/=`, `==`, `!=`, `<`, `>`, `<=`, `>=`.
+Supported operators: `=`, `<-`, `<->`, `+`, `-`, `*`, `/`, `+=`, `-=`, `*=`, `/=`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `[]`, `[]=`.
 
 **Default copy operator.** If a class does not define `op=(SameType^)`, the compiler synthesizes one that copies each field by value. This means `Foo b = a;` always does the right thing for plain data types. Define your own `op=(Foo^)` to override — for example, when a field is a heap pointer that requires a deep copy.
 
@@ -1217,6 +1220,8 @@ int32 main() {
 - Nested slids are local — not callable from outside their enclosing scope
 - Capture is by reference — mutations affect the original variable
 
+> **TODO:** Not yet implemented.
+
 **Non-local return** — a nested slid can cause any enclosing slid to return using `name:return`. The stack unwinds from the nested slid up to the named enclosing slid, calling destructors for all objects going out of scope along the way. The named slid then immediately returns.
 
 ```
@@ -1252,6 +1257,12 @@ int outer() {
 - `name:return value` — non-local return with a value
 - Destructors are called for all objects going out of scope during unwinding
 - Only enclosing slids may be targeted — not siblings or outer non-enclosing slids
+
+---
+
+## Templates
+
+> **TODO:** Documentation forthcoming. See `CLAUDE.md` for an implementation-side overview.
 
 ---
 
