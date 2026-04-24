@@ -410,7 +410,7 @@ if (c == b)     { }   // comparison yields 0 or 1 (int8), promoted as needed
 
 ## Enclosure rules
 
-- `()` — data: tuples, arguments, literals, conditions, ranges
+- `()` — data: slid data, tuples, arguments, literals, conditions, ranges
 - `{}` — code: slid bodies, if/for/while blocks
 
 ---
