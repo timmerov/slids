@@ -725,13 +725,16 @@ void Codegen::emit() {
         }
     }
 
-    // validate: class objects cannot be passed by value
+    // validate: class objects and anon-tuples cannot be passed by value
     auto checkParams = [&](const std::string& ctx,
                            const std::vector<std::pair<std::string,std::string>>& params) {
         for (auto& [type, name] : params) {
             if (slid_info_.count(type) > 0)
                 throw std::runtime_error(ctx + ": parameter '" + name +
                     "' has class type '" + type + "' — cannot pass by value; use '" + type + "^'");
+            if (isAnonTupleType(type))
+                throw std::runtime_error(ctx + ": parameter '" + name +
+                    "' has tuple type '" + type + "' — cannot pass by value; use '" + type + "^'");
         }
     };
     for (auto& fn : program_.functions)
@@ -2401,6 +2404,44 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                         return loaded;
                     }
                 }
+            }
+        }
+        // anon-tuple-ref param: `(t1,...)^`
+        std::string tup_inner = param_type.substr(0, param_type.size() - 1);
+        if (isAnonTupleType(tup_inner)) {
+            // ^my_tuple → pass alloca ptr
+            if (auto* ao = dynamic_cast<const AddrOfExpr*>(&arg)) {
+                if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
+                    auto lit = local_types_.find(ve->name);
+                    if (lit != local_types_.end() && isAnonTupleType(lit->second))
+                        return locals_.at(ve->name);
+                }
+            }
+            // bare my_tuple → auto-promote (analogous to implicit slid-ref promotion)
+            if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
+                auto lit = local_types_.find(ve->name);
+                if (lit != local_types_.end() && isAnonTupleType(lit->second))
+                    return locals_.at(ve->name);
+            }
+            // deref of a tuple-ref local: load the ptr
+            if (auto* de = dynamic_cast<const DerefExpr*>(&arg)) {
+                if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                    auto lit = local_types_.find(ve->name);
+                    if (lit != local_types_.end() && lit->second == param_type) {
+                        std::string loaded = newTmp();
+                        out_ << "    " << loaded << " = load ptr, ptr " << locals_.at(ve->name) << "\n";
+                        return loaded;
+                    }
+                }
+            }
+            // tuple-literal arg: materialize into a temp alloca, pass its ptr
+            std::string arg_slids = inferSlidType(arg);
+            if (isAnonTupleType(arg_slids)) {
+                std::string v = emitExpr(arg);
+                std::string tmp = newTmp();
+                out_ << "    " << tmp << " = alloca " << llvmType(tup_inner) << "\n";
+                out_ << "    store " << llvmType(tup_inner) << " " << v << ", ptr " << tmp << "\n";
+                return tmp;
             }
         }
     }

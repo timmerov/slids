@@ -103,6 +103,23 @@ std::string Codegen::emitExpr(const Expr& expr) {
                         }
                     }
                 }
+            } else if (auto* de = dynamic_cast<const DerefExpr*>(cur)) {
+                // p^ where p is a (t1,...)^ or (t1,...)[] param/local — load the ptr
+                if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                    auto tit = local_types_.find(ve->name);
+                    if (tit != local_types_.end()) {
+                        std::string t = tit->second;
+                        if (!t.empty() && t.back() == '^') t.pop_back();
+                        else if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
+                            t.resize(t.size()-2);
+                        if (isAnonTupleType(t)) {
+                            tup_type = t;
+                            tup_ptr = newTmp();
+                            out_ << "    " << tup_ptr << " = load ptr, ptr "
+                                 << locals_.at(ve->name) << "\n";
+                        }
+                    }
+                }
             }
             // generic fallback: any expression producing an anon-tuple value
             // (e.g. a tuple-returning function call). Materialize to a temp alloca.
@@ -1807,6 +1824,17 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
                         tup_type = info.field_types[fit->second];
                 }
             }
+        } else if (auto* de = dynamic_cast<const DerefExpr*>(cur)) {
+            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) {
+                    std::string t = tit->second;
+                    if (!t.empty() && t.back() == '^') t.pop_back();
+                    else if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
+                        t.resize(t.size()-2);
+                    if (isAnonTupleType(t)) tup_type = t;
+                }
+            }
         }
         // generic fallback: any expression producing an anon-tuple value
         if (tup_type.empty()) {
@@ -2127,6 +2155,17 @@ std::string Codegen::inferSlidType(const Expr& expr) {
                     if (fit != info.field_index.end()
                             && isAnonTupleType(info.field_types[fit->second]))
                         tup_type = info.field_types[fit->second];
+                }
+            }
+        } else if (auto* de = dynamic_cast<const DerefExpr*>(cur)) {
+            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) {
+                    std::string t = tit->second;
+                    if (!t.empty() && t.back() == '^') t.pop_back();
+                    else if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
+                        t.resize(t.size()-2);
+                    if (isAnonTupleType(t)) tup_type = t;
                 }
             }
         }

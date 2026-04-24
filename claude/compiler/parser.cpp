@@ -141,7 +141,7 @@ bool Parser::isTemplateTypeArgLookahead() const {
 
 std::string Parser::parseTypeName() {
     std::string base;
-    // anon-tuple type: (t1, t2, ...)
+    // anon-tuple type: (t1, t2, ...) — may carry trailing ^ or []
     if (peek().type == TokenType::kLParen) {
         advance(); // consume '('
         base = "(";
@@ -153,7 +153,19 @@ std::string Parser::parseTypeName() {
             if (peek().type == TokenType::kComma) advance();
         }
         expect(TokenType::kRParen, "expected ')' in anon-tuple type");
-        return base + ")";
+        base += ")";
+        // fall through to the trailing ^/[] loop below
+        while (true) {
+            if (peek().type == TokenType::kBitXor) { advance(); base += "^"; }
+            else if (peek().type == TokenType::kLBracket
+                       && pos_ + 1 < (int)tokens_.size()
+                       && tokens_[pos_ + 1].type == TokenType::kRBracket) {
+                advance(); advance();
+                base += "[]";
+            }
+            else break;
+        }
+        return base;
     }
     if (isTypeName(peek())) base = advance().value;
     else if (isUserTypeName(peek())) base = advance().value;
@@ -1055,7 +1067,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             auto base = parsePostfix(std::make_unique<VarExpr>(name));
             // base is now DerefExpr, or DerefExpr.field, or DerefExpr.method(...)
 
-            if (peek().type == TokenType::kEquals) {
+            if (peek().type == TokenType::kEquals || peek().type == TokenType::kArrowLeft) {
+                bool is_move = (peek().type == TokenType::kArrowLeft);
                 advance();
                 auto val = parseExpr();
                 expect(TokenType::kSemicolon, "expected ';'");
@@ -1063,11 +1076,17 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 if (auto* de = dynamic_cast<DerefExpr*>(base.get())) {
                     return std::make_unique<DerefAssignStmt>(std::move(de->operand), std::move(val));
                 }
-                // ptr^.field = val
+                // ptr^.field = val  or  ptr^.field <- val
                 if (auto* fa = dynamic_cast<FieldAccessExpr*>(base.get())) {
                     auto obj = std::move(fa->object);
                     std::string field = fa->field;
-                    return std::make_unique<FieldAssignStmt>(std::move(obj), field, std::move(val));
+                    return std::make_unique<FieldAssignStmt>(std::move(obj), field, std::move(val), is_move);
+                }
+                // ptr^[idx] = val  or  ptr^[idx] <- val
+                if (auto* ai = dynamic_cast<ArrayIndexExpr*>(base.get())) {
+                    auto b = std::move(ai->base);
+                    auto ix = std::move(ai->index);
+                    return std::make_unique<IndexAssignStmt>(std::move(b), std::move(ix), std::move(val), is_move);
                 }
                 throw std::runtime_error("invalid deref assignment target");
             }

@@ -62,6 +62,14 @@ void takeAction(Action^ a) {
     __println("takeAction received");
 }
 
+void take_tuple((int, int)^ p) {
+    __println("take_tuple: p^[0]=" + p^[0] + " p^[1]=" + p^[1]);
+}
+
+void modify_tuple((int, int)^ p) {
+    p^[0] = 999;
+}
+
 (int a, int b, int c) make_tuple() {
     return (100, 200, 300);
 }
@@ -345,6 +353,14 @@ int32 main() {
     __println("make_tuple()[0]=" + mtv0 + " [2]=" + mtv2);
     sv0 = make_simples_var()[0];
     sv0.print("make_simples_var()[0]");
+
+    /* #1: passing a tuple variable to a function (by-reference). */
+    tp = (10, 20);
+    take_tuple(^tp);
+    take_tuple(tp);             /* implicit ref auto-promote */
+    take_tuple((100, 200));     /* tuple-literal arg materialized to temp */
+    modify_tuple(^tp);
+    __println("after modify_tuple: tp=(" + tp[0] + "," + tp[1] + ")");
 
     /* #8: destructure from a tuple-returning call with inferred target types. */
     (ra, rb, rc) = make_tuple();

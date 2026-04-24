@@ -1232,6 +1232,60 @@ void Codegen::emitStmt(const Stmt& stmt) {
             return;
         }
 
+        // anon-tuple-ref element write: p^[N] = val where p is (t1,...)^
+        if (auto* de = dynamic_cast<const DerefExpr*>(ia->base.get())) {
+            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) {
+                    std::string t = tit->second;
+                    if (!t.empty() && t.back() == '^') t.pop_back();
+                    else if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
+                        t.resize(t.size()-2);
+                    if (isAnonTupleType(t)) {
+                        auto elems = anonTupleElems(t);
+                        int idx;
+                        if (!constExprToInt(*ia->index, enum_values_, idx))
+                            throw std::runtime_error("tuple index must be a constant integer");
+                        if (idx < 0 || idx >= (int)elems.size())
+                            throw std::runtime_error("tuple index " + std::to_string(idx)
+                                + " out of range (size " + std::to_string(elems.size()) + ")");
+                        std::string base_ptr = newTmp();
+                        out_ << "    " << base_ptr << " = load ptr, ptr "
+                             << locals_.at(ve->name) << "\n";
+                        std::string slot_gep = emitFieldGep(t, base_ptr, idx);
+                        const std::string& elem_slids = elems[idx];
+                        if (slid_info_.count(elem_slids) || isAnonTupleType(elem_slids)) {
+                            std::string src_ptr;
+                            if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
+                                auto lit = locals_.find(rve->name);
+                                if (lit != locals_.end()) src_ptr = lit->second;
+                            } else {
+                                std::string v = emitExpr(*ia->value);
+                                if (isAnonTupleType(elem_slids)) {
+                                    std::string tmp = newTmp();
+                                    out_ << "    " << tmp << " = alloca "
+                                         << llvmType(elem_slids) << "\n";
+                                    out_ << "    store " << llvmType(elem_slids) << " "
+                                         << v << ", ptr " << tmp << "\n";
+                                    src_ptr = tmp;
+                                } else {
+                                    src_ptr = v;
+                                }
+                            }
+                            emitSlidSlotAssign(elem_slids, slot_gep, src_ptr, ia->is_move);
+                            return;
+                        }
+                        std::string rhs_val = emitExpr(*ia->value);
+                        out_ << "    store " << llvmType(elem_slids) << " " << rhs_val
+                             << ", ptr " << slot_gep << "\n";
+                        if (ia->is_move && isIndirectType(elem_slids))
+                            emitNullOut(*ia->value);
+                        return;
+                    }
+                }
+            }
+        }
+
         auto* ve = dynamic_cast<const VarExpr*>(ia->base.get());
         if (!ve) throw std::runtime_error("IndexAssign: complex base not supported");
 
