@@ -56,6 +56,9 @@ int32 main() {
     d = (50, 51, 52);
     d.print("d*");
 
+    d <- (60, 61, 62);
+    d.print("d<-");
+
     /* compile errors. */
     //Simple e(1, 2, 3, 4, 5);
     //d = (1, 2, 3, 4, 5);
@@ -69,6 +72,10 @@ int32 main() {
     __println("tuple = (" + one + "," + two + "," + ten + ")");
     tuple2 = tuple;
     __println("tuple2 = (" + tuple2[0] + "," + tuple2[1] + "," + tuple2[2] + ")");
+    tuple3 <- tuple;
+    __println("tuple3 = (" + tuple3[0] + "," + tuple3[1] + "," + tuple3[2] + ")");
+    (int, int, int) tuple4 <- tuple;
+    __println("tuple4 = (" + tuple4[0] + "," + tuple4[1] + "," + tuple4[2] + ")");
 
     /* overwriting */
     tuple2 = (100, 200);
@@ -101,6 +108,11 @@ int32 main() {
     slid_tuple = (Simple(1,2,3), Simple(4,5,6));
     slid_tuple[0].print("slid_tuple[0]");
     slid_tuple[1].print("slid_tuple[1]");
+    slid_tuple[0] = Simple(7, 8, 9);
+    slid_tuple[0].print("slid_tuple[0] after element-write");
+    (Simple p, Simple q) = slid_tuple;
+    p.print("p");
+    q.print("q");
 
     /* constructables. */
     {
@@ -120,6 +132,8 @@ int32 main() {
     /* tuple return from function. */
     ret_tuple = make_tuple();
     __println("ret_tuple = (" + ret_tuple[0] + "," + ret_tuple[1] + "," + ret_tuple[2] + ")");
+    ret_tuple2 <- make_tuple();
+    __println("ret_tuple2 = (" + ret_tuple2[0] + "," + ret_tuple2[1] + "," + ret_tuple2[2] + ")");
 
     /* element-wise tuple binary ops. */
     sum_tuple = (1, 2, 3) + (4, 5, 6);

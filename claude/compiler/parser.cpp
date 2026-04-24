@@ -834,6 +834,43 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             td->init = parseExpr();
             expect(TokenType::kSemicolon, "expected ';'");
             return td;
+        } else if (scan < (int)tokens_.size()
+                   && tokens_[scan].type == TokenType::kIdentifier
+                   && scan + 1 < (int)tokens_.size()
+                   && (tokens_[scan + 1].type == TokenType::kEquals
+                       || tokens_[scan + 1].type == TokenType::kArrowLeft
+                       || tokens_[scan + 1].type == TokenType::kSemicolon)) {
+            // (t1, t2, ...) name [= expr | <- expr]; — anon-tuple typed var decl
+            advance(); // consume '('
+            std::string type = "(";
+            bool first = true;
+            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                if (!first) type += ",";
+                first = false;
+                type += parseTypeName();
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kRParen, "expected ')'");
+            type += ")";
+            std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
+            if (peek().type == TokenType::kSemicolon) {
+                advance();
+                declareVar(name);
+                return std::make_unique<VarDeclStmt>(type, name, nullptr);
+            }
+            if (peek().type == TokenType::kArrowLeft) {
+                advance();
+                auto init = parseExpr();
+                expect(TokenType::kSemicolon, "expected ';'");
+                declareVar(name);
+                return std::make_unique<VarDeclStmt>(type, name, std::move(init),
+                                                      std::vector<std::unique_ptr<Expr>>{}, true);
+            }
+            expect(TokenType::kEquals, "expected '='");
+            auto init = parseExpr();
+            expect(TokenType::kSemicolon, "expected ';'");
+            declareVar(name);
+            return std::make_unique<VarDeclStmt>(type, name, std::move(init));
         }
         // fall through to expression statement
     }
@@ -1184,11 +1221,16 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             }
             return std::make_unique<AssignStmt>(name, std::move(value));
         }
-        // move assignment
+        // move assignment — or inferred move-init if name is not yet in scope and not a class field
         if (peek().type == TokenType::kArrowLeft) {
             advance();
             auto value = parseExpr();
             expect(TokenType::kSemicolon, "expected ';'");
+            if (!isInScope(name) && !current_slid_fields_.count(name) && name != "self") {
+                declareVar(name);
+                return std::make_unique<VarDeclStmt>("", name, std::move(value),
+                                                      std::vector<std::unique_ptr<Expr>>{}, true);
+            }
             return std::make_unique<AssignStmt>(name, std::move(value), true);
         }
 

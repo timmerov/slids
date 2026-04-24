@@ -6,10 +6,15 @@
             "Read(/home/timmer/Documents/code/slids/claude/**)",
             "Edit(/home/timmer/Documents/code/slids/claude/**)",
             "Write(/home/timmer/Documents/code/slids/claude/**)",
-            "Bash(make *)",
+            "Read(/tmp/claude/**)",
+            "Edit(/tmp/claude/**)",
+            "Write(/tmp/claude/**)",
+
             "Bash(./bin/* *)",
             "Bash(/home/timmer/Documents/code/slids/claude/bin/* *)",
             "Bash(/tmp/* *)",
+
+            "Bash(make *)",
             "Bash(llc *)",
             "Bash(g++ *)",
             "Bash(gdb *)",
@@ -26,6 +31,7 @@
             "Bash(sort *)",
             "Bash(uniq *)",
             "Bash(cut *)",
+
             "Bash(make * | tail *)",
             "Bash(./bin/* * | tail *)",
             "Bash(/home/timmer/Documents/code/slids/claude/bin/* * | tail *)"
@@ -34,16 +40,5 @@
             "Bash(git *)",
             "Bash(cd *)"
         ]
-    },
-
-    "sandbox": {
-        "enabled": true,
-        "filesystem": {
-            "denyRead": ["/**"],
-            "allowRead": [
-                "/tmp/claude/**",
-                "/home/timmer/Documents/code/slids/claude/**"
-            ]
-        }
     }
 }

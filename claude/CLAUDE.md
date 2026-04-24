@@ -10,7 +10,7 @@ Three modes govern how I work. The user sets the mode by what they ask for. I de
 
 ### Tool preferences
 
-- `cd` is not permitted. Use `make -C <dir>` instead of `cd <dir> && make`.
+- Use of `git` and `cd` is not permitted. Use `make -C <dir>` instead of `cd <dir> && make`.
 - Avoid piping Bash output through `head`/`tail`/`wc`. If output is long, redirect to a file and `Read` it, or rerun with a narrower scope.
 
 ### Modes
