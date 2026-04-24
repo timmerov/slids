@@ -6,32 +6,33 @@
             "Read(/home/timmer/Documents/code/slids/claude/**)",
             "Edit(/home/timmer/Documents/code/slids/claude/**)",
             "Write(/home/timmer/Documents/code/slids/claude/**)",
-            "Grep",
-            "Glob",
             "Bash(make *)",
-            "Bash(make * | tail *)",
             "Bash(./bin/* *)",
-            "Bash(./bin/* * | tail *)",
             "Bash(/home/timmer/Documents/code/slids/claude/bin/* *)",
-            "Bash(/home/timmer/Documents/code/slids/claude/bin/* * | tail *)",
             "Bash(/tmp/* *)",
             "Bash(llc *)",
             "Bash(g++ *)",
             "Bash(gdb *)",
-            "Bash(nm *)",
-            "Bash(xxd *)",
-            "Bash(chmod *)",
             "Bash(ls *)",
-            "Bash(cat *)"
-        ],
-        "deny": [
-            "Bash(git *)",
+            "Bash(cat *)",
             "Bash(grep *)",
             "Bash(rg *)",
             "Bash(find *)",
-            "Bash(cd *)",
             "Bash(awk *)",
-            "Bash(sed *)"
+            "Bash(sed *)",
+            "Bash(head *)",
+            "Bash(tail *)",
+            "Bash(wc *)",
+            "Bash(sort *)",
+            "Bash(uniq *)",
+            "Bash(cut *)",
+            "Bash(make * | tail *)",
+            "Bash(./bin/* * | tail *)",
+            "Bash(/home/timmer/Documents/code/slids/claude/bin/* * | tail *)"
+        ],
+        "deny": [
+            "Bash(git *)",
+            "Bash(cd *)"
         ]
     },
 

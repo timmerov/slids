@@ -649,6 +649,100 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* b = dynamic_cast<const BinaryExpr*>(&expr)) {
+        // element-wise tuple binary op: (a,b,c) + (x,y,z) → (a+x, b+y, c+z).
+        // applies the desugar rule — operations on tuples apply per element.
+        {
+            std::string lslid = inferSlidType(*b->left);
+            std::string rslid = inferSlidType(*b->right);
+            if (isAnonTupleType(lslid) && isAnonTupleType(rslid)) {
+                auto lelems = anonTupleElems(lslid);
+                auto relems = anonTupleElems(rslid);
+                if (lelems.size() != relems.size())
+                    throw std::runtime_error("tuple arity mismatch in elementwise '"
+                        + b->op + "': " + lslid + " vs " + rslid);
+                static const std::set<std::string> ewise_ops = {
+                    "+","-","*","/","%","&","|","^","<<",">>"
+                };
+                if (!ewise_ops.count(b->op))
+                    throw std::runtime_error("operator '" + b->op
+                        + "' not supported element-wise on tuples");
+                std::string struct_llvm = llvmType(lslid);
+                auto* lte = dynamic_cast<const TupleExpr*>(b->left.get());
+                auto* rte = dynamic_cast<const TupleExpr*>(b->right.get());
+                // resolve pointer to a non-literal tuple operand
+                auto getPtr = [&](const Expr& e, const std::string& t) -> std::string {
+                    if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
+                        auto lit = locals_.find(ve->name);
+                        if (lit != locals_.end()) return lit->second;
+                    }
+                    std::string v = emitExpr(e);
+                    std::string tmp = newTmp();
+                    out_ << "    " << tmp << " = alloca " << llvmType(t) << "\n";
+                    out_ << "    store " << llvmType(t) << " " << v << ", ptr " << tmp << "\n";
+                    return tmp;
+                };
+                std::string lptr = lte ? "" : getPtr(*b->left, lslid);
+                std::string rptr = rte ? "" : getPtr(*b->right, rslid);
+                std::string res_ptr = newTmp();
+                out_ << "    " << res_ptr << " = alloca " << struct_llvm << "\n";
+                for (size_t i = 0; i < lelems.size(); i++) {
+                    const std::string& ltype = lelems[i];
+                    const std::string& rtype = relems[i];
+                    if (ltype != rtype)
+                        throw std::runtime_error("tuple element type mismatch in elementwise '"
+                            + b->op + "' at index " + std::to_string(i)
+                            + ": " + ltype + " vs " + rtype);
+                    if (slid_info_.count(ltype) || isAnonTupleType(ltype))
+                        throw std::runtime_error("elementwise '" + b->op
+                            + "' on slid or nested-tuple elements not yet supported");
+                    std::string elem_llvm = llvmType(ltype);
+                    std::string lval;
+                    if (lte) {
+                        lval = emitExpr(*lte->values[i]);
+                    } else {
+                        std::string gep = emitFieldGep(lslid, lptr, (int)i);
+                        lval = newTmp();
+                        out_ << "    " << lval << " = load " << elem_llvm
+                             << ", ptr " << gep << "\n";
+                    }
+                    std::string rval;
+                    if (rte) {
+                        rval = emitExpr(*rte->values[i]);
+                    } else {
+                        std::string gep = emitFieldGep(rslid, rptr, (int)i);
+                        rval = newTmp();
+                        out_ << "    " << rval << " = load " << elem_llvm
+                             << ", ptr " << gep << "\n";
+                    }
+                    bool unsig = (ltype == "uint" || ltype == "uint8" || ltype == "uint16"
+                               || ltype == "uint32" || ltype == "uint64"
+                               || ltype == "char" || ltype == "bool");
+                    const std::string& op = b->op;
+                    std::string instr;
+                    if      (op == "+")  instr = "add";
+                    else if (op == "-")  instr = "sub";
+                    else if (op == "*")  instr = "mul";
+                    else if (op == "/")  instr = unsig ? "udiv" : "sdiv";
+                    else if (op == "%")  instr = unsig ? "urem" : "srem";
+                    else if (op == "&")  instr = "and";
+                    else if (op == "|")  instr = "or";
+                    else if (op == "^")  instr = "xor";
+                    else if (op == "<<") instr = "shl";
+                    else if (op == ">>") instr = unsig ? "lshr" : "ashr";
+                    std::string rtmp = newTmp();
+                    out_ << "    " << rtmp << " = " << instr << " " << elem_llvm
+                         << " " << lval << ", " << rval << "\n";
+                    std::string rgep = emitFieldGep(lslid, res_ptr, (int)i);
+                    out_ << "    store " << elem_llvm << " " << rtmp
+                         << ", ptr " << rgep << "\n";
+                }
+                std::string loaded = newTmp();
+                out_ << "    " << loaded << " = load " << struct_llvm
+                     << ", ptr " << res_ptr << "\n";
+                return loaded;
+            }
+        }
+
         if (b->op == "&&" || b->op == "||" || b->op == "^^") {
             std::string result_ptr = newTmp() + "_sc";
             out_ << "    " << result_ptr << " = alloca i32\n";

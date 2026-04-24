@@ -10,8 +10,7 @@ Three modes govern how I work. The user sets the mode by what they ask for. I de
 
 ### Tool preferences
 
-- Prefer `make -C <dir>` over `cd <dir> && make`. Avoids compound commands and keeps the working directory stable.
-- Use the `Grep` tool instead of Bash `grep`/`rg`/`awk`/`sed` for pattern search. Use the `Glob` tool instead of Bash `find` for filename patterns.
+- `cd` is not permitted. Use `make -C <dir>` instead of `cd <dir> && make`.
 - Avoid piping Bash output through `head`/`tail`/`wc`. If output is long, redirect to a file and `Read` it, or rerun with a narrower scope.
 
 ### Modes

@@ -121,5 +121,13 @@ int32 main() {
     ret_tuple = make_tuple();
     __println("ret_tuple = (" + ret_tuple[0] + "," + ret_tuple[1] + "," + ret_tuple[2] + ")");
 
+    /* element-wise tuple binary ops. */
+    sum_tuple = (1, 2, 3) + (4, 5, 6);
+    __println("sum = (" + sum_tuple[0] + "," + sum_tuple[1] + "," + sum_tuple[2] + ")");
+    diff_tuple = (10, 20, 30) - (1, 2, 3);
+    __println("diff = (" + diff_tuple[0] + "," + diff_tuple[1] + "," + diff_tuple[2] + ")");
+    prod_tuple = sum_tuple * (2, 3, 4);
+    __println("prod = (" + prod_tuple[0] + "," + prod_tuple[1] + "," + prod_tuple[2] + ")");
+
     return 0;
 }
