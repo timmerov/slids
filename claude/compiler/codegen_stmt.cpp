@@ -77,7 +77,7 @@ void Codegen::emitDestructure(
                             + elem_type + "' into '" + eff_type + " " + name + "'");
                     out_ << "    " << reg << " = alloca " << llvmType(elem_type) << "\n";
                     std::string src_gep = emitFieldGep(src_type, src_ptr, i);
-                    emitSlidAssign(elem_type, reg, src_gep, /*is_move=*/true);
+                    emitSlidSlotAssign(elem_type, reg, src_gep, /*is_move=*/true);
                     locals_[name] = reg;
                     local_types_[name] = eff_type;
                     continue;
@@ -533,7 +533,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                     && !current_slid_.empty() && current_slid_ == eff_type)
                                 src_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
                         }
-                        if (!src_ptr.empty()) emitSlidAssign(eff_type, reg, src_ptr, decl->is_move);
+                        if (!src_ptr.empty()) emitSlidSlotAssign(eff_type, reg, src_ptr, decl->is_move);
                     }
                 }
             }
@@ -570,7 +570,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         } else {
                             src_ptr = emitExpr(*te->values[i]);
                         }
-                        emitSlidAssign(elems[i], gep, src_ptr, decl->is_move);
+                        emitSlidSlotAssign(elems[i], gep, src_ptr, decl->is_move);
                         if (slid_info_[elems[i]].has_dtor)
                             dtor_vars_.push_back({decl->name, elems[i], i});
                         continue;
@@ -599,7 +599,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 out_ << "    " << src_ptr << " = alloca " << struct_llvm << "\n";
                 out_ << "    store " << struct_llvm << " " << val << ", ptr " << src_ptr << "\n";
             }
-            emitSlidAssign(eff_type, reg, src_ptr, decl->is_move);
+            emitSlidSlotAssign(eff_type, reg, src_ptr, decl->is_move);
             return;
         }
 
@@ -719,7 +719,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         } else {
                             src_ptr = emitExpr(*te->values[i]);
                         }
-                        emitSlidAssign(ft, gep, src_ptr, assign->is_move);
+                        emitSlidSlotAssign(ft, gep, src_ptr, assign->is_move);
                         continue;
                     }
                     std::string val = emitExpr(*te->values[i]);
@@ -758,7 +758,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
             if (src_ptr.empty())
                 throw std::runtime_error("tuple copy from non-variable source not supported");
-            emitSlidAssign(lhs_t, it->second, src_ptr, assign->is_move);
+            emitSlidSlotAssign(lhs_t, it->second, src_ptr, assign->is_move);
             return;
         }
         // compound assignment: x = x op rhs → detect and dispatch to op{op}= directly
@@ -904,7 +904,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         } else {
                             src_ptr = emitExpr(*te->values[i]);
                         }
-                        emitSlidAssign(ft, gep, src_ptr, assign->is_move);
+                        emitSlidSlotAssign(ft, gep, src_ptr, assign->is_move);
                         continue;
                     }
                     // anon-tuple-typed field: recurse via walker on matching tuple-var source
@@ -919,7 +919,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         }
                         if (src_ptr.empty())
                             throw std::runtime_error("tuple-typed field copy from non-variable source not supported");
-                        emitSlidAssign(ft, gep, src_ptr, assign->is_move);
+                        emitSlidSlotAssign(ft, gep, src_ptr, assign->is_move);
                         continue;
                     }
                     std::string val = emitExpr(*te->values[i]);
@@ -974,7 +974,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         }
                     }
                 }
-                if (!src_ptr.empty()) { emitSlidAssign(slid_name, it->second, src_ptr, assign->is_move); return; }
+                if (!src_ptr.empty()) { emitSlidSlotAssign(slid_name, it->second, src_ptr, assign->is_move); return; }
             }
         }
         // pointer move: copy source to dest, null source
@@ -1129,7 +1129,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     }
                     if (src_ptr.empty())
                         throw std::runtime_error("tuple element write from unsupported source");
-                    emitSlidAssign(elem_slids, gep, src_ptr, /*is_move=*/false);
+                    emitSlidSlotAssign(elem_slids, gep, src_ptr, /*is_move=*/false);
                     return;
                 }
                 std::string rhs_val = emitExpr(*ia->value);
@@ -1544,7 +1544,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                 src_ptr = emitExpr(*te->values[i]);
                             }
                             bool is_move = isFreshSlidTemp(*te->values[i]);
-                            emitSlidAssign(elem_type, gep, src_ptr, is_move);
+                            emitSlidSlotAssign(elem_type, gep, src_ptr, is_move);
                         } else {
                             std::string val = emitExpr(*te->values[i]);
                             out_ << "    store " << llvmType(elem_type) << " " << val
@@ -1581,7 +1581,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             slids_tuple_type += current_func_tuple_fields_[i].first;
                         }
                         slids_tuple_type += ")";
-                        emitSlidAssign(slids_tuple_type, ret_tup, src_ptr, /*is_move=*/false);
+                        emitSlidSlotAssign(slids_tuple_type, ret_tup, src_ptr, /*is_move=*/false);
                         std::string loaded = newTmp();
                         out_ << "    " << loaded << " = load " << current_func_return_type_
                              << ", ptr " << ret_tup << "\n";

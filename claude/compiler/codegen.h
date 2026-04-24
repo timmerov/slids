@@ -192,6 +192,14 @@ private:
     // `struct_type` may be a slid name or an anon tuple.
     void emitSlidAssign(const std::string& struct_type, const std::string& dst_ptr,
                         const std::string& src_ptr, bool is_move);
+    // Assign a single slid (or anon-tuple) slot. For slid types, prefers user
+    // op<- (move) or op= (copy) taking Type^ when defined; otherwise falls
+    // back to emitSlidAssign (default field-by-field walk). For anon-tuple
+    // types, always falls back (anon-tuples have no user ops). This is the
+    // desugar-rule entry point: wherever an operation lands on a slid-typed
+    // slot, go through this helper so the user's op is invoked.
+    void emitSlidSlotAssign(const std::string& elem_type, const std::string& dst_ptr,
+                            const std::string& src_ptr, bool is_move);
     std::string emitSlidAlloca(const std::string& slid_name); // alloca + default-init fields + ctor
     std::string emitRawSlidAlloca(const std::string& slid_name); // alloca only, no init, no dtor
     void emitConstructAt(const std::string& stype, const std::string& ptr,

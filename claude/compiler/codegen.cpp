@@ -1392,8 +1392,11 @@ bool Codegen::isFreshSlidTemp(const Expr& expr) {
     if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr))
         return slid_info_.count(nc->target_type) > 0;
     // function or method call returning a slid type produces a fresh temp alloca
-    if (dynamic_cast<const CallExpr*>(&expr))
+    if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        // slid-ctor call: Type(args) always produces a fresh slid temp
+        if (slid_info_.count(ce->callee)) return true;
         return !exprSlidType(expr).empty();
+    }
     if (dynamic_cast<const MethodCallExpr*>(&expr))
         return !exprSlidType(expr).empty();
     // any binary expression that produces a slid result owns a fresh temp alloca
@@ -1967,6 +1970,28 @@ std::string Codegen::emitFieldGep(const std::string& struct_type,
     return gep;
 }
 
+void Codegen::emitSlidSlotAssign(const std::string& elem_type,
+                                  const std::string& dst_ptr, const std::string& src_ptr,
+                                  bool is_move) {
+    // For a slid slot: prefer user op<- (move) or op= (copy) taking Type^ if defined.
+    if (slid_info_.count(elem_type)) {
+        std::string op_base = elem_type + "__" + (is_move ? "op<-" : "op=");
+        auto oit = method_overloads_.find(op_base);
+        if (oit != method_overloads_.end()) {
+            std::string want = elem_type + "^";
+            for (auto& [m, pt] : oit->second) {
+                if (pt.size() == 1 && pt[0] == want) {
+                    out_ << "    call void @" << llvmGlobalName(m)
+                         << "(ptr " << dst_ptr << ", ptr " << src_ptr << ")\n";
+                    return;
+                }
+            }
+        }
+    }
+    // No user op (or anon-tuple / other): default field-by-field walk.
+    emitSlidAssign(elem_type, dst_ptr, src_ptr, is_move);
+}
+
 void Codegen::emitSlidAssign(const std::string& struct_type,
                              const std::string& dst_ptr, const std::string& src_ptr,
                              bool is_move) {
@@ -1975,27 +2000,9 @@ void Codegen::emitSlidAssign(const std::string& struct_type,
         const std::string& fslids = fields[i];
         std::string src_gep = emitFieldGep(struct_type, src_ptr, i);
         std::string dst_gep = emitFieldGep(struct_type, dst_ptr, i);
-        // embedded slid (value-type): dispatch to user op if one matches; else recurse default
-        if (slid_info_.count(fslids)) {
-            std::string op_base = fslids + "__" + (is_move ? "op<-" : "op=");
-            auto oit = method_overloads_.find(op_base);
-            std::string mangled;
-            if (oit != method_overloads_.end()) {
-                std::string want = fslids + "^";
-                for (auto& [m, pt] : oit->second)
-                    if (pt.size() == 1 && pt[0] == want) { mangled = m; break; }
-            }
-            if (!mangled.empty()) {
-                out_ << "    call void @" << llvmGlobalName(mangled)
-                     << "(ptr " << dst_gep << ", ptr " << src_gep << ")\n";
-            } else {
-                emitSlidAssign(fslids, dst_gep, src_gep, is_move);
-            }
-            continue;
-        }
-        // anon-tuple field: recurse element-wise
-        if (isAnonTupleType(fslids)) {
-            emitSlidAssign(fslids, dst_gep, src_gep, is_move);
+        // embedded slid / anon-tuple: dispatch via slot helper (user op else default walk)
+        if (slid_info_.count(fslids) || isAnonTupleType(fslids)) {
+            emitSlidSlotAssign(fslids, dst_gep, src_gep, is_move);
             continue;
         }
         // inline array of slids or pointers: walk each element
@@ -2005,14 +2012,6 @@ void Codegen::emitSlidAssign(const std::string& struct_type,
             int n = std::stoi(fslids.substr(lb + 1, fslids.size() - lb - 2));
             std::string arr_llvm = llvmType(fslids);
             if (slid_info_.count(elem_slids)) {
-                std::string op_base = elem_slids + "__" + (is_move ? "op<-" : "op=");
-                auto oit = method_overloads_.find(op_base);
-                std::string mangled;
-                if (oit != method_overloads_.end()) {
-                    std::string want = elem_slids + "^";
-                    for (auto& [m, pt] : oit->second)
-                        if (pt.size() == 1 && pt[0] == want) { mangled = m; break; }
-                }
                 for (int k = 0; k < n; k++) {
                     std::string s_ep = newTmp();
                     out_ << "    " << s_ep << " = getelementptr " << arr_llvm
@@ -2020,11 +2019,7 @@ void Codegen::emitSlidAssign(const std::string& struct_type,
                     std::string d_ep = newTmp();
                     out_ << "    " << d_ep << " = getelementptr " << arr_llvm
                          << ", ptr " << dst_gep << ", i32 0, i32 " << k << "\n";
-                    if (!mangled.empty())
-                        out_ << "    call void @" << llvmGlobalName(mangled)
-                             << "(ptr " << d_ep << ", ptr " << s_ep << ")\n";
-                    else
-                        emitSlidAssign(elem_slids, d_ep, s_ep, is_move);
+                    emitSlidSlotAssign(elem_slids, d_ep, s_ep, is_move);
                 }
                 continue;
             }
@@ -2175,7 +2170,7 @@ void Codegen::emitConstructAtPtrs(const std::string& stype, const std::string& p
                 emitConstructAtPtrs(ftype, gep, {}, {});
             } else if (inferSlidType(*arg_expr) == ftype) {
                 std::string src = emitExpr(*arg_expr);
-                emitSlidAssign(ftype, gep, src, /*is_move=*/false);
+                emitSlidSlotAssign(ftype, gep, src, /*is_move=*/false);
             } else {
                 std::vector<const Expr*> one{ arg_expr };
                 emitConstructAtPtrs(ftype, gep, one, {});

@@ -57,6 +57,20 @@ void foo(NameValue^ nv) {
     return pair;
 }
 
+(Action a0, Action a1) make_actions_move() {
+    return (Action(0), Action(1));
+}
+
+(Action a0, Action a1) make_actions_copy() {
+    Action a(0);
+    Action b(1);
+    return (a, b);
+}
+
+(Simple s0, Simple s1) passthrough() {
+    return make_simples_var();
+}
+
 int32 main() {
 
     /* assignments with tuples. */
@@ -169,6 +183,15 @@ int32 main() {
     var_slid_ret = make_simples_var();
     var_slid_ret[0].print("var_slid_ret[0]");
     var_slid_ret[1].print("var_slid_ret[1]");
+
+    __println("-- action move return: expect 2 move lines --");
+    act_move_ret = make_actions_move();
+    __println("-- action copy return: expect 0 move lines --");
+    act_copy_ret = make_actions_copy();
+
+    pass_ret = passthrough();
+    pass_ret[0].print("pass_ret[0]");
+    pass_ret[1].print("pass_ret[1]");
 
     /* element-wise tuple binary ops. */
     sum_tuple = (1, 2, 3) + (4, 5, 6);
