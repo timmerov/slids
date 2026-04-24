@@ -460,8 +460,9 @@ Rules:
 ### 3. Destructure target — a list of variable slots
 
 A list used on the **left** of an assignment or declaration to unpack a tuple-valued expression. Each slot is one of:
-- A bare variable name — the variable is declared with its type inferred from the matching RHS element.
-- `type name` — an explicit variable declaration.
+- **An existing variable** — its type must be compatible with the matching RHS element; the element's value is assigned to it.
+- **A new bare name** (not yet in scope) — the variable is declared with its type inferred from the matching RHS element.
+- **`type name`** — an explicit variable declaration.
 - **Empty** — the matching RHS element is skipped (no variable is introduced).
 
 ```
@@ -474,7 +475,7 @@ A list used on the **left** of an assignment or declaration to unpack a tuple-va
 
 Rules:
 - The number of slots (commas + 1, counting empty slots) must equal the RHS tuple's element count — size mismatches are a compile error.
-- An explicitly-typed slot must be compatible with the corresponding RHS element (integer widths may coerce; other mismatches are a compile error).
+- Each non-empty slot's target type (existing variable's type, or explicit `type`, or inferred type) must be compatible with the corresponding RHS element — integer widths may coerce; other mismatches are a compile error.
 - Empty slots contribute no local variable.
 
 ### Tuples desugar per element
@@ -587,14 +588,16 @@ Both forms are equivalent. `^s` is preferred when you want to make the pass-by-r
 }
 ```
 
-The returned tuple can be assigned to a named tuple variable or destructured directly:
-```
-// assign to tuple variable
-(bool success, int handle) result = openFile("data.txt");
-if (!result.success) { /* error */ }
+The element names are descriptive sugar for the reader — they carry no semantic weight. The return value's type is the unnamed tuple `(bool, int)`.
 
-// destructure directly
-(bool ok, int h) = openFile("data.txt");
+The returned tuple can be assigned to a variable or destructured directly:
+```
+// assign to a tuple variable — access elements by index
+result = openFile("data.txt");
+if (!result[0]) { /* error */ }
+
+// destructure directly — bare names are inferred, explicit types also work
+(ok, h) = openFile("data.txt");
 if (!ok) { /* error */ }
 ```
 
