@@ -683,7 +683,33 @@ Counter {
 }
 ```
 
-> **TODO:** It should be possible to add new fields to a slid's tuple in the implementation file (`.sl`), not just in the header (`.slh`). This would allow private data members that are not part of the public interface. This is deferred — it raises ABI and layout questions that need careful thought.
+**Incomplete slid — private fields in `.sl`**
+
+A slid may hide additional fields inside its implementation file. The `...` ellipsis marks the split between the public prefix (visible to consumers of the `.slh`) and the private suffix (visible only inside the `.sl`).
+
+**Header (`.slh`)** — tuple **ends** with `...` to signal that hidden fields follow elsewhere:
+```
+// counter.slh
+Counter(int value_ = 0, ...) {
+    int get();
+    void increment(int delta);
+}
+```
+
+**Implementation (`.sl`)** — tuple **starts** with `...`, standing in for the full public prefix, then adds the private fields:
+```
+// counter.sl
+Counter(..., int step_ = 1) {
+    int get() { return value_; }
+    void increment(int delta) { value_ += delta * step_; }
+}
+```
+
+Rules:
+- The public prefix in the header and the `...` in the implementation must agree on order, types, and defaults.
+- Consumers that import only the `.slh` see only the public fields. They cannot name, initialize, or access private fields.
+- Struct size (including the private suffix) is coordinated by the compiler and linker. Consumers do not need to recompile when the private part of the implementation changes, as long as the public prefix stays the same.
+- Tuple-literal initialization follows the standard accessibility rule: a `.slh` consumer can only set public fields via a tuple literal; the `.sl` implementer can set all fields.
 
 ---
 
