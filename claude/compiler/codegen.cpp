@@ -2010,7 +2010,12 @@ std::string Codegen::emitFieldGep(const std::string& struct_type,
 
 void Codegen::emitSlidSlotAssign(const std::string& elem_type,
                                   const std::string& dst_ptr, const std::string& src_ptr,
-                                  bool is_move) {
+                                  bool is_move, bool is_init) {
+    // Init sites: default-construct the slot first so the eventual dtor pairs
+    // with a ctor. No-op for anon-tuple and non-slid element types.
+    if (is_init && slid_info_.count(elem_type)) {
+        emitConstructAtPtrs(elem_type, dst_ptr, {}, {});
+    }
     // For a slid slot: prefer user op<- (move) or op= (copy) taking Type^ if defined.
     if (slid_info_.count(elem_type)) {
         std::string op_base = elem_type + "__" + (is_move ? "op<-" : "op=");
@@ -2027,12 +2032,12 @@ void Codegen::emitSlidSlotAssign(const std::string& elem_type,
         }
     }
     // No user op (or anon-tuple / other): default field-by-field walk.
-    emitSlidAssign(elem_type, dst_ptr, src_ptr, is_move);
+    emitSlidAssign(elem_type, dst_ptr, src_ptr, is_move, is_init);
 }
 
 void Codegen::emitSlidAssign(const std::string& struct_type,
                              const std::string& dst_ptr, const std::string& src_ptr,
-                             bool is_move) {
+                             bool is_move, bool is_init) {
     auto fields = fieldTypesOf(struct_type);
     for (int i = 0; i < (int)fields.size(); i++) {
         const std::string& fslids = fields[i];
@@ -2040,7 +2045,7 @@ void Codegen::emitSlidAssign(const std::string& struct_type,
         std::string dst_gep = emitFieldGep(struct_type, dst_ptr, i);
         // embedded slid / anon-tuple: dispatch via slot helper (user op else default walk)
         if (slid_info_.count(fslids) || isAnonTupleType(fslids)) {
-            emitSlidSlotAssign(fslids, dst_gep, src_gep, is_move);
+            emitSlidSlotAssign(fslids, dst_gep, src_gep, is_move, is_init);
             continue;
         }
         // inline array of slids or pointers: walk each element
@@ -2057,7 +2062,7 @@ void Codegen::emitSlidAssign(const std::string& struct_type,
                     std::string d_ep = newTmp();
                     out_ << "    " << d_ep << " = getelementptr " << arr_llvm
                          << ", ptr " << dst_gep << ", i32 0, i32 " << k << "\n";
-                    emitSlidSlotAssign(elem_slids, d_ep, s_ep, is_move);
+                    emitSlidSlotAssign(elem_slids, d_ep, s_ep, is_move, is_init);
                 }
                 continue;
             }
@@ -2091,6 +2096,76 @@ void Codegen::emitSlidAssign(const std::string& struct_type,
         out_ << "    store " << ft << " " << val << ", ptr " << dst_gep << "\n";
         if (is_move && isIndirectType(fslids))
             out_ << "    store ptr null, ptr " << src_gep << "\n";
+    }
+}
+
+void Codegen::emitElementwiseAtPtr(const std::string& ttype,
+                                    const std::string& l_ptr, const std::string& r_ptr,
+                                    const std::string& res_ptr, const std::string& op) {
+    auto fields = fieldTypesOf(ttype);
+    for (int i = 0; i < (int)fields.size(); i++) {
+        const std::string& ft = fields[i];
+        std::string l_gep = emitFieldGep(ttype, l_ptr, i);
+        std::string r_gep = emitFieldGep(ttype, r_ptr, i);
+        std::string res_gep = emitFieldGep(ttype, res_ptr, i);
+        // nested anon-tuple slot: recurse
+        if (isAnonTupleType(ft)) {
+            emitElementwiseAtPtr(ft, l_gep, r_gep, res_gep, op);
+            continue;
+        }
+        // slid slot: dispatch user op<op>(Elem^, Elem^)
+        if (slid_info_.count(ft)) {
+            std::string op_base = ft + "__op" + op;
+            auto oit = method_overloads_.find(op_base);
+            std::string mangled;
+            std::string want = ft + "^";
+            if (oit != method_overloads_.end()) {
+                for (auto& [m, pt] : oit->second) {
+                    if (pt.size() == 2 && pt[0] == want && pt[1] == want) {
+                        mangled = m; break;
+                    }
+                }
+            }
+            if (mangled.empty())
+                throw std::runtime_error("slid element type '" + ft
+                    + "' has no op" + op + "(" + ft + "^, " + ft + "^)");
+            std::string ret_t = func_return_types_.count(mangled)
+                ? func_return_types_[mangled] : "";
+            bool is_method = (ret_t == "void");
+            std::string args = is_method
+                ? ("ptr " + res_gep)
+                : ("ptr sret(%struct." + ft + ") " + res_gep);
+            args += ", ptr " + l_gep + ", ptr " + r_gep;
+            out_ << "    call void @" << llvmGlobalName(mangled)
+                 << "(" << args << ")\n";
+            continue;
+        }
+        // scalar slot: load both operands, emit scalar op, store
+        std::string elem_llvm = llvmType(ft);
+        bool unsig = (ft == "uint" || ft == "uint8" || ft == "uint16"
+                   || ft == "uint32" || ft == "uint64"
+                   || ft == "char" || ft == "bool");
+        std::string instr;
+        if      (op == "+")  instr = "add";
+        else if (op == "-")  instr = "sub";
+        else if (op == "*")  instr = "mul";
+        else if (op == "/")  instr = unsig ? "udiv" : "sdiv";
+        else if (op == "%")  instr = unsig ? "urem" : "srem";
+        else if (op == "&")  instr = "and";
+        else if (op == "|")  instr = "or";
+        else if (op == "^")  instr = "xor";
+        else if (op == "<<") instr = "shl";
+        else if (op == ">>") instr = unsig ? "lshr" : "ashr";
+        else throw std::runtime_error("elementwise: unsupported op '" + op + "'");
+        std::string lv = newTmp();
+        out_ << "    " << lv << " = load " << elem_llvm << ", ptr " << l_gep << "\n";
+        std::string rv = newTmp();
+        out_ << "    " << rv << " = load " << elem_llvm << ", ptr " << r_gep << "\n";
+        std::string rtmp = newTmp();
+        out_ << "    " << rtmp << " = " << instr << " " << elem_llvm
+             << " " << lv << ", " << rv << "\n";
+        out_ << "    store " << elem_llvm << " " << rtmp
+             << ", ptr " << res_gep << "\n";
     }
 }
 
@@ -2208,7 +2283,7 @@ void Codegen::emitConstructAtPtrs(const std::string& stype, const std::string& p
                 emitConstructAtPtrs(ftype, gep, {}, {});
             } else if (inferSlidType(*arg_expr) == ftype) {
                 std::string src = emitExpr(*arg_expr);
-                emitSlidSlotAssign(ftype, gep, src, /*is_move=*/false);
+                emitSlidSlotAssign(ftype, gep, src, /*is_move=*/false, /*is_init=*/true);
             } else {
                 std::vector<const Expr*> one{ arg_expr };
                 emitConstructAtPtrs(ftype, gep, one, {});

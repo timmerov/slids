@@ -190,8 +190,13 @@ private:
     // fields are nulled in the source after transfer, and embedded slid fields
     // recurse. Copy and move are identical for value fields.
     // `struct_type` may be a slid name or an anon tuple.
+    // `is_init` means the destination is a freshly-alloca'd slot that hasn't
+    // been constructed yet. When true, the slot is default-constructed
+    // (emitConstructAtPtrs with no args) before the copy/move, so every object
+    // that will later be dtor'd at scope exit has a matching ctor call.
+    // Default false (reassignment — target is already a live object).
     void emitSlidAssign(const std::string& struct_type, const std::string& dst_ptr,
-                        const std::string& src_ptr, bool is_move);
+                        const std::string& src_ptr, bool is_move, bool is_init = false);
     // Assign a single slid (or anon-tuple) slot. For slid types, prefers user
     // op<- (move) or op= (copy) taking Type^ when defined; otherwise falls
     // back to emitSlidAssign (default field-by-field walk). For anon-tuple
@@ -199,7 +204,14 @@ private:
     // desugar-rule entry point: wherever an operation lands on a slid-typed
     // slot, go through this helper so the user's op is invoked.
     void emitSlidSlotAssign(const std::string& elem_type, const std::string& dst_ptr,
-                            const std::string& src_ptr, bool is_move);
+                            const std::string& src_ptr, bool is_move, bool is_init = false);
+    // Elementwise arithmetic/bitwise op on same-typed anon-tuple operands at pointer
+    // level. For each slot of `ttype`: scalar → load+op+store; slid → user
+    // op<op>(Elem^,Elem^) call; nested anon-tuple → recurse. `op` is a scalar
+    // operator string ("+","-","*","/","%","&","|","^","<<",">>").
+    void emitElementwiseAtPtr(const std::string& ttype,
+                              const std::string& l_ptr, const std::string& r_ptr,
+                              const std::string& res_ptr, const std::string& op);
     std::string emitSlidAlloca(const std::string& slid_name); // alloca + default-init fields + ctor
     std::string emitRawSlidAlloca(const std::string& slid_name); // alloca only, no init, no dtor
     void emitConstructAt(const std::string& stype, const std::string& ptr,

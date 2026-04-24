@@ -372,6 +372,41 @@ std::string Codegen::emitExpr(const Expr& expr) {
             out_ << "    " << tmp << " = load " << field_type << ", ptr " << gep << "\n";
             return tmp;
         }
+        // chained indexed rvalue: tuple[idx].field
+        if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(fa->object.get())) {
+            auto* bve = dynamic_cast<const VarExpr*>(ai->base.get());
+            if (!bve)
+                throw std::runtime_error("chained indexed FieldAccess: complex base not supported");
+            auto tit = local_types_.find(bve->name);
+            if (tit == local_types_.end() || !isAnonTupleType(tit->second))
+                throw std::runtime_error("chained indexed FieldAccess: '" + bve->name
+                    + "' is not a tuple");
+            auto elems = anonTupleElems(tit->second);
+            int idx;
+            if (!constExprToInt(*ai->index, enum_values_, idx))
+                throw std::runtime_error("tuple index must be a constant integer");
+            if (idx < 0 || idx >= (int)elems.size())
+                throw std::runtime_error("tuple index " + std::to_string(idx)
+                    + " out of range (size " + std::to_string(elems.size()) + ")");
+            const std::string& slid_name = elems[idx];
+            if (!slid_info_.count(slid_name))
+                throw std::runtime_error("chained indexed FieldAccess: tuple element "
+                    + std::to_string(idx) + " is not a slid type");
+            auto& info = slid_info_[slid_name];
+            auto fit = info.field_index.find(fa->field);
+            if (fit == info.field_index.end())
+                throw std::runtime_error("unknown field '" + fa->field
+                    + "' on slid '" + slid_name + "'");
+            int field_idx = fit->second;
+            std::string field_type = llvmType(info.field_types[field_idx]);
+            std::string slot_gep = emitFieldGep(tit->second, locals_[bve->name], idx);
+            std::string field_gep = newTmp();
+            out_ << "    " << field_gep << " = getelementptr %struct." << slid_name
+                 << ", ptr " << slot_gep << ", i32 0, i32 " << field_idx << "\n";
+            std::string tmp = newTmp();
+            out_ << "    " << tmp << " = load " << field_type << ", ptr " << field_gep << "\n";
+            return tmp;
+        }
         throw std::runtime_error("complex field access not yet supported");
     }
 
@@ -448,11 +483,16 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* call = dynamic_cast<const CallExpr*>(&expr)) {
-        // slid ctor call as expression: SlidName(args) → alloca temp + construct, return ptr
+        // slid ctor call as expression: SlidName(args) → alloca temp + construct, return ptr.
+        // Register for statement-scope dtor so non-consume uses (e.g. call args, discarded
+        // ExprStmt) still run the dtor. Consume-the-temp sites (same-type VarDecl init)
+        // unregister the entry so ownership transfers cleanly.
         if (slid_info_.count(call->callee)) {
             std::string slid_name = call->callee;
             std::string tmp = emitRawSlidAlloca(slid_name);
             emitConstructAt(slid_name, tmp, call->args);
+            if (slid_info_[slid_name].has_dtor)
+                pending_temp_dtors_.push_back({tmp, slid_name});
             return tmp;
         }
         // check nested function first
@@ -650,15 +690,14 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
     if (auto* b = dynamic_cast<const BinaryExpr*>(&expr)) {
         // element-wise tuple binary op: (a,b,c) + (x,y,z) → (a+x, b+y, c+z).
-        // applies the desugar rule — operations on tuples apply per element.
+        // applies the desugar rule — operations on tuples apply per element,
+        // recursing into nested anon-tuple slots and dispatching user ops on slid slots.
         {
             std::string lslid = inferSlidType(*b->left);
             std::string rslid = inferSlidType(*b->right);
             if (isAnonTupleType(lslid) && isAnonTupleType(rslid)) {
-                auto lelems = anonTupleElems(lslid);
-                auto relems = anonTupleElems(rslid);
-                if (lelems.size() != relems.size())
-                    throw std::runtime_error("tuple arity mismatch in elementwise '"
+                if (lslid != rslid)
+                    throw std::runtime_error("tuple type mismatch in elementwise '"
                         + b->op + "': " + lslid + " vs " + rslid);
                 static const std::set<std::string> ewise_ops = {
                     "+","-","*","/","%","&","|","^","<<",">>"
@@ -666,11 +705,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 if (!ewise_ops.count(b->op))
                     throw std::runtime_error("operator '" + b->op
                         + "' not supported element-wise on tuples");
-                std::string struct_llvm = llvmType(lslid);
-                auto* lte = dynamic_cast<const TupleExpr*>(b->left.get());
-                auto* rte = dynamic_cast<const TupleExpr*>(b->right.get());
-                // resolve pointer to a non-literal tuple operand
-                auto getPtr = [&](const Expr& e, const std::string& t) -> std::string {
+                // Materialize each operand to a ptr. VarExpr of matching type → use its
+                // alloca directly; otherwise emit the struct SSA and store into a fresh temp.
+                auto materialize = [&](const Expr& e, const std::string& t) -> std::string {
                     if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
                         auto lit = locals_.find(ve->name);
                         if (lit != locals_.end()) return lit->second;
@@ -681,95 +718,12 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     out_ << "    store " << llvmType(t) << " " << v << ", ptr " << tmp << "\n";
                     return tmp;
                 };
-                std::string lptr = lte ? "" : getPtr(*b->left, lslid);
-                std::string rptr = rte ? "" : getPtr(*b->right, rslid);
+                std::string l_ptr = materialize(*b->left, lslid);
+                std::string r_ptr = materialize(*b->right, rslid);
+                std::string struct_llvm = llvmType(lslid);
                 std::string res_ptr = newTmp();
                 out_ << "    " << res_ptr << " = alloca " << struct_llvm << "\n";
-                for (size_t i = 0; i < lelems.size(); i++) {
-                    const std::string& ltype = lelems[i];
-                    const std::string& rtype = relems[i];
-                    if (ltype != rtype)
-                        throw std::runtime_error("tuple element type mismatch in elementwise '"
-                            + b->op + "' at index " + std::to_string(i)
-                            + ": " + ltype + " vs " + rtype);
-                    // slid element: dispatch to user op<op> taking (Type^, Type^).
-                    if (slid_info_.count(ltype)) {
-                        std::string op_base = ltype + "__op" + b->op;
-                        auto oit = method_overloads_.find(op_base);
-                        std::string mangled;
-                        std::string want = ltype + "^";
-                        if (oit != method_overloads_.end()) {
-                            for (auto& [m, pt] : oit->second) {
-                                if (pt.size() == 2 && pt[0] == want && pt[1] == want) {
-                                    mangled = m; break;
-                                }
-                            }
-                        }
-                        if (mangled.empty())
-                            throw std::runtime_error("slid element type '" + ltype
-                                + "' has no op" + b->op + "(" + ltype + "^, " + ltype + "^)");
-                        std::string lslot = lte
-                            ? emitExpr(*lte->values[i])
-                            : emitFieldGep(lslid, lptr, (int)i);
-                        std::string rslot = rte
-                            ? emitExpr(*rte->values[i])
-                            : emitFieldGep(rslid, rptr, (int)i);
-                        std::string rgep = emitFieldGep(lslid, res_ptr, (int)i);
-                        std::string ret_t = func_return_types_.count(mangled)
-                            ? func_return_types_[mangled] : "";
-                        bool is_method = (ret_t == "void");
-                        std::string args = is_method
-                            ? ("ptr " + rgep)
-                            : ("ptr sret(%struct." + ltype + ") " + rgep);
-                        args += ", ptr " + lslot + ", ptr " + rslot;
-                        out_ << "    call void @" << llvmGlobalName(mangled)
-                             << "(" << args << ")\n";
-                        continue;
-                    }
-                    if (isAnonTupleType(ltype))
-                        throw std::runtime_error("elementwise '" + b->op
-                            + "' on nested-tuple elements not yet supported");
-                    std::string elem_llvm = llvmType(ltype);
-                    std::string lval;
-                    if (lte) {
-                        lval = emitExpr(*lte->values[i]);
-                    } else {
-                        std::string gep = emitFieldGep(lslid, lptr, (int)i);
-                        lval = newTmp();
-                        out_ << "    " << lval << " = load " << elem_llvm
-                             << ", ptr " << gep << "\n";
-                    }
-                    std::string rval;
-                    if (rte) {
-                        rval = emitExpr(*rte->values[i]);
-                    } else {
-                        std::string gep = emitFieldGep(rslid, rptr, (int)i);
-                        rval = newTmp();
-                        out_ << "    " << rval << " = load " << elem_llvm
-                             << ", ptr " << gep << "\n";
-                    }
-                    bool unsig = (ltype == "uint" || ltype == "uint8" || ltype == "uint16"
-                               || ltype == "uint32" || ltype == "uint64"
-                               || ltype == "char" || ltype == "bool");
-                    const std::string& op = b->op;
-                    std::string instr;
-                    if      (op == "+")  instr = "add";
-                    else if (op == "-")  instr = "sub";
-                    else if (op == "*")  instr = "mul";
-                    else if (op == "/")  instr = unsig ? "udiv" : "sdiv";
-                    else if (op == "%")  instr = unsig ? "urem" : "srem";
-                    else if (op == "&")  instr = "and";
-                    else if (op == "|")  instr = "or";
-                    else if (op == "^")  instr = "xor";
-                    else if (op == "<<") instr = "shl";
-                    else if (op == ">>") instr = unsig ? "lshr" : "ashr";
-                    std::string rtmp = newTmp();
-                    out_ << "    " << rtmp << " = " << instr << " " << elem_llvm
-                         << " " << lval << ", " << rval << "\n";
-                    std::string rgep = emitFieldGep(lslid, res_ptr, (int)i);
-                    out_ << "    store " << elem_llvm << " " << rtmp
-                         << ", ptr " << rgep << "\n";
-                }
+                emitElementwiseAtPtr(lslid, l_ptr, r_ptr, res_ptr, b->op);
                 std::string loaded = newTmp();
                 out_ << "    " << loaded << " = load " << struct_llvm
                      << ", ptr " << res_ptr << "\n";
@@ -1439,6 +1393,40 @@ std::string Codegen::emitExpr(const Expr& expr) {
         return tmp;
     }
 
+    // tuple literal (e1, e2, ...): materialize into a fresh alloca, fill per slot
+    // dispatching scalar / slid / nested-tuple per the desugar rule, then return
+    // the loaded struct SSA value.
+    if (auto* te = dynamic_cast<const TupleExpr*>(&expr)) {
+        std::string ttype = inferSlidType(*te);
+        std::string struct_llvm = llvmType(ttype);
+        std::string reg = newTmp();
+        out_ << "    " << reg << " = alloca " << struct_llvm << "\n";
+        for (int i = 0; i < (int)te->values.size(); i++) {
+            std::string elem_ttype = inferSlidType(*te->values[i]);
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr " << struct_llvm
+                 << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
+            if (slid_info_.count(elem_ttype)) {
+                std::string src_ptr;
+                if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
+                    auto lit = locals_.find(ve->name);
+                    src_ptr = (lit != locals_.end()) ? lit->second : emitExpr(*te->values[i]);
+                } else {
+                    src_ptr = emitExpr(*te->values[i]);
+                }
+                emitSlidSlotAssign(elem_ttype, gep, src_ptr, /*is_move=*/false);
+                continue;
+            }
+            std::string val = emitExpr(*te->values[i]);
+            out_ << "    store " << llvmType(elem_ttype) << " " << val
+                 << ", ptr " << gep << "\n";
+        }
+        std::string loaded = newTmp();
+        out_ << "    " << loaded << " = load " << struct_llvm
+             << ", ptr " << reg << "\n";
+        return loaded;
+    }
+
     // float literal — emit as double constant
     if (auto* fl = dynamic_cast<const FloatLiteralExpr*>(&expr)) {
         char buf[64];
@@ -1635,6 +1623,18 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
         } else if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
             auto tit = local_types_.find(ve->name);
             if (tit != local_types_.end()) slid_name = tit->second;
+        } else if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(fa->object.get())) {
+            // tuple[idx].field: resolve the slot's slid type
+            if (auto* bve = dynamic_cast<const VarExpr*>(ai->base.get())) {
+                auto tit = local_types_.find(bve->name);
+                if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
+                    auto elems = anonTupleElems(tit->second);
+                    int idx;
+                    if (constExprToInt(*ai->index, enum_values_, idx)
+                            && idx >= 0 && idx < (int)elems.size())
+                        slid_name = elems[idx];
+                }
+            }
         }
         if (!slid_name.empty() && slid_info_.count(slid_name)) {
             auto& info = slid_info_[slid_name];
@@ -1924,6 +1924,17 @@ std::string Codegen::inferSlidType(const Expr& expr) {
         } else if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
             auto tit = local_types_.find(ve->name);
             if (tit != local_types_.end()) slid_name = tit->second;
+        } else if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(fa->object.get())) {
+            if (auto* bve = dynamic_cast<const VarExpr*>(ai->base.get())) {
+                auto tit = local_types_.find(bve->name);
+                if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
+                    auto elems = anonTupleElems(tit->second);
+                    int idx;
+                    if (constExprToInt(*ai->index, enum_values_, idx)
+                            && idx >= 0 && idx < (int)elems.size())
+                        slid_name = elems[idx];
+                }
+            }
         }
         if (!slid_name.empty() && slid_info_.count(slid_name)) {
             auto& info = slid_info_[slid_name];

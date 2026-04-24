@@ -77,7 +77,7 @@ void Codegen::emitDestructure(
                             + elem_type + "' into '" + eff_type + " " + name + "'");
                     out_ << "    " << reg << " = alloca " << llvmType(elem_type) << "\n";
                     std::string src_gep = emitFieldGep(src_type, src_ptr, i);
-                    emitSlidSlotAssign(elem_type, reg, src_gep, /*is_move=*/true);
+                    emitSlidSlotAssign(elem_type, reg, src_gep, /*is_move=*/true, /*is_init=*/true);
                     locals_[name] = reg;
                     local_types_[name] = eff_type;
                     if (slid_info_.count(elem_type) && slid_info_[elem_type].has_dtor)
@@ -381,6 +381,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     std::string temp_ptr = emitExpr(*decl->init);
                     locals_[decl->name] = temp_ptr;
                     local_types_[decl->name] = eff_type;
+                    // consume-the-temp: ownership transfers from the temp to this decl's
+                    // scope-exit dtor. Unregister the pending temp entry to avoid double-dtor.
+                    for (auto it = pending_temp_dtors_.begin();
+                         it != pending_temp_dtors_.end(); ++it) {
+                        if (it->first == temp_ptr) { pending_temp_dtors_.erase(it); break; }
+                    }
                     if (info.has_dtor)
                         dtor_vars_.push_back({decl->name, eff_type});
                     return;
@@ -535,7 +541,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                     && !current_slid_.empty() && current_slid_ == eff_type)
                                 src_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
                         }
-                        if (!src_ptr.empty()) emitSlidSlotAssign(eff_type, reg, src_ptr, decl->is_move);
+                        if (!src_ptr.empty()) emitSlidSlotAssign(eff_type, reg, src_ptr, decl->is_move, /*is_init=*/true);
                     }
                 }
             }
@@ -572,7 +578,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         } else {
                             src_ptr = emitExpr(*te->values[i]);
                         }
-                        emitSlidSlotAssign(elems[i], gep, src_ptr, decl->is_move);
+                        emitSlidSlotAssign(elems[i], gep, src_ptr, decl->is_move, /*is_init=*/true);
                         if (slid_info_[elems[i]].has_dtor)
                             dtor_vars_.push_back({decl->name, elems[i], i});
                         continue;
@@ -601,7 +607,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 out_ << "    " << src_ptr << " = alloca " << struct_llvm << "\n";
                 out_ << "    store " << struct_llvm << " " << val << ", ptr " << src_ptr << "\n";
             }
-            emitSlidSlotAssign(eff_type, reg, src_ptr, decl->is_move);
+            emitSlidSlotAssign(eff_type, reg, src_ptr, decl->is_move, /*is_init=*/true);
             for (int i = 0; i < (int)elems.size(); i++) {
                 if (slid_info_.count(elems[i]) && slid_info_[elems[i]].has_dtor)
                     dtor_vars_.push_back({decl->name, elems[i], i});
@@ -1572,7 +1578,6 @@ void Codegen::emitStmt(const Stmt& stmt) {
             emitDtors();
             out_ << "    ret void\n";
         } else {
-            emitDtors();
             if (ret->value) {
                 if (auto* te = dynamic_cast<const TupleExpr*>(ret->value.get())) {
                     // Per desugar rule: build the return struct slot-by-slot. Scalar
@@ -1604,6 +1609,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     std::string loaded = newTmp();
                     out_ << "    " << loaded << " = load " << current_func_return_type_
                          << ", ptr " << ret_tup << "\n";
+                    emitDtors();
                     out_ << "    ret " << current_func_return_type_ << " " << loaded << "\n";
                 } else {
                     // If any slot is a slid or nested anon-tuple, dispatch element-wise
@@ -1635,13 +1641,16 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         std::string loaded = newTmp();
                         out_ << "    " << loaded << " = load " << current_func_return_type_
                              << ", ptr " << ret_tup << "\n";
+                        emitDtors();
                         out_ << "    ret " << current_func_return_type_ << " " << loaded << "\n";
                     } else {
                         std::string val = emitExpr(*ret->value);
+                        emitDtors();
                         out_ << "    ret " << current_func_return_type_ << " " << val << "\n";
                     }
                 }
             } else {
+                emitDtors();
                 out_ << "    ret void\n";
             }
         }

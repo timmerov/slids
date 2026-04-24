@@ -52,6 +52,10 @@ void foo(NameValue^ nv) {
     __println("foo:print: " + nv^.name_ + " = " + nv^.value_);
 }
 
+void takeAction(Action^ a) {
+    __println("takeAction received");
+}
+
 (int a, int b, int c) make_tuple() {
     return (100, 200, 300);
 }
@@ -169,7 +173,7 @@ int32 main() {
 
     /* constructables. */
     {
-        __println("2 ctor, 2 move, 4 dtor.");
+        __println("6 ctor, 2 move, 6 dtor.");
         xtor_tuple = (Action(0), Action(2));
         xtor1_tuple = xtor_tuple;
         xtor_tuple = xtor1_tuple;
@@ -203,10 +207,13 @@ int32 main() {
     var_slid_ret[0].print("var_slid_ret[0]");
     var_slid_ret[1].print("var_slid_ret[1]");
 
-    __println("-- action move return: expect 2 move lines --");
-    act_move_ret = make_actions_move();
-    __println("-- action copy return: expect 0 move lines --");
-    act_copy_ret = make_actions_copy();
+    /* Action-return tests: expect 8 ctor, 2 move, 8 dtor. */
+    {
+        __println("-- action move return: expect 2 move lines --");
+        act_move_ret = make_actions_move();
+        __println("-- action copy return: expect 0 move lines --");
+        act_copy_ret = make_actions_copy();
+    }
 
     pass_ret = passthrough();
     pass_ret[0].print("pass_ret[0]");
@@ -227,7 +234,7 @@ int32 main() {
 
     /* tuple[N] <- val move: dispatches op<- on the slot's slid type. */
     {
-        __println("-- tuple[N] <- move test: expect 3 ctor, 1 move, 2 dtor --");
+        __println("-- tuple[N] <- move test: expect 5 ctor, 1 move, 5 dtor --");
         at = (Action(0), Action(1));
         at[0] <- Action(2);
     }
@@ -269,7 +276,8 @@ int32 main() {
     slid_tuple[0].x_ = 99;
     slid_tuple[0].print("after slid_tuple[0].x_ = 99");
 
-    /* #5 move + #16 observable: chained indexed field move nulls pointer source. */
+    /* #5 move + #16 observable: chained indexed field move nulls pointer source.
+       Also exercises chained indexed rvalue read via `delete ib_tup[0].data_`. */
     {
         __println("-- chained indexed field move test --");
         buf = new int[3];
@@ -278,7 +286,26 @@ int32 main() {
         if (buf == nullptr) {
             __println("buf is null after move into ib_tup[0].data_");
         }
-        /* intentional int[3] leak: no rvalue read of ib_tup[0].data_ today */
+        delete ib_tup[0].data_;
+    }
+
+    /* #6: nested anonymous tuples. emitExpr(TupleExpr) now materializes a nested
+       tuple literal. Read back via `inner = nested[1]` (non-literal VarDecl path). */
+    nested = (1, (2, 3));
+    __println("nested[0]=" + nested[0]);
+    inner = nested[1];
+    __println("inner=(" + inner[0] + "," + inner[1] + ")");
+
+    /* #14: elementwise ops on nested anon-tuple slots (recurses via emitElementwiseAtPtr). */
+    ntx = ((1,2),(3,4)) + ((5,6),(7,8));
+    nt0 = ntx[0];
+    nt1 = ntx[1];
+    __println("ntx = ((" + nt0[0] + "," + nt0[1] + "),(" + nt1[0] + "," + nt1[1] + "))");
+
+    /* #3: slid temp in non-consume context (call arg). Expect 1 ctor, 1 dtor. */
+    {
+        __println("-- slid temp in call arg test --");
+        takeAction(Action(99));
     }
 
     return 0;
