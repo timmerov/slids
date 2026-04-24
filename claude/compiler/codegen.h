@@ -199,6 +199,11 @@ private:
     void emitConstructAtPtrs(const std::string& stype, const std::string& ptr,
                              const std::vector<const Expr*>& args,
                              const std::vector<const Expr*>& overrides); // same, but with raw ptrs (used for recursion)
+    // Destructure `init` into `targets` (type,name pairs — empty name skips that slot).
+    // Dispatches on source shape: tuple literal, VarExpr of anon-tuple type, or generic.
+    // Slid-typed slots in the anon-tuple-var path are moved element-wise via emitSlidAssign.
+    void emitDestructure(const std::vector<std::pair<std::string,std::string>>& targets,
+                         const Expr& init);
     bool isFreshSlidTemp(const Expr& expr); // true if expr produces a fresh temp alloca we can mutate
     std::string exprSlidType(const Expr& expr); // return slid type name if expr produces a slid value
     std::string exprType(const Expr& expr);     // return full Slids type string of expr, or ""

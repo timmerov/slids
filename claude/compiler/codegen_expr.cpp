@@ -1819,6 +1819,16 @@ std::string Codegen::inferSlidType(const Expr& expr) {
             auto it2 = subst.find(tmpl.return_type);
             return it2 != subst.end() ? it2->second : tmpl.return_type;
         }
+        // tuple-returning function: reconstruct Slids form "(t1,t2,...)"
+        auto tfit = func_tuple_fields_.find(ce->callee);
+        if (tfit != func_tuple_fields_.end()) {
+            std::string s = "(";
+            for (int i = 0; i < (int)tfit->second.size(); i++) {
+                if (i > 0) s += ",";
+                s += tfit->second[i].first;
+            }
+            return s + ")";
+        }
         auto it = func_return_types_.find(ce->callee);
         if (it != func_return_types_.end()) return it->second;
     }
@@ -1827,6 +1837,15 @@ std::string Codegen::inferSlidType(const Expr& expr) {
         std::string slid_type = exprSlidType(*me->object);
         if (!slid_type.empty()) {
             std::string mangled = slid_type + "__" + me->method;
+            auto tfit = func_tuple_fields_.find(mangled);
+            if (tfit != func_tuple_fields_.end()) {
+                std::string s = "(";
+                for (int i = 0; i < (int)tfit->second.size(); i++) {
+                    if (i > 0) s += ",";
+                    s += tfit->second[i].first;
+                }
+                return s + ")";
+            }
             auto it = func_return_types_.find(mangled);
             if (it != func_return_types_.end()) return it->second;
         }

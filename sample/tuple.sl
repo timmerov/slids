@@ -33,6 +33,10 @@ void foo(NameValue^ nv) {
     __println("foo:print: " + nv^.name_ + " = " + nv^.value_);
 }
 
+(int a, int b, int c) make_tuple() {
+    return (100, 200, 300);
+}
+
 int32 main() {
 
     /* assignments with tuples. */
@@ -112,6 +116,10 @@ int32 main() {
     foo(^nv);
     foo(nv);
     */
+
+    /* tuple return from function. */
+    ret_tuple = make_tuple();
+    __println("ret_tuple = (" + ret_tuple[0] + "," + ret_tuple[1] + "," + ret_tuple[2] + ")");
 
     return 0;
 }

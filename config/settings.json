@@ -1,34 +1,48 @@
 {
-  "includeGitInstructions": false,
+    "includeGitInstructions": false,
 
-  "permissions": {
-      "allow": [
-          "Read(/home/timmer/Documents/code/slids/claude/**)",
-          "Edit(/home/timmer/Documents/code/slids/claude/**)",
-          "Write(/home/timmer/Documents/code/slids/claude/**)",
-          "Bash(make *)",
-          "Bash(./bin/slidsc *)",
-          "Bash(llc *)",
-          "Bash(g++ *)",
-          "Bash(ls *)",
-          "Bash(cat *)",
-          "Bash(sed *)",
-          "Grep",
-          "Glob"
-      ],
-      "deny": [
-          "Bash(git *)"
-      ]
-  },
+    "permissions": {
+        "allow": [
+            "Read(/home/timmer/Documents/code/slids/claude/**)",
+            "Edit(/home/timmer/Documents/code/slids/claude/**)",
+            "Write(/home/timmer/Documents/code/slids/claude/**)",
+            "Grep",
+            "Glob",
+            "Bash(make *)",
+            "Bash(make * | tail *)",
+            "Bash(./bin/* *)",
+            "Bash(./bin/* * | tail *)",
+            "Bash(/home/timmer/Documents/code/slids/claude/bin/* *)",
+            "Bash(/home/timmer/Documents/code/slids/claude/bin/* * | tail *)",
+            "Bash(/tmp/* *)",
+            "Bash(llc *)",
+            "Bash(g++ *)",
+            "Bash(gdb *)",
+            "Bash(nm *)",
+            "Bash(xxd *)",
+            "Bash(chmod *)",
+            "Bash(ls *)",
+            "Bash(cat *)"
+        ],
+        "deny": [
+            "Bash(git *)",
+            "Bash(grep *)",
+            "Bash(rg *)",
+            "Bash(find *)",
+            "Bash(cd *)",
+            "Bash(awk *)",
+            "Bash(sed *)"
+        ]
+    },
 
-  "sandbox": {
-      "enabled": true,
-      "filesystem": {
-          "denyRead": ["/**"],
-          "allowRead": [
-              "/tmp/claude/**",
-              "/home/timmer/Documents/code/slids/claude/**"
-          ]
-      }
-  }
+    "sandbox": {
+        "enabled": true,
+        "filesystem": {
+            "denyRead": ["/**"],
+            "allowRead": [
+                "/tmp/claude/**",
+                "/home/timmer/Documents/code/slids/claude/**"
+            ]
+        }
+    }
 }
