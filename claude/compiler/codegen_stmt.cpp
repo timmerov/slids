@@ -80,6 +80,8 @@ void Codegen::emitDestructure(
                     emitSlidSlotAssign(elem_type, reg, src_gep, /*is_move=*/true);
                     locals_[name] = reg;
                     local_types_[name] = eff_type;
+                    if (slid_info_.count(elem_type) && slid_info_[elem_type].has_dtor)
+                        dtor_vars_.push_back({name, elem_type});
                     continue;
                 }
                 std::string elem_llvm = llvmType(elem_type);
@@ -600,6 +602,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 out_ << "    store " << struct_llvm << " " << val << ", ptr " << src_ptr << "\n";
             }
             emitSlidSlotAssign(eff_type, reg, src_ptr, decl->is_move);
+            for (int i = 0; i < (int)elems.size(); i++) {
+                if (slid_info_.count(elems[i]) && slid_info_[elems[i]].has_dtor)
+                    dtor_vars_.push_back({decl->name, elems[i], i});
+            }
             return;
         }
 

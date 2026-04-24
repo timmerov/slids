@@ -1392,11 +1392,8 @@ bool Codegen::isFreshSlidTemp(const Expr& expr) {
     if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr))
         return slid_info_.count(nc->target_type) > 0;
     // function or method call returning a slid type produces a fresh temp alloca
-    if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
-        // slid-ctor call: Type(args) always produces a fresh slid temp
-        if (slid_info_.count(ce->callee)) return true;
+    if (dynamic_cast<const CallExpr*>(&expr))
         return !exprSlidType(expr).empty();
-    }
     if (dynamic_cast<const MethodCallExpr*>(&expr))
         return !exprSlidType(expr).empty();
     // any binary expression that produces a slid result owns a fresh temp alloca
@@ -1431,6 +1428,8 @@ std::string Codegen::exprSlidType(const Expr& expr) {
     }
     // function call returning a slid type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        // slid ctor call: SlidName(args) → fresh SlidName temp
+        if (slid_info_.count(ce->callee)) return ce->callee;
         auto tit = template_funcs_.find(ce->callee);
         if (tit != template_funcs_.end()) {
             const FunctionDef& tmpl = *tit->second;

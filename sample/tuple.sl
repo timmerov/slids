@@ -150,7 +150,7 @@ int32 main() {
 
     /* constructables. */
     {
-        __println("2 ctor, 2 dtor, 2 move.");
+        __println("2 ctor, 2 move, 4 dtor.");
         xtor_tuple = (Action(0), Action(2));
         xtor1_tuple = xtor_tuple;
         xtor_tuple = xtor1_tuple;
