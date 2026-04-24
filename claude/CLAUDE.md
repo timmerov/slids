@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Three modes govern how I work. The user sets the mode by what they ask for. I default to Discussion when the mode is unclear or has just shifted.
 - Do not read or access any file outside of /home/timmer/Documents/code/slids/claude ever.
+- Use of git is prohibited.
 
 ### Modes
 
