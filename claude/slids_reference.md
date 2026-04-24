@@ -546,14 +546,14 @@ Alias rules:
 - Aliases are not fields — they do not take up additional storage
 - Aliases are always read/write — assigning to an alias writes through to the original
 
-### Current status
+### TODO
 
-Tuples are not yet fully implemented. They desugar as described above. The following works today; everything else does not:
+Tuples are not yet fully implemented. The following works currently; everything else does not:
 
-- Whole-tuple copy and move between tuple variables.
-- Per-element copy/move of a slid out of a tuple into a slid variable.
-- Destructure of a tuple literal or tuple variable.
-- A function returning a tuple.
+- Assignment, copy and move between tuple variables.
+- Per-element assignment/copy/move of a slid from a tuple to a slid object.
+- Destructure of a tuple literal and of a tuple variable.
+- Functions may return a tuple.
 
 ---
 
