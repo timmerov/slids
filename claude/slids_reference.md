@@ -523,8 +523,6 @@ a.x_ = 10;        // same as a.v_[0] = 10
 int n = a.y_;     // same as a.v_[1]
 ```
 
-> **TODO:** Tuples are currently minimally implemented. You can assign, copy, and move a slid object from a tuple. You can assign, copy, and move tuples to tuples. You can destructure a tuple. A function can return a tuple. Arbitrary operations on tuples like + are not yet implemented.
-
 **Named field aliases** — the same data accessible under two naming conventions:
 ```
 Color(
@@ -547,6 +545,15 @@ Alias rules:
 - Aliases may only point to fields or array elements within the same tuple
 - Aliases are not fields — they do not take up additional storage
 - Aliases are always read/write — assigning to an alias writes through to the original
+
+### Current status
+
+Tuples are not yet fully implemented. They desugar as described above. The following works today; everything else does not:
+
+- Whole-tuple copy and move between tuple variables.
+- Per-element copy/move of a slid out of a tuple into a slid variable.
+- Destructure of a tuple literal or tuple variable.
+- A function returning a tuple.
 
 ---
 
