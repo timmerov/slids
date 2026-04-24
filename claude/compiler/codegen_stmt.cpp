@@ -1367,6 +1367,44 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 emitNullOut(*fa->value);
             return;
         }
+        // chained indexed field: tuple[idx].field = val  (or  <- val)
+        if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(fa->object.get())) {
+            auto* bve = dynamic_cast<const VarExpr*>(ai->base.get());
+            if (!bve)
+                throw std::runtime_error("chained indexed FieldAssign: complex base not supported");
+            auto tit = local_types_.find(bve->name);
+            if (tit == local_types_.end() || !isAnonTupleType(tit->second))
+                throw std::runtime_error("chained indexed FieldAssign: '" + bve->name
+                    + "' is not a tuple");
+            auto elems = anonTupleElems(tit->second);
+            int idx;
+            if (!constExprToInt(*ai->index, enum_values_, idx))
+                throw std::runtime_error("tuple index must be a constant integer");
+            if (idx < 0 || idx >= (int)elems.size())
+                throw std::runtime_error("tuple index " + std::to_string(idx)
+                    + " out of range (size " + std::to_string(elems.size()) + ")");
+            const std::string& slid_name = elems[idx];
+            if (!slid_info_.count(slid_name))
+                throw std::runtime_error("chained indexed FieldAssign: tuple element "
+                    + std::to_string(idx) + " is not a slid type");
+            auto& info = slid_info_[slid_name];
+            auto fit = info.field_index.find(fa->field);
+            if (fit == info.field_index.end())
+                throw std::runtime_error("unknown field '" + fa->field
+                    + "' on slid '" + slid_name + "'");
+            int field_idx = fit->second;
+            const std::string& ft = info.field_types[field_idx];
+            std::string ft_llvm = llvmType(ft);
+            std::string slot_gep = emitFieldGep(tit->second, locals_[bve->name], idx);
+            std::string field_gep = newTmp();
+            out_ << "    " << field_gep << " = getelementptr %struct." << slid_name
+                 << ", ptr " << slot_gep << ", i32 0, i32 " << field_idx << "\n";
+            std::string val = emitExpr(*fa->value);
+            out_ << "    store " << ft_llvm << " " << val << ", ptr " << field_gep << "\n";
+            if (fa->is_move && isIndirectType(ft))
+                emitNullOut(*fa->value);
+            return;
+        }
         throw std::runtime_error("complex field assignment not yet supported");
     }
 

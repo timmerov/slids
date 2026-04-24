@@ -545,22 +545,61 @@ void Codegen::scanForSlidTemplateUses() {
 void Codegen::collectStringConstants() {
     // Flatten a "+" concat chain and collect all StringLiteralExpr leaves
     std::function<void(const Expr*, bool)> collectExpr = [&](const Expr* e, bool newline_on_last) {
+        if (!e) return;
+        if (auto* s = dynamic_cast<const StringLiteralExpr*>(e)) {
+            std::string full = newline_on_last ? s->value + "\n" : s->value;
+            string_constants_.emplace_back("@.str" + std::to_string(str_counter_++), full);
+            return;
+        }
         if (auto* b = dynamic_cast<const BinaryExpr*>(e)) {
             if (b->op == "+") {
                 collectExpr(b->left.get(), false);
                 collectExpr(b->right.get(), newline_on_last);
                 return;
             }
+            collectExpr(b->left.get(), false);
+            collectExpr(b->right.get(), false);
+            return;
         }
         if (auto* t = dynamic_cast<const TupleExpr*>(e)) {
             for (auto& v : t->values) collectExpr(v.get(), false);
             return;
         }
-        if (auto* s = dynamic_cast<const StringLiteralExpr*>(e)) {
-            std::string full = newline_on_last ? s->value + "\n" : s->value;
-            string_constants_.emplace_back("@.str" + std::to_string(str_counter_++), full);
+        if (auto* ce = dynamic_cast<const CallExpr*>(e)) {
+            for (auto& arg : ce->args) collectExpr(arg.get(), false);
+            return;
         }
-        // integer exprs produce no string constants
+        if (auto* mc = dynamic_cast<const MethodCallExpr*>(e)) {
+            collectExpr(mc->object.get(), false);
+            for (auto& arg : mc->args) collectExpr(arg.get(), false);
+            return;
+        }
+        if (auto* ne = dynamic_cast<const NewScalarExpr*>(e)) {
+            for (auto& arg : ne->args) collectExpr(arg.get(), false);
+            return;
+        }
+        if (auto* ne = dynamic_cast<const NewExpr*>(e)) {
+            collectExpr(ne->count.get(), false);
+            return;
+        }
+        if (auto* pn = dynamic_cast<const PlacementNewExpr*>(e)) {
+            collectExpr(pn->addr.get(), false);
+            for (auto& arg : pn->args) collectExpr(arg.get(), false);
+            return;
+        }
+        if (auto* u = dynamic_cast<const UnaryExpr*>(e))       { collectExpr(u->operand.get(), false); return; }
+        if (auto* d = dynamic_cast<const DerefExpr*>(e))       { collectExpr(d->operand.get(), false); return; }
+        if (auto* p = dynamic_cast<const PostIncDerefExpr*>(e)){ collectExpr(p->operand.get(), false); return; }
+        if (auto* a = dynamic_cast<const AddrOfExpr*>(e))      { collectExpr(a->operand.get(), false); return; }
+        if (auto* tc = dynamic_cast<const TypeConvExpr*>(e))   { collectExpr(tc->operand.get(), false); return; }
+        if (auto* pc = dynamic_cast<const PtrCastExpr*>(e))    { collectExpr(pc->operand.get(), false); return; }
+        if (auto* fa = dynamic_cast<const FieldAccessExpr*>(e)){ collectExpr(fa->object.get(), false); return; }
+        if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(e)) {
+            collectExpr(ai->base.get(), false);
+            collectExpr(ai->index.get(), false);
+            return;
+        }
+        // leaves (IntLiteralExpr, FloatLiteralExpr, VarExpr, NullptrExpr, etc.) produce no strings
     };
 
     std::function<void(const Stmt&)> collect = [&](const Stmt& stmt) {

@@ -29,6 +29,8 @@ Counted(int c_) {
     }
 }
 
+IntBuf(int[] data_ = nullptr) {}
+
 Action(
     int x_
 ) {
@@ -249,17 +251,34 @@ int32 main() {
         ct = (cA, cB);
     }
 
-    /* #17: raw-pointer base[idx] <- val null-outs the source when elt is indirect. */
+    /* #17: raw-pointer base[idx] <- val null-outs the source when elt is indirect.
+       Also exercises string-literal inside new Type(args) (collectStringConstants fix). */
     {
         __println("-- raw-pointer move test --");
-        arr = new Counted^[2];
-        src = new Counted(42);
+        arr = new NameValue^[2];
+        src = new NameValue("hello", 42);
         arr[0] <- src;  /* null-outs src */
         if (src == nullptr) {
             __println("src is null after move");
         }
         delete arr[0];
         delete arr;
+    }
+
+    /* #5 copy: chained indexed field lvalue — tuple[N].field = val. */
+    slid_tuple[0].x_ = 99;
+    slid_tuple[0].print("after slid_tuple[0].x_ = 99");
+
+    /* #5 move + #16 observable: chained indexed field move nulls pointer source. */
+    {
+        __println("-- chained indexed field move test --");
+        buf = new int[3];
+        ib_tup = (IntBuf(), IntBuf());
+        ib_tup[0].data_ <- buf;
+        if (buf == nullptr) {
+            __println("buf is null after move into ib_tup[0].data_");
+        }
+        /* intentional int[3] leak: no rvalue read of ib_tup[0].data_ today */
     }
 
     return 0;
