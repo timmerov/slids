@@ -581,6 +581,10 @@ print(s);     // also valid — compiler auto-promotes s to ^s
 
 Both forms are equivalent. `^s` is preferred when you want to make the pass-by-reference explicit.
 
+> **TODO:** `^` is intended to pass by **immutable** reference — the callee observes but cannot alter the referred-to object. A keyword (likely `mutable`, exact syntax TBD) will let the caller grant write access for cases where mutation is intended. Today's implementation does not enforce immutability; code that relies on mutating a `^` parameter will need to be updated once enforcement lands.
+>
+> `self` inside a method body is **mutable by default** — methods may read and write the object's fields freely. A way to mark a method as non-mutating (so `self` is treated as immutable inside that method body) is TBD.
+
 **Returning a tuple:**
 ```
 (bool success, int handle) openFile(string^ file_name) {
