@@ -417,25 +417,92 @@ if (c == b)     { }   // comparison yields 0 or 1 (int8), promoted as needed
 
 ## Tuples
 
-A tuple is the `()` data block of a slid. Fields are separated by `,`. Member fields use trailing `_` by convention.
+A tuple is a comma-separated list enclosed in `()`. Slids has three kinds of tuples, distinguished by what their elements look like.
+
+### 1. Named tuple — a slid's data block
+
+A slid's `()` data block. Each element has an explicit type and a name — these are the slid's **fields**, always reached as `obj.field_`. Fields use a trailing `_` by convention.
 
 ```
-(int)                               // anonymous field, type only
-(int value_)                        // named, required — caller must supply
-(int a_, int b_)                    // two required fields
-(int x_=0, int y_=0)               // two fields with defaults
-(int r_, int g_=0, int b_=0)       // one required, two with defaults
+(int value_)                     // one required
+(int a_, int b_)                 // two required
+(int x_=0, int y_=0)             // two defaulted
+(int r_, int g_=0, int b_=0)     // one required, two defaulted
 ```
 
 Rules:
-- Every field must have an explicit type
-- Fields are always separated by `,`
-- Required fields (no default) must come before defaulted fields
-- Fields without defaults must be supplied by the caller
-- Fields with defaults may be overridden by the caller
-- Every field is always initialized — to the caller-supplied value, the declared default, or zero
+- Every field has an explicit type **and** a name.
+- Fields are always accessed by name.
+- Required fields (no default) must precede defaulted fields.
+- Required fields must be supplied by the caller; defaulted fields may be overridden.
+- Every field is always initialized — to the caller-supplied value, the tuple-supplied default, or zero.
 
-**Aliases** — a tuple field can be aliased to another field or array element within the same tuple. Aliases are read/write and write through to the original.
+### 2. Unnamed tuple — a data list
+
+A general-purpose ordered list. Each element has a type but no name; elements are reached **by index `[]`** or by **destructuring**.
+
+```
+tuple = (1, 2, 3);            // anonymous tuple type inferred as (int,int,int)
+a = tuple[0];                 // read element 0 (type int)
+tuple[2] = 10;                // write element 2
+
+mixed = (42, "hello", 3.14);  // elements may have different types
+s = mixed[1];                 // read as char[]
+```
+
+Rules:
+- The anonymous tuple type is inferred from the initializer's elements.
+- An index used with `[]` must be a compile-time constant integer (literal or constant-foldable). Non-constant index is a compile error.
+- `tuple[N]` is read/write; out-of-range N is a compile error.
+- Slid-typed elements behave like embedded fields: their destructors run (in reverse declaration order) when the tuple variable goes out of scope.
+
+### 3. Destructure target — a list of variable slots
+
+A list used on the **left** of an assignment or declaration to unpack a tuple-valued expression. Each slot is one of:
+- A bare variable name — the variable is declared with its type inferred from the matching RHS element.
+- `type name` — an explicit variable declaration.
+- **Empty** — the matching RHS element is skipped (no variable is introduced).
+
+```
+(int x, int y) = (1, 2);        // explicit types
+(a, b) = (42, "weird");         // inferred: a is int, b is char[]
+(c, ) = (10, 20);               // skip element 1
+(, d) = (10, 20);               // skip element 0
+(int a, b) = (1, 2);            // mixed explicit / inferred
+```
+
+Rules:
+- The number of slots (commas + 1, counting empty slots) must equal the RHS tuple's element count — size mismatches are a compile error.
+- An explicitly-typed slot must be compatible with the corresponding RHS element (integer widths may coerce; other mismatches are a compile error).
+- Empty slots contribute no local variable.
+
+### Tuples desugar per element
+
+Most operations on literals, variables, or slid values apply **element-wise** to tuples. For example:
+
+```
+(x, y, z) = (1, 2, 3) + (4, 5, 6);
+```
+
+desugars to:
+
+```
+x = 1 + 4;
+y = 2 + 5;
+z = 3 + 6;
+```
+
+The same element-wise rule applies to tuple construction, whole-tuple assignment, element writes via `[]=`, and method calls on slid-typed elements.
+
+### Accessibility for tuple-literal initialization and reassignment
+
+A tuple-literal RHS can only set fields or elements that are accessible at the call site. In a `.slh` consumer, only the slid's **public** fields can be set via a tuple literal. In the `.sl` implementer, all fields are accessible.
+
+### Aliases (named tuples only)
+
+> **TODO:** Not yet implemented.
+
+A named tuple field may be aliased to another field or array element within the same tuple. Aliases are read/write and write through to the original.
 
 **Array element aliases:**
 ```
