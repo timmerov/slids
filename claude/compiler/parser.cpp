@@ -1265,30 +1265,32 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             advance(); // consume '['
             auto idx = parseExpr();
             expect(TokenType::kRBracket, "expected ']'");
-            // simple index assignment
-            if (peek().type == TokenType::kEquals) {
+            // simple index assignment (copy or move)
+            if (peek().type == TokenType::kEquals || peek().type == TokenType::kArrowLeft) {
+                bool is_move = (peek().type == TokenType::kArrowLeft);
                 advance();
                 auto val = parseExpr();
                 expect(TokenType::kSemicolon, "expected ';'");
                 return std::make_unique<IndexAssignStmt>(
-                    std::make_unique<VarExpr>(name), std::move(idx), std::move(val));
+                    std::make_unique<VarExpr>(name), std::move(idx), std::move(val), is_move);
             }
             // chained: name[idx].field = val, name[idx].method(), name[idx][j]..., etc.
             auto base = parsePostfix(std::make_unique<ArrayIndexExpr>(
                 std::make_unique<VarExpr>(name), std::move(idx)));
-            if (peek().type == TokenType::kEquals) {
+            if (peek().type == TokenType::kEquals || peek().type == TokenType::kArrowLeft) {
+                bool is_move = (peek().type == TokenType::kArrowLeft);
                 advance();
                 auto val = parseExpr();
                 expect(TokenType::kSemicolon, "expected ';'");
                 if (auto* fa = dynamic_cast<FieldAccessExpr*>(base.get())) {
                     auto obj = std::move(fa->object);
                     std::string field = fa->field;
-                    return std::make_unique<FieldAssignStmt>(std::move(obj), field, std::move(val));
+                    return std::make_unique<FieldAssignStmt>(std::move(obj), field, std::move(val), is_move);
                 }
                 if (auto* ai = dynamic_cast<ArrayIndexExpr*>(base.get())) {
                     auto b = std::move(ai->base);
                     auto ix = std::move(ai->index);
-                    return std::make_unique<IndexAssignStmt>(std::move(b), std::move(ix), std::move(val));
+                    return std::make_unique<IndexAssignStmt>(std::move(b), std::move(ix), std::move(val), is_move);
                 }
                 throw std::runtime_error("invalid indexed assignment target");
             }

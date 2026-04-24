@@ -203,9 +203,11 @@ struct FieldAssignStmt : Stmt {
     std::unique_ptr<Expr> object;
     std::string field;
     std::unique_ptr<Expr> value;
+    bool is_move = false;                 // true for obj.field_ <- expr
     FieldAssignStmt(std::unique_ptr<Expr> obj, std::string field,
-                    std::unique_ptr<Expr> value)
-        : object(std::move(obj)), field(std::move(field)), value(std::move(value)) {}
+                    std::unique_ptr<Expr> value, bool is_move = false)
+        : object(std::move(obj)), field(std::move(field)), value(std::move(value)),
+          is_move(is_move) {}
 };
 
 struct ReturnStmt : Stmt {
@@ -257,8 +259,10 @@ struct IndexAssignStmt : Stmt {
     std::unique_ptr<Expr> base;
     std::unique_ptr<Expr> index;
     std::unique_ptr<Expr> value;
-    IndexAssignStmt(std::unique_ptr<Expr> b, std::unique_ptr<Expr> i, std::unique_ptr<Expr> v)
-        : base(std::move(b)), index(std::move(i)), value(std::move(v)) {}
+    bool is_move = false;                 // true for base[index] <- value
+    IndexAssignStmt(std::unique_ptr<Expr> b, std::unique_ptr<Expr> i, std::unique_ptr<Expr> v,
+                    bool is_move = false)
+        : base(std::move(b)), index(std::move(i)), value(std::move(v)), is_move(is_move) {}
 };
 
 // delete ptr — free heap allocation

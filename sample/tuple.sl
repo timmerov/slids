@@ -15,6 +15,18 @@ Simple(
         y_ = a^.y_ + b^.y_;
         z_ = a^.z_ + b^.z_;
     }
+    op*(Simple^ a, Simple^ b) {
+        x_ = a^.x_ * b^.x_;
+        y_ = a^.y_ * b^.y_;
+        z_ = a^.z_ * b^.z_;
+    }
+}
+
+Counted(int c_) {
+    op=(Counted^ rhs) {
+        __println("Counted:op=");
+        c_ = rhs^.c_;
+    }
 }
 
 Action(
@@ -210,6 +222,45 @@ int32 main() {
     ss = (Simple(1,2,3), Simple(4,5,6)) + (Simple(10,20,30), Simple(40,50,60));
     ss[0].print("ss[0]");
     ss[1].print("ss[1]");
+
+    /* tuple[N] <- val move: dispatches op<- on the slot's slid type. */
+    {
+        __println("-- tuple[N] <- move test: expect 3 ctor, 1 move, 2 dtor --");
+        at = (Action(0), Action(1));
+        at[0] <- Action(2);
+    }
+
+    /* single-slid Simple::op+ dispatch (bare, not inside a tuple). */
+    sA = Simple(1, 2, 3);
+    sB = Simple(10, 20, 30);
+    sC = sA + sB;
+    sC.print("sC");
+
+    /* elementwise Simple::op* on slid tuples. */
+    sq = (Simple(1,2,3), Simple(4,5,6)) * (Simple(10,10,10), Simple(100,100,100));
+    sq[0].print("sq[0]");
+    sq[1].print("sq[1]");
+
+    /* op= dispatch via emitSlidSlotAssign on per-slot tuple-literal init. */
+    {
+        __println("-- op= dispatch test: expect 2 Counted:op= prints --");
+        cA = Counted(1);
+        cB = Counted(2);
+        ct = (cA, cB);
+    }
+
+    /* #17: raw-pointer base[idx] <- val null-outs the source when elt is indirect. */
+    {
+        __println("-- raw-pointer move test --");
+        arr = new Counted^[2];
+        src = new Counted(42);
+        arr[0] <- src;  /* null-outs src */
+        if (src == nullptr) {
+            __println("src is null after move");
+        }
+        delete arr[0];
+        delete arr;
+    }
 
     return 0;
 }

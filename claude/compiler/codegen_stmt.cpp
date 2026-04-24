@@ -1135,7 +1135,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     }
                     if (src_ptr.empty())
                         throw std::runtime_error("tuple element write from unsupported source");
-                    emitSlidSlotAssign(elem_slids, gep, src_ptr, /*is_move=*/false);
+                    emitSlidSlotAssign(elem_slids, gep, src_ptr, ia->is_move);
                     return;
                 }
                 std::string rhs_val = emitExpr(*ia->value);
@@ -1248,6 +1248,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
         out_ << "    " << gep << " = getelementptr " << elt << ", ptr " << base_ptr << ", " << idx_llvm << " " << idx_val << "\n";
         std::string rhs = emitExpr(*ia->value);
         out_ << "    store " << elt << " " << rhs << ", ptr " << gep << "\n";
+        if (ia->is_move && isIndirectType(elem_type_str))
+            emitNullOut(*ia->value);
         return;
     }
 
@@ -1342,6 +1344,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                  << ", ptr " << ptr_val << ", i32 0, i32 " << idx << "\n";
             std::string val = emitExpr(*fa->value);
             out_ << "    store " << field_type << " " << val << ", ptr " << gep << "\n";
+            if (fa->is_move && isIndirectType(info.field_types[idx]))
+                emitNullOut(*fa->value);
             return;
         }
         if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
@@ -1359,6 +1363,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string field_type = llvmType(info.field_types[idx]);
             std::string val = emitExpr(*fa->value);
             out_ << "    store " << field_type << " " << val << ", ptr " << gep << "\n";
+            if (fa->is_move && isIndirectType(info.field_types[idx]))
+                emitNullOut(*fa->value);
             return;
         }
         throw std::runtime_error("complex field assignment not yet supported");
