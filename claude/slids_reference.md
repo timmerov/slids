@@ -432,6 +432,7 @@ A slid's `()` data block. Each element has an explicit type and a name — these
 
 Rules:
 - Every field has an explicit type **and** a name.
+- Every field has an optional initial value.
 - Fields are always accessed by name.
 - Required fields (no default) must precede defaulted fields.
 - Required fields must be supplied by the caller; defaulted fields may be overridden.
