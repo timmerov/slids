@@ -1,0 +1,22 @@
+{
+    "includeGitInstructions": false,
+
+    "permissions": {
+        "allow": [
+            "Read(/home/timmer/Documents/code/slids/claude/**)",
+            "Edit(/home/timmer/Documents/code/slids/claude/**)"
+        ],
+        "deny": [
+            "Bash(git *)",
+            "Bash(git:*)"
+        ]
+    },
+
+    "sandbox": {
+        "enabled": true,
+        "filesystem": {
+            "denyRead": ["/**"],
+            "allowRead": ["/home/timmer/Documents/code/slids/claude/**"]
+        }
+    }
+}
