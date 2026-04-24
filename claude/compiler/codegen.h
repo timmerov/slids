@@ -180,10 +180,16 @@ private:
                                         const Expr& left, const Expr& right);
     std::string emitArgForParam(const Expr& arg, const std::string& param_type);
     std::string resolveOpEq(const std::string& base, const Expr& arg);
+    // Element-type list for a struct-like type (slid name or anon tuple).
+    std::vector<std::string> fieldTypesOf(const std::string& struct_type);
+    // Emit a GEP selecting field `i` of a struct-like type. Returns the register.
+    std::string emitFieldGep(const std::string& struct_type,
+                             const std::string& ptr, int i);
     // Per-field copy or move from src to dst. For `is_move`, pointer/iterator
     // fields are nulled in the source after transfer, and embedded slid fields
     // recurse. Copy and move are identical for value fields.
-    void emitSlidAssign(const std::string& slid_name, const std::string& dst_ptr,
+    // `struct_type` may be a slid name or an anon tuple.
+    void emitSlidAssign(const std::string& struct_type, const std::string& dst_ptr,
                         const std::string& src_ptr, bool is_move);
     std::string emitSlidAlloca(const std::string& slid_name); // alloca + default-init fields + ctor
     std::string emitRawSlidAlloca(const std::string& slid_name); // alloca only, no init, no dtor

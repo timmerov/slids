@@ -21,6 +21,10 @@ Action(
     ~() {
         __println("Action:dtor");
     }
+
+    op<-(Action^ rhs) {
+        __println("Action:move");
+    }
 }
 
 NameValue(char[] name_, int value_) {}
@@ -96,7 +100,11 @@ int32 main() {
 
     /* constructables. */
     {
+        __println("2 ctor, 2 dtor, 2 move.");
         xtor_tuple = (Action(0), Action(2));
+        xtor1_tuple = xtor_tuple;
+        xtor_tuple = xtor1_tuple;
+        xtor1_tuple <- xtor_tuple;
     }
 
     /* functions */

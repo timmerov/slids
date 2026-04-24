@@ -1948,18 +1948,32 @@ std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
 }
 
 // Copy all fields of slid_name from src_ptr into dst_ptr (synthesized default copy).
-void Codegen::emitSlidAssign(const std::string& slid_name,
+std::vector<std::string> Codegen::fieldTypesOf(const std::string& struct_type) {
+    auto it = slid_info_.find(struct_type);
+    if (it != slid_info_.end()) return it->second.field_types;
+    if (isAnonTupleType(struct_type)) return anonTupleElems(struct_type);
+    return {};
+}
+
+std::string Codegen::emitFieldGep(const std::string& struct_type,
+                                  const std::string& ptr, int i) {
+    std::string gep = newTmp();
+    std::string leading = slid_info_.count(struct_type)
+        ? ("%struct." + struct_type)
+        : llvmType(struct_type);
+    out_ << "    " << gep << " = getelementptr " << leading
+         << ", ptr " << ptr << ", i32 0, i32 " << i << "\n";
+    return gep;
+}
+
+void Codegen::emitSlidAssign(const std::string& struct_type,
                              const std::string& dst_ptr, const std::string& src_ptr,
                              bool is_move) {
-    auto& info = slid_info_[slid_name];
-    for (int i = 0; i < (int)info.field_types.size(); i++) {
-        const std::string& fslids = info.field_types[i];
-        std::string src_gep = newTmp();
-        out_ << "    " << src_gep << " = getelementptr %struct." << slid_name
-             << ", ptr " << src_ptr << ", i32 0, i32 " << i << "\n";
-        std::string dst_gep = newTmp();
-        out_ << "    " << dst_gep << " = getelementptr %struct." << slid_name
-             << ", ptr " << dst_ptr << ", i32 0, i32 " << i << "\n";
+    auto fields = fieldTypesOf(struct_type);
+    for (int i = 0; i < (int)fields.size(); i++) {
+        const std::string& fslids = fields[i];
+        std::string src_gep = emitFieldGep(struct_type, src_ptr, i);
+        std::string dst_gep = emitFieldGep(struct_type, dst_ptr, i);
         // embedded slid (value-type): dispatch to user op if one matches; else recurse default
         if (slid_info_.count(fslids)) {
             std::string op_base = fslids + "__" + (is_move ? "op<-" : "op=");
@@ -1976,6 +1990,11 @@ void Codegen::emitSlidAssign(const std::string& slid_name,
             } else {
                 emitSlidAssign(fslids, dst_gep, src_gep, is_move);
             }
+            continue;
+        }
+        // anon-tuple field: recurse element-wise
+        if (isAnonTupleType(fslids)) {
+            emitSlidAssign(fslids, dst_gep, src_gep, is_move);
             continue;
         }
         // inline array of slids or pointers: walk each element
@@ -2115,30 +2134,34 @@ void Codegen::emitConstructAt(const std::string& stype, const std::string& ptr,
 void Codegen::emitConstructAtPtrs(const std::string& stype, const std::string& ptr,
                                   const std::vector<const Expr*>& args,
                                   const std::vector<const Expr*>& overrides) {
-    if (!slid_info_.count(stype)) return;
-    auto& info = slid_info_[stype];
-    int nfields = (int)info.field_types.size();
+    bool is_slid = slid_info_.count(stype) != 0;
+    bool is_tuple = isAnonTupleType(stype);
+    if (!is_slid && !is_tuple) return;
+
+    auto fields = fieldTypesOf(stype);
+    int nfields = (int)fields.size();
     if ((int)args.size() > nfields)
         throw std::runtime_error("too many initializers: '" + stype + "' has "
             + std::to_string(nfields) + " fields, got " + std::to_string(args.size()));
     if ((int)overrides.size() > nfields)
         throw std::runtime_error("too many tuple values: '" + stype + "' has "
             + std::to_string(nfields) + " fields, got " + std::to_string(overrides.size()));
-    if (info.has_pinit) {
+
+    if (is_slid && slid_info_[stype].has_pinit) {
         out_ << "    call void @" << stype << "__pinit(ptr " << ptr << ")\n";
         return;
     }
     const SlidDef* slid_def = nullptr;
-    for (auto& s : program_.slids) if (s.name == stype) slid_def = &s;
-    if (!slid_def) {
-        auto it = concrete_slid_template_defs_.find(stype);
-        if (it != concrete_slid_template_defs_.end()) slid_def = &it->second;
+    if (is_slid) {
+        for (auto& s : program_.slids) if (s.name == stype) slid_def = &s;
+        if (!slid_def) {
+            auto it = concrete_slid_template_defs_.find(stype);
+            if (it != concrete_slid_template_defs_.end()) slid_def = &it->second;
+        }
     }
-    for (int i = 0; i < (int)info.field_types.size(); i++) {
-        const std::string& ftype = info.field_types[i];
-        std::string gep = newTmp();
-        out_ << "    " << gep << " = getelementptr %struct." << stype
-             << ", ptr " << ptr << ", i32 0, i32 " << i << "\n";
+    for (int i = 0; i < nfields; i++) {
+        const std::string& ftype = fields[i];
+        std::string gep = emitFieldGep(stype, ptr, i);
         // pick the input expression: override > arg > field default > none
         const Expr* arg_expr = nullptr;
         if (i < (int)overrides.size())      arg_expr = overrides[i];
@@ -2178,7 +2201,7 @@ void Codegen::emitConstructAtPtrs(const std::string& stype, const std::string& p
         emitBlock(*slid_def->ctor_body);
         current_slid_ = saved_slid;
         self_ptr_ = saved_self;
-    } else if (info.has_explicit_ctor) {
+    } else if (is_slid && slid_info_[stype].has_explicit_ctor) {
         out_ << "    call void @" << stype << "__ctor(ptr " << ptr << ")\n";
     }
 }

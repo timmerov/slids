@@ -446,17 +446,19 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         } else {
                             src_ptr = emitExpr(*te->values[i]);
                         }
-                        emitSlidAssign(elems[i], gep, src_ptr, /*is_move=*/false);
+                        emitSlidAssign(elems[i], gep, src_ptr, decl->is_move);
                         if (slid_info_[elems[i]].has_dtor)
                             dtor_vars_.push_back({decl->name, elems[i], i});
                         continue;
                     }
                     std::string val = emitExpr(*te->values[i]);
                     out_ << "    store " << llvmType(elems[i]) << " " << val << ", ptr " << gep << "\n";
+                    if (decl->is_move && isIndirectType(elems[i]))
+                        emitNullOut(*te->values[i]);
                 }
                 return;
             }
-            // non-literal initializer — require a same-typed tuple source and field-by-field copy
+            // non-literal initializer — require a same-typed tuple source and field-by-field copy/move
             std::string src_slids = inferSlidType(*decl->init);
             if (src_slids != eff_type)
                 throw std::runtime_error("cannot initialize tuple '" + eff_type
@@ -465,19 +467,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (!ve) throw std::runtime_error("tuple copy from non-variable source not supported");
             auto lit = locals_.find(ve->name);
             if (lit == locals_.end()) throw std::runtime_error("undefined tuple source: " + ve->name);
-            const std::string& src_ptr = lit->second;
-            for (int i = 0; i < (int)elems.size(); i++) {
-                std::string elem_llvm = llvmType(elems[i]);
-                std::string src_gep = newTmp();
-                out_ << "    " << src_gep << " = getelementptr " << struct_llvm
-                     << ", ptr " << src_ptr << ", i32 0, i32 " << i << "\n";
-                std::string val = newTmp();
-                out_ << "    " << val << " = load " << elem_llvm << ", ptr " << src_gep << "\n";
-                std::string dst_gep = newTmp();
-                out_ << "    " << dst_gep << " = getelementptr " << struct_llvm
-                     << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
-                out_ << "    store " << elem_llvm << " " << val << ", ptr " << dst_gep << "\n";
-            }
+            emitSlidAssign(eff_type, reg, lit->second, decl->is_move);
             return;
         }
 
@@ -570,23 +560,22 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (it == locals_.end())
             throw std::runtime_error("undefined variable: " + assign->name);
         auto tit = local_types_.find(assign->name);
-        // tuple rhs into an anonymous-tuple local: tuple2 = (a, b); — partial overwrite, stop when rhs runs out
-        if (tit != local_types_.end() && isAnonTupleType(tit->second) && !assign->is_move) {
+        // anonymous-tuple local LHS: route per the element-wise rule.
+        if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
+            const std::string& lhs_t = tit->second;
+            auto elems = anonTupleElems(lhs_t);
+            // tuple-literal rhs: tuple = (a, b, ...); — per-element, partial overwrite allowed
             if (auto* te = dynamic_cast<const TupleExpr*>(assign->value.get())) {
-                auto elems = anonTupleElems(tit->second);
                 int nfields = (int)elems.size();
                 if ((int)te->values.size() > nfields)
                     throw std::runtime_error("tuple has " + std::to_string(te->values.size())
                         + " values but '" + assign->name + "' has " + std::to_string(nfields)
                         + " elements");
-                std::string struct_llvm = llvmType(tit->second);
                 for (int i = 0; i < (int)te->values.size(); i++) {
                     const std::string& ft = elems[i];
                     std::string elem_llvm = llvmType(ft);
-                    std::string gep = newTmp();
-                    out_ << "    " << gep << " = getelementptr " << struct_llvm
-                         << ", ptr " << it->second << ", i32 0, i32 " << i << "\n";
-                    // slid-typed element: copy fields from a same-typed source
+                    std::string gep = emitFieldGep(lhs_t, it->second, i);
+                    // slid-typed element: copy/move from a same-typed source
                     if (slid_info_.count(ft)) {
                         std::string src_type = inferSlidType(*te->values[i]);
                         if (src_type != ft)
@@ -598,7 +587,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         } else {
                             src_ptr = emitExpr(*te->values[i]);
                         }
-                        emitSlidAssign(ft, gep, src_ptr, /*is_move=*/false);
+                        emitSlidAssign(ft, gep, src_ptr, assign->is_move);
                         continue;
                     }
                     std::string val = emitExpr(*te->values[i]);
@@ -620,14 +609,25 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         }
                     }
                     out_ << "    store " << elem_llvm << " " << val << ", ptr " << gep << "\n";
+                    if (assign->is_move && isIndirectType(ft))
+                        emitNullOut(*te->values[i]);
                 }
                 return;
             }
-            // non-literal rhs into a tuple lhs: require exact tuple-type match
+            // tuple-variable rhs of matching type: route through element-wise walker
             std::string src_slids = inferSlidType(*assign->value);
-            if (src_slids != tit->second)
+            if (src_slids != lhs_t)
                 throw std::runtime_error("type mismatch: cannot assign '" + src_slids
-                    + "' to tuple variable '" + assign->name + "' of type '" + tit->second + "'");
+                    + "' to tuple variable '" + assign->name + "' of type '" + lhs_t + "'");
+            std::string src_ptr;
+            if (auto* ve = dynamic_cast<const VarExpr*>(assign->value.get())) {
+                auto lit = locals_.find(ve->name);
+                if (lit != locals_.end()) src_ptr = lit->second;
+            }
+            if (src_ptr.empty())
+                throw std::runtime_error("tuple copy from non-variable source not supported");
+            emitSlidAssign(lhs_t, it->second, src_ptr, assign->is_move);
+            return;
         }
         // compound assignment: x = x op rhs → detect and dispatch to op{op}= directly
         // (parser desugars x += rhs into x = x + rhs; we undo that here for slid types)
@@ -746,8 +746,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             }
         }
-        // tuple literal rhs: d = (a, b, c); desugars to per-field writes.
-        if (tit != local_types_.end() && slid_info_.count(tit->second) && !assign->is_move) {
+        // tuple literal rhs: d = (a, b, c); or d <- (a, b, c); — per-field writes.
+        if (tit != local_types_.end() && slid_info_.count(tit->second)) {
             if (auto* te = dynamic_cast<const TupleExpr*>(assign->value.get())) {
                 const std::string& slid_name = tit->second;
                 auto& info = slid_info_[slid_name];
@@ -759,9 +759,37 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 for (int i = 0; i < (int)te->values.size(); i++) {
                     const std::string& ft = info.field_types[i];
                     std::string elem_llvm = llvmType(ft);
-                    std::string gep = newTmp();
-                    out_ << "    " << gep << " = getelementptr %struct." << slid_name
-                         << ", ptr " << it->second << ", i32 0, i32 " << i << "\n";
+                    std::string gep = emitFieldGep(slid_name, it->second, i);
+                    // slid-typed field: dispatch per the element-wise rule
+                    if (slid_info_.count(ft)) {
+                        std::string src_type = inferSlidType(*te->values[i]);
+                        if (src_type != ft)
+                            throw std::runtime_error("slid field '" + info.field_types[i]
+                                + "' reassignment: expected '" + ft + "', got '" + src_type + "'");
+                        std::string src_ptr;
+                        if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
+                            src_ptr = locals_[ve->name];
+                        } else {
+                            src_ptr = emitExpr(*te->values[i]);
+                        }
+                        emitSlidAssign(ft, gep, src_ptr, assign->is_move);
+                        continue;
+                    }
+                    // anon-tuple-typed field: recurse via walker on matching tuple-var source
+                    if (isAnonTupleType(ft)) {
+                        std::string src_type = inferSlidType(*te->values[i]);
+                        if (src_type != ft)
+                            throw std::runtime_error("tuple field reassignment: expected '"
+                                + ft + "', got '" + src_type + "'");
+                        std::string src_ptr;
+                        if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
+                            src_ptr = locals_[ve->name];
+                        }
+                        if (src_ptr.empty())
+                            throw std::runtime_error("tuple-typed field copy from non-variable source not supported");
+                        emitSlidAssign(ft, gep, src_ptr, assign->is_move);
+                        continue;
+                    }
                     std::string val = emitExpr(*te->values[i]);
                     if (!isIndirectType(ft)) {
                         std::string src_t = exprLlvmType(*te->values[i]);
@@ -777,6 +805,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         }
                     }
                     out_ << "    store " << elem_llvm << " " << val << ", ptr " << gep << "\n";
+                    if (assign->is_move && isIndirectType(ft))
+                        emitNullOut(*te->values[i]);
                 }
                 return;
             }
@@ -951,9 +981,25 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         + " out of range (size " + std::to_string(elems.size()) + ")");
                 std::string elem_slids = elems[idx];
                 std::string elem_llvm = llvmType(elem_slids);
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr " << llvmType(tit->second)
-                     << ", ptr " << locals_[ve->name] << ", i32 0, i32 " << idx << "\n";
+                std::string gep = emitFieldGep(tit->second, locals_[ve->name], idx);
+                // slid or anon-tuple element: route through element-wise walker for op= dispatch
+                if (slid_info_.count(elem_slids) || isAnonTupleType(elem_slids)) {
+                    std::string src_type = inferSlidType(*ia->value);
+                    if (src_type != elem_slids)
+                        throw std::runtime_error("tuple element write: expected '"
+                            + elem_slids + "', got '" + src_type + "'");
+                    std::string src_ptr;
+                    if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
+                        auto lit = locals_.find(rve->name);
+                        if (lit != locals_.end()) src_ptr = lit->second;
+                    } else {
+                        src_ptr = emitExpr(*ia->value);
+                    }
+                    if (src_ptr.empty())
+                        throw std::runtime_error("tuple element write from unsupported source");
+                    emitSlidAssign(elem_slids, gep, src_ptr, /*is_move=*/false);
+                    return;
+                }
                 std::string rhs_val = emitExpr(*ia->value);
                 // width-coerce integer widths (sext/trunc) to match the field type
                 if (!isIndirectType(elem_slids)) {
