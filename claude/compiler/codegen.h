@@ -51,6 +51,7 @@ private:
     std::map<std::string, std::vector<std::string>> func_param_types_; // func name -> param types
     std::map<std::string, std::vector<std::pair<std::string,std::string>>> func_tuple_fields_; // func -> [(type,name)]
     std::string current_func_return_type_; // LLVM return type of the function being emitted
+    std::vector<std::pair<std::string,std::string>> current_func_tuple_fields_; // Slids-form tuple return fields (type,name) for element-wise dispatch; empty if not a tuple return
     // overload table: base_mangled -> [(full_mangled, param_types)]
     std::map<std::string, std::vector<std::pair<std::string, std::vector<std::string>>>> method_overloads_;
     // free function overload table: base_name -> [(mangled_name, param_types)]

@@ -1525,16 +1525,36 @@ void Codegen::emitStmt(const Stmt& stmt) {
             emitDtors();
             if (ret->value) {
                 if (auto* te = dynamic_cast<const TupleExpr*>(ret->value.get())) {
-                    std::string acc = "undef";
+                    // Per desugar rule: build the return struct slot-by-slot. Scalar
+                    // slots store directly; slid/anon-tuple slots dispatch via
+                    // emitSlidAssign — fresh temps get moved, named locals copied.
+                    std::string ret_tup = newTmp();
+                    out_ << "    " << ret_tup << " = alloca " << current_func_return_type_ << "\n";
+                    auto& fields = current_func_tuple_fields_;
                     for (int i = 0; i < (int)te->values.size(); i++) {
-                        std::string val = emitExpr(*te->values[i]);
-                        std::string elem_type = exprLlvmType(*te->values[i]);
-                        std::string tmp = newTmp();
-                        out_ << "    " << tmp << " = insertvalue " << current_func_return_type_
-                             << " " << acc << ", " << elem_type << " " << val << ", " << i << "\n";
-                        acc = tmp;
+                        std::string gep = newTmp();
+                        out_ << "    " << gep << " = getelementptr " << current_func_return_type_
+                             << ", ptr " << ret_tup << ", i32 0, i32 " << i << "\n";
+                        const std::string& elem_type = fields[i].first;
+                        if (slid_info_.count(elem_type) || isAnonTupleType(elem_type)) {
+                            std::string src_ptr;
+                            if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
+                                src_ptr = locals_[ve->name];
+                            } else {
+                                src_ptr = emitExpr(*te->values[i]);
+                            }
+                            bool is_move = isFreshSlidTemp(*te->values[i]);
+                            emitSlidAssign(elem_type, gep, src_ptr, is_move);
+                        } else {
+                            std::string val = emitExpr(*te->values[i]);
+                            out_ << "    store " << llvmType(elem_type) << " " << val
+                                 << ", ptr " << gep << "\n";
+                        }
                     }
-                    out_ << "    ret " << current_func_return_type_ << " " << acc << "\n";
+                    std::string loaded = newTmp();
+                    out_ << "    " << loaded << " = load " << current_func_return_type_
+                         << ", ptr " << ret_tup << "\n";
+                    out_ << "    ret " << current_func_return_type_ << " " << loaded << "\n";
                 } else {
                     std::string val = emitExpr(*ret->value);
                     out_ << "    ret " << current_func_return_type_ << " " << val << "\n";

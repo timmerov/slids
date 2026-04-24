@@ -660,8 +660,8 @@ void Codegen::collectStringConstants() {
 void Codegen::emit() {
     out_ << "target triple = \"x86_64-pc-linux-gnu\"\n\n";
 
-    collectFunctionSignatures();
     collectSlids();
+    collectFunctionSignatures();
     scanForSlidTemplateUses();
 
     // process explicit instantiate statements before string-constant collection so
@@ -1033,6 +1033,7 @@ void Codegen::emitNestedFunction(
     std::string mangled = parent_name + "__" + fn.name;
     std::string ret_type = llvmType(func_return_types_[mangled]);
     current_func_return_type_ = ret_type;
+    current_func_tuple_fields_ = fn.tuple_return_fields;
 
     // build parameter list
     std::string param_str;
@@ -2448,6 +2449,7 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
     for (auto& m : slid.methods) {
         if (!m.body) continue;
         std::string mangled = resolveMethodMangledName(slid.name, m.name, m.params);
+        current_func_tuple_fields_.clear();
         emitSlidMethod(slid, mangled, m.return_type, m.params, *m.body);
     }
     // emit external method definitions for this slid
@@ -2455,6 +2457,7 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
         if (em.slid_name != slid.name || !em.body) continue;
         if (em.method_name == "_" || em.method_name == "~") continue;
         std::string mangled = resolveMethodMangledName(slid.name, em.method_name, em.params);
+        current_func_tuple_fields_.clear();
         emitSlidMethod(slid, mangled, em.return_type, em.params, *em.body);
     }
     current_slid_ = "";
@@ -2495,6 +2498,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
 
     std::string ret_type = uses_sret ? "void" : llvmType(func_return_types_[emit_name]);
     current_func_return_type_ = ret_type;
+    current_func_tuple_fields_ = fn.tuple_return_fields;
 
     std::string param_str;
     if (uses_sret) {

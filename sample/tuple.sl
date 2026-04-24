@@ -37,6 +37,21 @@ void foo(NameValue^ nv) {
     return (100, 200, 300);
 }
 
+(Simple s0, Simple s1) make_simples() {
+    return (Simple(1, 2, 3), Simple(4, 5, 6));
+}
+
+(int t0, int t1, int t2) make_tuple_var() {
+    t = (11, 22, 33);
+    return t;
+}
+
+(Simple s0, Simple s1) make_simples_from_locals() {
+    Simple a(7, 8, 9);
+    Simple b(10, 11, 12);
+    return (a, b);
+}
+
 int32 main() {
 
     /* assignments with tuples. */
@@ -134,6 +149,17 @@ int32 main() {
     __println("ret_tuple = (" + ret_tuple[0] + "," + ret_tuple[1] + "," + ret_tuple[2] + ")");
     ret_tuple2 <- make_tuple();
     __println("ret_tuple2 = (" + ret_tuple2[0] + "," + ret_tuple2[1] + "," + ret_tuple2[2] + ")");
+
+    slid_ret = make_simples();
+    slid_ret[0].print("slid_ret[0]");
+    slid_ret[1].print("slid_ret[1]");
+
+    var_ret = make_tuple_var();
+    __println("var_ret = (" + var_ret[0] + "," + var_ret[1] + "," + var_ret[2] + ")");
+
+    local_ret = make_simples_from_locals();
+    local_ret[0].print("local_ret[0]");
+    local_ret[1].print("local_ret[1]");
 
     /* element-wise tuple binary ops. */
     sum_tuple = (1, 2, 3) + (4, 5, 6);
