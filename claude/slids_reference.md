@@ -481,7 +481,7 @@ Rules:
 
 ### Tuples desugar per element
 
-Most operations on literals, variables, or slid values apply **element-wise** to tuples. For example:
+Most operations on literals, variables, or slid values apply recursively **element-wise** to tuples. For example:
 
 ```
 (x, y, z) = (1, 2, 3) + (4, 5, 6);
@@ -495,7 +495,7 @@ y = 2 + 5;
 z = 3 + 6;
 ```
 
-The same element-wise rule applies to tuple construction, whole-tuple assignment, element writes via `[]=`, and method calls on slid-typed elements.
+The same recursive element-wise rule applies to tuple construction, whole-tuple assignment, element writes via `[]=`, and method calls on slid-typed elements.
 
 ### Accessibility for tuple-literal initialization and reassignment
 
