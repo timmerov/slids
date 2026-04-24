@@ -692,9 +692,43 @@ std::string Codegen::emitExpr(const Expr& expr) {
                         throw std::runtime_error("tuple element type mismatch in elementwise '"
                             + b->op + "' at index " + std::to_string(i)
                             + ": " + ltype + " vs " + rtype);
-                    if (slid_info_.count(ltype) || isAnonTupleType(ltype))
+                    // slid element: dispatch to user op<op> taking (Type^, Type^).
+                    if (slid_info_.count(ltype)) {
+                        std::string op_base = ltype + "__op" + b->op;
+                        auto oit = method_overloads_.find(op_base);
+                        std::string mangled;
+                        std::string want = ltype + "^";
+                        if (oit != method_overloads_.end()) {
+                            for (auto& [m, pt] : oit->second) {
+                                if (pt.size() == 2 && pt[0] == want && pt[1] == want) {
+                                    mangled = m; break;
+                                }
+                            }
+                        }
+                        if (mangled.empty())
+                            throw std::runtime_error("slid element type '" + ltype
+                                + "' has no op" + b->op + "(" + ltype + "^, " + ltype + "^)");
+                        std::string lslot = lte
+                            ? emitExpr(*lte->values[i])
+                            : emitFieldGep(lslid, lptr, (int)i);
+                        std::string rslot = rte
+                            ? emitExpr(*rte->values[i])
+                            : emitFieldGep(rslid, rptr, (int)i);
+                        std::string rgep = emitFieldGep(lslid, res_ptr, (int)i);
+                        std::string ret_t = func_return_types_.count(mangled)
+                            ? func_return_types_[mangled] : "";
+                        bool is_method = (ret_t == "void");
+                        std::string args = is_method
+                            ? ("ptr " + rgep)
+                            : ("ptr sret(%struct." + ltype + ") " + rgep);
+                        args += ", ptr " + lslot + ", ptr " + rslot;
+                        out_ << "    call void @" << llvmGlobalName(mangled)
+                             << "(" << args << ")\n";
+                        continue;
+                    }
+                    if (isAnonTupleType(ltype))
                         throw std::runtime_error("elementwise '" + b->op
-                            + "' on slid or nested-tuple elements not yet supported");
+                            + "' on nested-tuple elements not yet supported");
                     std::string elem_llvm = llvmType(ltype);
                     std::string lval;
                     if (lte) {

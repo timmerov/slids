@@ -10,6 +10,11 @@ Simple(
     void print(char[] name) {
         __println(name + ": (x,y,z)=(" + x_ + "," + y_ + "," + z_ + ")");
     }
+    op+(Simple^ a, Simple^ b) {
+        x_ = a^.x_ + b^.x_;
+        y_ = a^.y_ + b^.y_;
+        z_ = a^.z_ + b^.z_;
+    }
 }
 
 Action(
@@ -200,6 +205,11 @@ int32 main() {
     __println("diff = (" + diff_tuple[0] + "," + diff_tuple[1] + "," + diff_tuple[2] + ")");
     prod_tuple = sum_tuple * (2, 3, 4);
     __println("prod = (" + prod_tuple[0] + "," + prod_tuple[1] + "," + prod_tuple[2] + ")");
+
+    /* element-wise slid tuple ops — dispatches Simple::op+ per slot. */
+    ss = (Simple(1,2,3), Simple(4,5,6)) + (Simple(10,20,30), Simple(40,50,60));
+    ss[0].print("ss[0]");
+    ss[1].print("ss[1]");
 
     return 0;
 }
