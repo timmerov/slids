@@ -17,9 +17,44 @@ void Codegen::emitDestructure(
             auto& [type, name] = targets[i];
             if (name.empty()) continue; // empty slot — skip this element
             std::string eff_type = type.empty() ? inferSlidType(*te->values[i]) : type;
+            // if name is already in scope AND no explicit type: reassign the existing local
+            bool reassign = type.empty() && locals_.count(name) > 0;
+            if (reassign) {
+                auto ltit = local_types_.find(name);
+                if (ltit == local_types_.end() || ltit->second != eff_type)
+                    throw std::runtime_error("destructure reassign: '" + name
+                        + "' has type '" + (ltit==local_types_.end()?"<unknown>":ltit->second)
+                        + "' but source element is '" + eff_type + "'");
+            }
+            std::string reg = reassign ? locals_[name] : ("%var_" + name);
+            // slid or anon-tuple target: init path (alloca + ctor) unless reassigning.
+            if (slid_info_.count(eff_type) || isAnonTupleType(eff_type)) {
+                std::string src_type = inferSlidType(*te->values[i]);
+                if (src_type != eff_type)
+                    throw std::runtime_error("type mismatch: cannot destructure '"
+                        + src_type + "' into '" + eff_type + " " + name + "'");
+                if (!reassign)
+                    out_ << "    " << reg << " = alloca " << llvmType(eff_type) << "\n";
+                std::string src_ptr;
+                if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
+                    auto lit = locals_.find(ve->name);
+                    src_ptr = (lit != locals_.end()) ? lit->second : emitExpr(*te->values[i]);
+                } else {
+                    src_ptr = emitExpr(*te->values[i]);
+                }
+                bool is_move = isFreshSlidTemp(*te->values[i]);
+                emitSlidSlotAssign(eff_type, reg, src_ptr, is_move, /*is_init=*/!reassign);
+                if (!reassign) {
+                    locals_[name] = reg;
+                    local_types_[name] = eff_type;
+                    if (slid_info_.count(eff_type) && slid_info_[eff_type].has_dtor)
+                        dtor_vars_.push_back({name, eff_type});
+                }
+                continue;
+            }
             std::string llvm_t = llvmType(eff_type);
-            std::string reg = "%var_" + name;
-            out_ << "    " << reg << " = alloca " << llvm_t << "\n";
+            if (!reassign)
+                out_ << "    " << reg << " = alloca " << llvm_t << "\n";
             std::string val = emitExpr(*te->values[i]);
             std::string src_t = exprLlvmType(*te->values[i]);
             if (src_t != llvm_t) {
@@ -38,8 +73,10 @@ void Codegen::emitDestructure(
                 }
             }
             out_ << "    store " << llvm_t << " " << val << ", ptr " << reg << "\n";
-            locals_[name] = reg;
-            local_types_[name] = eff_type;
+            if (!reassign) {
+                locals_[name] = reg;
+                local_types_[name] = eff_type;
+            }
         }
         return;
     }
@@ -70,18 +107,29 @@ void Codegen::emitDestructure(
                 if (name.empty()) continue; // empty slot
                 const std::string& elem_type = elems[i];
                 std::string eff_type = type.empty() ? elem_type : type;
-                std::string reg = "%var_" + name;
+                bool reassign = type.empty() && locals_.count(name) > 0;
+                if (reassign) {
+                    auto ltit = local_types_.find(name);
+                    if (ltit == local_types_.end() || ltit->second != eff_type)
+                        throw std::runtime_error("destructure reassign: '" + name
+                            + "' has type '" + (ltit==local_types_.end()?"<unknown>":ltit->second)
+                            + "' but source element is '" + eff_type + "'");
+                }
+                std::string reg = reassign ? locals_[name] : ("%var_" + name);
                 if (slid_info_.count(elem_type) || isAnonTupleType(elem_type)) {
                     if (!type.empty() && type != elem_type)
                         throw std::runtime_error("type mismatch: cannot destructure '"
                             + elem_type + "' into '" + eff_type + " " + name + "'");
-                    out_ << "    " << reg << " = alloca " << llvmType(elem_type) << "\n";
+                    if (!reassign)
+                        out_ << "    " << reg << " = alloca " << llvmType(elem_type) << "\n";
                     std::string src_gep = emitFieldGep(src_type, src_ptr, i);
-                    emitSlidSlotAssign(elem_type, reg, src_gep, /*is_move=*/true, /*is_init=*/true);
-                    locals_[name] = reg;
-                    local_types_[name] = eff_type;
-                    if (slid_info_.count(elem_type) && slid_info_[elem_type].has_dtor)
-                        dtor_vars_.push_back({name, elem_type});
+                    emitSlidSlotAssign(elem_type, reg, src_gep, /*is_move=*/true, /*is_init=*/!reassign);
+                    if (!reassign) {
+                        locals_[name] = reg;
+                        local_types_[name] = eff_type;
+                        if (slid_info_.count(elem_type) && slid_info_[elem_type].has_dtor)
+                            dtor_vars_.push_back({name, elem_type});
+                    }
                     continue;
                 }
                 std::string elem_llvm = llvmType(elem_type);
@@ -104,29 +152,51 @@ void Codegen::emitDestructure(
                             + elem_type + "' into '" + eff_type + " " + name + "'");
                     }
                 }
-                out_ << "    " << reg << " = alloca " << dst_llvm << "\n";
+                if (!reassign)
+                    out_ << "    " << reg << " = alloca " << dst_llvm << "\n";
                 out_ << "    store " << dst_llvm << " " << extracted << ", ptr " << reg << "\n";
-                locals_[name] = reg;
-                local_types_[name] = eff_type;
+                if (!reassign) {
+                    locals_[name] = reg;
+                    local_types_[name] = eff_type;
+                }
             }
             return;
         }
     }
     std::string result = emitExpr(init);
     std::string tuple_type = exprLlvmType(init);
+    // if the source produces an anon-tuple (e.g. tuple-returning call), use its
+    // element types to fill in bare-name targets missing an explicit type.
+    std::string src_slids = inferSlidType(init);
+    std::vector<std::string> src_elems;
+    if (isAnonTupleType(src_slids)) src_elems = anonTupleElems(src_slids);
     for (int i = 0; i < (int)targets.size(); i++) {
         auto& [type, name] = targets[i];
         if (name.empty()) continue; // empty slot
-        if (type.empty())
+        std::string eff_type = type;
+        if (eff_type.empty() && i < (int)src_elems.size())
+            eff_type = src_elems[i];
+        if (eff_type.empty())
             throw std::runtime_error("destructure type inference from non-tuple-variable source not supported yet");
-        std::string llvm_t = llvmType(type);
-        std::string reg = "%var_" + name;
-        out_ << "    " << reg << " = alloca " << llvm_t << "\n";
+        bool reassign = type.empty() && locals_.count(name) > 0;
+        if (reassign) {
+            auto ltit = local_types_.find(name);
+            if (ltit == local_types_.end() || ltit->second != eff_type)
+                throw std::runtime_error("destructure reassign: '" + name
+                    + "' has type '" + (ltit==local_types_.end()?"<unknown>":ltit->second)
+                    + "' but source element is '" + eff_type + "'");
+        }
+        std::string llvm_t = llvmType(eff_type);
+        std::string reg = reassign ? locals_[name] : ("%var_" + name);
+        if (!reassign)
+            out_ << "    " << reg << " = alloca " << llvm_t << "\n";
         std::string extracted = newTmp();
         out_ << "    " << extracted << " = extractvalue " << tuple_type << " " << result << ", " << i << "\n";
         out_ << "    store " << llvm_t << " " << extracted << ", ptr " << reg << "\n";
-        locals_[name] = reg;
-        local_types_[name] = type;
+        if (!reassign) {
+            locals_[name] = reg;
+            local_types_[name] = eff_type;
+        }
     }
 }
 
@@ -541,6 +611,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                     && !current_slid_.empty() && current_slid_ == eff_type)
                                 src_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
                         }
+                        // any expr whose type matches eff_type: emitExpr returns a slid ptr.
+                        if (src_ptr.empty() && inferSlidType(*init_expr) == eff_type)
+                            src_ptr = emitExpr(*init_expr);
                         if (!src_ptr.empty()) emitSlidSlotAssign(eff_type, reg, src_ptr, decl->is_move, /*is_init=*/true);
                     }
                 }
@@ -986,6 +1059,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         }
                     }
                 }
+                // any other expr whose type matches slid_name: emitExpr returns a slid ptr.
+                if (src_ptr.empty() && inferSlidType(*assign->value) == slid_name)
+                    src_ptr = emitExpr(*assign->value);
                 if (!src_ptr.empty()) { emitSlidSlotAssign(slid_name, it->second, src_ptr, assign->is_move); return; }
             }
         }
@@ -1090,6 +1166,53 @@ void Codegen::emitStmt(const Stmt& stmt) {
             auto fit = info.field_index.find(fa->field);
             if (fit == info.field_index.end()) throw std::runtime_error("IndexAssign: unknown field '" + fa->field + "'");
             std::string ft = info.field_types[fit->second];
+            // anon-tuple field: GEP into the field and delegate to tuple-element store logic
+            if (isAnonTupleType(ft)) {
+                auto elems = anonTupleElems(ft);
+                int idx;
+                if (!constExprToInt(*ia->index, enum_values_, idx))
+                    throw std::runtime_error("tuple index must be a constant integer");
+                if (idx < 0 || idx >= (int)elems.size())
+                    throw std::runtime_error("tuple index " + std::to_string(idx)
+                        + " out of range (size " + std::to_string(elems.size()) + ")");
+                const std::string& elem_slids = elems[idx];
+                std::string obj_ptr = locals_[ove->name];
+                std::string field_gep = newTmp();
+                out_ << "    " << field_gep << " = getelementptr %struct." << slid_name
+                     << ", ptr " << obj_ptr << ", i32 0, i32 " << fit->second << "\n";
+                std::string slot_gep = emitFieldGep(ft, field_gep, idx);
+                if (slid_info_.count(elem_slids) || isAnonTupleType(elem_slids)) {
+                    std::string src_type = inferSlidType(*ia->value);
+                    if (src_type != elem_slids)
+                        throw std::runtime_error("tuple element write: expected '"
+                            + elem_slids + "', got '" + src_type + "'");
+                    std::string src_ptr;
+                    if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
+                        auto lit = locals_.find(rve->name);
+                        if (lit != locals_.end()) src_ptr = lit->second;
+                    } else {
+                        std::string v = emitExpr(*ia->value);
+                        if (isAnonTupleType(elem_slids)) {
+                            std::string tmp = newTmp();
+                            out_ << "    " << tmp << " = alloca " << llvmType(elem_slids) << "\n";
+                            out_ << "    store " << llvmType(elem_slids) << " " << v
+                                 << ", ptr " << tmp << "\n";
+                            src_ptr = tmp;
+                        } else {
+                            src_ptr = v;
+                        }
+                    }
+                    emitSlidSlotAssign(elem_slids, slot_gep, src_ptr, ia->is_move);
+                    return;
+                }
+                // scalar slot
+                std::string rhs_val = emitExpr(*ia->value);
+                out_ << "    store " << llvmType(elem_slids) << " " << rhs_val
+                     << ", ptr " << slot_gep << "\n";
+                if (ia->is_move && isIndirectType(elem_slids))
+                    emitNullOut(*ia->value);
+                return;
+            }
             if (!isInlineArrayType(ft)) throw std::runtime_error("IndexAssign: field '" + fa->field + "' is not an inline array");
             auto lb = ft.rfind('[');
             std::string elem_type = ft.substr(0, lb);
@@ -1137,7 +1260,19 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         auto lit = locals_.find(rve->name);
                         if (lit != locals_.end()) src_ptr = lit->second;
                     } else {
-                        src_ptr = emitExpr(*ia->value);
+                        std::string v = emitExpr(*ia->value);
+                        if (isAnonTupleType(elem_slids)) {
+                            // emitExpr(TupleExpr or similar) returns a loaded struct SSA.
+                            // Materialize to a ptr so emitSlidSlotAssign's field walk works.
+                            std::string tmp = newTmp();
+                            out_ << "    " << tmp << " = alloca " << llvmType(elem_slids) << "\n";
+                            out_ << "    store " << llvmType(elem_slids) << " " << v
+                                 << ", ptr " << tmp << "\n";
+                            src_ptr = tmp;
+                        } else {
+                            // slid: emitExpr returns the ptr directly
+                            src_ptr = v;
+                        }
                     }
                     if (src_ptr.empty())
                         throw std::runtime_error("tuple element write from unsupported source");

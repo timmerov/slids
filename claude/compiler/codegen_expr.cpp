@@ -56,40 +56,95 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (dynamic_cast<const ArrayIndexExpr*>(&expr)) {
-        // support chained indexing: base[i][j] — base may be another ArrayIndexExpr
-        // collect index chain and base name
+        // collect index chain and identify the base
         std::vector<const Expr*> indices;
         const Expr* cur = &expr;
         while (auto* a = dynamic_cast<const ArrayIndexExpr*>(cur)) {
             indices.insert(indices.begin(), a->index.get());
             cur = a->base.get();
         }
-        // cur is now the root VarExpr
-        auto* ve = dynamic_cast<const VarExpr*>(cur);
-        if (!ve) throw std::runtime_error("complex array base not supported");
 
-        // anonymous tuple element read: tuple[N] — N must be a compile-time constant
+        // anonymous tuple walk. Bases covered: local anon-tuple var, implicit-self
+        // anon-tuple field (inside a method), and `obj.field` anon-tuple field access.
         {
-            auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
-                if (indices.size() != 1)
-                    throw std::runtime_error("tuple supports only single-level indexing");
-                auto elems = anonTupleElems(tit->second);
-                int idx;
-                if (!constExprToInt(*indices[0], enum_values_, idx))
-                    throw std::runtime_error("tuple index must be a constant integer");
-                if (idx < 0 || idx >= (int)elems.size())
-                    throw std::runtime_error("tuple index " + std::to_string(idx)
-                        + " out of range (size " + std::to_string(elems.size()) + ")");
-                std::string elem_llvm = llvmType(elems[idx]);
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr " << llvmType(tit->second)
-                     << ", ptr " << locals_[ve->name] << ", i32 0, i32 " << idx << "\n";
+            std::string tup_type;
+            std::string tup_ptr;
+            if (auto* ve = dynamic_cast<const VarExpr*>(cur)) {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
+                    tup_type = tit->second;
+                    tup_ptr = locals_[ve->name];
+                } else if (!current_slid_.empty()) {
+                    auto& info = slid_info_[current_slid_];
+                    auto fit = info.field_index.find(ve->name);
+                    if (fit != info.field_index.end()
+                            && isAnonTupleType(info.field_types[fit->second])) {
+                        tup_type = info.field_types[fit->second];
+                        std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
+                        tup_ptr = newTmp();
+                        out_ << "    " << tup_ptr << " = getelementptr %struct."
+                             << current_slid_ << ", ptr " << self
+                             << ", i32 0, i32 " << fit->second << "\n";
+                    }
+                }
+            } else if (auto* fa = dynamic_cast<const FieldAccessExpr*>(cur)) {
+                if (auto* ove = dynamic_cast<const VarExpr*>(fa->object.get())) {
+                    auto tit = local_types_.find(ove->name);
+                    if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+                        auto& info = slid_info_[tit->second];
+                        auto fit = info.field_index.find(fa->field);
+                        if (fit != info.field_index.end()
+                                && isAnonTupleType(info.field_types[fit->second])) {
+                            tup_type = info.field_types[fit->second];
+                            tup_ptr = newTmp();
+                            out_ << "    " << tup_ptr << " = getelementptr %struct."
+                                 << tit->second << ", ptr " << locals_[ove->name]
+                                 << ", i32 0, i32 " << fit->second << "\n";
+                        }
+                    }
+                }
+            }
+            // generic fallback: any expression producing an anon-tuple value
+            // (e.g. a tuple-returning function call). Materialize to a temp alloca.
+            if (tup_type.empty()) {
+                std::string ttype = inferSlidType(*cur);
+                if (isAnonTupleType(ttype)) {
+                    std::string v = emitExpr(*cur);
+                    tup_ptr = newTmp();
+                    out_ << "    " << tup_ptr << " = alloca " << llvmType(ttype) << "\n";
+                    out_ << "    store " << llvmType(ttype) << " " << v
+                         << ", ptr " << tup_ptr << "\n";
+                    tup_type = ttype;
+                }
+            }
+            if (!tup_type.empty()) {
+                std::string cur_type = tup_type;
+                std::string cur_ptr = tup_ptr;
+                for (int level = 0; level < (int)indices.size(); level++) {
+                    if (!isAnonTupleType(cur_type))
+                        throw std::runtime_error("chained tuple index: '" + cur_type
+                            + "' is not a tuple at level " + std::to_string(level));
+                    auto elems = anonTupleElems(cur_type);
+                    int idx;
+                    if (!constExprToInt(*indices[level], enum_values_, idx))
+                        throw std::runtime_error("tuple index must be a constant integer");
+                    if (idx < 0 || idx >= (int)elems.size())
+                        throw std::runtime_error("tuple index " + std::to_string(idx)
+                            + " out of range (size " + std::to_string(elems.size()) + ")");
+                    cur_ptr = emitFieldGep(cur_type, cur_ptr, idx);
+                    cur_type = elems[idx];
+                }
+                if (slid_info_.count(cur_type)) return cur_ptr;
                 std::string val = newTmp();
-                out_ << "    " << val << " = load " << elem_llvm << ", ptr " << gep << "\n";
+                out_ << "    " << val << " = load " << llvmType(cur_type)
+                     << ", ptr " << cur_ptr << "\n";
                 return val;
             }
         }
+
+        // non-anon-tuple bases only handled for VarExpr roots below
+        auto* ve = dynamic_cast<const VarExpr*>(cur);
+        if (!ve) throw std::runtime_error("complex array base not supported");
 
         // slid op[] dispatch
         {
@@ -1721,20 +1776,57 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // array index — elem type
     if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&expr)) {
+        (void)ai;
+        std::vector<const Expr*> indices;
         const Expr* cur = &expr;
-        while (auto* a = dynamic_cast<const ArrayIndexExpr*>(cur))
+        while (auto* a = dynamic_cast<const ArrayIndexExpr*>(cur)) {
+            indices.insert(indices.begin(), a->index.get());
             cur = a->base.get();
+        }
+        // try to resolve base as an anon-tuple type (local, self-field, or obj.field)
+        std::string tup_type;
         if (auto* ve = dynamic_cast<const VarExpr*>(cur)) {
-            // anonymous tuple element — index must be a compile-time constant
             auto ttit = local_types_.find(ve->name);
-            if (ttit != local_types_.end() && isAnonTupleType(ttit->second)) {
-                auto elems = anonTupleElems(ttit->second);
-                int idx;
-                if (constExprToInt(*ai->index, enum_values_, idx)
-                    && idx >= 0 && idx < (int)elems.size())
-                    return llvmType(elems[idx]);
-                return "i32";
+            if (ttit != local_types_.end() && isAnonTupleType(ttit->second))
+                tup_type = ttit->second;
+            else if (!current_slid_.empty()) {
+                auto& info = slid_info_[current_slid_];
+                auto fit = info.field_index.find(ve->name);
+                if (fit != info.field_index.end()
+                        && isAnonTupleType(info.field_types[fit->second]))
+                    tup_type = info.field_types[fit->second];
             }
+        } else if (auto* fa = dynamic_cast<const FieldAccessExpr*>(cur)) {
+            if (auto* ove = dynamic_cast<const VarExpr*>(fa->object.get())) {
+                auto tit = local_types_.find(ove->name);
+                if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+                    auto& info = slid_info_[tit->second];
+                    auto fit = info.field_index.find(fa->field);
+                    if (fit != info.field_index.end()
+                            && isAnonTupleType(info.field_types[fit->second]))
+                        tup_type = info.field_types[fit->second];
+                }
+            }
+        }
+        // generic fallback: any expression producing an anon-tuple value
+        if (tup_type.empty()) {
+            std::string ttype = inferSlidType(*cur);
+            if (isAnonTupleType(ttype)) tup_type = ttype;
+        }
+        if (!tup_type.empty()) {
+            std::string cur_type = tup_type;
+            for (int level = 0; level < (int)indices.size(); level++) {
+                if (!isAnonTupleType(cur_type)) return "i32";
+                auto elems = anonTupleElems(cur_type);
+                int idx;
+                if (!constExprToInt(*indices[level], enum_values_, idx)
+                    || idx < 0 || idx >= (int)elems.size())
+                    return "i32";
+                cur_type = elems[idx];
+            }
+            return llvmType(cur_type);
+        }
+        if (auto* ve = dynamic_cast<const VarExpr*>(cur)) {
             auto ait = array_info_.find(ve->name);
             if (ait != array_info_.end()) return llvmType(ait->second.elem_type);
             // slid op[] return type
@@ -2005,20 +2097,59 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     }
     // array index — return type of op[] if base is a slid, else element type of pointer/array
     if (auto* aie = dynamic_cast<const ArrayIndexExpr*>(&expr)) {
+        (void)aie;
+        // collect indices (outer → inner) and walk to base
+        std::vector<const Expr*> indices;
         const Expr* cur = &expr;
-        while (auto* a = dynamic_cast<const ArrayIndexExpr*>(cur))
+        while (auto* a = dynamic_cast<const ArrayIndexExpr*>(cur)) {
+            indices.insert(indices.begin(), a->index.get());
             cur = a->base.get();
+        }
+        // try to resolve the base as an anon-tuple type (local, self-field, or obj.field)
+        std::string tup_type;
         if (auto* ve = dynamic_cast<const VarExpr*>(cur)) {
-            // anonymous tuple indexing: require constant index
             auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
-                auto elems = anonTupleElems(tit->second);
-                int idx;
-                if (constExprToInt(*aie->index, enum_values_, idx)
-                    && idx >= 0 && idx < (int)elems.size())
-                    return elems[idx];
-                return "int";
+            if (tit != local_types_.end() && isAnonTupleType(tit->second))
+                tup_type = tit->second;
+            else if (!current_slid_.empty()) {
+                auto& info = slid_info_[current_slid_];
+                auto fit = info.field_index.find(ve->name);
+                if (fit != info.field_index.end()
+                        && isAnonTupleType(info.field_types[fit->second]))
+                    tup_type = info.field_types[fit->second];
             }
+        } else if (auto* fa = dynamic_cast<const FieldAccessExpr*>(cur)) {
+            if (auto* ove = dynamic_cast<const VarExpr*>(fa->object.get())) {
+                auto tit = local_types_.find(ove->name);
+                if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+                    auto& info = slid_info_[tit->second];
+                    auto fit = info.field_index.find(fa->field);
+                    if (fit != info.field_index.end()
+                            && isAnonTupleType(info.field_types[fit->second]))
+                        tup_type = info.field_types[fit->second];
+                }
+            }
+        }
+        // generic fallback: any expression producing an anon-tuple value
+        if (tup_type.empty()) {
+            std::string ttype = inferSlidType(*cur);
+            if (isAnonTupleType(ttype)) tup_type = ttype;
+        }
+        if (!tup_type.empty()) {
+            std::string cur_type = tup_type;
+            for (int level = 0; level < (int)indices.size(); level++) {
+                if (!isAnonTupleType(cur_type)) return "int";
+                auto elems = anonTupleElems(cur_type);
+                int idx;
+                if (!constExprToInt(*indices[level], enum_values_, idx)
+                    || idx < 0 || idx >= (int)elems.size())
+                    return "int";
+                cur_type = elems[idx];
+            }
+            return cur_type;
+        }
+        if (auto* ve = dynamic_cast<const VarExpr*>(cur)) {
+            auto tit = local_types_.find(ve->name);
             // slid op[] return type
             if (tit != local_types_.end() && slid_info_.count(tit->second)) {
                 std::string base_name = tit->second + "__op[]";

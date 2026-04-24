@@ -31,6 +31,12 @@ Counted(int c_) {
 
 IntBuf(int[] data_ = nullptr) {}
 
+TupleHolder((int, int) pair_ = (0, 0)) {
+    void print(char[] label) {
+        __println(label + ".pair_=(" + pair_[0] + "," + pair_[1] + ")");
+    }
+}
+
 Action(
     int x_
 ) {
@@ -295,6 +301,58 @@ int32 main() {
     __println("nested[0]=" + nested[0]);
     inner = nested[1];
     __println("inner=(" + inner[0] + "," + inner[1] + ")");
+
+    /* chained tuple indexing — nested[1][0] walks nested anon-tuples. */
+    __println("nested[1][0]=" + nested[1][0] + " nested[1][1]=" + nested[1][1]);
+
+    /* #12: destructure TupleExpr literal into slid-typed targets. */
+    (Simple p3, Simple q3) = (Simple(100, 200, 300), Simple(400, 500, 600));
+    p3.print("p3");
+    q3.print("q3");
+
+    /* #4: read a slid-typed tuple element as a value. */
+    sx = slid_tuple[0];
+    sx.print("sx");
+
+    /* #7: tuple rhs into a field lvalue. Also exercises implicit-self
+       tuple-field indexing (pair_[0] inside TupleHolder::print) and
+       chained FieldAccess + index (th.pair_[0]) at the caller. */
+    th = TupleHolder((10, 20));
+    th.print("th-before");
+    th.pair_ = (100, 200);
+    th.print("th-after");
+    __println("direct: th.pair_[0]=" + th.pair_[0] + " th.pair_[1]=" + th.pair_[1]);
+
+    /* anon-tuple field with default value: TupleHolder() uses pair_ = (0, 0). */
+    th_def = TupleHolder();
+    th_def.print("th_def");
+
+    /* tuple expression binary symmetry: TupleExpr + VarExpr. */
+    sum_sym = (7, 8, 9) + sum_tuple;
+    __println("sum_sym = (" + sum_sym[0] + "," + sum_sym[1] + "," + sum_sym[2] + ")");
+
+    /* tuple[N] = TupleLiteral where slot is anon-tuple. */
+    nested[1] = (9, 9);
+    __println("after nested[1]=(9,9): nested[1][0]=" + nested[1][0] + " nested[1][1]=" + nested[1][1]);
+
+    /* chained-indexed field write: th.pair_[0] = 99. */
+    th.pair_[0] = 99;
+    th.print("th-after-single-write");
+
+    /* tuple-return then index: index directly into a tuple-returning call. */
+    mtv0 = make_tuple()[0];
+    mtv2 = make_tuple()[2];
+    __println("make_tuple()[0]=" + mtv0 + " [2]=" + mtv2);
+    sv0 = make_simples_var()[0];
+    sv0.print("make_simples_var()[0]");
+
+    /* #8: destructure from a tuple-returning call with inferred target types. */
+    (ra, rb, rc) = make_tuple();
+    __println("(ra,rb,rc)=(" + ra + "," + rb + "," + rc + ")");
+
+    /* #9: destructure target already in scope should assign, not redeclare. */
+    (ra, rb, rc) = (7, 8, 9);
+    __println("(ra,rb,rc) after reassign=(" + ra + "," + rb + "," + rc + ")");
 
     /* #14: elementwise ops on nested anon-tuple slots (recurses via emitElementwiseAtPtr). */
     ntx = ((1,2),(3,4)) + ((5,6),(7,8));

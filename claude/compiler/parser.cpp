@@ -141,6 +141,20 @@ bool Parser::isTemplateTypeArgLookahead() const {
 
 std::string Parser::parseTypeName() {
     std::string base;
+    // anon-tuple type: (t1, t2, ...)
+    if (peek().type == TokenType::kLParen) {
+        advance(); // consume '('
+        base = "(";
+        bool first = true;
+        while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+            if (!first) base += ",";
+            first = false;
+            base += parseTypeName();
+            if (peek().type == TokenType::kComma) advance();
+        }
+        expect(TokenType::kRParen, "expected ')' in anon-tuple type");
+        return base + ")";
+    }
     if (isTypeName(peek())) base = advance().value;
     else if (isUserTypeName(peek())) base = advance().value;
     else throw std::runtime_error("Line " + std::to_string(peek().line)
