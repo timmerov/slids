@@ -870,7 +870,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                                      << "(ptr " << res_tmp << ", " << cptype << " " << carg << ")\n";
                             } else {
                                 std::string src = emitArgForParam(*b->left, left_slid + "^");
-                                emitSlidCopy(left_slid, res_tmp, src);
+                                emitSlidAssign(left_slid, res_tmp, src, /*is_move=*/false);
                             }
                         }
                         // call op+= on result with right

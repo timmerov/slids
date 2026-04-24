@@ -180,12 +180,19 @@ private:
                                         const Expr& left, const Expr& right);
     std::string emitArgForParam(const Expr& arg, const std::string& param_type);
     std::string resolveOpEq(const std::string& base, const Expr& arg);
-    void emitSlidCopy(const std::string& slid_name, const std::string& dst_ptr, const std::string& src_ptr);
+    // Per-field copy or move from src to dst. For `is_move`, pointer/iterator
+    // fields are nulled in the source after transfer, and embedded slid fields
+    // recurse. Copy and move are identical for value fields.
+    void emitSlidAssign(const std::string& slid_name, const std::string& dst_ptr,
+                        const std::string& src_ptr, bool is_move);
     std::string emitSlidAlloca(const std::string& slid_name); // alloca + default-init fields + ctor
     std::string emitRawSlidAlloca(const std::string& slid_name); // alloca only, no init, no dtor
     void emitConstructAt(const std::string& stype, const std::string& ptr,
                          const std::vector<std::unique_ptr<Expr>>& args,
                          const std::vector<std::unique_ptr<Expr>>& overrides = {}); // init fields + ctor at ptr; overrides[i] wins over args[i]
+    void emitConstructAtPtrs(const std::string& stype, const std::string& ptr,
+                             const std::vector<const Expr*>& args,
+                             const std::vector<const Expr*>& overrides); // same, but with raw ptrs (used for recursion)
     bool isFreshSlidTemp(const Expr& expr); // true if expr produces a fresh temp alloca we can mutate
     std::string exprSlidType(const Expr& expr); // return slid type name if expr produces a slid value
     std::string exprType(const Expr& expr);     // return full Slids type string of expr, or ""

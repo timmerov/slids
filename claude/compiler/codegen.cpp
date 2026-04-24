@@ -1948,20 +1948,96 @@ std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
 }
 
 // Copy all fields of slid_name from src_ptr into dst_ptr (synthesized default copy).
-void Codegen::emitSlidCopy(const std::string& slid_name,
-                            const std::string& dst_ptr, const std::string& src_ptr) {
+void Codegen::emitSlidAssign(const std::string& slid_name,
+                             const std::string& dst_ptr, const std::string& src_ptr,
+                             bool is_move) {
     auto& info = slid_info_[slid_name];
     for (int i = 0; i < (int)info.field_types.size(); i++) {
-        std::string ft = llvmType(info.field_types[i]);
+        const std::string& fslids = info.field_types[i];
         std::string src_gep = newTmp();
         out_ << "    " << src_gep << " = getelementptr %struct." << slid_name
              << ", ptr " << src_ptr << ", i32 0, i32 " << i << "\n";
-        std::string val = newTmp();
-        out_ << "    " << val << " = load " << ft << ", ptr " << src_gep << "\n";
         std::string dst_gep = newTmp();
         out_ << "    " << dst_gep << " = getelementptr %struct." << slid_name
              << ", ptr " << dst_ptr << ", i32 0, i32 " << i << "\n";
+        // embedded slid (value-type): dispatch to user op if one matches; else recurse default
+        if (slid_info_.count(fslids)) {
+            std::string op_base = fslids + "__" + (is_move ? "op<-" : "op=");
+            auto oit = method_overloads_.find(op_base);
+            std::string mangled;
+            if (oit != method_overloads_.end()) {
+                std::string want = fslids + "^";
+                for (auto& [m, pt] : oit->second)
+                    if (pt.size() == 1 && pt[0] == want) { mangled = m; break; }
+            }
+            if (!mangled.empty()) {
+                out_ << "    call void @" << llvmGlobalName(mangled)
+                     << "(ptr " << dst_gep << ", ptr " << src_gep << ")\n";
+            } else {
+                emitSlidAssign(fslids, dst_gep, src_gep, is_move);
+            }
+            continue;
+        }
+        // inline array of slids or pointers: walk each element
+        if (isInlineArrayType(fslids)) {
+            auto lb = fslids.rfind('[');
+            std::string elem_slids = fslids.substr(0, lb);
+            int n = std::stoi(fslids.substr(lb + 1, fslids.size() - lb - 2));
+            std::string arr_llvm = llvmType(fslids);
+            if (slid_info_.count(elem_slids)) {
+                std::string op_base = elem_slids + "__" + (is_move ? "op<-" : "op=");
+                auto oit = method_overloads_.find(op_base);
+                std::string mangled;
+                if (oit != method_overloads_.end()) {
+                    std::string want = elem_slids + "^";
+                    for (auto& [m, pt] : oit->second)
+                        if (pt.size() == 1 && pt[0] == want) { mangled = m; break; }
+                }
+                for (int k = 0; k < n; k++) {
+                    std::string s_ep = newTmp();
+                    out_ << "    " << s_ep << " = getelementptr " << arr_llvm
+                         << ", ptr " << src_gep << ", i32 0, i32 " << k << "\n";
+                    std::string d_ep = newTmp();
+                    out_ << "    " << d_ep << " = getelementptr " << arr_llvm
+                         << ", ptr " << dst_gep << ", i32 0, i32 " << k << "\n";
+                    if (!mangled.empty())
+                        out_ << "    call void @" << llvmGlobalName(mangled)
+                             << "(ptr " << d_ep << ", ptr " << s_ep << ")\n";
+                    else
+                        emitSlidAssign(elem_slids, d_ep, s_ep, is_move);
+                }
+                continue;
+            }
+            if (isIndirectType(elem_slids)) {
+                std::string elem_llvm = llvmType(elem_slids);
+                for (int k = 0; k < n; k++) {
+                    std::string s_ep = newTmp();
+                    out_ << "    " << s_ep << " = getelementptr " << arr_llvm
+                         << ", ptr " << src_gep << ", i32 0, i32 " << k << "\n";
+                    std::string d_ep = newTmp();
+                    out_ << "    " << d_ep << " = getelementptr " << arr_llvm
+                         << ", ptr " << dst_gep << ", i32 0, i32 " << k << "\n";
+                    std::string v = newTmp();
+                    out_ << "    " << v << " = load " << elem_llvm << ", ptr " << s_ep << "\n";
+                    out_ << "    store " << elem_llvm << " " << v << ", ptr " << d_ep << "\n";
+                    if (is_move)
+                        out_ << "    store ptr null, ptr " << s_ep << "\n";
+                }
+                continue;
+            }
+            // inline array of primitives — blit the whole array
+            std::string val = newTmp();
+            out_ << "    " << val << " = load " << arr_llvm << ", ptr " << src_gep << "\n";
+            out_ << "    store " << arr_llvm << " " << val << ", ptr " << dst_gep << "\n";
+            continue;
+        }
+        // pointer/iterator field: transfer (and null source on move)
+        std::string ft = llvmType(fslids);
+        std::string val = newTmp();
+        out_ << "    " << val << " = load " << ft << ", ptr " << src_gep << "\n";
         out_ << "    store " << ft << " " << val << ", ptr " << dst_gep << "\n";
+        if (is_move && isIndirectType(fslids))
+            out_ << "    store ptr null, ptr " << src_gep << "\n";
     }
 }
 
@@ -2029,6 +2105,16 @@ std::string Codegen::emitRawSlidAlloca(const std::string& slid_name) {
 void Codegen::emitConstructAt(const std::string& stype, const std::string& ptr,
                               const std::vector<std::unique_ptr<Expr>>& args,
                               const std::vector<std::unique_ptr<Expr>>& overrides) {
+    std::vector<const Expr*> a; a.reserve(args.size());
+    for (auto& p : args) a.push_back(p.get());
+    std::vector<const Expr*> o; o.reserve(overrides.size());
+    for (auto& p : overrides) o.push_back(p.get());
+    emitConstructAtPtrs(stype, ptr, a, o);
+}
+
+void Codegen::emitConstructAtPtrs(const std::string& stype, const std::string& ptr,
+                                  const std::vector<const Expr*>& args,
+                                  const std::vector<const Expr*>& overrides) {
     if (!slid_info_.count(stype)) return;
     auto& info = slid_info_[stype];
     int nfields = (int)info.field_types.size();
@@ -2049,23 +2135,40 @@ void Codegen::emitConstructAt(const std::string& stype, const std::string& ptr,
         if (it != concrete_slid_template_defs_.end()) slid_def = &it->second;
     }
     for (int i = 0; i < (int)info.field_types.size(); i++) {
+        const std::string& ftype = info.field_types[i];
         std::string gep = newTmp();
         out_ << "    " << gep << " = getelementptr %struct." << stype
              << ", ptr " << ptr << ", i32 0, i32 " << i << "\n";
+        // pick the input expression: override > arg > field default > none
+        const Expr* arg_expr = nullptr;
+        if (i < (int)overrides.size())      arg_expr = overrides[i];
+        else if (i < (int)args.size())      arg_expr = args[i];
+        else if (slid_def && i < (int)slid_def->fields.size() && slid_def->fields[i].default_val)
+            arg_expr = slid_def->fields[i].default_val.get();
+        // slid-typed field: recurse element-wise instead of storing a raw value
+        if (slid_info_.count(ftype)) {
+            if (!arg_expr) {
+                emitConstructAtPtrs(ftype, gep, {}, {});
+            } else if (inferSlidType(*arg_expr) == ftype) {
+                std::string src = emitExpr(*arg_expr);
+                emitSlidAssign(ftype, gep, src, /*is_move=*/false);
+            } else {
+                std::vector<const Expr*> one{ arg_expr };
+                emitConstructAtPtrs(ftype, gep, one, {});
+            }
+            continue;
+        }
+        // non-slid field: plain store
         std::string val;
-        if (i < (int)overrides.size()) {
-            val = emitExpr(*overrides[i]);
-        } else if (i < (int)args.size()) {
-            val = emitExpr(*args[i]);
-        } else if (slid_def && i < (int)slid_def->fields.size() && slid_def->fields[i].default_val) {
-            val = emitExpr(*slid_def->fields[i].default_val);
+        if (arg_expr) {
+            val = emitExpr(*arg_expr);
         } else {
-            val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer"
-                : isIndirectType(info.field_types[i]) ? "null"
-                : (info.field_types[i] == "float32" || info.field_types[i] == "float64") ? "0.0"
+            val = isInlineArrayType(ftype) ? "zeroinitializer"
+                : isIndirectType(ftype) ? "null"
+                : (ftype == "float32" || ftype == "float64") ? "0.0"
                 : "0";
         }
-        out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
+        out_ << "    store " << llvmType(ftype) << " " << val << ", ptr " << gep << "\n";
     }
     if (slid_def && slid_def->ctor_body) {
         std::string saved_slid = current_slid_;

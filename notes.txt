@@ -1,4 +1,13 @@
 
+update docs so an array is semantically a tuple
+where all of the elements are the same type.
+and has special powers.
+
+review passing initializers to classes whose fields
+are classes.
+right now can pass one initializer.
+properly would be to nest tuples.
+
 implement vector api:
 T[] begin()
 T[] end()

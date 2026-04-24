@@ -9,5 +9,8 @@ Move:<-=42
 Move after : from=42 to=42
 NestedMove:before from: a=42 b=37 c=2026
 NestedMove:before to  : a=0 b=0 c=0
+Move:<-=42
+Move:<-=37
+Move:<-=2026
 NestedMove:after  from: a=42 b=37 c=2026
 NestedMove:after  to  : a=42 b=37 c=2026

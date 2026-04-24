@@ -389,8 +389,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
                         out_ << "    call void @" << llvmGlobalName(mangled)
                              << "(ptr " << reg << ", " << ptype_str << " " << arg_val << ")\n";
-                    } else if (!decl->is_move) {
-                        // no matching op= found: synthesize a default field-by-field copy
+                    } else {
+                        // no matching op=/op<- found: synthesize a default field-by-field copy or move
                         // when init is the same slid type (value or reference)
                         std::string src_ptr;
                         if (auto* ve = dynamic_cast<const VarExpr*>(init_expr)) {
@@ -409,7 +409,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                     && !current_slid_.empty() && current_slid_ == eff_type)
                                 src_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
                         }
-                        if (!src_ptr.empty()) emitSlidCopy(eff_type, reg, src_ptr);
+                        if (!src_ptr.empty()) emitSlidAssign(eff_type, reg, src_ptr, decl->is_move);
                     }
                 }
             }
@@ -446,7 +446,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         } else {
                             src_ptr = emitExpr(*te->values[i]);
                         }
-                        emitSlidCopy(elems[i], gep, src_ptr);
+                        emitSlidAssign(elems[i], gep, src_ptr, /*is_move=*/false);
                         if (slid_info_[elems[i]].has_dtor)
                             dtor_vars_.push_back({decl->name, elems[i], i});
                         continue;
@@ -598,7 +598,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         } else {
                             src_ptr = emitExpr(*te->values[i]);
                         }
-                        emitSlidCopy(ft, gep, src_ptr);
+                        emitSlidAssign(ft, gep, src_ptr, /*is_move=*/false);
                         continue;
                     }
                     std::string val = emitExpr(*te->values[i]);
@@ -812,7 +812,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         }
                     }
                 }
-                if (!src_ptr.empty()) { emitSlidCopy(slid_name, it->second, src_ptr); return; }
+                if (!src_ptr.empty()) { emitSlidAssign(slid_name, it->second, src_ptr, assign->is_move); return; }
             }
         }
         // pointer move: copy source to dest, null source
