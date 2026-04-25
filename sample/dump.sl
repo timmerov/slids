@@ -1,13 +1,10 @@
 
 void dump( (char[], char[], int)^ tuple ) {
-    char[] type = tuple[0];
-    //char[] name = tuple[1];
-    //int value = tuble[2];
-    //__println(type + " " + name + " = " + value);
+    __println(tuple^[0] + " " + tuple^[1] + "=" + tuple^[2]);
 }
 
 int32 main() {
-    int x;
+    int x = 42;
     tuple = ("int", "x", x);
     dump(tuple);
     return 0;
