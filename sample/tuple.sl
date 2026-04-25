@@ -70,6 +70,19 @@ void modify_tuple((int, int)^ p) {
     p^[0] = 999;
 }
 
+void move_tuple_slot((int, int)^ p, int v) {
+    p^[0] <- v;
+}
+
+void take_simples((Simple, Simple)^ sp) {
+    sp^[0].print("via-ref-sp[0]");
+    sp^[1].print("via-ref-sp[1]");
+}
+
+void take_nested(((int, int), int)^ np) {
+    __println("np^[0][0]=" + np^[0][0] + " np^[0][1]=" + np^[0][1] + " np^[1]=" + np^[1]);
+}
+
 (int a, int b, int c) make_tuple() {
     return (100, 200, 300);
 }
@@ -361,6 +374,18 @@ int32 main() {
     take_tuple((100, 200));     /* tuple-literal arg materialized to temp */
     modify_tuple(^tp);
     __println("after modify_tuple: tp=(" + tp[0] + "," + tp[1] + ")");
+
+    /* #1 follow-ups */
+    /* (a) p^[N] <- v move form through a ref */
+    move_tuple_slot(^tp, 42);
+    __println("after move_slot: tp=(" + tp[0] + "," + tp[1] + ")");
+
+    /* (b) slid-tuple ref + (d) method call on slid slot through ref */
+    take_simples(^slid_tuple);
+
+    /* (c) nested-tuple ref */
+    nested_local = ((1, 2), 3);
+    take_nested(^nested_local);
 
     /* #8: destructure from a tuple-returning call with inferred target types. */
     (ra, rb, rc) = make_tuple();
