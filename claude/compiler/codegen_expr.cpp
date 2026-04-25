@@ -1487,7 +1487,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* s = dynamic_cast<const StringLiteralExpr*>(&expr)) {
-        std::string label = "@.str" + std::to_string(str_counter_++);
+        std::string label = registerStringConstant(s->value);
         int len; llvmEscape(s->value, len);
         std::string tmp = newTmp();
         out_ << "    " << tmp << " = getelementptr [" << len << " x i8], ptr "

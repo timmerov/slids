@@ -58,6 +58,11 @@ private:
     std::map<std::string, std::vector<std::pair<std::string, std::vector<std::string>>>> free_func_overloads_;
     std::map<std::string, SlidInfo>    slid_info_;
     std::vector<std::pair<std::string, std::string>> string_constants_;
+    // Register a string constant on-demand from emit-time. Generates a fresh
+    // `@.strN` label, records it for end-of-module emission, and returns the
+    // label. Replaces the pre-collection scan, which couldn't see template
+    // instantiation bodies.
+    std::string registerStringConstant(const std::string& value);
 
     std::string break_label_;
     std::string continue_label_;

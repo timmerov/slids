@@ -10,6 +10,12 @@ Codegen::Codegen(const Program& program, std::ostream& out)
     : program_(program), out_(out), str_counter_(0), tmp_counter_(0), label_counter_(0) {}
 
 std::string Codegen::newTmp() { return "%t" + std::to_string(tmp_counter_++); }
+
+std::string Codegen::registerStringConstant(const std::string& value) {
+    std::string label = "@.str" + std::to_string(str_counter_++);
+    string_constants_.emplace_back(label, value);
+    return label;
+}
 std::string Codegen::newLabel(const std::string& p) { return p + std::to_string(label_counter_++); }
 std::string Codegen::uniqueAllocaReg(const std::string& var_name) {
     std::string base = "%var_" + var_name;
@@ -747,7 +753,9 @@ void Codegen::emit() {
     for (auto& em : program_.external_methods)
         checkParams(em.slid_name + "." + em.method_name, em.params);
 
-    collectStringConstants();
+    // String constants are now registered on-demand from emit-time via
+    // registerStringConstant(); the global declarations are flushed at the end
+    // of the module (see end of emit()).
 
     // collect enum values
     for (auto& e : program_.enums) {
@@ -828,14 +836,6 @@ void Codegen::emit() {
 
     if (!program_.slids.empty() || !program_.functions.empty()) out_ << "\n";
 
-    // emit string constants
-    for (auto& [label, value] : string_constants_) {
-        int len;
-        std::string escaped = llvmEscape(value, len);
-        out_ << label << " = private constant [" << len << " x i8] c\"" << escaped << "\"\n";
-    }
-
-    out_ << "\n";
     out_ << "declare i32 @printf(ptr noundef, ...)\n";
     out_ << "declare ptr @malloc(i64)\n";
     out_ << "declare void @free(ptr)\n";
@@ -1006,6 +1006,14 @@ void Codegen::emit() {
     // emit declares for imported template instantiations (deferred to module scope)
     for (auto& fn : pending_declares_)
         emitTemplateDeclare(fn);
+
+    // flush string constants (registered on-demand during emit)
+    if (!string_constants_.empty()) out_ << "\n";
+    for (auto& [label, value] : string_constants_) {
+        int len;
+        std::string escaped = llvmEscape(value, len);
+        out_ << label << " = private constant [" << len << " x i8] c\"" << escaped << "\"\n";
+    }
 }
 
 bool Codegen::isExported(const std::string& mangled) const {

@@ -2263,7 +2263,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string class_ptr, begin_fn, end_fn;
 
         if (auto* sl = dynamic_cast<const StringLiteralExpr*>(fa->array_expr.get())) {
-            std::string label = "@.str" + std::to_string(str_counter_++);
+            std::string label = registerStringConstant(sl->value);
             int len; llvmEscape(sl->value, len);
             arr_count  = len - 1;  // skip null terminator
             elem_slids = "char";
@@ -2620,8 +2620,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
                 // single string literal
                 if (auto* s = dynamic_cast<const StringLiteralExpr*>(segments[0])) {
-                    std::string label = "@.str" + std::to_string(str_counter_++);
                     std::string full = newline ? s->value + "\n" : s->value;
+                    std::string label = registerStringConstant(full);
                     int len; llvmEscape(full, len);
                     std::string tmp = newTmp();
                     out_ << "    " << tmp << " = getelementptr [" << len << " x i8], ptr "
@@ -2666,7 +2666,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 bool last = (si == (int)segments.size() - 1);
                 if (auto* s = dynamic_cast<const StringLiteralExpr*>(segments[si])) {
                     std::string full = (last && newline) ? s->value + "\n" : s->value;
-                    std::string label = "@.str" + std::to_string(str_counter_++);
+                    std::string label = registerStringConstant(full);
                     int len; llvmEscape(full, len);
                     std::string tmp = newTmp();
                     out_ << "    " << tmp << " = getelementptr [" << len << " x i8], ptr "
