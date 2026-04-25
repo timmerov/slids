@@ -1,21 +1,20 @@
+/*
+dump prints the type name and value of a variable.
+uses the stringification operator #.
+*/
 
-void dump1( (char[], char[], int)^ tuple ) {
+/* header: template declaration */
+void dump<T>( (char[], char[], T)^ tuple );
+
+/* source: template definition */
+void dump<T>( (char[], char[], T)^ tuple ) {
     __println(tuple^[0] + " " + tuple^[1] + "=" + tuple^[2]);
 }
 
-void dump2<T>( T^ tuple ) {
-    __println(tuple^[0] + " " + tuple^[1] + "=" + tuple^[2]);
-}
-
-void dump3<T>( (char[], char[], T)^ tuple ) {
-    __println(tuple^[0] + " " + tuple^[1] + "=" + tuple^[2]);
-}
-
+/* sample usage. */
 int32 main() {
     int x = 42;
-    tuple = ("int", "x", x);
-    dump1(tuple);
-    dump2(tuple);
-    dump3(tuple);
+    dump(#x);
+
     return 0;
 }
