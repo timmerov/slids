@@ -457,14 +457,20 @@ Rules:
 - An index used with `[]` must be a compile-time constant integer (literal or constant-foldable). Non-constant index is a compile error.
 - `tuple[N]` is read/write; out-of-range N is a compile error.
 - Slid-typed elements behave like embedded fields: their destructors run (in reverse declaration order) when the tuple variable goes out of scope.
+- **Anon-tuples have a minimum size of 2.** `(x)` is a parenthesized expression, not a 1-tuple; a 1-tuple would equal a scalar, so it's excluded to keep the kinds disjoint. Size 0 is meaningless.
+- **Chained indexing** walks nested anon-tuples: `nested[1][0]` reads two levels. Slid or scalar slots terminate the chain.
+- **Tuples pass by reference**, like classes: `(t1, t2, ...)^` on params; pass-by-value is a compile error. Inside the callee, `p^[N]` reads, `p^[N] = val` writes, `p^[N] <- val` moves.
+- **Tuples can be slid fields**: `Holder((int, int) pair_) {}`. Use `obj.pair_[N]` for chained read/write; inside the slid's methods, implicit-self `pair_[N]` works too. Default values allowed: `Holder((int, int) pair_ = (0, 0)) {}`.
 
 ### 3. Destructure target — a list of variable slots
 
 A list used on the **left** of an assignment or declaration to unpack a tuple-valued expression. Each slot is one of:
-- **An existing variable** — its type must be compatible with the matching RHS element; the element's value is assigned to it.
-- **A new bare name** (not yet in scope) — the variable is declared with its type inferred from the matching RHS element.
+- **A bare name already in scope** — the existing variable is reassigned (no redeclaration); its type must match the corresponding RHS element exactly.
+- **A bare name not yet in scope** — the variable is declared with its type inferred from the matching RHS element.
 - **`type name`** — an explicit variable declaration.
 - **Empty** — the matching RHS element is skipped (no variable is introduced).
+
+The RHS may be a tuple literal, a tuple variable, or a tuple-returning function call; in every form, slid-typed targets dispatch the same per-slot copy/move logic as ordinary slid assignment.
 
 ```
 (int x, int y) = (1, 2);        // explicit types
@@ -481,21 +487,29 @@ Rules:
 
 ### Tuples desugar per element
 
-Most operations on literals, variables, or slid values apply recursively **element-wise** to tuples. For example:
+Operations on tuples desugar element-wise, recursing into nested structure. For each slot:
+- A **scalar** slot emits the scalar instruction.
+- A **slid** slot dispatches the user's `op` method on that slid type if defined; otherwise falls back to a default per-field walk.
+- A **nested anon-tuple** slot applies the rule recursively.
 
 ```
-(x, y, z) = (1, 2, 3) + (4, 5, 6);
+(x, y, z) = (1, 2, 3) + (4, 5, 6);    // → x=1+4; y=2+5; z=3+6;
 ```
 
-desugars to:
+Move (`<-`) and copy (`=`) follow the same rule, dispatching `op<-` / `op=` per slot.
+
+**Element-wise applies *within* a kind, not across kinds.** Anon-tuple + anon-tuple is element-wise. Class + class can dispatch element-wise *if* the user defines an `op+` (the compiler does not auto-fall-back to the field-walk for slid+slid). Class + tuple, tuple + class, range + tuple, etc., all require explicit user ops.
+
+**Scalar broadcast** is the natural extension of element-wise: an anon-tuple op-with a scalar broadcasts the scalar to every slot. Operand order is preserved for non-commutative ops.
 
 ```
-x = 1 + 4;
-y = 2 + 5;
-z = 3 + 6;
+(1, 2, 3) + 10           // → (11, 12, 13)
+2 * (1, 2, 3)            // → (2, 4, 6)
+100 - (1, 2, 3)          // → (99, 98, 97)
+((1,2),(3,4)) + 10       // → ((11,12),(13,14))   recurses through nested slots
 ```
 
-The same recursive element-wise rule applies to tuple construction, whole-tuple assignment, element writes via `[]=`, and method calls on slid-typed elements.
+Slot/scalar types must match exactly (no widening; this may be relaxed in the future). For slid slots, broadcast requires a user `Elem::op<op>(Elem^, scalar_type)` to be defined.
 
 ### Accessibility for tuple-literal initialization and reassignment
 
@@ -546,14 +560,14 @@ Alias rules:
 - Aliases are not fields — they do not take up additional storage
 - Aliases are always read/write — assigning to an alias writes through to the original
 
-### TODO
+### Limitations
 
-Tuples are not yet fully implemented. The following works currently; everything else does not:
-
-- Assignment, copy and move between tuple variables.
-- Per-element assignment/copy/move of a slid from a tuple to a slid object.
-- Destructure of a tuple literal and of a tuple variable.
-- Functions may return a tuple.
+- **`new` of an anon-tuple** — `tup_ptr = new (int, int);` is not a supported syntax. Heap allocation is currently only for named types (`new SlidType(args)`, `new T[n]`). Anon-tuples live as locals or on the slid-field/tuple-slot they're embedded in. May be added.
+- **Range expressions** (`a..b`) and tuple/range interaction (`2 * (1..3)`) — not designed.
+- **Type widening across slots** — slot/element types must match exactly; no implicit promotion (e.g. `(int, int) + 1.5` is a compile error). May relax later.
+- **Method dispatch on a slid slot reached through a tuple-returning call** — `make_tuple()[0]` reads the slot, but `make_tuple()[0].method()` is not yet wired.
+- **`tuple.count()`** — not implemented. Element count is known at compile time but isn't exposed through a method.
+- **Runtime-indexed tuple element access** — `tuple[i]` with a non-constant `i` is not supported because heterogeneous slots can't be type-checked at runtime. Tuples must be unrolled at compile time (no construct for that yet).
 
 ---
 
@@ -572,21 +586,29 @@ int add(int a, int b) {
 }
 ```
 
-**Passing class objects to functions:**
+**Passing class objects and tuples to functions:**
 
-Class objects must be passed by reference using `^`. Passing by value is a compile error.
+Class objects and anon-tuples must be passed by reference using `^`. Passing by value is a compile error. Both follow the same convention.
 
 ```
-void print(String^ s);     // correct
-void print(String s);      // compile error: cannot pass class object by value
+void print(String^ s);            // class ref
+void take_pair((int, int)^ p);    // tuple ref
+void print(String s);             // compile error: cannot pass class object by value
+void take_pair((int, int) p);     // compile error: cannot pass tuple by value
 ```
 
-At the call site, use `^s` (explicit address-of) or just `s` (auto-promotes):
+At the call site, use `^v` (explicit address-of) or just `v` (auto-promotes); a literal of the matching type is materialized to a temp and passed:
 
 ```
 String s = "hello";
-print(^s);    // explicit — syntactically clearest
-print(s);     // also valid — compiler auto-promotes s to ^s
+print(^s);                  // explicit
+print(s);                   // auto-promote
+print(String("world"));     // fresh temp materialized + passed
+
+tp = (10, 20);
+take_pair(^tp);             // explicit
+take_pair(tp);              // auto-promote
+take_pair((100, 200));      // tuple-literal materialized + passed
 ```
 
 Both forms are equivalent. `^s` is preferred when you want to make the pass-by-reference explicit.

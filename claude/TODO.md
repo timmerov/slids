@@ -10,7 +10,7 @@
 
 - **Improve compiler error messages**: Error messages currently report only a line number and a token-level surprise (e.g. "expected '=', got '('""). They should also report the source file name, show the offending source line, and — where possible — give a higher-level description of what construct was being parsed (e.g. "in slid method declaration").
 
-- **Bounds check fixed-size arrays indexed by literals**: When a fixed-size array field or local (e.g. `int rgb_[3]`) is indexed by an integer literal (e.g. `rgb_[3]`), the compiler has enough information to catch the out-of-bounds access at compile time and emit an error. Currently it silently writes past the end of the array.
+- **Bounds check fixed-size arrays indexed by literals**: When a fixed-size array field or local (e.g. `int rgb_[3]`) is indexed by an integer literal (e.g. `rgb_[3]`), the compiler has enough information to catch the out-of-bounds access at compile time and emit an error. Currently it silently writes past the end of the array. Anon-tuple `tuple[N]` already does this — same approach (resolve N via `constExprToInt`, range-check against the type's known size) applies to fixed-size arrays.
 
 - **Revisit array handling**: Review how arrays are declared, passed, indexed, and iterated — including whether `int` pointer arithmetic increments correctly and whether pointer math in general is correct. Make a sample file to exercise these cases.
 
@@ -22,6 +22,12 @@
   - Emit `alwaysinline` or `inlinehint` LLVM attribute on template instantiations
   - The instantiator should internally build the `.sl` file contents and only overwrite the existing `.sl` file if the contents differ; also ensure the build system (Makefile) does not treat an unchanged file as dirty (so `make` does not unnecessarily rebuild dependents)
 
+- **Heap-allocated anon-tuples**: Support `tup_ptr = new (int, int);` and `tup_ptr = new (int, int)(10, 20);` for heap allocation of anonymous tuples. Today `new` only accepts named types. Need parser disambiguation (the type after `new` already accepts anon-tuple syntax via `parseTypeName`, but the trailing `(args)` vs no-init form needs grammar rules) and a codegen path that allocates `sizeof(<struct>)` bytes and either zero-fills or runs ctor-style per-slot init.
+
+- **Template type-parameter matching against tuple shapes**: Allow a template T to bind through a tuple-shaped parameter so `void print<T>( (char[], char[], T)^ p )` infers T from the third slot of the call site's tuple arg. Also adds the named-tuple-as-parameter form `void print<T>( (char[] type, char[] name, T value) )` where the inner element names become local bindings (sugar for an anonymous tuple-ref param plus a leading destructure into the named slots). Mirrors the existing named-tuple-return syntax, on the input side.
+
+- **Revisit `tuple.count()` and runtime-indexed tuple access**: `tuple.count()` would expose element count as a compile-time constant — useful for compile-time iteration (template recursion / `static for`). Runtime-indexed tuple access (`tuple[i]` with non-constant `i`) is currently rejected because heterogeneous tuples can't be type-checked at runtime. Either feature on its own is small; together they enable generic tuple-traversal patterns. Decide whether to introduce a compile-time-unroll construct, restrict to homogeneous tuples for runtime indexing, or leave as-is.
+
 - **Testing:**
   - Need unit tests and regression tests for pretty much everything.
   - Naming conventions: Claude used naming conventions in the parser. Test to ensure the user can use lower case classes and upper case functions.
@@ -31,4 +37,7 @@
 
 - **Optimize returning objects:**
   - Currently, a function returning an object copies the object to its retval. The retval should be the object - named value return optimization (NRVO).
+    - **Status**: single-slid sret returns already do NRVO (the function writes directly into the caller's `%retval`).
+    - **Tuple returns do not yet NRVO** — they build a transitional `ret_tup` alloca, populate per slot, load the struct, and `ret` the value (the caller then stores into its slot — second copy). NRVO for tuple returns would require a sret-style protocol where the caller passes a destination ptr.
   - Copying objects about to be destructed should use move semantics.
+    - **Status (partial)**: in the sret path, `op<-` is preferred over `op=` when the ret-value source is a fresh slid temp.
