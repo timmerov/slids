@@ -301,21 +301,59 @@ std::vector<std::string> Codegen::inferTypeArgs(
     std::set<std::string> type_param_set(tmpl.type_params.begin(), tmpl.type_params.end());
     std::map<std::string, std::string> inferred;
 
+    // Recursive unifier: bind type params occurring in `p` against `a`. Walks
+    // parallel ^/[] suffixes (with arg-side auto-promote tolerance) and
+    // recurses into anon-tuple structure, so a tuple-shaped parameter type like
+    // `(char[], char[], T)^` extracts T from the matching slot of the actual
+    // argument's anon-tuple type.
+    std::function<void(std::string, std::string)> unify =
+        [&](std::string p, std::string a) {
+        auto strip = [](std::string& t) -> std::string {
+            if (t.size() >= 2 && t.substr(t.size()-2) == "[]") {
+                t = t.substr(0, t.size()-2); return "[]";
+            }
+            if (!t.empty() && t.back() == '^') {
+                t.pop_back(); return "^";
+            }
+            return "";
+        };
+        // strip one suffix level. If both sides have a suffix, they must match;
+        // if the arg has none, allow it (caller's auto-promote rule).
+        std::string ps = strip(p);
+        std::string as = strip(a);
+        if (!ps.empty() && !as.empty() && ps != as) return;
+        if (type_param_set.count(p)) {
+            if (!inferred.count(p)) {
+                inferred[p] = a;
+                return;
+            }
+            static const std::map<std::string,int> irank =
+                {{"int8",1},{"int16",2},{"int",3},{"int32",3},{"int64",4},{"intptr",4},
+                 {"uint8",1},{"uint16",2},{"uint32",3},{"uint64",4}};
+            if ((isRefType(inferred[p]) || isPtrType(inferred[p])) && a != inferred[p])
+                throw std::runtime_error("cannot match type '" + a
+                    + "' to template parameter '" + p
+                    + "' (inferred as reference type '" + inferred[p] + "')");
+            auto ait = irank.find(inferred[p]);
+            auto bit = irank.find(a);
+            if (ait != irank.end() && bit != irank.end() && bit->second > ait->second)
+                inferred[p] = a;
+            else if (!slid_info_.count(inferred[p]) && slid_info_.count(a))
+                inferred[p] = a;
+            return;
+        }
+        if (isAnonTupleType(p) && isAnonTupleType(a)) {
+            auto pe = anonTupleElems(p);
+            auto ae = anonTupleElems(a);
+            if (pe.size() != ae.size()) return;
+            for (size_t i = 0; i < pe.size(); i++)
+                unify(pe[i], ae[i]);
+        }
+        // literal match or shape mismatch: nothing to bind
+    };
+
     for (int i = 0; i < (int)tmpl.params.size() && i < (int)args.size(); i++) {
         const std::string& ptype = tmpl.params[i].first;
-
-        // strip pointer/reference suffix to get the base type param name
-        std::string base;
-        std::string suffix;
-        if (ptype.size() >= 2 && ptype.substr(ptype.size()-2) == "[]") {
-            base = ptype.substr(0, ptype.size()-2); suffix = "[]";
-        } else if (!ptype.empty() && ptype.back() == '^') {
-            base = ptype.substr(0, ptype.size()-1); suffix = "^";
-        } else {
-            base = ptype;
-        }
-
-        if (!type_param_set.count(base)) continue;
 
         // get Slids type of actual argument
         std::string arg_slids;
@@ -331,35 +369,12 @@ std::vector<std::string> Codegen::inferTypeArgs(
             arg_slids = "int";
         } else if (dynamic_cast<const FloatLiteralExpr*>(args[i].get())) {
             arg_slids = "float64";
+        } else {
+            arg_slids = inferSlidType(*args[i]);
         }
         if (arg_slids.empty()) continue;
 
-        // strip the matching suffix to get the concrete type
-        std::string concrete = arg_slids;
-        if (suffix == "[]" && arg_slids.size() >= 2 && arg_slids.substr(arg_slids.size()-2) == "[]")
-            concrete = arg_slids.substr(0, arg_slids.size()-2);
-        else if (suffix == "^" && !arg_slids.empty() && arg_slids.back() == '^')
-            concrete = arg_slids.substr(0, arg_slids.size()-1);
-
-        // mismatched types: widen integers; prefer slid over primitive
-        if (inferred.count(base)) {
-            static const std::map<std::string,int> irank =
-                {{"int8",1},{"int16",2},{"int",3},{"int32",3},{"int64",4},{"intptr",4},
-                 {"uint8",1},{"uint16",2},{"uint32",3},{"uint64",4}};
-            // if T was inferred as a reference/iterator, all args must match exactly
-            if ((isRefType(inferred[base]) || isPtrType(inferred[base])) && concrete != inferred[base])
-                throw std::runtime_error("cannot match type '" + concrete
-                    + "' to template parameter '" + base
-                    + "' (inferred as reference type '" + inferred[base] + "')");
-            auto ait = irank.find(inferred[base]);
-            auto bit = irank.find(concrete);
-            if (ait != irank.end() && bit != irank.end() && bit->second > ait->second)
-                inferred[base] = concrete;  // widen integer
-            else if (!slid_info_.count(inferred[base]) && slid_info_.count(concrete))
-                inferred[base] = concrete;  // prefer slid type: primitive can be constructed as slid
-            continue;
-        }
-        inferred[base] = concrete;
+        unify(ptype, arg_slids);
     }
 
     std::vector<std::string> result;
