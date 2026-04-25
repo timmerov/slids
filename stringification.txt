@@ -6,7 +6,7 @@ variables:
 int some_var = 42;
 ##name(some_var) -> "some_var"
 ##type(some_var) -> "int"
-#some_var -> tuple: ("int", "some_var", 42)
+#some_var -> tuple: (##type(some_var), ##name(some_var), some_var) -> ("int", "some_var", 42)
 
 c++ parity:
 ##line -> "12" current line in the file
