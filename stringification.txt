@@ -3,11 +3,22 @@ new feature: stringification the # operator.
 # turns things into string literals.
 
 variables:
-int your_name_here;
-#your_name_here -> "your_name_here"
+int some_var = 42;
+##name(some_var) -> "some_var"
+##type(some_var) -> "int"
+#some_var -> tuple: ("int", "some_var", 42)
 
-types:
-#typeof(your_name_here) -> "int"
+c++ parity:
+##line -> "12" current line in the file
+##file -> "stringification.txt"
+##func-> "foo"
+##date -> "Apr 22 2026"
+##time -> "21:52:02"
+
+maybe in the future:
+
+##pathname -> "/home/timmer/Documents/slids/stringification.txt"
+##function_mangled -> "String__foo"
 
 enums:
 a bit of a reach goal.
@@ -16,21 +27,13 @@ even if it's just looking up the name in a table.
 we don't know in advance the value of piece.
 enum Piece { kKing }
 Piece piece = kKing;
-#__value(kKing) -> "kKing"
-#__value(piece) -> "kKing"
+##value(kKing) -> "kKing"
+##value(piece) -> "kKing"
 
 bools:
 same issues as enums.
+but easier.
 bool yes = true;
 bool no = false;
-#__value(true) -> "true";
-#__value(no) -> "false";
-
-c++ parity:
-#__line -> current line in the file
-#__filename -> "stringification.txt"
-#__pathname -> "/home/timmer/Documents/slids/stringification.txt"
-#__function -> "foo"
-#__function_mangled -> "String__foo"
-#__date -> "Apr 22 2026"
-#__time -> "21:52:02"
+##value(true) -> "true";
+##value(no) -> "false";
