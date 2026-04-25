@@ -10,6 +10,7 @@ BUILD_DIR = ../build/sample
 SAMPLES = \
 	biz_buzz \
 	chess1 chess2 chess3 \
+	dump \
 	counter1 counter2 \
 	hello1 \
 	leap_years \
