@@ -1,0 +1,131 @@
+a: (x,y,z)=(0,1,2)
+b: (x,y,z)=(10,11,12)
+c: (x,y,z)=(20,21,22)
+d: (x,y,z)=(40,41,42)
+d*: (x,y,z)=(50,51,52)
+d<-: (x,y,z)=(60,61,62)
+tuple = (1,2,10)
+tuple2 = (1,2,10)
+tuple3 = (1,2,10)
+tuple4 = (1,2,10)
+tuple2 = (100,200,10)
+tuple = (100,200,10)
+x=-1 y= -2
+a1=42 b1=weird
+c1=42 d1=weird
+slid_tuple[0]: (x,y,z)=(0,1,2)
+slid_tuple[1]: (x,y,z)=(10,11,12)
+slid_tuple[0]: (x,y,z)=(1,2,3)
+slid_tuple[1]: (x,y,z)=(4,5,6)
+slid_tuple[0] after element-write: (x,y,z)=(7,8,9)
+p: (x,y,z)=(7,8,9)
+q: (x,y,z)=(4,5,6)
+6 ctor, 2 move, 6 dtor.
+Action:ctor
+Action:ctor
+Action:ctor
+Action:ctor
+Action:dtor
+Action:dtor
+Action:ctor
+Action:ctor
+Action:move
+Action:move
+Action:dtor
+Action:dtor
+Action:dtor
+Action:dtor
+ret_tuple = (100,200,300)
+ret_tuple2 = (100,200,300)
+slid_ret[0]: (x,y,z)=(1,2,3)
+slid_ret[1]: (x,y,z)=(4,5,6)
+var_ret = (11,22,33)
+local_ret[0]: (x,y,z)=(7,8,9)
+local_ret[1]: (x,y,z)=(10,11,12)
+var_slid_ret[0]: (x,y,z)=(13,14,15)
+var_slid_ret[1]: (x,y,z)=(16,17,18)
+-- action move return: expect 2 move lines --
+Action:ctor
+Action:move
+Action:ctor
+Action:move
+Action:dtor
+Action:dtor
+Action:ctor
+Action:ctor
+-- action copy return: expect 0 move lines --
+Action:ctor
+Action:ctor
+Action:dtor
+Action:dtor
+Action:ctor
+Action:ctor
+Action:dtor
+Action:dtor
+Action:dtor
+Action:dtor
+pass_ret[0]: (x,y,z)=(13,14,15)
+pass_ret[1]: (x,y,z)=(16,17,18)
+sum = (5,7,9)
+diff = (9,18,27)
+prod = (10,21,36)
+ss[0]: (x,y,z)=(11,22,33)
+ss[1]: (x,y,z)=(44,55,66)
+-- tuple[N] <- move test: expect 5 ctor, 1 move, 5 dtor --
+Action:ctor
+Action:ctor
+Action:ctor
+Action:ctor
+Action:dtor
+Action:dtor
+Action:ctor
+Action:move
+Action:dtor
+Action:dtor
+Action:dtor
+sC: (x,y,z)=(11,22,33)
+sq[0]: (x,y,z)=(10,20,30)
+sq[1]: (x,y,z)=(400,500,600)
+-- op= dispatch test: expect 2 Counted:op= prints --
+Counted:op=
+Counted:op=
+-- raw-pointer move test --
+src is null after move
+after slid_tuple[0].x_ = 99: (x,y,z)=(99,8,9)
+-- chained indexed field move test --
+buf is null after move into ib_tup[0].data_
+nested[0]=1
+inner=(2,3)
+nested[1][0]=2 nested[1][1]=3
+p3: (x,y,z)=(100,200,300)
+q3: (x,y,z)=(400,500,600)
+sx: (x,y,z)=(99,8,9)
+th-before.pair_=(10,20)
+th-after.pair_=(100,200)
+direct: th.pair_[0]=100 th.pair_[1]=200
+th_def.pair_=(0,0)
+sum_sym = (12,15,18)
+after nested[1]=(9,9): nested[1][0]=9 nested[1][1]=9
+th-after-single-write.pair_=(99,200)
+make_tuple()[0]=100 [2]=300
+make_simples_var()[0]: (x,y,z)=(13,14,15)
+take_tuple: p^[0]=10 p^[1]=20
+take_tuple: p^[0]=10 p^[1]=20
+take_tuple: p^[0]=100 p^[1]=200
+after modify_tuple: tp=(999,20)
+after move_slot: tp=(42,20)
+via-ref-sp[0]: (x,y,z)=(99,8,9)
+via-ref-sp[1]: (x,y,z)=(4,5,6)
+np^[0][0]=1 np^[0][1]=2 np^[1]=3
+(ra,rb,rc)=(100,200,300)
+(ra,rb,rc) after reassign=(7,8,9)
+ntx = ((6,8),(10,12))
+b_add = (11,12,13)
+b_mul = (2,4,6)
+b_sub = (99,98,97)
+b_div = (2,4,6)
+b_nest = ((11,12),(13,14))
+-- slid temp in call arg test --
+Action:ctor
+takeAction received
+Action:dtor

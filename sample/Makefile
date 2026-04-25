@@ -16,8 +16,7 @@ SAMPLES = \
 	memcpy \
 	primes1 \
 	reference1 reference2 reference3 \
-	reverse_bits \
-	tuple
+	reverse_bits
 
 # --- multi-file samples (don't fit the single-file template) ---
 MULTI_SAMPLES = import_test

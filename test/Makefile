@@ -22,6 +22,7 @@ SAMPLES = \
 	sizeof \
 	strlitcat \
 	switch \
+	tuple \
 	type_conv \
 	type_infer
 
