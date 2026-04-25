@@ -212,6 +212,17 @@ private:
     void emitElementwiseAtPtr(const std::string& ttype,
                               const std::string& l_ptr, const std::string& r_ptr,
                               const std::string& res_ptr, const std::string& op);
+    // Broadcast a scalar over an anon-tuple, slot-by-slot, at pointer level.
+    // Recurses into nested anon-tuple slots; for slid slots requires user
+    // `Elem__op<op>(Elem^, scalar_slids)` overload. `scalar_on_left` flips
+    // operand order for non-commutative ops.
+    void emitTupleScalarBroadcastAtPtr(const std::string& ttype,
+                                       const std::string& tup_ptr,
+                                       const std::string& scalar_val,
+                                       const std::string& scalar_slids,
+                                       const std::string& res_ptr,
+                                       const std::string& op,
+                                       bool scalar_on_left);
     std::string emitSlidAlloca(const std::string& slid_name); // alloca + default-init fields + ctor
     std::string emitRawSlidAlloca(const std::string& slid_name); // alloca only, no init, no dtor
     void emitConstructAt(const std::string& stype, const std::string& ptr,

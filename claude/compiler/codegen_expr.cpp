@@ -767,35 +767,65 @@ std::string Codegen::emitExpr(const Expr& expr) {
         {
             std::string lslid = inferSlidType(*b->left);
             std::string rslid = inferSlidType(*b->right);
-            if (isAnonTupleType(lslid) && isAnonTupleType(rslid)) {
+            bool l_tuple = isAnonTupleType(lslid);
+            bool r_tuple = isAnonTupleType(rslid);
+            static const std::set<std::string> ewise_ops = {
+                "+","-","*","/","%","&","|","^","<<",">>"
+            };
+            // Materialize an anon-tuple operand to a ptr. VarExpr of matching type
+            // → use its alloca directly; otherwise emit the struct SSA and store
+            // into a fresh temp.
+            auto materialize = [&](const Expr& e, const std::string& t) -> std::string {
+                if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
+                    auto lit = locals_.find(ve->name);
+                    if (lit != locals_.end()) return lit->second;
+                }
+                std::string v = emitExpr(e);
+                std::string tmp = newTmp();
+                out_ << "    " << tmp << " = alloca " << llvmType(t) << "\n";
+                out_ << "    store " << llvmType(t) << " " << v << ", ptr " << tmp << "\n";
+                return tmp;
+            };
+            if (l_tuple && r_tuple) {
                 if (lslid != rslid)
                     throw std::runtime_error("tuple type mismatch in elementwise '"
                         + b->op + "': " + lslid + " vs " + rslid);
-                static const std::set<std::string> ewise_ops = {
-                    "+","-","*","/","%","&","|","^","<<",">>"
-                };
                 if (!ewise_ops.count(b->op))
                     throw std::runtime_error("operator '" + b->op
                         + "' not supported element-wise on tuples");
-                // Materialize each operand to a ptr. VarExpr of matching type → use its
-                // alloca directly; otherwise emit the struct SSA and store into a fresh temp.
-                auto materialize = [&](const Expr& e, const std::string& t) -> std::string {
-                    if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
-                        auto lit = locals_.find(ve->name);
-                        if (lit != locals_.end()) return lit->second;
-                    }
-                    std::string v = emitExpr(e);
-                    std::string tmp = newTmp();
-                    out_ << "    " << tmp << " = alloca " << llvmType(t) << "\n";
-                    out_ << "    store " << llvmType(t) << " " << v << ", ptr " << tmp << "\n";
-                    return tmp;
-                };
                 std::string l_ptr = materialize(*b->left, lslid);
                 std::string r_ptr = materialize(*b->right, rslid);
                 std::string struct_llvm = llvmType(lslid);
                 std::string res_ptr = newTmp();
                 out_ << "    " << res_ptr << " = alloca " << struct_llvm << "\n";
                 emitElementwiseAtPtr(lslid, l_ptr, r_ptr, res_ptr, b->op);
+                std::string loaded = newTmp();
+                out_ << "    " << loaded << " = load " << struct_llvm
+                     << ", ptr " << res_ptr << "\n";
+                return loaded;
+            }
+            // mixed shape: tuple op scalar (broadcast). Other side must be a primitive
+            // scalar (not slid, not tuple, not pointer).
+            if (l_tuple ^ r_tuple) {
+                if (!ewise_ops.count(b->op))
+                    throw std::runtime_error("operator '" + b->op
+                        + "' not supported element-wise on tuples");
+                const std::string& tup_type = l_tuple ? lslid : rslid;
+                const std::string& scalar_slids = l_tuple ? rslid : lslid;
+                if (slid_info_.count(scalar_slids) || isAnonTupleType(scalar_slids)
+                        || isIndirectType(scalar_slids))
+                    throw std::runtime_error("broadcast: non-tuple operand of '" + b->op
+                        + "' must be a primitive scalar; got '" + scalar_slids + "'");
+                const Expr& tup_expr = l_tuple ? *b->left : *b->right;
+                const Expr& scalar_expr = l_tuple ? *b->right : *b->left;
+                std::string tup_ptr = materialize(tup_expr, tup_type);
+                std::string scalar_val = emitExpr(scalar_expr);
+                std::string struct_llvm = llvmType(tup_type);
+                std::string res_ptr = newTmp();
+                out_ << "    " << res_ptr << " = alloca " << struct_llvm << "\n";
+                emitTupleScalarBroadcastAtPtr(tup_type, tup_ptr, scalar_val,
+                                              scalar_slids, res_ptr, b->op,
+                                              /*scalar_on_left=*/!l_tuple);
                 std::string loaded = newTmp();
                 out_ << "    " << loaded << " = load " << struct_llvm
                      << ", ptr " << res_ptr << "\n";
@@ -1732,6 +1762,14 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             b->op == ">"  || b->op == "<=" || b->op == ">=" ||
             b->op == "&&" || b->op == "||" || b->op == "^^")
             return "i32";
+        // elementwise tuple binary op (including scalar broadcast): the result is a
+        // loaded struct SSA matching the tuple operand's LLVM type.
+        {
+            std::string ls = inferSlidType(*b->left);
+            std::string rs = inferSlidType(*b->right);
+            if (isAnonTupleType(ls)) return llvmType(ls);
+            if (isAnonTupleType(rs)) return llvmType(rs);
+        }
         // arithmetic/bitwise: result is the wider of the two operands
         {
             bool left_is_literal  = (dynamic_cast<const IntLiteralExpr*>(b->left.get())  != nullptr);
@@ -2215,7 +2253,13 @@ std::string Codegen::inferSlidType(const Expr& expr) {
             be->op == ">"  || be->op == "<=" || be->op == ">=" ||
             be->op == "&&" || be->op == "||" || be->op == "^^")
             return "bool";
-        return inferSlidType(*be->left);
+        // elementwise tuple binary op (including scalar broadcast): result type is the
+        // tuple operand's type, regardless of which side it appears on.
+        std::string lt = inferSlidType(*be->left);
+        std::string rt = inferSlidType(*be->right);
+        if (isAnonTupleType(lt)) return lt;
+        if (isAnonTupleType(rt)) return rt;
+        return lt;
     }
     // unary — propagate through
     if (auto* ue = dynamic_cast<const UnaryExpr*>(&expr)) {

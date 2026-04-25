@@ -401,6 +401,20 @@ int32 main() {
     nt1 = ntx[1];
     __println("ntx = ((" + nt0[0] + "," + nt0[1] + "),(" + nt1[0] + "," + nt1[1] + "))");
 
+    /* #15: tuple op scalar broadcast. */
+    b_add = (1, 2, 3) + 10;
+    __println("b_add = (" + b_add[0] + "," + b_add[1] + "," + b_add[2] + ")");
+    b_mul = 2 * (1, 2, 3);
+    __println("b_mul = (" + b_mul[0] + "," + b_mul[1] + "," + b_mul[2] + ")");
+    b_sub = 100 - (1, 2, 3);
+    __println("b_sub = (" + b_sub[0] + "," + b_sub[1] + "," + b_sub[2] + ")");
+    b_div = (10, 20, 30) / 5;
+    __println("b_div = (" + b_div[0] + "," + b_div[1] + "," + b_div[2] + ")");
+    b_nest = ((1,2),(3,4)) + 10;
+    bn0 = b_nest[0];
+    bn1 = b_nest[1];
+    __println("b_nest = ((" + bn0[0] + "," + bn0[1] + "),(" + bn1[0] + "," + bn1[1] + "))");
+
     /* #3: slid temp in non-consume context (call arg). Expect 1 ctor, 1 dtor. */
     {
         __println("-- slid temp in call arg test --");

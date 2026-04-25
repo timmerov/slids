@@ -2172,6 +2172,79 @@ void Codegen::emitElementwiseAtPtr(const std::string& ttype,
     }
 }
 
+void Codegen::emitTupleScalarBroadcastAtPtr(const std::string& ttype,
+                                             const std::string& tup_ptr,
+                                             const std::string& scalar_val,
+                                             const std::string& scalar_slids,
+                                             const std::string& res_ptr,
+                                             const std::string& op,
+                                             bool scalar_on_left) {
+    auto fields = fieldTypesOf(ttype);
+    for (int i = 0; i < (int)fields.size(); i++) {
+        const std::string& ft = fields[i];
+        std::string t_gep = emitFieldGep(ttype, tup_ptr, i);
+        std::string r_gep = emitFieldGep(ttype, res_ptr, i);
+        if (isAnonTupleType(ft)) {
+            emitTupleScalarBroadcastAtPtr(ft, t_gep, scalar_val, scalar_slids,
+                                          r_gep, op, scalar_on_left);
+            continue;
+        }
+        if (slid_info_.count(ft)) {
+            std::string op_base = ft + "__op" + op;
+            auto oit = method_overloads_.find(op_base);
+            std::string mangled;
+            std::string want_left = ft + "^";
+            if (oit != method_overloads_.end()) {
+                for (auto& [m, pt] : oit->second) {
+                    if (pt.size() == 2 && pt[0] == want_left && pt[1] == scalar_slids) {
+                        mangled = m; break;
+                    }
+                }
+            }
+            if (mangled.empty())
+                throw std::runtime_error("broadcast: slid slot '" + ft + "' has no op"
+                    + op + "(" + ft + "^, " + scalar_slids + ")");
+            std::string ret_t = func_return_types_.count(mangled)
+                ? func_return_types_[mangled] : "";
+            bool is_method = (ret_t == "void");
+            std::string args = is_method
+                ? ("ptr " + r_gep)
+                : ("ptr sret(%struct." + ft + ") " + r_gep);
+            args += ", ptr " + t_gep + ", " + llvmType(scalar_slids) + " " + scalar_val;
+            out_ << "    call void @" << llvmGlobalName(mangled) << "(" << args << ")\n";
+            continue;
+        }
+        // scalar slot — strict type-match with scalar
+        if (ft != scalar_slids)
+            throw std::runtime_error("broadcast: tuple slot type '" + ft
+                + "' does not match scalar type '" + scalar_slids + "'");
+        std::string elem_llvm = llvmType(ft);
+        bool unsig = (ft == "uint" || ft == "uint8" || ft == "uint16"
+                   || ft == "uint32" || ft == "uint64"
+                   || ft == "char" || ft == "bool");
+        std::string instr;
+        if      (op == "+")  instr = "add";
+        else if (op == "-")  instr = "sub";
+        else if (op == "*")  instr = "mul";
+        else if (op == "/")  instr = unsig ? "udiv" : "sdiv";
+        else if (op == "%")  instr = unsig ? "urem" : "srem";
+        else if (op == "&")  instr = "and";
+        else if (op == "|")  instr = "or";
+        else if (op == "^")  instr = "xor";
+        else if (op == "<<") instr = "shl";
+        else if (op == ">>") instr = unsig ? "lshr" : "ashr";
+        else throw std::runtime_error("broadcast: unsupported op '" + op + "'");
+        std::string slot_val = newTmp();
+        out_ << "    " << slot_val << " = load " << elem_llvm << ", ptr " << t_gep << "\n";
+        std::string lhs = scalar_on_left ? scalar_val : slot_val;
+        std::string rhs = scalar_on_left ? slot_val : scalar_val;
+        std::string rtmp = newTmp();
+        out_ << "    " << rtmp << " = " << instr << " " << elem_llvm
+             << " " << lhs << ", " << rhs << "\n";
+        out_ << "    store " << elem_llvm << " " << rtmp << ", ptr " << r_gep << "\n";
+    }
+}
+
 // Alloca a fresh instance of slid_name, default-init all fields, run ctor body, call __ctor.
 // Returns the alloca register. Does NOT register for dtor (caller's responsibility if needed).
 std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
