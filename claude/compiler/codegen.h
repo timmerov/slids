@@ -33,7 +33,7 @@ struct NestedFuncInfo {
 
 class Codegen {
 public:
-    Codegen(const Program& program, std::ostream& out);
+    Codegen(const Program& program, std::ostream& out, std::string source_file = "");
     void emit();
     void writeSliFile(std::ostream& out) const;
 
@@ -63,6 +63,9 @@ private:
     // label. Replaces the pre-collection scan, which couldn't see template
     // instantiation bodies.
     std::string registerStringConstant(const std::string& value);
+
+    std::string source_file_;        // base filename of the source being compiled (for ##file)
+    std::string current_func_name_;  // user-visible name of the function being emitted (for ##func)
 
     std::string break_label_;
     std::string continue_label_;

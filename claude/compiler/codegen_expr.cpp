@@ -1486,6 +1486,29 @@ std::string Codegen::emitExpr(const Expr& expr) {
         return ptr;
     }
 
+    if (auto* se = dynamic_cast<const StringifyExpr*>(&expr)) {
+        std::string result;
+        if (se->kind == "name") {
+            auto* ve = dynamic_cast<const VarExpr*>(se->operand.get());
+            if (!ve) throw std::runtime_error("##name requires a simple variable");
+            result = ve->name;
+        } else if (se->kind == "type") {
+            result = inferSlidType(*se->operand);
+        } else if (se->kind == "line") {
+            result = std::to_string(se->line);
+        } else if (se->kind == "file") {
+            result = source_file_;
+        } else if (se->kind == "func") {
+            result = current_func_name_;
+        } else if (se->kind == "date") {
+            result = __DATE__;
+        } else if (se->kind == "time") {
+            result = __TIME__;
+        }
+        StringLiteralExpr str(result);
+        return emitExpr(str);
+    }
+
     if (auto* s = dynamic_cast<const StringLiteralExpr*>(&expr)) {
         std::string label = registerStringConstant(s->value);
         int len; llvmEscape(s->value, len);
@@ -1676,6 +1699,9 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // string literal — ptr
     if (dynamic_cast<const StringLiteralExpr*>(&expr)) return "ptr";
+
+    // stringify — ptr (char[])
+    if (dynamic_cast<const StringifyExpr*>(&expr)) return "ptr";
 
     // variable — look up declared type
     if (auto* v = dynamic_cast<const VarExpr*>(&expr)) {
@@ -2028,6 +2054,8 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     if (dynamic_cast<const FloatLiteralExpr*>(&expr)) return "float64";
     // string literal → char[]
     if (dynamic_cast<const StringLiteralExpr*>(&expr)) return "char[]";
+    // stringify → char[]
+    if (dynamic_cast<const StringifyExpr*>(&expr)) return "char[]";
     // nullptr → intptr
     if (dynamic_cast<const NullptrExpr*>(&expr)) return "intptr";
     // tuple literal (a, b, c) → anonymous tuple type (ta,tb,tc)

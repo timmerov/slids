@@ -372,6 +372,22 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         expect(TokenType::kRParen, "expected ')'");
         return first;
     }
+    if (t.type == TokenType::kHashHash) {
+        int src_line = t.line;
+        advance();
+        std::string kw = expect(TokenType::kIdentifier,
+            "expected name, type, line, file, func, date, or time after ##").value;
+        if (kw == "name" || kw == "type") {
+            expect(TokenType::kLParen, "expected '(' after ##" + kw);
+            auto operand = parseExpr();
+            expect(TokenType::kRParen, "expected ')'");
+            return std::make_unique<StringifyExpr>(kw, std::move(operand), src_line);
+        }
+        if (kw == "line" || kw == "file" || kw == "func" || kw == "date" || kw == "time")
+            return std::make_unique<StringifyExpr>(kw, nullptr, src_line);
+        throw std::runtime_error("Line " + std::to_string(src_line)
+            + ": unknown ## operator '" + kw + "'");
+    }
     throw std::runtime_error("Line " + std::to_string(t.line)
         + ": expected expression, got '" + t.value + "'");
 }
@@ -441,6 +457,24 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
 }
 
 std::unique_ptr<Expr> Parser::parseUnary() {
+    // #x — desugar to (##type(x), ##name(x), x)
+    if (peek().type == TokenType::kHash) {
+        int src_line = peek().line;
+        advance();
+        auto operand = parsePostfix(parsePrimary());
+        auto* ve = dynamic_cast<VarExpr*>(operand.get());
+        if (!ve)
+            throw std::runtime_error("Line " + std::to_string(src_line)
+                + ": # requires a simple variable name");
+        std::string name = ve->name;
+        auto tuple = std::make_unique<TupleExpr>();
+        tuple->values.push_back(
+            std::make_unique<StringifyExpr>("type", std::make_unique<VarExpr>(name), src_line));
+        tuple->values.push_back(
+            std::make_unique<StringifyExpr>("name", std::make_unique<VarExpr>(name), src_line));
+        tuple->values.push_back(std::move(operand));
+        return tuple;
+    }
     // pointer reinterpret cast: <Type^> expr  or  <Type[]> expr  or  <intptr> expr
     if (peek().type == TokenType::kLt) {
         int saved = pos_;

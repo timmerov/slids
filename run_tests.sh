@@ -11,6 +11,7 @@ SAMPLES=(
     constructor
     function1
     indexop
+    macros
     math1 math2
     move
     new_delete
@@ -32,7 +33,9 @@ if [[ "${1:-}" == "--update" ]]; then
 fi
 
 normalize() {
-    sed 's/intptr=[0-9][0-9]*/intptr=ADDR/g'
+    sed -e 's/intptr=[0-9][0-9]*/intptr=ADDR/g' \
+        -e 's/##date=[A-Za-z]\{3\} [ 0-9][0-9] [0-9]\{4\}/##date=DATE/' \
+        -e 's/##time=[0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}/##time=TIME/'
 }
 
 pass=0

@@ -1,0 +1,14 @@
+##name(some_int  )=some_int
+##name(some_float)=some_float
+##name(some_bool )=some_bool
+##type(some_int  )=int
+##type(some_float)=float64
+##type(some_bool )=bool
+##line=27
+##file=macros.sl
+##func=main
+##date=DATE
+##time=TIME
+#some_int  : int some_int = 42
+#some_float: float64 some_float = 3.140000
+#some_bool : bool some_bool = 1

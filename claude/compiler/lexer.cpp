@@ -302,6 +302,14 @@ std::vector<Token> Lexer::tokenize() {
                 case ']':
                     tokens.emplace_back(TokenType::kRBracket, "]", line_);
                     break;
+                case '#':
+                    if (peek() == '#') {
+                        advance();
+                        tokens.emplace_back(TokenType::kHashHash, "##", line_);
+                    } else {
+                        tokens.emplace_back(TokenType::kHash, "#", line_);
+                    }
+                    break;
                 default:  tokens.emplace_back(TokenType::kUnknown, std::string(1, c), line_); break;
             }
         }

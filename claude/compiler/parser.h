@@ -170,6 +170,15 @@ struct SizeofExpr : Expr {
     std::unique_ptr<Expr> operand;   // non-null for sizeof(expr)
 };
 
+// stringification: ##name(x), ##type(x), ##line, ##file, ##func, ##date, ##time
+struct StringifyExpr : Expr {
+    std::string kind;                // "name"|"type"|"line"|"file"|"func"|"date"|"time"
+    std::unique_ptr<Expr> operand;   // non-null for name/type; null for others
+    int line = 0;                    // source line (for ##line)
+    StringifyExpr(std::string k, std::unique_ptr<Expr> op = nullptr, int ln = 0)
+        : kind(std::move(k)), operand(std::move(op)), line(ln) {}
+};
+
 // --- Statements ---
 
 struct Stmt {

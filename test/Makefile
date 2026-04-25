@@ -12,6 +12,7 @@ SAMPLES = \
 	constructor \
 	function1 \
 	indexop \
+	macros \
 	math1 math2 \
 	move \
 	new_delete \

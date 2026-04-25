@@ -169,7 +169,8 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        Codegen codegen(program, out);
+        std::string source_file = std::filesystem::path(input_path).filename().string();
+        Codegen codegen(program, out, source_file);
         codegen.emit();
 
         std::cout << "slidsc: wrote " << output_path << "\n";

@@ -6,8 +6,9 @@
 #include <climits>
 #include "codegen_helpers.h"
 
-Codegen::Codegen(const Program& program, std::ostream& out)
-    : program_(program), out_(out), str_counter_(0), tmp_counter_(0), label_counter_(0) {}
+Codegen::Codegen(const Program& program, std::ostream& out, std::string source_file)
+    : program_(program), out_(out), str_counter_(0), tmp_counter_(0), label_counter_(0),
+      source_file_(std::move(source_file)) {}
 
 std::string Codegen::newTmp() { return "%t" + std::to_string(tmp_counter_++); }
 
@@ -2636,6 +2637,10 @@ void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& full_mangle
     continue_label_ = "";
     current_slid_ = slid.name;
     block_terminated_ = false;
+    {
+        size_t sep = full_mangled.rfind("__");
+        current_func_name_ = (sep != std::string::npos) ? full_mangled.substr(sep + 2) : full_mangled;
+    }
 
     bool uses_sret = !return_type.empty() && slid_info_.count(return_type) > 0;
     current_func_uses_sret_ = uses_sret;
@@ -2707,6 +2712,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     continue_label_ = "";
     current_slid_ = "";
     current_parent_ = fn.name;
+    current_func_name_ = fn.name;
     frame_ptr_reg_ = "";
     block_terminated_ = false;
 

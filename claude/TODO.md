@@ -2,6 +2,13 @@
 
 ## Compiler
 
+- **Expand ##name scope**: Currently `##name(expr)` only accepts a bare variable reference (`VarExpr`). Consider extending to field access (`obj.field` → `"field"` or `"obj.field"`), array index (`arr[i]` → `"arr"`), and other lvalue forms.
+
+- **##value operator**: Implement `##value(expr)` for runtime-to-string conversion of enum values and bools. Enums require a lookup table (name → string); bools are a simple conditional. This needs runtime code emission and a table-generation pass during codegen.
+
+- **Future stringification macros**: `##pathname` (full source file path), `##function_mangled` (linker-mangled name), and other compile-time introspection macros noted in `stringification.txt`.
+
+
 - **Optimize temporary object usage**: Allow a class to declare `op reset() { ... }` that returns the object to a valid default state. When this overload exists, the compiler should reuse the same temporary slot across successive operations — avoiding the allocate/free cycle entirely. This is especially valuable for types like `String` where each construction involves a heap allocation.
 
 - **Auto-generated transport header signatures**: When producing a `.slh` transport header, allow marking a declaration with `= auto` to have the compiler derive and emit the full signature from the implementation. For example, `hello = auto;` in the header spec would expand to `void hello(char[] greeting);` in the exported `.slh`, eliminating the need to hand-write signatures for transport types.
