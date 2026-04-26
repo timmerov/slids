@@ -749,6 +749,36 @@ Rules:
 
 ---
 
+## Namespaces
+
+A namespace is a slid with no data block — a name that groups functions. Cannot be instantiated.
+
+```
+Space {
+    void greet() {
+        __println("howdy");
+    }
+}
+
+Space:greet();          // call a namespace function
+```
+
+A leading `::` reaches the global (unnamed) namespace:
+
+```
+::greet();              // calls the top-level greet()
+```
+
+Reopening adds more functions to an existing namespace:
+
+```
+Space {
+    void wave() { ... }
+}
+```
+
+---
+
 ## Inheritance
 
 > **TODO:** Not yet implemented. The design described below is aspirational.

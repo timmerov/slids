@@ -1,4 +1,15 @@
 
+aliases:
+alias int32 i32;
+
+using:
+what's the slids equivalent of using?
+using std;
+possible:
+alias std;
+alias std :;
+alias std ::;
+
 templated namespaces:
 Namespace<T> {
     ...
