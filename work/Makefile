@@ -5,7 +5,6 @@ LLCFLAGS = --filetype=obj --relocation-model=pic
 
 BIN_DIR    = ../bin
 BUILD_DIR  = ../build/work
-INC_DIR    = $(BUILD_DIR)/incomplete
 ST_DIR     = $(BUILD_DIR)/string_test
 TM1_DIR    = $(BUILD_DIR)/template1
 TM2_DIR    = $(BUILD_DIR)/template2
@@ -21,23 +20,9 @@ TMT_INST_OBJ = $(TMT_DIR)/__instantiations.o
 IMPORT_PATH = .
 SLIDSC_FLAGS = --import-path $(IMPORT_PATH)
 
-.PHONY: all clean incomplete string_test template1 template2 template_test vector1
+.PHONY: all clean string_test template1 template2 template_test vector1
 
-all: incomplete string_test vector1
-
-# ---- incomplete ----
-
-incomplete: $(BIN_DIR)/incomplete
-
-$(BIN_DIR)/incomplete: $(INC_DIR)/incomplete.o
-	$(CXX) $^ -o $@
-
-$(INC_DIR)/incomplete.o: $(INC_DIR)/incomplete.ll
-	$(LLC) $(LLCFLAGS) $< -o $@
-
-$(INC_DIR)/incomplete.ll: incomplete.sl $(SLIDSC)
-	mkdir -p $(INC_DIR)
-	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS)
+all: string_test vector1
 
 # ---- string_test ----
 
@@ -151,4 +136,4 @@ $(TMT_INST_SL): $(wildcard $(TMT_DIR)/*.sli) $(SLIDSC)
 
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f $(BIN_DIR)/incomplete $(BIN_DIR)/string_test $(BIN_DIR)/template1 $(BIN_DIR)/template2 $(BIN_DIR)/template_test $(BIN_DIR)/vector1
+	rm -f $(BIN_DIR)/string_test $(BIN_DIR)/template1 $(BIN_DIR)/template2 $(BIN_DIR)/template_test $(BIN_DIR)/vector1

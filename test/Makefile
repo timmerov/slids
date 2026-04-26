@@ -11,6 +11,7 @@ SAMPLES = \
 	class \
 	constructor \
 	function1 \
+	incomplete \
 	indexop \
 	macros \
 	math1 math2 \

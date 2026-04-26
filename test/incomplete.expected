@@ -1,0 +1,7 @@
+Incomplete:ctor
+Hello, World!
+sizeof(inc)<4>=4
+sizeof(Incomplete)<4>=4
+inc.sizeof()<4>=4
+Incomplete.sizeof()<4>=4
+Incomplete:dtor
