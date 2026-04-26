@@ -483,7 +483,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
-        // obj.sizeof() and TypeName.sizeof() — compiler-generated __sizeof, no self arg
+        // obj.sizeof() and TypeName.sizeof() — compiler-generated __$sizeof, no self arg
         if (mc->method == "sizeof") {
             std::string slid_name;
             if (auto* ve = dynamic_cast<const VarExpr*>(mc->object.get())) {
@@ -494,7 +494,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             if (slid_name.empty())
                 throw std::runtime_error("sizeof(): cannot determine slid type");
             std::string reg = newTmp();
-            out_ << "    " << reg << " = call i64 @" << slid_name << "__sizeof()\n";
+            out_ << "    " << reg << " = call i64 @" << slid_name << "__$sizeof()\n";
             return reg;
         }
 
@@ -523,7 +523,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         if (!slid_name.empty() && mc->method == "~") {
             auto& info = slid_info_[slid_name];
             if (info.has_dtor || info.has_pinit)
-                out_ << "    call void @" << slid_name << "__dtor(ptr " << obj_ptr << ")\n";
+                out_ << "    call void @" << slid_name << "__$dtor(ptr " << obj_ptr << ")\n";
             return "";
         }
         if (!slid_name.empty()) {
@@ -1274,10 +1274,10 @@ std::string Codegen::emitExpr(const Expr& expr) {
             // pointer/iterator types — size of a pointer
             if (tn.size() >= 1 && tn.back() == '^') return "8";
             if (tn.size() >= 2 && tn.substr(tn.size()-2) == "[]") return "8";
-            // slid (struct) type — call __sizeof
+            // slid (struct) type — call __$sizeof
             if (slid_info_.count(tn)) {
                 std::string reg = newTmp();
-                out_ << "    " << reg << " = call i64 @" << tn << "__sizeof()\n";
+                out_ << "    " << reg << " = call i64 @" << tn << "__$sizeof()\n";
                 return reg;
             }
             return "0";
@@ -1353,7 +1353,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         if (is_slid) {
             {
                 std::string sz = newTmp();
-                out_ << "    " << sz << " = call i64 @" << ne->elem_type << "__sizeof()\n";
+                out_ << "    " << sz << " = call i64 @" << ne->elem_type << "__$sizeof()\n";
                 elem_size = sz;
             }
         } else {
@@ -1431,9 +1431,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     self_ptr_ = saved_self;
                 }
                 if (info.has_pinit)
-                    out_ << "    call void @" << ne->elem_type << "__pinit(ptr " << elem << ")\n";
+                    out_ << "    call void @" << ne->elem_type << "__$pinit(ptr " << elem << ")\n";
                 else if (info.has_explicit_ctor)
-                    out_ << "    call void @" << ne->elem_type << "__ctor(ptr " << elem << ")\n";
+                    out_ << "    call void @" << ne->elem_type << "__$ctor(ptr " << elem << ")\n";
 
                 std::string idx_next = newTmp();
                 out_ << "    " << idx_next << " = add i64 " << idx << ", 1\n";
@@ -1456,7 +1456,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string size_val;
         if (slid_info_.count(stype)) {
             std::string sz = newTmp();
-            out_ << "    " << sz << " = call i64 @" << stype << "__sizeof()\n";
+            out_ << "    " << sz << " = call i64 @" << stype << "__$sizeof()\n";
             size_val = sz;
         } else {
             // primitive type
@@ -1593,9 +1593,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
             // call ctor if any
             if (info.has_pinit)
-                out_ << "    call void @" << stype << "__pinit(ptr " << tmp_reg << ")\n";
+                out_ << "    call void @" << stype << "__$pinit(ptr " << tmp_reg << ")\n";
             else if (info.has_explicit_ctor)
-                out_ << "    call void @" << stype << "__ctor(ptr " << tmp_reg << ")\n";
+                out_ << "    call void @" << stype << "__$ctor(ptr " << tmp_reg << ")\n";
 
             // call op= with the operand
             std::string mangled = resolveOpEq(stype + "__op=", *nc->operand);

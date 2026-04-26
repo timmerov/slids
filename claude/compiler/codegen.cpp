@@ -256,11 +256,11 @@ void Codegen::collectFunctionSignatures() {
                     if (ptypes == mptypes) exported_symbols_.insert(mangled);
             }
         }
-        if (slid.has_explicit_ctor_decl) exported_symbols_.insert(slid.name + "__ctor");
-        if (slid.has_explicit_dtor_decl) exported_symbols_.insert(slid.name + "__dtor");
+        if (slid.has_explicit_ctor_decl) exported_symbols_.insert(slid.name + "__$ctor");
+        if (slid.has_explicit_dtor_decl) exported_symbols_.insert(slid.name + "__$dtor");
         if (slid.is_transport_impl) {
-            exported_symbols_.insert(slid.name + "__pinit");
-            exported_symbols_.insert(slid.name + "__sizeof");
+            exported_symbols_.insert(slid.name + "__$pinit");
+            exported_symbols_.insert(slid.name + "__$sizeof");
         }
     }
 }
@@ -463,10 +463,10 @@ void Codegen::collectSlids() {
             info.field_index[slid.fields[i].name] = i;
             info.field_types.push_back(slid.fields[i].type);
         }
-        // declaration of incomplete class: consumer calls __pinit and __sizeof
+        // declaration of incomplete class: consumer calls __$pinit and __$sizeof
         if (slid.has_ellipsis_suffix)
             info.has_pinit = true;
-        // impl side: complete locally; emits __pinit and __sizeof for consumer
+        // impl side: complete locally; emits __$pinit and __$sizeof for consumer
         if (slid.is_transport_impl) {
             info.is_transport_impl = true;
             info.public_field_count = slid.public_field_count;
@@ -721,9 +721,9 @@ void Codegen::emit() {
 
     // explicit instantiations are linkable entry points — export all their symbols
     for (auto* slid : pending_slid_instantiations_) {
-        exported_symbols_.insert(slid->name + "__ctor");
-        exported_symbols_.insert(slid->name + "__dtor");
-        exported_symbols_.insert(slid->name + "__sizeof");
+        exported_symbols_.insert(slid->name + "__$ctor");
+        exported_symbols_.insert(slid->name + "__$dtor");
+        exported_symbols_.insert(slid->name + "__$sizeof");
         std::string prefix = slid->name + "__";
         for (auto& [base, overloads] : method_overloads_) {
             if (base.substr(0, prefix.size()) != prefix) continue;
@@ -880,15 +880,15 @@ void Codegen::emit() {
     for (auto& slid : program_.slids) {
         if (!slid.type_params.empty()) continue; // skip template slids
         // inline ctor/dtor bodies count as locally defined
-        if (slid.explicit_ctor_body) local_methods.insert(slid.name + "__ctor");
-        if (slid.dtor_body)          local_methods.insert(slid.name + "__dtor");
-        // impl slids locally define __pinit and __sizeof
+        if (slid.explicit_ctor_body) local_methods.insert(slid.name + "__$ctor");
+        if (slid.dtor_body)          local_methods.insert(slid.name + "__$dtor");
+        // impl slids locally define __$pinit and __$sizeof
         if (slid.is_transport_impl) {
-            local_methods.insert(slid.name + "__pinit");
-            local_methods.insert(slid.name + "__sizeof");
+            local_methods.insert(slid.name + "__$pinit");
+            local_methods.insert(slid.name + "__$sizeof");
         }
-        // all non-declaration slids define __sizeof locally
-        if (!slid.has_ellipsis_suffix) local_methods.insert(slid.name + "__sizeof");
+        // all non-declaration slids define __$sizeof locally
+        if (!slid.has_ellipsis_suffix) local_methods.insert(slid.name + "__$sizeof");
         for (auto& m : slid.methods) {
             if (!m.body) continue;
             std::string base = slid.name + "__" + m.name;
@@ -899,8 +899,8 @@ void Codegen::emit() {
     }
     // template instantiations are always locally defined
     for (auto* slid : pending_slid_instantiations_) {
-        local_methods.insert(slid->name + "__ctor");
-        local_methods.insert(slid->name + "__dtor");
+        local_methods.insert(slid->name + "__$ctor");
+        local_methods.insert(slid->name + "__$dtor");
         for (auto& m : slid->methods) {
             std::string base = slid->name + "__" + m.name;
             auto oit = method_overloads_.find(base);
@@ -912,10 +912,10 @@ void Codegen::emit() {
     for (auto* slid : pending_slid_declares_) {
         auto& info = slid_info_[slid->name];
         if (info.has_explicit_ctor)
-            out_ << "declare void @" << slid->name << "__ctor(ptr)\n";
+            out_ << "declare void @" << slid->name << "__$ctor(ptr)\n";
         if (info.has_dtor)
-            out_ << "declare void @" << slid->name << "__dtor(ptr)\n";
-        out_ << "declare i64 @" << slid->name << "__sizeof()\n";
+            out_ << "declare void @" << slid->name << "__$dtor(ptr)\n";
+        out_ << "declare i64 @" << slid->name << "__$sizeof()\n";
         for (auto& [base, overloads] : method_overloads_) {
             std::string prefix = slid->name + "__";
             if (base.substr(0, prefix.size()) != prefix) continue;
@@ -936,21 +936,21 @@ void Codegen::emit() {
         if (oit != method_overloads_.end())
             for (auto& [mn, _] : oit->second) local_methods.insert(mn);
         // also include ctor/dtor
-        if (em.method_name == "_") local_methods.insert(em.slid_name + "__ctor");
-        if (em.method_name == "~") local_methods.insert(em.slid_name + "__dtor");
+        if (em.method_name == "_") local_methods.insert(em.slid_name + "__$ctor");
+        if (em.method_name == "~") local_methods.insert(em.slid_name + "__$dtor");
     }
     for (auto& slid : program_.slids) {
         if (!slid.type_params.empty()) continue; // skip template slids
         // ctor/dtor — declare if not locally defined
         auto& info = slid_info_[slid.name];
-        if (info.has_explicit_ctor && !local_methods.count(slid.name + "__ctor"))
-            out_ << "declare void @" << slid.name << "__ctor(ptr)\n";
-        if (info.has_dtor && !local_methods.count(slid.name + "__dtor"))
-            out_ << "declare void @" << slid.name << "__dtor(ptr)\n";
-        if (info.has_pinit && !local_methods.count(slid.name + "__pinit"))
-            out_ << "declare void @" << slid.name << "__pinit(ptr)\n";
-        if (info.has_pinit && !local_methods.count(slid.name + "__sizeof"))
-            out_ << "declare i64 @" << slid.name << "__sizeof()\n";
+        if (info.has_explicit_ctor && !local_methods.count(slid.name + "__$ctor"))
+            out_ << "declare void @" << slid.name << "__$ctor(ptr)\n";
+        if (info.has_dtor && !local_methods.count(slid.name + "__$dtor"))
+            out_ << "declare void @" << slid.name << "__$dtor(ptr)\n";
+        if (info.has_pinit && !local_methods.count(slid.name + "__$pinit"))
+            out_ << "declare void @" << slid.name << "__$pinit(ptr)\n";
+        if (info.has_pinit && !local_methods.count(slid.name + "__$sizeof"))
+            out_ << "declare i64 @" << slid.name << "__$sizeof()\n";
         // regular methods: first arg is always ptr (self)
         for (auto& [base, overloads] : method_overloads_) {
             if (base.substr(0, slid.name.size() + 2) != slid.name + "__") continue;
@@ -1163,7 +1163,7 @@ void Codegen::emitDtors() {
     // flush expression-level temporaries first (before named locals)
     for (int i = (int)pending_temp_dtors_.size() - 1; i >= 0; i--) {
         auto& td = pending_temp_dtors_[i];
-        out_ << "    call void @" << td.second << "__dtor(ptr " << td.first << ")\n";
+        out_ << "    call void @" << td.second << "__$dtor(ptr " << td.first << ")\n";
     }
     pending_temp_dtors_.clear();
     // call named-local dtors in reverse declaration order
@@ -1179,7 +1179,7 @@ void Codegen::emitDtors() {
         } else {
             target = locals_[e.var_name];
         }
-        out_ << "    call void @" << e.slid_type << "__dtor(ptr " << target << ")\n";
+        out_ << "    call void @" << e.slid_type << "__$dtor(ptr " << target << ")\n";
     }
 }
 
@@ -1193,7 +1193,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         if (em.method_name == "~")  dtor_body = em.body.get();
     }
 
-    // emit explicit constructor: @ClassName__ctor(ptr %self)
+    // emit explicit constructor: @ClassName__$ctor(ptr %self)
     if (ctor_body) {
         locals_.clear();
         local_types_.clear();
@@ -1203,14 +1203,14 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         block_terminated_ = false;
         current_slid_ = slid.name;
 
-        out_ << "define " << (isExported(slid.name + "__ctor") ? "" : "internal ") << "void @" << slid.name << "__ctor(ptr %self) {\n";
+        out_ << "define " << (isExported(slid.name + "__$ctor") ? "" : "internal ") << "void @" << slid.name << "__$ctor(ptr %self) {\n";
         out_ << "entry:\n";
         emitBlock(*ctor_body);
         if (!block_terminated_) out_ << "    ret void\n";
         out_ << "}\n\n";
     }
 
-    // emit destructor: @ClassName__dtor(ptr %self)
+    // emit destructor: @ClassName__$dtor(ptr %self)
     if (dtor_body) {
         locals_.clear();
         local_types_.clear();
@@ -1220,7 +1220,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         block_terminated_ = false;
         current_slid_ = slid.name;
 
-        out_ << "define " << (isExported(slid.name + "__dtor") ? "" : "internal ") << "void @" << slid.name << "__dtor(ptr %self) {\n";
+        out_ << "define " << (isExported(slid.name + "__$dtor") ? "" : "internal ") << "void @" << slid.name << "__$dtor(ptr %self) {\n";
         out_ << "entry:\n";
         emitBlock(*dtor_body);
         if (!block_terminated_) out_ << "    ret void\n";
@@ -1229,7 +1229,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
 
     current_slid_ = "";
 
-    // emit __pinit for transport slids: initializes private fields, optionally chains to __ctor
+    // emit __$pinit for transport slids: initializes private fields, optionally chains to __$ctor
     if (slid.is_transport_impl) {
         auto& info = slid_info_[slid.name];
         locals_.clear();
@@ -1241,7 +1241,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         current_slid_ = slid.name;
         self_ptr_ = "";  // field access uses %self fallback
 
-        out_ << "define " << (isExported(slid.name + "__pinit") ? "" : "internal ") << "void @" << slid.name << "__pinit(ptr %self) {\n";
+        out_ << "define " << (isExported(slid.name + "__$pinit") ? "" : "internal ") << "void @" << slid.name << "__$pinit(ptr %self) {\n";
         out_ << "entry:\n";
 
         // store each private field at its struct index
@@ -1260,7 +1260,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
 
         if (info.has_explicit_ctor) {
             // chain to explicit ctor with musttail for zero overhead
-            out_ << "    musttail call void @" << slid.name << "__ctor(ptr %self)\n";
+            out_ << "    musttail call void @" << slid.name << "__$ctor(ptr %self)\n";
         }
         out_ << "    ret void\n";
         out_ << "}\n\n";
@@ -1269,10 +1269,10 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         self_ptr_ = "";
     }
 
-    // emit __sizeof for every locally-complete slid (not for consumer-side declarations)
+    // emit __$sizeof for every locally-complete slid (not for consumer-side declarations)
     if (!slid.has_ellipsis_suffix) {
-        std::string linkage = isExported(slid.name + "__sizeof") ? "" : "internal ";
-        out_ << "define " << linkage << "i64 @" << slid.name << "__sizeof() {\n";
+        std::string linkage = isExported(slid.name + "__$sizeof") ? "" : "internal ";
+        out_ << "define " << linkage << "i64 @" << slid.name << "__$sizeof() {\n";
         out_ << "entry:\n";
         out_ << "    %gep0 = getelementptr %struct." << slid.name << ", ptr null, i32 1\n";
         out_ << "    %sz0 = ptrtoint ptr %gep0 to i64\n";
@@ -2254,14 +2254,14 @@ void Codegen::emitTupleScalarBroadcastAtPtr(const std::string& ttype,
     }
 }
 
-// Alloca a fresh instance of slid_name, default-init all fields, run ctor body, call __ctor.
+// Alloca a fresh instance of slid_name, default-init all fields, run ctor body, call __$ctor.
 // Returns the alloca register. Does NOT register for dtor (caller's responsibility if needed).
 std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
     auto& info = slid_info_[slid_name];
     std::string reg = newTmp();
     if (info.has_pinit) {
         std::string sz = newTmp();
-        out_ << "    " << sz << " = call i64 @" << slid_name << "__sizeof()\n";
+        out_ << "    " << sz << " = call i64 @" << slid_name << "__$sizeof()\n";
         out_ << "    " << reg << " = alloca i8, i64 " << sz << "\n";
     } else {
         out_ << "    " << reg << " = alloca %struct." << slid_name << "\n";
@@ -2294,9 +2294,9 @@ std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
         self_ptr_ = saved_self;
     }
     if (info.has_pinit)
-        out_ << "    call void @" << slid_name << "__pinit(ptr " << reg << ")\n";
+        out_ << "    call void @" << slid_name << "__$pinit(ptr " << reg << ")\n";
     else if (info.has_explicit_ctor)
-        out_ << "    call void @" << slid_name << "__ctor(ptr " << reg << ")\n";
+        out_ << "    call void @" << slid_name << "__$ctor(ptr " << reg << ")\n";
     if (info.has_dtor)
         pending_temp_dtors_.push_back({reg, slid_name});
     return reg;
@@ -2307,7 +2307,7 @@ std::string Codegen::emitRawSlidAlloca(const std::string& slid_name) {
     std::string reg = newTmp();
     if (info.has_pinit) {
         std::string sz = newTmp();
-        out_ << "    " << sz << " = call i64 @" << slid_name << "__sizeof()\n";
+        out_ << "    " << sz << " = call i64 @" << slid_name << "__$sizeof()\n";
         out_ << "    " << reg << " = alloca i8, i64 " << sz << "\n";
     } else {
         out_ << "    " << reg << " = alloca %struct." << slid_name << "\n";
@@ -2342,7 +2342,7 @@ void Codegen::emitConstructAtPtrs(const std::string& stype, const std::string& p
             + std::to_string(nfields) + " fields, got " + std::to_string(overrides.size()));
 
     if (is_slid && slid_info_[stype].has_pinit) {
-        out_ << "    call void @" << stype << "__pinit(ptr " << ptr << ")\n";
+        out_ << "    call void @" << stype << "__$pinit(ptr " << ptr << ")\n";
         return;
     }
     const SlidDef* slid_def = nullptr;
@@ -2396,7 +2396,7 @@ void Codegen::emitConstructAtPtrs(const std::string& stype, const std::string& p
         current_slid_ = saved_slid;
         self_ptr_ = saved_self;
     } else if (is_slid && slid_info_[stype].has_explicit_ctor) {
-        out_ << "    call void @" << stype << "__ctor(ptr " << ptr << ")\n";
+        out_ << "    call void @" << stype << "__$ctor(ptr " << ptr << ")\n";
     }
 }
 
@@ -2419,7 +2419,7 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
             std::string tmp_reg = emitRawSlidAlloca(slid_name);
             auto& info = slid_info_[slid_name];
             if (info.has_pinit) {
-                out_ << "    call void @" << slid_name << "__pinit(ptr " << tmp_reg << ")\n";
+                out_ << "    call void @" << slid_name << "__$pinit(ptr " << tmp_reg << ")\n";
             } else {
                 // zero-init fields
                 for (int i = 0; i < (int)info.field_types.size(); i++) {
@@ -2433,7 +2433,7 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                 }
                 // call explicit constructor if any
                 if (info.has_explicit_ctor)
-                    out_ << "    call void @" << slid_name << "__ctor(ptr " << tmp_reg << ")\n";
+                    out_ << "    call void @" << slid_name << "__$ctor(ptr " << tmp_reg << ")\n";
             }
             // call op=(char[]) to initialize from the literal
             auto oit = method_overloads_.find(slid_name + "__op=");
@@ -2559,8 +2559,8 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                     if (!exact && !widen) continue;
                     std::string tmp = emitRawSlidAlloca(slid_name);
                     if (info.has_pinit) {
-                        // transport type: __pinit zeros private fields and chains to __ctor
-                        out_ << "    call void @" << slid_name << "__pinit(ptr " << tmp << ")\n";
+                        // transport type: __$pinit zeros private fields and chains to __$ctor
+                        out_ << "    call void @" << slid_name << "__$pinit(ptr " << tmp << ")\n";
                     } else {
                         for (int i2 = 0; i2 < (int)info.field_types.size(); i2++) {
                             std::string gep = newTmp();
@@ -2572,7 +2572,7 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                                 out_ << "    store " << llvmType(info.field_types[i2]) << " 0, ptr " << gep << "\n";
                         }
                         if (info.has_explicit_ctor)
-                            out_ << "    call void @" << slid_name << "__ctor(ptr " << tmp << ")\n";
+                            out_ << "    call void @" << slid_name << "__$ctor(ptr " << tmp << ")\n";
                     }
                     std::string av = emitExpr(arg);
                     if (widen && !exact) {
@@ -2807,7 +2807,7 @@ void Codegen::emitBlock(const BlockStmt& block) {
         // destroy implicit temporaries created during this statement
         for (int i = (int)pending_temp_dtors_.size() - 1; i >= (int)temp_mark; i--) {
             auto& td = pending_temp_dtors_[i];
-            out_ << "    call void @" << td.second << "__dtor(ptr " << td.first << ")\n";
+            out_ << "    call void @" << td.second << "__$dtor(ptr " << td.first << ")\n";
         }
         pending_temp_dtors_.resize(temp_mark);
     }

@@ -13,9 +13,9 @@ struct SlidInfo {
     std::vector<std::string> field_types;
     bool has_explicit_ctor = false;
     bool has_dtor = false;
-    bool has_pinit = false;        // consumer: call __pinit instead of __ctor
-    bool is_transport_impl = false; // impl side: emit __pinit, treat as complete locally
-    int public_field_count = 0;    // number of public fields before private ones (for __pinit)
+    bool has_pinit = false;        // consumer: call __$pinit instead of __ctor
+    bool is_transport_impl = false; // impl side: emit __$pinit, treat as complete locally
+    int public_field_count = 0;    // number of public fields before private ones (for __$pinit)
     int64_t sizeof_override = 0;   // >0: use this value for sizeof()
     int64_t padding_bytes = 0;     // extra opaque bytes appended after known fields in struct type
 };

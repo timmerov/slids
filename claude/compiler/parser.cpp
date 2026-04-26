@@ -1516,7 +1516,7 @@ SlidDef Parser::parseSlidDef() {
             slid.has_ellipsis_suffix = true;
         else {
             slid.has_ellipsis_prefix = true;
-            slid.is_transport_impl = true;  // emits __pinit and __sizeof for the consumer
+            slid.is_transport_impl = true;  // emits __$pinit and __$sizeof for the consumer
         }
     }
 

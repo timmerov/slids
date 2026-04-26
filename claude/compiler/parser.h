@@ -407,8 +407,8 @@ struct SlidDef {
     bool has_ellipsis_suffix = false;    // tuple ends with ...   (declaration of incomplete class)
     bool has_explicit_ctor_decl = false; // _() was declared (with or without body)
     bool has_explicit_dtor_decl = false; // ~() was declared (with or without body)
-    bool is_transport_impl = false;      // this slid emits __pinit for the consumer
-    int public_field_count = 0;          // number of public fields before private ones (for __pinit)
+    bool is_transport_impl = false;      // this slid emits __$pinit for the consumer
+    int public_field_count = 0;          // number of public fields before private ones (for __$pinit)
     bool is_local = true;                // false when template body loaded from an imported .sl file
     std::string impl_module;             // module name of the impl file (when !is_local)
     std::unique_ptr<BlockStmt> ctor_body;          // loose code (implicit ctor), or null

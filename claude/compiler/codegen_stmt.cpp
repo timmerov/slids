@@ -304,7 +304,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 std::string elem = newTmp();
                 out_ << "    " << elem << " = getelementptr %struct." << elem_type
                      << ", ptr " << ptr_val << ", i64 " << idx_prev << "\n";
-                out_ << "    call void @" << elem_type << "__dtor(ptr " << elem << ")\n";
+                out_ << "    call void @" << elem_type << "__$dtor(ptr " << elem << ")\n";
                 out_ << "    br label %" << cond_lbl << "\n";
 
                 block_terminated_ = false;
@@ -316,7 +316,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             out_ << end_lbl_outer << ":\n";
         } else {
             if (is_slid && slid_info_[elem_type].has_dtor)
-                out_ << "    call void @" << elem_type << "__dtor(ptr " << ptr_val << ")\n";
+                out_ << "    call void @" << elem_type << "__$dtor(ptr " << ptr_val << ")\n";
             out_ << "    call void @free(ptr " << ptr_val << ")\n";
         }
         // nullify the pointer variable so it is left in a valid (null) state
@@ -467,7 +467,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     std::string reg = uniqueAllocaReg(decl->name);
                     if (info.has_pinit) {
                         std::string sz = newTmp();
-                        out_ << "    " << sz << " = call i64 @" << eff_type << "__sizeof()\n";
+                        out_ << "    " << sz << " = call i64 @" << eff_type << "__$sizeof()\n";
                         out_ << "    " << reg << " = alloca i8, i64 " << sz << "\n";
                     } else {
                         out_ << "    " << reg << " = alloca %struct." << eff_type << "\n";
@@ -506,9 +506,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         self_ptr_ = saved_self;
                     }
                     if (info.has_pinit)
-                        out_ << "    call void @" << eff_type << "__pinit(ptr " << reg << ")\n";
+                        out_ << "    call void @" << eff_type << "__$pinit(ptr " << reg << ")\n";
                     else if (info.has_explicit_ctor)
-                        out_ << "    call void @" << eff_type << "__ctor(ptr " << reg << ")\n";
+                        out_ << "    call void @" << eff_type << "__$ctor(ptr " << reg << ")\n";
                     // call op+=(rhs)
                     std::string compound_base = eff_type + "__op+=";
                     std::string mangled = resolveOpEq(compound_base, *be->right);
@@ -527,7 +527,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string reg = uniqueAllocaReg(decl->name);
             if (info.has_pinit) {
                 std::string sz = newTmp();
-                out_ << "    " << sz << " = call i64 @" << eff_type << "__sizeof()\n";
+                out_ << "    " << sz << " = call i64 @" << eff_type << "__$sizeof()\n";
                 out_ << "    " << reg << " = alloca i8, i64 " << sz << "\n";
             } else {
                 out_ << "    " << reg << " = alloca %struct." << eff_type << "\n";
@@ -882,9 +882,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                 }
                             }
                             if (sinfo.has_pinit && !sinfo.is_transport_impl)
-                                out_ << "    call void @" << slid_name << "__pinit(ptr " << tmp << ")\n";
+                                out_ << "    call void @" << slid_name << "__$pinit(ptr " << tmp << ")\n";
                             else if (sinfo.has_explicit_ctor)
-                                out_ << "    call void @" << slid_name << "__ctor(ptr " << tmp << ")\n";
+                                out_ << "    call void @" << slid_name << "__$ctor(ptr " << tmp << ")\n";
                             auto& cptypes = func_param_types_[coerce];
                             std::string cptype = cptypes.empty() ? "" : cptypes[0];
                             std::string carg = emitArgForParam(*be->right, cptype);
@@ -914,7 +914,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                         }
                             }
                             if (sinfo.has_dtor)
-                                out_ << "    call void @" << slid_name << "__dtor(ptr " << tmp << ")\n";
+                                out_ << "    call void @" << slid_name << "__$dtor(ptr " << tmp << ")\n";
                             return;
                         }
                     }
@@ -930,7 +930,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     // first call dtor on existing lhs value
                     const std::string& slid_name = tit->second;
                     if (slid_info_.at(slid_name).has_dtor) {
-                        out_ << "    call void @" << slid_name << "__dtor(ptr " << it->second << ")\n";
+                        out_ << "    call void @" << slid_name << "__$dtor(ptr " << it->second << ")\n";
                         // re-init fields to zero/null
                         auto& info = slid_info_[slid_name];
                         for (int i = 0; i < (int)info.field_types.size(); i++) {
@@ -1604,7 +1604,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* mcs = dynamic_cast<const MethodCallStmt*>(&stmt)) {
-        // TypeName.sizeof() as a statement — call __sizeof, discard result
+        // TypeName.sizeof() as a statement — call __$sizeof, discard result
         if (mcs->method == "sizeof") {
             std::string slid_name;
             if (auto* ve = dynamic_cast<const VarExpr*>(mcs->object.get())) {
@@ -1614,7 +1614,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
             if (!slid_name.empty()) {
                 std::string tmp = newTmp();
-                out_ << "    " << tmp << " = call i64 @" << slid_name << "__sizeof()\n";
+                out_ << "    " << tmp << " = call i64 @" << slid_name << "__$sizeof()\n";
                 return;
             }
         }
@@ -1685,7 +1685,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (!slid_name.empty() && mcs->method == "~") {
             auto& info = slid_info_[slid_name];
             if (info.has_dtor || info.has_pinit)
-                out_ << "    call void @" << slid_name << "__dtor(ptr " << obj_ptr << ")\n";
+                out_ << "    call void @" << slid_name << "__$dtor(ptr " << obj_ptr << ")\n";
             return;
         }
         if (!slid_name.empty()) {
@@ -1760,9 +1760,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
             } else {
                 // opaque (transport) type: init %retval, then move or copy from src
                 if (info.has_pinit)
-                    out_ << "    call void @" << slid_name << "__pinit(ptr %retval)\n";
+                    out_ << "    call void @" << slid_name << "__$pinit(ptr %retval)\n";
                 else if (info.has_explicit_ctor)
-                    out_ << "    call void @" << slid_name << "__ctor(ptr %retval)\n";
+                    out_ << "    call void @" << slid_name << "__$ctor(ptr %retval)\n";
                 // prefer op<- (move), fallback to op= (copy)
                 std::string move_func;
                 auto mit = method_overloads_.find(slid_name + "__op<-");
@@ -1784,7 +1784,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             // if src was a fresh temp (not a named local), dtor it now
             // (its ptr fields are already null after the move, so dtor is a no-op for resources)
             if (src_is_fresh_temp && info.has_dtor)
-                out_ << "    call void @" << slid_name << "__dtor(ptr " << src << ")\n";
+                out_ << "    call void @" << slid_name << "__$dtor(ptr " << src << ")\n";
             emitDtors();
             out_ << "    ret void\n";
         } else {
@@ -2884,7 +2884,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 } else {
                     target = locals_[e.var_name];
                 }
-                out_ << "    call void @" << e.slid_type << "__dtor(ptr " << target << ")\n";
+                out_ << "    call void @" << e.slid_type << "__$dtor(ptr " << target << ")\n";
             }
         }
         dtor_vars_.resize(dtor_mark);
