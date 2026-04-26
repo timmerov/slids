@@ -60,9 +60,15 @@ bool Parser::isUserTypeName(const Token& t) const {
 
 bool Parser::isVarDeclLookahead() const {
     // pos_ is at an identifier that might be a type name.
-    // scan past it (plus optional template args and pointer/iterator suffix)
+    // scan past it (plus optional :Qualifier, template args and pointer/iterator suffix)
     // and check that an identifier (the variable name) follows.
     int i = pos_ + 1; // skip base type name
+    // optional qualified-type suffix: : Identifier (e.g. Outer:Inner)
+    if (i + 1 < (int)tokens_.size()
+        && tokens_[i].type == TokenType::kColon
+        && tokens_[i + 1].type == TokenType::kIdentifier) {
+        i += 2;
+    }
     // optional template args: <Types>
     if (i < (int)tokens_.size() && tokens_[i].type == TokenType::kLt) {
         i++;
@@ -171,6 +177,21 @@ std::string Parser::parseTypeName() {
     else if (isUserTypeName(peek())) base = advance().value;
     else throw std::runtime_error("Line " + std::to_string(peek().line)
         + ": expected type name, got '" + peek().value + "'");
+    // qualified nested-type suffix: Outer:Inner — consume only when the next-next token is
+    // an identifier (the variable name), not a '(' (which would be an external-method def).
+    if (peek().type == TokenType::kColon
+        && pos_ + 1 < (int)tokens_.size()
+        && tokens_[pos_ + 1].type == TokenType::kIdentifier
+        && pos_ + 2 < (int)tokens_.size()
+        && tokens_[pos_ + 2].type != TokenType::kLParen) {
+        advance(); // consume ':'
+        std::string inner = advance().value;
+        base += "." + inner;
+    } else {
+        // unqualified — apply nested-alias map (e.g. "Inner" → "Outer.Inner" inside Outer's body)
+        auto it = nested_alias_.find(base);
+        if (it != nested_alias_.end()) base = it->second;
+    }
     // template type instantiation in type position: Name<Type> → mangled as Name__Type
     if (peek().type == TokenType::kLt && isTemplateTypeArgLookahead()) {
         advance(); // consume '<'
@@ -1458,6 +1479,10 @@ SlidDef Parser::parseSlidDef() {
     slid.name = peek().value;
     advance(); // consume class name
 
+    // save outer's alias map; nested slids in this slid's body register short→canonical here
+    auto saved_alias = nested_alias_;
+    nested_alias_.clear();
+
     // template type parameters: Vector<T> or Pair<K, V>
     if (peek().type == TokenType::kLt) {
         advance(); // consume '<'
@@ -1623,6 +1648,49 @@ SlidDef Parser::parseSlidDef() {
             return (tokens_[name_pos + 1].type == TokenType::kEquals || tokens_[name_pos + 1].type == TokenType::kArrowLeft)
                 && tokens_[name_pos + 2].type == TokenType::kLParen;
         };
+        // nested slid def: Identifier ( <field-list-or-empty-or-...> ) { body }
+        // distinguish from method decl (return type before identifier) and from a ctor
+        // statement (call/assignment, terminated by ';'). Disambiguator: matching ')'
+        // followed by '{' is unambiguously a slid body — calls/assignments end in ';'.
+        auto isNestedSlidDecl = [&]() {
+            if (peek().type != TokenType::kIdentifier) return false;
+            if (pos_ + 1 >= (int)tokens_.size()) return false;
+            if (tokens_[pos_ + 1].type != TokenType::kLParen
+                && tokens_[pos_ + 1].type != TokenType::kLt) return false;
+            // scan past the (...) (and optional <...> template params) to find a {
+            int scan = pos_ + 1;
+            if (tokens_[scan].type == TokenType::kLt) {
+                int depth = 1;
+                scan++;
+                while (scan < (int)tokens_.size() && depth > 0) {
+                    if (tokens_[scan].type == TokenType::kLt) depth++;
+                    else if (tokens_[scan].type == TokenType::kGt) depth--;
+                    scan++;
+                }
+                if (scan >= (int)tokens_.size() || tokens_[scan].type != TokenType::kLParen)
+                    return false;
+            }
+            int depth = 1;
+            scan++;
+            while (scan < (int)tokens_.size() && depth > 0) {
+                if (tokens_[scan].type == TokenType::kLParen) depth++;
+                else if (tokens_[scan].type == TokenType::kRParen) depth--;
+                scan++;
+            }
+            return scan < (int)tokens_.size() && tokens_[scan].type == TokenType::kLBrace;
+        };
+        if (isNestedSlidDecl()) {
+            // save outer's per-slid context across the recursive call
+            auto saved_fields = current_slid_fields_;
+            SlidDef inner = parseSlidDef();
+            current_slid_fields_ = saved_fields;
+            // register short→canonical alias so subsequent methods of this outer
+            // can refer to the nested type by its bare name
+            std::string canonical = slid.name + "." + inner.name;
+            nested_alias_[inner.name] = canonical;
+            slid.nested_slids.push_back(std::move(inner));
+            continue;
+        }
         if (isMethodDecl()) {
             slid.methods.push_back(parseMethodDef());
         } else {
@@ -1637,6 +1705,7 @@ SlidDef Parser::parseSlidDef() {
 
     expect(TokenType::kRBrace, "expected '}'");
     current_slid_fields_.clear();
+    nested_alias_ = std::move(saved_alias);
     return slid;
 }
 
@@ -1963,6 +2032,27 @@ Program Parser::parse() {
             }
         }
     }
+
+    // hoist nested slid defs to top level. each nested slid is renamed
+    // <Outer>.<Inner> so it's globally addressable. parent_name is taken by
+    // value because push_back below may reallocate program.slids, which would
+    // invalidate any reference into it.
+    std::function<void(SlidDef&, std::string)> hoist =
+        [&](SlidDef& s, std::string parent_name) {
+            std::vector<SlidDef> nested = std::move(s.nested_slids);
+            s.nested_slids.clear();
+            for (auto& n : nested) {
+                std::string canonical = parent_name + "." + n.name;
+                n.name = canonical;
+                hoist(n, canonical);
+                program.slids.push_back(std::move(n));
+            }
+        };
+    int top_count = (int)program.slids.size();
+    for (int i = 0; i < top_count; i++) {
+        hoist(program.slids[i], program.slids[i].name);
+    }
+
     return program;
 }
 

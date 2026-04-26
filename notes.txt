@@ -1,6 +1,12 @@
 
-nested classes:
-apparently this isn't implemented.
+##type fails in a template.
+
+method name collisions:
+name collisions when adding methods in different files.
+source1.slh and source2.slh can both add String:foo().
+both are public.
+so we have a name conflict.
+which is probably silent at link time.
 
 inheritance:
 

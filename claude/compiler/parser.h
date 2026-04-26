@@ -415,6 +415,7 @@ struct SlidDef {
     std::unique_ptr<BlockStmt> explicit_ctor_body; // _() { ... }, or null
     std::unique_ptr<BlockStmt> dtor_body;          // ~() { ... }, or null
     std::vector<MethodDef> methods;
+    std::vector<SlidDef> nested_slids;             // slid defs declared inside this slid's body
 };
 
 // nested function defined inside a parent function body
@@ -497,6 +498,9 @@ private:
     std::set<std::string> current_slid_fields_;
     // all parsed slid field names, keyed by slid name (used for external method blocks)
     std::map<std::string, std::set<std::string>> all_slid_fields_;
+    // short-name → canonical-name aliases for nested slids in the current outer's body
+    // (e.g. "Inner" → "Outer.Inner") — applied by parseTypeName
+    std::map<std::string, std::string> nested_alias_;
 
     // lookahead: pos_ is at '<'; returns true if this is a template type-arg list followed by '('
     bool isTemplateCallLookahead() const;

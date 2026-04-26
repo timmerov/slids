@@ -6,6 +6,7 @@ MEMORY INDEX
 - feedback_read_modified_files.md — read files before working on them, don't assume contents from prior context
 - feedback_stay_focused.md        — don't investigate tangential areas when user has named the specific construct to fix
 - feedback_build_scope.md         — never build a slids target outside the named scope
+- project_nested_slids.md         — flat-hoist nested slid classes (sample/nested.sl, 2026-04-26)
 
 
 ========================================
@@ -147,3 +148,37 @@ CODEGEN INTERNALS
 
 FILE LAYOUT
 compiler/ (slidsc C++17 source), sample/ (regression tests), work/ (multi-file dev area), bin/ (binaries), build/ (intermediates)
+
+
+========================================
+project_nested_slids.md
+========================================
+Nested slid classes — flat hoist semantics (sample/nested.sl, regression test).
+
+Why: User wanted `Inner` defined inside `Outer { ... }` for organization, accessible by `Outer:Inner` outside Outer and bare `Inner` inside Outer's methods. Inner has zero access to Outer's fields/methods — purely a syntactic nesting.
+How to apply: When extending nested-slid behavior, treat `Outer.Inner` as a top-level slid; it has no implicit relationship to Outer at codegen time.
+
+DESIGN
+- Source syntax: `:` separator (`Outer:Inner`); internal/AST canonical name uses `.` (`Outer.Inner`) — `.` is legal in LLVM IR identifiers, `:` is not (would need quoting).
+- Inner is hoisted to `program.slids` after parse; codegen sees a flat list.
+- Inside Outer's methods, parser maintains `nested_alias_` map ("Inner" → "Outer.Inner"); applied at parseTypeName after consuming the base identifier.
+- Outside Outer, parseTypeName consumes `:Identifier` after the base when the next token is not `(` (disambiguates from external-method def `Outer:method(`).
+- isVarDeclLookahead extended to skip `:Identifier` between base and var name.
+- Duplicate-name check after hoisting in Parser::parse().
+
+PARSER ENTRY POINTS (parser.cpp)
+- SlidDef.nested_slids (parser.h)
+- Parser.nested_alias_ map (parser.h)
+- parseTypeName: qualified-name + alias substitution
+- parseSlidDef body loop: isNestedSlidDecl lambda + recursive call, with save/restore of current_slid_fields_ and nested_alias_
+- Parser::parse(): hoist + duplicate-name check at end
+
+OUT OF SCOPE (v1)
+- Inner as a field type of Outer (fields parse before nested defs become visible).
+- `Outer:Inner make()` as a top-level function return type — currently misparsed as external-method def at line ~2026 (`Outer:Inner` matches the external-method shape).
+- Templates on nested types (`Inner<T>`).
+- Exporting nested types via .slh.
+- Deeper nesting works via recursion in the hoist pass but isn't otherwise exercised.
+
+KEYWORD GOTCHA
+- `in` is `kIn` (lexer.cpp:161); cannot be used as a variable name. Sample originally had `Inner in(5);` and was changed to `Inner i(5);`.

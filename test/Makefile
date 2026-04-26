@@ -15,6 +15,7 @@ SAMPLES = \
 	macros \
 	math1 math2 \
 	move \
+	nested \
 	new_delete \
 	parsing \
 	pointer \
