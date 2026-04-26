@@ -566,6 +566,73 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* call = dynamic_cast<const CallExpr*>(&expr)) {
+        // namespace-qualified call: Name:method(args)
+        if (!call->qualifier.empty() && call->qualifier != "::") {
+            auto sit = slid_info_.find(call->qualifier);
+            if (sit == slid_info_.end())
+                throw std::runtime_error("unknown slid: " + call->qualifier);
+            if (!sit->second.is_namespace)
+                throw std::runtime_error("'" + call->qualifier + "' is not a namespace; use instance.method() instead");
+            std::string base = call->qualifier + "__" + call->callee;
+            std::string mangled = resolveOverloadForCall(base, call->args);
+            auto rit = func_return_types_.find(mangled);
+            if (rit == func_return_types_.end())
+                throw std::runtime_error("unknown namespace function: " + call->qualifier + ":" + call->callee);
+            auto& ptypes = func_param_types_[mangled];
+            std::string arg_str;
+            for (int i = 0; i < (int)call->args.size(); i++) {
+                if (i > 0) arg_str += ", ";
+                std::string ptype_str = (i < (int)ptypes.size()) ? ptypes[i] : "";
+                std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
+                arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
+            }
+            if (slid_info_.count(rit->second)) {
+                std::string tmp = emitRawSlidAlloca(rit->second);
+                std::string sret_arg = "ptr sret(%struct." + rit->second + ") " + tmp;
+                if (!arg_str.empty()) sret_arg += ", " + arg_str;
+                out_ << "    call void @" << llvmGlobalName(mangled) << "(" << sret_arg << ")\n";
+                return tmp;
+            }
+            std::string ret_type = llvmType(rit->second);
+            if (ret_type == "void") {
+                out_ << "    call void @" << llvmGlobalName(mangled) << "(" << arg_str << ")\n";
+                return "";
+            }
+            std::string tmp = newTmp();
+            out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(mangled)
+                 << "(" << arg_str << ")\n";
+            return tmp;
+        }
+        // ::name(args) — global lookup: skip nested/template/method paths, go straight to free function
+        if (call->qualifier == "::") {
+            auto it = func_return_types_.find(call->callee);
+            if (it == func_return_types_.end())
+                throw std::runtime_error("undefined global function: " + call->callee);
+            auto& ptypes = func_param_types_[call->callee];
+            std::string arg_str;
+            for (int i = 0; i < (int)call->args.size(); i++) {
+                if (i > 0) arg_str += ", ";
+                std::string ptype_str = (i < (int)ptypes.size()) ? ptypes[i] : "";
+                std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
+                arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
+            }
+            if (slid_info_.count(it->second)) {
+                std::string tmp = emitRawSlidAlloca(it->second);
+                std::string sret_arg = "ptr sret(%struct." + it->second + ") " + tmp;
+                if (!arg_str.empty()) sret_arg += ", " + arg_str;
+                out_ << "    call void @" << llvmGlobalName(call->callee) << "(" << sret_arg << ")\n";
+                return tmp;
+            }
+            std::string ret_type = llvmType(it->second);
+            if (ret_type == "void") {
+                out_ << "    call void @" << llvmGlobalName(call->callee) << "(" << arg_str << ")\n";
+                return "";
+            }
+            std::string tmp = newTmp();
+            out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(call->callee)
+                 << "(" << arg_str << ")\n";
+            return tmp;
+        }
         // slid ctor call as expression: SlidName(args) → alloca temp + construct, return ptr.
         // Register for statement-scope dtor so non-consume uses (e.g. call args, discarded
         // ExprStmt) still run the dtor. Consume-the-temp sites (same-type VarDecl init)
@@ -641,6 +708,44 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     return tmp;
                 }
                 std::string ret_type = llvmType(ret_slid);
+                std::string tmp = newTmp();
+                out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(mangled)
+                     << "(" << arg_str << ")\n";
+                return tmp;
+            }
+        }
+
+        // implicit self method call (peer call inside a slid method) — takes precedence
+        // over global free functions per the bare-name lookup rule
+        if (!current_slid_.empty()) {
+            std::string base = current_slid_ + "__" + call->callee;
+            std::string mangled = resolveOverloadForCall(base, call->args);
+            auto mit = func_return_types_.find(mangled);
+            if (mit != func_return_types_.end()) {
+                auto& mptypes = func_param_types_[mangled];
+                bool empty = slid_info_[current_slid_].is_empty;
+                std::string self_str = empty ? "" : "ptr %self";
+                std::string arg_str = self_str;
+                for (int i = 0; i < (int)call->args.size(); i++) {
+                    std::string ptype_str = (i < (int)mptypes.size()) ? mptypes[i] : "";
+                    std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
+                    if (!arg_str.empty()) arg_str += ", ";
+                    arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
+                }
+                if (slid_info_.count(mit->second)) {
+                    std::string tmp = emitRawSlidAlloca(mit->second);
+                    std::string sret_arg = "ptr sret(%struct." + mit->second + ") " + tmp;
+                    std::string final_args = arg_str.empty() ? sret_arg
+                        : (self_str.empty() ? sret_arg + ", " + arg_str
+                                            : self_str + ", " + sret_arg + arg_str.substr(self_str.size()));
+                    out_ << "    call void @" << llvmGlobalName(mangled) << "(" << final_args << ")\n";
+                    return tmp;
+                }
+                std::string ret_type = llvmType(mit->second);
+                if (ret_type == "void") {
+                    out_ << "    call void @" << llvmGlobalName(mangled) << "(" << arg_str << ")\n";
+                    return "";
+                }
                 std::string tmp = newTmp();
                 out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(mangled)
                      << "(" << arg_str << ")\n";

@@ -288,7 +288,12 @@ std::vector<Token> Lexer::tokenize() {
                     }
                     break;
                 case ':':
-                    tokens.emplace_back(TokenType::kColon, ":", line_);
+                    if (peek() == ':') {
+                        advance();
+                        tokens.emplace_back(TokenType::kColonColon, "::", line_);
+                    } else {
+                        tokens.emplace_back(TokenType::kColon, ":", line_);
+                    }
                     break;
                 case '[':
                     if (peek() == ']' && peek2() == '=') {

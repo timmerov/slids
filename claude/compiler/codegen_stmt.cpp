@@ -2808,6 +2808,34 @@ void Codegen::emitStmt(const Stmt& stmt) {
             return;
         }
 
+        // implicit self method call (peer call inside a slid method) — takes precedence
+        // over global free functions per the bare-name lookup rule
+        if (!current_slid_.empty()) {
+            std::string base = current_slid_ + "__" + call->callee;
+            std::string mangled = resolveOverloadForCall(base, call->args);
+            auto mit = func_return_types_.find(mangled);
+            if (mit != func_return_types_.end()) {
+                std::string ret_type = llvmType(mit->second);
+                auto& mptypes = func_param_types_[mangled];
+                bool empty = slid_info_[current_slid_].is_empty;
+                std::string arg_str = empty ? "" : "ptr %self";
+                for (int i = 0; i < (int)call->args.size(); i++) {
+                    std::string ptype_str = (i < (int)mptypes.size()) ? mptypes[i] : "";
+                    std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
+                    if (!arg_str.empty()) arg_str += ", ";
+                    arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
+                }
+                if (ret_type == "void") {
+                    out_ << "    call void @" << mangled << "(" << arg_str << ")\n";
+                } else {
+                    std::string tmp = newTmp();
+                    out_ << "    " << tmp << " = call " << ret_type << " @" << mangled
+                         << "(" << arg_str << ")\n";
+                }
+                return;
+            }
+        }
+
         // regular top-level function call as statement
         // resolve overloaded free functions by argument count when plain name isn't registered
         std::string resolved_callee = call->callee;
@@ -2839,33 +2867,6 @@ void Codegen::emitStmt(const Stmt& stmt) {
                      << "(" << arg_str << ")\n";
             }
             return;
-        }
-
-        // implicit self method call — e.g. reserve(len) inside a method
-        if (!current_slid_.empty()) {
-            std::string base = current_slid_ + "__" + call->callee;
-            std::string mangled = resolveOverloadForCall(base, call->args);
-            auto mit = func_return_types_.find(mangled);
-            if (mit != func_return_types_.end()) {
-                std::string ret_type = llvmType(mit->second);
-                auto& mptypes = func_param_types_[mangled];
-                bool empty = slid_info_[current_slid_].is_empty;
-                std::string arg_str = empty ? "" : "ptr %self";
-                for (int i = 0; i < (int)call->args.size(); i++) {
-                    std::string ptype_str = (i < (int)mptypes.size()) ? mptypes[i] : "";
-                    std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
-                    if (!arg_str.empty()) arg_str += ", ";
-                    arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
-                }
-                if (ret_type == "void") {
-                    out_ << "    call void @" << mangled << "(" << arg_str << ")\n";
-                } else {
-                    std::string tmp = newTmp();
-                    out_ << "    " << tmp << " = call " << ret_type << " @" << mangled
-                         << "(" << arg_str << ")\n";
-                }
-                return;
-            }
         }
 
         throw std::runtime_error("unknown function: " + call->callee);

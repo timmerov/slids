@@ -16,6 +16,7 @@ struct SlidInfo {
     bool has_pinit = false;        // consumer: call __$pinit instead of __$ctor
     bool is_transport_impl = false; // impl side: emit __$pinit, treat as complete locally
     bool is_empty = false;         // class with () but zero fields: methods/ctor/dtor take no self
+    bool is_namespace = false;     // declared as `Name { ... }` only — non-instantiable, called as Name:fn()
     int public_field_count = 0;    // number of public fields before private ones (for __$pinit)
     int64_t sizeof_override = 0;   // >0: use this value for sizeof()
     int64_t padding_bytes = 0;     // extra opaque bytes appended after known fields in struct type

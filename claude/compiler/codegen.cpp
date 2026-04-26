@@ -482,6 +482,8 @@ void Codegen::collectSlids() {
         }
         // empty class: has () but no fields, not incomplete. methods/ctor/dtor take no self.
         info.is_empty = info.field_types.empty() && !info.has_pinit && !info.is_transport_impl;
+        // namespace: declared as `Name { ... }` only — non-instantiable, called as Name:fn()
+        info.is_namespace = slid.is_namespace;
         slid_info_[slid.name] = std::move(info);
     }
 }
@@ -797,6 +799,7 @@ void Codegen::emit() {
     // first pass: emit implementation slids (complete field layout)
     for (auto& slid : program_.slids) {
         if (!slid.type_params.empty()) continue;
+        if (slid.is_namespace) continue;
         if (!slid.is_transport_impl) continue;
         if (!emitted_structs.insert(slid.name).second) continue;
         emitStructType(slid);
@@ -804,6 +807,7 @@ void Codegen::emit() {
     // second pass: emit remaining slids (skip names already covered by impl)
     for (auto& slid : program_.slids) {
         if (!slid.type_params.empty()) continue;
+        if (slid.is_namespace) continue;
         if (slid.is_transport_impl) continue;
         if (!emitted_structs.insert(slid.name).second) continue;
         emitStructType(slid);
@@ -1285,7 +1289,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     }
 
     // emit __$sizeof for every locally-complete slid (not for consumer-side declarations)
-    if (!slid.has_ellipsis_suffix) {
+    if (!slid.has_ellipsis_suffix && !slid.is_namespace) {
         std::string linkage = isExported(slid.name + "__$sizeof") ? "" : "internal ";
         out_ << "define " << linkage << "i64 @" << slid.name << "__$sizeof() {\n";
         out_ << "entry:\n";

@@ -120,6 +120,7 @@ enum class TokenType {
     kDot,
     kDotDot,
     kColon,
+    kColonColon,
     kLBracket,
     kRBracket,
     kBracketAssign,  // []=

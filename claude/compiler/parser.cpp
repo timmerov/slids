@@ -327,8 +327,43 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         expect(TokenType::kRParen, "expected ')'");
         return se;
     }
+    if (t.type == TokenType::kColonColon) {
+        advance(); // consume '::'
+        std::string fn = expect(TokenType::kIdentifier, "expected name after '::'").value;
+        expect(TokenType::kLParen, "expected '(' after '::name'");
+        std::vector<std::unique_ptr<Expr>> args;
+        while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+            args.push_back(parseExpr());
+            if (peek().type == TokenType::kComma) advance();
+        }
+        expect(TokenType::kRParen, "expected ')'");
+        auto call = std::make_unique<CallExpr>(fn, std::move(args));
+        call->qualifier = "::";
+        return call;
+    }
     if (t.type == TokenType::kIdentifier) {
         advance();
+        // qualified call: Name:method(args) — namespace function call.
+        // Suppressed in contexts where ':' terminates the expression (e.g. case labels).
+        if (colon_terminates_expr_ == 0
+            && peek().type == TokenType::kColon
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kIdentifier
+            && pos_ + 2 < (int)tokens_.size()
+            && tokens_[pos_ + 2].type == TokenType::kLParen) {
+            advance(); // consume ':'
+            std::string method = advance().value; // consume method identifier
+            advance(); // consume '('
+            std::vector<std::unique_ptr<Expr>> args;
+            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                args.push_back(parseExpr());
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kRParen, "expected ')'");
+            auto call = std::make_unique<CallExpr>(method, std::move(args));
+            call->qualifier = t.value;
+            return call;
+        }
         // template call: name<TypeArg,...>(args)
         if (peek().type == TokenType::kLt && isTemplateCallLookahead()) {
             advance(); // consume '<'
@@ -661,6 +696,13 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
 
 std::unique_ptr<Stmt> Parser::parseStmt() {
     Token t = peek();
+
+    // global-qualified call statement: ::name(args);
+    if (t.type == TokenType::kColonColon) {
+        auto call = parseExpr();
+        expect(TokenType::kSemicolon, "expected ';'");
+        return std::make_unique<ExprStmt>(std::move(call));
+    }
 
     if (t.type == TokenType::kDelete) {
         advance();
@@ -1122,6 +1164,27 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     if (t.type == TokenType::kIdentifier) {
         std::string name = t.value;
         advance();
+
+        // namespace-qualified call statement: Name:method(args);
+        if (peek().type == TokenType::kColon
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kIdentifier
+            && pos_ + 2 < (int)tokens_.size()
+            && tokens_[pos_ + 2].type == TokenType::kLParen) {
+            advance(); // consume ':'
+            std::string method = advance().value;
+            advance(); // consume '('
+            std::vector<std::unique_ptr<Expr>> args;
+            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                args.push_back(parseExpr());
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kSemicolon, "expected ';'");
+            auto call = std::make_unique<CallExpr>(method, std::move(args));
+            call->qualifier = name;
+            return std::make_unique<ExprStmt>(std::move(call));
+        }
 
         // deref assignment: ptr^ = val  or  ptr^.field = val  or  ptr^.method()
         if (peek().type == TokenType::kBitXor) {
@@ -2060,6 +2123,22 @@ Program Parser::parse() {
         hoist(program.slids[i], program.slids[i].name);
     }
 
+    // synthesize SlidDef entries for namespaces — slid names that appear only
+    // in external_methods (block reopens or `void Name:fn()` defs) with no `Name(...)` data block.
+    {
+        std::set<std::string> existing;
+        for (auto& s : program.slids) existing.insert(s.name);
+        std::set<std::string> seen_ns;
+        for (auto& em : program.external_methods) {
+            if (existing.count(em.slid_name)) continue;
+            if (!seen_ns.insert(em.slid_name).second) continue;
+            SlidDef ns;
+            ns.name = em.slid_name;
+            ns.is_namespace = true;
+            program.slids.push_back(std::move(ns));
+        }
+    }
+
     return program;
 }
 
@@ -2075,7 +2154,9 @@ std::unique_ptr<SwitchStmt> Parser::parseSwitchStmt() {
         SwitchCase sc;
         if (peek().type == TokenType::kCase) {
             advance();
+            colon_terminates_expr_++;
             sc.value = parseExpr();
+            colon_terminates_expr_--;
             expect(TokenType::kColon, "expected ':'");
         } else if (peek().type == TokenType::kDefault) {
             advance();

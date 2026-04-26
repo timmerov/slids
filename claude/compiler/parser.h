@@ -42,6 +42,7 @@ struct CallExpr : Expr {
     std::string callee;
     std::vector<std::unique_ptr<Expr>> args;
     std::vector<std::string> type_args; // non-empty for template calls: add<int>(...)
+    std::string qualifier;              // "" for bare; slid name for `Name:fn()`; "::" for `::fn()`
     CallExpr(std::string callee, std::vector<std::unique_ptr<Expr>> args)
         : callee(std::move(callee)), args(std::move(args)) {}
 };
@@ -411,6 +412,7 @@ struct SlidDef {
     int public_field_count = 0;          // number of public fields before private ones (for __$pinit)
     bool is_local = true;                // false when template body loaded from an imported .sl file
     std::string impl_module;             // module name of the impl file (when !is_local)
+    bool is_namespace = false;           // declared as `Name { ... }` only — no `()` data block ever
     std::unique_ptr<BlockStmt> ctor_body;          // loose code (implicit ctor), or null
     std::unique_ptr<BlockStmt> explicit_ctor_body; // _() { ... }, or null
     std::unique_ptr<BlockStmt> dtor_body;          // ~() { ... }, or null
@@ -501,6 +503,10 @@ private:
     // short-name → canonical-name aliases for nested slids in the current outer's body
     // (e.g. "Inner" → "Outer.Inner") — applied by parseTypeName
     std::map<std::string, std::string> nested_alias_;
+
+    // when > 0, ':' terminates the current expression — used in contexts like
+    // `case <expr>:` to keep the namespace-call lookahead from eating the label colon.
+    int colon_terminates_expr_ = 0;
 
     // lookahead: pos_ is at '<'; returns true if this is a template type-arg list followed by '('
     bool isTemplateCallLookahead() const;

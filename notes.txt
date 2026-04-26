@@ -1,4 +1,9 @@
 
+case expr:
+hrm... that's unexpected.
+seems like it should be:
+case const_expr:
+
 inheritance:
 
 update docs so an array is semantically a tuple
