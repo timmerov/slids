@@ -783,7 +783,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             std::string var_type = advance().value;   // e.g. "Piece"
             if (peek().type == TokenType::kIdentifier) {
                 std::string var_name = advance().value;
-                if (peek().type == TokenType::kIn) {
+                if (peek().type == TokenType::kIdentifier && peek().value == "in") {
                     advance(); // consume 'in'
                     if (isUserTypeName(peek())) {
                         auto stmt = std::make_unique<ForEnumStmt>();
@@ -814,7 +814,14 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             throw std::runtime_error("Line " + std::to_string(peek().line)
                 + ": expected variable name in for loop");
         }
-        expect(TokenType::kIn, "expected 'in'");
+        {
+            Token in_tok = peek();
+            if (in_tok.type != TokenType::kIdentifier || in_tok.value != "in") {
+                throw std::runtime_error("Line " + std::to_string(in_tok.line)
+                    + ": expected 'in'");
+            }
+            advance();
+        }
         if (peek().type == TokenType::kStringLiteral || peek().type == TokenType::kIdentifier) {
             auto stmt = std::make_unique<ForArrayStmt>();
             stmt->var_name = for_var_name;

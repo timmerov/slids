@@ -34,7 +34,6 @@ enum class TokenType {
     kElse,
     kWhile,
     kFor,
-    kIn,
     kBreak,
     kContinue,
     kEnum,

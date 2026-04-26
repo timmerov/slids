@@ -158,7 +158,6 @@ Token Lexer::readIdentifierOrKeyword() {
     if (value == "else")     return Token(TokenType::kElse,     value, line_);
     if (value == "while")    return Token(TokenType::kWhile,    value, line_);
     if (value == "for")      return Token(TokenType::kFor,      value, line_);
-    if (value == "in")       return Token(TokenType::kIn,       value, line_);
     if (value == "break")    return Token(TokenType::kBreak,    value, line_);
     if (value == "continue") return Token(TokenType::kContinue, value, line_);
     if (value == "enum")     return Token(TokenType::kEnum,     value, line_);

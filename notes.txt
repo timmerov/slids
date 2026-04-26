@@ -95,3 +95,10 @@ must use
 or
     alias slids;
     s = String;
+
+for loops:
+kinda hate the current syntax.
+'in' should not be a keyword.
+possibilities:
+    for (int x : (0..10)) { }
+blech.
