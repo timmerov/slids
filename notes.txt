@@ -1,4 +1,10 @@
 
+templated namespaces:
+Namespace<T> {
+    ...
+}
+has potential.
+
 case expr:
 hrm... that's unexpected.
 seems like it should be:
