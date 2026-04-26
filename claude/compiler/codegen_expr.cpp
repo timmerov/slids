@@ -10,8 +10,14 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
     if (auto* v = dynamic_cast<const VarExpr*>(&expr)) {
         // self — pointer to the current object
-        if (v->name == "self" && !current_slid_.empty())
+        if (v->name == "self" && !current_slid_.empty()) {
+            auto& info = slid_info_[current_slid_];
+            if (info.is_empty)
+                throw std::runtime_error(
+                    (info.is_namespace ? "namespace '" : "empty class '")
+                    + current_slid_ + "' has no self");
             return self_ptr_.empty() ? "%self" : self_ptr_;
+        }
         // check if it's a field access via self in a method
         if (!current_slid_.empty()) {
             auto& info = slid_info_[current_slid_];
@@ -284,8 +290,16 @@ std::string Codegen::emitExpr(const Expr& expr) {
         // ^x — return the alloca register (its address)
         if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
             // ^self — address of the current object (implicit method parameter)
-            if (ve->name == "self")
+            if (ve->name == "self") {
+                if (!current_slid_.empty()) {
+                    auto& info = slid_info_[current_slid_];
+                    if (info.is_empty)
+                        throw std::runtime_error(
+                            (info.is_namespace ? "namespace '" : "empty class '")
+                            + current_slid_ + "' has no self");
+                }
                 return self_ptr_.empty() ? "%self" : self_ptr_;
+            }
             auto it = locals_.find(ve->name);
             if (it == locals_.end())
                 throw std::runtime_error("AddrOf: undefined variable '" + ve->name + "'");
