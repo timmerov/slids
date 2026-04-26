@@ -1,5 +1,6 @@
 {
     "includeGitInstructions": false,
+    "awaySummaryEnabled": false,
     "autoRecap": false,
 
     "permissions": {

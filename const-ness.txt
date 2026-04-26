@@ -1,0 +1,113 @@
+
+objects are passed by reference.
+the plan is to assume all pointers passed as arguments to
+functions and methods are const.
+ie their contents is read only.
+unless specifically tagged as mutable.
+i'm trying very hard to not have a const keyword.
+let the compiler determine const-ness.
+
+for the rest of this document, assume these variables
+have these types:
+const int^ p;
+const int^ q;
+int^ r;
+int x;
+int y;
+
+functions:
+strcpy(mutable char[] dst, char[] src, intptr cnt);
+
+methods:
+self is always mutable.
+
+assignments:
+blanket naive rule:
+any time a const pointer appears on the
+lhs of an assignment, this is a compile error.
+p^ = 47;
+with the exception of...
+
+const pointer reassignment:
+if you want to reassign a const ptr, go ahead.
+allowed:
+p = ^x;
+p = nullptr;
+p = ^y;
+
+deleting:
+the pointer must be mutable.
+allowed:
+delete r;
+not allowed:
+delete p;
+
+swapping:
+any time a const pointers appears on either side
+of a swap, this is a compile error.
+except swapping the actual const pointers is allowed.
+it's weird. but it's allowed.
+allowed:
+p <-> q;
+not allowed:
+p <-> r;
+r <-> q;
+p^ <-> q^;
+p^ <-> r^;
+
+move pointers:
+you can move any pointer into a const pointer.
+you cannot move a mutable pointer into a const pointer.
+this is a compile error.
+allowed:
+p <- q;
+q <- r;
+not allowed;
+r <- p;
+
+pointer declaration:
+if a const pointer appears anywhere on the rhs,
+then the lhs pointer is const.
+const int^ q = expression involving p;
+
+mutable pointer assignment:
+if a const pointer appears anywhere on the rhs,
+then there is a compile error.
+not allowed:
+r = expression involving p;
+
+casting:
+you can do anything you want when you cast pointers.
+that's the spec.
+allowed:
+r = <int^> <void^> p;
+allowed-ness tbd:
+r = <int^> p;
+am thinking you need to strip const-ness before
+casting to non-const.
+okay, this is a big can of worms.
+
+objects:
+i would love for the compiler to be able to figure
+out if a method is const or not.
+i really don't want to have to do it myself.
+void foo(const String^ s) {
+    /* should be allowed. */
+    len = s^.size();
+    /* should not be allowed. */
+    s^.clear();
+}
+maybe we bring back transport.
+string.sl:
+transport string;
+compiling string.sl annotates and exports string.slh
+to the export directory.
+other source files would search the export directory first.
+annotated:
+String(...) {
+    intptr size() const;
+    void reserve() mutable;
+    void some_func(); /* unknown - compiler could not classify */
+}
+does the compiler classify methods every time?
+what if the header is wrong?
