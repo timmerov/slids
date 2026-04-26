@@ -25,8 +25,7 @@ Outer(
         T m_
     ) {
         void print(char[] name) {
-            __println("InTemplate: " + name + " = " + m_);
-            //__println("InTemplate: " + ##type(m_) + " " + name + " = " + m_);
+            __println("InTemplate: " + ##type(m_) + " " + name + " = " + m_);
         }
     }
 

@@ -1,5 +1,5 @@
 Inner: Outer:test inn: a=5 b=4
 Outer:test2 it
 Inner: main_inn: a=6 b=7
-InTemplate: main_it = 11
+InTemplate: char main_it = 11
 Inner2: main_in2: c=102

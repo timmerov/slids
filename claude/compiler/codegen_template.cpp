@@ -129,6 +129,10 @@ static std::unique_ptr<Expr> cloneExpr(const Expr& expr,
         return t;
     }
 
+    if (auto* e = dynamic_cast<const StringifyExpr*>(&expr))
+        return std::make_unique<StringifyExpr>(e->kind,
+            e->operand ? cloneExpr(*e->operand, subst) : nullptr, e->line);
+
     throw std::runtime_error("cloneExpr: unhandled expression type");
 }
 

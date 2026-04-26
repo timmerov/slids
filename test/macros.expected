@@ -4,11 +4,25 @@
 ##type(some_int  )=int
 ##type(some_float)=float64
 ##type(some_bool )=bool
-##line=27
+##line=75
 ##file=macros.sl
 ##func=main
-##date=DATE
-##time=TIME
+##date=Apr 26 2026
+##time=09:08:42
 #some_int  : int some_int = 42
 #some_float: float64 some_float = 3.140000
 #some_bool : bool some_bool = 1
+freefn  ##func=freefn ##name=x ##type=int
+freefn  #x: int x = 7
+freetpl ##func=freetpl__int ##name=v ##type=int
+freetpl #v: int v = 3
+freetpl ##func=freetpl__float64 ##name=v ##type=float64
+freetpl #v: float64 v = 2.500000
+Klass.method ##func=method ##name=y ##type=int
+Klass.method #y: int y = 99
+KlassTpl.tmethod ##func=tmethod ##name=q ##type=uint16
+KlassTpl.tmethod #q: uint16 q = 8
+OuterC:InnerC.show ##func=show ##name=z ##type=int
+OuterC:InnerC.show #z: int z = 2
+OuterC:InnerCT.tshow ##func=tshow ##name=q ##type=uint8
+OuterC:InnerCT.tshow #q: uint8 q = 4

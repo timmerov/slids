@@ -1,13 +1,4 @@
 
-##type fails in a template.
-
-method name collisions:
-name collisions when adding methods in different files.
-source1.slh and source2.slh can both add String:foo().
-both are public.
-so we have a name conflict.
-which is probably silent at link time.
-
 inheritance:
 
 update docs so an array is semantically a tuple
@@ -102,3 +93,11 @@ kinda hate the current syntax.
 possibilities:
     for (int x : (0..10)) { }
 blech.
+
+method name collisions:
+name collisions when adding methods in different files.
+source1.slh and source2.slh can both add String:foo().
+both are public.
+so we have a name conflict.
+which is probably silent at link time.
+
