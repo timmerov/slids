@@ -101,6 +101,19 @@ this is my annotated settings.json:
     },
 
     /*
+    the sandbox doesn't actually work.
+    something something sysclt user permissions for bwrap bubble wrap.
+    also something about a root level directory.
+    also probably don't want to enable it.
+    cause it doesn't handle compound bash commands well.
+    like pipe | and chaining &&.
+
+    otoh, it's real good at what it does:
+    auto-fail git.
+    and auto-fail access to out of bounds files.
+    */
+
+    /*
     this seems redudant.
     but claude ai insists its necessary.
     it's another way to keep claude in it's sandbox.
