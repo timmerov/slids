@@ -304,7 +304,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 std::string elem = newTmp();
                 out_ << "    " << elem << " = getelementptr %struct." << elem_type
                      << ", ptr " << ptr_val << ", i64 " << idx_prev << "\n";
-                out_ << "    call void @" << elem_type << "__$dtor(ptr " << elem << ")\n";
+                out_ << "    call void @" << elem_type << "__$dtor("
+                     << (slid_info_[elem_type].is_empty ? "" : "ptr " + elem) << ")\n";
                 out_ << "    br label %" << cond_lbl << "\n";
 
                 block_terminated_ = false;
@@ -316,7 +317,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             out_ << end_lbl_outer << ":\n";
         } else {
             if (is_slid && slid_info_[elem_type].has_dtor)
-                out_ << "    call void @" << elem_type << "__$dtor(ptr " << ptr_val << ")\n";
+                out_ << "    call void @" << elem_type << "__$dtor("
+                     << (slid_info_[elem_type].is_empty ? "" : "ptr " + ptr_val) << ")\n";
             out_ << "    call void @free(ptr " << ptr_val << ")\n";
         }
         // nullify the pointer variable so it is left in a valid (null) state
@@ -508,7 +510,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     if (info.has_pinit)
                         out_ << "    call void @" << eff_type << "__$pinit(ptr " << reg << ")\n";
                     else if (info.has_explicit_ctor)
-                        out_ << "    call void @" << eff_type << "__$ctor(ptr " << reg << ")\n";
+                        out_ << "    call void @" << eff_type << "__$ctor("
+                             << (info.is_empty ? "" : "ptr " + reg) << ")\n";
                     // call op+=(rhs)
                     std::string compound_base = eff_type + "__op+=";
                     std::string mangled = resolveOpEq(compound_base, *be->right);
@@ -884,7 +887,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             if (sinfo.has_pinit && !sinfo.is_transport_impl)
                                 out_ << "    call void @" << slid_name << "__$pinit(ptr " << tmp << ")\n";
                             else if (sinfo.has_explicit_ctor)
-                                out_ << "    call void @" << slid_name << "__$ctor(ptr " << tmp << ")\n";
+                                out_ << "    call void @" << slid_name << "__$ctor("
+                                     << (sinfo.is_empty ? "" : "ptr " + tmp) << ")\n";
                             auto& cptypes = func_param_types_[coerce];
                             std::string cptype = cptypes.empty() ? "" : cptypes[0];
                             std::string carg = emitArgForParam(*be->right, cptype);
@@ -914,7 +918,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                         }
                             }
                             if (sinfo.has_dtor)
-                                out_ << "    call void @" << slid_name << "__$dtor(ptr " << tmp << ")\n";
+                                out_ << "    call void @" << slid_name << "__$dtor("
+                                     << (sinfo.is_empty ? "" : "ptr " + tmp) << ")\n";
                             return;
                         }
                     }
@@ -930,7 +935,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     // first call dtor on existing lhs value
                     const std::string& slid_name = tit->second;
                     if (slid_info_.at(slid_name).has_dtor) {
-                        out_ << "    call void @" << slid_name << "__$dtor(ptr " << it->second << ")\n";
+                        out_ << "    call void @" << slid_name << "__$dtor("
+                             << (slid_info_.at(slid_name).is_empty ? "" : "ptr " + it->second) << ")\n";
                         // re-init fields to zero/null
                         auto& info = slid_info_[slid_name];
                         for (int i = 0; i < (int)info.field_types.size(); i++) {
@@ -1685,7 +1691,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (!slid_name.empty() && mcs->method == "~") {
             auto& info = slid_info_[slid_name];
             if (info.has_dtor || info.has_pinit)
-                out_ << "    call void @" << slid_name << "__$dtor(ptr " << obj_ptr << ")\n";
+                out_ << "    call void @" << slid_name << "__$dtor("
+                     << (info.is_empty ? "" : "ptr " + obj_ptr) << ")\n";
             return;
         }
         if (!slid_name.empty()) {
@@ -1696,12 +1703,14 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 throw std::runtime_error("unknown method: " + mcs->method);
             std::string ret_type = llvmType(ret_it->second);
             auto& mptypes = func_param_types_[mangled];
-            std::string arg_str = "ptr " + obj_ptr;
+            bool empty = slid_info_[slid_name].is_empty;
+            std::string arg_str = empty ? "" : "ptr " + obj_ptr;
             for (int i = 0; i < (int)mcs->args.size(); i++) {
                 std::string ptype_str = (i < (int)mptypes.size()) ? mptypes[i] : "";
                 std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
                 std::string aval = emitArgForParam(*mcs->args[i], ptype_str);
-                arg_str += ", " + ptype + " " + aval;
+                if (!arg_str.empty()) arg_str += ", ";
+                arg_str += ptype + " " + aval;
             }
             if (ret_type == "void") {
                 out_ << "    call void @" << llvmGlobalName(mangled) << "(" << arg_str << ")\n";
@@ -1784,7 +1793,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             // if src was a fresh temp (not a named local), dtor it now
             // (its ptr fields are already null after the move, so dtor is a no-op for resources)
             if (src_is_fresh_temp && info.has_dtor)
-                out_ << "    call void @" << slid_name << "__$dtor(ptr " << src << ")\n";
+                out_ << "    call void @" << slid_name << "__$dtor("
+                     << (info.is_empty ? "" : "ptr " + src) << ")\n";
             emitDtors();
             out_ << "    ret void\n";
         } else {
@@ -2839,11 +2849,13 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (mit != func_return_types_.end()) {
                 std::string ret_type = llvmType(mit->second);
                 auto& mptypes = func_param_types_[mangled];
-                std::string arg_str = "ptr %self";
+                bool empty = slid_info_[current_slid_].is_empty;
+                std::string arg_str = empty ? "" : "ptr %self";
                 for (int i = 0; i < (int)call->args.size(); i++) {
                     std::string ptype_str = (i < (int)mptypes.size()) ? mptypes[i] : "";
                     std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
-                    arg_str += ", " + ptype + " " + emitArgForParam(*call->args[i], ptype_str);
+                    if (!arg_str.empty()) arg_str += ", ";
+                    arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
                 }
                 if (ret_type == "void") {
                     out_ << "    call void @" << mangled << "(" << arg_str << ")\n";
@@ -2884,7 +2896,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 } else {
                     target = locals_[e.var_name];
                 }
-                out_ << "    call void @" << e.slid_type << "__$dtor(ptr " << target << ")\n";
+                out_ << "    call void @" << e.slid_type << "__$dtor("
+                     << (slid_info_[e.slid_type].is_empty ? "" : "ptr " + target) << ")\n";
             }
         }
         dtor_vars_.resize(dtor_mark);

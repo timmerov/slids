@@ -480,6 +480,8 @@ void Codegen::collectSlids() {
             if (em.method_name == "_") info.has_explicit_ctor = true;
             if (em.method_name == "~") info.has_dtor = true;
         }
+        // empty class: has () but no fields, not incomplete. methods/ctor/dtor take no self.
+        info.is_empty = info.field_types.empty() && !info.has_pinit && !info.is_transport_impl;
         slid_info_[slid.name] = std::move(info);
     }
 }
@@ -911,10 +913,11 @@ void Codegen::emit() {
     // imported template instantiations: emit declares for ctor/dtor/sizeof/methods
     for (auto* slid : pending_slid_declares_) {
         auto& info = slid_info_[slid->name];
+        const char* self_arg = info.is_empty ? "" : "ptr";
         if (info.has_explicit_ctor)
-            out_ << "declare void @" << slid->name << "__$ctor(ptr)\n";
+            out_ << "declare void @" << slid->name << "__$ctor(" << self_arg << ")\n";
         if (info.has_dtor)
-            out_ << "declare void @" << slid->name << "__$dtor(ptr)\n";
+            out_ << "declare void @" << slid->name << "__$dtor(" << self_arg << ")\n";
         out_ << "declare i64 @" << slid->name << "__$sizeof()\n";
         for (auto& [base, overloads] : method_overloads_) {
             std::string prefix = slid->name + "__";
@@ -923,8 +926,10 @@ void Codegen::emit() {
                 if (!declared_fns.insert(mangled).second) continue;
                 std::string ret_type_str = func_return_types_[mangled];
                 std::string ret = ret_type_str.empty() ? "void" : llvmType(ret_type_str);
-                out_ << "declare " << ret << " @" << llvmGlobalName(mangled) << "(ptr";
-                for (auto& pt : ptypes) out_ << ", " << llvmType(pt);
+                out_ << "declare " << ret << " @" << llvmGlobalName(mangled) << "(";
+                bool first = info.is_empty;
+                if (!info.is_empty) out_ << "ptr";
+                for (auto& pt : ptypes) { if (!first) out_ << ", "; first = false; out_ << llvmType(pt); }
                 out_ << ")\n";
             }
         }
@@ -943,15 +948,16 @@ void Codegen::emit() {
         if (!slid.type_params.empty()) continue; // skip template slids
         // ctor/dtor — declare if not locally defined
         auto& info = slid_info_[slid.name];
+        const char* self_arg = info.is_empty ? "" : "ptr";
         if (info.has_explicit_ctor && !local_methods.count(slid.name + "__$ctor"))
-            out_ << "declare void @" << slid.name << "__$ctor(ptr)\n";
+            out_ << "declare void @" << slid.name << "__$ctor(" << self_arg << ")\n";
         if (info.has_dtor && !local_methods.count(slid.name + "__$dtor"))
-            out_ << "declare void @" << slid.name << "__$dtor(ptr)\n";
+            out_ << "declare void @" << slid.name << "__$dtor(" << self_arg << ")\n";
         if (info.has_pinit && !local_methods.count(slid.name + "__$pinit"))
             out_ << "declare void @" << slid.name << "__$pinit(ptr)\n";
         if (info.has_pinit && !local_methods.count(slid.name + "__$sizeof"))
             out_ << "declare i64 @" << slid.name << "__$sizeof()\n";
-        // regular methods: first arg is always ptr (self)
+        // regular methods: first arg is ptr (self) unless slid is empty
         for (auto& [base, overloads] : method_overloads_) {
             if (base.substr(0, slid.name.size() + 2) != slid.name + "__") continue;
             for (auto& [mangled, ptypes] : overloads) {
@@ -959,8 +965,10 @@ void Codegen::emit() {
                 if (!declared_fns.insert(mangled).second) continue;
                 std::string ret_type_str = func_return_types_[mangled];
                 std::string ret = ret_type_str.empty() ? "void" : llvmType(ret_type_str);
-                out_ << "declare " << ret << " @" << llvmGlobalName(mangled) << "(ptr";
-                for (auto& pt : ptypes) out_ << ", " << llvmType(pt);
+                out_ << "declare " << ret << " @" << llvmGlobalName(mangled) << "(";
+                bool first = info.is_empty;
+                if (!info.is_empty) out_ << "ptr";
+                for (auto& pt : ptypes) { if (!first) out_ << ", "; first = false; out_ << llvmType(pt); }
                 out_ << ")\n";
             }
         }
@@ -1163,12 +1171,14 @@ void Codegen::emitDtors() {
     // flush expression-level temporaries first (before named locals)
     for (int i = (int)pending_temp_dtors_.size() - 1; i >= 0; i--) {
         auto& td = pending_temp_dtors_[i];
-        out_ << "    call void @" << td.second << "__$dtor(ptr " << td.first << ")\n";
+        out_ << "    call void @" << td.second << "__$dtor("
+             << (slid_info_[td.second].is_empty ? "" : "ptr " + td.first) << ")\n";
     }
     pending_temp_dtors_.clear();
     // call named-local dtors in reverse declaration order
     for (int i = (int)dtor_vars_.size() - 1; i >= 0; i--) {
         auto& e = dtor_vars_[i];
+        bool empty = slid_info_[e.slid_type].is_empty;
         std::string target;
         if (e.tuple_index >= 0) {
             std::string tuple_type = local_types_[e.var_name];
@@ -1179,7 +1189,8 @@ void Codegen::emitDtors() {
         } else {
             target = locals_[e.var_name];
         }
-        out_ << "    call void @" << e.slid_type << "__$dtor(ptr " << target << ")\n";
+        out_ << "    call void @" << e.slid_type << "__$dtor("
+             << (empty ? "" : "ptr " + target) << ")\n";
     }
 }
 
@@ -1203,7 +1214,9 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         block_terminated_ = false;
         current_slid_ = slid.name;
 
-        out_ << "define " << (isExported(slid.name + "__$ctor") ? "" : "internal ") << "void @" << slid.name << "__$ctor(ptr %self) {\n";
+        bool empty = slid_info_[slid.name].is_empty;
+        out_ << "define " << (isExported(slid.name + "__$ctor") ? "" : "internal ") << "void @" << slid.name << "__$ctor("
+             << (empty ? "" : "ptr %self") << ") {\n";
         out_ << "entry:\n";
         emitBlock(*ctor_body);
         if (!block_terminated_) out_ << "    ret void\n";
@@ -1220,7 +1233,9 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         block_terminated_ = false;
         current_slid_ = slid.name;
 
-        out_ << "define " << (isExported(slid.name + "__$dtor") ? "" : "internal ") << "void @" << slid.name << "__$dtor(ptr %self) {\n";
+        bool empty = slid_info_[slid.name].is_empty;
+        out_ << "define " << (isExported(slid.name + "__$dtor") ? "" : "internal ") << "void @" << slid.name << "__$dtor("
+             << (empty ? "" : "ptr %self") << ") {\n";
         out_ << "entry:\n";
         emitBlock(*dtor_body);
         if (!block_terminated_) out_ << "    ret void\n";
@@ -2034,10 +2049,11 @@ void Codegen::emitSlidSlotAssign(const std::string& elem_type,
         auto oit = method_overloads_.find(op_base);
         if (oit != method_overloads_.end()) {
             std::string want = elem_type + "^";
+            bool empty = slid_info_[elem_type].is_empty;
             for (auto& [m, pt] : oit->second) {
                 if (pt.size() == 1 && pt[0] == want) {
                     out_ << "    call void @" << llvmGlobalName(m)
-                         << "(ptr " << dst_ptr << ", ptr " << src_ptr << ")\n";
+                         << "(" << (empty ? "" : "ptr " + dst_ptr + ", ") << "ptr " << src_ptr << ")\n";
                     return;
                 }
             }
@@ -2296,7 +2312,8 @@ std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
     if (info.has_pinit)
         out_ << "    call void @" << slid_name << "__$pinit(ptr " << reg << ")\n";
     else if (info.has_explicit_ctor)
-        out_ << "    call void @" << slid_name << "__$ctor(ptr " << reg << ")\n";
+        out_ << "    call void @" << slid_name << "__$ctor("
+             << (info.is_empty ? "" : "ptr " + reg) << ")\n";
     if (info.has_dtor)
         pending_temp_dtors_.push_back({reg, slid_name});
     return reg;
@@ -2396,7 +2413,8 @@ void Codegen::emitConstructAtPtrs(const std::string& stype, const std::string& p
         current_slid_ = saved_slid;
         self_ptr_ = saved_self;
     } else if (is_slid && slid_info_[stype].has_explicit_ctor) {
-        out_ << "    call void @" << stype << "__$ctor(ptr " << ptr << ")\n";
+        out_ << "    call void @" << stype << "__$ctor("
+             << (slid_info_[stype].is_empty ? "" : "ptr " + ptr) << ")\n";
     }
 }
 
@@ -2433,7 +2451,8 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                 }
                 // call explicit constructor if any
                 if (info.has_explicit_ctor)
-                    out_ << "    call void @" << slid_name << "__$ctor(ptr " << tmp_reg << ")\n";
+                    out_ << "    call void @" << slid_name << "__$ctor("
+                         << (info.is_empty ? "" : "ptr " + tmp_reg) << ")\n";
             }
             // call op=(char[]) to initialize from the literal
             auto oit = method_overloads_.find(slid_name + "__op=");
@@ -2572,7 +2591,8 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                                 out_ << "    store " << llvmType(info.field_types[i2]) << " 0, ptr " << gep << "\n";
                         }
                         if (info.has_explicit_ctor)
-                            out_ << "    call void @" << slid_name << "__$ctor(ptr " << tmp << ")\n";
+                            out_ << "    call void @" << slid_name << "__$ctor("
+                                 << (info.is_empty ? "" : "ptr " + tmp) << ")\n";
                     }
                     std::string av = emitExpr(arg);
                     if (widen && !exact) {
@@ -2647,11 +2667,17 @@ void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& full_mangle
     std::string ret_type = uses_sret ? "void" : llvmType(return_type);
     current_func_return_type_ = ret_type;
 
-    std::string param_str = "ptr %self";
-    if (uses_sret)
-        param_str += ", ptr sret(%struct." + return_type + ") %retval";
-    for (auto& [type, name] : params)
-        param_str += ", " + llvmType(type) + " %arg_" + name;
+    bool empty = slid_info_[slid.name].is_empty;
+    std::string param_str;
+    if (!empty) param_str = "ptr %self";
+    if (uses_sret) {
+        if (!param_str.empty()) param_str += ", ";
+        param_str += "ptr sret(%struct." + return_type + ") %retval";
+    }
+    for (auto& [type, name] : params) {
+        if (!param_str.empty()) param_str += ", ";
+        param_str += llvmType(type) + " %arg_" + name;
+    }
 
     out_ << "define " << (isExported(full_mangled) ? "" : "internal ") << ret_type << " @" << llvmGlobalName(full_mangled)
          << "(" << param_str << ") {\n";
@@ -2807,7 +2833,8 @@ void Codegen::emitBlock(const BlockStmt& block) {
         // destroy implicit temporaries created during this statement
         for (int i = (int)pending_temp_dtors_.size() - 1; i >= (int)temp_mark; i--) {
             auto& td = pending_temp_dtors_[i];
-            out_ << "    call void @" << td.second << "__$dtor(ptr " << td.first << ")\n";
+            out_ << "    call void @" << td.second << "__$dtor("
+                 << (slid_info_[td.second].is_empty ? "" : "ptr " + td.first) << ")\n";
         }
         pending_temp_dtors_.resize(temp_mark);
     }

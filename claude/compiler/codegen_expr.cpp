@@ -523,7 +523,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
         if (!slid_name.empty() && mc->method == "~") {
             auto& info = slid_info_[slid_name];
             if (info.has_dtor || info.has_pinit)
-                out_ << "    call void @" << slid_name << "__$dtor(ptr " << obj_ptr << ")\n";
+                out_ << "    call void @" << slid_name << "__$dtor("
+                     << (info.is_empty ? "" : "ptr " + obj_ptr) << ")\n";
             return "";
         }
         if (!slid_name.empty()) {
@@ -533,22 +534,32 @@ std::string Codegen::emitExpr(const Expr& expr) {
             if (ret_it == func_return_types_.end())
                 throw std::runtime_error("unknown method: " + mc->method);
             auto& mptypes = func_param_types_[mangled];
+            bool empty = slid_info_[slid_name].is_empty;
             std::string method_args;
             for (int i = 0; i < (int)mc->args.size(); i++) {
                 std::string ptype = (i < (int)mptypes.size()) ? llvmType(mptypes[i]) : "i32";
                 method_args += ", " + ptype + " " + emitExpr(*mc->args[i]);
             }
+            std::string self_arg = empty ? "" : "ptr " + obj_ptr;
             if (slid_info_.count(ret_it->second)) {
                 std::string tmp = emitRawSlidAlloca(ret_it->second);
+                std::string sret_arg = "ptr sret(%struct." + ret_it->second + ") " + tmp;
+                std::string args = self_arg.empty() ? sret_arg : self_arg + ", " + sret_arg;
                 out_ << "    call void @" << llvmGlobalName(mangled)
-                     << "(ptr " << obj_ptr << ", ptr sret(%struct." << ret_it->second << ") " << tmp
-                     << method_args << ")\n";
+                     << "(" << args << method_args << ")\n";
                 return tmp;
             }
             std::string ret_type = llvmType(ret_it->second);
             std::string tmp = newTmp();
+            std::string args_prefix = self_arg;
+            if (!args_prefix.empty() && !method_args.empty()) {
+                // method_args begins with ", " — fine
+            } else if (args_prefix.empty() && !method_args.empty()) {
+                // strip leading ", " from method_args
+                method_args = method_args.substr(2);
+            }
             out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(mangled)
-                 << "(ptr " << obj_ptr << method_args << ")\n";
+                 << "(" << args_prefix << method_args << ")\n";
             return tmp;
         }
         throw std::runtime_error("complex method call not yet supported");
@@ -1433,7 +1444,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 if (info.has_pinit)
                     out_ << "    call void @" << ne->elem_type << "__$pinit(ptr " << elem << ")\n";
                 else if (info.has_explicit_ctor)
-                    out_ << "    call void @" << ne->elem_type << "__$ctor(ptr " << elem << ")\n";
+                    out_ << "    call void @" << ne->elem_type << "__$ctor("
+                         << (info.is_empty ? "" : "ptr " + elem) << ")\n";
 
                 std::string idx_next = newTmp();
                 out_ << "    " << idx_next << " = add i64 " << idx << ", 1\n";
@@ -1595,7 +1607,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
             if (info.has_pinit)
                 out_ << "    call void @" << stype << "__$pinit(ptr " << tmp_reg << ")\n";
             else if (info.has_explicit_ctor)
-                out_ << "    call void @" << stype << "__$ctor(ptr " << tmp_reg << ")\n";
+                out_ << "    call void @" << stype << "__$ctor("
+                     << (info.is_empty ? "" : "ptr " + tmp_reg) << ")\n";
 
             // call op= with the operand
             std::string mangled = resolveOpEq(stype + "__op=", *nc->operand);
