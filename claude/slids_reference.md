@@ -1404,6 +1404,78 @@ sizeof(^x)         // 8 — size of a pointer, not of the pointed-to type
 
 ---
 
+## Stringification
+
+Compile-time operators that produce `char[]` string literals from code structure.
+
+### `##name(x)` — variable name
+
+Returns the name of `x` as a string literal.
+
+```
+int some_var = 42;
+char[] n = ##name(some_var);   // "some_var"
+```
+
+### `##type(x)` — variable type
+
+Returns the declared type of `x` as a string literal.
+
+```
+int some_var = 42;
+float64 f = 3.14;
+char[] t1 = ##type(some_var);  // "int"
+char[] t2 = ##type(f);         // "float64"
+```
+
+### `##line` — source line
+
+Returns the current source line number as a string literal.
+
+```
+char[] ln = ##line;            // e.g. "42"
+```
+
+### `##file` — source filename
+
+Returns the base filename of the source file being compiled.
+
+```
+char[] f = ##file;             // e.g. "main.sl"
+```
+
+### `##func` — enclosing function name
+
+Returns the name of the function or method containing the expression.
+
+```
+char[] fn = ##func;            // e.g. "main"
+```
+
+### `##date` and `##time` — compilation timestamp
+
+Returns the date and time at which the compiler ran, in the same format as C's `__DATE__` and `__TIME__`.
+
+```
+char[] d = ##date;             // e.g. "Apr 25 2026"
+char[] tm = ##time;            // e.g. "15:30:55"
+```
+
+### `#x` — introspection tuple
+
+Desugars to a 3-tuple `(##type(x), ##name(x), x)`. The typical use is passing to a templated `dump` function for debug logging:
+
+```
+void dump<T>( (char[], char[], T)^ tuple );
+
+int x = 42;
+dump(#x);              // prints: int x=42
+```
+
+The operand of `#` must be a simple variable name. `##name` and `##type` have the same restriction.
+
+---
+
 ## Comments
 
 ```
