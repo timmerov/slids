@@ -14,9 +14,9 @@
 #some_bool : bool some_bool = 1
 freefn  ##func=freefn ##name=x ##type=int
 freefn  #x: int x = 7
-freetpl ##func=freetpl__int ##name=v ##type=int
+freetpl ##func=freetpl ##name=v ##type=int
 freetpl #v: int v = 3
-freetpl ##func=freetpl__float64 ##name=v ##type=float64
+freetpl ##func=freetpl ##name=v ##type=float64
 freetpl #v: float64 v = 2.500000
 Klass.method ##func=method ##name=y ##type=int
 Klass.method #y: int y = 99

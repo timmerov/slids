@@ -2712,7 +2712,10 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     continue_label_ = "";
     current_slid_ = "";
     current_parent_ = fn.name;
-    current_func_name_ = fn.name;
+    {
+        size_t sep = fn.name.find("__");
+        current_func_name_ = (sep != std::string::npos) ? fn.name.substr(0, sep) : fn.name;
+    }
     frame_ptr_reg_ = "";
     block_terminated_ = false;
 
