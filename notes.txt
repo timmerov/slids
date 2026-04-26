@@ -1,4 +1,9 @@
 
+nested classes:
+apparently this isn't implemented.
+
+inheritance:
+
 update docs so an array is semantically a tuple
 where all of the elements are the same type.
 and has special powers.
@@ -52,11 +57,35 @@ we will need a way to make a reference mutable.
 void strcpy(mutable char[] dst, char[] src);
 self is always mutable.
 we might want to be able to make self const.
+notes on this are in future directory.
 
-tuple:
-assignment:
-Simple x(1,2,3) = (4, 5, 6);
-as parameters:
-void foo( (int a, int b), int c);
-with templates:
-void bar<T>( (char[] name, char[] type, T value) );
+namespaces:
+    Math(
+        /* constant must have initializer. */
+        float pi_ = 3.14
+    ) {
+        /* you cannot instantiate a Math object. */
+        _() = delete;
+
+        float sin(float a);
+        float cos(float a);
+    }
+    x = Math.sin(Math.pi_);
+claude suggested using : instead of .
+    x = Math:sin(Math.pi_);
+Math.sin() means instantiate a temp Math and call the sin method.
+which won't work because the ctor is deleted.
+this feature depends on knowing that the member functions do not
+access self at all.
+which is similar to the problem of classifying methods as const
+or mutable.
+another option is extracting namespace data from
+the name of the .slh.
+don't really like that.
+but maybe from path info?
+import slids.string;
+must use
+    s = slids:String.
+or
+    alias slids;
+    s = String;
