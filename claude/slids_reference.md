@@ -934,7 +934,7 @@ Curly brackets are always required.
 ```
 while (condition) {
     // ...
-} :outer   // name can be targeted by break/continue from a nested block
+} :outer;   // name can be targeted by break/continue from a nested block
 ```
 
 An empty condition `while ()` is equivalent to `while (true)` — loops forever until a `break` or `return`:
@@ -965,7 +965,7 @@ Numeric range:
 ```
 for int i in (0..10) {
     println(i);
-} :outer
+} :outer;
 ```
 
 Collection iteration:

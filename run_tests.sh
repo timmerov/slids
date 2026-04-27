@@ -6,6 +6,7 @@ BIN_DIR="$SCRIPT_DIR/bin"
 TEST_DIR="$SCRIPT_DIR/test"
 
 SAMPLES=(
+    blocks
     cast
     class
     constructor

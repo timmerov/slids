@@ -239,6 +239,70 @@ int32 main() {
     }
     __println("after-outer");
 
+    __println("== test21: naked break in bottom-while ==");
+    int bb = 0;
+    while {
+        bb = bb + 1;
+        __println("bw bb=" + bb);
+        if (bb == 2) {
+            break;
+        }
+        __println("body bb=" + bb);
+    } (bb < 5);
+    __println("after-bw bb=" + bb);
+
+    __println("== test22: naked continue in bottom-while ==");
+    int cc = 0;
+    while {
+        cc = cc + 1;
+        __println("bw cc=" + cc);
+        if (cc == 2) {
+            continue;
+        }
+        __println("body cc=" + cc);
+    } (cc < 4);
+    __println("after-bw cc=" + cc);
+
+    __println("== test23: bottom-while with explicit name, break by name ==");
+    int dd = 0;
+    while {
+        dd = dd + 1;
+        __println("bw dd=" + dd);
+        if (dd == 2) {
+            break loop23;
+        }
+        __println("body dd=" + dd);
+    } :loop23 (dd < 5);
+    __println("after-bw dd=" + dd);
+
+    __println("== test24: switch in bottom-while, break 1 exits the while ==");
+    int ee = 0;
+    while {
+        ee = ee + 1;
+        __println("bw ee=" + ee);
+        switch (ee) {
+        case 2:
+            __println("  case 2, break 1");
+            break 1;
+        }
+        __println("after-switch ee=" + ee);
+    } (ee < 5);
+    __println("after-bw ee=" + ee);
+
+    __println("== test25: switch in bottom-while, continue 1 advances the while ==");
+    int ff = 0;
+    while {
+        ff = ff + 1;
+        __println("bw ff=" + ff);
+        switch (ff) {
+        case 2:
+            __println("  case 2, continue 1");
+            continue 1;
+        }
+        __println("after-switch ff=" + ff);
+    } (ff < 4);
+    __println("after-bw ff=" + ff);
+
     __println("== test20: nested switches, outer named ==");
     switch (1) {
     case 1:
