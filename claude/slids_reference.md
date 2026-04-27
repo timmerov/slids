@@ -1060,6 +1060,26 @@ delete arr;              // free memory — arr is set to nullptr automatically
 - `delete p` — calls the destructor for the object (or all objects if `p` is an array), frees the memory, and sets `p` to `nullptr`
 - No dangling pointers after `delete` — the pointer is always nulled
 
+### Placement new
+
+`new(addr) Type(args)` constructs a `Type` at an existing address. No memory is allocated; the caller owns the storage. The destructor is **not** registered automatically — call it explicitly when done, then release the storage.
+
+`addr` must be a raw-byte pointer.
+
+```
+Simple(int x_ = 0, int y_ = 0, int z_ = 0) {
+    _()  { /* ... */ }
+    ~()  { /* ... */ }
+}
+
+intptr size = sizeof(Simple);
+int8[] where = new int8[size];               // raw storage
+Simple^ obj  = new(where) Simple(1, 2, 3);   // construct in place
+obj^.print();
+obj^.~();                                    // explicit destructor
+delete where;                                // free the buffer
+```
+
 **References (`^`) and iterators (`[]`):**
 
 Both are pointer-like types. The difference is semantic:
