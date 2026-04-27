@@ -876,60 +876,35 @@ String(int size_ = 0, int capacity_ = 0, char[] storage_ = nullptr) {
 
 ### Block names
 
-Every code block `{}` may have an optional name, written after the closing brace with `:`. `if`, `else`, `for`, `while`, and `switch` blocks have default names `:if`, `:else`, `:for`, `:while`, `:switch`. Default names follow standard scoping — an inner block's default name hides the outer block's default name of the same type.
+`for`, `while`, and `switch` blocks may have a name. The default name is the keyword (`for`, `while`, `switch`). An explicit name overrides the default and is written after the closing brace as `:label;`. Innermost match wins for resolution. Plain `{}`, `if`, and `else` blocks have no name.
 
-`break` and `continue` rules:
+| Block    | naked `break`              | `break name` / `break N`                       | naked `continue`         |
+|----------|----------------------------|------------------------------------------------|--------------------------|
+| `for`    | exit loop                  | exit named loop or Nth enclosing loop          | next iteration           |
+| `while`  | exit loop                  | exit named loop or Nth enclosing loop          | re-evaluate condition    |
+| `switch` | exit switch (stop fall)    | exit named switch (numbered form is loop-only) | not valid                |
 
-| Block | naked `break` | `break name` / `break N` | `continue` |
-|---|---|---|---|
-| `for` | exit loop | exit named or Nth enclosing block | re-evaluate condition, next iteration |
-| `while` | exit loop | exit named or Nth enclosing block | re-evaluate condition |
-| `switch` | exit block / stop fallthrough | exit named or Nth enclosing block | not valid |
-| `if`, `else`, plain `{}` | compiler error if unnamed | exit named block | not valid |
+Numbered `break N` and `continue N` count outward across `for` and `while` only — `switch` frames are skipped. To exit a `switch` other than the innermost, use its name. `break 1;` differs from naked `break;` when inside a switch: naked exits the switch, `break 1;` exits the enclosing loop.
 
-`break` and `continue` accept either a name or a positive integer. For numbered `break`, the integer counts outward across `for`, `while`, and `switch` blocks. For numbered `continue`, the integer counts outward across `for` and `while` blocks only — `switch` blocks are not counted. `1` is the innermost (same as naked `break`/`continue`).
+Naked `continue;` inside a `switch` is a compile error even when a loop encloses the switch. Use `continue N;` or `continue name;` to advance the intended loop.
 
-```
-while (true) {
-    while (true) {
-        break 2;    // exits the outer while loop
-    }
-}
-```
-
-Plain block example — `continue` is not valid, `break` requires a name:
-```
-{
-    // do stuff
-    break myBlock;   // exit the block
-} :myBlock
-```
-
-`break` targeting an outer block by name:
 ```
 for int i in (0..10) {
     for int j in (0..10) {
-        if (i == 5) {
-            break;             // exit inner for loop
-        }
-        if (j == 2) {
-            continue;          // continue inner for loop
-        }
-        if (i == 7) {
-            break outer;       // exit outer for loop by name
-        }
+        if (i == 5) break;            // exit inner for
+        if (j == 2) continue;         // next iteration of inner for
+        if (i == 7) break outer;      // exit outer for by name
     }
-} :outer
+} :outer;
 ```
 
-`break` exiting an outer `for` from inside a `switch`:
 ```
 for x in (0..10) {
     switch (x) {
     default:
-        break outer;
+        break for;                    // exit the for from inside the switch
     }
-} :outer
+}
 ```
 
 ### If / else

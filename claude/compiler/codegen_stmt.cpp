@@ -1896,9 +1896,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (target.empty())
                 throw std::runtime_error("break: unknown label '" + brk->label + "'");
         } else if (brk->number > 0) {
-            // numbered break: count outward N loop frames
+            // numbered break: count outward N loop frames, skipping switch frames
             int count = 0;
             for (int i = (int)loop_stack_.size() - 1; i >= 0; i--) {
+                if (loop_stack_[i].is_switch) continue;
                 count++;
                 if (count == brk->number) {
                     target = loop_stack_[i].break_target;
@@ -1932,15 +1933,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (target.empty())
                 throw std::runtime_error("continue: unknown label '" + cont->label + "'");
         } else if (cont->number > 0) {
+            // numbered continue: count outward N loop frames, skipping switch frames
             int count = 0;
             for (int i = (int)loop_stack_.size() - 1; i >= 0; i--) {
-                if (!loop_stack_[i].continue_target.empty()) {
-                    count++;
-                    if (count == cont->number) {
-                        target = loop_stack_[i].continue_target;
-                        target_frame = i;
-                        break;
-                    }
+                if (loop_stack_[i].is_switch) continue;
+                count++;
+                if (count == cont->number) {
+                    target = loop_stack_[i].continue_target;
+                    target_frame = i;
+                    break;
                 }
             }
             if (target.empty())
@@ -2447,9 +2448,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
     if (auto* sw = dynamic_cast<const SwitchStmt*>(&stmt)) {
         std::string end_lbl = newLabel("sw_end");
-        std::string saved_break = break_label_;
+        std::string saved_break = break_label_, saved_continue = continue_label_;
         break_label_ = end_lbl;
-        loop_stack_.push_back({sw->block_label, end_lbl, "", ""});
+        continue_label_ = "";
+        loop_stack_.push_back({sw->block_label, end_lbl, "", "", true});
 
         std::string disc = emitExpr(*sw->expr);
 
@@ -2493,6 +2495,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         out_ << end_lbl << ":\n";
         loop_stack_.pop_back();
         break_label_ = saved_break;
+        continue_label_ = saved_continue;
         return;
     }
 

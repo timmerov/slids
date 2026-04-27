@@ -739,7 +739,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         auto stmt = std::make_unique<BreakStmt>();
         if (peek().type == TokenType::kIntLiteral) {
             stmt->number = std::stoi(advance().value);
-        } else if (peek().type == TokenType::kIdentifier) {
+        } else if (peek().type == TokenType::kIdentifier
+                || peek().type == TokenType::kFor
+                || peek().type == TokenType::kWhile
+                || peek().type == TokenType::kSwitch) {
             stmt->label = advance().value;
         }
         expect(TokenType::kSemicolon, "expected ';'");
@@ -751,7 +754,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         auto stmt = std::make_unique<ContinueStmt>();
         if (peek().type == TokenType::kIntLiteral) {
             stmt->number = std::stoi(advance().value);
-        } else if (peek().type == TokenType::kIdentifier) {
+        } else if (peek().type == TokenType::kIdentifier
+                || peek().type == TokenType::kFor
+                || peek().type == TokenType::kWhile
+                || peek().type == TokenType::kSwitch) {
             stmt->label = advance().value;
         }
         expect(TokenType::kSemicolon, "expected ';'");
@@ -803,6 +809,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             if (peek().type == TokenType::kColon) {
                 advance();
                 stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+            } else {
+                stmt->block_label = "while";
             }
             expect(TokenType::kLParen, "expected '('");
             stmt->cond = parseExpr();
@@ -820,6 +828,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 advance();
                 stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
                 expect(TokenType::kSemicolon, "expected ';'");
+            } else {
+                stmt->block_label = "while";
             }
         }
         return stmt;
@@ -850,6 +860,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                             advance();
                             stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
                             expect(TokenType::kSemicolon, "expected ';'");
+                        } else {
+                            stmt->block_label = "for";
                         }
                         return stmt;
                     }
@@ -887,6 +899,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 advance();
                 stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
                 expect(TokenType::kSemicolon, "expected ';'");
+            } else {
+                stmt->block_label = "for";
             }
             return stmt;
         }
@@ -906,6 +920,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 advance();
                 stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
                 expect(TokenType::kSemicolon, "expected ';'");
+            } else {
+                stmt->block_label = "for";
             }
             return stmt;
         } else {
@@ -923,6 +939,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 advance();
                 stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
                 expect(TokenType::kSemicolon, "expected ';'");
+            } else {
+                stmt->block_label = "for";
             }
             return stmt;
         }
@@ -2208,6 +2226,8 @@ std::unique_ptr<SwitchStmt> Parser::parseSwitchStmt() {
         advance();
         stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
         expect(TokenType::kSemicolon, "expected ';'");
+    } else {
+        stmt->block_label = "switch";
     }
     return stmt;
 }

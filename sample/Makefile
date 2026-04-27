@@ -9,6 +9,7 @@ BUILD_DIR = ../build/sample
 # --- add new samples here ---
 SAMPLES = \
 	biz_buzz \
+	blocks \
 	chess1 chess2 chess3 \
 	dump \
 	counter1 counter2 \

@@ -77,13 +77,14 @@ private:
     bool current_func_uses_sret_ = false; // true when current function uses sret for return
 
     // named/numbered break+continue support
-    // each entry: {block_label, break_target, continue_target}
+    // each entry: {block_label, break_target, continue_target, stack_ptr_reg, is_switch}
     // continue_target is "" for non-loop blocks
     struct LoopFrame {
         std::string block_label;   // user label, or "" if unnamed
         std::string break_target;
         std::string continue_target; // "" for switch/plain blocks
         std::string stack_ptr_reg;  // @llvm.stacksave result for this loop body, or ""
+        bool is_switch = false;     // true for switch frames; numbered break/continue skip these
     };
     std::vector<LoopFrame> loop_stack_;
 
