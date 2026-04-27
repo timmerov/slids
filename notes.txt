@@ -1,4 +1,13 @@
 
+parse issues:
+this doesn't parse but should.
+(++p)^ = (++q)^
+
+check post inc/dec implementation:
+p2 = p1++;
+ensure p2 != p1;
+PostIncDerefExpr sounds like a hack.
+
 compiler generated swap operator:
 swap field by field.
 like move and copy.
@@ -25,6 +34,10 @@ inheritance:
 update docs so an array is semantically a tuple
 where all of the elements are the same type.
 and has special powers.
+
+revisit the handle of fixed size arrays.
+const index out of bounds.
+assign, move, copy to/from arrays and tuples.
 
 review passing initializers to classes whose fields
 are classes.

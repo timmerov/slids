@@ -196,6 +196,15 @@ void Codegen::collectFunctionSignatures() {
             if (!by_name.count(em.method_name))
                 by_name[em.method_name].push_back({em.return_type, em.params});
         }
+        // op<-> may only take a single SameType^ parameter — reject anything else.
+        if (auto it = by_name.find("op<->"); it != by_name.end()) {
+            std::string want = slid.name + "^";
+            for (auto& e : it->second) {
+                if (e.params.size() != 1 || e.params[0].first != want)
+                    throw std::runtime_error("op<-> on slid '" + slid.name
+                        + "' must take exactly one parameter of type '" + want + "'");
+            }
+        }
         for (auto& [method_name, entries] : by_name) {
             std::string base = slid.name + "__" + method_name;
             for (auto& e : entries) {
@@ -2261,6 +2270,56 @@ void Codegen::emitSlidAssign(const std::string& struct_type,
         out_ << "    store " << ft << " " << val << ", ptr " << dst_gep << "\n";
         if (is_move && isIndirectType(fslids))
             out_ << "    store ptr null, ptr " << src_gep << "\n";
+    }
+}
+
+void Codegen::emitSlidSlotSwap(const std::string& elem_type,
+                                const std::string& a_ptr, const std::string& b_ptr) {
+    // For a slid slot: prefer user op<->(Type^) if defined.
+    if (slid_info_.count(elem_type)) {
+        std::string op_base = elem_type + "__op<->";
+        auto oit = method_overloads_.find(op_base);
+        if (oit != method_overloads_.end()) {
+            std::string want = elem_type + "^";
+            bool empty = slid_info_[elem_type].is_empty;
+            for (auto& [m, pt] : oit->second) {
+                if (pt.size() == 1 && pt[0] == want) {
+                    out_ << "    call void @" << llvmGlobalName(m)
+                         << "(" << (empty ? "" : "ptr " + a_ptr + ", ") << "ptr " << b_ptr << ")\n";
+                    return;
+                }
+            }
+        }
+    }
+    // No user op<-> (or anon-tuple): default field-by-field swap.
+    emitSlidSwap(elem_type, a_ptr, b_ptr);
+}
+
+void Codegen::emitSlidSwap(const std::string& struct_type,
+                            const std::string& a_ptr, const std::string& b_ptr) {
+    auto fields = fieldTypesOf(struct_type);
+    for (int i = 0; i < (int)fields.size(); i++) {
+        const std::string& fslids = fields[i];
+        std::string a_gep = emitFieldGep(struct_type, a_ptr, i);
+        std::string b_gep = emitFieldGep(struct_type, b_ptr, i);
+        // embedded slid / anon-tuple: dispatch via slot helper
+        if (slid_info_.count(fslids) || isAnonTupleType(fslids)) {
+            emitSlidSlotSwap(fslids, a_gep, b_gep);
+            continue;
+        }
+        // inline arrays: deferred — array handling will be revisited
+        if (isInlineArrayType(fslids)) {
+            throw std::runtime_error("swap of inline-array fields not yet supported (field type '"
+                + fslids + "')");
+        }
+        // pointer/iterator or primitive field: 4-load/store exchange (no nullification)
+        std::string ft = llvmType(fslids);
+        std::string av = newTmp();
+        std::string bv = newTmp();
+        out_ << "    " << av << " = load " << ft << ", ptr " << a_gep << "\n";
+        out_ << "    " << bv << " = load " << ft << ", ptr " << b_gep << "\n";
+        out_ << "    store " << ft << " " << bv << ", ptr " << a_gep << "\n";
+        out_ << "    store " << ft << " " << av << ", ptr " << b_gep << "\n";
     }
 }
 

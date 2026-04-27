@@ -1426,6 +1426,13 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             }
             return std::make_unique<AssignStmt>(name, std::move(value), true);
         }
+        // swap statement — exchange values at two same-typed lvalues
+        if (peek().type == TokenType::kArrowBoth) {
+            advance();
+            auto rhs = parseExpr();
+            expect(TokenType::kSemicolon, "expected ';'");
+            return std::make_unique<SwapStmt>(std::make_unique<VarExpr>(name), std::move(rhs));
+        }
 
         // compound assignment
         static const std::map<TokenType, std::string> compound_ops = {

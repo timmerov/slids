@@ -1481,37 +1481,121 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* sw = dynamic_cast<const SwapStmt*>(&stmt)) {
-        // lhs <-> rhs — swap values at two lvalue locations
-        // both sides must be PostIncDerefExpr (ptr++^ or ptr--^)
-        auto emitPtrAndAdvance = [&](const Expr& e) -> std::pair<std::string, std::string> {
-            // returns (cur_ptr_val, pointee_llvm_type)
-            auto* pide = dynamic_cast<const PostIncDerefExpr*>(&e);
-            if (!pide) throw std::runtime_error("SwapStmt: only ptr++^ / ptr--^ lvalues supported");
-            auto* ve = dynamic_cast<const VarExpr*>(pide->operand.get());
-            if (!ve) throw std::runtime_error("SwapStmt: only simple pointer variables supported");
-            auto it  = locals_.find(ve->name);
-            auto tit = local_types_.find(ve->name);
-            if (it == locals_.end())
+        // lhs <-> rhs — swap values at two lvalue locations.
+        // Two shapes are supported:
+        //   1. ptr++^ <-> ptr--^   — pointer-deref element swap (advance both ptrs)
+        //   2. var   <-> var       — plain lvalue swap (same type required)
+        auto* l_pide = dynamic_cast<const PostIncDerefExpr*>(sw->lhs.get());
+        auto* r_pide = dynamic_cast<const PostIncDerefExpr*>(sw->rhs.get());
+        if (l_pide && r_pide) {
+            auto emitPtrAndAdvance = [&](const PostIncDerefExpr& pide) -> std::pair<std::string, std::string> {
+                auto* ve = dynamic_cast<const VarExpr*>(pide.operand.get());
+                if (!ve) throw std::runtime_error("SwapStmt: only simple pointer variables supported");
+                auto it  = locals_.find(ve->name);
+                auto tit = local_types_.find(ve->name);
+                if (it == locals_.end())
+                    throw std::runtime_error("SwapStmt: undefined variable '" + ve->name + "'");
+                if (tit == local_types_.end() || !isPtrType(tit->second))
+                    throw std::runtime_error("SwapStmt: '" + ve->name + "' is not a pointer ([]) type");
+                std::string pointee_type = tit->second.substr(0, tit->second.size()-2);
+                std::string pointee_llvm = llvmType(pointee_type);
+                int step = (pide.op == "++") ? 1 : -1;
+                std::string cur = newTmp();
+                out_ << "    " << cur << " = load ptr, ptr " << it->second << "\n";
+                std::string nxt = newTmp();
+                out_ << "    " << nxt << " = getelementptr " << pointee_llvm << ", ptr " << cur << ", i32 " << step << "\n";
+                out_ << "    store ptr " << nxt << ", ptr " << it->second << "\n";
+                return {cur, pointee_llvm};
+            };
+            auto [lptr, ltype] = emitPtrAndAdvance(*l_pide);
+            auto [rptr, rtype] = emitPtrAndAdvance(*r_pide);
+            std::string lval = newTmp(), rval = newTmp();
+            out_ << "    " << lval << " = load " << ltype << ", ptr " << lptr << "\n";
+            out_ << "    " << rval << " = load " << rtype << ", ptr " << rptr << "\n";
+            out_ << "    store " << rtype << " " << rval << ", ptr " << lptr << "\n";
+            out_ << "    store " << ltype << " " << lval << ", ptr " << rptr << "\n";
+            return;
+        }
+        // plain lvalue <-> plain lvalue (same type required).
+        // Supported lvalue shapes: local VarExpr, current-slid field VarExpr, and
+        // FieldAccessExpr through a slid pointer deref (ptr^.field).
+        auto resolveLvalue = [&](const Expr& e) -> std::pair<std::string, std::string> {
+            if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
+                auto lit = locals_.find(ve->name);
+                auto tit = local_types_.find(ve->name);
+                if (lit != locals_.end() && tit != local_types_.end())
+                    return {lit->second, tit->second};
+                if (!current_slid_.empty()) {
+                    auto& info = slid_info_[current_slid_];
+                    auto fit = info.field_index.find(ve->name);
+                    if (fit != info.field_index.end()) {
+                        std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
+                        std::string gep = newTmp();
+                        out_ << "    " << gep << " = getelementptr %struct." << current_slid_
+                             << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
+                        return {gep, info.field_types[fit->second]};
+                    }
+                }
                 throw std::runtime_error("SwapStmt: undefined variable '" + ve->name + "'");
-            if (tit == local_types_.end() || !isPtrType(tit->second))
-                throw std::runtime_error("SwapStmt: '" + ve->name + "' is not a pointer ([]) type");
-            std::string pointee_type = tit->second.substr(0, tit->second.size()-2);
-            std::string pointee_llvm = llvmType(pointee_type);
-            int step = (pide->op == "++") ? 1 : -1;
-            std::string cur = newTmp();
-            out_ << "    " << cur << " = load ptr, ptr " << it->second << "\n";
-            std::string nxt = newTmp();
-            out_ << "    " << nxt << " = getelementptr " << pointee_llvm << ", ptr " << cur << ", i32 " << step << "\n";
-            out_ << "    store ptr " << nxt << ", ptr " << it->second << "\n";
-            return {cur, pointee_llvm};
+            }
+            if (auto* faE = dynamic_cast<const FieldAccessExpr*>(&e)) {
+                if (auto* de = dynamic_cast<const DerefExpr*>(faE->object.get())) {
+                    if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                        auto lit = locals_.find(ve->name);
+                        auto tit = local_types_.find(ve->name);
+                        if (lit == locals_.end() || tit == local_types_.end())
+                            throw std::runtime_error("SwapStmt: undefined variable '" + ve->name + "'");
+                        std::string t = tit->second;
+                        std::string pointee;
+                        if (isPtrType(t)) pointee = t.substr(0, t.size()-2);
+                        else if (!t.empty() && t.back() == '^') pointee = t.substr(0, t.size()-1);
+                        else throw std::runtime_error("SwapStmt: '" + ve->name + "' is not a slid pointer");
+                        if (!slid_info_.count(pointee))
+                            throw std::runtime_error("SwapStmt: '" + pointee + "' is not a slid type");
+                        auto& info = slid_info_[pointee];
+                        auto fit = info.field_index.find(faE->field);
+                        if (fit == info.field_index.end())
+                            throw std::runtime_error("SwapStmt: unknown field '" + faE->field
+                                + "' on '" + pointee + "'");
+                        std::string ptr_val = newTmp();
+                        out_ << "    " << ptr_val << " = load ptr, ptr " << lit->second << "\n";
+                        std::string gep = newTmp();
+                        out_ << "    " << gep << " = getelementptr %struct." << pointee
+                             << ", ptr " << ptr_val << ", i32 0, i32 " << fit->second << "\n";
+                        return {gep, info.field_types[fit->second]};
+                    }
+                }
+                throw std::runtime_error("SwapStmt: complex field access not supported");
+            }
+            throw std::runtime_error("SwapStmt: unsupported lvalue shape");
         };
-        auto [lptr, ltype] = emitPtrAndAdvance(*sw->lhs);
-        auto [rptr, rtype] = emitPtrAndAdvance(*sw->rhs);
-        std::string lval = newTmp(), rval = newTmp();
-        out_ << "    " << lval << " = load " << ltype << ", ptr " << lptr << "\n";
-        out_ << "    " << rval << " = load " << rtype << ", ptr " << rptr << "\n";
-        out_ << "    store " << rtype << " " << rval << ", ptr " << lptr << "\n";
-        out_ << "    store " << ltype << " " << lval << ", ptr " << rptr << "\n";
+        auto [a_ptr, a_type] = resolveLvalue(*sw->lhs);
+        auto [b_ptr, b_type] = resolveLvalue(*sw->rhs);
+        if (a_type != b_type)
+            throw std::runtime_error("SwapStmt: type mismatch — '"
+                + a_type + "' vs '" + b_type + "'");
+        const std::string& t = a_type;
+        // slid type: dispatch user op<-> if defined, else default per-field swap
+        if (slid_info_.count(t)) {
+            emitSlidSlotSwap(t, a_ptr, b_ptr);
+            return;
+        }
+        // anon-tuple: default per-slot swap
+        if (isAnonTupleType(t)) {
+            emitSlidSwap(t, a_ptr, b_ptr);
+            return;
+        }
+        // inline array: deferred
+        if (isInlineArrayType(t))
+            throw std::runtime_error("SwapStmt: swap of inline-array variables not yet supported");
+        // pointer/iterator or primitive: 4-load/store exchange
+        std::string llt = llvmType(t);
+        std::string av = newTmp();
+        std::string bv = newTmp();
+        out_ << "    " << av << " = load " << llt << ", ptr " << a_ptr << "\n";
+        out_ << "    " << bv << " = load " << llt << ", ptr " << b_ptr << "\n";
+        out_ << "    store " << llt << " " << bv << ", ptr " << a_ptr << "\n";
+        out_ << "    store " << llt << " " << av << ", ptr " << b_ptr << "\n";
         return;
     }
 

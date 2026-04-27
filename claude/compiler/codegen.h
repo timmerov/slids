@@ -260,6 +260,17 @@ private:
     // slot, go through this helper so the user's op is invoked.
     void emitSlidSlotAssign(const std::string& elem_type, const std::string& dst_ptr,
                             const std::string& src_ptr, bool is_move, bool is_init = false);
+    // Per-field swap between two same-typed objects. Pointer/iterator fields
+    // are exchanged without nullification (both sides keep valid data).
+    // Embedded slid / anon-tuple fields recurse via emitSlidSlotSwap.
+    // Inline-array fields are not yet supported and throw.
+    void emitSlidSwap(const std::string& struct_type,
+                      const std::string& a_ptr, const std::string& b_ptr);
+    // Swap a single slid (or anon-tuple) slot. For slid types, prefers user
+    // op<-> taking Type^ when defined; otherwise falls back to emitSlidSwap.
+    // For anon-tuple slots, always falls back (anon-tuples have no user ops).
+    void emitSlidSlotSwap(const std::string& elem_type,
+                          const std::string& a_ptr, const std::string& b_ptr);
     // Elementwise arithmetic/bitwise op on same-typed anon-tuple operands at pointer
     // level. For each slot of `ttype`: scalar → load+op+store; slid → user
     // op<op>(Elem^,Elem^) call; nested anon-tuple → recurse. `op` is a scalar

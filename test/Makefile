@@ -25,6 +25,7 @@ SAMPLES = \
 	returnslid \
 	sizeof \
 	strlitcat \
+	swap \
 	switch \
 	tuple \
 	type_conv \

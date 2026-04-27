@@ -859,6 +859,8 @@ Supported operators: `=`, `<-`, `<->`, `+`, `-`, `*`, `/`, `+=`, `-=`, `*=`, `/=
 
 **Default move operator.** If a class does not define `op<-(SameType^)`, the compiler synthesizes one that moves each field. Value-typed fields (ints, floats, embedded structs with no dtor) are copied; pointer and iterator fields are transferred — their value is copied to the destination and the source is set to `nullptr`. This means `Foo b <- a;` works for plain data types without any user code. Define your own `op<-(Foo^)` to override — for example, when a heap resource needs extra bookkeeping, or when the source must be left in a non-default state.
 
+**Default swap operator.** If a class does not define `op<->(SameType^)`, the compiler synthesizes one that swaps each field. Value-typed fields and pointer/iterator fields are exchanged in place — pointers are *not* nullified, since both objects retain valid data after a swap. `op<->` may only take `SameType^`; other signatures are a compile error.
+
 **Assignment is a statement, not an expression.** Chained assignment (`x = y = 0;`) and assignment inside a condition (`if (x = 0)`) are not allowed.
 
 **Forward declarations** inside the class body omit the body:
@@ -1221,7 +1223,7 @@ String {
 
 Swap rules:
 - For pointer/iterator element swap (`ptr++^ <-> ptr--^`), `<->` is built into the language
-- For class types, `<->` compiles only if `op<->` is defined
+- For class types, `<->` calls `op<->` if one is defined; otherwise it calls the compiler-synthesized default swap (see Operator overloading)
 - Both sides must be the same element type
 
 ---
