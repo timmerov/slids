@@ -20,9 +20,21 @@ TMT_INST_OBJ = $(TMT_DIR)/__instantiations.o
 IMPORT_PATH = .
 SLIDSC_FLAGS = --import-path $(IMPORT_PATH)
 
-.PHONY: all clean string_test template1 template2 template_test vector1
+TEST_TARGETS = template_test
 
-all: string_test template1 template2 vector1
+.PHONY: all clean test string_test template1 template2 template_test vector1
+.PHONY: $(addsuffix .test,$(TEST_TARGETS))
+
+all: string_test template1 template2 template_test vector1
+
+test: $(addsuffix .test,$(TEST_TARGETS))
+
+define TEST_RULE
+$(1).test: $(BIN_DIR)/$(1)
+	@echo "==> $(1)"
+	@$$< | awk -F: 'NF<2{next} { split($$$$1,a,"="); if (a[2] != $$$$2) { print "FAIL: " $$$$0; exit 1 } } END { print "PASS" }'
+endef
+$(foreach t,$(TEST_TARGETS),$(eval $(call TEST_RULE,$(t))))
 
 # ---- string_test ----
 

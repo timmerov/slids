@@ -232,6 +232,9 @@ private:
                                         const Expr& left, const Expr& right);
     std::string emitArgForParam(const Expr& arg, const std::string& param_type);
     std::string resolveOpEq(const std::string& base, const Expr& arg);
+    // If `de` dereferences a slid pointer/reference, return the slid type name.
+    // Empty if not a slid pointer or the operand can't be resolved.
+    std::string derefSlidName(const DerefExpr& de);
     // Element-type list for a struct-like type (slid name or anon tuple).
     std::vector<std::string> fieldTypesOf(const std::string& struct_type);
     // Emit a GEP selecting field `i` of a struct-like type. Returns the register.

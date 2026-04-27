@@ -1607,21 +1607,8 @@ std::string Codegen::exprSlidType(const Expr& expr) {
     }
     // DerefExpr: sa^ where sa: SlidType^ — produces SlidType
     if (auto* de = dynamic_cast<const DerefExpr*>(&expr)) {
-        if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
-            auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end()) {
-                std::string t = tit->second;
-                if (!t.empty() && t.back() == '^') { t.pop_back(); if (slid_info_.count(t)) return t; }
-            }
-        }
-        // operand is some expression of slid-pointer type (e.g. tuple[idx], call(), field)
-        std::string ot = inferSlidType(*de->operand);
-        if (isPtrType(ot) || isIndirectType(ot)) {
-            std::string pointee = isPtrType(ot)
-                ? ot.substr(0, ot.size()-2)
-                : ot.substr(0, ot.size()-1);
-            if (slid_info_.count(pointee)) return pointee;
-        }
+        std::string s = derefSlidName(*de);
+        if (!s.empty()) return s;
     }
     // ArrayIndexExpr: tup[i] where tup is an anon-tuple with a slid-typed slot
     if (dynamic_cast<const ArrayIndexExpr*>(&expr)) {
@@ -1879,13 +1866,8 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
             else if (slid_info_.count(ve->name)) return ve->name;
         }
         if (auto* de = dynamic_cast<const DerefExpr*>(&left)) {
-            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                auto tit = local_types_.find(ve->name);
-                if (tit != local_types_.end()) {
-                    std::string t = tit->second;
-                    if (!t.empty() && t.back() == '^') { t.pop_back(); if (slid_info_.count(t)) return t; }
-                }
-            }
+            std::string s = derefSlidName(*de);
+            if (!s.empty()) return s;
         }
         if (dynamic_cast<const BinaryExpr*>(&left)) return exprSlidType(left);
         // StringLiteralExpr: find a slid type that has op=(char[]) — it can act as that type
@@ -1910,14 +1892,7 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
         }
         // DerefExpr: sa^ where sa: SlidType^
         if (auto* de = dynamic_cast<const DerefExpr*>(&left)) {
-            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                auto tit = local_types_.find(ve->name);
-                if (tit != local_types_.end()) {
-                    std::string t = tit->second;
-                    if (!t.empty() && t.back() == '^') t.pop_back();
-                    if (t == slid_name) return true;
-                }
-            }
+            if (derefSlidName(*de) == slid_name) return true;
         }
         // BinaryExpr: chained op result (e.g. (a+b)+c)
         if (dynamic_cast<const BinaryExpr*>(&left)) {
@@ -1955,6 +1930,7 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
         }
         // right is a DerefExpr → produces slid value
         if (auto* de = dynamic_cast<const DerefExpr*>(&right)) {
+            if (!derefSlidName(*de).empty() && p1_is_slid_ref) return true;
             if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
                 auto tit = local_types_.find(ve->name);
                 if (tit != local_types_.end()) {
@@ -2013,6 +1989,27 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
 
 // Resolve the best op= (or op<-) overload for the given argument expression.
 // Priority: slid ref > exact type name match > best-fit (smallest rank >= arg rank) > ptr/char[] fallback.
+std::string Codegen::derefSlidName(const DerefExpr& de) {
+    if (auto* ve = dynamic_cast<const VarExpr*>(de.operand.get())) {
+        auto tit = local_types_.find(ve->name);
+        if (tit == local_types_.end()) return "";
+        std::string t = tit->second;
+        if (isPtrType(t)) t.resize(t.size() - 2);
+        else if (!t.empty() && t.back() == '^') t.pop_back();
+        else return "";
+        if (slid_info_.count(t)) return t;
+        return "";
+    }
+    std::string ot = inferSlidType(*de.operand);
+    if (isPtrType(ot) || isIndirectType(ot)) {
+        std::string pointee = isPtrType(ot)
+            ? ot.substr(0, ot.size() - 2)
+            : ot.substr(0, ot.size() - 1);
+        if (slid_info_.count(pointee)) return pointee;
+    }
+    return "";
+}
+
 std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
     auto oit = method_overloads_.find(base);
     if (oit == method_overloads_.end()) return "";
@@ -2632,29 +2629,15 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                 return locals_.at(ve->name);
             }
         }
-        // DerefExpr of a slid pointer (sa^): load the pointer value and pass it directly
+        // DerefExpr of a slid pointer (sa^): pass the pointer value directly without re-deref.
         if (auto* de = dynamic_cast<const DerefExpr*>(&arg)) {
-            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                auto lit = local_types_.find(ve->name);
-                if (lit != local_types_.end()) {
-                    std::string t = lit->second;
-                    if (!t.empty() && t.back() == '^') { t.pop_back(); }
-                    if (slid_info_.count(t)) {
-                        std::string loaded = newTmp();
-                        out_ << "    " << loaded << " = load ptr, ptr " << locals_.at(ve->name) << "\n";
-                        return loaded;
-                    }
+            if (!derefSlidName(*de).empty()) {
+                if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                    std::string loaded = newTmp();
+                    out_ << "    " << loaded << " = load ptr, ptr " << locals_.at(ve->name) << "\n";
+                    return loaded;
                 }
-            }
-            // operand is some expression of slid-pointer type (e.g. tuple[idx], call(), field).
-            // emitExpr returns the pointer-to-slid value; pass it directly without re-deref.
-            std::string ot = inferSlidType(*de->operand);
-            if (isPtrType(ot) || isIndirectType(ot)) {
-                std::string pointee = isPtrType(ot)
-                    ? ot.substr(0, ot.size()-2)
-                    : ot.substr(0, ot.size()-1);
-                if (slid_info_.count(pointee))
-                    return emitExpr(*de->operand);
+                return emitExpr(*de->operand);
             }
         }
         // anon-tuple-ref param: `(t1,...)^`

@@ -433,6 +433,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 }
             } else {
                 ptr_val = emitExpr(*de->operand);
+                slid_name = derefSlidName(*de);
             }
             if (slid_name.empty() || !slid_info_.count(slid_name))
                 throw std::runtime_error("DerefFieldAccess: unknown slid type for field '" + fa->field + "'");
@@ -540,6 +541,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 std::string loaded = newTmp();
                 out_ << "    " << loaded << " = load ptr, ptr " << locals_[ve2->name] << "\n";
                 obj_ptr = loaded;
+            } else {
+                slid_name = derefSlidName(*de);
+                if (!slid_name.empty()) obj_ptr = emitExpr(*de->operand);
             }
         }
         if (!slid_name.empty() && mc->method == "~") {
@@ -1887,14 +1891,7 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
         std::string slid_name;
         if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
-            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                auto tit = local_types_.find(ve->name);
-                if (tit != local_types_.end()) {
-                    slid_name = isPtrType(tit->second)
-                        ? tit->second.substr(0, tit->second.size()-2)
-                        : tit->second.substr(0, tit->second.size()-1);
-                }
-            }
+            slid_name = derefSlidName(*de);
         } else if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
             auto tit = local_types_.find(ve->name);
             if (tit != local_types_.end()) slid_name = tit->second;
@@ -2247,14 +2244,7 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
         std::string slid_name;
         if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
-            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                auto tit = local_types_.find(ve->name);
-                if (tit != local_types_.end()) {
-                    slid_name = isPtrType(tit->second)
-                        ? tit->second.substr(0, tit->second.size()-2)
-                        : tit->second.substr(0, tit->second.size()-1);
-                }
-            }
+            slid_name = derefSlidName(*de);
         } else if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
             auto tit = local_types_.find(ve->name);
             if (tit != local_types_.end()) slid_name = tit->second;
