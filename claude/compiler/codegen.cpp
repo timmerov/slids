@@ -2182,6 +2182,25 @@ std::string Codegen::emitFieldGep(const std::string& struct_type,
     return gep;
 }
 
+std::pair<std::string, std::string>
+Codegen::emitInlineArrayElemPtr(const Expr& base, const Expr& index) {
+    auto* ve = dynamic_cast<const VarExpr*>(&base);
+    if (!ve) return {"", ""};
+    auto ait = array_info_.find(ve->name);
+    if (ait == array_info_.end()) return {"", ""};
+    const std::string& elem_type = ait->second.elem_type;
+    int total = 1;
+    for (int d : ait->second.dims) total *= d;
+    std::string elt = llvmType(elem_type);
+    std::string idx_llvm = exprLlvmType(index);
+    std::string idx_val = emitExpr(index);
+    std::string gep = newTmp();
+    out_ << "    " << gep << " = getelementptr [" << total << " x " << elt
+         << "], ptr " << ait->second.alloca_reg << ", i32 0, "
+         << idx_llvm << " " << idx_val << "\n";
+    return {gep, elem_type};
+}
+
 void Codegen::emitSlidSlotAssign(const std::string& elem_type,
                                   const std::string& dst_ptr, const std::string& src_ptr,
                                   bool is_move, bool is_init) {

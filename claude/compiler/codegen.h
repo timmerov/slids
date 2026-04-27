@@ -320,6 +320,10 @@ private:
     void requirePtrInit(const std::string& dst_type, const Expr& src); // dst is ^ or [] -> src must be ptr
     std::string inferSlidType(const Expr& expr); // infer Slids type string for type-inferred declarations
     std::string emitFieldPtr(const std::string& obj_name, const std::string& field);
+    // If `base` is a VarExpr naming an inline-array local, emit a GEP to element
+    // [index] and return {gep_register, slids_elem_type}. Otherwise {"", ""}.
+    std::pair<std::string, std::string>
+    emitInlineArrayElemPtr(const Expr& base, const Expr& index);
     std::string newTmp();
     std::string newLabel(const std::string& prefix);
     std::string uniqueAllocaReg(const std::string& var_name);

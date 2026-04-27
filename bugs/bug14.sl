@@ -24,7 +24,13 @@ int32 main() {
     p1^ = (p2--)^;
     __println("arr[4, 2, 3, 4]=(" + arr[0] + "," + arr[1] + "," + arr[2] + "," + arr[3] + ")");
 
-    /* reset. */
+    /*
+    reset.
+    this was a compile error.
+    weird that after 30+ days i never tried to directly.
+    set the value of an array.
+    always went through a pointer.
+    */
     arr[0] = 1;
 
     /*

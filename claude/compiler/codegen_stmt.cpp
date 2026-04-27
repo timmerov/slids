@@ -1389,6 +1389,19 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
         }
 
+        // inline-array local: arr[i] = val (or arr[i] <- val)
+        {
+            auto [gep, et] = emitInlineArrayElemPtr(*ia->base, *ia->index);
+            if (!gep.empty()) {
+                requirePtrInit(et, *ia->value);
+                std::string rhs = emitExpr(*ia->value);
+                out_ << "    store " << llvmType(et) << " " << rhs << ", ptr " << gep << "\n";
+                if (ia->is_move && isIndirectType(et))
+                    emitNullOut(*ia->value);
+                return;
+            }
+        }
+
         // fixed-size array field store inside method body (e.g. int rgb_[3])
         if (!current_slid_.empty()) {
             auto& info = slid_info_[current_slid_];
@@ -1530,6 +1543,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // Supported lvalue shapes: local VarExpr, current-slid field VarExpr, and
         // FieldAccessExpr through a slid pointer deref (ptr^.field).
         auto resolveLvalue = [&](const Expr& e) -> std::pair<std::string, std::string> {
+            if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&e)) {
+                auto [gep, et] = emitInlineArrayElemPtr(*ai->base, *ai->index);
+                if (!gep.empty()) return {gep, et};
+            }
             if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
                 auto lit = locals_.find(ve->name);
                 auto tit = local_types_.find(ve->name);
