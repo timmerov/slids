@@ -3,9 +3,9 @@ define how function templates work
 with separate header and source files.
 */
 
+import dump;
 import string;
 import template_add;
-import dump;
 
 int32 main() {
     x = add(2, 4);

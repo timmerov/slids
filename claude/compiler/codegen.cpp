@@ -1614,6 +1614,14 @@ std::string Codegen::exprSlidType(const Expr& expr) {
                 if (!t.empty() && t.back() == '^') { t.pop_back(); if (slid_info_.count(t)) return t; }
             }
         }
+        // operand is some expression of slid-pointer type (e.g. tuple[idx], call(), field)
+        std::string ot = inferSlidType(*de->operand);
+        if (isPtrType(ot) || isIndirectType(ot)) {
+            std::string pointee = isPtrType(ot)
+                ? ot.substr(0, ot.size()-2)
+                : ot.substr(0, ot.size()-1);
+            if (slid_info_.count(pointee)) return pointee;
+        }
     }
     // ArrayIndexExpr: tup[i] where tup is an anon-tuple with a slid-typed slot
     if (dynamic_cast<const ArrayIndexExpr*>(&expr)) {
@@ -2637,6 +2645,16 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                         return loaded;
                     }
                 }
+            }
+            // operand is some expression of slid-pointer type (e.g. tuple[idx], call(), field).
+            // emitExpr returns the pointer-to-slid value; pass it directly without re-deref.
+            std::string ot = inferSlidType(*de->operand);
+            if (isPtrType(ot) || isIndirectType(ot)) {
+                std::string pointee = isPtrType(ot)
+                    ? ot.substr(0, ot.size()-2)
+                    : ot.substr(0, ot.size()-1);
+                if (slid_info_.count(pointee))
+                    return emitExpr(*de->operand);
             }
         }
         // anon-tuple-ref param: `(t1,...)^`

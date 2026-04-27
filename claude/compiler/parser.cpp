@@ -2037,7 +2037,10 @@ Program Parser::parse() {
                     program.imported_headers.push_back(impl_path);
                     std::ostringstream impl_buf; impl_buf << impl_in.rdbuf();
                     Lexer impl_lexer(impl_buf.str());
-                    Parser impl_parser(impl_lexer.tokenize(), source_dir_, import_paths_, imported_once_);
+                    auto impl_cache = std::make_shared<std::set<std::string>>();
+                    impl_cache->insert(header_path);
+                    impl_cache->insert(impl_path);
+                    Parser impl_parser(impl_lexer.tokenize(), source_dir_, import_paths_, impl_cache);
                     Program impl_prog = impl_parser.parse();
                     for (size_t i = 0; i < impl_prog.functions.size(); i++) {
                         auto& fn = impl_prog.functions[i];

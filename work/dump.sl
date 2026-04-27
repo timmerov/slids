@@ -3,8 +3,8 @@ dump prints the type name and value of a variable.
 uses the stringification operator #.
 */
 
-import string;
 import dump;
+import string;
 
 /*
 usage:
