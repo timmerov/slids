@@ -92,61 +92,45 @@ void Codegen::collectFunctionSignatures() {
         return s + " }";
     };
 
-    // detect which free function names have multiple definitions (overloads)
-    // forward declarations imported from headers don't count toward the overload
-    // total when a bodied definition exists in the same file — otherwise the
-    // implementation file's own functions would get spurious mangled names.
-    std::set<std::string> names_with_body;
-    for (auto& fn : program_.functions)
-        if (fn.body) names_with_body.insert(fn.name);
-    std::map<std::string, int> func_name_count;
-    for (auto& fn : program_.functions)
-        if (fn.body || !names_with_body.count(fn.name)) func_name_count[fn.name]++;
-
-    // helper: mangling suffix for a single type (duplicated here for use before typeToken lambda)
-    auto typeToken2 = [](const std::string& t) -> std::string {
-        if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
-            return t.substr(0, t.size()-2) + "s";
-        if (!t.empty() && t.back() == '^')
-            return t.substr(0, t.size()-1) + "r";
-        return t;
+    // template overloads: prefer the bodied FunctionDef as the authoritative entry
+    // for each (name, param-signature) pair. A `.slh` forward-decl + a `.sl` body
+    // can both appear in `program_.functions` for the same overload — pick the body.
+    auto sameTemplateSig = [](const FunctionDef& a, const FunctionDef& b) {
+        if (a.params.size() != b.params.size()) return false;
+        for (int i = 0; i < (int)a.params.size(); i++)
+            if (a.params[i].first != b.params[i].first) return false;
+        return true;
     };
+    std::set<const FunctionDef*> bodied_templates;
+    for (auto& fn : program_.functions)
+        if (!fn.type_params.empty() && fn.body) bodied_templates.insert(&fn);
 
     for (auto& fn : program_.functions) {
         if (!fn.type_params.empty()) {
-            // template function — store for lazy instantiation, skip normal registration
-            template_funcs_[fn.name] = &fn;
-            // only bodies determine locality (forward decls from .slh are not authoritative)
-            if (fn.body) {
-                if (fn.is_local)
-                    local_template_names_.insert(fn.name);
-                else
-                    template_func_modules_[fn.name] = fn.impl_module;
+            // suppress a bodyless decl when a bodied overload with matching sig exists
+            if (!fn.body) {
+                bool shadowed = false;
+                for (auto* b : bodied_templates) {
+                    if (b->name == fn.name && sameTemplateSig(*b, fn)) { shadowed = true; break; }
+                }
+                if (shadowed) continue;
             }
+            template_funcs_[fn.name].push_back({&fn, fn.impl_module, fn.is_local});
             continue;
         }
-        bool overloaded = (func_name_count[fn.name] > 1);
         std::vector<std::string> ptypes;
         for (auto& [t, n] : fn.params) ptypes.push_back(t);
 
-        // compute mangled name (append param type tokens when overloaded)
-        std::string mangled = fn.name;
-        if (overloaded) {
-            for (auto& t : ptypes) mangled += "__" + typeToken2(t);
-        }
+        std::string mangled = mangleFreeFunction(fn.name, ptypes);
         free_func_overloads_[fn.name].push_back({mangled, ptypes});
 
         if (!fn.tuple_return_fields.empty()) {
-            std::string st = buildTupleType(fn.tuple_return_fields);
-            func_return_types_[mangled] = st;
+            func_return_types_[mangled] = buildTupleType(fn.tuple_return_fields);
             func_tuple_fields_[mangled] = fn.tuple_return_fields;
-            if (!overloaded) { func_return_types_[fn.name] = st; func_tuple_fields_[fn.name] = fn.tuple_return_fields; }
         } else {
             func_return_types_[mangled] = fn.return_type;
-            if (!overloaded) func_return_types_[fn.name] = fn.return_type;
         }
         func_param_types_[mangled] = ptypes;
-        if (!overloaded) func_param_types_[fn.name] = ptypes;
 
         if (!fn.body) { exported_symbols_.insert(mangled); continue; } // forward declaration = exported
 
@@ -159,16 +143,13 @@ void Codegen::collectFunctionSignatures() {
                     if (!nfs->def.tuple_return_fields.empty()) {
                         ret = buildTupleType(nfs->def.tuple_return_fields);
                         func_tuple_fields_[mangled] = nfs->def.tuple_return_fields;
-                        func_tuple_fields_[nfs->def.name] = nfs->def.tuple_return_fields;
                     } else {
                         ret = nfs->def.return_type;
                     }
                     func_return_types_[mangled] = ret;
-                    func_return_types_[nfs->def.name] = ret;
                     std::vector<std::string> nptypes;
                     for (auto& [t, n] : nfs->def.params) nptypes.push_back(t);
                     func_param_types_[mangled] = nptypes;
-                    func_param_types_[nfs->def.name] = nptypes;
                 } else if (auto* f = dynamic_cast<const ForRangeStmt*>(stmt.get())) {
                     findNested(*f->body);
                 } else if (auto* ft = dynamic_cast<const ForTupleStmt*>(stmt.get())) {
@@ -185,15 +166,6 @@ void Codegen::collectFunctionSignatures() {
         };
         findNested(*fn.body);
     }
-    // helper: mangling suffix for a single type (used when overloads exist)
-    auto typeToken = [](const std::string& t) -> std::string {
-        if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
-            return t.substr(0, t.size()-2) + "s"; // char[] -> chars, int[] -> ints
-        if (!t.empty() && t.back() == '^')
-            return t.substr(0, t.size()-1) + "r";  // char^ -> charr
-        return t; // int, char, bool, etc.
-    };
-
     for (auto& slid : program_.slids) {
         // collect all method implementations (inline bodies + external defs), grouped by name
         struct Entry { std::string ret; std::vector<std::pair<std::string,std::string>> params; };
@@ -226,15 +198,11 @@ void Codegen::collectFunctionSignatures() {
         }
         for (auto& [method_name, entries] : by_name) {
             std::string base = slid.name + "__" + method_name;
-            bool overloaded = (entries.size() > 1);
             for (auto& e : entries) {
-                std::string mangled = base;
-                if (overloaded) {
-                    for (auto& [t, n] : e.params) mangled += "__" + typeToken(t);
-                }
-                func_return_types_[mangled] = e.ret;
                 std::vector<std::string> ptypes;
                 for (auto& [t, n] : e.params) ptypes.push_back(t);
+                std::string mangled = mangleMethod(slid.name, method_name, ptypes);
+                func_return_types_[mangled] = e.ret;
                 func_param_types_[mangled] = ptypes;
                 // avoid duplicate overload entries (transport slid + impl slid both contribute)
                 auto& overloads = method_overloads_[base];
@@ -717,10 +685,48 @@ void Codegen::emit() {
     // process explicit instantiate statements before string-constant collection so
     // their bodies are included in the pre-scan and in the ctor/dtor/method emit loops
     for (auto& req : program_.instantiations) {
-        if (template_slids_.count(req.func_name))
+        if (template_slids_.count(req.func_name)) {
             instantiateSlidTemplate(req.func_name, req.type_args, true);
-        else
-            instantiateTemplate(req.func_name, req.type_args, true);
+            continue;
+        }
+        // pick the function-template overload that matches req.param_types
+        auto it = template_funcs_.find(req.func_name);
+        if (it == template_funcs_.end() || it->second.empty())
+            throw std::runtime_error("unknown template: " + req.func_name);
+        // build subst for matching against req.param_types
+        const TemplateFuncEntry* chosen = nullptr;
+        for (auto& entry : it->second) {
+            const FunctionDef& tmpl = *entry.def;
+            if (tmpl.params.size() != req.param_types.size()) continue;
+            if (tmpl.type_params.size() != req.type_args.size()) continue;
+            std::map<std::string, std::string> subst;
+            for (int i = 0; i < (int)tmpl.type_params.size(); i++)
+                subst[tmpl.type_params[i]] = req.type_args[i];
+            std::function<std::string(const std::string&)> sub =
+                [&](const std::string& t) -> std::string {
+                if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return sub(t.substr(0, t.size()-2)) + "[]";
+                if (!t.empty() && t.back() == '^') return sub(t.substr(0, t.size()-1)) + "^";
+                if (isAnonTupleType(t)) {
+                    std::string s = "(";
+                    bool first = true;
+                    for (auto& e : anonTupleElems(t)) { if (!first) s += ","; first = false; s += sub(e); }
+                    return s + ")";
+                }
+                auto sit = subst.find(t);
+                return sit != subst.end() ? sit->second : t;
+            };
+            bool match = true;
+            for (int i = 0; i < (int)tmpl.params.size(); i++) {
+                std::string substituted = sub(tmpl.params[i].first);
+                if (slid_info_.count(substituted)) substituted += "^";
+                if (substituted != req.param_types[i]) { match = false; break; }
+            }
+            if (match) { chosen = &entry; break; }
+        }
+        if (!chosen)
+            throw std::runtime_error("instantiate: no overload of '" + req.func_name
+                + "' matches the requested parameter signature");
+        instantiateTemplate(*chosen, req.type_args, true);
     }
 
     // explicit instantiations are linkable entry points — export all their symbols
@@ -1300,6 +1306,119 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     }
 }
 
+Codegen::TemplateResolution Codegen::resolveTemplateOverload(
+    const std::string& name,
+    const std::vector<std::string>& explicit_type_args,
+    const std::vector<std::unique_ptr<Expr>>& args)
+{
+    auto it = template_funcs_.find(name);
+    if (it == template_funcs_.end() || it->second.empty()) return {nullptr, {}};
+
+    // Single overload fast path: skip arity check at this layer (template type-arg
+    // inference will surface a clear error if shapes don't match).
+    if (it->second.size() == 1) {
+        const TemplateFuncEntry& entry = it->second[0];
+        std::vector<std::string> targs = explicit_type_args.empty()
+            ? inferTypeArgs(*entry.def, args) : explicit_type_args;
+        return {&entry, std::move(targs)};
+    }
+
+    // Multiple overloads: filter by arity, then by post-substitution param-type match.
+    const TemplateFuncEntry* best = nullptr;
+    std::vector<std::string> best_targs;
+    int matches = 0;
+    for (auto& entry : it->second) {
+        const FunctionDef& tmpl = *entry.def;
+        if (tmpl.params.size() != args.size()) continue;
+        std::vector<std::string> targs;
+        try {
+            targs = explicit_type_args.empty() ? inferTypeArgs(tmpl, args) : explicit_type_args;
+        } catch (...) { continue; }
+        if (targs.size() != tmpl.type_params.size()) continue;
+        // build substitution and check each substituted param against actual arg type
+        std::map<std::string, std::string> subst;
+        for (int i = 0; i < (int)tmpl.type_params.size(); i++)
+            subst[tmpl.type_params[i]] = targs[i];
+        bool match = true;
+        for (int i = 0; i < (int)tmpl.params.size(); i++) {
+            std::string expected = tmpl.params[i].first;
+            // apply substitution recursively (handles T, T^, T[], (T,T)^ etc.)
+            std::function<std::string(const std::string&)> sub =
+                [&](const std::string& t) -> std::string {
+                if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return sub(t.substr(0, t.size()-2)) + "[]";
+                if (!t.empty() && t.back() == '^') return sub(t.substr(0, t.size()-1)) + "^";
+                if (isAnonTupleType(t)) {
+                    std::string s = "(";
+                    bool first = true;
+                    for (auto& e : anonTupleElems(t)) { if (!first) s += ","; first = false; s += sub(e); }
+                    return s + ")";
+                }
+                auto sit = subst.find(t);
+                return sit != subst.end() ? sit->second : t;
+            };
+            std::string substituted = sub(expected);
+            // class-typed params auto-promote to ref in instantiateTemplate; mirror that here
+            if (slid_info_.count(substituted)) substituted += "^";
+            std::string actual = exprType(*args[i]);
+            if (actual.empty()) continue; // can't resolve actual; skip strict check
+            if (actual != substituted) {
+                // tolerate auto-promote (value to ref) for slid types
+                std::string s = substituted;
+                if (!s.empty() && s.back() == '^' && s.substr(0, s.size()-1) == actual) continue;
+                match = false; break;
+            }
+        }
+        if (!match) continue;
+        matches++;
+        best = &entry;
+        best_targs = std::move(targs);
+    }
+    if (matches == 0) return {nullptr, {}};
+    if (matches > 1)
+        throw std::runtime_error("ambiguous template overload for '" + name + "'");
+    return {best, std::move(best_targs)};
+}
+
+std::string Codegen::resolveFreeFunctionMangledName(
+    const std::string& name,
+    size_t arg_count) const
+{
+    if (func_return_types_.count(name)) return name;
+    // nested function: signatures are registered under <parent>__<nested>.
+    // Nested-fn names are unique within their parent so no arity match is needed.
+    auto nit = nested_info_.find(name);
+    if (nit != nested_info_.end()) {
+        std::string mangled = nit->second.parent_name + "__" + name;
+        if (func_return_types_.count(mangled)) return mangled;
+    }
+    auto foit = free_func_overloads_.find(name);
+    if (foit == free_func_overloads_.end()) return "";
+    for (auto& [mn, ptypes] : foit->second) {
+        if (ptypes.size() == arg_count) return mn;
+    }
+    return "";
+}
+
+std::string Codegen::mangleFreeFunction(
+    const std::string& name,
+    const std::vector<std::string>& ptypes) const
+{
+    if (name == "main") return name; // C runtime calls main() by exact name
+    std::string m = name;
+    for (auto& t : ptypes) m += "__" + paramTokenForType(t);
+    return m;
+}
+
+std::string Codegen::mangleMethod(
+    const std::string& slid_name,
+    const std::string& method_name,
+    const std::vector<std::string>& ptypes) const
+{
+    std::string m = slid_name + "__" + method_name;
+    for (auto& t : ptypes) m += "__" + paramTokenForType(t);
+    return m;
+}
+
 std::string Codegen::resolveMethodMangledName(
     const std::string& slid_name,
     const std::string& method_name,
@@ -1496,25 +1615,31 @@ std::string Codegen::exprSlidType(const Expr& expr) {
             }
         }
     }
+    // ArrayIndexExpr: tup[i] where tup is an anon-tuple with a slid-typed slot
+    if (dynamic_cast<const ArrayIndexExpr*>(&expr)) {
+        std::string t = inferSlidType(expr);
+        if (slid_info_.count(t)) return t;
+    }
     // function call returning a slid type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
         // slid ctor call: SlidName(args) → fresh SlidName temp
         if (slid_info_.count(ce->callee)) return ce->callee;
-        auto tit = template_funcs_.find(ce->callee);
-        if (tit != template_funcs_.end()) {
-            const FunctionDef& tmpl = *tit->second;
-            std::vector<std::string> targs = ce->type_args.empty()
-                ? inferTypeArgs(tmpl, ce->args) : ce->type_args;
+        auto resolved = resolveTemplateOverload(ce->callee, ce->type_args, ce->args);
+        if (resolved.entry) {
+            const FunctionDef& tmpl = *resolved.entry->def;
             std::map<std::string,std::string> subst;
-            for (int i = 0; i < (int)tmpl.type_params.size() && i < (int)targs.size(); i++)
-                subst[tmpl.type_params[i]] = targs[i];
+            for (int i = 0; i < (int)tmpl.type_params.size(); i++)
+                subst[tmpl.type_params[i]] = resolved.type_args[i];
             auto it2 = subst.find(tmpl.return_type);
             std::string rt = (it2 != subst.end()) ? it2->second : tmpl.return_type;
             if (slid_info_.count(rt)) return rt;
         }
-        auto rit = func_return_types_.find(ce->callee);
-        if (rit != func_return_types_.end() && slid_info_.count(rit->second))
-            return rit->second;
+        std::string mangled = resolveFreeFunctionMangledName(ce->callee, ce->args.size());
+        if (!mangled.empty()) {
+            auto rit = func_return_types_.find(mangled);
+            if (rit != func_return_types_.end() && slid_info_.count(rit->second))
+                return rit->second;
+        }
     }
     if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
         std::string obj_slid;
@@ -1670,8 +1795,11 @@ std::string Codegen::exprType(const Expr& expr) {
             auto rit = func_return_types_.find(mangled);
             if (rit != func_return_types_.end()) return rit->second;
         }
-        auto rit = func_return_types_.find(ce->callee);
-        if (rit != func_return_types_.end()) return rit->second;
+        std::string mangled = resolveFreeFunctionMangledName(ce->callee, ce->args.size());
+        if (!mangled.empty()) {
+            auto rit = func_return_types_.find(mangled);
+            if (rit != func_return_types_.end()) return rit->second;
+        }
         return "";
     }
     if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
@@ -2647,7 +2775,9 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
     return val;
 }
 
-void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& full_mangled,
+void Codegen::emitSlidMethod(const SlidDef& slid,
+                              const std::string& method_user_name,
+                              const std::string& full_mangled,
                               const std::string& return_type,
                               const std::vector<std::pair<std::string,std::string>>& params,
                               const BlockStmt& body) {
@@ -2661,10 +2791,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid, const std::string& full_mangle
     continue_label_ = "";
     current_slid_ = slid.name;
     block_terminated_ = false;
-    {
-        size_t sep = full_mangled.rfind("__");
-        current_func_name_ = (sep != std::string::npos) ? full_mangled.substr(sep + 2) : full_mangled;
-    }
+    current_func_name_ = method_user_name;
 
     bool uses_sret = !return_type.empty() && slid_info_.count(return_type) > 0;
     current_func_uses_sret_ = uses_sret;
@@ -2715,7 +2842,7 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
         if (!m.body) continue;
         std::string mangled = resolveMethodMangledName(slid.name, m.name, m.params);
         current_func_tuple_fields_.clear();
-        emitSlidMethod(slid, mangled, m.return_type, m.params, *m.body);
+        emitSlidMethod(slid, m.name, mangled, m.return_type, m.params, *m.body);
     }
     // emit external method definitions for this slid
     for (auto& em : program_.external_methods) {
@@ -2723,7 +2850,7 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
         if (em.method_name == "_" || em.method_name == "~") continue;
         std::string mangled = resolveMethodMangledName(slid.name, em.method_name, em.params);
         current_func_tuple_fields_.clear();
-        emitSlidMethod(slid, mangled, em.return_type, em.params, *em.body);
+        emitSlidMethod(slid, em.method_name, mangled, em.return_type, em.params, *em.body);
     }
     current_slid_ = "";
 }
@@ -2742,10 +2869,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     continue_label_ = "";
     current_slid_ = "";
     current_parent_ = fn.name;
-    {
-        size_t sep = fn.name.find("__");
-        current_func_name_ = (sep != std::string::npos) ? fn.name.substr(0, sep) : fn.name;
-    }
+    current_func_name_ = !fn.user_name.empty() ? fn.user_name : fn.name;
     frame_ptr_reg_ = "";
     block_terminated_ = false;
 

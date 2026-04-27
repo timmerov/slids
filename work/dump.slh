@@ -1,0 +1,22 @@
+/*
+dump prints the type name and value of a variable.
+uses the stringification operator #.
+*/
+
+/*
+usage:
+    int x = 42;
+    dump(#x);
+output:
+    int x = 42
+*/
+void dump<T>( (char[], char[], T^)^ tuple );
+
+/*
+usage:
+    int x = 42;
+    dump(#x, "37");
+output:
+    int x = 42 : 37;
+*/
+void dump<T>( (char[], char[], T^)^ tuple, char[] expected );

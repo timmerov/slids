@@ -43,7 +43,7 @@ static int runInstantiate(const std::string& dir, const std::string& out_path) {
                 if (import_set.insert(mod).second)
                     imports.push_back({mod, is_tmpl});
             } else if (line.find('<') != std::string::npos) {
-                // instantiation line: Name<Types>;
+                // instantiation line: Name<Types>(ParamTypes);
                 auto semi = line.find(';');
                 if (semi == std::string::npos) continue;
                 std::string inst = line.substr(0, semi);

@@ -619,10 +619,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
         }
         // ::name(args) — global lookup: skip nested/template/method paths, go straight to free function
         if (call->qualifier == "::") {
-            auto it = func_return_types_.find(call->callee);
-            if (it == func_return_types_.end())
+            std::string mangled = resolveFreeFunctionMangledName(call->callee, call->args.size());
+            if (mangled.empty())
                 throw std::runtime_error("undefined global function: " + call->callee);
-            auto& ptypes = func_param_types_[call->callee];
+            auto it = func_return_types_.find(mangled);
+            auto& ptypes = func_param_types_[mangled];
             std::string arg_str;
             for (int i = 0; i < (int)call->args.size(); i++) {
                 if (i > 0) arg_str += ", ";
@@ -634,16 +635,16 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 std::string tmp = emitRawSlidAlloca(it->second);
                 std::string sret_arg = "ptr sret(%struct." + it->second + ") " + tmp;
                 if (!arg_str.empty()) sret_arg += ", " + arg_str;
-                out_ << "    call void @" << llvmGlobalName(call->callee) << "(" << sret_arg << ")\n";
+                out_ << "    call void @" << llvmGlobalName(mangled) << "(" << sret_arg << ")\n";
                 return tmp;
             }
             std::string ret_type = llvmType(it->second);
             if (ret_type == "void") {
-                out_ << "    call void @" << llvmGlobalName(call->callee) << "(" << arg_str << ")\n";
+                out_ << "    call void @" << llvmGlobalName(mangled) << "(" << arg_str << ")\n";
                 return "";
             }
             std::string tmp = newTmp();
-            out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(call->callee)
+            out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(mangled)
                  << "(" << arg_str << ")\n";
             return tmp;
         }
@@ -700,11 +701,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
         // template call: instantiate and emit (infer type args if not explicit)
         {
-            auto tit = template_funcs_.find(call->callee);
-            if (tit != template_funcs_.end()) {
-                std::vector<std::string> targs = call->type_args.empty()
-                    ? inferTypeArgs(*tit->second, call->args) : call->type_args;
-                std::string mangled = instantiateTemplate(call->callee, targs);
+            auto resolved = resolveTemplateOverload(call->callee, call->type_args, call->args);
+            if (resolved.entry) {
+                std::string mangled = instantiateTemplate(*resolved.entry, resolved.type_args);
                 std::string ret_slid = func_return_types_[mangled];
                 auto& ptypes = func_param_types_[mangled];
                 std::string arg_str;
@@ -768,10 +767,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
         }
 
         // regular function call
-        auto it = func_return_types_.find(call->callee);
-        if (it == func_return_types_.end())
+        std::string mangled = resolveFreeFunctionMangledName(call->callee, call->args.size());
+        if (mangled.empty())
             throw std::runtime_error("undefined function: " + call->callee);
-        auto& ptypes = func_param_types_[call->callee];
+        auto it = func_return_types_.find(mangled);
+        auto& ptypes = func_param_types_[mangled];
         std::string arg_str;
         for (int i = 0; i < (int)call->args.size(); i++) {
             if (i > 0) arg_str += ", ";
@@ -784,12 +784,12 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string tmp = emitRawSlidAlloca(it->second);
             std::string sret_arg = "ptr sret(%struct." + it->second + ") " + tmp;
             if (!arg_str.empty()) sret_arg += ", " + arg_str;
-            out_ << "    call void @" << llvmGlobalName(call->callee) << "(" << sret_arg << ")\n";
+            out_ << "    call void @" << llvmGlobalName(mangled) << "(" << sret_arg << ")\n";
             return tmp;
         }
         std::string ret_type = llvmType(it->second);
         std::string tmp = newTmp();
-        out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(call->callee)
+        out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(mangled)
              << "(" << arg_str << ")\n";
         return tmp;
     }
@@ -1670,7 +1670,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 } else {
                     src_ptr = emitExpr(*te->values[i]);
                 }
-                emitSlidSlotAssign(elem_ttype, gep, src_ptr, /*is_move=*/false);
+                emitSlidSlotAssign(elem_ttype, gep, src_ptr, /*is_move=*/false, /*is_init=*/true);
                 continue;
             }
             std::string val = emitExpr(*te->values[i]);
@@ -2110,14 +2110,12 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // function call — look up return type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
-        auto tit = template_funcs_.find(ce->callee);
-        if (tit != template_funcs_.end()) {
-            const FunctionDef& tmpl = *tit->second;
-            std::vector<std::string> targs = ce->type_args.empty()
-                ? inferTypeArgs(tmpl, ce->args) : ce->type_args;
+        auto resolved = resolveTemplateOverload(ce->callee, ce->type_args, ce->args);
+        if (resolved.entry) {
+            const FunctionDef& tmpl = *resolved.entry->def;
             std::map<std::string, std::string> subst;
-            for (int i = 0; i < (int)tmpl.type_params.size() && i < (int)targs.size(); i++)
-                subst[tmpl.type_params[i]] = targs[i];
+            for (int i = 0; i < (int)tmpl.type_params.size(); i++)
+                subst[tmpl.type_params[i]] = resolved.type_args[i];
             std::string rt = tmpl.return_type;
             auto it2 = subst.find(rt);
             if (it2 != subst.end()) rt = it2->second;
@@ -2125,8 +2123,11 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             return llvmType(rt);
         }
         // check if already instantiated
-        auto rit = func_return_types_.find(ce->callee);
-        if (rit != func_return_types_.end()) return llvmType(rit->second);
+        std::string mangled = resolveFreeFunctionMangledName(ce->callee, ce->args.size());
+        if (!mangled.empty()) {
+            auto rit = func_return_types_.find(mangled);
+            if (rit != func_return_types_.end()) return llvmType(rit->second);
+        }
         return "i32";
     }
 
@@ -2265,29 +2266,30 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
         // slid ctor call: SlidName(args) → type is SlidName
         if (slid_info_.count(ce->callee)) return ce->callee;
-        auto tit = template_funcs_.find(ce->callee);
-        if (tit != template_funcs_.end()) {
-            const FunctionDef& tmpl = *tit->second;
-            std::vector<std::string> targs = ce->type_args.empty()
-                ? inferTypeArgs(tmpl, ce->args) : ce->type_args;
+        auto resolved = resolveTemplateOverload(ce->callee, ce->type_args, ce->args);
+        if (resolved.entry) {
+            const FunctionDef& tmpl = *resolved.entry->def;
             std::map<std::string, std::string> subst;
-            for (int i = 0; i < (int)tmpl.type_params.size() && i < (int)targs.size(); i++)
-                subst[tmpl.type_params[i]] = targs[i];
+            for (int i = 0; i < (int)tmpl.type_params.size(); i++)
+                subst[tmpl.type_params[i]] = resolved.type_args[i];
             auto it2 = subst.find(tmpl.return_type);
             return it2 != subst.end() ? it2->second : tmpl.return_type;
         }
         // tuple-returning function: reconstruct Slids form "(t1,t2,...)"
-        auto tfit = func_tuple_fields_.find(ce->callee);
-        if (tfit != func_tuple_fields_.end()) {
-            std::string s = "(";
-            for (int i = 0; i < (int)tfit->second.size(); i++) {
-                if (i > 0) s += ",";
-                s += tfit->second[i].first;
+        std::string mangled = resolveFreeFunctionMangledName(ce->callee, ce->args.size());
+        if (!mangled.empty()) {
+            auto tfit = func_tuple_fields_.find(mangled);
+            if (tfit != func_tuple_fields_.end()) {
+                std::string s = "(";
+                for (int i = 0; i < (int)tfit->second.size(); i++) {
+                    if (i > 0) s += ",";
+                    s += tfit->second[i].first;
+                }
+                return s + ")";
             }
-            return s + ")";
+            auto it = func_return_types_.find(mangled);
+            if (it != func_return_types_.end()) return it->second;
         }
-        auto it = func_return_types_.find(ce->callee);
-        if (it != func_return_types_.end()) return it->second;
     }
     // method call — look up return type via slid type of object
     if (auto* me = dynamic_cast<const MethodCallExpr*>(&expr)) {

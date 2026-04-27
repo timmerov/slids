@@ -14,15 +14,26 @@ static std::string subType(const std::string& t,
     return it != subst.end() ? it->second : t;
 }
 
-// Substitute type params inside a type string that may have ^ or [] suffix.
-// e.g. "T[]" with T->int becomes "int[]"
+// Substitute type params inside a type string that may have ^ or [] suffix
+// or be an anonymous tuple. e.g. "T[]" with T->int becomes "int[]";
+// "(char[],char[],T)^" with T->int becomes "(char[],char[],int)^".
 static std::string subTypeSuffix(const std::string& t,
                                   const std::map<std::string, std::string>& subst) {
     if (t.size() >= 2 && t.substr(t.size() - 2) == "[]") {
-        return subType(t.substr(0, t.size() - 2), subst) + "[]";
+        return subTypeSuffix(t.substr(0, t.size() - 2), subst) + "[]";
     }
     if (!t.empty() && t.back() == '^') {
-        return subType(t.substr(0, t.size() - 1), subst) + "^";
+        return subTypeSuffix(t.substr(0, t.size() - 1), subst) + "^";
+    }
+    if (isAnonTupleType(t)) {
+        std::string s = "(";
+        bool first = true;
+        for (auto& e : anonTupleElems(t)) {
+            if (!first) s += ",";
+            first = false;
+            s += subTypeSuffix(e, subst);
+        }
+        return s + ")";
     }
     return subType(t, subst);
 }
@@ -414,12 +425,13 @@ void Codegen::emitTemplateDeclare(const FunctionDef& fn) {
 // --- Codegen::recordSliEntry ---
 
 void Codegen::recordSliEntry(const std::string& func_name,
-                              const std::vector<std::string>& type_args) {
-    // template module (function or class template)
-    auto mit = template_func_modules_.find(func_name);
-    if (mit != template_func_modules_.end()) {
-        if (sli_import_set_.insert("t:" + mit->second).second)
-            sli_imports_.push_back({mit->second, true});
+                              const std::vector<std::string>& type_args,
+                              const std::vector<std::string>& param_types,
+                              const std::string& impl_module) {
+    // template module (this overload's impl source)
+    if (!impl_module.empty()) {
+        if (sli_import_set_.insert("t:" + impl_module).second)
+            sli_imports_.push_back({impl_module, true});
     }
     auto sit2 = slid_template_modules_.find(func_name);
     if (sit2 != slid_template_modules_.end()) {
@@ -434,11 +446,28 @@ void Codegen::recordSliEntry(const std::string& func_name,
                 sli_imports_.push_back({sit->second, false});
         }
     }
-    // instantiation record
+    // class modules for slid types appearing in param types (e.g. String^ → import string)
+    std::function<void(const std::string&)> scan = [&](const std::string& t) {
+        std::string base = t;
+        if (base.size() >= 2 && base.substr(base.size()-2) == "[]") base = base.substr(0, base.size()-2);
+        else if (!base.empty() && base.back() == '^') base.pop_back();
+        if (isAnonTupleType(base)) {
+            for (auto& e : anonTupleElems(base)) scan(e);
+            return;
+        }
+        auto sit = program_.slid_modules.find(base);
+        if (sit != program_.slid_modules.end()) {
+            if (sli_import_set_.insert("c:" + sit->second).second)
+                sli_imports_.push_back({sit->second, false});
+        }
+    };
+    for (auto& pt : param_types) scan(pt);
+    // instantiation record (key includes param signature for overload disambiguation)
     std::string key = func_name;
     for (auto& ta : type_args) key += "__" + ta;
+    for (auto& pt : param_types) key += "__" + paramTokenForType(pt);
     if (sli_instantiation_set_.insert(key).second)
-        sli_instantiations_.push_back({func_name, type_args});
+        sli_instantiations_.push_back({func_name, type_args, param_types});
 }
 
 // --- Codegen::writeSliFile ---
@@ -457,25 +486,28 @@ void Codegen::writeSliFile(std::ostream& out) const {
     out << "\n";
 
     out << "/* explicit template instantiations. */\n";
-    for (auto& [func, type_args] : sli_instantiations_) {
+    for (auto& [func, type_args, param_types] : sli_instantiations_) {
         out << func << "<";
         for (int i = 0; i < (int)type_args.size(); i++) {
             if (i > 0) out << ", ";
             out << type_args[i];
         }
-        out << ">;\n";
+        out << ">(";
+        for (int i = 0; i < (int)param_types.size(); i++) {
+            if (i > 0) out << ", ";
+            out << param_types[i];
+        }
+        out << ");\n";
     }
 }
 
 // --- Codegen::instantiateTemplate ---
 
-std::string Codegen::instantiateTemplate(const std::string& name,
+std::string Codegen::instantiateTemplate(const TemplateFuncEntry& entry,
                                           const std::vector<std::string>& type_args,
                                           bool force) {
-    auto tit = template_funcs_.find(name);
-    if (tit == template_funcs_.end())
-        throw std::runtime_error("unknown template function: " + name);
-    const FunctionDef& tmpl = *tit->second;
+    const FunctionDef& tmpl = *entry.def;
+    const std::string& name = tmpl.name;
 
     if (tmpl.type_params.size() != type_args.size())
         throw std::runtime_error("template '" + name + "': expected "
@@ -487,9 +519,18 @@ std::string Codegen::instantiateTemplate(const std::string& name,
     for (int i = 0; i < (int)tmpl.type_params.size(); i++)
         subst[tmpl.type_params[i]] = type_args[i];
 
-    // compute mangled name: add__int
+    // post-substitution param types (with class-type auto-promote to ref)
+    std::vector<std::string> ptypes;
+    for (auto& [ptype, pname] : tmpl.params) {
+        std::string pt = subTypeSuffix(ptype, subst);
+        if (slid_info_.count(pt)) pt += "^";
+        ptypes.push_back(pt);
+    }
+
+    // mangled name: <name>__<typeArg>...__<paramToken>...
     std::string mangled = name;
     for (auto& t : type_args) mangled += "__" + t;
+    for (auto& pt : ptypes) mangled += "__" + paramTokenForType(pt);
 
     // already instantiated
     if (emitted_templates_.count(mangled)) return mangled;
@@ -498,28 +539,23 @@ std::string Codegen::instantiateTemplate(const std::string& name,
     // build concrete FunctionDef
     FunctionDef concrete;
     concrete.name = mangled;
+    concrete.user_name = !tmpl.user_name.empty() ? tmpl.user_name : tmpl.name;
     concrete.return_type = subTypeSuffix(tmpl.return_type, subst);
-    for (auto& [ptype, pname] : tmpl.params) {
-        std::string pt = subTypeSuffix(ptype, subst);
-        // class types can't be passed by value: auto-promote to reference
-        if (slid_info_.count(pt)) pt += "^";
-        concrete.params.emplace_back(pt, pname);
-    }
+    for (int i = 0; i < (int)tmpl.params.size(); i++)
+        concrete.params.emplace_back(ptypes[i], tmpl.params[i].second);
     concrete.body = cloneBlock(*tmpl.body, subst);
 
     // register signatures so call sites work
-    std::vector<std::string> ptypes;
-    for (auto& [pt, _] : concrete.params) ptypes.push_back(pt);
     func_return_types_[mangled] = concrete.return_type;
     func_param_types_[mangled]  = ptypes;
 
-    if (force || local_template_names_.count(name)) {
+    if (force || entry.is_local) {
         // inline: emit full definition
         if (force) exported_symbols_.insert(mangled); // explicit instantiation = linkable entry point
         pending_instantiations_.push_back(std::move(concrete));
     } else {
         // imported template: defer declare to module scope + record .sli entry
-        recordSliEntry(name, type_args);
+        recordSliEntry(name, type_args, ptypes, entry.impl_module);
         pending_declares_.push_back(std::move(concrete));
     }
 
@@ -615,7 +651,12 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
     if (force || local_slid_template_names_.count(name) || any_local_type_arg) {
         pending_slid_instantiations_.push_back(concrete_ptr);
     } else {
-        recordSliEntry(name, type_args);
+        // class templates don't carry function-template param overloads — record an
+        // empty param-types signature so the .sli writer emits an empty `()` segment.
+        std::string impl_module;
+        auto mit = slid_template_modules_.find(name);
+        if (mit != slid_template_modules_.end()) impl_module = mit->second;
+        recordSliEntry(name, type_args, /*param_types=*/{}, impl_module);
         pending_slid_declares_.push_back(concrete_ptr);
     }
 

@@ -2743,11 +2743,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
         // template call statement: add<int>(a, b); or add(a, b) with inferred type
         {
-            auto tit = template_funcs_.find(call->callee);
-            if (tit != template_funcs_.end()) {
-                std::vector<std::string> targs = call->type_args.empty()
-                    ? inferTypeArgs(*tit->second, call->args) : call->type_args;
-                std::string mangled = instantiateTemplate(call->callee, targs);
+            auto resolved = resolveTemplateOverload(call->callee, call->type_args, call->args);
+            if (resolved.entry) {
+                std::string mangled = instantiateTemplate(*resolved.entry, resolved.type_args);
                 std::string ret_type = llvmType(func_return_types_[mangled]);
                 auto& ptypes = func_param_types_[mangled];
                 std::string arg_str;
@@ -2837,18 +2835,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
 
         // regular top-level function call as statement
-        // resolve overloaded free functions by argument count when plain name isn't registered
-        std::string resolved_callee = call->callee;
-        auto fit = func_return_types_.find(call->callee);
-        if (fit == func_return_types_.end()) {
-            auto foit = free_func_overloads_.find(call->callee);
-            if (foit != free_func_overloads_.end()) {
-                for (auto& [mn, ptypes] : foit->second) {
-                    if (ptypes.size() == call->args.size()) { resolved_callee = mn; break; }
-                }
-                fit = func_return_types_.find(resolved_callee);
-            }
-        }
+        std::string resolved_callee = resolveFreeFunctionMangledName(call->callee, call->args.size());
+        auto fit = resolved_callee.empty()
+            ? func_return_types_.end()
+            : func_return_types_.find(resolved_callee);
         if (fit != func_return_types_.end()) {
             std::string ret_type = llvmType(fit->second);
             auto& rptypes = func_param_types_[resolved_callee];

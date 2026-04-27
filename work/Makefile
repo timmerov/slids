@@ -22,7 +22,7 @@ SLIDSC_FLAGS = --import-path $(IMPORT_PATH)
 
 .PHONY: all clean string_test template1 template2 template_test vector1
 
-all: string_test vector1
+all: string_test template1 template2 vector1
 
 # ---- string_test ----
 
@@ -83,7 +83,7 @@ $(BIN_DIR)/template_test: $(ST_DIR)/string.o $(TMT_DIR)/template_test.o $(TMT_IN
 $(TMT_DIR)/template_test.o: $(TMT_DIR)/template_test.ll
 	$(LLC) $(LLCFLAGS) $< -o $@
 
-$(TMT_DIR)/template_test.ll: template_test.sl template_add.slh template_add.sl $(SLIDSC)
+$(TMT_DIR)/template_test.ll: template_test.sl template_add.slh template_add.sl dump.slh dump.sl $(SLIDSC)
 	mkdir -p $(TMT_DIR)
 	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS) -MF $(TMT_DIR)/template_test.d
 

@@ -110,12 +110,13 @@ bool Parser::isTemplateCallLookahead() const {
 }
 
 bool Parser::isInstantiationLookahead() const {
-    // pos_ is at identifier; pos_+1 is '<'; scan type args and require '>' followed by ';'
+    // pos_ is at identifier; pos_+1 is '<'; scan type args and require '>' followed by
+    // '(...)' (param signature) followed by ';'. Distinguishes from a class-template
+    // definition `Name<T>(fields) { ... }` which has '{' after the parens, not ';'.
     int i = pos_ + 2;
     while (i < (int)tokens_.size()) {
         const Token& ti = tokens_[i];
-        if (ti.type == TokenType::kGt)
-            return (i + 1 < (int)tokens_.size()) && tokens_[i + 1].type == TokenType::kSemicolon;
+        if (ti.type == TokenType::kGt) break;
         bool ok = isTypeName(ti) || isUserTypeName(ti)
                || ti.type == TokenType::kComma
                || ti.type == TokenType::kBitXor
@@ -124,7 +125,18 @@ bool Parser::isInstantiationLookahead() const {
         if (!ok) return false;
         i++;
     }
-    return false;
+    if (i >= (int)tokens_.size() || tokens_[i].type != TokenType::kGt) return false;
+    i++; // past '>'
+    if (i >= (int)tokens_.size() || tokens_[i].type != TokenType::kLParen) return false;
+    int depth = 1;
+    i++;
+    while (i < (int)tokens_.size() && depth > 0) {
+        if (tokens_[i].type == TokenType::kLParen) depth++;
+        else if (tokens_[i].type == TokenType::kRParen) depth--;
+        i++;
+    }
+    if (depth != 0) return false;
+    return i < (int)tokens_.size() && tokens_[i].type == TokenType::kSemicolon;
 }
 
 bool Parser::isTemplateTypeArgLookahead() const {
@@ -1933,6 +1945,7 @@ FunctionDef Parser::parseFunctionDef() {
             if (it != op_map.end()) { advance(); fname = "op" + it->second; }
         }
         fn.name = fname;
+        fn.user_name = fname;
     }
     // template type params: funcname<T, U, ...>
     if (peek().type == TokenType::kLt && isTemplateCallLookahead()) {
@@ -2057,7 +2070,7 @@ Program Parser::parse() {
         else if (peek().type == TokenType::kEnum) {
             program.enums.push_back(parseEnumDef());
         }
-        // explicit template instantiation: Name<Types>;
+        // explicit template instantiation: Name<Types>(ParamTypes);
         else if (peek().type == TokenType::kIdentifier
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLt
@@ -2068,8 +2081,15 @@ Program Parser::parse() {
             type_args.push_back(parseTypeName());
             while (peek().type == TokenType::kComma) { advance(); type_args.push_back(parseTypeName()); }
             expect(TokenType::kGt, "expected '>'");
+            std::vector<std::string> param_types;
+            expect(TokenType::kLParen, "expected '(' after instantiate type args");
+            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                param_types.push_back(parseTypeName());
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kRParen, "expected ')'");
             expect(TokenType::kSemicolon, "expected ';'");
-            program.instantiations.push_back({name, std::move(type_args)});
+            program.instantiations.push_back({name, std::move(type_args), std::move(param_types)});
         }
         // slid class definition: bare identifier immediately followed by ( or <
         // (no return type prefix — that's what makes it a class, not a function)

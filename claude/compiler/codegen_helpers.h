@@ -73,6 +73,26 @@ inline std::vector<std::string> anonTupleElems(const std::string& t) {
     return out;
 }
 
+// Build the parameter-type token used inside a mangled function symbol.
+// "T[]" -> "Ts" (chars, ints), "T^" -> "Tr" (charr, Stringr).
+// Anon-tuple "(t1,t2,...)" -> "t_<token(t1)>_<token(t2)>_..._e", recursively.
+// Single source of truth — every call/decl/define site that builds a mangled
+// symbol must use this so consumer and instantiator TUs agree byte-for-byte.
+inline std::string paramTokenForType(const std::string& t) {
+    if (t.size() >= 2 && t.substr(t.size() - 2) == "[]")
+        return paramTokenForType(t.substr(0, t.size() - 2)) + "s";
+    if (!t.empty() && t.back() == '^')
+        return paramTokenForType(t.substr(0, t.size() - 1)) + "r";
+    if (isAnonTupleType(t)) {
+        std::string s = "t";
+        for (auto& elem : anonTupleElems(t))
+            s += "_" + paramTokenForType(elem);
+        s += "_e";
+        return s;
+    }
+    return t;
+}
+
 // Resolve a constant expression (integer literal or enum value) to an int
 // without emitting any IR. Returns false if not constant.
 inline bool constExprToInt(const Expr& expr,

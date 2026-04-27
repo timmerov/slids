@@ -119,13 +119,16 @@ private:
     std::string current_parent_;   // mangled name of current parent function
     std::string frame_ptr_reg_;    // %frame ptr inside a nested function
 
-    // template function support
-    std::map<std::string, const FunctionDef*> template_funcs_; // name -> template def (not owned)
+    // template function support — multiple overloads can share a base name
+    struct TemplateFuncEntry {
+        const FunctionDef* def;     // template definition (not owned)
+        std::string impl_module;    // module name for cross-TU loading; empty if local
+        bool is_local;              // body present in this TU? always inline.
+    };
+    std::map<std::string, std::vector<TemplateFuncEntry>> template_funcs_;
     std::set<std::string> emitted_templates_;  // mangled names already emitted
     std::vector<FunctionDef> pending_instantiations_; // concrete fns to emit after main functions
     std::vector<FunctionDef> pending_declares_;        // imported templates: declare at module scope
-    std::set<std::string> local_template_names_;       // templates defined in this TU (inline always)
-    std::map<std::string, std::string> template_func_modules_; // imported template name -> module
 
     // template slid (class template) support
     std::map<std::string, const SlidDef*> template_slids_;       // base name -> template def (not owned)
@@ -140,7 +143,11 @@ private:
     struct SliImport { std::string module; bool is_template; };
     std::vector<SliImport> sli_imports_;
     std::set<std::string> sli_import_set_;
-    struct SliInstantiation { std::string func_name; std::vector<std::string> type_args; };
+    struct SliInstantiation {
+        std::string func_name;
+        std::vector<std::string> type_args;
+        std::vector<std::string> param_types; // post-substitution param types — selects overload
+    };
     std::vector<SliInstantiation> sli_instantiations_;
     std::set<std::string> sli_instantiation_set_;
 
@@ -156,17 +163,32 @@ private:
     void ensureSlidInstantiated(const std::string& type);
     void scanForSlidTemplateUses();
     // template instantiation: builds substituted FunctionDef, registers signatures.
+    // Caller has already disambiguated the overload via resolveTemplateOverload.
     // force=true: always emit define (for explicit instantiate statements).
     // force=false: inline if local template, else emit declare + record .sli entry.
-    // returns mangled name (e.g. "add__int")
-    std::string instantiateTemplate(const std::string& name,
+    // returns mangled name including the post-substitution param-token suffix.
+    std::string instantiateTemplate(const TemplateFuncEntry& entry,
                                     const std::vector<std::string>& type_args,
                                     bool force = false);
     void emitTemplateDeclare(const FunctionDef& fn);
-    void recordSliEntry(const std::string& func_name, const std::vector<std::string>& type_args);
+    void recordSliEntry(const std::string& func_name,
+                        const std::vector<std::string>& type_args,
+                        const std::vector<std::string>& param_types,
+                        const std::string& impl_module);
     // infer type args from actual call arguments when no explicit <T> is given
     std::vector<std::string> inferTypeArgs(const FunctionDef& tmpl,
                                            const std::vector<std::unique_ptr<Expr>>& args);
+    // Pick the template overload (entry + concrete type-args) that matches the call.
+    // Returns {nullptr, {}} if `name` is not a template or no overload matches.
+    // Throws on ambiguity.
+    struct TemplateResolution {
+        const TemplateFuncEntry* entry;
+        std::vector<std::string> type_args;
+    };
+    TemplateResolution resolveTemplateOverload(
+        const std::string& name,
+        const std::vector<std::string>& explicit_type_args,
+        const std::vector<std::unique_ptr<Expr>>& args);
     void analyzeNestedFunctions(const FunctionDef& fn);
     std::set<std::string> collectCaptures(
         const BlockStmt& body,
@@ -175,7 +197,9 @@ private:
 
     void emitFrameStruct(const FunctionDef& fn);
     void emitSlidCtorDtor(const SlidDef& slid);
-    void emitSlidMethod(const SlidDef& slid, const std::string& full_mangled,
+    void emitSlidMethod(const SlidDef& slid,
+                        const std::string& method_user_name,
+                        const std::string& full_mangled,
                         const std::string& return_type,
                         const std::vector<std::pair<std::string,std::string>>& params,
                         const BlockStmt& body);
@@ -183,6 +207,23 @@ private:
     std::string resolveMethodMangledName(const std::string& slid_name,
                                          const std::string& method_name,
                                          const std::vector<std::pair<std::string,std::string>>& params);
+    // Resolve a free-function call's mangled symbol name. Returns "" if the name
+    // is not a known free function. Tries the bare name first (single-overload
+    // fast path where mangled == base), then falls back to picking an entry
+    // from free_func_overloads_ that matches the argument count.
+    std::string resolveFreeFunctionMangledName(const std::string& name,
+                                               size_t arg_count) const;
+    // Mangling helpers — single source of truth. Mangling is unconditional:
+    // every free function gets a __<paramToken> suffix per parameter, every
+    // method gets <Slid>__<method>__<paramToken>...  Carve-outs:
+    //   - main: emitted bare so the C runtime can find it.
+    //   - lifecycle hooks ($ctor/$dtor/$pinit/$sizeof) and libc symbols
+    //     (printf/malloc/free) don't go through these helpers at all.
+    std::string mangleFreeFunction(const std::string& name,
+                                   const std::vector<std::string>& ptypes) const;
+    std::string mangleMethod(const std::string& slid_name,
+                             const std::string& method_name,
+                             const std::vector<std::string>& ptypes) const;
     std::string resolveOverloadForCall(const std::string& base_mangled,
                                        const std::vector<std::unique_ptr<Expr>>& args);
     bool isPointerExpr(const Expr& expr);

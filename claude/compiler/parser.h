@@ -437,7 +437,8 @@ struct NestedFunctionDefStmt : Stmt {
 struct FunctionDef {
     std::string return_type; // empty when tuple_return_fields is non-empty
     std::vector<std::pair<std::string, std::string>> tuple_return_fields;
-    std::string name;
+    std::string name;        // emit-time symbol name (mangled for template instantiations)
+    std::string user_name;   // unmangled, source-level name (used for ##func, diagnostics)
     std::vector<std::pair<std::string, std::string>> params;
     std::unique_ptr<BlockStmt> body;
     std::vector<std::string> type_params; // non-empty for template functions: T add<T>(T a, T b)
@@ -463,7 +464,11 @@ struct Program {
 
     std::vector<std::string> imported_headers; // resolved .slh paths, for -MF dep output
     std::map<std::string, std::string> slid_modules; // slid name -> module that provides it
-    struct InstantiateRequest { std::string func_name; std::vector<std::string> type_args; };
+    struct InstantiateRequest {
+        std::string func_name;
+        std::vector<std::string> type_args;
+        std::vector<std::string> param_types; // post-substitution param types — selects overload
+    };
     std::vector<InstantiateRequest> instantiations; // explicit instantiate statements
 };
 
