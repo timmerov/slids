@@ -1337,7 +1337,27 @@ int outer() {
 
 ## Templates
 
-> **TODO:** Documentation forthcoming. See `CLAUDE.md` for an implementation-side overview.
+Functions and classes can be parameterized over types using `<T>` after the name.
+
+```
+// function template
+T add<T>(T a, T b) { return a + b; }
+
+// class template
+Vec<T>(T x_, T y_) {
+    T length() { return sqrt(x_*x_ + y_*y_); }
+}
+
+x = add(1, 2);                  // T=int inferred from args
+y = add<float64>(1.5, 2.5);     // explicit type arg
+Vec<float64> v(1.0, 2.0);
+```
+
+Multiple type parameters: `Pair<K, V>(K key_, V value_)`.
+
+**One instantiation per project build.** Declare a template signature in a `.slh` and put the body in the matching `.sl`. Each concrete instance (e.g. `Vec<float64>`) is emitted exactly once for the whole project, regardless of how many translation units use it.
+
+**Explicit instantiation.** `instantiate Foo<int>;` forces a particular instance to be emitted.
 
 ---
 
@@ -1575,10 +1595,3 @@ int32 main() {
     return 0;
 }
 ```
-
----
-
-## Next steps
-
-- [ ] Templates
-- [ ] Auto-generate function signatures in transported headers.
