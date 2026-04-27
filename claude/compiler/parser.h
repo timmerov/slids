@@ -531,6 +531,13 @@ private:
     FunctionDef parseFunctionDef();
     std::unique_ptr<BlockStmt> parseBlock(std::vector<std::string> predeclare = {});
     std::unique_ptr<Stmt> parseStmt();
+    // Lvalue-led tail: lhs has been parsed; consume '=' / '<-' / '<->' or ';'
+    // and build the matching specialized stmt node.
+    std::unique_ptr<Stmt> parseLvalueTail(std::unique_ptr<Expr> lhs);
+    std::unique_ptr<Stmt> buildAssignFromLhs(std::unique_ptr<Expr> lhs,
+                                             std::unique_ptr<Expr> rhs, bool is_move);
+    std::unique_ptr<Stmt> buildSwapFromLhs(std::unique_ptr<Expr> lhs,
+                                            std::unique_ptr<Expr> rhs);
     std::unique_ptr<SwitchStmt> parseSwitchStmt();
 
     // expression precedence levels

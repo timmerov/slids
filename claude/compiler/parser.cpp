@@ -706,6 +706,91 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     return block;
 }
 
+// Normalize DerefExpr(UnaryExpr("post++"|"post--", VarExpr)) to PostIncDerefExpr,
+// so that paren-wrapped post-inc-deref `(p++)^` produces the same AST as the
+// unparenthesized `p++^`. Caller passes ownership; receives ownership back
+// (possibly the same object if no rewrite was needed).
+static std::unique_ptr<Expr> normalizePostIncDeref(std::unique_ptr<Expr> e) {
+    auto* de = dynamic_cast<DerefExpr*>(e.get());
+    if (!de) return e;
+    auto* ue = dynamic_cast<UnaryExpr*>(de->operand.get());
+    if (!ue || (ue->op != "post++" && ue->op != "post--")) return e;
+    auto* ve = dynamic_cast<VarExpr*>(ue->operand.get());
+    if (!ve) return e;
+    std::string op = (ue->op == "post++") ? "++" : "--";
+    return std::make_unique<PostIncDerefExpr>(
+        std::make_unique<VarExpr>(ve->name), op);
+}
+
+std::unique_ptr<Stmt> Parser::buildAssignFromLhs(
+        std::unique_ptr<Expr> lhs, std::unique_ptr<Expr> rhs, bool is_move) {
+    lhs = normalizePostIncDeref(std::move(lhs));
+
+    if (auto* ve = dynamic_cast<VarExpr*>(lhs.get())) {
+        std::string name = ve->name;
+        if (!isInScope(name) && !current_slid_fields_.count(name) && name != "self") {
+            declareVar(name);
+            return std::make_unique<VarDeclStmt>("", name, std::move(rhs),
+                std::vector<std::unique_ptr<Expr>>{}, is_move);
+        }
+        return std::make_unique<AssignStmt>(name, std::move(rhs), is_move);
+    }
+    if (auto* pide = dynamic_cast<PostIncDerefExpr*>(lhs.get())) {
+        if (is_move)
+            throw std::runtime_error("move (<-) through post-inc-deref not supported");
+        return std::make_unique<PostIncDerefAssignStmt>(
+            std::move(pide->operand), pide->op, std::move(rhs));
+    }
+    if (auto* de = dynamic_cast<DerefExpr*>(lhs.get())) {
+        if (is_move)
+            throw std::runtime_error("move (<-) through deref not supported");
+        return std::make_unique<DerefAssignStmt>(std::move(de->operand), std::move(rhs));
+    }
+    if (auto* fa = dynamic_cast<FieldAccessExpr*>(lhs.get())) {
+        return std::make_unique<FieldAssignStmt>(
+            std::move(fa->object), fa->field, std::move(rhs), is_move);
+    }
+    if (auto* ai = dynamic_cast<ArrayIndexExpr*>(lhs.get())) {
+        return std::make_unique<IndexAssignStmt>(
+            std::move(ai->base), std::move(ai->index), std::move(rhs), is_move);
+    }
+    throw std::runtime_error("invalid assignment target");
+}
+
+std::unique_ptr<Stmt> Parser::buildSwapFromLhs(
+        std::unique_ptr<Expr> lhs, std::unique_ptr<Expr> rhs) {
+    lhs = normalizePostIncDeref(std::move(lhs));
+    rhs = normalizePostIncDeref(std::move(rhs));
+    return std::make_unique<SwapStmt>(std::move(lhs), std::move(rhs));
+}
+
+std::unique_ptr<Stmt> Parser::parseLvalueTail(std::unique_ptr<Expr> lhs) {
+    if (peek().type == TokenType::kEquals) {
+        advance();
+        auto rhs = parseExpr();
+        expect(TokenType::kSemicolon, "expected ';'");
+        return buildAssignFromLhs(std::move(lhs), std::move(rhs), false);
+    }
+    if (peek().type == TokenType::kArrowLeft) {
+        advance();
+        auto rhs = parseExpr();
+        expect(TokenType::kSemicolon, "expected ';'");
+        return buildAssignFromLhs(std::move(lhs), std::move(rhs), true);
+    }
+    if (peek().type == TokenType::kArrowBoth) {
+        advance();
+        auto rhs = parseExpr();
+        expect(TokenType::kSemicolon, "expected ';'");
+        return buildSwapFromLhs(std::move(lhs), std::move(rhs));
+    }
+    expect(TokenType::kSemicolon, "expected ';'");
+    if (auto* mc = dynamic_cast<MethodCallExpr*>(lhs.get())) {
+        return std::make_unique<MethodCallStmt>(
+            std::move(mc->object), mc->method, std::move(mc->args));
+    }
+    return std::make_unique<ExprStmt>(std::move(lhs));
+}
+
 std::unique_ptr<Stmt> Parser::parseStmt() {
     Token t = peek();
 
@@ -948,11 +1033,14 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
     // tuple return nested function or tuple destructure: starts with '('
     if (t.type == TokenType::kLParen) {
-        // scan to matching ')' and check what follows
-        int depth = 1, scan = pos_ + 1;
+        // scan to matching ')' and check what follows; also count outer-level
+        // commas so single-element parens fall through to the lvalue branch
+        // (anon-tuples have minimum size 2).
+        int depth = 1, scan = pos_ + 1, outer_commas = 0;
         while (scan < (int)tokens_.size() && depth > 0) {
             if (tokens_[scan].type == TokenType::kLParen) depth++;
             else if (tokens_[scan].type == TokenType::kRParen) depth--;
+            else if (depth == 1 && tokens_[scan].type == TokenType::kComma) outer_commas++;
             scan++;
         }
         // scan is now at the token after the matching ')'
@@ -964,7 +1052,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             auto stmt = std::make_unique<NestedFunctionDefStmt>();
             stmt->def = parseNestedFunctionDef();
             return stmt;
-        } else if (scan < (int)tokens_.size()
+        } else if (outer_commas > 0
+                   && scan < (int)tokens_.size()
                    && tokens_[scan].type == TokenType::kEquals) {
             // (type name, ...) = expr; — tuple destructure
             // slots may be: empty (skip), bare name (infer type), or type + name (declared).
@@ -999,7 +1088,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             td->init = parseExpr();
             expect(TokenType::kSemicolon, "expected ';'");
             return td;
-        } else if (scan < (int)tokens_.size()
+        } else if (outer_commas > 0
+                   && scan < (int)tokens_.size()
                    && tokens_[scan].type == TokenType::kIdentifier
                    && scan + 1 < (int)tokens_.size()
                    && (tokens_[scan + 1].type == TokenType::kEquals
@@ -1037,7 +1127,9 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             declareVar(name);
             return std::make_unique<VarDeclStmt>(type, name, std::move(init));
         }
-        // fall through to expression statement
+        // paren-led lvalue statement: (lvalue) <op> rhs;  /  (expr);
+        auto lhs = parsePostfix(parsePrimary());
+        return parseLvalueTail(std::move(lhs));
     }
 
     // nested function definition: type name(...) { ... }
@@ -1221,153 +1313,6 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             return std::make_unique<ExprStmt>(std::move(call));
         }
 
-        // deref assignment: ptr^ = val  or  ptr^.field = val  or  ptr^.method()
-        if (peek().type == TokenType::kBitXor) {
-            // parse the full postfix chain starting from deref
-            auto base = parsePostfix(std::make_unique<VarExpr>(name));
-            // base is now DerefExpr, or DerefExpr.field, or DerefExpr.method(...)
-
-            if (peek().type == TokenType::kEquals || peek().type == TokenType::kArrowLeft) {
-                bool is_move = (peek().type == TokenType::kArrowLeft);
-                advance();
-                auto val = parseExpr();
-                expect(TokenType::kSemicolon, "expected ';'");
-                // ptr^ = val
-                if (auto* de = dynamic_cast<DerefExpr*>(base.get())) {
-                    return std::make_unique<DerefAssignStmt>(std::move(de->operand), std::move(val));
-                }
-                // ptr^.field = val  or  ptr^.field <- val
-                if (auto* fa = dynamic_cast<FieldAccessExpr*>(base.get())) {
-                    auto obj = std::move(fa->object);
-                    std::string field = fa->field;
-                    return std::make_unique<FieldAssignStmt>(std::move(obj), field, std::move(val), is_move);
-                }
-                // ptr^[idx] = val  or  ptr^[idx] <- val
-                if (auto* ai = dynamic_cast<ArrayIndexExpr*>(base.get())) {
-                    auto b = std::move(ai->base);
-                    auto ix = std::move(ai->index);
-                    return std::make_unique<IndexAssignStmt>(std::move(b), std::move(ix), std::move(val), is_move);
-                }
-                throw std::runtime_error("invalid deref assignment target");
-            }
-            // ptr^ += rhs  (compound assignment through dereference)
-            {
-                static const std::map<TokenType, std::string> compound_ops = {
-                    {TokenType::kPlusEq,    "+"},
-                    {TokenType::kMinusEq,   "-"},
-                    {TokenType::kStarEq,    "*"},
-                    {TokenType::kSlashEq,   "/"},
-                    {TokenType::kPercentEq, "%"},
-                    {TokenType::kBitAndEq,  "&"},
-                    {TokenType::kBitOrEq,   "|"},
-                    {TokenType::kBitXorEq,  "^"},
-                    {TokenType::kLShiftEq,  "<<"},
-                    {TokenType::kRShiftEq,  ">>"},
-                    {TokenType::kAndEq,     "&&"},
-                    {TokenType::kOrEq,      "||"},
-                    {TokenType::kXorXorEq,  "^^"},
-                };
-                auto cop = compound_ops.find(peek().type);
-                if (cop != compound_ops.end()) {
-                    if (auto* de = dynamic_cast<DerefExpr*>(base.get())) {
-                        auto* ve = dynamic_cast<VarExpr*>(de->operand.get());
-                        if (!ve) throw std::runtime_error("compound deref-assign requires simple pointer variable");
-                        std::string ptr_name = ve->name;
-                        advance();
-                        auto rhs = parseExpr();
-                        expect(TokenType::kSemicolon, "expected ';'");
-                        // desugar: ptr^ op= rhs  ->  DerefAssignStmt(ptr, BinaryExpr(op, DerefExpr(ptr), rhs))
-                        auto lhs_read = std::make_unique<DerefExpr>(std::make_unique<VarExpr>(ptr_name));
-                        auto bin = std::make_unique<BinaryExpr>(cop->second, std::move(lhs_read), std::move(rhs));
-                        return std::make_unique<DerefAssignStmt>(std::make_unique<VarExpr>(ptr_name), std::move(bin));
-                    }
-                    throw std::runtime_error("compound assignment requires a dereference target");
-                }
-            }
-            // ptr^++  or  ptr^--  as a statement — ExprStmt routes to the correct codegen
-            if (auto* ue = dynamic_cast<UnaryExpr*>(base.get())) {
-                if (ue->op == "post++" || ue->op == "post--") {
-                    expect(TokenType::kSemicolon, "expected ';'");
-                    return std::make_unique<ExprStmt>(std::move(base));
-                }
-            }
-            // ptr^.method()
-            if (auto* mc = dynamic_cast<MethodCallExpr*>(base.get())) {
-                expect(TokenType::kSemicolon, "expected ';'");
-                return std::make_unique<MethodCallStmt>(
-                    std::move(mc->object), mc->method, std::move(mc->args));
-            }
-            throw std::runtime_error("Line " + std::to_string(peek().line)
-                + ": unexpected token after dereference");
-        }
-
-        // method call or field access chain followed by assignment
-        if (peek().type == TokenType::kDot) {
-            // parse the chain as an expression starting from VarExpr
-            auto base = parsePostfix(std::make_unique<VarExpr>(name));
-
-            // field assignment: obj.field_ = expr;
-            if (peek().type == TokenType::kEquals) {
-                advance();
-                auto val = parseExpr();
-                expect(TokenType::kSemicolon, "expected ';'");
-                // unwrap to FieldAccessExpr
-                if (auto* fa = dynamic_cast<FieldAccessExpr*>(base.get())) {
-                    auto obj = std::move(fa->object);
-                    std::string field = fa->field;
-                    return std::make_unique<FieldAssignStmt>(std::move(obj), field, std::move(val));
-                }
-                // unwrap obj.field[idx] = val -> IndexAssignStmt
-                if (auto* ai = dynamic_cast<ArrayIndexExpr*>(base.get())) {
-                    auto b = std::move(ai->base);
-                    auto idx = std::move(ai->index);
-                    return std::make_unique<IndexAssignStmt>(std::move(b), std::move(idx), std::move(val));
-                }
-                throw std::runtime_error("invalid assignment target");
-            }
-
-            // method call statement
-            if (auto* mc = dynamic_cast<MethodCallExpr*>(base.get())) {
-                expect(TokenType::kSemicolon, "expected ';'");
-                return std::make_unique<MethodCallStmt>(
-                    std::move(mc->object), mc->method, std::move(mc->args));
-            }
-            throw std::runtime_error("Line " + std::to_string(peek().line)
-                + ": expected ';' after method call");
-        }
-
-        // post-increment/decrement statement: x++; x--; or ptr++^ = val;
-        if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
-            std::string op = (peek().type == TokenType::kPlusPlus) ? "++" : "--";
-            advance();
-            // ptr++^ = val  — post-inc-deref lvalue
-            if (peek().type == TokenType::kBitXor) {
-                advance();
-                if (peek().type == TokenType::kEquals) {
-                    advance();
-                    auto val = parseExpr();
-                    expect(TokenType::kSemicolon, "expected ';'");
-                    return std::make_unique<PostIncDerefAssignStmt>(
-                        std::make_unique<VarExpr>(name), op, std::move(val));
-                }
-                if (peek().type == TokenType::kArrowBoth) {
-                    advance();
-                    auto lhs = std::make_unique<PostIncDerefExpr>(std::make_unique<VarExpr>(name), op);
-                    auto rhs = parseExpr();
-                    expect(TokenType::kSemicolon, "expected ';'");
-                    return std::make_unique<SwapStmt>(std::move(lhs), std::move(rhs));
-                }
-                // ptr++^ as expression statement (rvalue use)
-                expect(TokenType::kSemicolon, "expected ';'");
-                return std::make_unique<ExprStmt>(
-                    std::make_unique<PostIncDerefExpr>(std::make_unique<VarExpr>(name), op));
-            }
-            std::string uop = (op == "++") ? "post++" : "post--";
-            expect(TokenType::kSemicolon, "expected ';'");
-            return std::make_unique<ExprStmt>(
-                std::make_unique<UnaryExpr>(uop, std::make_unique<VarExpr>(name)));
-        }
-
         // template call statement: name<Type,...>(args);
         if (peek().type == TokenType::kLt && isTemplateCallLookahead()) {
             advance(); // consume '<'
@@ -1403,38 +1348,12 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             return std::make_unique<CallStmt>(name, std::move(args));
         }
 
-        // plain assignment — or inferred declaration if name is not yet in scope and not a class field
-        if (peek().type == TokenType::kEquals) {
-            advance();
-            auto value = parseExpr();
-            expect(TokenType::kSemicolon, "expected ';'");
-            if (!isInScope(name) && !current_slid_fields_.count(name) && name != "self") {
-                declareVar(name);
-                return std::make_unique<VarDeclStmt>("", name, std::move(value));
-            }
-            return std::make_unique<AssignStmt>(name, std::move(value));
-        }
-        // move assignment — or inferred move-init if name is not yet in scope and not a class field
-        if (peek().type == TokenType::kArrowLeft) {
-            advance();
-            auto value = parseExpr();
-            expect(TokenType::kSemicolon, "expected ';'");
-            if (!isInScope(name) && !current_slid_fields_.count(name) && name != "self") {
-                declareVar(name);
-                return std::make_unique<VarDeclStmt>("", name, std::move(value),
-                                                      std::vector<std::unique_ptr<Expr>>{}, true);
-            }
-            return std::make_unique<AssignStmt>(name, std::move(value), true);
-        }
-        // swap statement — exchange values at two same-typed lvalues
-        if (peek().type == TokenType::kArrowBoth) {
-            advance();
-            auto rhs = parseExpr();
-            expect(TokenType::kSemicolon, "expected ';'");
-            return std::make_unique<SwapStmt>(std::make_unique<VarExpr>(name), std::move(rhs));
-        }
+        // identifier-led lvalue: parse the postfix chain and route through the
+        // unified lvalue tail. Compound assign on the bare name or through a
+        // single deref is desugared inline (general compound through other
+        // lvalue shapes is deferred to feature C').
+        auto lhs = parsePostfix(std::make_unique<VarExpr>(name));
 
-        // compound assignment
         static const std::map<TokenType, std::string> compound_ops = {
             {TokenType::kPlusEq,    "+"},
             {TokenType::kMinusEq,   "-"},
@@ -1450,61 +1369,31 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             {TokenType::kOrEq,      "||"},
             {TokenType::kXorXorEq,  "^^"},
         };
-        auto it = compound_ops.find(peek().type);
-        if (it != compound_ops.end()) {
-            advance();
-            auto rhs = parseExpr();
-            expect(TokenType::kSemicolon, "expected ';'");
-            auto lhs = std::make_unique<VarExpr>(name);
-            auto value = std::make_unique<BinaryExpr>(it->second, std::move(lhs), std::move(rhs));
-            return std::make_unique<AssignStmt>(name, std::move(value));
+        auto cop = compound_ops.find(peek().type);
+        if (cop != compound_ops.end()) {
+            if (dynamic_cast<VarExpr*>(lhs.get())) {
+                advance();
+                auto rhs = parseExpr();
+                expect(TokenType::kSemicolon, "expected ';'");
+                auto lhs2 = std::make_unique<VarExpr>(name);
+                auto value = std::make_unique<BinaryExpr>(cop->second, std::move(lhs2), std::move(rhs));
+                return std::make_unique<AssignStmt>(name, std::move(value));
+            }
+            if (auto* de = dynamic_cast<DerefExpr*>(lhs.get())) {
+                auto* ve = dynamic_cast<VarExpr*>(de->operand.get());
+                if (!ve) throw std::runtime_error("compound deref-assign requires simple pointer variable");
+                std::string ptr_name = ve->name;
+                advance();
+                auto rhs = parseExpr();
+                expect(TokenType::kSemicolon, "expected ';'");
+                auto lhs_read = std::make_unique<DerefExpr>(std::make_unique<VarExpr>(ptr_name));
+                auto bin = std::make_unique<BinaryExpr>(cop->second, std::move(lhs_read), std::move(rhs));
+                return std::make_unique<DerefAssignStmt>(std::make_unique<VarExpr>(ptr_name), std::move(bin));
+            }
+            throw std::runtime_error("compound assignment requires a simple variable or dereference target");
         }
 
-        // indexed statement: name[expr]... — may be simple assign, method call on element, etc.
-        if (peek().type == TokenType::kLBracket) {
-            advance(); // consume '['
-            auto idx = parseExpr();
-            expect(TokenType::kRBracket, "expected ']'");
-            // simple index assignment (copy or move)
-            if (peek().type == TokenType::kEquals || peek().type == TokenType::kArrowLeft) {
-                bool is_move = (peek().type == TokenType::kArrowLeft);
-                advance();
-                auto val = parseExpr();
-                expect(TokenType::kSemicolon, "expected ';'");
-                return std::make_unique<IndexAssignStmt>(
-                    std::make_unique<VarExpr>(name), std::move(idx), std::move(val), is_move);
-            }
-            // chained: name[idx].field = val, name[idx].method(), name[idx][j]..., etc.
-            auto base = parsePostfix(std::make_unique<ArrayIndexExpr>(
-                std::make_unique<VarExpr>(name), std::move(idx)));
-            if (peek().type == TokenType::kEquals || peek().type == TokenType::kArrowLeft) {
-                bool is_move = (peek().type == TokenType::kArrowLeft);
-                advance();
-                auto val = parseExpr();
-                expect(TokenType::kSemicolon, "expected ';'");
-                if (auto* fa = dynamic_cast<FieldAccessExpr*>(base.get())) {
-                    auto obj = std::move(fa->object);
-                    std::string field = fa->field;
-                    return std::make_unique<FieldAssignStmt>(std::move(obj), field, std::move(val), is_move);
-                }
-                if (auto* ai = dynamic_cast<ArrayIndexExpr*>(base.get())) {
-                    auto b = std::move(ai->base);
-                    auto ix = std::move(ai->index);
-                    return std::make_unique<IndexAssignStmt>(std::move(b), std::move(ix), std::move(val), is_move);
-                }
-                throw std::runtime_error("invalid indexed assignment target");
-            }
-            if (auto* mc = dynamic_cast<MethodCallExpr*>(base.get())) {
-                expect(TokenType::kSemicolon, "expected ';'");
-                return std::make_unique<MethodCallStmt>(
-                    std::move(mc->object), mc->method, std::move(mc->args));
-            }
-            expect(TokenType::kSemicolon, "expected ';'");
-            return std::make_unique<ExprStmt>(std::move(base));
-        }
-
-        throw std::runtime_error("Line " + std::to_string(peek().line)
-            + ": expected '(' or '=' after '" + name + "'");
+        return parseLvalueTail(std::move(lhs));
     }
 
     throw std::runtime_error("Line " + std::to_string(t.line)

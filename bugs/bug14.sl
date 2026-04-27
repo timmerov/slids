@@ -25,7 +25,7 @@ int32 main() {
     __println("arr[4, 2, 3, 4]=(" + arr[0] + "," + arr[1] + "," + arr[2] + "," + arr[3] + ")");
 
     /*
-    reset.
+    reset the array.
     this was a compile error.
     weird that after 30+ days i never tried to directly.
     set the value of an array.
@@ -33,12 +33,11 @@ int32 main() {
     */
     arr[0] = 1;
 
-    /*
+    /* check pointers. */
     bool eq1 = (p2 == ^arr[3]);
     bool eq2 = (p2 == ^arr[2]);
     __println("eq1[0]=" + eq1);
     __println("eq2[1]=" + eq2);
-    */
 
     /* this should compile but doesn't */
     //(p1++)^ = (p2--)^;
