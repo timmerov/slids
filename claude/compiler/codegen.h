@@ -53,6 +53,7 @@ private:
     std::map<std::string, std::vector<std::string>> func_param_types_; // func name -> param types
     std::map<std::string, std::vector<std::pair<std::string,std::string>>> func_tuple_fields_; // func -> [(type,name)]
     std::string current_func_return_type_; // LLVM return type of the function being emitted
+    std::string current_func_slids_return_type_; // Slids-form return type of the function being emitted
     std::vector<std::pair<std::string,std::string>> current_func_tuple_fields_; // Slids-form tuple return fields (type,name) for element-wise dispatch; empty if not a tuple return
     // overload table: base_mangled -> [(full_mangled, param_types)]
     std::map<std::string, std::vector<std::pair<std::string, std::vector<std::string>>>> method_overloads_;
@@ -316,6 +317,7 @@ private:
     std::string emitExpr(const Expr& expr);
     std::string emitCondBool(const Expr& expr); // emit expr then icmp ne <type> val, 0 -> i1
     std::string exprLlvmType(const Expr& expr); // infer LLVM type without emitting IR
+    void requirePtrInit(const std::string& dst_type, const Expr& src); // dst is ^ or [] -> src must be ptr
     std::string inferSlidType(const Expr& expr); // infer Slids type string for type-inferred declarations
     std::string emitFieldPtr(const std::string& obj_name, const std::string& field);
     std::string newTmp();

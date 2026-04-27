@@ -1111,6 +1111,7 @@ void Codegen::emitNestedFunction(
     std::string mangled = parent_name + "__" + fn.name;
     std::string ret_type = llvmType(func_return_types_[mangled]);
     current_func_return_type_ = ret_type;
+    current_func_slids_return_type_ = func_return_types_[mangled];
     current_func_tuple_fields_ = fn.tuple_return_fields;
 
     // build parameter list
@@ -2802,6 +2803,16 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
         }
     }
 
+    // auto-promote slid-producing expressions (CallExpr, BinaryExpr with op
+    // overload, MethodCallExpr returning a slid) to their alloca ptr.
+    // The earlier VarExpr-only auto-promote misses these forms; emitExpr already
+    // produces a ptr for them, so return it directly before requirePtrInit runs.
+    if (!param_type.empty() && param_type.back() == '^') {
+        std::string slid_name = param_type.substr(0, param_type.size() - 1);
+        if (slid_info_.count(slid_name) && inferSlidType(arg) == slid_name)
+            return emitExpr(arg);
+    }
+    requirePtrInit(param_type, arg);
     std::string val = emitExpr(arg);
     // widen or truncate integer to match param type
     if (!param_type.empty() && !isIndirectType(param_type)) {
@@ -2857,6 +2868,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid,
     current_func_uses_sret_ = uses_sret;
     std::string ret_type = uses_sret ? "void" : llvmType(return_type);
     current_func_return_type_ = ret_type;
+    current_func_slids_return_type_ = return_type;
 
     bool empty = slid_info_[slid.name].is_empty;
     std::string param_str;
@@ -2951,6 +2963,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
 
     std::string ret_type = uses_sret ? "void" : llvmType(func_return_types_[emit_name]);
     current_func_return_type_ = ret_type;
+    current_func_slids_return_type_ = func_return_types_[emit_name];
     current_func_tuple_fields_ = fn.tuple_return_fields;
 
     std::string param_str;

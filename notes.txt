@@ -8,9 +8,7 @@ p2 = p1++;
 ensure p2 != p1;
 PostIncDerefExpr sounds like a hack.
 
-compiler generated swap operator:
-swap field by field.
-like move and copy.
+inheritance:
 
 aliases:
 alias int32 i32;
@@ -23,18 +21,10 @@ alias std;
 alias std :;
 alias std ::;
 
-templated namespaces:
-Namespace<T> {
-    ...
-}
-has potential.
-
-inheritance:
-
+arrays:
 update docs so an array is semantically a tuple
 where all of the elements are the same type.
 and has special powers.
-
 revisit the handle of fixed size arrays.
 const index out of bounds.
 assign, move, copy to/from arrays and tuples.
@@ -62,22 +52,6 @@ remove(start, count)
 check if this works:
 vec[2] <-> vec[4];
 
-do we need the op^[] ?
-it returns a reference to the indexed value.
-T^ op^[](index) {
-    // cast pointer [] to reference ^ is automagic.
-    T^ ref = storage_ + index;
-    // alternatively:
-    T^ ref = begin() + index;
-    return ref;
-}
-how would we use it?
-these are probably impossible to parse as intended.
-T^ ref = ^vec[3];
-T^ ref = vec^[3];
-maybe just api.
-T^ ref = vec.at(3);
-
 import paths.
 
 const correctness:
@@ -91,6 +65,7 @@ we might want to be able to make self const.
 notes on this are in future directory.
 
 namespaces:
+somewhat implemented.
     Math(
         /* constant must have initializer. */
         float pi_ = 3.14
@@ -121,6 +96,12 @@ or
     alias slids;
     s = String;
 
+templated namespaces:
+Namespace<T> {
+    ...
+}
+has potential.
+
 for loops:
 kinda hate the current syntax.
 'in' should not be a keyword.
@@ -135,3 +116,19 @@ both are public.
 so we have a name conflict.
 which is probably silent at link time.
 
+do we need the op^[] ?
+no.
+it returns a reference to the indexed value.
+T^ op^[](index) {
+    // cast pointer [] to reference ^ is automagic.
+    T^ ref = storage_ + index;
+    // alternatively:
+    T^ ref = begin() + index;
+    return ref;
+}
+how would we use it?
+these are probably impossible to parse as intended.
+T^ ref = ^vec[3];
+T^ ref = vec^[3];
+maybe just api.
+T^ ref = vec.at(3);

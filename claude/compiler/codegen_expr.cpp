@@ -2179,6 +2179,18 @@ std::string Codegen::emitCondBool(const Expr& expr) {
     return cond_bool;
 }
 
+// When dst is a pointer (^) or iterator ([]) type, the source expression must
+// produce an LLVM ptr value. Reject scalar->pointer (e.g. `int[] p = arr[0];`),
+// which would otherwise emit `store ptr %i32val, ptr %dst` — invalid IR.
+void Codegen::requirePtrInit(const std::string& dst_type, const Expr& src) {
+    if (!isRefType(dst_type) && !isPtrType(dst_type)) return;
+    std::string src_t = exprLlvmType(src);
+    if (src_t == "ptr") return;
+    std::string src_slids = inferSlidType(src);
+    throw std::runtime_error("cannot initialize '" + dst_type
+        + "' from value of type '" + src_slids + "'");
+}
+
 // Infer the Slids type string for a type-inferred variable declaration (x = expr;).
 // Returns a Slids type string like "int", "int64", "uint", "float64", "char[]", etc.
 std::string Codegen::inferSlidType(const Expr& expr) {

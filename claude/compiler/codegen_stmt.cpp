@@ -710,6 +710,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         locals_[decl->name] = reg;
         local_types_[decl->name] = eff_type;
         if (!decl->init) return; // uninitialized — alloca only
+        requirePtrInit(eff_type, *decl->init);
         std::string val = emitExpr(*decl->init);
         // coerce integer or float widths if necessary
         if (!isIndirectType(eff_type)) {
@@ -764,6 +765,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             auto& info = slid_info_[current_slid_];
             if (info.field_index.count(assign->name)) {
                 int idx = info.field_index[assign->name];
+                requirePtrInit(info.field_types[idx], *assign->value);
                 std::string field_type = llvmType(info.field_types[idx]);
                 std::string gep = newTmp();
                 std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
@@ -1073,6 +1075,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
         // pointer move: copy source to dest, null source
         if (assign->is_move && tit != local_types_.end() && isIndirectType(tit->second)) {
+            requirePtrInit(tit->second, *assign->value);
             std::string src_val = emitExpr(*assign->value);
             out_ << "    store ptr " << src_val << ", ptr " << it->second << "\n";
             emitNullOut(*assign->value);
@@ -1081,12 +1084,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string val = emitExpr(*assign->value);
         bool is_ptr = tit != local_types_.end() && isIndirectType(tit->second);
         std::string store_type = is_ptr ? "ptr" : llvmType(tit != local_types_.end() ? tit->second : "int");
-        // catch assigning a non-pointer result (e.g. ptr - ptr → intptr) into a pointer variable
-        // also catch mismatched pointer types (e.g. char[] into int[])
+        // catch mismatched pointer types (e.g. char[] into int[]) — non-pointer
+        // RHS is rejected by requirePtrInit above.
         if (is_ptr) {
-            std::string rhs_t = exprLlvmType(*assign->value);
-            if (rhs_t != "ptr")
-                throw std::runtime_error("cannot assign non-pointer value to pointer variable '" + assign->name + "'");
+            requirePtrInit(tit->second, *assign->value);
             // check pointee type compatibility (void^ is compatible with any pointer)
             auto ptrBase = [](const std::string& t) -> std::string {
                 if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return t.substr(0, t.size()-2);
@@ -1136,6 +1137,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // ptr^ = val — load the pointer from its alloca, then store through it
         std::string ptr_reg;
         std::string pointee_llvm = "i32";
+        std::string pointee_type;
         if (auto* ve = dynamic_cast<const VarExpr*>(da->ptr.get())) {
             auto it = locals_.find(ve->name);
             if (it == locals_.end())
@@ -1145,7 +1147,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 std::string loaded_ptr = newTmp();
                 out_ << "    " << loaded_ptr << " = load ptr, ptr " << it->second << "\n";
                 ptr_reg = loaded_ptr;
-                std::string pointee_type = ( isPtrType(tit->second) ? tit->second.substr(0, tit->second.size()-2) : tit->second.substr(0, tit->second.size()-1) );
+                pointee_type = ( isPtrType(tit->second) ? tit->second.substr(0, tit->second.size()-2) : tit->second.substr(0, tit->second.size()-1) );
                 pointee_llvm = llvmType(pointee_type);
             } else {
                 ptr_reg = it->second;
@@ -1153,6 +1155,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         } else {
             ptr_reg = emitExpr(*da->ptr);
         }
+        if (!pointee_type.empty()) requirePtrInit(pointee_type, *da->value);
         std::string val = emitExpr(*da->value);
         out_ << "    store " << pointee_llvm << " " << val << ", ptr " << ptr_reg << "\n";
         return;
@@ -1212,6 +1215,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     return;
                 }
                 // scalar slot
+                requirePtrInit(elem_slids, *ia->value);
                 std::string rhs_val = emitExpr(*ia->value);
                 out_ << "    store " << llvmType(elem_slids) << " " << rhs_val
                      << ", ptr " << slot_gep << "\n";
@@ -1233,6 +1237,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string elem_gep = newTmp();
             out_ << "    " << elem_gep << " = getelementptr [" << sz_str << " x " << elt
                  << "], ptr " << field_gep << ", i32 0, " << idx_llvm << " " << idx_val << "\n";
+            requirePtrInit(elem_type, *ia->value);
             std::string rhs_val = emitExpr(*ia->value);
             out_ << "    store " << elt << " " << rhs_val << ", ptr " << elem_gep << "\n";
             return;
@@ -1281,6 +1286,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             emitSlidSlotAssign(elem_slids, slot_gep, src_ptr, ia->is_move);
                             return;
                         }
+                        requirePtrInit(elem_slids, *ia->value);
                         std::string rhs_val = emitExpr(*ia->value);
                         out_ << "    store " << llvmType(elem_slids) << " " << rhs_val
                              << ", ptr " << slot_gep << "\n";
@@ -1339,6 +1345,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     emitSlidSlotAssign(elem_slids, gep, src_ptr, ia->is_move);
                     return;
                 }
+                requirePtrInit(elem_slids, *ia->value);
                 std::string rhs_val = emitExpr(*ia->value);
                 // width-coerce integer widths (sext/trunc) to match the field type
                 if (!isIndirectType(elem_slids)) {
@@ -1401,6 +1408,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 std::string elem_gep = newTmp();
                 out_ << "    " << elem_gep << " = getelementptr [" << sz_str << " x " << elt
                      << "], ptr " << field_gep << ", i32 0, " << idx_llvm << " " << idx_val << "\n";
+                requirePtrInit(elem_type, *ia->value);
                 std::string rhs_val = emitExpr(*ia->value);
                 out_ << "    store " << elt << " " << rhs_val << ", ptr " << elem_gep << "\n";
                 return;
@@ -1447,6 +1455,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string elt = llvmType(elem_type_str);
         std::string gep = newTmp();
         out_ << "    " << gep << " = getelementptr " << elt << ", ptr " << base_ptr << ", " << idx_llvm << " " << idx_val << "\n";
+        requirePtrInit(elem_type_str, *ia->value);
         std::string rhs = emitExpr(*ia->value);
         out_ << "    store " << elt << " " << rhs << ", ptr " << gep << "\n";
         if (ia->is_move && isIndirectType(elem_type_str))
@@ -1467,6 +1476,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string pointee_type = tit->second.substr(0, tit->second.size()-2);
         std::string pointee_llvm = llvmType(pointee_type);
         int step = (pida->op == "++") ? 1 : -1;
+        requirePtrInit(pointee_type, *pida->value);
         // load current ptr
         std::string cur_ptr = newTmp();
         out_ << "    " << cur_ptr << " = load ptr, ptr " << it->second << "\n";
@@ -1623,6 +1633,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 throw std::runtime_error("DerefFieldAssign: unknown slid type for field '" + fa->field + "'");
             auto& info = slid_info_[slid_name];
             int idx = info.field_index[fa->field];
+            requirePtrInit(info.field_types[idx], *fa->value);
             std::string field_type = llvmType(info.field_types[idx]);
             std::string gep = newTmp();
             out_ << "    " << gep << " = getelementptr %struct." << slid_name
@@ -1645,6 +1656,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
             auto& info = slid_info_[slid_name];
             int idx = info.field_index[fa->field];
+            requirePtrInit(info.field_types[idx], *fa->value);
             std::string field_type = llvmType(info.field_types[idx]);
             std::string val = emitExpr(*fa->value);
             out_ << "    store " << field_type << " " << val << ", ptr " << gep << "\n";
@@ -1679,6 +1691,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     + "' on slid '" + slid_name + "'");
             int field_idx = fit->second;
             const std::string& ft = info.field_types[field_idx];
+            requirePtrInit(ft, *fa->value);
             std::string ft_llvm = llvmType(ft);
             std::string slot_gep = emitFieldGep(tit->second, locals_[bve->name], idx);
             std::string field_gep = newTmp();
@@ -1905,6 +1918,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             bool is_move = isFreshSlidTemp(*te->values[i]);
                             emitSlidSlotAssign(elem_type, gep, src_ptr, is_move);
                         } else {
+                            requirePtrInit(elem_type, *te->values[i]);
                             std::string val = emitExpr(*te->values[i]);
                             out_ << "    store " << llvmType(elem_type) << " " << val
                                  << ", ptr " << gep << "\n";
@@ -1948,6 +1962,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         emitDtors();
                         out_ << "    ret " << current_func_return_type_ << " " << loaded << "\n";
                     } else {
+                        requirePtrInit(current_func_slids_return_type_, *ret->value);
                         std::string val = emitExpr(*ret->value);
                         emitDtors();
                         out_ << "    ret " << current_func_return_type_ << " " << val << "\n";
