@@ -13,6 +13,7 @@ SAMPLES=(
     function1
     incomplete
     indexop
+    lvalues
     macros
     math1 math2
     move

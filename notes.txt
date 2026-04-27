@@ -1,13 +1,4 @@
 
-parse issues:
-this doesn't parse but should.
-(++p)^ = (++q)^
-
-check post inc/dec implementation:
-p2 = p1++;
-ensure p2 != p1;
-PostIncDerefExpr sounds like a hack.
-
 inheritance:
 
 aliases:

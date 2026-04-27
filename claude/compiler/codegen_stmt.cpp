@@ -200,6 +200,38 @@ void Codegen::emitDestructure(
     }
 }
 
+// Deep-clone an expression. Used by CompoundAssignStmt's desugar fallback to
+// produce a fresh copy of the LHS for the BinaryExpr operand while moving the
+// original LHS sub-tree into the synthesized assign-family stmt.
+// Handles the shapes that can appear in lvalues plus common rvalue pieces.
+static std::unique_ptr<Expr> cloneExpr(const Expr& e) {
+    if (auto* ve = dynamic_cast<const VarExpr*>(&e))
+        return std::make_unique<VarExpr>(ve->name);
+    if (auto* il = dynamic_cast<const IntLiteralExpr*>(&e))
+        return std::make_unique<IntLiteralExpr>(il->value, il->is_char_literal, il->is_nondecimal);
+    if (auto* sl = dynamic_cast<const StringLiteralExpr*>(&e))
+        return std::make_unique<StringLiteralExpr>(sl->value);
+    if (auto* fl = dynamic_cast<const FloatLiteralExpr*>(&e))
+        return std::make_unique<FloatLiteralExpr>(fl->value);
+    if (dynamic_cast<const NullptrExpr*>(&e))
+        return std::make_unique<NullptrExpr>();
+    if (auto* de = dynamic_cast<const DerefExpr*>(&e))
+        return std::make_unique<DerefExpr>(cloneExpr(*de->operand));
+    if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&e))
+        return std::make_unique<FieldAccessExpr>(cloneExpr(*fa->object), fa->field);
+    if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&e))
+        return std::make_unique<ArrayIndexExpr>(cloneExpr(*ai->base), cloneExpr(*ai->index));
+    if (auto* pide = dynamic_cast<const PostIncDerefExpr*>(&e))
+        return std::make_unique<PostIncDerefExpr>(cloneExpr(*pide->operand), pide->op);
+    if (auto* be = dynamic_cast<const BinaryExpr*>(&e))
+        return std::make_unique<BinaryExpr>(be->op, cloneExpr(*be->left), cloneExpr(*be->right));
+    if (auto* ue = dynamic_cast<const UnaryExpr*>(&e))
+        return std::make_unique<UnaryExpr>(ue->op, cloneExpr(*ue->operand));
+    if (auto* ao = dynamic_cast<const AddrOfExpr*>(&e))
+        return std::make_unique<AddrOfExpr>(cloneExpr(*ao->operand));
+    throw std::runtime_error("cloneExpr: unsupported expression shape");
+}
+
 void Codegen::emitStmt(const Stmt& stmt) {
     // null out the storage location of a source expression after a move
     auto emitNullOut = [&](const Expr& src) {
@@ -1131,6 +1163,160 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
         out_ << "    store " << store_type << " " << val << ", ptr " << it->second << "\n";
         return;
+    }
+
+    if (auto* cas = dynamic_cast<const CompoundAssignStmt*>(&stmt)) {
+        // Step 1: detect direct slid op<op>= dispatch — single-eval, no temp.
+        // Only fires when the LHS resolves to a slid type that defines op<op>=
+        // for the rhs; otherwise we desugar to the matching specialized
+        // assign-family stmt and let its existing handler run.
+        std::string slids_type;
+        std::string addr;
+        const Expr* lhs = cas->lhs.get();
+
+        auto resolveAddr = [&]() {
+            if (auto* ve = dynamic_cast<const VarExpr*>(lhs)) {
+                auto lit = locals_.find(ve->name);
+                auto tit = local_types_.find(ve->name);
+                if (lit != locals_.end() && tit != local_types_.end()) {
+                    addr = lit->second;
+                    slids_type = tit->second;
+                    return;
+                }
+                if (!current_slid_.empty() && slid_info_.count(current_slid_)) {
+                    auto& info = slid_info_[current_slid_];
+                    auto fit = info.field_index.find(ve->name);
+                    if (fit != info.field_index.end()) {
+                        std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
+                        std::string gep = newTmp();
+                        out_ << "    " << gep << " = getelementptr %struct."
+                             << current_slid_ << ", ptr " << self
+                             << ", i32 0, i32 " << fit->second << "\n";
+                        addr = gep;
+                        slids_type = info.field_types[fit->second];
+                    }
+                }
+                return;
+            }
+            if (auto* de = dynamic_cast<const DerefExpr*>(lhs)) {
+                if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                    auto lit = locals_.find(ve->name);
+                    auto tit = local_types_.find(ve->name);
+                    if (lit != locals_.end() && tit != local_types_.end()) {
+                        std::string loaded = newTmp();
+                        out_ << "    " << loaded << " = load ptr, ptr " << lit->second << "\n";
+                        addr = loaded;
+                        std::string pt = tit->second;
+                        if (isPtrType(pt)) pt = pt.substr(0, pt.size()-2);
+                        else if (!pt.empty() && pt.back() == '^') pt = pt.substr(0, pt.size()-1);
+                        slids_type = pt;
+                    }
+                }
+                return;
+            }
+            if (auto* fa = dynamic_cast<const FieldAccessExpr*>(lhs)) {
+                if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
+                    auto lit = locals_.find(ve->name);
+                    auto tit = local_types_.find(ve->name);
+                    if (lit != locals_.end() && tit != local_types_.end()
+                        && slid_info_.count(tit->second)) {
+                        auto& info = slid_info_[tit->second];
+                        auto fit = info.field_index.find(fa->field);
+                        if (fit != info.field_index.end()) {
+                            std::string gep = newTmp();
+                            out_ << "    " << gep << " = getelementptr %struct." << tit->second
+                                 << ", ptr " << lit->second << ", i32 0, i32 " << fit->second << "\n";
+                            addr = gep;
+                            slids_type = info.field_types[fit->second];
+                        }
+                    }
+                }
+                return;
+            }
+            if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(lhs)) {
+                if (auto* ve = dynamic_cast<const VarExpr*>(ai->base.get())) {
+                    auto ait = array_info_.find(ve->name);
+                    if (ait != array_info_.end()) {
+                        int total = 1;
+                        for (int d : ait->second.dims) total *= d;
+                        std::string elt = llvmType(ait->second.elem_type);
+                        std::string idx_llvm = exprLlvmType(*ai->index);
+                        std::string idx_val = emitExpr(*ai->index);
+                        std::string gep = newTmp();
+                        out_ << "    " << gep << " = getelementptr [" << total << " x " << elt
+                             << "], ptr " << ait->second.alloca_reg << ", i32 0, "
+                             << idx_llvm << " " << idx_val << "\n";
+                        addr = gep;
+                        slids_type = ait->second.elem_type;
+                    }
+                }
+                return;
+            }
+        };
+        resolveAddr();
+
+        if (!slids_type.empty() && slid_info_.count(slids_type) && !addr.empty()) {
+            std::string compound_base = slids_type + "__op" + cas->op + "=";
+            std::string mangled = resolveOpEq(compound_base, *cas->rhs);
+            if (!mangled.empty()) {
+                auto& ptypes = func_param_types_[mangled];
+                std::string param_type = ptypes.empty() ? "" : ptypes[0];
+                std::string arg_val = emitArgForParam(*cas->rhs, param_type);
+                std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
+                out_ << "    call void @" << llvmGlobalName(mangled)
+                     << "(ptr " << addr << ", " << ptype_str << " " << arg_val << ")\n";
+                return;
+            }
+        }
+
+        // Step 2: desugar to the matching specialized assign-family stmt.
+        // Existing handlers cover primitives, pointer arithmetic (iter += int),
+        // slid op<op> + op= for slid types without op<op>=, etc.
+        // Sub-expressions evaluate twice; safe for idempotent shapes (VarExpr
+        // bases, literal/var indices, etc.).
+        auto rhs_clone = cloneExpr(*cas->rhs);
+        if (auto* ve = dynamic_cast<const VarExpr*>(lhs)) {
+            auto bin = std::make_unique<BinaryExpr>(cas->op,
+                std::make_unique<VarExpr>(ve->name), std::move(rhs_clone));
+            AssignStmt synth(ve->name, std::move(bin), false);
+            emitStmt(synth);
+            return;
+        }
+        if (auto* de = dynamic_cast<const DerefExpr*>(lhs)) {
+            auto bin = std::make_unique<BinaryExpr>(cas->op,
+                std::make_unique<DerefExpr>(cloneExpr(*de->operand)),
+                std::move(rhs_clone));
+            DerefAssignStmt synth(cloneExpr(*de->operand), std::move(bin));
+            emitStmt(synth);
+            return;
+        }
+        if (auto* fa = dynamic_cast<const FieldAccessExpr*>(lhs)) {
+            auto bin = std::make_unique<BinaryExpr>(cas->op,
+                std::make_unique<FieldAccessExpr>(cloneExpr(*fa->object), fa->field),
+                std::move(rhs_clone));
+            FieldAssignStmt synth(cloneExpr(*fa->object), fa->field, std::move(bin), false);
+            emitStmt(synth);
+            return;
+        }
+        if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(lhs)) {
+            auto bin = std::make_unique<BinaryExpr>(cas->op,
+                std::make_unique<ArrayIndexExpr>(cloneExpr(*ai->base), cloneExpr(*ai->index)),
+                std::move(rhs_clone));
+            IndexAssignStmt synth(cloneExpr(*ai->base), cloneExpr(*ai->index),
+                std::move(bin), false);
+            emitStmt(synth);
+            return;
+        }
+        if (auto* pide = dynamic_cast<const PostIncDerefExpr*>(lhs)) {
+            auto bin = std::make_unique<BinaryExpr>(cas->op,
+                std::make_unique<DerefExpr>(cloneExpr(*pide->operand)),
+                std::move(rhs_clone));
+            PostIncDerefAssignStmt synth(cloneExpr(*pide->operand), pide->op,
+                std::move(bin));
+            emitStmt(synth);
+            return;
+        }
+        throw std::runtime_error("compound assignment: unsupported LHS shape");
     }
 
     if (auto* da = dynamic_cast<const DerefAssignStmt*>(&stmt)) {

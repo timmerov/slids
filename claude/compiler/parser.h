@@ -306,6 +306,18 @@ struct PostIncDerefAssignStmt : Stmt {
         : ptr(std::move(ptr)), op(std::move(op)), value(std::move(val)) {}
 };
 
+// lvalue op= rhs — compound assign with single LHS evaluation.
+// LHS shape preserved so codegen can emit address-once / load / op / store
+// (or dispatch slid op<op>= directly when the LHS is a slid type).
+struct CompoundAssignStmt : Stmt {
+    std::unique_ptr<Expr> lhs;
+    std::string op;              // "+", "-", "*", "/", "%", "&", "|", "^",
+                                 // "<<", ">>", "&&", "||", "^^"
+    std::unique_ptr<Expr> rhs;
+    CompoundAssignStmt(std::unique_ptr<Expr> l, std::string o, std::unique_ptr<Expr> r)
+        : lhs(std::move(l)), op(std::move(o)), rhs(std::move(r)) {}
+};
+
 struct BlockStmt : Stmt {
     std::vector<std::unique_ptr<Stmt>> stmts;
 };
@@ -538,6 +550,9 @@ private:
                                              std::unique_ptr<Expr> rhs, bool is_move);
     std::unique_ptr<Stmt> buildSwapFromLhs(std::unique_ptr<Expr> lhs,
                                             std::unique_ptr<Expr> rhs);
+    std::unique_ptr<Stmt> buildCompoundAssignFromLhs(std::unique_ptr<Expr> lhs,
+                                                      const std::string& op,
+                                                      std::unique_ptr<Expr> rhs);
     std::unique_ptr<SwitchStmt> parseSwitchStmt();
 
     // expression precedence levels

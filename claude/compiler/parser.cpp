@@ -764,7 +764,44 @@ std::unique_ptr<Stmt> Parser::buildSwapFromLhs(
     return std::make_unique<SwapStmt>(std::move(lhs), std::move(rhs));
 }
 
+std::unique_ptr<Stmt> Parser::buildCompoundAssignFromLhs(
+        std::unique_ptr<Expr> lhs, const std::string& op,
+        std::unique_ptr<Expr> rhs) {
+    lhs = normalizePostIncDeref(std::move(lhs));
+    if (!dynamic_cast<VarExpr*>(lhs.get())
+        && !dynamic_cast<DerefExpr*>(lhs.get())
+        && !dynamic_cast<FieldAccessExpr*>(lhs.get())
+        && !dynamic_cast<ArrayIndexExpr*>(lhs.get())
+        && !dynamic_cast<PostIncDerefExpr*>(lhs.get())) {
+        throw std::runtime_error("compound assignment requires an lvalue");
+    }
+    return std::make_unique<CompoundAssignStmt>(
+        std::move(lhs), op, std::move(rhs));
+}
+
 std::unique_ptr<Stmt> Parser::parseLvalueTail(std::unique_ptr<Expr> lhs) {
+    static const std::map<TokenType, std::string> compound_ops = {
+        {TokenType::kPlusEq,    "+"},
+        {TokenType::kMinusEq,   "-"},
+        {TokenType::kStarEq,    "*"},
+        {TokenType::kSlashEq,   "/"},
+        {TokenType::kPercentEq, "%"},
+        {TokenType::kBitAndEq,  "&"},
+        {TokenType::kBitOrEq,   "|"},
+        {TokenType::kBitXorEq,  "^"},
+        {TokenType::kLShiftEq,  "<<"},
+        {TokenType::kRShiftEq,  ">>"},
+        {TokenType::kAndEq,     "&&"},
+        {TokenType::kOrEq,      "||"},
+        {TokenType::kXorXorEq,  "^^"},
+    };
+    auto cop = compound_ops.find(peek().type);
+    if (cop != compound_ops.end()) {
+        advance();
+        auto rhs = parseExpr();
+        expect(TokenType::kSemicolon, "expected ';'");
+        return buildCompoundAssignFromLhs(std::move(lhs), cop->second, std::move(rhs));
+    }
     if (peek().type == TokenType::kEquals) {
         advance();
         auto rhs = parseExpr();
@@ -1349,50 +1386,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         }
 
         // identifier-led lvalue: parse the postfix chain and route through the
-        // unified lvalue tail. Compound assign on the bare name or through a
-        // single deref is desugared inline (general compound through other
-        // lvalue shapes is deferred to feature C').
+        // unified lvalue tail (handles =, <-, <->, compound op=, and bare expr).
         auto lhs = parsePostfix(std::make_unique<VarExpr>(name));
-
-        static const std::map<TokenType, std::string> compound_ops = {
-            {TokenType::kPlusEq,    "+"},
-            {TokenType::kMinusEq,   "-"},
-            {TokenType::kStarEq,    "*"},
-            {TokenType::kSlashEq,   "/"},
-            {TokenType::kPercentEq, "%"},
-            {TokenType::kBitAndEq,  "&"},
-            {TokenType::kBitOrEq,   "|"},
-            {TokenType::kBitXorEq,  "^"},
-            {TokenType::kLShiftEq,  "<<"},
-            {TokenType::kRShiftEq,  ">>"},
-            {TokenType::kAndEq,     "&&"},
-            {TokenType::kOrEq,      "||"},
-            {TokenType::kXorXorEq,  "^^"},
-        };
-        auto cop = compound_ops.find(peek().type);
-        if (cop != compound_ops.end()) {
-            if (dynamic_cast<VarExpr*>(lhs.get())) {
-                advance();
-                auto rhs = parseExpr();
-                expect(TokenType::kSemicolon, "expected ';'");
-                auto lhs2 = std::make_unique<VarExpr>(name);
-                auto value = std::make_unique<BinaryExpr>(cop->second, std::move(lhs2), std::move(rhs));
-                return std::make_unique<AssignStmt>(name, std::move(value));
-            }
-            if (auto* de = dynamic_cast<DerefExpr*>(lhs.get())) {
-                auto* ve = dynamic_cast<VarExpr*>(de->operand.get());
-                if (!ve) throw std::runtime_error("compound deref-assign requires simple pointer variable");
-                std::string ptr_name = ve->name;
-                advance();
-                auto rhs = parseExpr();
-                expect(TokenType::kSemicolon, "expected ';'");
-                auto lhs_read = std::make_unique<DerefExpr>(std::make_unique<VarExpr>(ptr_name));
-                auto bin = std::make_unique<BinaryExpr>(cop->second, std::move(lhs_read), std::move(rhs));
-                return std::make_unique<DerefAssignStmt>(std::make_unique<VarExpr>(ptr_name), std::move(bin));
-            }
-            throw std::runtime_error("compound assignment requires a simple variable or dereference target");
-        }
-
         return parseLvalueTail(std::move(lhs));
     }
 

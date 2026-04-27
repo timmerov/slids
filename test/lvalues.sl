@@ -1,7 +1,7 @@
 /*
 test lvalue parsing and assignment dispatch.
 shapes: variable | field | index | deref | parens
-operators: = | <- | <-> | += -= *= /= (compound deferred to feature C)
+operators: = | <- | <-> | += -= *= /=
 */
 
 Counter(int v_ = 0) {
@@ -9,6 +9,19 @@ Counter(int v_ = 0) {
 }
 
 Pair(int x_ = 0, int y_ = 0) {}
+
+/* Buffer: exercises slid op<op>= direct dispatch and the chain-build
+   optimization (Buffer + a + b + ... emits one alloca + repeated op+=). */
+Buffer(int count_ = 0, int last_int_ = 0, char[] last_str_ = nullptr) {
+    op+=(char[] s) {
+        count_ = count_ + 1;
+        last_str_ = s;
+    }
+    op+=(int v) {
+        count_ = count_ + 1;
+        last_int_ = v;
+    }
+}
 
 void mutate_param(int p) {
     p = 99;
@@ -127,11 +140,10 @@ int32 main() {
         arrS[0] <-> arrS[3];
         __println("inline-arr: arrS=" + arrS[0] + "," + arrS[1] + "," + arrS[2] + "," + arrS[3]);
 
-        /* aspirational (C'): slid swap via default op<-> */
-        // Pair pa(1, 2);
-        // Pair pb(3, 4);
-        // pa <-> pb;
-        // __println("slid: pa=(" + pa.x_ + "," + pa.y_ + ") pb=(" + pb.x_ + "," + pb.y_ + ")");
+        Pair pa(1, 2);
+        Pair pb(3, 4);
+        pa <-> pb;
+        __println("slid: pa=(" + pa.x_ + "," + pa.y_ + ") pb=(" + pb.x_ + "," + pb.y_ + ")");
     }
 
     /* move <- */
@@ -148,16 +160,51 @@ int32 main() {
         delete d;
     }
 
-    /* compound (feature C) */
+    /* compound on each lvalue shape */
     {
-        __println("-- compound (C) --");
+        __println("-- compound primitive --");
 
-        // int x = 10;
-        // x += 5;
-        // x -= 2;
-        // x *= 2;
-        // x /= 4;
-        // __println("x=" + x);
+        int x = 10;
+        x += 5;  __println("x+=5: " + x);
+        x -= 2;  __println("x-=2: " + x);
+        x *= 2;  __println("x*=2: " + x);
+        x /= 4;  __println("x/=4: " + x);
+        x %= 3;  __println("x%=3: " + x);
+
+        int y = 100;
+        int^ py = ^y;
+        py^ += 50;
+        __println("py^+=50: y=" + y);
+
+        Pair p(1, 2);
+        p.x_ += 10;
+        p.y_ *= 5;
+        __println("p.x_+=10 p.y_*=5: (" + p.x_ + "," + p.y_ + ")");
+
+        int arrC[4] = (10, 20, 30, 40);
+        arrC[1] += 100;
+        arrC[3] -= 5;
+        __println("arrC: " + arrC[0] + "," + arrC[1] + "," + arrC[2] + "," + arrC[3]);
+    }
+
+    /* compound on slid LHS — direct op<op>= dispatch */
+    {
+        __println("-- compound slid op<op>= --");
+
+        Buffer bd;
+        bd += "hello";
+        bd += 42;
+        bd += "world";
+        __println("bd: count=" + bd.count_ + " last_int=" + bd.last_int_);
+    }
+
+    /* chain optimization preservation: Buffer + ... produces one alloca with
+       repeated op+= dispatch — not a chain of op+ temps. */
+    {
+        __println("-- chain optimization --");
+
+        bc = Buffer + "x" + 1 + "y" + 2 + "z" + 3;
+        __println("chain bc: count=" + bc.count_ + " last_int=" + bc.last_int_);
     }
 
     return 0;

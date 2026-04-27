@@ -1,0 +1,43 @@
+-- variables --
+local: x=10
+mutate_param: p=99
+self-field: c.v_=2
+inline-arr: arrV[2]=30
+-- field access --
+obj-field: p.x_=10
+deref-field: p.y_=20
+tup-elem-field: slid_tup[1].x_=99
+-- index --
+inline-arr: arrI[1]=200
+iter: arrI[2]=333
+tup: tup[0]=100
+-- pointer deref --
+var^: arrD[0]=11
+post-inc^: arrD[1]=20
+post-dec^: arrD[1]=33
+pre-inc^: arrD[1]=44
+pre-dec^: arrD[0]=55
+-- parens --
+(xp)=: xp=7
+paren-inc-deref: arrP=100,2,3,200
+paren-swap: arrQ=4,2,3,1
+-- swap --
+var: a=2 b=1
+inline-arr: arrS=4,2,3,1
+slid: pa=(3,4) pb=(1,2)
+-- move --
+s is null after move
+d[0]=1
+-- compound primitive --
+x+=5: 15
+x-=2: 13
+x*=2: 26
+x/=4: 6
+x%=3: 0
+py^+=50: y=150
+p.x_+=10 p.y_*=5: (11,10)
+arrC: 10,120,30,35
+-- compound slid op<op>= --
+bd: count=3 last_int=42
+-- chain optimization --
+chain bc: count=6 last_int=3
