@@ -1,4 +1,8 @@
 
+compiler generated swap operator:
+swap field by field.
+like move and copy.
+
 aliases:
 alias int32 i32;
 

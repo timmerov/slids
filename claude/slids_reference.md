@@ -1121,7 +1121,7 @@ int diff = iter - arr; // distance between two iterators
 
 ## Move semantics
 
-The move operator `<-` transfers ownership of a resource from one variable to another. The source is left in a valid, empty state (its pointer is set to `nullptr`). This avoids copying and makes ownership transfer explicit in the code.
+The move operator `<-` transfers ownership of a resource from one variable to another. The source is left in a valid, empty state (its pointer is set to `nullptr`). This avoids copying and makes ownership transfer explicit in the code. For non-pointer built-in scalars (`int`, `float`, `bool`, …), `<-` is a copy.
 
 ### Pointer and iterator move
 
@@ -1169,7 +1169,9 @@ String {
         delete storage_;            // free existing storage (delete, not <-)
         size_     = s^.size_;
         capacity_ = s^.capacity_;
-        storage_ <- s^.storage_;   // steal pointer; s^.storage_ set to nullptr automatically
+        storage_ <- s^.storage_;    // steal pointer; s^.storage_ set to nullptr automatically
+        s^.size_     = 0;           // leave rhs in a valid empty state
+        s^.capacity_ = 0;
     }
 }
 ```
@@ -1249,7 +1251,7 @@ enum Status : int32 (
 
 ## Nested slids
 
-Slids can be defined inside any `{}` block. They capture variables from all enclosing scopes by reference and can nest to any depth.
+Slids can be defined inside any `{}` block — including methods, nested functions, and nested classes. They capture variables from all enclosing scopes by reference and can nest to any depth.
 
 ```
 int32 main() {
@@ -1278,9 +1280,24 @@ int32 main() {
 - Nested slids are local — not callable from outside their enclosing scope
 - Capture is by reference — mutations affect the original variable
 
-> **TODO:** Not yet implemented.
+### Hoisted nested classes
+
+A class declared inside another class is hoisted by the compiler to a top-level type with a colon-qualified name: `Outer:Inner`. The hoisted class is independent — no implicit access to the outer class's fields. Nested templates work the same way.
+
+```
+Outer(int o_ = 0) {
+    Inner(int i_ = 0) {
+        void show(int z) { /* ... */ }
+    }
+}
+
+Outer:Inner ii(1);
+ii.show(2);
+```
 
 **Non-local return** — a nested slid can cause any enclosing slid to return using `name:return`. The stack unwinds from the nested slid up to the named enclosing slid, calling destructors for all objects going out of scope along the way. The named slid then immediately returns.
+
+> **TODO:** Not yet implemented.
 
 ```
 int foo() {
