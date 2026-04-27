@@ -4,11 +4,11 @@ uses the stringification operator #.
 */
 
 /* header: template declaration */
-void dump<T>( (char[], char[], T)^ tuple );
+void dump<T>( (char[], char[], T^)^ tuple );
 
 /* source: template definition */
-void dump<T>( (char[], char[], T)^ tuple ) {
-    __println(tuple^[0] + " " + tuple^[1] + "=" + tuple^[2]);
+void dump<T>( (char[], char[], T^)^ tuple ) {
+    __println(tuple^[0] + " " + tuple^[1] + "=" + tuple^[2]^);
 }
 
 /* sample usage. */

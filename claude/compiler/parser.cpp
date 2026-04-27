@@ -525,7 +525,7 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
 }
 
 std::unique_ptr<Expr> Parser::parseUnary() {
-    // #x — desugar to (##type(x), ##name(x), x)
+    // #x — desugar to (##type(x), ##name(x), ^x)
     if (peek().type == TokenType::kHash) {
         int src_line = peek().line;
         advance();
@@ -540,7 +540,7 @@ std::unique_ptr<Expr> Parser::parseUnary() {
             std::make_unique<StringifyExpr>("type", std::make_unique<VarExpr>(name), src_line));
         tuple->values.push_back(
             std::make_unique<StringifyExpr>("name", std::make_unique<VarExpr>(name), src_line));
-        tuple->values.push_back(std::move(operand));
+        tuple->values.push_back(std::make_unique<AddrOfExpr>(std::move(operand)));
         return tuple;
     }
     // pointer reinterpret cast: <Type^> expr  or  <Type[]> expr  or  <intptr> expr

@@ -1493,10 +1493,10 @@ char[] tm = ##time;            // e.g. "15:30:55"
 
 ### `#x` — introspection tuple
 
-Desugars to a 3-tuple `(##type(x), ##name(x), x)`. The typical use is passing to a templated `dump` function for debug logging:
+Desugars to a 3-tuple `(##type(x), ##name(x), ^x)`. The third element is a pointer to `x`; the `dump` template dereferences it to print the value. The typical use is passing to a templated `dump` function for debug logging:
 
 ```
-void dump<T>( (char[], char[], T)^ tuple );
+void dump<T>( (char[], char[], T^)^ tuple );
 
 int x = 42;
 dump(#x);              // prints: int x=42

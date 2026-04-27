@@ -372,6 +372,14 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
                 else if (!t.empty() && t.back() == '^') t.pop_back();
                 pointee_llvm = llvmType(t);
+            } else {
+                std::string ot = inferSlidType(*de->operand);
+                if (isPtrType(ot) || isIndirectType(ot)) {
+                    std::string pointee_type = isPtrType(ot)
+                        ? ot.substr(0, ot.size()-2)
+                        : ot.substr(0, ot.size()-1);
+                    pointee_llvm = llvmType(pointee_type);
+                }
             }
         }
 
@@ -1864,6 +1872,13 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
                     : tit->second.substr(0, tit->second.size()-1);
                 return llvmType(pt);
             }
+        }
+        std::string ot = inferSlidType(*de->operand);
+        if (isPtrType(ot) || isIndirectType(ot)) {
+            std::string pt = isPtrType(ot)
+                ? ot.substr(0, ot.size()-2)
+                : ot.substr(0, ot.size()-1);
+            return llvmType(pt);
         }
         return "i32";
     }

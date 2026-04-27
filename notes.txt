@@ -8,10 +8,6 @@ claude thinks (int, String) should be (int, String^) like functions.
 that's wrong.
 needs to be fixed.
 
-stringification:
-the stringifier needs to pass ^x instead of x.
-cause that's cleaner.
-
 aliases:
 alias int32 i32;
 
