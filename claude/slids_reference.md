@@ -1493,7 +1493,12 @@ char[] tm = ##time;            // e.g. "15:30:55"
 
 ### `#x` — introspection tuple
 
-Desugars to a 3-tuple `(##type(x), ##name(x), ^x)`. The third element is a pointer to `x`; the `dump` template dereferences it to print the value. The typical use is passing to a templated `dump` function for debug logging:
+Desugars to a 3-tuple `(##type(x), ##name(x), ^x)`:
+- `##type(x)` — the declared type of `x` as `char[]`
+- `##name(x)` — the variable name as `char[]`
+- `^x` — the address of `x`, typed `T^`
+
+The third element is a pointer rather than a value so a single tuple shape carries primitives (`int`, `float64`, …) and class objects uniformly. The `dump` template dereferences it to read the value.
 
 ```
 void dump<T>( (char[], char[], T^)^ tuple );
