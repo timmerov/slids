@@ -603,7 +603,7 @@ At the call site, use `^v` (explicit address-of) or just `v` (auto-promotes); a 
 String s = "hello";
 print(^s);                  // explicit
 print(s);                   // auto-promote
-print(String("world"));     // fresh temp materialized + passed
+print((String="world"));     // fresh temp materialized + passed
 
 tp = (10, 20);
 take_pair(^tp);             // explicit
