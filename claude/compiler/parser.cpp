@@ -819,6 +819,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             if (peek().type == TokenType::kColon) {
                 advance();
                 stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+                expect(TokenType::kSemicolon, "expected ';'");
             }
         }
         return stmt;
@@ -848,6 +849,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         if (peek().type == TokenType::kColon) {
                             advance();
                             stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+                            expect(TokenType::kSemicolon, "expected ';'");
                         }
                         return stmt;
                     }
@@ -884,6 +886,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             if (peek().type == TokenType::kColon) {
                 advance();
                 stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+                expect(TokenType::kSemicolon, "expected ';'");
             }
             return stmt;
         }
@@ -902,6 +905,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             if (peek().type == TokenType::kColon) {
                 advance();
                 stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+                expect(TokenType::kSemicolon, "expected ';'");
             }
             return stmt;
         } else {
@@ -918,6 +922,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             if (peek().type == TokenType::kColon) {
                 advance();
                 stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+                expect(TokenType::kSemicolon, "expected ';'");
             }
             return stmt;
         }
@@ -2202,6 +2207,7 @@ std::unique_ptr<SwitchStmt> Parser::parseSwitchStmt() {
     if (peek().type == TokenType::kColon) {
         advance();
         stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+        expect(TokenType::kSemicolon, "expected ';'");
     }
     return stmt;
 }

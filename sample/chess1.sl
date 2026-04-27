@@ -28,8 +28,8 @@ int32 main() {
             if (board[row][col] == kKnight) {
                 break rows;
             }
-        } :cols
-    } :rows
+        } :cols;
+    } :rows;
     __println("Knight found at row " + row + ", col " + col);
 
     return 0;
