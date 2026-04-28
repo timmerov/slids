@@ -219,17 +219,14 @@ Reinterprets a pointer as a pointer to a different type. The address is unchange
 | base-class `^` | derived-class `^` | every derived class is a base class |
 
 ```
-char^ char_ptr;
-void^ void_ptr;
-intptr bigint;
-Animal^ animal_ptr;
-Dog^ dog_ptr; // Dog derives from Animal
+// variables have the obvious type.
 void_ptr = char_ptr;
 char_ptr = void_ptr;
 void_ptr = nullptr;
 char_ptr = nullptr;
 bigint = void_ptr;
 bigint = char_ptr;
+// Dog derives from Animal
 animal_ptr = dog_ptr;
 ```
 
@@ -241,26 +238,21 @@ animal_ptr = dog_ptr;
 | any pointer | `int8^` / `uint8^` | from generic buffer pointer |
 | `uint N ^` | `int N ^` (same bit width) | sign reinterpretation |
 | any pointer | `intptr` | convert integer to pointer |
-| derived-class `^` | base-class `^` | out-cast — single-step, unchecked |
+| derived-class `^` | base-class `^` | not all base classes are derived classes - use with caution |
 
 ```
-int8^ buffer;
-char^ char_ptr;
-intptr bigint;
-int32^ int32ptr;
-Animal^ animal_ptr;
-Dog^ dog_ptr; // Dog derives from Animal
-uint32^ = uint32ptr;
+// variables have the obvious type.
 char_ptr = <char^> buffer;
-buffer = <int8> char_ptr;
+buffer = <int8^> char_ptr;
 int32ptr = <int32^> uint32ptr;
 char_ptr = <char^> bigint;
+// Dog derives from Animal
 dog_ptr = <Dog^> animal_ptr;
 ```
 
 Explicitly casting an implicit reinterpretation is valid. Explicitly casting a pointer to the same type is valid. All other reinterpretations are compile errors.
 
-**Chaining reinterpretations** Reinterpretating a pointer to an unrelated type requires first casting to `void` then casting to the desired type.
+**Chaining reinterpretations** Reinterpretating a pointer to an unrelated type is very dangerous. It requires first casting the pointer to `void` then casting to the desired type.
 
 ```
 float32 f = 3.14;
