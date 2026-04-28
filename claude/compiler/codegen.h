@@ -336,6 +336,12 @@ private:
     std::string emitCondBool(const Expr& expr); // emit expr then icmp ne <type> val, 0 -> i1
     std::string exprLlvmType(const Expr& expr); // infer LLVM type without emitting IR
     void requirePtrInit(const std::string& dst_type, const Expr& src); // dst is ^ or [] -> src must be ptr
+    // Slids-level pointer-base compatibility for implicit init/assign of a
+    // pointer var. Rejects unrelated bases and reference→iterator demotion.
+    // Only `pointer → void^` is implicit (stripping); `void^ → typed pointer`
+    // requires an explicit cast under the new spec.
+    void requirePtrSlidCompat(const std::string& lhs_type, const Expr& src,
+                              const std::string& var_name, bool is_init);
     std::string inferSlidType(const Expr& expr); // infer Slids type string for type-inferred declarations
     std::string emitFieldPtr(const std::string& obj_name, const std::string& field);
     // If `base` is a VarExpr naming an inline-array local, emit a GEP to element

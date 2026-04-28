@@ -743,6 +743,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
         local_types_[decl->name] = eff_type;
         if (!decl->init) return; // uninitialized — alloca only
         requirePtrInit(eff_type, *decl->init);
+        if (isIndirectType(eff_type))
+            requirePtrSlidCompat(eff_type, *decl->init, decl->name, /*is_init=*/true);
         std::string val = emitExpr(*decl->init);
         // coerce integer or float widths if necessary
         if (!isIndirectType(eff_type)) {
@@ -1120,33 +1122,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // RHS is rejected by requirePtrInit above.
         if (is_ptr) {
             requirePtrInit(tit->second, *assign->value);
-            // check pointee type compatibility (void^ is compatible with any pointer)
-            auto ptrBase = [](const std::string& t) -> std::string {
-                if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return t.substr(0, t.size()-2);
-                if (!t.empty() && t.back() == '^') return t.substr(0, t.size()-1);
-                return "";
-            };
-            std::string lhs_base = ptrBase(tit->second);
-            std::string rhs_slids;
-            if (auto* ve = dynamic_cast<const VarExpr*>(assign->value.get())) {
-                auto rit = local_types_.find(ve->name);
-                if (rit != local_types_.end()) rhs_slids = rit->second;
-            }
-            if (!rhs_slids.empty()) {
-                std::string rhs_base = ptrBase(rhs_slids);
-                if (!lhs_base.empty() && !rhs_base.empty()
-                    && lhs_base != "void" && rhs_base != "void"
-                    && lhs_base != rhs_base
-                    && !isAncestor(lhs_base, rhs_base))
-                    throw std::runtime_error("cannot assign '" + rhs_slids + "' to '"
-                        + tit->second + "' variable '" + assign->name + "'");
-                // reference cannot promote to iterator
-                if (isPtrType(tit->second) && isRefType(rhs_slids)
-                    && lhs_base != "void" && rhs_base != "void")
-                    throw std::runtime_error("cannot assign reference '" + rhs_slids
-                        + "' to iterator '" + tit->second + "' variable '" + assign->name
-                        + "': references cannot promote to iterators");
-            }
+            requirePtrSlidCompat(tit->second, *assign->value, assign->name, /*is_init=*/false);
         }
         // coerce integer widths if necessary (sext or trunc)
         if (!is_ptr && tit != local_types_.end()) {

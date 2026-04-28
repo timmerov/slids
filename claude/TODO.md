@@ -21,6 +21,8 @@
 
 - **Revisit array handling**: Review how arrays are declared, passed, indexed, and iterated — including whether `int` pointer arithmetic increments correctly and whether pointer math in general is correct. Make a sample file to exercise these cases.
 
+- **Extend `requirePtrSlidCompat` to all implicit pointer-init sites**: The Slids-level pointer-base compatibility check is currently only invoked at variable declaration with init (`DeclStmt`) and plain-variable assignment (`AssignStmt`). Function arguments, field assignments, indexed-element assignments, return statements, and tuple-element initialization all init a pointer from a source expression but only call `requirePtrInit` (LLVM-type-only check). They silently accept unrelated typed pointers and `void^` source. Pre-existing gap, surfaced by the explicit-cast-from-void rule.
+
 - **Forbid shadowing type names with variable names**: Using a class name as a variable name should be a compile error. `String String = "..."` is currently not caught and causes ambiguities and vexing parses — the parser cannot tell whether `String` in expression position refers to the type or the variable. Builtin type keywords (`int`, `float32`, etc.) are already safe since they are reserved tokens; user-defined class names are identifiers and need an explicit check.
 
 - **Templates across translation units — remaining work:**

@@ -1,3 +1,6 @@
+/*
+test casting pointers.
+*/
 
 This() {
 }
@@ -22,8 +25,8 @@ int32 main() {
     void^ raw = buf;
     __println("int8[] → void^:      ok");
 
-    // void^ implicitly converts to any pointer
-    int8[] back = raw;
+    // void^ requires an explicit cast to any typed pointer
+    int8[] back = <int8[]> raw;
     delete buf;
     __println("void^ → int8[]:      ok");
 

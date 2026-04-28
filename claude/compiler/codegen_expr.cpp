@@ -2260,6 +2260,45 @@ void Codegen::requirePtrInit(const std::string& dst_type, const Expr& src) {
         + "' from value of type '" + src_slids + "'");
 }
 
+void Codegen::requirePtrSlidCompat(const std::string& lhs_type, const Expr& src,
+                                    const std::string& var_name, bool is_init) {
+    auto ptrBase = [](const std::string& t) -> std::string {
+        if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return t.substr(0, t.size()-2);
+        if (!t.empty() && t.back() == '^') return t.substr(0, t.size()-1);
+        return "";
+    };
+    std::string lhs_base = ptrBase(lhs_type);
+    std::string rhs_slids;
+    if (auto* ve = dynamic_cast<const VarExpr*>(&src)) {
+        auto rit = local_types_.find(ve->name);
+        if (rit != local_types_.end()) rhs_slids = rit->second;
+    }
+    if (rhs_slids.empty()) return;
+    std::string rhs_base = ptrBase(rhs_slids);
+    if (lhs_base.empty() || rhs_base.empty()) return;
+    const char* verb = is_init ? "initialize" : "assign";
+    // unrelated pointee types — `pointer → void^` is implicit (stripping); the
+    // reverse and all other unrelated pairs require an explicit cast.
+    if (lhs_base != "void"
+        && lhs_base != rhs_base
+        && !isAncestor(lhs_base, rhs_base)) {
+        if (is_init)
+            throw std::runtime_error("cannot initialize '" + lhs_type
+                + "' variable '" + var_name + "' from value of type '"
+                + rhs_slids + "'");
+        else
+            throw std::runtime_error("cannot assign '" + rhs_slids + "' to '"
+                + lhs_type + "' variable '" + var_name + "'");
+    }
+    // reference cannot promote to iterator
+    if (isPtrType(lhs_type) && isRefType(rhs_slids)
+        && lhs_base != "void" && rhs_base != "void") {
+        throw std::runtime_error(std::string("cannot ") + verb + " reference '"
+            + rhs_slids + "' to iterator '" + lhs_type + "' variable '"
+            + var_name + "': references cannot promote to iterators");
+    }
+}
+
 // Infer the Slids type string for a type-inferred variable declaration (x = expr;).
 // Returns a Slids type string like "int", "int64", "uint", "float64", "char[]", etc.
 std::string Codegen::inferSlidType(const Expr& expr) {
