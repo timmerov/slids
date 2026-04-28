@@ -1,6 +1,10 @@
 
 review casting pointers:
-cast to unrealted type should be a compile error.
+we can implicitly cast to/from void^
+but we can only implicitly cast pointer to intptr
+we must explicitly cast intptr to pointer.
+inconsistent.
+which one's right though?
 
 inheritance:
 multiple inheritance.
