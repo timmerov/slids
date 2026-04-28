@@ -1136,7 +1136,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 std::string rhs_base = ptrBase(rhs_slids);
                 if (!lhs_base.empty() && !rhs_base.empty()
                     && lhs_base != "void" && rhs_base != "void"
-                    && lhs_base != rhs_base)
+                    && lhs_base != rhs_base
+                    && !isAncestor(lhs_base, rhs_base))
                     throw std::runtime_error("cannot assign '" + rhs_slids + "' to '"
                         + tit->second + "' variable '" + assign->name + "'");
                 // reference cannot promote to iterator
@@ -1149,16 +1150,22 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
         // coerce integer widths if necessary (sext or trunc)
         if (!is_ptr && tit != local_types_.end()) {
-            static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
             std::string src_t = exprLlvmType(*assign->value);
-            auto sit = rank.find(src_t), dit = rank.find(store_type);
-            if (sit != rank.end() && dit != rank.end() && sit->second != dit->second) {
+            if (src_t == "ptr" && tit->second == "intptr") {
                 std::string coerced = newTmp();
-                if (dit->second > sit->second)
-                    out_ << "    " << coerced << " = sext " << src_t << " " << val << " to " << store_type << "\n";
-                else
-                    out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << store_type << "\n";
+                out_ << "    " << coerced << " = ptrtoint ptr " << val << " to i64\n";
                 val = coerced;
+            } else {
+                static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+                auto sit = rank.find(src_t), dit = rank.find(store_type);
+                if (sit != rank.end() && dit != rank.end() && sit->second != dit->second) {
+                    std::string coerced = newTmp();
+                    if (dit->second > sit->second)
+                        out_ << "    " << coerced << " = sext " << src_t << " " << val << " to " << store_type << "\n";
+                    else
+                        out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << store_type << "\n";
+                    val = coerced;
+                }
             }
         }
         out_ << "    store " << store_type << " " << val << ", ptr " << it->second << "\n";

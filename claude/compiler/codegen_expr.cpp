@@ -1849,6 +1849,30 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
     // pointer reinterpret cast: <Type^> expr
     if (auto* pc = dynamic_cast<const PtrCastExpr*>(&expr)) {
+        auto ptrBase = [](const std::string& t) -> std::string {
+            if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return t.substr(0, t.size()-2);
+            if (!t.empty() && t.back() == '^') return t.substr(0, t.size()-1);
+            return "";
+        };
+        std::string src_slids = inferSlidType(*pc->operand);
+        std::string src_base  = ptrBase(src_slids);
+        std::string dst_base  = ptrBase(pc->target_type);
+        bool src_opaque = (src_base == "void" || src_base == "int8" || src_base == "uint8");
+        bool dst_opaque = (dst_base == "void" || dst_base == "int8" || dst_base == "uint8");
+        if (!src_base.empty() && !dst_base.empty()
+            && !src_opaque && !dst_opaque
+            && src_base != dst_base) {
+            bool src_slid = slid_info_.count(src_base) > 0;
+            bool dst_slid = slid_info_.count(dst_base) > 0;
+            bool ok = false;
+            if (src_slid && dst_slid)
+                ok = isAncestor(src_base, dst_base) || isAncestor(dst_base, src_base);
+            else if (!src_slid && !dst_slid)
+                ok = (llvmType(src_base) == llvmType(dst_base));
+            if (!ok)
+                throw std::runtime_error("cannot cast pointer of unrelated type '"
+                    + src_slids + "' to '" + pc->target_type + "'");
+        }
         std::string src_val  = emitExpr(*pc->operand);
         std::string src_type = exprLlvmType(*pc->operand);
         std::string dst_type = llvmType(pc->target_type);

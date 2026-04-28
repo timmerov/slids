@@ -39,5 +39,22 @@ int32 main() {
     int32   one_bits = (<int32^> <void^> ^one)^;
     __println("bits of 1.0f:        expected 1065353216, got " + one_bits);
 
+    /* test compile errors. */
+    int16^ p16 = nullptr;
+    int32^ p32 = nullptr;
+    intptr intp = 0;
+    /* compile error */
+    //p16 = p32;
+    /* compile error */
+    //p16 = <int16^> p32;
+    /* compile error */
+    //p16 = intp;
+    /* correct usage. */
+    p16 = <int16^> <void^> p32;
+    p16 = <int16^> <int8^> p32;
+    p16 = <int16^> intp;
+    /* this generates invalid ll */
+    intp = p16;
+
     return 0;
 }

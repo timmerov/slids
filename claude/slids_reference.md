@@ -204,54 +204,69 @@ Value v = (Value=42);    // create a Value from an int32 via op=(int32)
 
 ---
 
-## Pointer casting — `<Type^> expr`
+## Pointer casting — `<Type^> pointer-expr`
 
-Reinterprets a pointer as a pointer to a different type. The address is unchanged; only the type changes. Also applies to iterator types (`<Type[]> expr`).
+Reinterprets a pointer as a pointer to a different type. The address is unchanged; only the type changes. References `^` and iterators `[]` are pointers.
 
-```
-int8[]     buf = new int8[100];
-ThisClass^ p   = <ThisClass^> buf;
-```
+**Implicit casts:** These reinterpretations are implicit. They do not need the explicit cast syntax.
 
-Valid reinterpretations:
-
-| From | To | Reason |
+| Target | Source | Notes |
 |---|---|---|
-| any pointer | `void^` / `int8^` / `uint8^` | byte/opaque pointer |
-| `void^` / `int8^` / `uint8^` | any pointer | byte/opaque pointer |
-| `T^` | `T^` (same type) | no-op |
-| `int N ^` | `uint N ^` (same bit width) | sign reinterpretation |
-| any pointer | `intptr` | pointer as integer |
-| `intptr` | any pointer | integer as pointer |
-| `Derived^` | `Base^` (same hierarchy) | in-cast — implicit, no syntax |
-| `Base^` | `Derived^` (same hierarchy) | out-cast — explicit `<Derived^>`, single-step, unchecked |
-
-Any other reinterpretation is a compiler error.
-
-**`void^` is cast implicitly.** Assigning a `void^` to any other pointer type, or any pointer type to `void^`, requires no explicit cast:
+| `void^` | any pointer |  |
+| any pointer | `void^` |  |
+| any pointer | `nullptr` | `nullptr` is type `void^` |
+| `intptr` | any pointer | convert pointer to integer |
+| base-class `^` | derived-class `^` | every derived class is a base class |
 
 ```
-void^      raw = some_ptr;    // implicit — any pointer → void^
-MyStruct^  obj = raw;         // implicit — void^ → any pointer
+char^ char_ptr;
+void^ void_ptr;
+intptr bigint;
+Animal^ animal_ptr;
+Dog^ dog_ptr; // Dog derives from Animal
+void_ptr = char_ptr;
+char_ptr = void_ptr;
+void_ptr = nullptr;
+char_ptr = nullptr;
+bigint = void_ptr;
+bigint = char_ptr;
+animal_ptr = dog_ptr;
 ```
 
-**`nullptr` is of type `void^`** and therefore assignable to any pointer type via the same implicit rule:
+**Explicit casts:** These reinterpretations require a single explicit cast `<Type^>`.
+
+| Target | Source | Notes |
+|---|---|---|
+| `int8^` / `uint8^` | any pointer | to generic buffer pointer |
+| any pointer | `int8^` / `uint8^` | from generic buffer pointer |
+| `uint N ^` | `int N ^` (same bit width) | sign reinterpretation |
+| any pointer | `intptr` | convert integer to pointer |
+| derived-class `^` | base-class `^` | out-cast — single-step, unchecked |
 
 ```
-MyStruct^ p = nullptr;        // valid — nullptr is void^, auto-cast to MyStruct^
+int8^ buffer;
+char^ char_ptr;
+intptr bigint;
+int32^ int32ptr;
+Animal^ animal_ptr;
+Dog^ dog_ptr; // Dog derives from Animal
+uint32^ = uint32ptr;
+char_ptr = <char^> buffer;
+buffer = <int8> char_ptr;
+int32ptr = <int32^> uint32ptr;
+char_ptr = <char^> bigint;
+dog_ptr = <Dog^> animal_ptr;
 ```
 
-**Reinterpreting float bits as an integer** requires two explicit casts through `void^`, which makes the operation visually prominent:
+Explicitly casting an implicit reinterpretation is valid. Explicitly casting a pointer to the same type is valid. All other reinterpretations are compile errors.
+
+**Chaining reinterpretations** Reinterpretating a pointer to an unrelated type requires first casting to `void` then casting to the desired type.
 
 ```
-float32 f    = 3.14;
-int32   bits = (<int32^> <void^> ^f)^;
-//              step 2    step 1         dereference
-// step 1: float32^ → void^   (valid — any pointer to void^)
-// step 2: void^    → int32^  (valid — void^ to any pointer)
+float32 f = 3.14;
+int32^ bits_ptr = <int32^> <void^> ^f;
+int32 bits = bits_ptr^;
 ```
-
-Direct `float32^` → `int32^` without `void^` as the intermediate is a compiler error.
 
 ---
 

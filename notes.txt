@@ -1,4 +1,7 @@
 
+review casting pointers:
+cast to unrealted type should be a compile error.
+
 inheritance:
 multiple inheritance.
 virrtual functions.
