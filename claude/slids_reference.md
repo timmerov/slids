@@ -206,60 +206,36 @@ Value v = (Value=42);    // create a Value from an int32 via op=(int32)
 
 ## Pointer casting — `<Type^> pointer-expr`
 
-Reinterprets a pointer as a pointer to a different type. The address is unchanged; only the type changes. References `^` and iterators `[]` are pointers.
+Casting reinterprets a pointer to one type as a pointer to a different type. The address is unchanged; only the type information changes. References `^` and iterators `[]` are pointers. There are rules:
 
-**Implicit casts:** These reinterpretations are implicit. They do not need the explicit cast syntax.
-
-| Target | Source | Notes |
-|---|---|---|
-| `void^` | any pointer |  |
-| any pointer | `void^` |  |
-| any pointer | `nullptr` | `nullptr` is type `void^` |
-| `intptr` | any pointer | convert pointer to integer |
-| base-class `^` | derived-class `^` | every derived class is a base class |
-
+**Assignment to `nullptr`:** Any pointer may be set to `nullptr` without an explicit cast.
 ```
-// variables have the obvious type.
-void_ptr = char_ptr;
-char_ptr = void_ptr;
-void_ptr = nullptr;
-char_ptr = nullptr;
-bigint = void_ptr;
-bigint = char_ptr;
-// Dog derives from Animal
-animal_ptr = dog_ptr;
+Type^ ptr = nullptr;
 ```
-
-**Explicit casts:** These reinterpretations require a single explicit cast `<Type^>`.
-
-| Target | Source | Notes |
-|---|---|---|
-| `int8^` / `uint8^` | any pointer | to generic buffer pointer |
-| any pointer | `int8^` / `uint8^` | from generic buffer pointer |
-| `uint N ^` | `int N ^` (same bit width) | sign reinterpretation |
-| any pointer | `intptr` | convert integer to pointer |
-| derived-class `^` | base-class `^` | not all base class objects are the derived class - use with caution |
-
+**Implicit casts:** Reinterpretations that strip type information from the pointer are implicit. Explicit cast syntax is optional. Target pointer types of implicit casts are limited to: `void^`, the integer type `intptr`, and base clases in the same hierarchy.
 ```
-// variables have the obvious type.
-char_ptr = <char^> buffer;
-buffer = <int8^> char_ptr;
-int32ptr = <int32^> uint32ptr;
-char_ptr = <char^> bigint;
-// Dog derives from Animal
-dog_ptr = <Dog^> animal_ptr;
+void^ void_ptr = any_ptr;     // strips all type information.
+intptr int_x   = any_ptr;     // convert to integer.
+Base^ base_ptr = derived_ptr; // every derived pointer is a base pointer.
 ```
-
-Explicitly casting an implicit reinterpretation is valid. Explicitly casting a pointer to the same type is valid. All other reinterpretations are compile errors.
-
-**Chaining reinterpretations** Reinterpretating a pointer to an unrelated type is very dangerous. It requires first casting the pointer to `void` then casting to the desired type.
-
+**Explicit casts to `int8`:** Reinterpretations of pointers to a generic buffer type - `int8` and `uint8`, require an explicit cast.
 ```
-float32 f = 3.14;
-int32^ bits_ptr = <int32^> <void^> ^f;
-int32 bits = bits_ptr^;
+int8^ int8_ptr   = <int8^> any_ptr;
+uint8^ uint8_ptr = <uint8^> any_ptr;
 ```
-
+**Explicit casts:** Adding type information to a compatible pointer type requires an explicit cast. Compatible pointer types are: `void^`, `int8^`, `uint8`, and the integer type `intptr`. Pointers related by class hierarchy are compatible.
+```
+Type^ any_ptr = <Type^> void_ptr;
+Type^ any_ptr = <Type^> int8_ptr;        // from generic buffer type.
+Type^ any_ptr = <Type^> uint8_ptr;       // from generic buffer type.
+Type^ any_ptr = <Type^> int_x;           // from integer.
+Derived^ derived_ptr = <Derived^> base^; // not every base pointer is a derived pointer.
+```
+**Prohibited casts:** Directly reinterpreting a pointer as a pointer to an unrelated type is prohibited. Reinterpret indirectly. The first cast removes the old type information. The second cast adds the new type information.
+```
+This^ this_ptr = <This^> that_ptr;         // compile error: This and That are unrelated types.
+This^ this_ptr = <This^> <void^> that_ptr; // correct method.
+```
 ---
 
 ## Variables
