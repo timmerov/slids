@@ -238,7 +238,7 @@ animal_ptr = dog_ptr;
 | any pointer | `int8^` / `uint8^` | from generic buffer pointer |
 | `uint N ^` | `int N ^` (same bit width) | sign reinterpretation |
 | any pointer | `intptr` | convert integer to pointer |
-| derived-class `^` | base-class `^` | not all base classes are derived classes - use with caution |
+| derived-class `^` | base-class `^` | not all base class objects are the derived class - use with caution |
 
 ```
 // variables have the obvious type.
