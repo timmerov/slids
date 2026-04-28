@@ -47,7 +47,7 @@ void Codegen::emitDestructure(
                 if (!reassign) {
                     locals_[name] = reg;
                     local_types_[name] = eff_type;
-                    if (slid_info_.count(eff_type) && slid_info_[eff_type].has_dtor)
+                    if (slid_info_.count(eff_type) && hasDtorInChain(eff_type))
                         dtor_vars_.push_back({name, eff_type});
                 }
                 continue;
@@ -127,7 +127,7 @@ void Codegen::emitDestructure(
                     if (!reassign) {
                         locals_[name] = reg;
                         local_types_[name] = eff_type;
-                        if (slid_info_.count(elem_type) && slid_info_[elem_type].has_dtor)
+                        if (slid_info_.count(elem_type) && hasDtorInChain(elem_type))
                             dtor_vars_.push_back({name, elem_type});
                     }
                     continue;
@@ -491,7 +491,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                          it != pending_temp_dtors_.end(); ++it) {
                         if (it->first == temp_ptr) { pending_temp_dtors_.erase(it); break; }
                     }
-                    if (info.has_dtor)
+                    if (hasDtorInChain(eff_type))
                         dtor_vars_.push_back({decl->name, eff_type});
                     return;
                 }
@@ -553,7 +553,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
                     out_ << "    call void @" << llvmGlobalName(mangled)
                          << "(ptr " << reg << ", " << ptype_str << " " << arg_val << ")\n";
-                    if (info.has_dtor)
+                    if (hasDtorInChain(eff_type))
                         dtor_vars_.push_back({decl->name, eff_type});
                     return;
                 }
@@ -654,8 +654,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             }
 
-            // register for dtor call on scope exit
-            if (info.has_dtor) {
+            // register for dtor call on scope exit (chain-aware: also covers inherited dtors)
+            if (hasDtorInChain(eff_type)) {
                 dtor_vars_.push_back({decl->name, eff_type});
             }
             return;
@@ -687,7 +687,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             src_ptr = emitExpr(*te->values[i]);
                         }
                         emitSlidSlotAssign(elems[i], gep, src_ptr, decl->is_move, /*is_init=*/true);
-                        if (slid_info_[elems[i]].has_dtor)
+                        if (hasDtorInChain(elems[i]))
                             dtor_vars_.push_back({decl->name, elems[i], i});
                         continue;
                     }
@@ -717,7 +717,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
             emitSlidSlotAssign(eff_type, reg, src_ptr, decl->is_move, /*is_init=*/true);
             for (int i = 0; i < (int)elems.size(); i++) {
-                if (slid_info_.count(elems[i]) && slid_info_[elems[i]].has_dtor)
+                if (slid_info_.count(elems[i]) && hasDtorInChain(elems[i]))
                     dtor_vars_.push_back({decl->name, elems[i], i});
             }
             return;

@@ -6,8 +6,8 @@ FROM="./claude"
 DIRS="bugs sample test work"
 
 for sub in $DIRS; do
-    rm -f "$FROM/$sub/Makefile"
-    rm -f "$FROM/$sub/*.sl"
-    rm -f "$FROM/$sub/*.slh"
-    rm -f "$FROM/$sub/*.expected"
+    rm -fv "$FROM/$sub/Makefile"
+    rm -fv "$FROM/$sub/"*.sl
+    rm -fv "$FROM/$sub/"*.slh
+    rm -fv "$FROM/$sub/"*.expected
 done

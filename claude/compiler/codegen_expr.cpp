@@ -597,8 +597,53 @@ std::string Codegen::emitExpr(const Expr& expr) {
             auto sit = slid_info_.find(call->qualifier);
             if (sit == slid_info_.end())
                 throw std::runtime_error("unknown slid: " + call->qualifier);
-            if (!sit->second.is_namespace)
-                throw std::runtime_error("'" + call->qualifier + "' is not a namespace; use instance.method() instead");
+            // inherited base method call from inside a derived's method body:
+            // `Base:method(args)` with current_slid_ in Base's descendant set.
+            if (!sit->second.is_namespace) {
+                if (current_slid_.empty()
+                    || (call->qualifier != current_slid_ && !isAncestor(call->qualifier, current_slid_)))
+                    throw std::runtime_error("'" + call->qualifier
+                        + "' is not a namespace; use instance.method() instead");
+                bool empty = sit->second.is_empty;
+                std::string base_q = call->qualifier + "__" + call->callee;
+                std::string mangled_q = resolveOverloadForCall(base_q, call->args);
+                auto rit_q = func_return_types_.find(mangled_q);
+                if (rit_q == func_return_types_.end())
+                    throw std::runtime_error("unknown method: "
+                        + call->qualifier + ":" + call->callee);
+                auto& mptypes_q = func_param_types_[mangled_q];
+                std::string self_str = self_ptr_.empty() ? "%self" : self_ptr_;
+                std::string method_args_q;
+                for (int i = 0; i < (int)call->args.size(); i++) {
+                    std::string ptype_str = (i < (int)mptypes_q.size()) ? mptypes_q[i] : "";
+                    std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
+                    method_args_q += ", " + ptype + " "
+                        + emitArgForParam(*call->args[i], ptype_str);
+                }
+                std::string self_arg_q = empty ? "" : "ptr " + self_str;
+                if (slid_info_.count(rit_q->second)) {
+                    std::string tmp = emitRawSlidAlloca(rit_q->second);
+                    std::string sret_arg = "ptr sret(%struct." + rit_q->second + ") " + tmp;
+                    std::string args = self_arg_q.empty() ? sret_arg : self_arg_q + ", " + sret_arg;
+                    args += method_args_q;
+                    out_ << "    call void @" << llvmGlobalName(mangled_q)
+                         << "(" << args << ")\n";
+                    return tmp;
+                }
+                std::string ret_type = llvmType(rit_q->second);
+                std::string args_prefix = self_arg_q;
+                if (args_prefix.empty() && !method_args_q.empty())
+                    method_args_q = method_args_q.substr(2);
+                if (ret_type == "void") {
+                    out_ << "    call void @" << llvmGlobalName(mangled_q)
+                         << "(" << args_prefix << method_args_q << ")\n";
+                    return "";
+                }
+                std::string tmp = newTmp();
+                out_ << "    " << tmp << " = call " << ret_type << " @"
+                     << llvmGlobalName(mangled_q) << "(" << args_prefix << method_args_q << ")\n";
+                return tmp;
+            }
             std::string base = call->qualifier + "__" + call->callee;
             std::string mangled = resolveOverloadForCall(base, call->args);
             auto rit = func_return_types_.find(mangled);
@@ -668,7 +713,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string slid_name = call->callee;
             std::string tmp = emitRawSlidAlloca(slid_name);
             emitConstructAt(slid_name, tmp, call->args);
-            if (slid_info_[slid_name].has_dtor)
+            if (hasDtorInChain(slid_name))
                 pending_temp_dtors_.push_back({tmp, slid_name});
             return tmp;
         }

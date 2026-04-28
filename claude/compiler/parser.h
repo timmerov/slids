@@ -414,6 +414,7 @@ struct MethodDef {
 
 struct SlidDef {
     std::string name;
+    std::string base_name;                // non-empty when defined as `Base : Derived(...) { ... }`
     std::vector<std::string> type_params; // non-empty for template slids: Vector<T>
     std::vector<FieldDef> fields;
     bool has_ellipsis_prefix = false;    // tuple starts with ... (implementation of incomplete class)

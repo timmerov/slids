@@ -621,6 +621,8 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
         info.field_index[concrete.fields[i].name] = i;
         info.field_types.push_back(concrete.fields[i].type);
     }
+    info.own_field_count = (int)concrete.fields.size();
+    info.inheritance_resolved = true; // templates with inheritance are deferred; treat as flat
     info.has_explicit_ctor = concrete.has_explicit_ctor_decl || (concrete.explicit_ctor_body != nullptr);
     info.has_dtor          = (concrete.dtor_body != nullptr) || concrete.has_explicit_dtor_decl;
     slid_info_[mangled] = info;

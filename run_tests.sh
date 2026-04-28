@@ -13,6 +13,7 @@ SAMPLES=(
     function1
     incomplete
     indexop
+    inheritance
     lvalues
     macros
     math1 math2

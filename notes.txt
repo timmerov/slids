@@ -1,5 +1,7 @@
 
 inheritance:
+multiple inheritance.
+virrtual functions.
 
 aliases:
 alias int32 i32;

@@ -223,6 +223,8 @@ Valid reinterpretations:
 | `int N ^` | `uint N ^` (same bit width) | sign reinterpretation |
 | any pointer | `intptr` | pointer as integer |
 | `intptr` | any pointer | integer as pointer |
+| `Derived^` | `Base^` (same hierarchy) | in-cast — implicit, no syntax |
+| `Base^` | `Derived^` (same hierarchy) | out-cast — explicit `<Derived^>`, single-step, unchecked |
 
 Any other reinterpretation is a compiler error.
 
@@ -781,44 +783,42 @@ Space {
 
 ## Inheritance
 
-> **TODO:** Not yet implemented. The design described below is aspirational.
+Single inheritance only. Multiple inheritance and virtual methods are not yet implemented; methods are non-virtual and statically dispatched.
 
-Methods are non-virtual by default — no vtable overhead unless `virtual` is explicitly used. `virtual` must be declared on the base class method and on every override in derived classes. Omitting `virtual` in a derived class when the base declares it virtual is a compiler error.
-
-A virtual class is one that has at least one virtual method. For virtual classes:
-
-- If `_` and `~` are explicitly defined, `~` must be declared `virtual`
-- If `~` is not explicitly defined, the compiler generates a default `virtual ~` that does nothing
+**Definition** — base name first, then `:`, then derived name with its own data tuple:
 
 ```
-Animal(string name_) {
-    _() {
-        name_ = "ubu";
-    }
-
-    virtual ~() {
-        // cleanup
-    }
-
-    virtual void speak() {
-        println(name_ + " makes a sound.");
-    }
+Animal(char[] name_, int legs_ = 0) {
+    void speak() { ... }
 }
 
-Animal : Dog() {
-    // compiler generates: virtual ~() {}
-
-    virtual void speak() {
-        println(name_ + " barks.");
+Animal : Cat(int toys_ = 0) {
+    void speak() {                    // shadows Animal:speak
+        Animal:speak();               // call base method on the same self
     }
 }
-
-Dog dog("spot");
-Animal^ animal = ^dog;
-animal^.speak();   // calls Dog:speak
 ```
 
-> **TODO:** Needs review — it should be possible to add private virtual methods in the implementation file (`.sl`) that are not exposed in the `.slh`. This is similar to the desire to add private fields not exposed in the `.slh`. Both raise ABI and layout questions that need careful thought.
+**Caller arguments** — instantiation supplies initialization values base fields first, the derived fields. A required field in the derived class forces any optional fields in the base class to be required.
+
+```
+Animal a("Snek");                     // legs_ is default
+Cat c("Princess Donut");              // legs_, toys_ are default
+Dog d("Spot", 4, 2);                  // sticks_ is required → legs_ is now required here
+```
+
+**Reopen and external methods** — bare and block syntax are both valid.
+
+```
+Dog { void perform() { ... } }        // block reopen
+void Dog:perform2() { ... }           // external method def
+```
+
+**Pointer view**
+- In-cast (derived → base) is implicit: `Animal^ a = ^cat;` needs no syntax.
+- Out-cast (base → derived) is explicit, single-step: `Cat^ c = <Cat^> animal_ptr;`. No `void^` intermediate.
+
+**Field-name collision** is a compile error.
 
 ---
 

@@ -1,0 +1,19 @@
+Hello, World!
+Animal:ctor
+Animal:speak: Snek says nothing.
+Animal:ctor
+Cat:ctor
+Cat:speak: Princess Donut meows.
+Animal:speak: Princess Donut says nothing.
+Animal:ctor
+Dog:ctor
+Dog:speak: Spot barks.
+Animal:speak: Spot says nothing.
+Dog:perform: Spot sits.
+Dog:perform2: Spot begs.
+Goodbye, World!
+Dog:dtor
+Animal:dtor
+Cat:dtor
+Animal:dtor
+Animal:dtor

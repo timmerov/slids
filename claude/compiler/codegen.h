@@ -20,6 +20,13 @@ struct SlidInfo {
     int public_field_count = 0;    // number of public fields before private ones (for __$pinit)
     int64_t sizeof_override = 0;   // >0: use this value for sizeof()
     int64_t padding_bytes = 0;     // extra opaque bytes appended after known fields in struct type
+    // inheritance: derived = `Base : Derived(...) { ... }`. After resolveSlidInheritance(),
+    // field_types/field_index hold the flat concat: base's flat fields prefix, then own fields.
+    std::string base_name;         // name of immediate base; empty if not derived
+    SlidInfo* base_info = nullptr; // resolved pointer to base SlidInfo
+    int own_field_count = 0;       // count of this class's own fields (the suffix in field_types)
+    int base_field_count = 0;      // count of inherited fields (the prefix in field_types)
+    bool inheritance_resolved = false;
 };
 
 // info about a nested function's capture set
@@ -158,6 +165,17 @@ private:
     void collectStringConstants();
     void collectFunctionSignatures();
     void collectSlids();
+    // Resolve `Base : Derived(...)` chains: link base_info pointers, build flat
+    // field_index/field_types as base prefix + own suffix, validate F2 collisions.
+    void resolveSlidInheritance();
+    void resolveSlidInheritanceFor(SlidInfo& info);
+    // Returns true if `derived` has `base` anywhere in its ancestor chain (proper ancestor).
+    bool isAncestor(const std::string& base, const std::string& derived);
+    // Returns the inheritance chain in base→derived order, including the slid itself.
+    std::vector<SlidInfo*> chainOf(const std::string& slid_name);
+    // True if any class in the chain (self or ancestor) has a dtor. Used to decide whether
+    // a local needs registering for destructor emit.
+    bool hasDtorInChain(const std::string& slid_name);
     bool isExported(const std::string& mangled) const;
     std::string instantiateSlidTemplate(const std::string& name,
                                         const std::vector<std::string>& type_args,

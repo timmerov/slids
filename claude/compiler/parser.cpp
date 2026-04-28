@@ -2016,6 +2016,27 @@ Program Parser::parse() {
                 || tokens_[pos_ + 1].type == TokenType::kLt)) {
             program.slids.push_back(parseSlidDef());
         }
+        // derived class definition or forward decl: Base : Derived(...)  or  Base : Derived;
+        else if (peek().type == TokenType::kIdentifier
+            && pos_ + 3 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kColon
+            && tokens_[pos_ + 2].type == TokenType::kIdentifier
+            && (tokens_[pos_ + 3].type == TokenType::kLParen
+                || tokens_[pos_ + 3].type == TokenType::kSemicolon)) {
+            std::string base_name = advance().value; // consume base name
+            advance();                                // consume ':'
+            if (tokens_[pos_ + 1].type == TokenType::kSemicolon) {
+                SlidDef fwd;
+                fwd.name = advance().value;
+                fwd.base_name = base_name;
+                advance(); // consume ';'
+                program.slids.push_back(std::move(fwd));
+            } else {
+                SlidDef slid = parseSlidDef();
+                slid.base_name = base_name;
+                program.slids.push_back(std::move(slid));
+            }
+        }
         // block-style external methods: TypeName { void method() { ... } ... }
         else if (peek().type == TokenType::kIdentifier
             && pos_ + 1 < (int)tokens_.size()
