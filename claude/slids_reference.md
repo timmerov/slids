@@ -820,6 +820,13 @@ void Dog:perform2() { ... }           // external method def
 
 **Field-name collision** is a compile error.
 
+> **TODO:** Needs review — it should be possible to add private virtual methods in the implementation file (`.sl`) that are not exposed in the `.slh`. This is similar to the desire to add private fields not exposed in the `.slh`. Both raise ABI and layout questions that need careful thought.
+> A virtual class is one that has at least one virtual method. For virtual classes:
+>- If `_` and `~` are explicitly defined, `~` must be declared `virtual`
+>- If `~` is not explicitly defined, the compiler generates a default `virtual ~` that does nothing
+>- Dtors must be virtual all the way in and out.
+>- `virtual` keyword is required for all virtual methods.
+
 ---
 
 ## Operator overloading
