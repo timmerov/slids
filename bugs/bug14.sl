@@ -1,47 +1,48 @@
 /*
-compile fails.
+gap in implicit pointer-base compatibility check.
+
+These cases violate the pointer-cast spec (void^ requires explicit cast
+to any typed pointer) but currently compile silently. Only DeclStmt-with-
+init and plain AssignStmt to a pointer variable invoke the Slids-level
+pointee-type check via requirePtrSlidCompat. Every other implicit
+pointer-init site only calls requirePtrInit, which checks the LLVM type
+(both sides are "ptr") and accepts.
+
+Pre-existing gap; tracked in TODO.md.
 */
 
+void take_int8(int8^ p) {
+}
+
+int8^ return_void_as_int8() {
+    void^ v = nullptr;
+    return v;       /* gap: return statement. */
+}
+
+Box(int8^ data_ = nullptr) {
+}
+
 int32 main() {
-    __println("Hello, World!");
+    void^ v = nullptr;
+    int8 a = 0;
 
-    int arr[4] = (1, 2, 3, 4);
+    /* gap 1: function argument (emitArgForParam). */
+    take_int8(v);
 
-    /* prints int */
-    __println(##type(arr[0]));
+    /* gap 2: field assignment (FieldAssign). */
+    Box b;
+    b.data_ = v;
 
-    /*
-    this is now correctly a compile error.
-    you cannot assign an int to an int^.
-    */
-    //int[] p1 = arr[0];
-    //int[] p2 = arr[3];
+    /* gap 3: return statement (Return). */
+    int8^ ret = return_void_as_int8();
 
-    int[] p1 = ^arr[0];
-    int[] p2 = ^arr[3];
+    /* gap 4: tuple element initialization at decl-site (TupleExpr emit). */
+    (int8^, int8^) tup = (v, v);
 
-    /* parentheses on rhs. */
-    p1^ = (p2--)^;
-    __println("arr[4, 2, 3, 4]=(" + arr[0] + "," + arr[1] + "," + arr[2] + "," + arr[3] + ")");
+    /* gap 5: tuple element write via IndexAssign. */
+    (int8^, int8^) tup2 = (^a, ^a);
+    tup2[0] = v;
 
-    /*
-    reset the array.
-    this was a compile error.
-    weird that after 30+ days i never tried to directly.
-    set the value of an array.
-    always went through a pointer.
-    */
-    arr[0] = 1;
-
-    /* check pointers. */
-    bool eq1 = (p2 == ^arr[3]);
-    bool eq2 = (p2 == ^arr[2]);
-    __println("eq1[0]=" + eq1);
-    __println("eq2[1]=" + eq2);
-
-    /* this should compile but doesn't */
-    //(p1++)^ = (p2--)^;
-
-    __println("Goodbye, World!");
+    __println("bug14: all gap cases compiled silently");
     return 0;
 }

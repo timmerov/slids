@@ -691,6 +691,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             dtor_vars_.push_back({decl->name, elems[i], i});
                         continue;
                     }
+                    requirePtrInit(elems[i], *te->values[i]);
                     std::string val = emitExpr(*te->values[i]);
                     out_ << "    store " << llvmType(elems[i]) << " " << val << ", ptr " << gep << "\n";
                     if (decl->is_move && isIndirectType(elems[i]))
@@ -743,8 +744,6 @@ void Codegen::emitStmt(const Stmt& stmt) {
         local_types_[decl->name] = eff_type;
         if (!decl->init) return; // uninitialized — alloca only
         requirePtrInit(eff_type, *decl->init);
-        if (isIndirectType(eff_type))
-            requirePtrSlidCompat(eff_type, *decl->init, decl->name, /*is_init=*/true);
         std::string val = emitExpr(*decl->init);
         // coerce integer or float widths if necessary
         if (!isIndirectType(eff_type)) {
@@ -1120,10 +1119,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string store_type = is_ptr ? "ptr" : llvmType(tit != local_types_.end() ? tit->second : "int");
         // catch mismatched pointer types (e.g. char[] into int[]) — non-pointer
         // RHS is rejected by requirePtrInit above.
-        if (is_ptr) {
-            requirePtrInit(tit->second, *assign->value);
-            requirePtrSlidCompat(tit->second, *assign->value, assign->name, /*is_init=*/false);
-        }
+        if (is_ptr) requirePtrInit(tit->second, *assign->value);
         // coerce integer widths if necessary (sext or trunc)
         if (!is_ptr && tit != local_types_.end()) {
             std::string src_t = exprLlvmType(*assign->value);

@@ -2254,49 +2254,35 @@ std::string Codegen::emitCondBool(const Expr& expr) {
 void Codegen::requirePtrInit(const std::string& dst_type, const Expr& src) {
     if (!isRefType(dst_type) && !isPtrType(dst_type)) return;
     std::string src_t = exprLlvmType(src);
-    if (src_t == "ptr") return;
+    if (src_t != "ptr") {
+        std::string src_slids = inferSlidType(src);
+        throw std::runtime_error("cannot initialize '" + dst_type
+            + "' from value of type '" + src_slids + "'");
+    }
+    // slids-level pointer-base compatibility. `pointer → void^` is implicit
+    // (stripping); `void^ → typed pointer` requires an explicit cast. nullptr
+    // (internal type "anyptr") carries no type info and is always implicit.
     std::string src_slids = inferSlidType(src);
-    throw std::runtime_error("cannot initialize '" + dst_type
-        + "' from value of type '" + src_slids + "'");
-}
-
-void Codegen::requirePtrSlidCompat(const std::string& lhs_type, const Expr& src,
-                                    const std::string& var_name, bool is_init) {
+    if (src_slids == "anyptr") return;
     auto ptrBase = [](const std::string& t) -> std::string {
         if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return t.substr(0, t.size()-2);
         if (!t.empty() && t.back() == '^') return t.substr(0, t.size()-1);
         return "";
     };
-    std::string lhs_base = ptrBase(lhs_type);
-    std::string rhs_slids;
-    if (auto* ve = dynamic_cast<const VarExpr*>(&src)) {
-        auto rit = local_types_.find(ve->name);
-        if (rit != local_types_.end()) rhs_slids = rit->second;
-    }
-    if (rhs_slids.empty()) return;
-    std::string rhs_base = ptrBase(rhs_slids);
-    if (lhs_base.empty() || rhs_base.empty()) return;
-    const char* verb = is_init ? "initialize" : "assign";
-    // unrelated pointee types — `pointer → void^` is implicit (stripping); the
-    // reverse and all other unrelated pairs require an explicit cast.
-    if (lhs_base != "void"
-        && lhs_base != rhs_base
-        && !isAncestor(lhs_base, rhs_base)) {
-        if (is_init)
-            throw std::runtime_error("cannot initialize '" + lhs_type
-                + "' variable '" + var_name + "' from value of type '"
-                + rhs_slids + "'");
-        else
-            throw std::runtime_error("cannot assign '" + rhs_slids + "' to '"
-                + lhs_type + "' variable '" + var_name + "'");
-    }
+    std::string dst_base = ptrBase(dst_type);
+    std::string src_base = ptrBase(src_slids);
+    if (dst_base.empty() || src_base.empty()) return;
+    if (dst_base != "void"
+        && dst_base != src_base
+        && !isAncestor(dst_base, src_base))
+        throw std::runtime_error("cannot initialize '" + dst_type
+            + "' from value of type '" + src_slids + "'");
     // reference cannot promote to iterator
-    if (isPtrType(lhs_type) && isRefType(rhs_slids)
-        && lhs_base != "void" && rhs_base != "void") {
-        throw std::runtime_error(std::string("cannot ") + verb + " reference '"
-            + rhs_slids + "' to iterator '" + lhs_type + "' variable '"
-            + var_name + "': references cannot promote to iterators");
-    }
+    if (isPtrType(dst_type) && isRefType(src_slids)
+        && dst_base != "void" && src_base != "void")
+        throw std::runtime_error("cannot initialize iterator '" + dst_type
+            + "' from reference '" + src_slids
+            + "': references cannot promote to iterators");
 }
 
 // Infer the Slids type string for a type-inferred variable declaration (x = expr;).
@@ -2321,8 +2307,9 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     if (dynamic_cast<const StringLiteralExpr*>(&expr)) return "char[]";
     // stringify → char[]
     if (dynamic_cast<const StringifyExpr*>(&expr)) return "char[]";
-    // nullptr → intptr
-    if (dynamic_cast<const NullptrExpr*>(&expr)) return "intptr";
+    // nullptr → anyptr (internal: a pointer with no type information,
+    // implicitly assignable to any pointer type per spec rule 1)
+    if (dynamic_cast<const NullptrExpr*>(&expr)) return "anyptr";
     // tuple literal (a, b, c) → anonymous tuple type (ta,tb,tc)
     if (auto* te = dynamic_cast<const TupleExpr*>(&expr)) {
         std::string s = "(";

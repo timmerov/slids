@@ -65,6 +65,7 @@ std::string Codegen::llvmType(const std::string& t) {
     if (t == "uint32") return "i32";
     if (t == "uint64") return "i64";
     if (t == "intptr") return "i64";
+    if (t == "anyptr") return "ptr";
     if (t == "float32") return "float";
     if (t == "float64") return "double";
     if (t == "void")  return "void";
