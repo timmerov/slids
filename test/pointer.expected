@@ -16,7 +16,7 @@ ptr<=other<true>=true
 ptr>other<false>=false
 ptr>=other<false>=false
 void^ = int^ pass
-int^ = void^ pass
+int^ = int[] void^ pass
 ref^<3>=3
 ref^<99>=99
 ref^<3>=3

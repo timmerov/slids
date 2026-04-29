@@ -1,7 +1,13 @@
 Incomplete:ctor
 Hello, World!
-sizeof(inc)<4>=4
-sizeof(Incomplete)<4>=4
-inc.sizeof()<4>=4
-Incomplete.sizeof()<4>=4
+Best friends forever!
+Grand reopening!
+You can never have too many ellipses.
+Incomplete:ctor
+sizeof(inc2)<0>=0
+sizeof(inc)<12>=12
+sizeof(Incomplete)<12>=12
+inc.sizeof()<12>=12
+Incomplete.sizeof()<12>=12
+Incomplete:dtor
 Incomplete:dtor
