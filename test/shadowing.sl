@@ -2,6 +2,9 @@
 Shadowing & identifier-uniqueness rule — example catalogue.
 
 shadowing is a difficult problem to describe rigorously.
+in a very real sense, it's a form of code obfuscation.
+not necessarily intentional, but the unintentional cases are
+often very hard to find.
 some cases are easy:
 shadowing causes parse/compile ambiguities: not allowed.
 pretty much everything else is subjective.
