@@ -1470,11 +1470,6 @@ std::string Codegen::emitExpr(const Expr& expr) {
             return "0";
         };
 
-        if (!se->type_name.empty()) {
-            return sizeofTypeName(se->type_name);
-        }
-
-        // expression form
         const Expr& op = *se->operand;
 
         // string literal → byte length (not including null terminator)
@@ -1483,7 +1478,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
             return std::to_string(len - 1); // llvmEscape counts the null terminator
         }
 
-        // variable → look up its type
+        // VarExpr: variable (value form) or type name (type form).
+        // Locals/fields win — type-form falls through to symbol-table check.
         if (auto* ve = dynamic_cast<const VarExpr*>(&op)) {
             // stack array → total byte size
             auto ait = array_info_.find(ve->name);
@@ -1507,6 +1503,18 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 if (fit != info.field_index.end())
                     return sizeofTypeName(info.field_types[fit->second]);
             }
+            // Not a local/field — is the name a type? (built-in keyword,
+            // pointer/iterator suffix form, or known slid type.)
+            const std::string& n = ve->name;
+            bool is_type =
+                n == "char" || n == "bool" ||
+                n == "int" || n == "int8" || n == "int16" || n == "int32" || n == "int64" ||
+                n == "uint" || n == "uint8" || n == "uint16" || n == "uint32" || n == "uint64" ||
+                n == "intptr" || n == "float32" || n == "float64" ||
+                (!n.empty() && n.back() == '^') ||
+                (n.size() >= 2 && n.substr(n.size()-2) == "[]") ||
+                slid_info_.count(n);
+            if (is_type) return sizeofTypeName(n);
         }
 
         // fallback: derive size from LLVM type of the expression

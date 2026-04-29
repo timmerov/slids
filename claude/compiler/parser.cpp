@@ -325,14 +325,12 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         advance();
         expect(TokenType::kLParen, "expected '(' after sizeof");
         auto se = std::make_unique<SizeofExpr>();
-        // type form: sizeof(TypeName) — type keyword or uppercase-initial identifier
-        auto isSizeofTypeName = [&](const Token& t) {
-            if (isTypeName(t)) return true;
-            return t.type == TokenType::kIdentifier && !t.value.empty()
-                   && std::isupper((unsigned char)t.value[0]);
-        };
-        if (isSizeofTypeName(peek())) {
-            se->type_name = parseTypeName();
+        // Built-in type keywords can't be parsed as expressions, so route them
+        // through parseTypeName() and carry the result as a VarExpr name.
+        // All other forms (user identifiers, variables) parse as expressions
+        // and are disambiguated in codegen against the symbol table.
+        if (isTypeName(peek())) {
+            se->operand = std::make_unique<VarExpr>(parseTypeName());
         } else {
             se->operand = parseExpr();
         }

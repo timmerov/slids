@@ -1,9 +1,8 @@
 
-check friend classes:
-
 inheritance:
-multiple inheritance.
-virrtual functions.
+multiple inheritance - no.
+virtual functions - next?
+compile error if the base class dtor is not virtual.
 
 improve error message.
 

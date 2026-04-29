@@ -116,8 +116,14 @@ static std::unique_ptr<Expr> cloneExpr(const Expr& expr,
 
     if (auto* e = dynamic_cast<const SizeofExpr*>(&expr)) {
         auto se = std::make_unique<SizeofExpr>();
-        se->type_name = e->type_name.empty() ? "" : subTypeSuffix(e->type_name, subst);
-        if (e->operand) se->operand = cloneExpr(*e->operand, subst);
+        // If the operand is a VarExpr naming a template parameter, substitute
+        // through the type system (handles ^/[]/tuple suffixes); generic VarExpr
+        // cloning leaves names untouched.
+        if (auto* ve = dynamic_cast<const VarExpr*>(e->operand.get())) {
+            se->operand = std::make_unique<VarExpr>(subTypeSuffix(ve->name, subst));
+        } else if (e->operand) {
+            se->operand = cloneExpr(*e->operand, subst);
+        }
         return se;
     }
 
