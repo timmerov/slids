@@ -471,7 +471,15 @@ signature. The decl + def pair is one binding, not a duplicate.
 int f44();
 int f44() { return 0; }
 
+/*
+ALLOWED: template forward declaration followed by template definition
+with the same signature. Same rule as #44, applied to templates.
+*/
+T t45<T>(T a);
+T t45<T>(T a) { return a; }
+
 int32 main() {
+    int discard45 = t45(0); // instantiate so the template is actually emitted
     __println("01: Not allowed: variable name may not equal type name in same declaration.");
     __println("02: Not allowed: method name may not equal enclosing class name.");
     __println("03: Not allowed: tuple-param name may not equal enclosing class name.");
@@ -516,5 +524,6 @@ int32 main() {
     __println("42: Allowed: overloaded functions with different signatures.");
     __println("43: Allowed: overloaded non-op methods with different signatures.");
     __println("44: Allowed: forward declaration followed by definition with the same signature.");
+    __println("45: Allowed: template forward declaration followed by template definition.");
     return 0;
 }

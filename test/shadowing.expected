@@ -42,3 +42,4 @@
 42: Allowed: overloaded functions with different signatures.
 43: Allowed: overloaded non-op methods with different signatures.
 44: Allowed: forward declaration followed by definition with the same signature.
+45: Allowed: template forward declaration followed by template definition.
