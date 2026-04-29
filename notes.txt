@@ -5,6 +5,22 @@ inheritance:
 multiple inheritance.
 virrtual functions.
 
+test incomplete templates.
+
+expose AnyTypePtr:
+internally, nullptr is type AnyTypePtr.
+any pointer type can be set to nullptr.
+it might be useful to expose AnyTypePtr.
+this would be used for virtual methods.
+Base() {
+    virtual void foo(AnyTypePtr ptr);
+}
+Derived() {
+    virtual void foo(char[] ptr);
+}
+Derived:foo matches to Base:foo.
+cause char[] matches to AnyTypePtr.
+
 aliases:
 alias int32 i32;
 

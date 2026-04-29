@@ -417,8 +417,12 @@ struct SlidDef {
     std::string base_name;                // non-empty when defined as `Base : Derived(...) { ... }`
     std::vector<std::string> type_params; // non-empty for template slids: Vector<T>
     std::vector<FieldDef> fields;
-    bool has_ellipsis_prefix = false;    // tuple starts with ... (implementation of incomplete class)
-    bool has_ellipsis_suffix = false;    // tuple ends with ...   (declaration of incomplete class)
+    // pure-syntactic positional flags. set by parseSlidDef; AND'd / OR'd by
+    // mergeReopens. trailing=true means "more reopens may still follow"
+    // (class is open). lone `(...)` is disambiguated via seen_classes_:
+    // first occurrence ⇒ trailing-only (open); subsequent ⇒ leading-only (close).
+    bool has_leading_ellipsis = false;
+    bool has_trailing_ellipsis = false;
     bool has_explicit_ctor_decl = false; // _() was declared (with or without body)
     bool has_explicit_dtor_decl = false; // ~() was declared (with or without body)
     bool is_transport_impl = false;      // this slid emits __$pinit for the consumer
@@ -518,6 +522,13 @@ private:
     std::set<std::string> current_slid_fields_;
     // all parsed slid field names, keyed by slid name (used for external method blocks)
     std::map<std::string, std::set<std::string>> all_slid_fields_;
+    // class names seen so far in this TU — disambiguates lone `(...)` between
+    // first-occurrence (open) and subsequent (closing). populated by tuple-form
+    // decls and bare-block reopens.
+    std::set<std::string> seen_classes_;
+    // class names that have been closed in this TU — further tuple-form
+    // reopens are an error; bare-block reopens are still allowed.
+    std::set<std::string> closed_classes_;
     // short-name → canonical-name aliases for nested slids in the current outer's body
     // (e.g. "Inner" → "Outer.Inner") — applied by parseTypeName
     std::map<std::string, std::string> nested_alias_;
@@ -536,6 +547,12 @@ private:
     bool isVarDeclLookahead() const;
 
     SlidDef parseSlidDef();
+    // collapse multiple SlidDef entries with the same class name into a single
+    // merged entry. multiple entries arise from reopens; codegen expects one
+    // logical class per name. fields, methods, and ctor/dtor bodies are
+    // concatenated/picked; open-state flags are AND'd; private-suffix flags
+    // are OR'd.
+    void mergeReopens(Program& program);
     EnumDef parseEnumDef();
     MethodDef parseMethodDef();
     ExternalMethodDef parseExternalMethodDef();

@@ -103,8 +103,8 @@ int32 main() {
     void^ void_ptr = other;
     __println("void^ = int^ pass");
 
-    other = void_ptr;
-    __println("int^ = void^ pass");
+    other = <int[]> void_ptr;
+    __println("int^ = int[] void^ pass");
 
     /*
     this should be a compile error.

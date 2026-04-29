@@ -1475,6 +1475,12 @@ SlidDef Parser::parseSlidDef() {
     slid.name = peek().value;
     advance(); // consume class name
 
+    // a closed class accepts no more tuple-form reopens (bare-block reopens are
+    // allowed via parseExternalMethodBlock and bypass this check).
+    if (closed_classes_.count(slid.name))
+        throw std::runtime_error("Line " + std::to_string(peek().line)
+            + ": class '" + slid.name + "' is already complete; further field/declaration reopens are not permitted");
+
     // save outer's alias map; nested slids in this slid's body register short→canonical here
     auto saved_alias = nested_alias_;
     nested_alias_.clear();
@@ -1491,20 +1497,22 @@ SlidDef Parser::parseSlidDef() {
     }
 
     // parse tuple: (type field_ = default, ...)
-    // ... at start = has_ellipsis_prefix (implementation of incomplete class)
-    // ... at end   = has_ellipsis_suffix (declaration of incomplete class)
     expect(TokenType::kLParen, "expected '('");
 
     // leading ellipsis?
     if (peek().type == TokenType::kEllipsis) {
         advance(); // consume ...
         if (peek().type == TokenType::kComma) advance(); // consume , before fields
-        // lone (...) means all fields are private — treat as suffix (declaration case)
-        // (..., field) means this is the implementation of an incomplete class
-        if (peek().type == TokenType::kRParen)
-            slid.has_ellipsis_suffix = true;
-        else {
-            slid.has_ellipsis_prefix = true;
+        if (peek().type == TokenType::kRParen) {
+            // lone (...): disambiguate by whether the class has been seen before
+            // in this TU. first occurrence ⇒ trailing-only (open incomplete);
+            // subsequent ⇒ leading-only (closing reopen, no new fields).
+            if (seen_classes_.count(slid.name))
+                slid.has_leading_ellipsis = true;
+            else
+                slid.has_trailing_ellipsis = true;
+        } else {
+            slid.has_leading_ellipsis = true;
             slid.is_transport_impl = true;  // emits __$pinit and __$sizeof for the consumer
         }
     }
@@ -1512,7 +1520,7 @@ SlidDef Parser::parseSlidDef() {
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         // trailing ellipsis?
         if (peek().type == TokenType::kEllipsis) {
-            slid.has_ellipsis_suffix = true;
+            slid.has_trailing_ellipsis = true;
             advance(); // consume ...
             if (peek().type == TokenType::kComma) advance();
             break; // ... must be last
@@ -1702,6 +1710,12 @@ SlidDef Parser::parseSlidDef() {
     expect(TokenType::kRBrace, "expected '}'");
     current_slid_fields_.clear();
     nested_alias_ = std::move(saved_alias);
+
+    // register this class as seen (disambiguates lone `(...)` on next reopen)
+    // and mark it closed if this reopen has no trailing `...`.
+    seen_classes_.insert(slid.name);
+    if (!slid.has_trailing_ellipsis) closed_classes_.insert(slid.name);
+
     return slid;
 }
 
@@ -1760,6 +1774,7 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
 void Parser::parseExternalMethodBlock(Program& program) {
     // TypeName { [returnType] methodName(params) { body } ... }
     std::string slid_name = expect(TokenType::kIdentifier, "expected class name").value;
+    seen_classes_.insert(slid_name);
     {
         auto fit = all_slid_fields_.find(slid_name);
         current_slid_fields_ = (fit != all_slid_fields_.end()) ? fit->second : std::set<std::string>{};
@@ -2081,6 +2096,9 @@ Program Parser::parse() {
         hoist(program.slids[i], program.slids[i].name);
     }
 
+    // collapse multiple reopens of the same class into one merged SlidDef.
+    mergeReopens(program);
+
     // synthesize SlidDef entries for namespaces — slid names that appear only
     // in external_methods (block reopens or `void Name:fn()` defs) with no `Name(...)` data block.
     {
@@ -2098,6 +2116,62 @@ Program Parser::parse() {
     }
 
     return program;
+}
+
+void Parser::mergeReopens(Program& program) {
+    // group SlidDef indices by class name in source order. skip namespaces
+    // (synthesized later) and template slids (have separate machinery).
+    std::map<std::string, std::vector<int>> groups;
+    for (int i = 0; i < (int)program.slids.size(); i++) {
+        if (program.slids[i].is_namespace) continue;
+        if (!program.slids[i].type_params.empty()) continue;
+        groups[program.slids[i].name].push_back(i);
+    }
+    std::set<int> to_remove;
+    for (auto& [name, indices] : groups) {
+        if (indices.size() <= 1) continue;
+        SlidDef& dst = program.slids[indices[0]];
+        // public_field_count: the field count of the first reopen that lacks a
+        // leading `...` (the public prefix). if dst already qualifies, count is
+        // its current field size; otherwise scan for one in the rest of the group.
+        bool first_no_leading = !dst.has_leading_ellipsis;
+        if (first_no_leading) dst.public_field_count = (int)dst.fields.size();
+        for (int i = 1; i < (int)indices.size(); i++) {
+            SlidDef& src = program.slids[indices[i]];
+            if (!first_no_leading && !src.has_leading_ellipsis) {
+                dst.public_field_count = (int)dst.fields.size() + (int)src.fields.size();
+                first_no_leading = true;
+            }
+            // append fields in source order
+            for (auto& f : src.fields) dst.fields.push_back(std::move(f));
+            // OR — "any reopen contributed this"
+            dst.has_explicit_ctor_decl = dst.has_explicit_ctor_decl || src.has_explicit_ctor_decl;
+            dst.has_explicit_dtor_decl = dst.has_explicit_dtor_decl || src.has_explicit_dtor_decl;
+            dst.is_transport_impl      = dst.is_transport_impl      || src.is_transport_impl;
+            dst.has_leading_ellipsis   = dst.has_leading_ellipsis   || src.has_leading_ellipsis;
+            // AND — "still open" only if every reopen left it open
+            dst.has_trailing_ellipsis  = dst.has_trailing_ellipsis  && src.has_trailing_ellipsis;
+            // pick the non-empty / non-null contribution
+            if (dst.base_name.empty()) dst.base_name = src.base_name;
+            if (!dst.ctor_body)          dst.ctor_body          = std::move(src.ctor_body);
+            if (!dst.explicit_ctor_body) dst.explicit_ctor_body = std::move(src.explicit_ctor_body);
+            if (!dst.dtor_body)          dst.dtor_body          = std::move(src.dtor_body);
+            if (dst.impl_module.empty()) dst.impl_module = src.impl_module;
+            // accumulate methods (declarations + bodies; codegen dedupes overload signatures)
+            for (auto& m : src.methods) dst.methods.push_back(std::move(m));
+            // accumulate any nested slids that haven't been hoisted yet
+            for (auto& n : src.nested_slids) dst.nested_slids.push_back(std::move(n));
+            to_remove.insert(indices[i]);
+        }
+    }
+    if (to_remove.empty()) return;
+    std::vector<SlidDef> kept;
+    kept.reserve(program.slids.size() - to_remove.size());
+    for (int i = 0; i < (int)program.slids.size(); i++) {
+        if (!to_remove.count(i))
+            kept.push_back(std::move(program.slids[i]));
+    }
+    program.slids = std::move(kept);
 }
 
 std::unique_ptr<SwitchStmt> Parser::parseSwitchStmt() {

@@ -445,7 +445,7 @@ void Codegen::collectSlids() {
         }
         info.own_field_count = (int)slid.fields.size();
         // declaration of incomplete class: consumer calls __$pinit and __$sizeof
-        if (slid.has_ellipsis_suffix)
+        if (slid.has_trailing_ellipsis)
             info.has_pinit = true;
         // impl side: complete locally; emits __$pinit and __$sizeof for consumer
         if (slid.is_transport_impl) {
@@ -987,7 +987,7 @@ void Codegen::emit() {
             local_methods.insert(slid.name + "__$sizeof");
         }
         // all non-declaration slids define __$sizeof locally
-        if (!slid.has_ellipsis_suffix) local_methods.insert(slid.name + "__$sizeof");
+        if (!slid.has_trailing_ellipsis) local_methods.insert(slid.name + "__$sizeof");
         for (auto& m : slid.methods) {
             if (!m.body) continue;
             std::string base = slid.name + "__" + m.name;
@@ -1392,7 +1392,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     }
 
     // emit __$sizeof for every locally-complete slid (not for consumer-side declarations)
-    if (!slid.has_ellipsis_suffix && !slid.is_namespace) {
+    if (!slid.has_trailing_ellipsis && !slid.is_namespace) {
         std::string linkage = isExported(slid.name + "__$sizeof") ? "" : "internal ";
         out_ << "define " << linkage << "i64 @" << slid.name << "__$sizeof() {\n";
         out_ << "entry:\n";
