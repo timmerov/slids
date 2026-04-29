@@ -48,3 +48,15 @@
     - **Tuple returns do not yet NRVO** — they build a transitional `ret_tup` alloca, populate per slot, load the struct, and `ret` the value (the caller then stores into its slot — second copy). NRVO for tuple returns would require a sret-style protocol where the caller passes a destination ptr.
   - Copying objects about to be destructed should use move semantics.
     - **Status (partial)**: in the sret path, `op<-` is preferred over `op=` when the ret-value source is a fresh slid temp.
+
+## Virtual methods (design, not yet implemented)
+
+Single-inheritance virtuals through a per-class vtable. Compatible with incomplete-class reopens (impl can have hidden virtuals invisible to consumers).
+
+- **Layout**: one vtable per class as static rodata; one vptr at offset 0 of each polymorphic instance. Slots `0..P-1` are public virtuals (declared in `.slh`); slots `P..N-1` are hidden virtuals (declared in impl/friends); derived classes append at `N..`.
+- **Hidden virtuals**: emitted with two symbols — the mangled internal name and a slot alias `<Class>__$vtable_method_<i>`. The impl also emits a sentinel `<Class>__$vtable_size = N`.
+- **Consumer of an imported virtual class** reads the sentinel from the impl `.o`, emits its derived vtable as rodata wiring slot aliases by name into hidden slots; emits a `.o` dependency via existing `-M`. Class→impl mapping uses the same `foo.slh` → `foo.o` convention as templates (`@impl "other"` override).
+- **ABI rules** match C++: bodies of any virtual change freely; add / remove / reorder virtuals (public or hidden) requires consumer rebuild. Slot order is locked by declaration order in source. The sentinel makes layout changes queryable.
+- **Reserved cap (optional)**: producer publishes N larger than actual count, fills padding with abort-stubs; later versions populate padding without bumping N.
+- **Validation**: at consumer compile time, header's public count P must match the first P slot aliases in the impl `.o`. Mismatch is a compile error against the header.
+- **Out of scope**: multiple inheritance, RTTI/dynamic_cast, trait-object-style decoupled vtables, forward-declared deriving (no `.o` known).
