@@ -15,8 +15,24 @@ Parser::Parser(std::vector<Token> tokens, std::string source_dir,
                                    : std::make_shared<std::set<std::string>>()) {}
 
 void Parser::declareVar(const std::string& name) {
-    if (!scope_stack_.empty())
-        scope_stack_.back().insert(name);
+    // (P2) inside any method, no binding may shadow a field of the enclosing class.
+    if (current_slid_fields_.count(name)) {
+        throw std::runtime_error("Line " + std::to_string(peek().line)
+            + ": '" + name + "' shadows field of enclosing class");
+    }
+    if (!scope_stack_.empty()) {
+        if (!scope_stack_.back().insert(name).second) {
+            throw std::runtime_error("Line " + std::to_string(peek().line)
+                + ": local '" + name + "' already declared in same scope");
+        }
+    }
+}
+
+static void rejectReserved(const std::string& name, int line, const char* role) {
+    if (name == "self") {
+        throw std::runtime_error("Line " + std::to_string(line)
+            + ": '" + name + "' is reserved and cannot be used as " + role);
+    }
 }
 
 bool Parser::isInScope(const std::string& name) const {
@@ -695,10 +711,25 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     expect(TokenType::kLBrace, "expected '{'");
     scope_stack_.push_back({});
     for (auto& n : predeclare)
-        scope_stack_.back().insert(n);
+        declareVar(n);
     auto block = std::make_unique<BlockStmt>();
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof)
         block->stmts.push_back(parseStmt());
+    // (P1) nested function uniqueness within this block — same name + signature.
+    {
+        std::set<std::string> sigs;
+        for (auto& st : block->stmts) {
+            auto* nf = dynamic_cast<NestedFunctionDefStmt*>(st.get());
+            if (!nf) continue;
+            std::string key = nf->def.name + "(";
+            for (auto& p : nf->def.params) key += p.first + ",";
+            key += ")";
+            if (!sigs.insert(key).second) {
+                throw std::runtime_error("nested function '" + nf->def.name
+                    + "' redefined with same signature in same block");
+            }
+        }
+    }
     scope_stack_.pop_back();
     expect(TokenType::kRBrace, "expected '}'");
     return block;
@@ -975,7 +1006,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         stmt->var_type = var_type;
                         stmt->var_name = var_name;
                         stmt->enum_name = advance().value;
-                        stmt->body = parseBlock();
+                        stmt->body = parseBlock({var_name});
                         if (peek().type == TokenType::kColon) {
                             advance();
                             stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
@@ -1014,7 +1045,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             auto stmt = std::make_unique<ForArrayStmt>();
             stmt->var_name = for_var_name;
             stmt->array_expr = parseExpr();
-            stmt->body = parseBlock();
+            stmt->body = parseBlock({for_var_name});
             if (peek().type == TokenType::kColon) {
                 advance();
                 stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
@@ -1035,7 +1066,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             stmt->range_start = std::move(first_expr);
             stmt->range_end = parseExpr();
             expect(TokenType::kRParen, "expected ')'");
-            stmt->body = parseBlock();
+            stmt->body = parseBlock({for_var_name});
             if (peek().type == TokenType::kColon) {
                 advance();
                 stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
@@ -1054,7 +1085,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 stmt->elements.push_back(parseExpr());
             }
             expect(TokenType::kRParen, "expected ')'");
-            stmt->body = parseBlock();
+            stmt->body = parseBlock({for_var_name});
             if (peek().type == TokenType::kColon) {
                 advance();
                 stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
@@ -1196,7 +1227,9 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         }
         // not a nested function — fall through to variable declaration
         std::string type = parseTypeName();
+        int vd_line = peek().line;
         std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
+        rejectReserved(name, vd_line, "local variable");
 
         // array declaration: Type name[d0][d1...] = ((..),(..),..);
         if (peek().type == TokenType::kLBracket) {
@@ -1252,8 +1285,18 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
     // user-defined type variable declaration: counter c; or counter c(5); or piece board[8][8] = ...
     if (t.type == TokenType::kIdentifier && isVarDeclLookahead()) {
+        int decl_line = peek().line;
         std::string type = parseTypeName(); // consumes Name plus any trailing ^ or []
         std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
+        // (P1) vexing parse: variable name must not equal the type's bare identifier.
+        {
+            size_t i = 0;
+            while (i < type.size() && (isalnum((unsigned char)type[i]) || type[i] == '_')) i++;
+            if (type.substr(0, i) == name) {
+                throw std::runtime_error("Line " + std::to_string(decl_line)
+                    + ": variable '" + name + "' shadows type '" + type + "' in same declaration");
+            }
+        }
 
         // pointer or reference variable with initializer: Type[] ptr = expr  or  Type^ ref = expr
         if (peek().type == TokenType::kEquals) {
@@ -1409,7 +1452,13 @@ NestedFunctionDef Parser::parseNestedFunctionDef() {
     } else {
         fn.return_type = parseTypeName();
     }
+    int fn_line = peek().line;
     fn.name = expect(TokenType::kIdentifier, "expected function name").value;
+    // (P2) nested function name cannot shadow a field of the enclosing class.
+    if (current_slid_fields_.count(fn.name)) {
+        throw std::runtime_error("Line " + std::to_string(fn_line)
+            + ": nested function '" + fn.name + "' shadows field of enclosing class");
+    }
     expect(TokenType::kLParen, "expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         std::string type = parseTypeName();
@@ -1525,7 +1574,9 @@ SlidDef Parser::parseSlidDef() {
         }
         FieldDef f;
         f.type = parseTypeName();
+        int field_line = peek().line;
         f.name = expect(TokenType::kIdentifier, "expected field name").value;
+        rejectReserved(f.name, field_line, "field");
         // inline fixed-size array field: char name_[16]
         if (peek().type == TokenType::kLBracket
             && pos_ + 1 < (int)tokens_.size()
@@ -1543,6 +1594,24 @@ SlidDef Parser::parseSlidDef() {
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "expected ')'");
+
+    // (P1) class header+body merge — tuple-param name cannot equal class name.
+    for (auto& f : slid.fields) {
+        if (f.name == slid.name) {
+            throw std::runtime_error("Line " + std::to_string(peek().line)
+                + ": tuple-param '" + f.name + "' shares enclosing class name");
+        }
+    }
+    // (P1) tuple-param names must be unique within the tuple.
+    {
+        std::set<std::string> seen;
+        for (auto& f : slid.fields) {
+            if (!seen.insert(f.name).second) {
+                throw std::runtime_error("Line " + std::to_string(peek().line)
+                    + ": duplicate tuple-param '" + f.name + "' in '" + slid.name + "'");
+            }
+        }
+    }
 
     // record field names to prevent method-body field assignments from being mistaken for inferred declarations
     current_slid_fields_.clear();
@@ -1694,7 +1763,14 @@ SlidDef Parser::parseSlidDef() {
             continue;
         }
         if (isMethodDecl()) {
-            slid.methods.push_back(parseMethodDef());
+            int method_line = peek().line;
+            auto method = parseMethodDef();
+            // (P1) class scope merges name + body — method name cannot equal class name.
+            if (method.name == slid.name) {
+                throw std::runtime_error("Line " + std::to_string(method_line)
+                    + ": method '" + method.name + "' shares enclosing class name");
+            }
+            slid.methods.push_back(std::move(method));
         } else {
             // constructor code
             ctor_body->stmts.push_back(parseStmt());
@@ -1811,7 +1887,13 @@ void Parser::parseExternalMethodBlock(Program& program) {
         } else {
             em.return_type = parseTypeName();
         }
+        int em_line = peek().line;
         em.method_name = expect(TokenType::kIdentifier, "expected method name").value;
+        // (P1) reopen merges into class scope — method name cannot equal class name.
+        if (em.method_name == slid_name) {
+            throw std::runtime_error("Line " + std::to_string(em_line)
+                + ": method '" + em.method_name + "' shares enclosing class name");
+        }
         if (em.method_name == "op" && peek().type == TokenType::kEquals)     { advance(); em.method_name = "op="; }
         else if (em.method_name == "op" && peek().type == TokenType::kArrowLeft) { advance(); em.method_name = "op<-"; }
         else if (em.method_name == "op" && peek().type == TokenType::kArrowBoth) { advance(); em.method_name = "op<->"; }
@@ -1885,13 +1967,23 @@ FunctionDef Parser::parseFunctionDef() {
         expect(TokenType::kGt, "expected '>'");
     }
     expect(TokenType::kLParen, "expected '('");
+    int params_line = peek().line;
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         std::string type = parseTypeName();
+        int p_line = peek().line;
         std::string name = expect(TokenType::kIdentifier, "expected parameter name").value;
+        rejectReserved(name, p_line, "parameter");
         fn.params.emplace_back(type, name);
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "expected ')'");
+    // (P1) function header+body merge — parameter name cannot equal function name.
+    for (auto& p : fn.params) {
+        if (p.second == fn.user_name) {
+            throw std::runtime_error("Line " + std::to_string(params_line)
+                + ": parameter '" + p.second + "' shares enclosing function name");
+        }
+    }
     if (peek().type == TokenType::kSemicolon) {
         advance(); // forward declaration — body remains null
     } else {
@@ -2097,6 +2189,60 @@ Program Parser::parse() {
     // collapse multiple reopens of the same class into one merged SlidDef.
     mergeReopens(program);
 
+    // (P1) bare-enum values inject into the enclosing (file) scope. Any
+    // file-scope identifier (function name, slid name, enum type, or sibling
+    // enum value) that equals an enum value is a same-scope collision.
+    {
+        std::map<std::string, std::string> enum_values; // value -> owning enum
+        for (auto& e : program.enums) {
+            for (auto& v : e.values) {
+                auto ins = enum_values.emplace(v, e.name);
+                if (!ins.second) {
+                    throw std::runtime_error("enum value '" + v + "' appears in '"
+                        + ins.first->second + "' and '" + e.name + "'");
+                }
+            }
+        }
+        for (auto& fn : program.functions) {
+            auto it = enum_values.find(fn.user_name);
+            if (it != enum_values.end()) {
+                throw std::runtime_error("function '" + fn.user_name
+                    + "' collides with enum value from '" + it->second + "'");
+            }
+        }
+        for (auto& s : program.slids) {
+            auto it = enum_values.find(s.name);
+            if (it != enum_values.end()) {
+                throw std::runtime_error("class/namespace '" + s.name
+                    + "' collides with enum value from '" + it->second + "'");
+            }
+        }
+        for (auto& e : program.enums) {
+            auto it = enum_values.find(e.name);
+            if (it != enum_values.end() && it->second != e.name) {
+                throw std::runtime_error("enum type '" + e.name
+                    + "' collides with enum value from '" + it->second + "'");
+            }
+        }
+    }
+
+    // (P1) file-scope function uniqueness — at most one definition per
+    // signature. Forward declarations (body == nullptr) are pair-able with a
+    // matching definition and don't count as duplicates.
+    {
+        std::set<std::string> sigs;
+        for (auto& fn : program.functions) {
+            if (!fn.body) continue;
+            std::string key = fn.user_name + "(";
+            for (auto& p : fn.params) key += p.first + ",";
+            key += ")";
+            if (!sigs.insert(key).second) {
+                throw std::runtime_error("function '" + fn.user_name
+                    + "' redefined with same signature");
+            }
+        }
+    }
+
     // synthesize SlidDef entries for namespaces — slid names that appear only
     // in external_methods (block reopens or `void Name:fn()` defs) with no `Name(...)` data block.
     {
@@ -2162,14 +2308,74 @@ void Parser::mergeReopens(Program& program) {
             to_remove.insert(indices[i]);
         }
     }
-    if (to_remove.empty()) return;
-    std::vector<SlidDef> kept;
-    kept.reserve(program.slids.size() - to_remove.size());
-    for (int i = 0; i < (int)program.slids.size(); i++) {
-        if (!to_remove.count(i))
-            kept.push_back(std::move(program.slids[i]));
+    if (!to_remove.empty()) {
+        std::vector<SlidDef> kept;
+        kept.reserve(program.slids.size() - to_remove.size());
+        for (int i = 0; i < (int)program.slids.size(); i++) {
+            if (!to_remove.count(i))
+                kept.push_back(std::move(program.slids[i]));
+        }
+        program.slids = std::move(kept);
     }
-    program.slids = std::move(kept);
+    // (P1) class scope merges across reopens — at most one definition per
+    // (class, method, signature). Forward declarations (body == nullptr)
+    // pair with a matching definition and don't count as duplicates.
+    {
+        std::map<std::string, std::set<std::string>> sigs_by_class;
+        auto check_dup = [&](const std::string& cls, const std::string& mname,
+                              const std::vector<std::pair<std::string, std::string>>& params) {
+            std::string key = mname + "(";
+            for (auto& p : params) key += p.first + ",";
+            key += ")";
+            auto& set = sigs_by_class[cls];
+            if (!set.insert(key).second) {
+                throw std::runtime_error("class '" + cls
+                    + "': duplicate method '" + mname + "' with same signature");
+            }
+        };
+        for (auto& s : program.slids) {
+            for (auto& m : s.methods) {
+                if (!m.body) continue;
+                check_dup(s.name, m.name, m.params);
+            }
+        }
+        for (auto& em : program.external_methods) {
+            if (!em.body) continue;
+            check_dup(em.slid_name, em.method_name, em.params);
+        }
+    }
+    // Inheritance shadow checks — derived field vs base method, derived method vs base field.
+    {
+        std::map<std::string, SlidDef*> by_name;
+        for (auto& s : program.slids) by_name[s.name] = &s;
+        std::map<std::string, std::set<std::string>> method_names_by_class;
+        for (auto& s : program.slids)
+            for (auto& m : s.methods) method_names_by_class[s.name].insert(m.name);
+        for (auto& em : program.external_methods)
+            method_names_by_class[em.slid_name].insert(em.method_name);
+        std::map<std::string, std::set<std::string>> field_names_by_class;
+        for (auto& s : program.slids)
+            for (auto& f : s.fields) field_names_by_class[s.name].insert(f.name);
+        for (auto& s : program.slids) {
+            if (s.base_name.empty()) continue;
+            auto bit = by_name.find(s.base_name);
+            if (bit == by_name.end()) continue;
+            auto& base_methods = method_names_by_class[s.base_name];
+            auto& base_fields  = field_names_by_class[s.base_name];
+            for (auto& f : s.fields) {
+                if (base_methods.count(f.name)) {
+                    throw std::runtime_error("derived field '" + f.name
+                        + "' in '" + s.name + "' shadows method inherited from '" + s.base_name + "'");
+                }
+            }
+            for (auto& m : s.methods) {
+                if (base_fields.count(m.name)) {
+                    throw std::runtime_error("derived method '" + m.name
+                        + "' in '" + s.name + "' shadows field inherited from '" + s.base_name + "'");
+                }
+            }
+        }
+    }
 }
 
 std::unique_ptr<SwitchStmt> Parser::parseSwitchStmt() {

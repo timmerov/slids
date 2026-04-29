@@ -1,0 +1,44 @@
+01: Not allowed: variable name may not equal type name in same declaration.
+02: Not allowed: method name may not equal enclosing class name.
+03: Not allowed: tuple-param name may not equal enclosing class name.
+04: Not allowed: parameter name may not equal enclosing function name.
+05: Not allowed: tuple-param names may not be duplicated within one class.
+06: Allowed: inner-scope variable may shadow a bare-enum value.
+07: Not allowed: file-scope identifier may not equal a bare-enum value at file scope.
+08: Not allowed: methods may not duplicate across class reopens with the same signature.
+09: Not allowed: built-in type keyword may not be used as an identifier.
+10: Not allowed: two enums in one scope may not share a value name.
+11: Not allowed: file-scope function may not be redefined with the same signature.
+12: Not allowed: nested function may not be redefined with the same signature in the same block.
+13: Not allowed: op overload may not be repeated with the same signature.
+14: Not allowed: constructor or destructor may not be declared twice in one class.
+15: Not allowed: function in namespace may not equal enclosing namespace name.
+16: Not allowed: namespace fn may not be duplicated across reopens with same signature.
+17: Not allowed: 'self' is reserved and may not be used as a parameter, local, or field.
+18: Allowed: outer and inner block may bind the same name to different meanings.
+19: Allowed: block-local variable may shadow an outer class name.
+20: Allowed: parameter name may differ from its type name without collision.
+21: Allowed: for-loop variable may shadow an outer local of the same name.
+22: Not allowed: for-body local may not duplicate the for-loop variable.
+23: Allowed: inner block may shadow both the for-loop var and an outer local.
+24: Allowed: nested for-loops may reuse the same index name.
+25: Allowed: nested loops may reuse a block label; innermost match wins.
+26: Allowed: sibling loops may share a block label.
+27: Not allowed: method parameter may not shadow a field of the enclosing class.
+28: Not allowed: method local may not shadow a field of the enclosing class.
+29: Not allowed: for-loop index in a method may not shadow a field of the enclosing class.
+30: Not allowed: block-local in a method may not shadow a field of the enclosing class.
+31: Not allowed: nested function name in a method may not shadow a field of the enclosing class.
+32: Not allowed: method local may not duplicate a method parameter.
+33: Not allowed: function local may not duplicate a function parameter.
+34: Not allowed: derived field may not equal a base field name.
+35: Allowed: derived method may shadow a base method.
+36: Not allowed: derived field may not equal a base method name.
+37: Not allowed: derived method may not equal a base field name.
+38: Allowed: operator overloads on different argument types.
+39: Allowed: method local may shadow a method name on the same class.
+40: Allowed: slid name, class type, and constructor are one binding with multiple roles.
+41: Allowed: hoisted nested classes have independent field scopes.
+42: Allowed: overloaded functions with different signatures.
+43: Allowed: overloaded non-op methods with different signatures.
+44: Allowed: forward declaration followed by definition with the same signature.

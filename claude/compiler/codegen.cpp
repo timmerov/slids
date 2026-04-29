@@ -1247,7 +1247,7 @@ void Codegen::emitNestedFunction(
 
     // alloca/store explicit params
     for (auto& [type, name] : fn.params) {
-        std::string reg = "%var_" + name;
+        std::string reg = uniqueAllocaReg(name);
         out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
         out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
         locals_[name] = reg;
@@ -3029,7 +3029,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid,
     out_ << "entry:\n";
 
     for (auto& [type, name] : params) {
-        std::string reg = "%var_" + name;
+        std::string reg = uniqueAllocaReg(name);
         out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
         out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
         locals_[name] = reg;
@@ -3121,7 +3121,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     out_ << "entry:\n";
 
     for (auto& [type, name] : fn.params) {
-        std::string reg = "%var_" + name;
+        std::string reg = uniqueAllocaReg(name);
         out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
         out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
         locals_[name] = reg;

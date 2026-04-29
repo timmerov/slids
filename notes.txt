@@ -8,6 +8,28 @@ improve error message.
 
 test incomplete templates.
 
+name collisions:
+this should be an error:
+String String;
+but if that's an error then so is this:
+Foo() { }
+Bar() { }
+Foo Bar;
+in other words, an identifier token can have only
+one possible interpretation within a scope.
+change scope and you can shadow names.
+
+review enums.
+name collisions make long enums ugly.
+x = Piece.kKing;
+blech.
+Piece x = kKing;
+better.
+
+implement constants.
+const int useful_factor = 1.234;
+cannot be an lvalue.
+
 expose AnyTypePtr:
 internally, nullptr is type AnyTypePtr.
 any pointer type can be set to nullptr.

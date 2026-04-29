@@ -26,6 +26,7 @@ SAMPLES=(
     returnslid
     sizeof
     strlitcat
+    shadowing
     swap
     switch
     tuple

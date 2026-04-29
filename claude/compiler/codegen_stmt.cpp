@@ -26,7 +26,7 @@ void Codegen::emitDestructure(
                         + "' has type '" + (ltit==local_types_.end()?"<unknown>":ltit->second)
                         + "' but source element is '" + eff_type + "'");
             }
-            std::string reg = reassign ? locals_[name] : ("%var_" + name);
+            std::string reg = reassign ? locals_[name] : uniqueAllocaReg(name);
             // slid or anon-tuple target: init path (alloca + ctor) unless reassigning.
             if (slid_info_.count(eff_type) || isAnonTupleType(eff_type)) {
                 std::string src_type = inferSlidType(*te->values[i]);
@@ -115,7 +115,7 @@ void Codegen::emitDestructure(
                             + "' has type '" + (ltit==local_types_.end()?"<unknown>":ltit->second)
                             + "' but source element is '" + eff_type + "'");
                 }
-                std::string reg = reassign ? locals_[name] : ("%var_" + name);
+                std::string reg = reassign ? locals_[name] : uniqueAllocaReg(name);
                 if (slid_info_.count(elem_type) || isAnonTupleType(elem_type)) {
                     if (!type.empty() && type != elem_type)
                         throw std::runtime_error("type mismatch: cannot destructure '"
@@ -187,7 +187,7 @@ void Codegen::emitDestructure(
                     + "' but source element is '" + eff_type + "'");
         }
         std::string llvm_t = llvmType(eff_type);
-        std::string reg = reassign ? locals_[name] : ("%var_" + name);
+        std::string reg = reassign ? locals_[name] : uniqueAllocaReg(name);
         if (!reassign)
             out_ << "    " << reg << " = alloca " << llvm_t << "\n";
         std::string extracted = newTmp();
@@ -2323,7 +2323,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         bool new_var = !f->var_type.empty();
         if (new_var) {
             // declare new loop variable
-            var_reg = "%var_" + f->var_name;
+            var_reg = uniqueAllocaReg(f->var_name);
             out_ << "    " << var_reg << " = alloca i32\n";
             locals_[f->var_name] = var_reg;
         } else {
@@ -2401,7 +2401,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         break_label_ = end_lbl; continue_label_ = incr_lbl;
         loop_stack_.push_back({f->block_label, end_lbl, incr_lbl, ""});
 
-        std::string var_reg = "%var_" + f->var_name;
+        std::string var_reg = uniqueAllocaReg(f->var_name);
         out_ << "    " << var_reg << " = alloca i32\n";
         locals_[f->var_name] = var_reg;
         local_types_[f->var_name] = f->var_type;
@@ -2481,7 +2481,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         bool new_var = !locals_.count(ft->var_name);
         std::string var_reg;
         if (new_var) {
-            var_reg = "%var_" + ft->var_name;
+            var_reg = uniqueAllocaReg(ft->var_name);
             out_ << "    " << var_reg << " = alloca " << elem_llvm << "\n";
             locals_[ft->var_name] = var_reg;
             local_types_[ft->var_name] = elem_slids;
@@ -2600,7 +2600,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             bool new_var = !locals_.count(fa->var_name);
             std::string var_reg;
             if (new_var) {
-                var_reg = "%var_" + fa->var_name;
+                var_reg = uniqueAllocaReg(fa->var_name);
                 out_ << "    " << var_reg << " = alloca " << elem_llvm << "\n";
                 locals_[fa->var_name] = var_reg;
                 local_types_[fa->var_name] = elem_slids;
@@ -2669,7 +2669,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         bool new_var = !locals_.count(fa->var_name);
         std::string var_reg;
         if (new_var) {
-            var_reg = "%var_" + fa->var_name;
+            var_reg = uniqueAllocaReg(fa->var_name);
             out_ << "    " << var_reg << " = alloca " << elem_llvm << "\n";
             locals_[fa->var_name] = var_reg;
             local_types_[fa->var_name] = elem_slids;
