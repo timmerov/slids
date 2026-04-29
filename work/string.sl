@@ -79,7 +79,7 @@ String (
     character literal.
     */
     op=(char c) {
-        set(^c, 1);
+        set(<char[]> ^c, 1);
     }
 
     /*
@@ -137,7 +137,7 @@ String (
 
     /* overload += to append a character. */
     op+=(char c) {
-        append(^c, 1);
+        append(<char[]> ^c, 1);
     }
 
 
@@ -301,7 +301,7 @@ String (
 
     /* append a single character */
     void append(char c) {
-        append(^c, 1);
+        append(<char[]> ^c, 1);
     }
 
     /*

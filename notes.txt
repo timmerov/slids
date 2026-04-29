@@ -5,6 +5,8 @@ inheritance:
 multiple inheritance.
 virrtual functions.
 
+improve error message.
+
 test incomplete templates.
 
 expose AnyTypePtr:
