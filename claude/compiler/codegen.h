@@ -197,6 +197,10 @@ private:
     // Validates: signature exact match on override; `virtual` keyword required to
     // override; non-virtual cannot shadow base virtual.
     void buildVtables();
+    // After inheritance is resolved, any class whose own fields include a
+    // slid-typed field needs a dtor to destroy those fields at scope/heap exit.
+    // Sets info.has_dtor accordingly so emitDtors and emitSlidCtorDtor pick it up.
+    void synthesizeFieldDtors();
     // Mark which classes are importable (declared in any .slh imported by this
     // TU, or whose impl side has a `(...)` transport prefix in .slh). Used to
     // gate end-of-TU pure-slot validation.
@@ -369,6 +373,10 @@ private:
     // Walk the inheritance chain derived→base and emit a dtor call for each
     // class that has a dtor. Single source of truth for "destroy this object".
     void emitDtorChainCall(const std::string& slid_type, const std::string& target);
+    // Explicit `.~()` call. For primitive / pointer / anon-tuple static types,
+    // emit nothing (genuine no-op — useful for generic template code that calls
+    // .~() uniformly). For slid types, walk the dtor chain.
+    void emitExplicitDtor(const std::string& static_type, const std::string& obj_ptr);
     void emitStackRestore(int to_frame); // emit stackrestore for frames [top..to_frame]
     std::string emitExpr(const Expr& expr);
     std::string emitCondBool(const Expr& expr); // emit expr then icmp ne <type> val, 0 -> i1

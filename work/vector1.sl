@@ -17,6 +17,14 @@ Value(
 }
 
 int32 main() {
+
+    {
+        int x = 42;
+        x.~();
+        Value v;
+        v.~();
+    }
+
     Vector<int> intvec;
     Vector<Value> valvec;
     Vector<String> strvec;

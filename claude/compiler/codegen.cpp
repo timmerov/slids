@@ -731,6 +731,28 @@ void Codegen::buildVtables() {
     for (auto& [name, info] : slid_info_) build(name);
 }
 
+void Codegen::synthesizeFieldDtors() {
+    // A class whose own fields include a slid-typed field needs a dtor to
+    // destroy those fields. If the user didn't write one, mark has_dtor anyway
+    // so emitDtors schedules the call and emitSlidCtorDtor emits a synthetic
+    // body containing only the field-destruction loop.
+    for (auto& [name, info] : slid_info_) {
+        if (info.is_namespace) continue;
+        if (info.has_dtor) continue;
+        bool owns_vptr = info.is_virtual_class && info.base_info == nullptr;
+        int vptr_local = owns_vptr ? 1 : 0;
+        int n_own = info.own_field_count - vptr_local;
+        for (int j = 0; j < n_own; j++) {
+            int flat_idx = info.base_field_count + vptr_local + j;
+            const std::string& ftype = info.field_types[flat_idx];
+            if (slid_info_.count(ftype)) {
+                info.has_dtor = true;
+                break;
+            }
+        }
+    }
+}
+
 void Codegen::markImportableClasses() {
     // A class is importable iff its name appears in program_.slid_modules — that
     // map is populated during .slh import. Local-only classes are not importable.
@@ -1012,6 +1034,7 @@ void Codegen::emit() {
     collectSlids();
     classifyVirtualClasses();
     resolveSlidInheritance();
+    synthesizeFieldDtors();
     buildVtables();
     markImportableClasses();
     validatePureSlots();
@@ -1557,6 +1580,13 @@ void Codegen::emitNestedFunction(
 }
 
 
+void Codegen::emitExplicitDtor(const std::string& static_type, const std::string& obj_ptr) {
+    auto sit = slid_info_.find(static_type);
+    if (sit == slid_info_.end()) return; // primitive / pointer / anon-tuple — no-op
+    if (sit->second.has_dtor || sit->second.has_pinit)
+        emitDtorChainCall(static_type, obj_ptr);
+}
+
 void Codegen::emitDtorChainCall(const std::string& slid_type, const std::string& target) {
     auto chain = chainOf(slid_type);
     // walk derived→base: chain is base→derived, so iterate in reverse.
@@ -1622,12 +1652,11 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     }
 
     // emit destructor: @ClassName__$dtor(ptr %self)
-    // F1 (A): virtual class with no explicit ~ gets a synthetic empty body.
-    bool synth_virtual_dtor = !dtor_body
-        && !slid.has_explicit_dtor_decl
-        && slid_info_.count(slid.name)
-        && slid_info_.at(slid.name).is_virtual_class;
-    if (dtor_body || synth_virtual_dtor) {
+    // Emitted whenever the class has a dtor for any reason: explicit body,
+    // virtual auto-gen (F1 A), or slid-typed own fields needing destruction.
+    bool need_dtor_fn = dtor_body
+        || (slid_info_.count(slid.name) && slid_info_.at(slid.name).has_dtor);
+    if (need_dtor_fn) {
         locals_.clear();
         local_types_.clear();
         emitted_alloca_regs_.clear();
@@ -1636,11 +1665,32 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         block_terminated_ = false;
         current_slid_ = slid.name;
 
-        bool empty = slid_info_[slid.name].is_empty;
+        auto& info = slid_info_[slid.name];
+        bool empty = info.is_empty;
         out_ << "define " << (isExported(slid.name + "__$dtor") ? "" : "internal ") << "void @" << slid.name << "__$dtor("
              << (empty ? "" : "ptr %self") << ") {\n";
         out_ << "entry:\n";
         if (dtor_body) emitBlock(*dtor_body);
+        // Auto-destroy own slid-typed fields in reverse declaration order.
+        // Inherited fields are destroyed by the base class's __$dtor (the
+        // chain walker calls each class's dtor in turn). Skip $vptr at slot 0
+        // of the root virtual class.
+        if (!block_terminated_ && !empty) {
+            bool owns_vptr = info.is_virtual_class && info.base_info == nullptr;
+            int vptr_local = owns_vptr ? 1 : 0;
+            int n_own = info.own_field_count - vptr_local;
+            for (int j = n_own - 1; j >= 0; j--) {
+                int flat_idx = info.base_field_count + vptr_local + j;
+                const std::string& ftype = info.field_types[flat_idx];
+                if (slid_info_.count(ftype) && slid_info_.at(ftype).has_dtor) {
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr %struct."
+                         << slid.name << ", ptr %self, i32 0, i32 "
+                         << flat_idx << "\n";
+                    emitDtorChainCall(ftype, gep);
+                }
+            }
+        }
         if (!block_terminated_) out_ << "    ret void\n";
         out_ << "}\n\n";
     }

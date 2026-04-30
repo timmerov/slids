@@ -1,4 +1,9 @@
 
+fix bugs not calling dtors when should.
+
+implement complex field access with tuples.
+tuple[1].a_ is not yet supported.
+
 inheritance:
 multiple inheritance - no.
 

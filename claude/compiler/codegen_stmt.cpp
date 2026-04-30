@@ -1987,10 +1987,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
         }
         if (!slid_name.empty() && mcs->method == "~") {
-            auto& info = slid_info_[slid_name];
-            if (info.has_dtor || info.has_pinit)
-                out_ << "    call void @" << slid_name << "__$dtor("
-                     << (info.is_empty ? "" : "ptr " + obj_ptr) << ")\n";
+            emitExplicitDtor(slid_name, obj_ptr);
             return;
         }
         if (!slid_name.empty()) {

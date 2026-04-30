@@ -22,11 +22,18 @@ Vector<T>(
     }
 
     /*
+    reserve space for more elements.
+    preserve existing elements.
+    */
+    void reserve(intptr new_size) {
+    }
+
+    /*
     change the number of elements.
     preserve existing elements.
     */
     void resize(intptr new_size) {
-        //reserve(new_size);
+        reserve(new_size);
         delete storage_;
         size_ = new_size;
         storage_ = new T[new_size];
