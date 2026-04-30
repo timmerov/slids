@@ -69,15 +69,18 @@ struct NestedFuncInfo {
     // 2+ captures -> pass ptr to frame struct
 };
 
+class SourceMap;
+
 class Codegen {
 public:
-    Codegen(const Program& program, std::ostream& out, std::string source_file = "");
+    Codegen(const Program& program, std::ostream& out, SourceMap& sm, std::string source_file = "");
     void emit();
     void writeSliFile(std::ostream& out) const;
 
 private:
     const Program& program_;
     std::ostream& out_;
+    SourceMap& sm_;
     int str_counter_;
     int tmp_counter_;
     int label_counter_;
@@ -105,6 +108,27 @@ private:
 
     std::string source_file_;        // base filename of the source being compiled (for ##file)
     std::string current_func_name_;  // user-visible name of the function being emitted (for ##func)
+
+    // emission location stack — pushed at major AST traversal boundaries
+    // (emitStmt, emitExpr, top-level def emit). Throws read the top to
+    // attribute to the current source location.
+    std::vector<std::pair<int,int>> emit_stack_;
+public:
+    void pushEmitLoc(int file_id, int tok) { emit_stack_.emplace_back(file_id, tok); }
+    void popEmitLoc() { emit_stack_.pop_back(); }
+
+    struct EmitGuard {
+        Codegen& cg;
+        EmitGuard(Codegen& c, int f, int t) : cg(c) { cg.pushEmitLoc(f, t); }
+        ~EmitGuard() { cg.popEmitLoc(); }
+        EmitGuard(const EmitGuard&) = delete;
+        EmitGuard& operator=(const EmitGuard&) = delete;
+    };
+
+private:
+    [[noreturn]] void error(const std::string& msg);
+    [[noreturn]] void errorAtNode(const Stmt& s, const std::string& msg);
+    [[noreturn]] void errorAtNode(const Expr& e, const std::string& msg);
 
     std::string break_label_;
     std::string continue_label_;

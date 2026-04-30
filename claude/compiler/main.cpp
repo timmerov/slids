@@ -1,6 +1,7 @@
 #include "lexer.h"
 #include "parser.h"
 #include "codegen.h"
+#include "source_map.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -145,6 +146,9 @@ int main(int argc, char* argv[]) {
     buf << in.rdbuf();
     std::string source = buf.str();
 
+    SourceMap source_map;
+    int root_file_id = source_map.openFile(input_path, source, -1);
+
     try {
         std::filesystem::path out_path(output_path);
         if (out_path.has_parent_path())
@@ -157,10 +161,10 @@ int main(int argc, char* argv[]) {
                 source_dir = p.parent_path().string();
         }
 
-        Lexer lexer(source);
+        Lexer lexer(source_map, root_file_id);
         auto tokens = lexer.tokenize();
 
-        Parser parser(std::move(tokens), source_dir, import_paths);
+        Parser parser(source_map, root_file_id, std::move(tokens), source_dir, import_paths);
         auto program = parser.parse();
 
         std::ofstream out(output_path);
@@ -170,7 +174,7 @@ int main(int argc, char* argv[]) {
         }
 
         std::string source_file = std::filesystem::path(input_path).filename().string();
-        Codegen codegen(program, out, source_file);
+        Codegen codegen(program, out, source_map, source_file);
         codegen.emit();
 
         std::cout << "slidsc: wrote " << output_path << "\n";
@@ -221,10 +225,16 @@ int main(int argc, char* argv[]) {
             }
         }
 
+    } catch (const CompileError& e) {
+        source_map.render(e.file_id, e.tok, e.msg, std::cerr);
+        std::string err_path = output_path + ".err";
+        std::error_code ec;
+        std::filesystem::rename(output_path, err_path, ec);
+        if (!ec)
+            std::cerr << "slidsc: partial output saved as " << err_path << "\n";
+        return 1;
     } catch (const std::exception& e) {
         std::cerr << "slidsc: error: " << e.what() << "\n";
-        // rename partial output so make doesn't treat it as up-to-date,
-        // but preserve it for debugging
         std::string err_path = output_path + ".err";
         std::error_code ec;
         std::filesystem::rename(output_path, err_path, ec);

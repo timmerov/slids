@@ -1,5 +1,5 @@
 
-nested comments.
+constant expressions.
 
 revisit initialization.
 
@@ -8,8 +8,6 @@ tuple[1].a_ is not yet supported.
 
 inheritance:
 multiple inheritance - no.
-
-improve error message.
 
 test incomplete templates.
 

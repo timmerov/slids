@@ -9,6 +9,8 @@
 // --- Expressions ---
 
 struct Expr {
+    int file_id = 0;
+    int tok = 0;            // index into SourceMap.at(file_id).tokens
     virtual ~Expr() = default;
 };
 
@@ -174,14 +176,15 @@ struct SizeofExpr : Expr {
 struct StringifyExpr : Expr {
     std::string kind;                // "name"|"type"|"line"|"file"|"func"|"date"|"time"
     std::unique_ptr<Expr> operand;   // non-null for name/type; null for others
-    int line = 0;                    // source line (for ##line)
-    StringifyExpr(std::string k, std::unique_ptr<Expr> op = nullptr, int ln = 0)
-        : kind(std::move(k)), operand(std::move(op)), line(ln) {}
+    StringifyExpr(std::string k, std::unique_ptr<Expr> op = nullptr)
+        : kind(std::move(k)), operand(std::move(op)) {}
 };
 
 // --- Statements ---
 
 struct Stmt {
+    int file_id = 0;
+    int tok = 0;            // index into SourceMap.at(file_id).tokens
     virtual ~Stmt() = default;
 };
 
@@ -495,15 +498,21 @@ struct Program {
 
 // --- Parser ---
 
+class SourceMap;
+
 class Parser {
 public:
-    Parser(std::vector<Token> tokens,
+    Parser(SourceMap& sm,
+           int file_id,
+           std::vector<Token> tokens,
            std::string source_dir = "",
            std::vector<std::string> import_paths = {},
            std::shared_ptr<std::set<std::string>> imported_once = nullptr);
     Program parse();
 
 private:
+    SourceMap& sm_;
+    int file_id_;
     std::vector<Token> tokens_;
     int pos_;
     std::string source_dir_;
@@ -513,6 +522,17 @@ private:
     Token& peek();
     Token& advance();
     Token& expect(TokenType type, const std::string& msg);
+    [[noreturn]] void errorHere(const std::string& msg);
+    [[noreturn]] void errorAt(int t, const std::string& msg);
+    int currentLine();    // line of the current token (used by ##line and friends)
+
+    template<typename T, typename... Args>
+    std::unique_ptr<T> make(int t, Args&&... args) {
+        auto p = std::make_unique<T>(std::forward<Args>(args)...);
+        p->file_id = file_id_;
+        p->tok = t;
+        return p;
+    }
     bool isTypeName(const Token& t) const;
     bool isUserTypeName(const Token& t) const;
     std::string parseTypeName();

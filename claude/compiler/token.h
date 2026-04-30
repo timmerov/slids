@@ -133,8 +133,7 @@ enum class TokenType {
 struct Token {
     TokenType type;
     std::string value;
-    int line;
 
-    Token(TokenType type, std::string value, int line)
-        : type(type), value(std::move(value)), line(line) {}
+    Token(TokenType type, std::string value)
+        : type(type), value(std::move(value)) {}
 };

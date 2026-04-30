@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "source_map.h"
 #include <sstream>
 #include <functional>
 #include <stdexcept>
@@ -7,9 +8,26 @@
 #include <algorithm>
 #include "codegen_helpers.h"
 
-Codegen::Codegen(const Program& program, std::ostream& out, std::string source_file)
-    : program_(program), out_(out), str_counter_(0), tmp_counter_(0), label_counter_(0),
+Codegen::Codegen(const Program& program, std::ostream& out, SourceMap& sm, std::string source_file)
+    : program_(program), out_(out), sm_(sm),
+      str_counter_(0), tmp_counter_(0), label_counter_(0),
       source_file_(std::move(source_file)) {}
+
+void Codegen::error(const std::string& msg) {
+    if (!emit_stack_.empty()) {
+        auto [f, t] = emit_stack_.back();
+        throw CompileError{f, t, msg};
+    }
+    error(msg);
+}
+
+void Codegen::errorAtNode(const Stmt& s, const std::string& msg) {
+    throw CompileError{s.file_id, s.tok, msg};
+}
+
+void Codegen::errorAtNode(const Expr& e, const std::string& msg) {
+    throw CompileError{e.file_id, e.tok, msg};
+}
 
 std::string Codegen::newTmp() { return "%t" + std::to_string(tmp_counter_++); }
 
@@ -204,8 +222,8 @@ void Codegen::collectFunctionSignatures() {
             std::string want = slid.name + "^";
             for (auto& e : it->second) {
                 if (e.params.size() != 1 || e.params[0].first != want)
-                    throw std::runtime_error("op<-> on slid '" + slid.name
-                        + "' must take exactly one parameter of type '" + want + "'");
+                    error(std::string("op<-> on slid '" + slid.name
+                        + "' must take exactly one parameter of type '" + want + "'"));
             }
         }
         for (auto& [method_name, entries] : by_name) {
@@ -471,10 +489,10 @@ void Codegen::collectSlids() {
         if (!info.is_namespace && info.has_explicit_ctor != info.has_dtor) {
             const char* present = info.has_explicit_ctor ? "_" : "~";
             const char* missing = info.has_explicit_ctor ? "~" : "_";
-            throw std::runtime_error("class '" + slid.name
+            error(std::string("class '" + slid.name
                 + "' declares '" + present + "()' but not '" + missing
                 + "()': constructor and destructor must be declared together"
-                + " or both auto-generated");
+                + " or both auto-generated"));
         }
         slid_info_[slid.name] = std::move(info);
     }
@@ -510,18 +528,18 @@ void Codegen::resolveSlidInheritanceFor(SlidInfo& info) {
     }
     auto bit = slid_info_.find(info.base_name);
     if (bit == slid_info_.end())
-        throw std::runtime_error("base class '" + info.base_name
-            + "' of '" + info.name + "' is not defined");
+        error(std::string("base class '" + info.base_name
+            + "' of '" + info.name + "' is not defined"));
     SlidInfo& base = bit->second;
     if (base.is_namespace)
-        throw std::runtime_error("cannot inherit from namespace '" + info.base_name + "'");
+        error(std::string("cannot inherit from namespace '" + info.base_name + "'"));
     resolveSlidInheritanceFor(base); // ensure base's flat layout is built first
     info.base_info = &base;
     // virtual-base validation: a virtual class must have a virtual base.
     if (info.is_virtual_class && !base.is_virtual_class)
-        throw std::runtime_error("class '" + info.name
+        error(std::string("class '" + info.name
             + "' is virtual but its base '" + base.name
-            + "' is not — all ancestors of a virtual class must have a virtual destructor");
+            + "' is not — all ancestors of a virtual class must have a virtual destructor"));
 
     // Save own fields (currently sole occupants of field_types/field_index).
     int own_count = info.own_field_count;
@@ -540,9 +558,9 @@ void Codegen::resolveSlidInheritanceFor(SlidInfo& info) {
     info.base_field_count = base_count;
     for (int i = 0; i < own_count; i++) {
         if (info.field_index.count(own_names[i]))
-            throw std::runtime_error("field '" + own_names[i]
+            error(std::string("field '" + own_names[i]
                 + "' in '" + info.name + "' collides with a field inherited from '"
-                + info.base_name + "'");
+                + info.base_name + "'"));
         info.field_index[own_names[i]] = base_count + i;
         info.field_types.push_back(own_types[i]);
     }
@@ -651,8 +669,8 @@ void Codegen::buildVtables() {
                     // shadowing-by-name check: same name with different sig
                     int by_name = findSlotByName(m.name);
                     if (by_name >= 0)
-                        throw std::runtime_error("class '" + name + "': virtual method '"
-                            + m.name + "' signature does not match the inherited slot");
+                        error(std::string("class '" + name + "': virtual method '"
+                            + m.name + "' signature does not match the inherited slot"));
                     // new slot
                     SlidInfo::VtableSlot s;
                     s.method_name = m.name;
@@ -667,8 +685,8 @@ void Codegen::buildVtables() {
                 } else {
                     // override: must match return type exactly
                     if (info.vtable[slot].return_type != m.return_type)
-                        throw std::runtime_error("class '" + name + "': virtual override '"
-                            + m.name + "' return type does not match base");
+                        error(std::string("class '" + name + "': virtual override '"
+                            + m.name + "' return type does not match base"));
                     if (m.is_pure) {
                         info.vtable[slot].is_pure = true;
                         info.vtable[slot].defining_class = "";
@@ -683,8 +701,8 @@ void Codegen::buildVtables() {
                 // non-virtual: must not shadow a base virtual of the same name
                 int by_name = findSlotByName(m.name);
                 if (by_name >= 0)
-                    throw std::runtime_error("class '" + name + "': method '" + m.name
-                        + "' shadows inherited virtual method — declare it 'virtual' to override");
+                    error(std::string("class '" + name + "': method '" + m.name
+                        + "' shadows inherited virtual method — declare it 'virtual' to override"));
             }
         }
         // Apply external_methods (reopens). May NOT add new virtual slots; may
@@ -702,15 +720,15 @@ void Codegen::buildVtables() {
                     // or attempt to add a new virtual via reopen.
                     int by_name = findSlotByName(em.method_name);
                     if (by_name >= 0)
-                        throw std::runtime_error("class '" + name + "': virtual method '"
-                            + em.method_name + "' signature does not match the inherited slot");
-                    throw std::runtime_error("class '" + name
+                        error(std::string("class '" + name + "': virtual method '"
+                            + em.method_name + "' signature does not match the inherited slot"));
+                    error(std::string("class '" + name
                         + "': new virtual methods may not be added in a reopen — '"
-                        + em.method_name + "' must be declared in the original class");
+                        + em.method_name + "' must be declared in the original class"));
                 }
                 if (info.vtable[slot].return_type != em.return_type)
-                    throw std::runtime_error("class '" + name + "': virtual override '"
-                        + em.method_name + "' return type does not match base");
+                    error(std::string("class '" + name + "': virtual override '"
+                        + em.method_name + "' return type does not match base"));
                 if (em.is_pure) {
                     info.vtable[slot].is_pure = true;
                     info.vtable[slot].defining_class = "";
@@ -723,8 +741,8 @@ void Codegen::buildVtables() {
             } else {
                 int by_name = findSlotByName(em.method_name);
                 if (by_name >= 0)
-                    throw std::runtime_error("class '" + name + "': method '" + em.method_name
-                        + "' shadows inherited virtual method — declare it 'virtual' to override");
+                    error(std::string("class '" + name + "': method '" + em.method_name
+                        + "' shadows inherited virtual method — declare it 'virtual' to override"));
             }
         }
     };
@@ -824,8 +842,8 @@ void Codegen::validatePureSlots() {
         if (!any_concrete) continue;
         for (auto& slot : info.vtable) {
             if (!slot.is_pure) continue;
-            throw std::runtime_error("class '" + name + "': virtual method '"
-                + slot.method_name + "' is declared pure (= delete) but is never defined");
+            error(std::string("class '" + name + "': virtual method '"
+                + slot.method_name + "' is declared pure (= delete) but is never defined"));
         }
     }
 }
@@ -1102,7 +1120,7 @@ void Codegen::emit() {
         // pick the function-template overload that matches req.param_types
         auto it = template_funcs_.find(req.func_name);
         if (it == template_funcs_.end() || it->second.empty())
-            throw std::runtime_error("unknown template: " + req.func_name);
+            error(std::string("unknown template: " + req.func_name));
         // build subst for matching against req.param_types
         const TemplateFuncEntry* chosen = nullptr;
         for (auto& entry : it->second) {
@@ -1134,8 +1152,8 @@ void Codegen::emit() {
             if (match) { chosen = &entry; break; }
         }
         if (!chosen)
-            throw std::runtime_error("instantiate: no overload of '" + req.func_name
-                + "' matches the requested parameter signature");
+            error(std::string("instantiate: no overload of '" + req.func_name
+                + "' matches the requested parameter signature"));
         instantiateTemplate(*chosen, req.type_args, true);
     }
 
@@ -1157,11 +1175,11 @@ void Codegen::emit() {
                            const std::vector<std::pair<std::string,std::string>>& params) {
         for (auto& [type, name] : params) {
             if (slid_info_.count(type) > 0)
-                throw std::runtime_error(ctx + ": parameter '" + name +
-                    "' has class type '" + type + "' — cannot pass by value; use '" + type + "^'");
+                error(std::string(ctx + ": parameter '" + name +
+                    "' has class type '" + type + "' — cannot pass by value; use '" + type + "^'"));
             if (isAnonTupleType(type))
-                throw std::runtime_error(ctx + ": parameter '" + name +
-                    "' has tuple type '" + type + "' — cannot pass by value; use '" + type + "^'");
+                error(std::string(ctx + ": parameter '" + name +
+                    "' has tuple type '" + type + "' — cannot pass by value; use '" + type + "^'"));
         }
     };
     for (auto& fn : program_.functions)
@@ -2012,7 +2030,7 @@ Codegen::TemplateResolution Codegen::resolveTemplateOverload(
     }
     if (matches == 0) return {nullptr, {}};
     if (matches > 1)
-        throw std::runtime_error("ambiguous template overload for '" + name + "'");
+        error(std::string("ambiguous template overload for '" + name + "'"));
     return {best, std::move(best_targs)};
 }
 
@@ -2962,8 +2980,8 @@ void Codegen::emitSlidSwap(const std::string& struct_type,
         }
         // inline arrays: deferred — array handling will be revisited
         if (isInlineArrayType(fslids)) {
-            throw std::runtime_error("swap of inline-array fields not yet supported (field type '"
-                + fslids + "')");
+            error(std::string("swap of inline-array fields not yet supported (field type '"
+                + fslids + "')"));
         }
         // pointer/iterator or primitive field: 4-load/store exchange (no nullification)
         std::string ft = llvmType(fslids);
@@ -3004,8 +3022,8 @@ void Codegen::emitElementwiseAtPtr(const std::string& ttype,
                 }
             }
             if (mangled.empty())
-                throw std::runtime_error("slid element type '" + ft
-                    + "' has no op" + op + "(" + ft + "^, " + ft + "^)");
+                error(std::string("slid element type '" + ft
+                    + "' has no op" + op + "(" + ft + "^, " + ft + "^)"));
             std::string ret_t = func_return_types_.count(mangled)
                 ? func_return_types_[mangled] : "";
             bool is_method = (ret_t == "void");
@@ -3033,7 +3051,7 @@ void Codegen::emitElementwiseAtPtr(const std::string& ttype,
         else if (op == "^")  instr = "xor";
         else if (op == "<<") instr = "shl";
         else if (op == ">>") instr = unsig ? "lshr" : "ashr";
-        else throw std::runtime_error("elementwise: unsupported op '" + op + "'");
+        else error(std::string("elementwise: unsupported op '" + op + "'"));
         std::string lv = newTmp();
         out_ << "    " << lv << " = load " << elem_llvm << ", ptr " << l_gep << "\n";
         std::string rv = newTmp();
@@ -3076,8 +3094,8 @@ void Codegen::emitTupleScalarBroadcastAtPtr(const std::string& ttype,
                 }
             }
             if (mangled.empty())
-                throw std::runtime_error("broadcast: slid slot '" + ft + "' has no op"
-                    + op + "(" + ft + "^, " + scalar_slids + ")");
+                error(std::string("broadcast: slid slot '" + ft + "' has no op"
+                    + op + "(" + ft + "^, " + scalar_slids + ")"));
             std::string ret_t = func_return_types_.count(mangled)
                 ? func_return_types_[mangled] : "";
             bool is_method = (ret_t == "void");
@@ -3090,8 +3108,8 @@ void Codegen::emitTupleScalarBroadcastAtPtr(const std::string& ttype,
         }
         // scalar slot — strict type-match with scalar
         if (ft != scalar_slids)
-            throw std::runtime_error("broadcast: tuple slot type '" + ft
-                + "' does not match scalar type '" + scalar_slids + "'");
+            error(std::string("broadcast: tuple slot type '" + ft
+                + "' does not match scalar type '" + scalar_slids + "'"));
         std::string elem_llvm = llvmType(ft);
         bool unsig = (ft == "uint" || ft == "uint8" || ft == "uint16"
                    || ft == "uint32" || ft == "uint64"
@@ -3107,7 +3125,7 @@ void Codegen::emitTupleScalarBroadcastAtPtr(const std::string& ttype,
         else if (op == "^")  instr = "xor";
         else if (op == "<<") instr = "shl";
         else if (op == ">>") instr = unsig ? "lshr" : "ashr";
-        else throw std::runtime_error("broadcast: unsupported op '" + op + "'");
+        else error(std::string("broadcast: unsupported op '" + op + "'"));
         std::string slot_val = newTmp();
         out_ << "    " << slot_val << " = load " << elem_llvm << ", ptr " << t_gep << "\n";
         std::string lhs = scalar_on_left ? scalar_val : slot_val;
@@ -3126,8 +3144,8 @@ std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
     if (info.is_virtual_class) {
         for (auto& slot : info.vtable) {
             if (slot.is_pure)
-                throw std::runtime_error("cannot instantiate pure virtual class '" + slid_name
-                    + "': method '" + slot.method_name + "' is not defined");
+                error(std::string("cannot instantiate pure virtual class '" + slid_name
+                    + "': method '" + slot.method_name + "' is not defined"));
         }
     }
     std::string reg = newTmp();
@@ -3178,11 +3196,11 @@ void Codegen::emitInitFieldsAtPtrs(const std::string& stype, const std::string& 
     auto fields = fieldTypesOf(stype);
     int nfields = (int)fields.size();
     if ((int)args.size() > nfields)
-        throw std::runtime_error("too many initializers: '" + stype + "' has "
-            + std::to_string(nfields) + " fields, got " + std::to_string(args.size()));
+        error(std::string("too many initializers: '" + stype + "' has "
+            + std::to_string(nfields) + " fields, got " + std::to_string(args.size())));
     if ((int)overrides.size() > nfields)
-        throw std::runtime_error("too many tuple values: '" + stype + "' has "
-            + std::to_string(nfields) + " fields, got " + std::to_string(overrides.size()));
+        error(std::string("too many tuple values: '" + stype + "' has "
+            + std::to_string(nfields) + " fields, got " + std::to_string(overrides.size())));
 
     auto slidDefFor = [&](const std::string& name) -> const SlidDef* {
         for (auto& s : program_.slids) if (s.name == name) return &s;
@@ -3640,7 +3658,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid,
             emitDtors();
             out_ << "    ret void\n";
         } else {
-            throw std::runtime_error("method '" + full_mangled + "' is missing a return statement");
+            error(std::string("method '" + full_mangled + "' is missing a return statement"));
         }
     }
 
@@ -3732,7 +3750,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
             emitDtors();
             out_ << "    ret void\n";
         } else {
-            throw std::runtime_error("function '" + fn.name + "' is missing a return statement");
+            error(std::string("function '" + fn.name + "' is missing a return statement"));
         }
     }
 
@@ -3791,14 +3809,14 @@ std::string Codegen::emitFieldPtr(const std::string& obj_name, const std::string
         slid_name = type_it->second;
         auto loc_it = locals_.find(obj_name);
         if (loc_it == locals_.end())
-            throw std::runtime_error("undefined variable: " + obj_name);
+            error(std::string("undefined variable: " + obj_name));
         obj_ptr = loc_it->second;
     } else if (!current_slid_.empty()) {
         // obj_name may be a field of the current slid, accessed via %self
         auto& parent_info = slid_info_[current_slid_];
         auto parent_it = parent_info.field_index.find(obj_name);
         if (parent_it == parent_info.field_index.end())
-            throw std::runtime_error("unknown type for variable: " + obj_name);
+            error(std::string("unknown type for variable: " + obj_name));
         int parent_idx = parent_it->second;
         slid_name = parent_info.field_types[parent_idx];
         std::string self_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
@@ -3807,13 +3825,13 @@ std::string Codegen::emitFieldPtr(const std::string& obj_name, const std::string
              << ", ptr " << self_ptr << ", i32 0, i32 " << parent_idx << "\n";
         obj_ptr = parent_gep;
     } else {
-        throw std::runtime_error("unknown type for variable: " + obj_name);
+        error(std::string("unknown type for variable: " + obj_name));
     }
 
     auto& info = slid_info_[slid_name];
     auto field_it = info.field_index.find(field);
     if (field_it == info.field_index.end())
-        throw std::runtime_error("unknown field: " + field + " in " + slid_name);
+        error(std::string("unknown field: " + field + " in " + slid_name));
 
     int idx = field_it->second;
     std::string gep = newTmp();

@@ -1,10 +1,12 @@
 #include "codegen.h"
+#include "source_map.h"
 #include "codegen_helpers.h"
 #include <sstream>
 #include <functional>
 #include <stdexcept>
 
 std::string Codegen::emitExpr(const Expr& expr) {
+    EmitGuard _g(*this, expr.file_id, expr.tok);
     if (auto* i = dynamic_cast<const IntLiteralExpr*>(&expr))
         return std::to_string(i->value);
 
@@ -13,9 +15,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
         if (v->name == "self" && !current_slid_.empty()) {
             auto& info = slid_info_[current_slid_];
             if (info.is_empty)
-                throw std::runtime_error(
-                    (info.is_namespace ? "namespace '" : "empty class '")
-                    + current_slid_ + "' has no self");
+                error(std::string((info.is_namespace ? "namespace '" : "empty class '")
+                    + current_slid_ + "' has no self"));
             return self_ptr_.empty() ? "%self" : self_ptr_;
         }
         // check if it's a field access via self in a method
@@ -52,7 +53,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             // Phase 1: type name used as anonymous temporary — alloca, init, ctor
             if (slid_info_.count(v->name))
                 return emitSlidAlloca(v->name);
-            throw std::runtime_error("undefined variable: " + v->name);
+            error(std::string("undefined variable: " + v->name));
         }
         std::string tmp = newTmp();
         auto tit = local_types_.find(v->name);
@@ -145,15 +146,15 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 std::string cur_ptr = tup_ptr;
                 for (int level = 0; level < (int)indices.size(); level++) {
                     if (!isAnonTupleType(cur_type))
-                        throw std::runtime_error("chained tuple index: '" + cur_type
-                            + "' is not a tuple at level " + std::to_string(level));
+                        error(std::string("chained tuple index: '" + cur_type
+                            + "' is not a tuple at level " + std::to_string(level)));
                     auto elems = anonTupleElems(cur_type);
                     int idx;
                     if (!constExprToInt(*indices[level], enum_values_, idx))
-                        throw std::runtime_error("tuple index must be a constant integer");
+                        error(std::string("tuple index must be a constant integer"));
                     if (idx < 0 || idx >= (int)elems.size())
-                        throw std::runtime_error("tuple index " + std::to_string(idx)
-                            + " out of range (size " + std::to_string(elems.size()) + ")");
+                        error(std::string("tuple index " + std::to_string(idx)
+                            + " out of range (size " + std::to_string(elems.size()) + ")"));
                     cur_ptr = emitFieldGep(cur_type, cur_ptr, idx);
                     cur_type = elems[idx];
                 }
@@ -167,7 +168,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
         // non-anon-tuple bases only handled for VarExpr roots below
         auto* ve = dynamic_cast<const VarExpr*>(cur);
-        if (!ve) throw std::runtime_error("complex array base not supported");
+        if (!ve) error(std::string("complex array base not supported"));
 
         // slid op[] dispatch
         {
@@ -274,7 +275,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             }
         }
         if (base_ptr.empty())
-            throw std::runtime_error("undefined array: " + ve->name);
+            error(std::string("undefined array: " + ve->name));
 
         std::string idx_llvm = exprLlvmType(*indices[0]);
         std::string idx_val = emitExpr(*indices[0]);
@@ -294,15 +295,14 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 if (!current_slid_.empty()) {
                     auto& info = slid_info_[current_slid_];
                     if (info.is_empty)
-                        throw std::runtime_error(
-                            (info.is_namespace ? "namespace '" : "empty class '")
-                            + current_slid_ + "' has no self");
+                        error(std::string((info.is_namespace ? "namespace '" : "empty class '")
+                            + current_slid_ + "' has no self"));
                 }
                 return self_ptr_.empty() ? "%self" : self_ptr_;
             }
             auto it = locals_.find(ve->name);
             if (it == locals_.end())
-                throw std::runtime_error("AddrOf: undefined variable '" + ve->name + "'");
+                error(std::string("AddrOf: undefined variable '" + ve->name + "'"));
             return it->second;
         }
         // ^arr[i][j] — compute GEP but skip the final load, returning the element ptr
@@ -314,10 +314,10 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 cur = a->base.get();
             }
             auto* ve = dynamic_cast<const VarExpr*>(cur);
-            if (!ve) throw std::runtime_error("AddrOf: complex array base not supported");
+            if (!ve) error(std::string("AddrOf: complex array base not supported"));
             auto ait = array_info_.find(ve->name);
             if (ait == array_info_.end())
-                throw std::runtime_error("AddrOf: undefined array '" + ve->name + "'");
+                error(std::string("AddrOf: undefined array '" + ve->name + "'"));
             auto& ainfo = ait->second;
             std::string flat = emitExpr(*indices[0]);
             for (int k = 1; k < (int)indices.size(); k++) {
@@ -337,7 +337,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                  << ainfo.alloca_reg << ", i32 0, i32 " << flat << "\n";
             return gep; // pointer to the element, no load
         }
-        throw std::runtime_error("AddrOf: unsupported operand");
+        error(std::string("AddrOf: unsupported operand"));
     }
 
     if (auto* de = dynamic_cast<const DerefExpr*>(&expr)) {
@@ -348,7 +348,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
             auto it = locals_.find(ve->name);
             if (it == locals_.end())
-                throw std::runtime_error("DerefExpr: undefined variable '" + ve->name + "'");
+                error(std::string("DerefExpr: undefined variable '" + ve->name + "'"));
             auto tit = local_types_.find(ve->name);
             if (tit != local_types_.end() && isIndirectType(tit->second)) {
                 // variable holds a reference or pointer — load the ptr, then load through it
@@ -359,9 +359,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 pointee_llvm = llvmType(pointee_type);
             } else {
                 std::string type_name = (tit != local_types_.end()) ? tit->second : "unknown";
-                throw std::runtime_error(
-                    "cannot dereference '" + ve->name + "' of type '" + type_name +
-                    "': only reference (^) and pointer ([]) types can be dereferenced");
+                error(std::string("cannot dereference '" + ve->name + "' of type '" + type_name +
+                    "': only reference (^) and pointer ([]) types can be dereferenced"));
             }
         } else {
             // general case: evaluate operand as expression to get a ptr
@@ -391,13 +390,13 @@ std::string Codegen::emitExpr(const Expr& expr) {
     if (auto* pide = dynamic_cast<const PostIncDerefExpr*>(&expr)) {
         // ptr++^ — load value at current ptr, then advance ptr
         auto* ve = dynamic_cast<const VarExpr*>(pide->operand.get());
-        if (!ve) throw std::runtime_error("PostIncDerefExpr: only simple pointer variables supported");
+        if (!ve) error(std::string("PostIncDerefExpr: only simple pointer variables supported"));
         auto it = locals_.find(ve->name);
         if (it == locals_.end())
-            throw std::runtime_error("PostIncDerefExpr: undefined variable '" + ve->name + "'");
+            error(std::string("PostIncDerefExpr: undefined variable '" + ve->name + "'"));
         auto tit = local_types_.find(ve->name);
         if (tit == local_types_.end() || !isPtrType(tit->second))
-            throw std::runtime_error("PostIncDerefExpr: '" + ve->name + "' is not a pointer ([]) type");
+            error(std::string("PostIncDerefExpr: '" + ve->name + "' is not a pointer ([]) type"));
         std::string pointee_type = tit->second.substr(0, tit->second.size()-2);
         std::string pointee_llvm = llvmType(pointee_type);
         int step = (pide->op == "++") ? 1 : -1;
@@ -436,11 +435,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 slid_name = derefSlidName(*de);
             }
             if (slid_name.empty() || !slid_info_.count(slid_name))
-                throw std::runtime_error("DerefFieldAccess: unknown slid type for field '" + fa->field + "'");
+                error(std::string("DerefFieldAccess: unknown slid type for field '" + fa->field + "'"));
             auto& info = slid_info_[slid_name];
             auto fit = info.field_index.find(fa->field);
             if (fit == info.field_index.end())
-                throw std::runtime_error("unknown field: " + fa->field);
+                error(std::string("unknown field: " + fa->field));
             int idx = fit->second;
             std::string field_type = llvmType(info.field_types[idx]);
             std::string gep = newTmp();
@@ -471,27 +470,27 @@ std::string Codegen::emitExpr(const Expr& expr) {
         if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(fa->object.get())) {
             auto* bve = dynamic_cast<const VarExpr*>(ai->base.get());
             if (!bve)
-                throw std::runtime_error("chained indexed FieldAccess: complex base not supported");
+                error(std::string("chained indexed FieldAccess: complex base not supported"));
             auto tit = local_types_.find(bve->name);
             if (tit == local_types_.end() || !isAnonTupleType(tit->second))
-                throw std::runtime_error("chained indexed FieldAccess: '" + bve->name
-                    + "' is not a tuple");
+                error(std::string("chained indexed FieldAccess: '" + bve->name
+                    + "' is not a tuple"));
             auto elems = anonTupleElems(tit->second);
             int idx;
             if (!constExprToInt(*ai->index, enum_values_, idx))
-                throw std::runtime_error("tuple index must be a constant integer");
+                error(std::string("tuple index must be a constant integer"));
             if (idx < 0 || idx >= (int)elems.size())
-                throw std::runtime_error("tuple index " + std::to_string(idx)
-                    + " out of range (size " + std::to_string(elems.size()) + ")");
+                error(std::string("tuple index " + std::to_string(idx)
+                    + " out of range (size " + std::to_string(elems.size()) + ")"));
             const std::string& slid_name = elems[idx];
             if (!slid_info_.count(slid_name))
-                throw std::runtime_error("chained indexed FieldAccess: tuple element "
-                    + std::to_string(idx) + " is not a slid type");
+                error(std::string("chained indexed FieldAccess: tuple element "
+                    + std::to_string(idx) + " is not a slid type"));
             auto& info = slid_info_[slid_name];
             auto fit = info.field_index.find(fa->field);
             if (fit == info.field_index.end())
-                throw std::runtime_error("unknown field '" + fa->field
-                    + "' on slid '" + slid_name + "'");
+                error(std::string("unknown field '" + fa->field
+                    + "' on slid '" + slid_name + "'"));
             int field_idx = fit->second;
             std::string field_type = llvmType(info.field_types[field_idx]);
             std::string slot_gep = emitFieldGep(tit->second, locals_[bve->name], idx);
@@ -502,7 +501,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             out_ << "    " << tmp << " = load " << field_type << ", ptr " << field_gep << "\n";
             return tmp;
         }
-        throw std::runtime_error("complex field access not yet supported");
+        error(std::string("complex field access not yet supported"));
     }
 
     if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
@@ -515,7 +514,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 else if (slid_info_.count(ve->name)) slid_name = ve->name; // TypeName.sizeof()
             }
             if (slid_name.empty())
-                throw std::runtime_error("sizeof(): cannot determine slid type");
+                error(std::string("sizeof(): cannot determine slid type"));
             std::string reg = newTmp();
             out_ << "    " << reg << " = call i64 @" << slid_name << "__$sizeof()\n";
             return reg;
@@ -530,7 +529,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             } else {
                 auto type_it = local_types_.find(ve->name);
                 if (type_it == local_types_.end())
-                    throw std::runtime_error("unknown type for: " + ve->name);
+                    error(std::string("unknown type for: " + ve->name));
                 slid_name = type_it->second;
                 obj_ptr = locals_[ve->name];
             }
@@ -539,7 +538,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
                 auto type_it = local_types_.find(ve2->name);
                 if (type_it == local_types_.end())
-                    throw std::runtime_error("unknown type for: " + ve2->name);
+                    error(std::string("unknown type for: " + ve2->name));
                 slid_name = type_it->second;
                 if (isRefType(slid_name)) slid_name.pop_back(); else if (isPtrType(slid_name)) slid_name.resize(slid_name.size()-2);
                 // load the pointer value from the alloca
@@ -580,7 +579,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 mangled = resolveOverloadForCall(base, mc->args);
                 auto ret_it = func_return_types_.find(mangled);
                 if (ret_it == func_return_types_.end())
-                    throw std::runtime_error("unknown method: " + mc->method);
+                    error(std::string("unknown method: " + mc->method));
                 ret_slids = ret_it->second;
                 mptypes_vec = func_param_types_[mangled];
             }
@@ -648,7 +647,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                  << "(" << args_prefix << method_args << ")\n";
             return tmp;
         }
-        throw std::runtime_error("complex method call not yet supported");
+        error(std::string("complex method call not yet supported"));
     }
 
     if (auto* call = dynamic_cast<const CallExpr*>(&expr)) {
@@ -656,21 +655,21 @@ std::string Codegen::emitExpr(const Expr& expr) {
         if (!call->qualifier.empty() && call->qualifier != "::") {
             auto sit = slid_info_.find(call->qualifier);
             if (sit == slid_info_.end())
-                throw std::runtime_error("unknown slid: " + call->qualifier);
+                error(std::string("unknown slid: " + call->qualifier));
             // inherited base method call from inside a derived's method body:
             // `Base:method(args)` with current_slid_ in Base's descendant set.
             if (!sit->second.is_namespace) {
                 if (current_slid_.empty()
                     || (call->qualifier != current_slid_ && !isAncestor(call->qualifier, current_slid_)))
-                    throw std::runtime_error("'" + call->qualifier
-                        + "' is not a namespace; use instance.method() instead");
+                    error(std::string("'" + call->qualifier
+                        + "' is not a namespace; use instance.method() instead"));
                 bool empty = sit->second.is_empty;
                 std::string base_q = call->qualifier + "__" + call->callee;
                 std::string mangled_q = resolveOverloadForCall(base_q, call->args);
                 auto rit_q = func_return_types_.find(mangled_q);
                 if (rit_q == func_return_types_.end())
-                    throw std::runtime_error("unknown method: "
-                        + call->qualifier + ":" + call->callee);
+                    error(std::string("unknown method: "
+                        + call->qualifier + ":" + call->callee));
                 auto& mptypes_q = func_param_types_[mangled_q];
                 std::string self_str = self_ptr_.empty() ? "%self" : self_ptr_;
                 std::string method_args_q;
@@ -708,7 +707,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string mangled = resolveOverloadForCall(base, call->args);
             auto rit = func_return_types_.find(mangled);
             if (rit == func_return_types_.end())
-                throw std::runtime_error("unknown namespace function: " + call->qualifier + ":" + call->callee);
+                error(std::string("unknown namespace function: " + call->qualifier + ":" + call->callee));
             auto& ptypes = func_param_types_[mangled];
             std::string arg_str;
             for (int i = 0; i < (int)call->args.size(); i++) {
@@ -738,7 +737,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         if (call->qualifier == "::") {
             std::string mangled = resolveFreeFunctionMangledName(call->callee, call->args.size());
             if (mangled.empty())
-                throw std::runtime_error("undefined global function: " + call->callee);
+                error(std::string("undefined global function: " + call->callee));
             auto it = func_return_types_.find(mangled);
             auto& ptypes = func_param_types_[mangled];
             std::string arg_str;
@@ -886,7 +885,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         // regular function call
         std::string mangled = resolveFreeFunctionMangledName(call->callee, call->args.size());
         if (mangled.empty())
-            throw std::runtime_error("undefined function: " + call->callee);
+            error(std::string("undefined function: " + call->callee));
         auto it = func_return_types_.find(mangled);
         auto& ptypes = func_param_types_[mangled];
         std::string arg_str;
@@ -951,9 +950,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
             // plain local variable
             if (ptr.empty()) {
                 auto* ve = dynamic_cast<const VarExpr*>(u->operand.get());
-                if (!ve) throw std::runtime_error("++/-- requires a variable");
+                if (!ve) error(std::string("++/-- requires a variable"));
                 auto it = locals_.find(ve->name);
-                if (it == locals_.end()) throw std::runtime_error("undefined variable: " + ve->name);
+                if (it == locals_.end()) error(std::string("undefined variable: " + ve->name));
                 ptr = it->second;
             }
 
@@ -965,9 +964,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 auto tit = local_types_.find(ve->name);
                 if (tit != local_types_.end()) {
                     if (isRefType(tit->second))
-                        throw std::runtime_error(
-                            "'" + u->op + "' on reference '" + ve->name +
-                            "': arithmetic on references is not allowed (use a pointer '[]' type)");
+                        error(std::string("'" + u->op + "' on reference '" + ve->name +
+                            "': arithmetic on references is not allowed (use a pointer '[]' type)"));
                     if (isPtrType(tit->second)) {
                         is_ptr_arith = true;
                         std::string pointee_type = tit->second.substr(0, tit->second.size()-2);
@@ -1004,7 +1002,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             out_ << "    " << tmp << " = xor i32 " << val << ", -1\n";
             return tmp;
         }
-        throw std::runtime_error("unknown unary op: " + u->op);
+        error(std::string("unknown unary op: " + u->op));
     }
 
     if (auto* b = dynamic_cast<const BinaryExpr*>(&expr)) {
@@ -1035,11 +1033,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
             };
             if (l_tuple && r_tuple) {
                 if (lslid != rslid)
-                    throw std::runtime_error("tuple type mismatch in elementwise '"
-                        + b->op + "': " + lslid + " vs " + rslid);
+                    error(std::string("tuple type mismatch in elementwise '"
+                        + b->op + "': " + lslid + " vs " + rslid));
                 if (!ewise_ops.count(b->op))
-                    throw std::runtime_error("operator '" + b->op
-                        + "' not supported element-wise on tuples");
+                    error(std::string("operator '" + b->op
+                        + "' not supported element-wise on tuples"));
                 std::string l_ptr = materialize(*b->left, lslid);
                 std::string r_ptr = materialize(*b->right, rslid);
                 std::string struct_llvm = llvmType(lslid);
@@ -1055,14 +1053,14 @@ std::string Codegen::emitExpr(const Expr& expr) {
             // scalar (not slid, not tuple, not pointer).
             if (l_tuple ^ r_tuple) {
                 if (!ewise_ops.count(b->op))
-                    throw std::runtime_error("operator '" + b->op
-                        + "' not supported element-wise on tuples");
+                    error(std::string("operator '" + b->op
+                        + "' not supported element-wise on tuples"));
                 const std::string& tup_type = l_tuple ? lslid : rslid;
                 const std::string& scalar_slids = l_tuple ? rslid : lslid;
                 if (slid_info_.count(scalar_slids) || isAnonTupleType(scalar_slids)
                         || isIndirectType(scalar_slids))
-                    throw std::runtime_error("broadcast: non-tuple operand of '" + b->op
-                        + "' must be a primitive scalar; got '" + scalar_slids + "'");
+                    error(std::string("broadcast: non-tuple operand of '" + b->op
+                        + "' must be a primitive scalar; got '" + scalar_slids + "'"));
                 const Expr& tup_expr = l_tuple ? *b->left : *b->right;
                 const Expr& scalar_expr = l_tuple ? *b->right : *b->left;
                 std::string tup_ptr = materialize(tup_expr, tup_type);
@@ -1336,8 +1334,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
             bool right_ref = isRefType(rslids);
             if (left_ref || right_ref) {
                 if (b->op != "==" && b->op != "!=")
-                    throw std::runtime_error("operator '" + b->op + "' is not allowed on reference type '"
-                        + (left_ref ? lslids : rslids) + "': references only support '==' and '!='");
+                    error(std::string("operator '" + b->op + "' is not allowed on reference type '"
+                        + (left_ref ? lslids : rslids) + "': references only support '==' and '!='"));
                 // == and != require same base type (strip either ^ or [] suffix)
                 auto refBase = [](const std::string& t) -> std::string {
                     if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return t.substr(0, t.size()-2);
@@ -1346,8 +1344,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 };
                 std::string lb = refBase(lslids), rb = refBase(rslids);
                 if (!lb.empty() && !rb.empty() && lb != "void" && rb != "void" && lb != rb)
-                    throw std::runtime_error("reference comparison requires same type: '"
-                        + lslids + "' vs '" + rslids + "'");
+                    error(std::string("reference comparison requires same type: '"
+                        + lslids + "' vs '" + rslids + "'"));
             }
         }
 
@@ -1368,16 +1366,16 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string lb = getPtBase(*b->left);
             std::string rb = getPtBase(*b->right);
             if (!lb.empty() && !rb.empty() && lb != rb)
-                throw std::runtime_error("pointer comparison requires same pointee type: '"
-                    + lb + "[]' vs '" + rb + "[]'");
+                error(std::string("pointer comparison requires same pointee type: '"
+                    + lb + "[]' vs '" + rb + "[]'"));
         }
 
         // invalid pointer arithmetic
         if (left_llvm == "ptr" || right_llvm == "ptr") {
             if (b->op == "+" && left_llvm == "ptr" && right_llvm == "ptr")
-                throw std::runtime_error("pointer + pointer is not allowed");
+                error(std::string("pointer + pointer is not allowed"));
             if (b->op == "*" || b->op == "/" || b->op == "%")
-                throw std::runtime_error("operator '" + b->op + "' is not allowed on pointer types");
+                error(std::string("operator '" + b->op + "' is not allowed on pointer types"));
         }
 
         if ((b->op == "+" || b->op == "-") && (left_llvm == "ptr" || right_llvm == "ptr")) {
@@ -1422,8 +1420,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 std::string lb = getSlidsBase(*b->left);
                 std::string rb = getSlidsBase(*b->right);
                 if (!lb.empty() && !rb.empty() && lb != rb)
-                    throw std::runtime_error("pointer subtraction requires same pointee type: '"
-                        + lb + "[]' vs '" + rb + "[]'");
+                    error(std::string("pointer subtraction requires same pointee type: '"
+                        + lb + "[]' vs '" + rb + "[]'"));
                 std::string pointee = getPt(*b->left);
                 std::string lv = emitExpr(*b->left);
                 std::string rv = emitExpr(*b->right);
@@ -1500,7 +1498,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         else if (b->op == ">")  pred = unsig ? "ugt" : "sgt";
         else if (b->op == "<=") pred = unsig ? "ule" : "sle";
         else if (b->op == ">=") pred = unsig ? "uge" : "sge";
-        else throw std::runtime_error("unknown operator: " + b->op);
+        else error(std::string("unknown operator: " + b->op));
 
         out_ << "    " << cmp << " = icmp " << pred << " " << op_type << " " << left << ", " << right << "\n";
         out_ << "    " << tmp << " = zext i1 " << cmp << " to i32\n";
@@ -1709,8 +1707,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
             if (info.is_virtual_class) {
                 for (auto& slot : info.vtable) {
                     if (slot.is_pure)
-                        throw std::runtime_error("cannot instantiate pure virtual class '" + stype
-                            + "': method '" + slot.method_name + "' is not defined");
+                        error(std::string("cannot instantiate pure virtual class '" + stype
+                            + "': method '" + slot.method_name + "' is not defined"));
                 }
             }
         }
@@ -1742,7 +1740,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         };
         std::string addr_type = exprType(*pne->addr);
         if (!allowed_addr_types.count(addr_type))
-            throw std::runtime_error("placement new: address must be void, int8, or uint8 pointer, got '" + addr_type + "'");
+            error(std::string("placement new: address must be void, int8, or uint8 pointer, got '" + addr_type + "'"));
         std::string ptr = emitExpr(*pne->addr);
         emitConstructAt(stype, ptr, pne->args);
         return ptr;
@@ -1752,14 +1750,26 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string result;
         if (se->kind == "name") {
             auto* ve = dynamic_cast<const VarExpr*>(se->operand.get());
-            if (!ve) throw std::runtime_error("##name requires a simple variable");
+            if (!ve) error(std::string("##name requires a simple variable"));
             result = ve->name;
         } else if (se->kind == "type") {
             result = inferSlidType(*se->operand);
         } else if (se->kind == "line") {
-            result = std::to_string(se->line);
+            int ln = 0;
+            if (se->file_id >= 0) {
+                auto& tlocs = sm_.at(se->file_id).tokens;
+                if (se->tok >= 0 && se->tok < (int)tlocs.size())
+                    ln = tlocs[se->tok].line;
+            }
+            result = std::to_string(ln);
         } else if (se->kind == "file") {
-            result = source_file_;
+            if (se->file_id >= 0) {
+                std::string p = sm_.at(se->file_id).path;
+                auto slash = p.find_last_of('/');
+                result = (slash == std::string::npos) ? p : p.substr(slash + 1);
+            } else {
+                result = source_file_;
+            }
         } else if (se->kind == "func") {
             result = current_func_name_;
         } else if (se->kind == "date") {
@@ -1919,8 +1929,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
             else if (!src_slid && !dst_slid)
                 ok = (llvmType(src_base) == llvmType(dst_base));
             if (!ok)
-                throw std::runtime_error("cannot cast pointer of unrelated type '"
-                    + src_slids + "' to '" + pc->target_type + "'");
+                error(std::string("cannot cast pointer of unrelated type '"
+                    + src_slids + "' to '" + pc->target_type + "'"));
         }
         std::string src_val  = emitExpr(*pc->operand);
         std::string src_type = exprLlvmType(*pc->operand);
@@ -1938,7 +1948,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         return tmp;
     }
 
-    throw std::runtime_error("unsupported expression type");
+    error(std::string("unsupported expression type"));
 }
 
 // Infer the LLVM type that emitExpr will produce for this expression,
@@ -2327,8 +2337,8 @@ void Codegen::requirePtrInit(const std::string& dst_type, const Expr& src) {
     std::string src_t = exprLlvmType(src);
     if (src_t != "ptr") {
         std::string src_slids = inferSlidType(src);
-        throw std::runtime_error("cannot initialize '" + dst_type
-            + "' from value of type '" + src_slids + "'");
+        error(std::string("cannot initialize '" + dst_type
+            + "' from value of type '" + src_slids + "'"));
     }
     // slids-level pointer-base compatibility. `pointer → void^` is implicit
     // (stripping); `void^ → typed pointer` requires an explicit cast. nullptr
@@ -2346,14 +2356,14 @@ void Codegen::requirePtrInit(const std::string& dst_type, const Expr& src) {
     if (dst_base != "void"
         && dst_base != src_base
         && !isAncestor(dst_base, src_base))
-        throw std::runtime_error("cannot initialize '" + dst_type
-            + "' from value of type '" + src_slids + "'");
+        error(std::string("cannot initialize '" + dst_type
+            + "' from value of type '" + src_slids + "'"));
     // reference cannot promote to iterator
     if (isPtrType(dst_type) && isRefType(src_slids)
         && dst_base != "void" && src_base != "void")
-        throw std::runtime_error("cannot initialize iterator '" + dst_type
+        error(std::string("cannot initialize iterator '" + dst_type
             + "' from reference '" + src_slids
-            + "': references cannot promote to iterators");
+            + "': references cannot promote to iterators"));
 }
 
 // Infer the Slids type string for a type-inferred variable declaration (x = expr;).

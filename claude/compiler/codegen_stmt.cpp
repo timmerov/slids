@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "source_map.h"
 #include "codegen_helpers.h"
 #include <sstream>
 #include <functional>
@@ -10,9 +11,9 @@ void Codegen::emitDestructure(
     // tuple literal rhs: desugar (t1 a, t2 b) = (x, y); into t1 a = x; t2 b = y;
     if (auto* te = dynamic_cast<const TupleExpr*>(&init)) {
         if (te->values.size() != targets.size())
-            throw std::runtime_error("destructure size mismatch: "
+            error(std::string("destructure size mismatch: "
                 + std::to_string(targets.size()) + " targets, "
-                + std::to_string(te->values.size()) + " values");
+                + std::to_string(te->values.size()) + " values"));
         for (int i = 0; i < (int)targets.size(); i++) {
             auto& [type, name] = targets[i];
             if (name.empty()) continue; // empty slot — skip this element
@@ -22,17 +23,17 @@ void Codegen::emitDestructure(
             if (reassign) {
                 auto ltit = local_types_.find(name);
                 if (ltit == local_types_.end() || ltit->second != eff_type)
-                    throw std::runtime_error("destructure reassign: '" + name
+                    error(std::string("destructure reassign: '" + name
                         + "' has type '" + (ltit==local_types_.end()?"<unknown>":ltit->second)
-                        + "' but source element is '" + eff_type + "'");
+                        + "' but source element is '" + eff_type + "'"));
             }
             std::string reg = reassign ? locals_[name] : uniqueAllocaReg(name);
             // slid or anon-tuple target: init path (alloca + ctor) unless reassigning.
             if (slid_info_.count(eff_type) || isAnonTupleType(eff_type)) {
                 std::string src_type = inferSlidType(*te->values[i]);
                 if (src_type != eff_type)
-                    throw std::runtime_error("type mismatch: cannot destructure '"
-                        + src_type + "' into '" + eff_type + " " + name + "'");
+                    error(std::string("type mismatch: cannot destructure '"
+                        + src_type + "' into '" + eff_type + " " + name + "'"));
                 if (!reassign)
                     out_ << "    " << reg << " = alloca " << llvmType(eff_type) << "\n";
                 std::string src_ptr;
@@ -68,8 +69,8 @@ void Codegen::emitDestructure(
                         out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << llvm_t << "\n";
                     val = coerced;
                 } else {
-                    throw std::runtime_error("type mismatch: cannot destructure '"
-                        + inferSlidType(*te->values[i]) + "' into '" + eff_type + " " + name + "'");
+                    error(std::string("type mismatch: cannot destructure '"
+                        + inferSlidType(*te->values[i]) + "' into '" + eff_type + " " + name + "'"));
                 }
             }
             out_ << "    store " << llvm_t << " " << val << ", ptr " << reg << "\n";
@@ -87,9 +88,9 @@ void Codegen::emitDestructure(
         if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
             auto elems = anonTupleElems(tit->second);
             if (elems.size() != targets.size())
-                throw std::runtime_error("destructure size mismatch: "
+                error(std::string("destructure size mismatch: "
                     + std::to_string(targets.size()) + " targets, "
-                    + std::to_string(elems.size()) + " elements in '" + ve->name + "'");
+                    + std::to_string(elems.size()) + " elements in '" + ve->name + "'"));
             const std::string& src_type = tit->second;
             const std::string& src_ptr = locals_[ve->name];
             // Any slid/anon-tuple slot? If so, we need per-slot GEP rather than a whole-struct load.
@@ -111,15 +112,15 @@ void Codegen::emitDestructure(
                 if (reassign) {
                     auto ltit = local_types_.find(name);
                     if (ltit == local_types_.end() || ltit->second != eff_type)
-                        throw std::runtime_error("destructure reassign: '" + name
+                        error(std::string("destructure reassign: '" + name
                             + "' has type '" + (ltit==local_types_.end()?"<unknown>":ltit->second)
-                            + "' but source element is '" + eff_type + "'");
+                            + "' but source element is '" + eff_type + "'"));
                 }
                 std::string reg = reassign ? locals_[name] : uniqueAllocaReg(name);
                 if (slid_info_.count(elem_type) || isAnonTupleType(elem_type)) {
                     if (!type.empty() && type != elem_type)
-                        throw std::runtime_error("type mismatch: cannot destructure '"
-                            + elem_type + "' into '" + eff_type + " " + name + "'");
+                        error(std::string("type mismatch: cannot destructure '"
+                            + elem_type + "' into '" + eff_type + " " + name + "'"));
                     if (!reassign)
                         out_ << "    " << reg << " = alloca " << llvmType(elem_type) << "\n";
                     std::string src_gep = emitFieldGep(src_type, src_ptr, i);
@@ -148,8 +149,8 @@ void Codegen::emitDestructure(
                             out_ << "    " << coerced << " = trunc " << elem_llvm << " " << extracted << " to " << dst_llvm << "\n";
                         extracted = coerced;
                     } else {
-                        throw std::runtime_error("type mismatch: cannot destructure '"
-                            + elem_type + "' into '" + eff_type + " " + name + "'");
+                        error(std::string("type mismatch: cannot destructure '"
+                            + elem_type + "' into '" + eff_type + " " + name + "'"));
                     }
                 }
                 if (!reassign)
@@ -177,14 +178,14 @@ void Codegen::emitDestructure(
         if (eff_type.empty() && i < (int)src_elems.size())
             eff_type = src_elems[i];
         if (eff_type.empty())
-            throw std::runtime_error("destructure type inference from non-tuple-variable source not supported yet");
+            error(std::string("destructure type inference from non-tuple-variable source not supported yet"));
         bool reassign = type.empty() && locals_.count(name) > 0;
         if (reassign) {
             auto ltit = local_types_.find(name);
             if (ltit == local_types_.end() || ltit->second != eff_type)
-                throw std::runtime_error("destructure reassign: '" + name
+                error(std::string("destructure reassign: '" + name
                     + "' has type '" + (ltit==local_types_.end()?"<unknown>":ltit->second)
-                    + "' but source element is '" + eff_type + "'");
+                    + "' but source element is '" + eff_type + "'"));
         }
         std::string llvm_t = llvmType(eff_type);
         std::string reg = reassign ? locals_[name] : uniqueAllocaReg(name);
@@ -229,10 +230,11 @@ static std::unique_ptr<Expr> cloneExpr(const Expr& e) {
         return std::make_unique<UnaryExpr>(ue->op, cloneExpr(*ue->operand));
     if (auto* ao = dynamic_cast<const AddrOfExpr*>(&e))
         return std::make_unique<AddrOfExpr>(cloneExpr(*ao->operand));
-    throw std::runtime_error("cloneExpr: unsupported expression shape");
+    throw CompileError{e.file_id, e.tok, "cloneExpr: unsupported expression shape"};
 }
 
 void Codegen::emitStmt(const Stmt& stmt) {
+    EmitGuard _g(*this, stmt.file_id, stmt.tok);
     // null out the storage location of a source expression after a move
     auto emitNullOut = [&](const Expr& src) {
         if (auto* ve = dynamic_cast<const VarExpr*>(&src)) {
@@ -449,7 +451,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string inferred;
         if (decl->type.empty()) {
             if (!decl->init)
-                throw std::runtime_error("inferred variable declaration requires initializer");
+                error(std::string("inferred variable declaration requires initializer"));
             inferred = inferSlidType(*decl->init);
         }
         const std::string& eff_type = decl->type.empty() ? inferred : decl->type;
@@ -460,8 +462,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (info.is_virtual_class) {
                 for (auto& slot : info.vtable) {
                     if (slot.is_pure)
-                        throw std::runtime_error("cannot instantiate pure virtual class '" + eff_type
-                            + "': method '" + slot.method_name + "' is not defined");
+                        error(std::string("cannot instantiate pure virtual class '" + eff_type
+                            + "': method '" + slot.method_name + "' is not defined"));
                 }
             }
 
@@ -651,8 +653,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     if (slid_info_.count(elems[i])) {
                         std::string src_type = inferSlidType(*te->values[i]);
                         if (src_type != elems[i])
-                            throw std::runtime_error("slid tuple element type mismatch: expected '"
-                                + elems[i] + "', got '" + src_type + "'");
+                            error(std::string("slid tuple element type mismatch: expected '"
+                                + elems[i] + "', got '" + src_type + "'"));
                         std::string src_ptr;
                         if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
                             src_ptr = locals_[ve->name];
@@ -675,12 +677,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
             // non-literal initializer — require a same-typed tuple source and field-by-field copy/move
             std::string src_slids = inferSlidType(*decl->init);
             if (src_slids != eff_type)
-                throw std::runtime_error("cannot initialize tuple '" + eff_type
-                    + "' from expression of type '" + src_slids + "'");
+                error(std::string("cannot initialize tuple '" + eff_type
+                    + "' from expression of type '" + src_slids + "'"));
             std::string src_ptr;
             if (auto* ve = dynamic_cast<const VarExpr*>(decl->init.get())) {
                 auto lit = locals_.find(ve->name);
-                if (lit == locals_.end()) throw std::runtime_error("undefined tuple source: " + ve->name);
+                if (lit == locals_.end()) error(std::string("undefined tuple source: " + ve->name));
                 src_ptr = lit->second;
             } else {
                 // non-variable source (e.g. tuple-returning call): emit into a temp alloca
@@ -708,7 +710,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             bool is_ptr = (!eff_type.empty() && eff_type.back() == '^')
                        || (eff_type.size() >= 2 && eff_type.substr(eff_type.size()-2) == "[]");
             if (!known_primitives.count(eff_type) && !is_ptr)
-                throw std::runtime_error("unknown type '" + eff_type + "'");
+                error(std::string("unknown type '" + eff_type + "'"));
         }
         std::string reg = uniqueAllocaReg(decl->name);
         std::string llvm_t = llvmType(eff_type);
@@ -756,7 +758,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (assign->name == "self" && !current_slid_.empty()) {
             std::string op_func = resolveOpEq(current_slid_ + "__op=", *assign->value);
             if (op_func.empty())
-                throw std::runtime_error("no matching op= on '" + current_slid_ + "' for 'self = <expr>'");
+                error(std::string("no matching op= on '" + current_slid_ + "' for 'self = <expr>'"));
             auto& ptypes = func_param_types_[op_func];
             std::string param_type = ptypes.empty() ? "" : ptypes[0];
             std::string arg_val = emitArgForParam(*assign->value, param_type);
@@ -786,7 +788,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
         auto it = locals_.find(assign->name);
         if (it == locals_.end())
-            throw std::runtime_error("undefined variable: " + assign->name);
+            error(std::string("undefined variable: " + assign->name));
         auto tit = local_types_.find(assign->name);
         // anonymous-tuple local LHS: route per the element-wise rule.
         if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
@@ -796,9 +798,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (auto* te = dynamic_cast<const TupleExpr*>(assign->value.get())) {
                 int nfields = (int)elems.size();
                 if ((int)te->values.size() > nfields)
-                    throw std::runtime_error("tuple has " + std::to_string(te->values.size())
+                    error(std::string("tuple has " + std::to_string(te->values.size())
                         + " values but '" + assign->name + "' has " + std::to_string(nfields)
-                        + " elements");
+                        + " elements"));
                 for (int i = 0; i < (int)te->values.size(); i++) {
                     const std::string& ft = elems[i];
                     std::string elem_llvm = llvmType(ft);
@@ -807,8 +809,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     if (slid_info_.count(ft)) {
                         std::string src_type = inferSlidType(*te->values[i]);
                         if (src_type != ft)
-                            throw std::runtime_error("slid tuple element type mismatch: expected '"
-                                + ft + "', got '" + src_type + "'");
+                            error(std::string("slid tuple element type mismatch: expected '"
+                                + ft + "', got '" + src_type + "'"));
                         std::string src_ptr;
                         if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
                             src_ptr = locals_[ve->name];
@@ -831,9 +833,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                 out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << elem_llvm << "\n";
                             val = coerced;
                         } else {
-                            throw std::runtime_error("type mismatch: cannot assign '"
+                            error(std::string("type mismatch: cannot assign '"
                                 + inferSlidType(*te->values[i]) + "' to tuple element "
-                                + std::to_string(i) + " of type '" + ft + "'");
+                                + std::to_string(i) + " of type '" + ft + "'"));
                         }
                     }
                     out_ << "    store " << elem_llvm << " " << val << ", ptr " << gep << "\n";
@@ -845,15 +847,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
             // tuple-variable rhs of matching type: route through element-wise walker
             std::string src_slids = inferSlidType(*assign->value);
             if (src_slids != lhs_t)
-                throw std::runtime_error("type mismatch: cannot assign '" + src_slids
-                    + "' to tuple variable '" + assign->name + "' of type '" + lhs_t + "'");
+                error(std::string("type mismatch: cannot assign '" + src_slids
+                    + "' to tuple variable '" + assign->name + "' of type '" + lhs_t + "'"));
             std::string src_ptr;
             if (auto* ve = dynamic_cast<const VarExpr*>(assign->value.get())) {
                 auto lit = locals_.find(ve->name);
                 if (lit != locals_.end()) src_ptr = lit->second;
             }
             if (src_ptr.empty())
-                throw std::runtime_error("tuple copy from non-variable source not supported");
+                error(std::string("tuple copy from non-variable source not supported"));
             emitSlidSlotAssign(lhs_t, it->second, src_ptr, assign->is_move);
             return;
         }
@@ -966,9 +968,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 auto& info = slid_info_[slid_name];
                 int nfields = (int)info.field_types.size();
                 if ((int)te->values.size() > nfields)
-                    throw std::runtime_error("tuple has " + std::to_string(te->values.size())
+                    error(std::string("tuple has " + std::to_string(te->values.size())
                         + " values but '" + slid_name + "' has " + std::to_string(nfields)
-                        + " accessible fields");
+                        + " accessible fields"));
                 for (int i = 0; i < (int)te->values.size(); i++) {
                     const std::string& ft = info.field_types[i];
                     std::string elem_llvm = llvmType(ft);
@@ -977,8 +979,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     if (slid_info_.count(ft)) {
                         std::string src_type = inferSlidType(*te->values[i]);
                         if (src_type != ft)
-                            throw std::runtime_error("slid field '" + info.field_types[i]
-                                + "' reassignment: expected '" + ft + "', got '" + src_type + "'");
+                            error(std::string("slid field '" + info.field_types[i]
+                                + "' reassignment: expected '" + ft + "', got '" + src_type + "'"));
                         std::string src_ptr;
                         if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
                             src_ptr = locals_[ve->name];
@@ -992,14 +994,14 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     if (isAnonTupleType(ft)) {
                         std::string src_type = inferSlidType(*te->values[i]);
                         if (src_type != ft)
-                            throw std::runtime_error("tuple field reassignment: expected '"
-                                + ft + "', got '" + src_type + "'");
+                            error(std::string("tuple field reassignment: expected '"
+                                + ft + "', got '" + src_type + "'"));
                         std::string src_ptr;
                         if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
                             src_ptr = locals_[ve->name];
                         }
                         if (src_ptr.empty())
-                            throw std::runtime_error("tuple-typed field copy from non-variable source not supported");
+                            error(std::string("tuple-typed field copy from non-variable source not supported"));
                         emitSlidSlotAssign(ft, gep, src_ptr, assign->is_move);
                         continue;
                     }
@@ -1250,7 +1252,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             emitStmt(synth);
             return;
         }
-        throw std::runtime_error("compound assignment: unsupported LHS shape");
+        error(std::string("compound assignment: unsupported LHS shape"));
     }
 
     if (auto* da = dynamic_cast<const DerefAssignStmt*>(&stmt)) {
@@ -1261,7 +1263,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (auto* ve = dynamic_cast<const VarExpr*>(da->ptr.get())) {
             auto it = locals_.find(ve->name);
             if (it == locals_.end())
-                throw std::runtime_error("DerefAssign: undefined variable '" + ve->name + "'");
+                error(std::string("DerefAssign: undefined variable '" + ve->name + "'"));
             auto tit = local_types_.find(ve->name);
             if (tit != local_types_.end() && isIndirectType(tit->second)) {
                 std::string loaded_ptr = newTmp();
@@ -1287,23 +1289,23 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // obj.field[index] = value — inline array field on an external object
         if (auto* fa = dynamic_cast<const FieldAccessExpr*>(ia->base.get())) {
             auto* ove = dynamic_cast<const VarExpr*>(fa->object.get());
-            if (!ove) throw std::runtime_error("IndexAssign: complex field object not supported");
+            if (!ove) error(std::string("IndexAssign: complex field object not supported"));
             auto tit = local_types_.find(ove->name);
-            if (tit == local_types_.end()) throw std::runtime_error("IndexAssign: unknown type for '" + ove->name + "'");
+            if (tit == local_types_.end()) error(std::string("IndexAssign: unknown type for '" + ove->name + "'"));
             std::string slid_name = tit->second;
             auto& info = slid_info_[slid_name];
             auto fit = info.field_index.find(fa->field);
-            if (fit == info.field_index.end()) throw std::runtime_error("IndexAssign: unknown field '" + fa->field + "'");
+            if (fit == info.field_index.end()) error(std::string("IndexAssign: unknown field '" + fa->field + "'"));
             std::string ft = info.field_types[fit->second];
             // anon-tuple field: GEP into the field and delegate to tuple-element store logic
             if (isAnonTupleType(ft)) {
                 auto elems = anonTupleElems(ft);
                 int idx;
                 if (!constExprToInt(*ia->index, enum_values_, idx))
-                    throw std::runtime_error("tuple index must be a constant integer");
+                    error(std::string("tuple index must be a constant integer"));
                 if (idx < 0 || idx >= (int)elems.size())
-                    throw std::runtime_error("tuple index " + std::to_string(idx)
-                        + " out of range (size " + std::to_string(elems.size()) + ")");
+                    error(std::string("tuple index " + std::to_string(idx)
+                        + " out of range (size " + std::to_string(elems.size()) + ")"));
                 const std::string& elem_slids = elems[idx];
                 std::string obj_ptr = locals_[ove->name];
                 std::string field_gep = newTmp();
@@ -1313,8 +1315,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (slid_info_.count(elem_slids) || isAnonTupleType(elem_slids)) {
                     std::string src_type = inferSlidType(*ia->value);
                     if (src_type != elem_slids)
-                        throw std::runtime_error("tuple element write: expected '"
-                            + elem_slids + "', got '" + src_type + "'");
+                        error(std::string("tuple element write: expected '"
+                            + elem_slids + "', got '" + src_type + "'"));
                     std::string src_ptr;
                     if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
                         auto lit = locals_.find(rve->name);
@@ -1343,7 +1345,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     emitNullOut(*ia->value);
                 return;
             }
-            if (!isInlineArrayType(ft)) throw std::runtime_error("IndexAssign: field '" + fa->field + "' is not an inline array");
+            if (!isInlineArrayType(ft)) error(std::string("IndexAssign: field '" + fa->field + "' is not an inline array"));
             auto lb = ft.rfind('[');
             std::string elem_type = ft.substr(0, lb);
             std::string sz_str = ft.substr(lb + 1, ft.size() - lb - 2);
@@ -1376,10 +1378,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         auto elems = anonTupleElems(t);
                         int idx;
                         if (!constExprToInt(*ia->index, enum_values_, idx))
-                            throw std::runtime_error("tuple index must be a constant integer");
+                            error(std::string("tuple index must be a constant integer"));
                         if (idx < 0 || idx >= (int)elems.size())
-                            throw std::runtime_error("tuple index " + std::to_string(idx)
-                                + " out of range (size " + std::to_string(elems.size()) + ")");
+                            error(std::string("tuple index " + std::to_string(idx)
+                                + " out of range (size " + std::to_string(elems.size()) + ")"));
                         std::string base_ptr = newTmp();
                         out_ << "    " << base_ptr << " = load ptr, ptr "
                              << locals_.at(ve->name) << "\n";
@@ -1419,7 +1421,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
 
         auto* ve = dynamic_cast<const VarExpr*>(ia->base.get());
-        if (!ve) throw std::runtime_error("IndexAssign: complex base not supported");
+        if (!ve) error(std::string("IndexAssign: complex base not supported"));
 
         // anonymous tuple element write: tuple[N] = val — N must be a compile-time constant
         {
@@ -1428,10 +1430,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 auto elems = anonTupleElems(tit->second);
                 int idx;
                 if (!constExprToInt(*ia->index, enum_values_, idx))
-                    throw std::runtime_error("tuple index must be a constant integer");
+                    error(std::string("tuple index must be a constant integer"));
                 if (idx < 0 || idx >= (int)elems.size())
-                    throw std::runtime_error("tuple index " + std::to_string(idx)
-                        + " out of range (size " + std::to_string(elems.size()) + ")");
+                    error(std::string("tuple index " + std::to_string(idx)
+                        + " out of range (size " + std::to_string(elems.size()) + ")"));
                 std::string elem_slids = elems[idx];
                 std::string elem_llvm = llvmType(elem_slids);
                 std::string gep = emitFieldGep(tit->second, locals_[ve->name], idx);
@@ -1439,8 +1441,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (slid_info_.count(elem_slids) || isAnonTupleType(elem_slids)) {
                     std::string src_type = inferSlidType(*ia->value);
                     if (src_type != elem_slids)
-                        throw std::runtime_error("tuple element write: expected '"
-                            + elem_slids + "', got '" + src_type + "'");
+                        error(std::string("tuple element write: expected '"
+                            + elem_slids + "', got '" + src_type + "'"));
                     std::string src_ptr;
                     if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
                         auto lit = locals_.find(rve->name);
@@ -1461,7 +1463,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         }
                     }
                     if (src_ptr.empty())
-                        throw std::runtime_error("tuple element write from unsupported source");
+                        error(std::string("tuple element write from unsupported source"));
                     emitSlidSlotAssign(elem_slids, gep, src_ptr, ia->is_move);
                     return;
                 }
@@ -1581,7 +1583,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
         }
         if (base_ptr.empty())
-            throw std::runtime_error("IndexAssign: '" + ve->name + "' is not a pointer type");
+            error(std::string("IndexAssign: '" + ve->name + "' is not a pointer type"));
 
         std::string idx_llvm = exprLlvmType(*ia->index);
         std::string idx_val = emitExpr(*ia->index);
@@ -1599,13 +1601,13 @@ void Codegen::emitStmt(const Stmt& stmt) {
     if (auto* pida = dynamic_cast<const PostIncDerefAssignStmt*>(&stmt)) {
         // ptr++^ = val — store val at current ptr, then advance ptr by one element
         auto* ve = dynamic_cast<const VarExpr*>(pida->ptr.get());
-        if (!ve) throw std::runtime_error("PostIncDerefAssign: only simple pointer variables supported");
+        if (!ve) error(std::string("PostIncDerefAssign: only simple pointer variables supported"));
         auto it = locals_.find(ve->name);
         if (it == locals_.end())
-            throw std::runtime_error("PostIncDerefAssign: undefined variable '" + ve->name + "'");
+            error(std::string("PostIncDerefAssign: undefined variable '" + ve->name + "'"));
         auto tit = local_types_.find(ve->name);
         if (tit == local_types_.end() || !isPtrType(tit->second))
-            throw std::runtime_error("PostIncDerefAssign: '" + ve->name + "' is not a pointer ([]) type");
+            error(std::string("PostIncDerefAssign: '" + ve->name + "' is not a pointer ([]) type"));
         std::string pointee_type = tit->second.substr(0, tit->second.size()-2);
         std::string pointee_llvm = llvmType(pointee_type);
         int step = (pida->op == "++") ? 1 : -1;
@@ -1633,13 +1635,13 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (l_pide && r_pide) {
             auto emitPtrAndAdvance = [&](const PostIncDerefExpr& pide) -> std::pair<std::string, std::string> {
                 auto* ve = dynamic_cast<const VarExpr*>(pide.operand.get());
-                if (!ve) throw std::runtime_error("SwapStmt: only simple pointer variables supported");
+                if (!ve) error(std::string("SwapStmt: only simple pointer variables supported"));
                 auto it  = locals_.find(ve->name);
                 auto tit = local_types_.find(ve->name);
                 if (it == locals_.end())
-                    throw std::runtime_error("SwapStmt: undefined variable '" + ve->name + "'");
+                    error(std::string("SwapStmt: undefined variable '" + ve->name + "'"));
                 if (tit == local_types_.end() || !isPtrType(tit->second))
-                    throw std::runtime_error("SwapStmt: '" + ve->name + "' is not a pointer ([]) type");
+                    error(std::string("SwapStmt: '" + ve->name + "' is not a pointer ([]) type"));
                 std::string pointee_type = tit->second.substr(0, tit->second.size()-2);
                 std::string pointee_llvm = llvmType(pointee_type);
                 int step = (pide.op == "++") ? 1 : -1;
@@ -1683,7 +1685,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         return {gep, info.field_types[fit->second]};
                     }
                 }
-                throw std::runtime_error("SwapStmt: undefined variable '" + ve->name + "'");
+                error(std::string("SwapStmt: undefined variable '" + ve->name + "'"));
             }
             if (auto* faE = dynamic_cast<const FieldAccessExpr*>(&e)) {
                 if (auto* de = dynamic_cast<const DerefExpr*>(faE->object.get())) {
@@ -1691,19 +1693,19 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         auto lit = locals_.find(ve->name);
                         auto tit = local_types_.find(ve->name);
                         if (lit == locals_.end() || tit == local_types_.end())
-                            throw std::runtime_error("SwapStmt: undefined variable '" + ve->name + "'");
+                            error(std::string("SwapStmt: undefined variable '" + ve->name + "'"));
                         std::string t = tit->second;
                         std::string pointee;
                         if (isPtrType(t)) pointee = t.substr(0, t.size()-2);
                         else if (!t.empty() && t.back() == '^') pointee = t.substr(0, t.size()-1);
-                        else throw std::runtime_error("SwapStmt: '" + ve->name + "' is not a slid pointer");
+                        else error(std::string("SwapStmt: '" + ve->name + "' is not a slid pointer"));
                         if (!slid_info_.count(pointee))
-                            throw std::runtime_error("SwapStmt: '" + pointee + "' is not a slid type");
+                            error(std::string("SwapStmt: '" + pointee + "' is not a slid type"));
                         auto& info = slid_info_[pointee];
                         auto fit = info.field_index.find(faE->field);
                         if (fit == info.field_index.end())
-                            throw std::runtime_error("SwapStmt: unknown field '" + faE->field
-                                + "' on '" + pointee + "'");
+                            error(std::string("SwapStmt: unknown field '" + faE->field
+                                + "' on '" + pointee + "'"));
                         std::string ptr_val = newTmp();
                         out_ << "    " << ptr_val << " = load ptr, ptr " << lit->second << "\n";
                         std::string gep = newTmp();
@@ -1712,15 +1714,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         return {gep, info.field_types[fit->second]};
                     }
                 }
-                throw std::runtime_error("SwapStmt: complex field access not supported");
+                error(std::string("SwapStmt: complex field access not supported"));
             }
-            throw std::runtime_error("SwapStmt: unsupported lvalue shape");
+            error(std::string("SwapStmt: unsupported lvalue shape"));
         };
         auto [a_ptr, a_type] = resolveLvalue(*sw->lhs);
         auto [b_ptr, b_type] = resolveLvalue(*sw->rhs);
         if (a_type != b_type)
-            throw std::runtime_error("SwapStmt: type mismatch — '"
-                + a_type + "' vs '" + b_type + "'");
+            error(std::string("SwapStmt: type mismatch — '"
+                + a_type + "' vs '" + b_type + "'"));
         const std::string& t = a_type;
         // slid type: dispatch user op<-> if defined, else default per-field swap
         if (slid_info_.count(t)) {
@@ -1734,7 +1736,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
         // inline array: deferred
         if (isInlineArrayType(t))
-            throw std::runtime_error("SwapStmt: swap of inline-array variables not yet supported");
+            error(std::string("SwapStmt: swap of inline-array variables not yet supported"));
         // pointer/iterator or primitive: 4-load/store exchange
         std::string llt = llvmType(t);
         std::string av = newTmp();
@@ -1767,7 +1769,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 ptr_val = emitExpr(*de->operand);
             }
             if (slid_name.empty() || !slid_info_.count(slid_name))
-                throw std::runtime_error("DerefFieldAssign: unknown slid type for field '" + fa->field + "'");
+                error(std::string("DerefFieldAssign: unknown slid type for field '" + fa->field + "'"));
             auto& info = slid_info_[slid_name];
             int idx = info.field_index[fa->field];
             requirePtrInit(info.field_types[idx], *fa->value);
@@ -1805,27 +1807,27 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(fa->object.get())) {
             auto* bve = dynamic_cast<const VarExpr*>(ai->base.get());
             if (!bve)
-                throw std::runtime_error("chained indexed FieldAssign: complex base not supported");
+                error(std::string("chained indexed FieldAssign: complex base not supported"));
             auto tit = local_types_.find(bve->name);
             if (tit == local_types_.end() || !isAnonTupleType(tit->second))
-                throw std::runtime_error("chained indexed FieldAssign: '" + bve->name
-                    + "' is not a tuple");
+                error(std::string("chained indexed FieldAssign: '" + bve->name
+                    + "' is not a tuple"));
             auto elems = anonTupleElems(tit->second);
             int idx;
             if (!constExprToInt(*ai->index, enum_values_, idx))
-                throw std::runtime_error("tuple index must be a constant integer");
+                error(std::string("tuple index must be a constant integer"));
             if (idx < 0 || idx >= (int)elems.size())
-                throw std::runtime_error("tuple index " + std::to_string(idx)
-                    + " out of range (size " + std::to_string(elems.size()) + ")");
+                error(std::string("tuple index " + std::to_string(idx)
+                    + " out of range (size " + std::to_string(elems.size()) + ")"));
             const std::string& slid_name = elems[idx];
             if (!slid_info_.count(slid_name))
-                throw std::runtime_error("chained indexed FieldAssign: tuple element "
-                    + std::to_string(idx) + " is not a slid type");
+                error(std::string("chained indexed FieldAssign: tuple element "
+                    + std::to_string(idx) + " is not a slid type"));
             auto& info = slid_info_[slid_name];
             auto fit = info.field_index.find(fa->field);
             if (fit == info.field_index.end())
-                throw std::runtime_error("unknown field '" + fa->field
-                    + "' on slid '" + slid_name + "'");
+                error(std::string("unknown field '" + fa->field
+                    + "' on slid '" + slid_name + "'"));
             int field_idx = fit->second;
             const std::string& ft = info.field_types[field_idx];
             requirePtrInit(ft, *fa->value);
@@ -1840,7 +1842,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 emitNullOut(*fa->value);
             return;
         }
-        throw std::runtime_error("complex field assignment not yet supported");
+        error(std::string("complex field assignment not yet supported"));
     }
 
     if (auto* mcs = dynamic_cast<const MethodCallStmt*>(&stmt)) {
@@ -1867,7 +1869,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             } else {
                 auto type_it = local_types_.find(ve->name);
                 if (type_it == local_types_.end())
-                    throw std::runtime_error("unknown type for: " + ve->name);
+                    error(std::string("unknown type for: " + ve->name));
                 slid_name = type_it->second;
                 obj_ptr = locals_[ve->name];
             }
@@ -1902,13 +1904,13 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 auto elems = anonTupleElems(tup_type);
                 int idx;
                 if (!constExprToInt(*ai->index, enum_values_, idx))
-                    throw std::runtime_error("tuple index must be a constant integer");
+                    error(std::string("tuple index must be a constant integer"));
                 if (idx < 0 || idx >= (int)elems.size())
-                    throw std::runtime_error("tuple index " + std::to_string(idx)
-                        + " out of range (size " + std::to_string(elems.size()) + ")");
+                    error(std::string("tuple index " + std::to_string(idx)
+                        + " out of range (size " + std::to_string(elems.size()) + ")"));
                 if (!slid_info_.count(elems[idx]))
-                    throw std::runtime_error("tuple element " + std::to_string(idx)
-                        + " is not a slid type");
+                    error(std::string("tuple element " + std::to_string(idx)
+                        + " is not a slid type"));
                 slid_name = elems[idx];
                 std::string gep = newTmp();
                 out_ << "    " << gep << " = getelementptr " << llvmType(tup_type)
@@ -1919,7 +1921,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
                 auto type_it = local_types_.find(ve2->name);
                 if (type_it == local_types_.end())
-                    throw std::runtime_error("unknown type for: " + ve2->name);
+                    error(std::string("unknown type for: " + ve2->name));
                 slid_name = type_it->second;
                 if (isRefType(slid_name)) slid_name.pop_back(); else if (isPtrType(slid_name)) slid_name.resize(slid_name.size()-2);
                 std::string loaded = newTmp();
@@ -1956,7 +1958,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 mangled = resolveOverloadForCall(base, mcs->args);
                 auto ret_it = func_return_types_.find(mangled);
                 if (ret_it == func_return_types_.end())
-                    throw std::runtime_error("unknown method: " + mcs->method);
+                    error(std::string("unknown method: " + mcs->method));
                 ret_slids = ret_it->second;
                 mptypes = func_param_types_[mangled];
             }
@@ -2010,7 +2012,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
             return;
         }
-        throw std::runtime_error("complex method call statement not yet supported");
+        error(std::string("complex method call statement not yet supported"));
     }
 
     if (auto* ret = dynamic_cast<const ReturnStmt*>(&stmt)) {
@@ -2023,14 +2025,14 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (ve) {
                 auto tit = local_types_.find(ve->name);
                 if (tit == local_types_.end() || !slid_info_.count(tit->second))
-                    throw std::runtime_error("sret: return value must be a slid type");
+                    error(std::string("sret: return value must be a slid type"));
                 slid_name = tit->second;
                 src = locals_.at(ve->name);
             } else {
                 // expression: emit it (BinaryExpr/CallExpr produce a fresh alloca)
                 slid_name = exprSlidType(*ret->value);
                 if (slid_name.empty())
-                    throw std::runtime_error("sret: return expression must produce a slid type");
+                    error(std::string("sret: return expression must produce a slid type"));
                 src = emitExpr(*ret->value);
                 src_is_fresh_temp = true;
             }
@@ -2181,7 +2183,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             }
             if (target.empty())
-                throw std::runtime_error("break: unknown label '" + brk->label + "'");
+                error(std::string("break: unknown label '" + brk->label + "'"));
         } else if (brk->number > 0) {
             // numbered break: count outward N loop frames, skipping switch frames
             int count = 0;
@@ -2195,9 +2197,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             }
             if (target.empty())
-                throw std::runtime_error("break " + std::to_string(brk->number) + ": not enough enclosing loops");
+                error(std::string("break " + std::to_string(brk->number) + ": not enough enclosing loops"));
         } else {
-            if (break_label_.empty()) throw std::runtime_error("break outside of loop");
+            if (break_label_.empty()) error(std::string("break outside of loop"));
             target = break_label_;
         }
         emitStackRestore(target_frame);
@@ -2218,7 +2220,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             }
             if (target.empty())
-                throw std::runtime_error("continue: unknown label '" + cont->label + "'");
+                error(std::string("continue: unknown label '" + cont->label + "'"));
         } else if (cont->number > 0) {
             // numbered continue: count outward N loop frames, skipping switch frames
             int count = 0;
@@ -2232,9 +2234,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             }
             if (target.empty())
-                throw std::runtime_error("continue " + std::to_string(cont->number) + ": not enough enclosing loops");
+                error(std::string("continue " + std::to_string(cont->number) + ": not enough enclosing loops"));
         } else {
-            if (continue_label_.empty()) throw std::runtime_error("continue outside of loop");
+            if (continue_label_.empty()) error(std::string("continue outside of loop"));
             target = continue_label_;
         }
         emitStackRestore(target_frame);
@@ -2336,7 +2338,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             // reuse existing variable
             auto it = locals_.find(f->var_name);
             if (it == locals_.end())
-                throw std::runtime_error("for loop: undefined variable '" + f->var_name + "'");
+                error(std::string("for loop: undefined variable '" + f->var_name + "'"));
             var_reg = it->second;
         }
         std::string end_reg = newTmp() + "_end";
@@ -2395,7 +2397,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // for EnumType var in EnumType — iterate 0..enum_size
         auto sit = enum_sizes_.find(f->enum_name);
         if (sit == enum_sizes_.end())
-            throw std::runtime_error("for-enum: unknown enum type '" + f->enum_name + "'");
+            error(std::string("for-enum: unknown enum type '" + f->enum_name + "'"));
         int size = sit->second;
 
         std::string init_lbl = newLabel("for_init");
@@ -2571,7 +2573,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         } else if (auto* ve = dynamic_cast<const VarExpr*>(fa->array_expr.get())) {
             auto tit = local_types_.find(ve->name);
             if (tit == local_types_.end())
-                throw std::runtime_error("for-in: unknown variable '" + ve->name + "'");
+                error(std::string("for-in: unknown variable '" + ve->name + "'"));
             std::string arr_type = tit->second;
             auto lb = arr_type.rfind('[');
             if (lb != std::string::npos && lb > 0 && arr_type.back() == ']') {
@@ -2588,14 +2590,14 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 end_fn    = arr_type + "__end";
                 auto rit  = func_return_types_.find(begin_fn);
                 if (rit == func_return_types_.end())
-                    throw std::runtime_error("for-in: '" + arr_type + "' has no begin() method");
+                    error(std::string("for-in: '" + arr_type + "' has no begin() method"));
                 elem_slids = rit->second;
                 elem_llvm  = llvmType(elem_slids);
             } else {
-                throw std::runtime_error("for-in: '" + ve->name + "' is not a fixed-size array or iterable class");
+                error(std::string("for-in: '" + ve->name + "' is not a fixed-size array or iterable class"));
             }
         } else {
-            throw std::runtime_error("for-in: expected string literal or array variable");
+            error(std::string("for-in: expected string literal or array variable"));
         }
 
         if (is_class_iter) {
@@ -2758,7 +2760,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (!sw->cases[i].value) continue; // skip default
             int val;
             if (!constExprToInt(*sw->cases[i].value, enum_values_, val))
-                throw std::runtime_error("switch case value must be a constant integer or enum");
+                error(std::string("switch case value must be a constant integer or enum"));
             out_ << "        i32 " << val << ", label %" << case_lbls[i] << "\n";
         }
         out_ << "    ]\n";
@@ -2795,10 +2797,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (call->callee == "__println" || call->callee == "__print") {
             bool newline = (call->callee == "__println");
             if (call->args.size() > 1)
-                throw std::runtime_error(call->callee + " expects 0 or 1 arguments");
+                error(std::string(call->callee + " expects 0 or 1 arguments"));
 
             if (call->args.size() == 0) {
-                if (!newline) throw std::runtime_error("__print() requires an argument");
+                if (!newline) error(std::string("__print() requires an argument"));
                 std::string tmp = newTmp();
                 out_ << "    " << tmp << " = getelementptr [2 x i8], ptr @.str_newline, i32 0, i32 0\n";
                 out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
@@ -3193,7 +3195,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             return;
         }
 
-        throw std::runtime_error("unknown function: " + call->callee);
+        error(std::string("unknown function: " + call->callee));
     }
 
     if (auto* td = dynamic_cast<const TupleDestructureStmt*>(&stmt)) {
@@ -3230,5 +3232,5 @@ void Codegen::emitStmt(const Stmt& stmt) {
         return;
     }
 
-    throw std::runtime_error("unsupported statement type");
+    error(std::string("unsupported statement type"));
 }

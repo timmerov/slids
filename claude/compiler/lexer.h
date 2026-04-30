@@ -3,15 +3,20 @@
 #include <string>
 #include <vector>
 
+class SourceMap;
+
 class Lexer {
 public:
-    Lexer(const std::string& source);
+    Lexer(SourceMap& sm, int file_id);
     std::vector<Token> tokenize();
 
 private:
-    std::string source_;
+    SourceMap& sm_;
+    int file_id_;
+    const std::string& source_;
     int pos_;
     int line_;
+    int col_;
 
     char peek();
     char peek2();
@@ -21,4 +26,5 @@ private:
     Token readCharLiteral();
     Token readNumber();
     Token readIdentifierOrKeyword();
+    [[noreturn]] void throwLexError(int line, int col, int length, const std::string& msg);
 };

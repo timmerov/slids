@@ -1,5 +1,6 @@
 // Template function instantiation — AST cloning + type substitution
 #include "codegen.h"
+#include "source_map.h"
 #include "codegen_helpers.h"
 #include "parser.h"
 #include <map>
@@ -147,10 +148,9 @@ static std::unique_ptr<Expr> cloneExpr(const Expr& expr,
     }
 
     if (auto* e = dynamic_cast<const StringifyExpr*>(&expr))
-        return std::make_unique<StringifyExpr>(e->kind,
-            e->operand ? cloneExpr(*e->operand, subst) : nullptr, e->line);
+        return std::make_unique<StringifyExpr>(e->kind, e->operand ? cloneExpr(*e->operand, subst) : nullptr);
 
-    throw std::runtime_error("cloneExpr: unhandled expression type");
+    throw CompileError{expr.file_id, expr.tok, "cloneExpr: unhandled expression type"};
 }
 
 // --- Statement deep clone with type substitution ---
@@ -303,7 +303,7 @@ static std::unique_ptr<Stmt> cloneStmt(const Stmt& stmt,
         return r;
     }
 
-    throw std::runtime_error("cloneStmt: unhandled statement type");
+    throw CompileError{stmt.file_id, stmt.tok, "cloneStmt: unhandled statement type"};
 }
 
 static std::unique_ptr<BlockStmt> cloneBlock(const BlockStmt& block,
@@ -352,9 +352,9 @@ std::vector<std::string> Codegen::inferTypeArgs(
                 {{"int8",1},{"int16",2},{"int",3},{"int32",3},{"int64",4},{"intptr",4},
                  {"uint8",1},{"uint16",2},{"uint32",3},{"uint64",4}};
             if ((isRefType(inferred[p]) || isPtrType(inferred[p])) && a != inferred[p])
-                throw std::runtime_error("cannot match type '" + a
+                error(std::string("cannot match type '" + a
                     + "' to template parameter '" + p
-                    + "' (inferred as reference type '" + inferred[p] + "')");
+                    + "' (inferred as reference type '" + inferred[p] + "')"));
             auto ait = irank.find(inferred[p]);
             auto bit = irank.find(a);
             if (ait != irank.end() && bit != irank.end() && bit->second > ait->second)
@@ -402,8 +402,8 @@ std::vector<std::string> Codegen::inferTypeArgs(
     for (auto& tp : tmpl.type_params) {
         auto it = inferred.find(tp);
         if (it == inferred.end())
-            throw std::runtime_error("cannot infer template type '" + tp
-                + "' for '" + tmpl.name + "': provide explicit type argument");
+            error(std::string("cannot infer template type '" + tp
+                + "' for '" + tmpl.name + "': provide explicit type argument"));
         result.push_back(it->second);
     }
     return result;
@@ -516,9 +516,9 @@ std::string Codegen::instantiateTemplate(const TemplateFuncEntry& entry,
     const std::string& name = tmpl.name;
 
     if (tmpl.type_params.size() != type_args.size())
-        throw std::runtime_error("template '" + name + "': expected "
+        error(std::string("template '" + name + "': expected "
             + std::to_string(tmpl.type_params.size()) + " type argument(s), got "
-            + std::to_string(type_args.size()));
+            + std::to_string(type_args.size())));
 
     // build substitution map
     std::map<std::string, std::string> subst;
@@ -575,13 +575,13 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
                                               bool force) {
     auto tit = template_slids_.find(name);
     if (tit == template_slids_.end())
-        throw std::runtime_error("unknown template class: " + name);
+        error(std::string("unknown template class: " + name));
     const SlidDef& tmpl = *tit->second;
 
     if (tmpl.type_params.size() != type_args.size())
-        throw std::runtime_error("template class '" + name + "': expected "
+        error(std::string("template class '" + name + "': expected "
             + std::to_string(tmpl.type_params.size()) + " type argument(s), got "
-            + std::to_string(type_args.size()));
+            + std::to_string(type_args.size())));
 
     std::map<std::string, std::string> subst;
     for (int i = 0; i < (int)tmpl.type_params.size(); i++)
