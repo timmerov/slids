@@ -1639,7 +1639,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             for (auto& s : program_.slids)
                 if (s.name == ne->elem_type) { slid_def = &s; break; }
 
-            bool has_any_ctor = info.has_explicit_ctor || (slid_def && slid_def->ctor_body) || info.has_pinit;
+            bool has_any_ctor = info.needs_ctor_fn || (slid_def && slid_def->ctor_body);
             if (has_any_ctor) {
                 std::string idx_reg = newTmp();
                 out_ << "    " << idx_reg << " = alloca i64\n";
@@ -1685,11 +1685,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     current_slid_ = saved_slid;
                     self_ptr_ = saved_self;
                 }
-                if (info.has_pinit)
-                    out_ << "    call void @" << ne->elem_type << "__$pinit(ptr " << elem << ")\n";
-                else if (info.has_explicit_ctor)
-                    out_ << "    call void @" << ne->elem_type << "__$ctor("
-                         << (info.is_empty ? "" : "ptr " + elem) << ")\n";
+                emitCtorCall(ne->elem_type, elem);
 
                 std::string idx_next = newTmp();
                 out_ << "    " << idx_next << " = add i64 " << idx << ", 1\n";
@@ -1834,35 +1830,10 @@ std::string Codegen::emitExpr(const Expr& expr) {
         // slid type conversion: (SlidType=expr) — alloca a temp, init fields, call op=, return ptr
         if (slid_info_.count(nc->target_type)) {
             const std::string& stype = nc->target_type;
-            auto& info = slid_info_[stype];
 
             std::string tmp_reg = emitRawSlidAlloca(stype);
-
-            // find SlidDef for default field values
-            const SlidDef* slid_def = nullptr;
-            for (auto& s : program_.slids)
-                if (s.name == stype) { slid_def = &s; break; }
-
-            if (!info.has_pinit) {
-                // initialize fields to defaults
-                for (int i = 0; i < (int)info.field_types.size(); i++) {
-                    std::string gep = newTmp();
-                    out_ << "    " << gep << " = getelementptr %struct." << stype
-                         << ", ptr " << tmp_reg << ", i32 0, i32 " << i << "\n";
-                    std::string val = (slid_def && slid_def->fields[i].default_val)
-                                      ? emitExpr(*slid_def->fields[i].default_val)
-                                      : (isInlineArrayType(info.field_types[i]) ? "zeroinitializer" : "0");
-                    out_ << "    store " << llvmType(info.field_types[i])
-                         << " " << val << ", ptr " << gep << "\n";
-                }
-            }
-
-            // call ctor if any
-            if (info.has_pinit)
-                out_ << "    call void @" << stype << "__$pinit(ptr " << tmp_reg << ")\n";
-            else if (info.has_explicit_ctor)
-                out_ << "    call void @" << stype << "__$ctor("
-                     << (info.is_empty ? "" : "ptr " + tmp_reg) << ")\n";
+            // default-init fields + call ctor
+            emitConstructAtPtrs(stype, tmp_reg, {}, {});
 
             // call op= with the operand
             std::string mangled = resolveOpEq(stype + "__op=", *nc->operand);

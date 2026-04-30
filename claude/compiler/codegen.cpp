@@ -239,7 +239,7 @@ void Codegen::collectFunctionSignatures() {
         if (slid.has_explicit_ctor_decl) exported_symbols_.insert(slid.name + "__$ctor");
         if (slid.has_explicit_dtor_decl) exported_symbols_.insert(slid.name + "__$dtor");
         if (slid.is_transport_impl) {
-            exported_symbols_.insert(slid.name + "__$pinit");
+            exported_symbols_.insert(slid.name + "__$ctor");
             exported_symbols_.insert(slid.name + "__$sizeof");
         }
     }
@@ -447,7 +447,7 @@ void Codegen::collectSlids() {
         info.own_field_count = (int)slid.fields.size();
         // declaration of incomplete class: consumer calls __$pinit and __$sizeof
         if (slid.has_trailing_ellipsis)
-            info.has_pinit = true;
+            info.has_private_suffix = true;
         // impl side: complete locally; emits __$pinit and __$sizeof for consumer
         if (slid.is_transport_impl) {
             info.is_transport_impl = true;
@@ -463,7 +463,7 @@ void Codegen::collectSlids() {
             if (em.method_name == "~") info.has_dtor = true;
         }
         // empty class: has () but no fields, not incomplete. methods/ctor/dtor take no self.
-        info.is_empty = info.field_types.empty() && !info.has_pinit && !info.is_transport_impl;
+        info.is_empty = info.field_types.empty() && !info.has_private_suffix && !info.is_transport_impl;
         // namespace: declared as `Name { ... }` only — non-instantiable, called as Name:fn()
         info.is_namespace = slid.is_namespace;
         // _() and ~() must be declared together or both auto-generated. Declaring
@@ -753,6 +753,56 @@ void Codegen::synthesizeFieldDtors() {
     }
 }
 
+void Codegen::synthesizeCtorNeeds() {
+    // Fixed-point: a class needs __$ctor iff it has any own work, or its base
+    // / any own field's class needs __$ctor (recursive descent at runtime).
+    // Iterate until stable since field/base order isn't guaranteed.
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (auto& [name, info] : slid_info_) {
+            if (info.needs_ctor_fn) continue;
+            if (info.is_namespace || info.is_empty) continue;
+            bool need = info.has_explicit_ctor
+                || info.has_dtor
+                || info.is_transport_impl
+                || info.is_virtual_class
+                || (info.base_info && info.base_info->needs_ctor_fn);
+            if (!need) {
+                bool owns_vptr = info.is_virtual_class && info.base_info == nullptr;
+                int vptr_local = owns_vptr ? 1 : 0;
+                int n_own = info.own_field_count - vptr_local;
+                for (int j = 0; j < n_own && !need; j++) {
+                    int flat_idx = info.base_field_count + vptr_local + j;
+                    if (flat_idx >= (int)info.field_types.size()) break;
+                    const std::string& ftype = info.field_types[flat_idx];
+                    auto fit = slid_info_.find(ftype);
+                    if (fit != slid_info_.end() && fit->second.needs_ctor_fn) {
+                        need = true; break;
+                    }
+                    if (isAnonTupleType(ftype)) {
+                        for (auto& et : anonTupleElems(ftype)) {
+                            auto eit = slid_info_.find(et);
+                            if (eit != slid_info_.end() && eit->second.needs_ctor_fn) {
+                                need = true; break;
+                            }
+                        }
+                    }
+                }
+            }
+            if (need) {
+                info.needs_ctor_fn = true;
+                changed = true;
+            }
+        }
+    }
+    // Derived flag: implicit classes (no user _()/~()) that still need ctor
+    // work — handled by inlining at the site rather than an emitted function.
+    for (auto& [name, info] : slid_info_) {
+        info.must_inline_ctor = !info.has_explicit_ctor && info.needs_ctor_fn;
+    }
+}
+
 void Codegen::markImportableClasses() {
     // A class is importable iff its name appears in program_.slid_modules — that
     // map is populated during .slh import. Local-only classes are not importable.
@@ -1035,6 +1085,7 @@ void Codegen::emit() {
     classifyVirtualClasses();
     resolveSlidInheritance();
     synthesizeFieldDtors();
+    synthesizeCtorNeeds();
     buildVtables();
     markImportableClasses();
     validatePureSlots();
@@ -1250,20 +1301,31 @@ void Codegen::emit() {
     std::set<std::string> local_methods;
     for (auto& slid : program_.slids) {
         if (!slid.type_params.empty()) continue; // skip template slids
-        // inline ctor/dtor bodies count as locally defined
-        if (slid.explicit_ctor_body) local_methods.insert(slid.name + "__$ctor");
-        if (slid.dtor_body)          local_methods.insert(slid.name + "__$dtor");
-        // F1 (A): virtual classes with no explicit dtor get a synthetic empty
-        // virtual dtor emitted in this TU.
+        // emitSlidCtorDtor emits __$ctor / __$dtor only for has_explicit_ctor
+        // classes (paired with user _()/~()). Implicit classes inline at the
+        // site and emit no symbol. Track local emissions so the declare loop
+        // below skips them.
         {
             auto sit = slid_info_.find(slid.name);
-            if (sit != slid_info_.end() && sit->second.is_virtual_class
-                && !slid.has_explicit_dtor_decl)
-                local_methods.insert(slid.name + "__$dtor");
+            if (sit != slid_info_.end() && sit->second.has_explicit_ctor) {
+                // body presence in this TU = this TU is the definer
+                bool has_body_here = slid.explicit_ctor_body || slid.dtor_body
+                                     || slid.ctor_body;
+                for (auto& em : program_.external_methods) {
+                    if (em.slid_name == slid.name && em.body
+                        && (em.method_name == "_" || em.method_name == "~")) {
+                        has_body_here = true; break;
+                    }
+                }
+                if (has_body_here) {
+                    local_methods.insert(slid.name + "__$ctor");
+                    if (sit->second.has_dtor)
+                        local_methods.insert(slid.name + "__$dtor");
+                }
+            }
         }
-        // impl slids locally define __$pinit and __$sizeof
+        // impl slids locally define __$sizeof
         if (slid.is_transport_impl) {
-            local_methods.insert(slid.name + "__$pinit");
             local_methods.insert(slid.name + "__$sizeof");
         }
         // all non-declaration slids define __$sizeof locally
@@ -1323,16 +1385,17 @@ void Codegen::emit() {
     }
     for (auto& slid : program_.slids) {
         if (!slid.type_params.empty()) continue; // skip template slids
-        // ctor/dtor — declare if not locally defined
+        // ctor/dtor — declare if not locally defined.
+        // Only explicit (user-paired _()/~()) classes have symbols; implicit
+        // classes are inlined at site, so no declare is ever needed.
         auto& info = slid_info_[slid.name];
         const char* self_arg = info.is_empty ? "" : "ptr";
         if (info.has_explicit_ctor && !local_methods.count(slid.name + "__$ctor"))
             out_ << "declare void @" << slid.name << "__$ctor(" << self_arg << ")\n";
-        if (info.has_dtor && !local_methods.count(slid.name + "__$dtor"))
+        if (info.has_explicit_ctor && info.has_dtor
+                && !local_methods.count(slid.name + "__$dtor"))
             out_ << "declare void @" << slid.name << "__$dtor(" << self_arg << ")\n";
-        if (info.has_pinit && !local_methods.count(slid.name + "__$pinit"))
-            out_ << "declare void @" << slid.name << "__$pinit(ptr)\n";
-        if (info.has_pinit && !local_methods.count(slid.name + "__$sizeof"))
+        if (info.has_private_suffix && !local_methods.count(slid.name + "__$sizeof"))
             out_ << "declare i64 @" << slid.name << "__$sizeof()\n";
         // regular methods: first arg is ptr (self) unless slid is empty
         for (auto& [base, overloads] : method_overloads_) {
@@ -1581,21 +1644,45 @@ void Codegen::emitNestedFunction(
 
 
 void Codegen::emitExplicitDtor(const std::string& static_type, const std::string& obj_ptr) {
+    if (isAnonTupleType(static_type)) {
+        // anon tuple: walk slid slots in reverse declaration order, dtor each
+        auto elems = anonTupleElems(static_type);
+        for (int i = (int)elems.size() - 1; i >= 0; i--) {
+            const std::string& et = elems[i];
+            if (slid_info_.count(et) && slid_info_.at(et).has_dtor) {
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr " << llvmType(static_type)
+                     << ", ptr " << obj_ptr << ", i32 0, i32 " << i << "\n";
+                emitDtorChainCall(et, gep);
+            } else if (isAnonTupleType(et)) {
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr " << llvmType(static_type)
+                     << ", ptr " << obj_ptr << ", i32 0, i32 " << i << "\n";
+                emitExplicitDtor(et, gep);
+            }
+        }
+        return;
+    }
     auto sit = slid_info_.find(static_type);
-    if (sit == slid_info_.end()) return; // primitive / pointer / anon-tuple — no-op
-    if (sit->second.has_dtor || sit->second.has_pinit)
+    if (sit == slid_info_.end()) return; // primitive / pointer — no-op
+    if (sit->second.has_dtor)
         emitDtorChainCall(static_type, obj_ptr);
 }
 
 void Codegen::emitDtorChainCall(const std::string& slid_type, const std::string& target) {
-    auto chain = chainOf(slid_type);
-    // walk derived→base: chain is base→derived, so iterate in reverse.
-    for (int ci = (int)chain.size() - 1; ci >= 0; ci--) {
-        SlidInfo* c = chain[ci];
-        if (!c->has_dtor) continue;
-        out_ << "    call void @" << c->name << "__$dtor("
-             << (c->is_empty ? "" : "ptr " + target) << ")\n";
+    auto sit = slid_info_.find(slid_type);
+    if (sit == slid_info_.end()) return;
+    auto& info = sit->second;
+    if (!info.has_dtor) return;     // no dtor work for this class
+    if (info.must_inline_ctor) {
+        // Implicit class — no __$dtor symbol; inline the synthesized walk.
+        emitInlineDtorWalk(slid_type, target);
+        return;
     }
+    // Explicit class — single call. The dtor function handles its own fields
+    // and chains to its base internally. (is_empty classes still get a real
+    // __$dtor function with `ptr %self` signature; the call form matches.)
+    out_ << "    call void @" << slid_type << "__$dtor(ptr " << target << ")\n";
 }
 
 void Codegen::emitDtors() {
@@ -1624,16 +1711,39 @@ void Codegen::emitDtors() {
 
 void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     // find ctor/dtor bodies — either inline or external
-    const BlockStmt* ctor_body = slid.explicit_ctor_body.get();
+    const BlockStmt* explicit_ctor_body = slid.explicit_ctor_body.get();
     const BlockStmt* dtor_body = slid.dtor_body.get();
     for (auto& em : program_.external_methods) {
         if (em.slid_name != slid.name || !em.body) continue;
-        if (em.method_name == "_")  ctor_body = em.body.get();
+        if (em.method_name == "_")  explicit_ctor_body = em.body.get();
         if (em.method_name == "~")  dtor_body = em.body.get();
     }
+    // implicit ctor body: loose code in the class body (only present when no _()/~())
+    const BlockStmt* implicit_ctor_body = slid.ctor_body.get();
 
-    // emit explicit constructor: @ClassName__$ctor(ptr %self)
-    if (ctor_body) {
+    auto sit = slid_info_.find(slid.name);
+    if (sit == slid_info_.end()) return;
+    auto& info = sit->second;
+
+    // Emit __$ctor + __$ctor_body only when (a) the class has a user-declared
+    // _() (has_explicit_ctor — true in every TU that imports the class), AND
+    // (b) THIS TU has the body locally — either inline `_(){...}`, implicit
+    // loose ctor_body, an external `Foo:_(){...}` definition, or this is the
+    // transport-impl closing TU. This combination distinguishes the definer
+    // (one TU, has body) from consumer TUs (no body), avoiding cross-TU
+    // duplicate `define`s. Implicit classes (must_inline_ctor) are inlined at
+    // every construction site — no symbol, no cross-TU issue.
+    bool has_body_here = explicit_ctor_body || implicit_ctor_body || dtor_body
+        || slid.is_transport_impl;
+    bool emit_ctor_pair = info.has_explicit_ctor && has_body_here;
+    bool owns_vptr = info.is_virtual_class && info.base_info == nullptr;
+    int vptr_local = owns_vptr ? 1 : 0;
+    int n_own = info.own_field_count - vptr_local;
+
+    // === __$ctor ===
+    // Outer entry. Initializes the private suffix (if transport impl), then
+    // tail-calls __$ctor_body to do the rest of construction.
+    if (emit_ctor_pair) {
         locals_.clear();
         local_types_.clear();
         emitted_alloca_regs_.clear();
@@ -1641,21 +1751,124 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         label_counter_ = 0;
         block_terminated_ = false;
         current_slid_ = slid.name;
+        self_ptr_ = "%self";
 
-        bool empty = slid_info_[slid.name].is_empty;
-        out_ << "define " << (isExported(slid.name + "__$ctor") ? "" : "internal ") << "void @" << slid.name << "__$ctor("
-             << (empty ? "" : "ptr %self") << ") {\n";
+        out_ << "define " << (isExported(slid.name + "__$ctor") ? "" : "internal ")
+             << "void @" << slid.name << "__$ctor(ptr %self) {\n";
         out_ << "entry:\n";
-        emitBlock(*ctor_body);
+
+        // Private-suffix init: only the closing TU sees the private fields, so
+        // only it emits this prefix. Consumers' __$ctor declares are external;
+        // the closing TU's definition fills them.
+        if (slid.is_transport_impl) {
+            for (int i = info.public_field_count; i < (int)slid.fields.size(); i++) {
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr %struct." << slid.name
+                     << ", ptr %self, i32 0, i32 " << i << "\n";
+                std::string val;
+                if (slid.fields[i].default_val) {
+                    val = emitExpr(*slid.fields[i].default_val);
+                } else if (i < (int)info.field_types.size()) {
+                    const std::string& ft = info.field_types[i];
+                    val = (ft == "float32" || ft == "float64") ? "0.0"
+                        : isIndirectType(ft) ? "null" : "0";
+                } else {
+                    val = "0";
+                }
+                if (i < (int)info.field_types.size()) {
+                    out_ << "    store " << llvmType(info.field_types[i]) << " "
+                         << val << ", ptr " << gep << "\n";
+                }
+            }
+        }
+
+        out_ << "    musttail call void @" << slid.name << "__$ctor_body(ptr %self)\n";
+        out_ << "    ret void\n";
+        out_ << "}\n\n";
+    }
+
+    // === __$ctor_body ===
+    // 1. set vptr (if root of virtual chain)
+    // 2. call base's __$ctor (recursive descent)
+    // 3. for each own slid-typed field in declaration order: call field's __$ctor
+    //    (anon-tuple field: inline ctor walk over its slid slots)
+    // 4. user body (implicit ctor_body, then explicit _() body)
+    if (emit_ctor_pair) {
+        locals_.clear();
+        local_types_.clear();
+        emitted_alloca_regs_.clear();
+        tmp_counter_ = 0;
+        label_counter_ = 0;
+        block_terminated_ = false;
+        current_slid_ = slid.name;
+        self_ptr_ = "%self";
+
+        out_ << "define internal void @" << slid.name << "__$ctor_body(ptr %self) {\n";
+        out_ << "entry:\n";
+
+        // 1. base call first (Itanium ABI — base ctor runs before our work,
+        //    so our vptr write below overwrites whatever the base wrote)
+        if (info.base_info) {
+            emitCtorCall(info.base_info->name, "%self");
+        }
+
+        // 2. own vptr — every virtual class writes its own vtable pointer
+        //    after the base call, leaving the most-derived ctor's value visible
+        if (info.is_virtual_class) {
+            std::string vptr_gep = emitFieldGep(slid.name, "%self", 0);
+            out_ << "    store ptr @_ZTV" << slid.name << ", ptr " << vptr_gep << "\n";
+        }
+
+        // 3. own slid field ctors in declaration order
+        for (int j = 0; j < n_own; j++) {
+            int flat_idx = info.base_field_count + vptr_local + j;
+            if (flat_idx >= (int)info.field_types.size()) break;
+            const std::string& ftype = info.field_types[flat_idx];
+            if (slid_info_.count(ftype) && !slid_info_.at(ftype).is_empty) {
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr %struct."
+                     << slid.name << ", ptr %self, i32 0, i32 "
+                     << flat_idx << "\n";
+                emitCtorCall(ftype, gep);
+            } else if (isAnonTupleType(ftype)) {
+                // anon tuple: inline ctor walk over slid slots in declaration order
+                auto elems = anonTupleElems(ftype);
+                std::string field_gep = newTmp();
+                out_ << "    " << field_gep << " = getelementptr %struct."
+                     << slid.name << ", ptr %self, i32 0, i32 "
+                     << flat_idx << "\n";
+                for (int k = 0; k < (int)elems.size(); k++) {
+                    const std::string& et = elems[k];
+                    if (slid_info_.count(et) && !slid_info_.at(et).is_empty) {
+                        std::string slot_gep = newTmp();
+                        out_ << "    " << slot_gep << " = getelementptr "
+                             << llvmType(ftype) << ", ptr " << field_gep
+                             << ", i32 0, i32 " << k << "\n";
+                        emitCtorCall(et, slot_gep);
+                    }
+                }
+            }
+            // primitive / pointer / inline-array: no ctor work (site init)
+        }
+
+        // 4. user body
+        if (implicit_ctor_body) emitBlock(*implicit_ctor_body);
+        if (!block_terminated_ && explicit_ctor_body) emitBlock(*explicit_ctor_body);
+
         if (!block_terminated_) out_ << "    ret void\n";
         out_ << "}\n\n";
     }
 
-    // emit destructor: @ClassName__$dtor(ptr %self)
-    // Emitted whenever the class has a dtor for any reason: explicit body,
-    // virtual auto-gen (F1 A), or slid-typed own fields needing destruction.
-    bool need_dtor_fn = dtor_body
-        || (slid_info_.count(slid.name) && slid_info_.at(slid.name).has_dtor);
+    // === __$dtor ===
+    // 1. user body
+    // 2. own slid-field dtors in reverse declaration order
+    //    (anon-tuple field: inline reverse walk over its slid slots)
+    // 3. base dtor call (if base has one)
+    // Same paired emission gate as __$ctor: emit __$dtor only for explicit
+    // user-paired _()/~() classes, and only in the TU that owns the body.
+    // Implicit (must_inline_ctor) classes have their dtor walks inlined at
+    // the site, no symbol.
+    bool need_dtor_fn = info.has_explicit_ctor && info.has_dtor && has_body_here;
     if (need_dtor_fn) {
         locals_.clear();
         local_types_.clear();
@@ -1664,23 +1877,21 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         label_counter_ = 0;
         block_terminated_ = false;
         current_slid_ = slid.name;
+        self_ptr_ = "%self";
 
-        auto& info = slid_info_[slid.name];
-        bool empty = info.is_empty;
-        out_ << "define " << (isExported(slid.name + "__$dtor") ? "" : "internal ") << "void @" << slid.name << "__$dtor("
-             << (empty ? "" : "ptr %self") << ") {\n";
+        out_ << "define " << (isExported(slid.name + "__$dtor") ? "" : "internal ")
+             << "void @" << slid.name << "__$dtor(ptr %self) {\n";
         out_ << "entry:\n";
+
+        // 1. user body
         if (dtor_body) emitBlock(*dtor_body);
-        // Auto-destroy own slid-typed fields in reverse declaration order.
-        // Inherited fields are destroyed by the base class's __$dtor (the
-        // chain walker calls each class's dtor in turn). Skip $vptr at slot 0
-        // of the root virtual class.
-        if (!block_terminated_ && !empty) {
-            bool owns_vptr = info.is_virtual_class && info.base_info == nullptr;
-            int vptr_local = owns_vptr ? 1 : 0;
-            int n_own = info.own_field_count - vptr_local;
+
+        // 2. own slid field dtors in reverse declaration order (dispatcher
+        //    handles must_inline_ctor / no-op cases)
+        if (!block_terminated_) {
             for (int j = n_own - 1; j >= 0; j--) {
                 int flat_idx = info.base_field_count + vptr_local + j;
+                if (flat_idx >= (int)info.field_types.size()) continue;
                 const std::string& ftype = info.field_types[flat_idx];
                 if (slid_info_.count(ftype) && slid_info_.at(ftype).has_dtor) {
                     std::string gep = newTmp();
@@ -1688,54 +1899,37 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
                          << slid.name << ", ptr %self, i32 0, i32 "
                          << flat_idx << "\n";
                     emitDtorChainCall(ftype, gep);
+                } else if (isAnonTupleType(ftype)) {
+                    auto elems = anonTupleElems(ftype);
+                    std::string field_gep = newTmp();
+                    out_ << "    " << field_gep << " = getelementptr %struct."
+                         << slid.name << ", ptr %self, i32 0, i32 "
+                         << flat_idx << "\n";
+                    for (int k = (int)elems.size() - 1; k >= 0; k--) {
+                        const std::string& et = elems[k];
+                        if (slid_info_.count(et) && slid_info_.at(et).has_dtor) {
+                            std::string slot_gep = newTmp();
+                            out_ << "    " << slot_gep << " = getelementptr "
+                                 << llvmType(ftype) << ", ptr " << field_gep
+                                 << ", i32 0, i32 " << k << "\n";
+                            emitDtorChainCall(et, slot_gep);
+                        }
+                    }
                 }
             }
         }
+
+        // 3. base dtor
+        if (!block_terminated_ && info.base_info) {
+            emitDtorChainCall(info.base_info->name, "%self");
+        }
+
         if (!block_terminated_) out_ << "    ret void\n";
         out_ << "}\n\n";
     }
 
     current_slid_ = "";
-
-    // emit __$pinit for transport slids: initializes private fields, optionally chains to __$ctor
-    if (slid.is_transport_impl) {
-        auto& info = slid_info_[slid.name];
-        locals_.clear();
-        local_types_.clear();
-        emitted_alloca_regs_.clear();
-        tmp_counter_ = 0;
-        label_counter_ = 0;
-        block_terminated_ = false;
-        current_slid_ = slid.name;
-        self_ptr_ = "";  // field access uses %self fallback
-
-        out_ << "define " << (isExported(slid.name + "__$pinit") ? "" : "internal ") << "void @" << slid.name << "__$pinit(ptr %self) {\n";
-        out_ << "entry:\n";
-
-        // store each private field at its struct index
-        for (int i = slid.public_field_count; i < (int)slid.fields.size(); i++) {
-            std::string gep = newTmp();
-            out_ << "    " << gep << " = getelementptr %struct." << slid.name
-                 << ", ptr %self, i32 0, i32 " << i << "\n";
-            std::string val;
-            if (slid.fields[i].default_val) {
-                val = emitExpr(*slid.fields[i].default_val);
-            } else {
-                val = (info.field_types[i] == "float32" || info.field_types[i] == "float64") ? "0.0" : "0";
-            }
-            out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
-        }
-
-        if (info.has_explicit_ctor) {
-            // chain to explicit ctor with musttail for zero overhead
-            out_ << "    musttail call void @" << slid.name << "__$ctor(ptr %self)\n";
-        }
-        out_ << "    ret void\n";
-        out_ << "}\n\n";
-
-        current_slid_ = "";
-        self_ptr_ = "";
-    }
+    self_ptr_ = "";
 
     // emit __$sizeof for every locally-complete slid (not for consumer-side declarations)
     if (!slid.has_trailing_ellipsis && !slid.is_namespace) {
@@ -2665,14 +2859,20 @@ void Codegen::emitSlidSlotAssign(const std::string& elem_type,
 void Codegen::emitSlidAssign(const std::string& struct_type,
                              const std::string& dst_ptr, const std::string& src_ptr,
                              bool is_move, bool is_init) {
+    // is_init propagates only through anon-tuple walks. When struct_type is a
+    // slid, its own __$ctor (emitted before reaching this default-walk fallback)
+    // already constructed every field — re-constructing them here would print
+    // a second ctor for slid-typed embedded fields. When struct_type is a
+    // tuple, no __$ctor exists and each slid slot needs to default-construct
+    // itself before op= copies/moves into it.
+    bool slot_is_init = is_init && isAnonTupleType(struct_type);
     auto fields = fieldTypesOf(struct_type);
     for (int i = 0; i < (int)fields.size(); i++) {
         const std::string& fslids = fields[i];
         std::string src_gep = emitFieldGep(struct_type, src_ptr, i);
         std::string dst_gep = emitFieldGep(struct_type, dst_ptr, i);
-        // embedded slid / anon-tuple: dispatch via slot helper (user op else default walk)
         if (slid_info_.count(fslids) || isAnonTupleType(fslids)) {
-            emitSlidSlotAssign(fslids, dst_gep, src_gep, is_move, is_init);
+            emitSlidSlotAssign(fslids, dst_gep, src_gep, is_move, slot_is_init);
             continue;
         }
         // inline array of slids or pointers: walk each element
@@ -2689,7 +2889,7 @@ void Codegen::emitSlidAssign(const std::string& struct_type,
                     std::string d_ep = newTmp();
                     out_ << "    " << d_ep << " = getelementptr " << arr_llvm
                          << ", ptr " << dst_gep << ", i32 0, i32 " << k << "\n";
-                    emitSlidSlotAssign(elem_slids, d_ep, s_ep, is_move, is_init);
+                    emitSlidSlotAssign(elem_slids, d_ep, s_ep, is_move, slot_is_init);
                 }
                 continue;
             }
@@ -2931,63 +3131,15 @@ std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
         }
     }
     std::string reg = newTmp();
-    if (info.has_pinit) {
+    if (info.has_private_suffix) {
         std::string sz = newTmp();
         out_ << "    " << sz << " = call i64 @" << slid_name << "__$sizeof()\n";
         out_ << "    " << reg << " = alloca i8, i64 " << sz << "\n";
     } else {
         out_ << "    " << reg << " = alloca %struct." << slid_name << "\n";
     }
-    // Walk the inheritance chain base→derived. For each class C: init C's own
-    // fields (using flat indices into the leaf's struct), emit C's implicit
-    // ctor body if any, then conditionally call C's __$pinit / __$ctor.
-    auto chain = chainOf(slid_name);
-    for (SlidInfo* c_info : chain) {
-        const SlidDef* c_def = nullptr;
-        for (auto& s : program_.slids) if (s.name == c_info->name) { c_def = &s; break; }
-        bool owns_vptr = c_info->is_virtual_class && c_info->base_info == nullptr;
-        if (c_info->is_virtual_class) {
-            std::string vptr_gep = newTmp();
-            out_ << "    " << vptr_gep << " = getelementptr %struct." << slid_name
-                 << ", ptr " << reg << ", i32 0, i32 0\n";
-            out_ << "    store ptr @_ZTV" << c_info->name
-                 << ", ptr " << vptr_gep << "\n";
-        }
-        if (!c_info->has_pinit) {
-            int vptr_local = owns_vptr ? 1 : 0;
-            int n_own = c_info->own_field_count - vptr_local;
-            for (int j = 0; j < n_own; j++) {
-                int flat_idx = c_info->base_field_count + vptr_local + j;
-                const std::string& ftype = info.field_types[flat_idx];
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr %struct." << slid_name
-                     << ", ptr " << reg << ", i32 0, i32 " << flat_idx << "\n";
-                std::string val;
-                if (c_def && j < (int)c_def->fields.size() && c_def->fields[j].default_val)
-                    val = emitExpr(*c_def->fields[j].default_val);
-                else
-                    val = isInlineArrayType(ftype) ? "zeroinitializer"
-                        : isIndirectType(ftype) ? "null"
-                        : (ftype == "float32" || ftype == "float64") ? "0.0"
-                        : "0";
-                out_ << "    store " << llvmType(ftype) << " " << val << ", ptr " << gep << "\n";
-            }
-        }
-        if (c_def && c_def->ctor_body) {
-            std::string saved_slid = current_slid_;
-            std::string saved_self = self_ptr_;
-            current_slid_ = c_info->name;
-            self_ptr_ = reg;
-            emitBlock(*c_def->ctor_body);
-            current_slid_ = saved_slid;
-            self_ptr_ = saved_self;
-        }
-        if (c_info->has_pinit)
-            out_ << "    call void @" << c_info->name << "__$pinit(ptr " << reg << ")\n";
-        else if (c_info->has_explicit_ctor)
-            out_ << "    call void @" << c_info->name << "__$ctor("
-                 << (c_info->is_empty ? "" : "ptr " + reg) << ")\n";
-    }
+    // Field init + ctor call go through the unified emit path.
+    emitConstructAtPtrs(slid_name, reg, {}, {});
     if (hasDtorInChain(slid_name))
         pending_temp_dtors_.push_back({reg, slid_name});
     return reg;
@@ -2996,7 +3148,7 @@ std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
 std::string Codegen::emitRawSlidAlloca(const std::string& slid_name) {
     auto& info = slid_info_[slid_name];
     std::string reg = newTmp();
-    if (info.has_pinit) {
+    if (info.has_private_suffix) {
         std::string sz = newTmp();
         out_ << "    " << sz << " = call i64 @" << slid_name << "__$sizeof()\n";
         out_ << "    " << reg << " = alloca i8, i64 " << sz << "\n";
@@ -3016,9 +3168,9 @@ void Codegen::emitConstructAt(const std::string& stype, const std::string& ptr,
     emitConstructAtPtrs(stype, ptr, a, o);
 }
 
-void Codegen::emitConstructAtPtrs(const std::string& stype, const std::string& ptr,
-                                  const std::vector<const Expr*>& args,
-                                  const std::vector<const Expr*>& overrides) {
+void Codegen::emitInitFieldsAtPtrs(const std::string& stype, const std::string& ptr,
+                                   const std::vector<const Expr*>& args,
+                                   const std::vector<const Expr*>& overrides) {
     bool is_slid = slid_info_.count(stype) != 0;
     bool is_tuple = isAnonTupleType(stype);
     if (!is_slid && !is_tuple) return;
@@ -3032,12 +3184,6 @@ void Codegen::emitConstructAtPtrs(const std::string& stype, const std::string& p
         throw std::runtime_error("too many tuple values: '" + stype + "' has "
             + std::to_string(nfields) + " fields, got " + std::to_string(overrides.size()));
 
-    // transport-only fast path (no inheritance): caller writes nothing, __$pinit handles init
-    if (is_slid && slid_info_[stype].has_pinit && slid_info_[stype].base_info == nullptr) {
-        out_ << "    call void @" << stype << "__$pinit(ptr " << ptr << ")\n";
-        return;
-    }
-
     auto slidDefFor = [&](const std::string& name) -> const SlidDef* {
         for (auto& s : program_.slids) if (s.name == name) return &s;
         auto it = concrete_slid_template_defs_.find(name);
@@ -3049,13 +3195,22 @@ void Codegen::emitConstructAtPtrs(const std::string& stype, const std::string& p
                                  const Expr* arg_expr) {
         if (slid_info_.count(ftype)) {
             if (!arg_expr) {
-                emitConstructAtPtrs(ftype, gep, {}, {});
+                // Default-init the field's primitives only. The outer
+                // __$ctor_body will call this field's __$ctor to construct it.
+                emitInitFieldsAtPtrs(ftype, gep, {}, {});
             } else if (inferSlidType(*arg_expr) == ftype) {
+                // Matching slid arg: in tuple context the slot has no outer
+                // __$ctor (tuples don't have one), so default-construct the slot
+                // before op=. In class-field context the outer __$ctor_body
+                // will call the field's __$ctor, so skip default-construct.
                 std::string src = emitExpr(*arg_expr);
-                emitSlidSlotAssign(ftype, gep, src, /*is_move=*/false, /*is_init=*/true);
+                emitSlidSlotAssign(ftype, gep, src, /*is_move=*/false,
+                                   /*is_init=*/is_tuple);
             } else {
+                // Compound init: route the single arg into the field's
+                // primitives. No __$ctor emit (outer __$ctor_body handles).
                 std::vector<const Expr*> one{ arg_expr };
-                emitConstructAtPtrs(ftype, gep, one, {});
+                emitInitFieldsAtPtrs(ftype, gep, one, {});
             }
             return;
         }
@@ -3086,54 +3241,150 @@ void Codegen::emitConstructAtPtrs(const std::string& stype, const std::string& p
         return;
     }
 
-    // slid: walk inheritance chain base→derived using flat indices into the leaf's struct.
-    // Virtual classes have a $vptr at flat index 0 (synthetic, not in the user
-    // arg list); each class's ctor sets the vptr to its own vtable as the chain
-    // walks down (Itanium ABI), so the most-derived ctor leaves the correct
-    // vtable in place. user-arg index = flat_idx - args_vptr_skew.
+    // slid: walk inheritance chain base→derived. Init only — vptr setting
+    // and ctor calls live in __$ctor_body.
     auto chain = chainOf(stype);
     bool root_virtual = !slid_info_.at(stype).is_virtual_class ? false : true;
     int args_vptr_skew = root_virtual ? 1 : 0;
     for (SlidInfo* c_info : chain) {
         const SlidDef* c_def = slidDefFor(c_info->name);
         bool owns_vptr = c_info->is_virtual_class && c_info->base_info == nullptr;
-        if (c_info->is_virtual_class) {
-            std::string vptr_gep = emitFieldGep(stype, ptr, 0);
-            out_ << "    store ptr @_ZTV" << c_info->name
-                 << ", ptr " << vptr_gep << "\n";
+        int vptr_local = owns_vptr ? 1 : 0;
+        int n_own = c_info->own_field_count - vptr_local;
+        for (int j = 0; j < n_own; j++) {
+            int flat_idx = c_info->base_field_count + vptr_local + j;
+            const std::string& ftype = fields[flat_idx];
+            int args_idx = flat_idx - args_vptr_skew;
+            const Expr* arg_expr = nullptr;
+            if (args_idx >= 0 && args_idx < (int)overrides.size())
+                arg_expr = overrides[args_idx];
+            else if (args_idx >= 0 && args_idx < (int)args.size())
+                arg_expr = args[args_idx];
+            else if (c_def && j < (int)c_def->fields.size() && c_def->fields[j].default_val)
+                arg_expr = c_def->fields[j].default_val.get();
+            std::string gep = emitFieldGep(stype, ptr, flat_idx);
+            initFieldFromExpr(ftype, gep, arg_expr);
         }
-        if (!c_info->has_pinit) {
-            int vptr_local = owns_vptr ? 1 : 0;
-            int n_own = c_info->own_field_count - vptr_local;
-            for (int j = 0; j < n_own; j++) {
-                int flat_idx = c_info->base_field_count + vptr_local + j;
-                const std::string& ftype = fields[flat_idx];
-                int args_idx = flat_idx - args_vptr_skew;
-                const Expr* arg_expr = nullptr;
-                if (args_idx >= 0 && args_idx < (int)overrides.size())
-                    arg_expr = overrides[args_idx];
-                else if (args_idx >= 0 && args_idx < (int)args.size())
-                    arg_expr = args[args_idx];
-                else if (c_def && j < (int)c_def->fields.size() && c_def->fields[j].default_val)
-                    arg_expr = c_def->fields[j].default_val.get();
-                std::string gep = emitFieldGep(stype, ptr, flat_idx);
-                initFieldFromExpr(ftype, gep, arg_expr);
+    }
+}
+
+void Codegen::emitConstructAtPtrs(const std::string& stype, const std::string& ptr,
+                                  const std::vector<const Expr*>& args,
+                                  const std::vector<const Expr*>& overrides) {
+    // Field-init half (no ctor call). For tuples, this is the entire job.
+    emitInitFieldsAtPtrs(stype, ptr, args, overrides);
+
+    // Ctor call half (slid types only). Single call; the function handles its
+    // own vptr, base call, field ctors, and user body internally.
+    emitCtorCall(stype, ptr);
+}
+
+void Codegen::emitCtorCall(const std::string& class_name, const std::string& ptr) {
+    auto sit = slid_info_.find(class_name);
+    if (sit == slid_info_.end()) return;       // tuple or unknown — no call
+    auto& info = sit->second;
+    if (info.must_inline_ctor) {
+        // Implicit class (no user _()/~()) — no __$ctor symbol exists; inline
+        // the synthesized walk at this site.
+        emitInlineCtorWalk(class_name, ptr);
+        return;
+    }
+    if (!info.has_explicit_ctor) return;        // no work to do
+    bool use_body = info.is_transport_impl;
+    out_ << "    call void @" << class_name << "__"
+         << (use_body ? "$ctor_body" : "$ctor") << "(ptr " << ptr << ")\n";
+}
+
+void Codegen::emitInlineCtorWalk(const std::string& class_name,
+                                 const std::string& ptr) {
+    auto sit = slid_info_.find(class_name);
+    if (sit == slid_info_.end()) return;
+    auto& info = sit->second;
+    // 1. base call first (recursive dispatch — may inline or call)
+    if (info.base_info) {
+        emitCtorCall(info.base_info->name, ptr);
+    }
+    // 2. own vptr — every virtual class writes its own vtable pointer
+    //    after the base call (Itanium ABI)
+    if (info.is_virtual_class) {
+        std::string vptr_gep = emitFieldGep(class_name, ptr, 0);
+        out_ << "    store ptr @_ZTV" << class_name << ", ptr " << vptr_gep << "\n";
+    }
+    // 3. own slid field ctors in declaration order
+    bool owns_vptr = info.is_virtual_class && info.base_info == nullptr;
+    int vptr_local = owns_vptr ? 1 : 0;
+    int n_own = info.own_field_count - vptr_local;
+    for (int j = 0; j < n_own; j++) {
+        int flat_idx = info.base_field_count + vptr_local + j;
+        if (flat_idx >= (int)info.field_types.size()) break;
+        const std::string& ftype = info.field_types[flat_idx];
+        if (slid_info_.count(ftype) && !slid_info_.at(ftype).is_empty) {
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr %struct."
+                 << class_name << ", ptr " << ptr << ", i32 0, i32 "
+                 << flat_idx << "\n";
+            emitCtorCall(ftype, gep);
+        } else if (isAnonTupleType(ftype)) {
+            auto elems = anonTupleElems(ftype);
+            std::string field_gep = newTmp();
+            out_ << "    " << field_gep << " = getelementptr %struct."
+                 << class_name << ", ptr " << ptr << ", i32 0, i32 "
+                 << flat_idx << "\n";
+            for (int k = 0; k < (int)elems.size(); k++) {
+                const std::string& et = elems[k];
+                if (slid_info_.count(et) && !slid_info_.at(et).is_empty) {
+                    std::string slot_gep = newTmp();
+                    out_ << "    " << slot_gep << " = getelementptr "
+                         << llvmType(ftype) << ", ptr " << field_gep
+                         << ", i32 0, i32 " << k << "\n";
+                    emitCtorCall(et, slot_gep);
+                }
             }
         }
-        if (c_def && c_def->ctor_body) {
-            std::string saved_slid = current_slid_;
-            std::string saved_self = self_ptr_;
-            current_slid_ = c_info->name;
-            self_ptr_ = ptr;
-            emitBlock(*c_def->ctor_body);
-            current_slid_ = saved_slid;
-            self_ptr_ = saved_self;
-        } else if (c_info->has_pinit) {
-            out_ << "    call void @" << c_info->name << "__$pinit(ptr " << ptr << ")\n";
-        } else if (c_info->has_explicit_ctor) {
-            out_ << "    call void @" << c_info->name << "__$ctor("
-                 << (c_info->is_empty ? "" : "ptr " + ptr) << ")\n";
+        // primitive / pointer / inline-array: site init handled it
+    }
+}
+
+void Codegen::emitInlineDtorWalk(const std::string& class_name,
+                                 const std::string& ptr) {
+    auto sit = slid_info_.find(class_name);
+    if (sit == slid_info_.end()) return;
+    auto& info = sit->second;
+    bool owns_vptr = info.is_virtual_class && info.base_info == nullptr;
+    int vptr_local = owns_vptr ? 1 : 0;
+    int n_own = info.own_field_count - vptr_local;
+    // 1. own slid field dtors in reverse declaration order
+    for (int j = n_own - 1; j >= 0; j--) {
+        int flat_idx = info.base_field_count + vptr_local + j;
+        if (flat_idx >= (int)info.field_types.size()) continue;
+        const std::string& ftype = info.field_types[flat_idx];
+        if (slid_info_.count(ftype) && slid_info_.at(ftype).has_dtor) {
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr %struct."
+                 << class_name << ", ptr " << ptr << ", i32 0, i32 "
+                 << flat_idx << "\n";
+            emitDtorChainCall(ftype, gep);
+        } else if (isAnonTupleType(ftype)) {
+            auto elems = anonTupleElems(ftype);
+            std::string field_gep = newTmp();
+            out_ << "    " << field_gep << " = getelementptr %struct."
+                 << class_name << ", ptr " << ptr << ", i32 0, i32 "
+                 << flat_idx << "\n";
+            for (int k = (int)elems.size() - 1; k >= 0; k--) {
+                const std::string& et = elems[k];
+                if (slid_info_.count(et) && slid_info_.at(et).has_dtor) {
+                    std::string slot_gep = newTmp();
+                    out_ << "    " << slot_gep << " = getelementptr "
+                         << llvmType(ftype) << ", ptr " << field_gep
+                         << ", i32 0, i32 " << k << "\n";
+                    emitDtorChainCall(et, slot_gep);
+                }
+            }
         }
+    }
+    // 2. base dtor (recursive dispatch)
+    if (info.base_info && info.base_info->has_dtor) {
+        emitDtorChainCall(info.base_info->name, ptr);
     }
 }
 
@@ -3154,25 +3405,8 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
         // implicit temporary: string literal passed to SlidType^ param
         if (slid_info_.count(slid_name) && dynamic_cast<const StringLiteralExpr*>(&arg)) {
             std::string tmp_reg = emitRawSlidAlloca(slid_name);
-            auto& info = slid_info_[slid_name];
-            if (info.has_pinit) {
-                out_ << "    call void @" << slid_name << "__$pinit(ptr " << tmp_reg << ")\n";
-            } else {
-                // zero-init fields
-                for (int i = 0; i < (int)info.field_types.size(); i++) {
-                    std::string gep = newTmp();
-                    out_ << "    " << gep << " = getelementptr %struct." << slid_name
-                         << ", ptr " << tmp_reg << ", i32 0, i32 " << i << "\n";
-                    if (isIndirectType(info.field_types[i]))
-                        out_ << "    store ptr null, ptr " << gep << "\n";
-                    else
-                        out_ << "    store " << llvmType(info.field_types[i]) << " 0, ptr " << gep << "\n";
-                }
-                // call explicit constructor if any
-                if (info.has_explicit_ctor)
-                    out_ << "    call void @" << slid_name << "__$ctor("
-                         << (info.is_empty ? "" : "ptr " + tmp_reg) << ")\n";
-            }
+            // default-init fields + call ctor
+            emitConstructAtPtrs(slid_name, tmp_reg, {}, {});
             // call op=(char[]) to initialize from the literal
             auto oit = method_overloads_.find(slid_name + "__op=");
             if (oit != method_overloads_.end()) {
@@ -3265,7 +3499,6 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
     if (want_ptr) {
         std::string slid_name = param_type.substr(0, param_type.size() - 1);
         if (slid_info_.count(slid_name)) {
-            auto& info = slid_info_[slid_name];
             std::string arg_llvm = exprLlvmType(arg);
             static const std::map<std::string,int> irank = {{"i8",1},{"i16",2},{"i32",3},{"i64",4}};
             auto ait = irank.find(arg_llvm);
@@ -3292,23 +3525,7 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                                && (arg_slids != "bool" || ptypes2[0] == "bool");
                     if (!exact && !widen) continue;
                     std::string tmp = emitRawSlidAlloca(slid_name);
-                    if (info.has_pinit) {
-                        // transport type: __$pinit zeros private fields and chains to __$ctor
-                        out_ << "    call void @" << slid_name << "__$pinit(ptr " << tmp << ")\n";
-                    } else {
-                        for (int i2 = 0; i2 < (int)info.field_types.size(); i2++) {
-                            std::string gep = newTmp();
-                            out_ << "    " << gep << " = getelementptr %struct." << slid_name
-                                 << ", ptr " << tmp << ", i32 0, i32 " << i2 << "\n";
-                            if (isIndirectType(info.field_types[i2]))
-                                out_ << "    store ptr null, ptr " << gep << "\n";
-                            else
-                                out_ << "    store " << llvmType(info.field_types[i2]) << " 0, ptr " << gep << "\n";
-                        }
-                        if (info.has_explicit_ctor)
-                            out_ << "    call void @" << slid_name << "__$ctor("
-                                 << (info.is_empty ? "" : "ptr " + tmp) << ")\n";
-                    }
+                    emitConstructAtPtrs(slid_name, tmp, {}, {});
                     std::string av = emitExpr(arg);
                     if (widen && !exact) {
                         std::string ext = newTmp();
@@ -3553,16 +3770,12 @@ void Codegen::emitBlock(const BlockStmt& block) {
         if (block_terminated_) break; // dead code after terminator — skip
         size_t temp_mark = pending_temp_dtors_.size();
         emitStmt(*stmt);
-        // destroy implicit temporaries created during this statement (chain derived→base)
+        // destroy implicit temporaries created during this statement.
+        // Single dispatcher call per temp — the dtor function (or inline walk)
+        // chains to its base internally.
         for (int i = (int)pending_temp_dtors_.size() - 1; i >= (int)temp_mark; i--) {
             auto& td = pending_temp_dtors_[i];
-            auto chain = chainOf(td.second);
-            for (int ci = (int)chain.size() - 1; ci >= 0; ci--) {
-                SlidInfo* c = chain[ci];
-                if (!c->has_dtor) continue;
-                out_ << "    call void @" << c->name << "__$dtor("
-                     << (c->is_empty ? "" : "ptr " + td.first) << ")\n";
-            }
+            emitDtorChainCall(td.second, td.first);
         }
         pending_temp_dtors_.resize(temp_mark);
     }

@@ -1,5 +1,7 @@
 
-fix bugs not calling dtors when should.
+nested comments.
+
+revisit initialization.
 
 implement complex field access with tuples.
 tuple[1].a_ is not yet supported.

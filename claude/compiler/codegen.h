@@ -13,7 +13,18 @@ struct SlidInfo {
     std::vector<std::string> field_types;
     bool has_explicit_ctor = false;
     bool has_dtor = false;
-    bool has_pinit = false;        // consumer: call __$pinit instead of __$ctor
+    // Set by synthesizeCtorNeeds() after has_dtor / has_explicit_ctor settle.
+    // True iff this class needs ctor work — either a __$ctor function or an
+    // inline walk at the construction site. Computed from: user-declared
+    // _()/~(), transport impl, virtual, base needs ctor, any own slid field
+    // needs ctor, any anon-tuple field has a slid slot needing ctor.
+    bool needs_ctor_fn = false;
+    // Set by synthesizeCtorNeeds() = !has_explicit_ctor && needs_ctor_fn.
+    // True iff the class has compiler-generated ctor/dtor only (no user `_()`
+    // / `~()` anywhere). These classes are tuple-like: no __$ctor / __$dtor
+    // symbol is emitted; the synthesized walk is inlined at every site.
+    bool must_inline_ctor = false;
+    bool has_private_suffix = false;  // class has private fields after `...` (consumer view: layout opaque, alloca size queried via __$sizeof)
     bool is_transport_impl = false; // impl side: emit __$pinit, treat as complete locally
     bool is_empty = false;         // class with () but zero fields: methods/ctor/dtor take no self
     bool is_namespace = false;     // declared as `Name { ... }` only — non-instantiable, called as Name:fn()
@@ -201,6 +212,11 @@ private:
     // slid-typed field needs a dtor to destroy those fields at scope/heap exit.
     // Sets info.has_dtor accordingly so emitDtors and emitSlidCtorDtor pick it up.
     void synthesizeFieldDtors();
+    // Computes info.needs_ctor_fn for every class via fixed-point iteration.
+    // Must run after has_dtor / has_explicit_ctor / inheritance are settled.
+    // A class needs __$ctor iff: user wrote _()/~(), transport impl, virtual,
+    // its base needs __$ctor, or any own slid field (or anon-tuple slot) needs __$ctor.
+    void synthesizeCtorNeeds();
     // Mark which classes are importable (declared in any .slh imported by this
     // TU, or whose impl side has a `(...)` transport prefix in .slh). Used to
     // gate end-of-TU pure-slot validation.
@@ -355,6 +371,29 @@ private:
     void emitConstructAtPtrs(const std::string& stype, const std::string& ptr,
                              const std::vector<const Expr*>& args,
                              const std::vector<const Expr*>& overrides); // same, but with raw ptrs (used for recursion)
+    // Emit the construct call for a slid. Dispatch:
+    //   must_inline_ctor=true  → inline the synthesized walk (emitInlineCtorWalk)
+    //   has_explicit_ctor=true → call @<class>__$ctor (or __$ctor_body in
+    //                            the closing TU)
+    //   otherwise              → no-op (no work to do)
+    // Single source of truth shared with emitConstructAtPtrs and the
+    // open-coded ctor sites.
+    void emitCtorCall(const std::string& class_name, const std::string& ptr);
+    // Inline the synthesized ctor walk: vptr (if any) + base call + own
+    // slid-field ctor calls (recursing into implicit slid fields). Used for
+    // implicit classes (must_inline_ctor=true) that have no __$ctor symbol.
+    void emitInlineCtorWalk(const std::string& class_name, const std::string& ptr);
+    // Inline the synthesized dtor walk: own slid-field dtors in reverse +
+    // base dtor call. Mirror of emitInlineCtorWalk for the destruction side.
+    void emitInlineDtorWalk(const std::string& class_name, const std::string& ptr);
+    // Field-init half of construction: walk fields and store caller-routed
+    // values, recursing into slid sub-fields for primitive routing. Does NOT
+    // emit any __$ctor call. The site uses this for sub-slid recursion (where
+    // the outer __$ctor_body will call the field's __$ctor); the top-level
+    // emitConstructAtPtrs combines this with a single trailing __$ctor call.
+    void emitInitFieldsAtPtrs(const std::string& stype, const std::string& ptr,
+                              const std::vector<const Expr*>& args,
+                              const std::vector<const Expr*>& overrides);
     // Destructure `init` into `targets` (type,name pairs — empty name skips that slot).
     // Dispatches on source shape: tuple literal, VarExpr of anon-tuple type, or generic.
     // Slid-typed slots in the anon-tuple-var path are moved element-wise via emitSlidAssign.

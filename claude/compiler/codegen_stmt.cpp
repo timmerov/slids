@@ -336,8 +336,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 std::string elem = newTmp();
                 out_ << "    " << elem << " = getelementptr %struct." << elem_type
                      << ", ptr " << ptr_val << ", i64 " << idx_prev << "\n";
-                out_ << "    call void @" << elem_type << "__$dtor("
-                     << (slid_info_[elem_type].is_empty ? "" : "ptr " + elem) << ")\n";
+                emitDtorChainCall(elem_type, elem);
                 out_ << "    br label %" << cond_lbl << "\n";
 
                 block_terminated_ = false;
@@ -349,14 +348,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
             out_ << end_lbl_outer << ":\n";
         } else {
             if (is_slid) {
-                // Walk the chain derived→base, calling each dtor in turn.
-                auto chain = chainOf(elem_type);
-                for (int ci = (int)chain.size() - 1; ci >= 0; ci--) {
-                    SlidInfo* c = chain[ci];
-                    if (!c->has_dtor) continue;
-                    out_ << "    call void @" << c->name << "__$dtor("
-                         << (c->is_empty ? "" : "ptr " + ptr_val) << ")\n";
-                }
+                // Single dispatcher call — the dtor function (or inline walk)
+                // chains to its base internally.
+                emitDtorChainCall(elem_type, ptr_val);
             }
             out_ << "    call void @free(ptr " << ptr_val << ")\n";
         }
@@ -510,10 +504,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     return;
                 }
                 if (is_empty_plus) {
-                    // emit: alloca, init fields, pinit/ctor, then op+=(rhs) — no empty temp
+                    // emit: alloca, default-construct, then op+=(rhs) — no empty temp
                     auto* be = dynamic_cast<const BinaryExpr*>(decl->init.get());
                     std::string reg = uniqueAllocaReg(decl->name);
-                    if (info.has_pinit) {
+                    if (info.has_private_suffix) {
                         std::string sz = newTmp();
                         out_ << "    " << sz << " = call i64 @" << eff_type << "__$sizeof()\n";
                         out_ << "    " << reg << " = alloca i8, i64 " << sz << "\n";
@@ -522,42 +516,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     }
                     locals_[decl->name] = reg;
                     local_types_[decl->name] = eff_type;
-                    const SlidDef* slid_def2 = nullptr;
-                    for (auto& s : program_.slids)
-                        if (s.name == eff_type) { slid_def2 = &s; break; }
-                    if (!slid_def2) {
-                        auto it = concrete_slid_template_defs_.find(eff_type);
-                        if (it != concrete_slid_template_defs_.end()) slid_def2 = &it->second;
-                    }
-                    if (!info.has_pinit) {
-                    for (int i = 0; i < (int)info.field_types.size(); i++) {
-                        std::string gep = newTmp();
-                        out_ << "    " << gep << " = getelementptr %struct." << eff_type
-                             << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
-                        std::string val;
-                        if (slid_def2 && slid_def2->fields[i].default_val)
-                            val = emitExpr(*slid_def2->fields[i].default_val);
-                        else
-                            val = isInlineArrayType(info.field_types[i]) ? "zeroinitializer"
-                                : (info.field_types[i] == "float32" || info.field_types[i] == "float64") ? "0.0"
-                                : "0";
-                        out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
-                    }
-                    } // !has_pinit
-                    if (slid_def2 && slid_def2->ctor_body) {
-                        std::string saved_slid = current_slid_;
-                        std::string saved_self = self_ptr_;
-                        current_slid_ = eff_type;
-                        self_ptr_ = reg;
-                        emitBlock(*slid_def2->ctor_body);
-                        current_slid_ = saved_slid;
-                        self_ptr_ = saved_self;
-                    }
-                    if (info.has_pinit)
-                        out_ << "    call void @" << eff_type << "__$pinit(ptr " << reg << ")\n";
-                    else if (info.has_explicit_ctor)
-                        out_ << "    call void @" << eff_type << "__$ctor("
-                             << (info.is_empty ? "" : "ptr " + reg) << ")\n";
+                    emitConstructAt(eff_type, reg, decl->ctor_args);
                     // call op+=(rhs)
                     std::string compound_base = eff_type + "__op+=";
                     std::string mangled = resolveOpEq(compound_base, *be->right);
@@ -574,7 +533,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
 
             std::string reg = uniqueAllocaReg(decl->name);
-            if (info.has_pinit) {
+            if (info.has_private_suffix) {
                 std::string sz = newTmp();
                 out_ << "    " << sz << " = call i64 @" << eff_type << "__$sizeof()\n";
                 out_ << "    " << reg << " = alloca i8, i64 " << sz << "\n";
@@ -922,22 +881,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         if (!coerce.empty()) {
                             auto& sinfo = slid_info_[slid_name];
                             std::string tmp = emitRawSlidAlloca(slid_name);
-                            if (!sinfo.has_pinit) {
-                                for (int i = 0; i < (int)sinfo.field_types.size(); i++) {
-                                    std::string gep = newTmp();
-                                    out_ << "    " << gep << " = getelementptr %struct." << slid_name
-                                         << ", ptr " << tmp << ", i32 0, i32 " << i << "\n";
-                                    if (isIndirectType(sinfo.field_types[i]))
-                                        out_ << "    store ptr null, ptr " << gep << "\n";
-                                    else
-                                        out_ << "    store " << llvmType(sinfo.field_types[i]) << " 0, ptr " << gep << "\n";
-                                }
-                            }
-                            if (sinfo.has_pinit && !sinfo.is_transport_impl)
-                                out_ << "    call void @" << slid_name << "__$pinit(ptr " << tmp << ")\n";
-                            else if (sinfo.has_explicit_ctor)
-                                out_ << "    call void @" << slid_name << "__$ctor("
-                                     << (sinfo.is_empty ? "" : "ptr " + tmp) << ")\n";
+                            emitConstructAtPtrs(slid_name, tmp, {}, {});
                             auto& cptypes = func_param_types_[coerce];
                             std::string cptype = cptypes.empty() ? "" : cptypes[0];
                             std::string carg = emitArgForParam(*be->right, cptype);
@@ -966,9 +910,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                             break;
                                         }
                             }
-                            if (sinfo.has_dtor)
-                                out_ << "    call void @" << slid_name << "__$dtor("
-                                     << (sinfo.is_empty ? "" : "ptr " + tmp) << ")\n";
+                            emitDtorChainCall(slid_name, tmp);
                             return;
                         }
                     }
@@ -984,8 +926,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     // first call dtor on existing lhs value
                     const std::string& slid_name = tit->second;
                     if (slid_info_.at(slid_name).has_dtor) {
-                        out_ << "    call void @" << slid_name << "__$dtor("
-                             << (slid_info_.at(slid_name).is_empty ? "" : "ptr " + it->second) << ")\n";
+                        emitDtorChainCall(slid_name, it->second);
                         // re-init fields to zero/null
                         auto& info = slid_info_[slid_name];
                         for (int i = 0; i < (int)info.field_types.size(); i++) {
@@ -2116,10 +2057,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             } else {
                 // opaque (transport) type: init %retval, then move or copy from src
-                if (info.has_pinit)
-                    out_ << "    call void @" << slid_name << "__$pinit(ptr %retval)\n";
-                else if (info.has_explicit_ctor)
-                    out_ << "    call void @" << slid_name << "__$ctor(ptr %retval)\n";
+                emitCtorCall(slid_name, "%retval");
                 // prefer op<- (move), fallback to op= (copy)
                 std::string move_func;
                 auto mit = method_overloads_.find(slid_name + "__op<-");
@@ -2141,8 +2079,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             // if src was a fresh temp (not a named local), dtor it now
             // (its ptr fields are already null after the move, so dtor is a no-op for resources)
             if (src_is_fresh_temp && info.has_dtor)
-                out_ << "    call void @" << slid_name << "__$dtor("
-                     << (info.is_empty ? "" : "ptr " + src) << ")\n";
+                emitDtorChainCall(slid_name, src);
             emitDtors();
             out_ << "    ret void\n";
         } else {
