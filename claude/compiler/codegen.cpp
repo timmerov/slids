@@ -66,6 +66,7 @@ std::string Codegen::llvmType(const std::string& t) {
     if (t == "uint64") return "i64";
     if (t == "intptr") return "i64";
     if (t == "anyptr") return "ptr";
+    if (t == "$vptr")  return "ptr"; // synthetic vtable pointer slot for virtual classes
     if (t == "float32") return "float";
     if (t == "float64") return "double";
     if (t == "void")  return "void";
@@ -465,6 +466,16 @@ void Codegen::collectSlids() {
         info.is_empty = info.field_types.empty() && !info.has_pinit && !info.is_transport_impl;
         // namespace: declared as `Name { ... }` only — non-instantiable, called as Name:fn()
         info.is_namespace = slid.is_namespace;
+        // _() and ~() must be declared together or both auto-generated. Declaring
+        // only one is a compile error. (Namespaces have no instances — skip.)
+        if (!info.is_namespace && info.has_explicit_ctor != info.has_dtor) {
+            const char* present = info.has_explicit_ctor ? "_" : "~";
+            const char* missing = info.has_explicit_ctor ? "~" : "_";
+            throw std::runtime_error("class '" + slid.name
+                + "' declares '" + present + "()' but not '" + missing
+                + "()': constructor and destructor must be declared together"
+                + " or both auto-generated");
+        }
         slid_info_[slid.name] = std::move(info);
     }
 }
@@ -472,8 +483,29 @@ void Codegen::collectSlids() {
 void Codegen::resolveSlidInheritanceFor(SlidInfo& info) {
     if (info.inheritance_resolved) return;
     info.inheritance_resolved = true;
+    // Helper: prepend a synthetic $vptr slot at index 0 of the given own-field
+    // list. Used at the root virtual class (this class is virtual, base is not
+    // or absent). Derived virtual classes inherit the vptr via base.field_types
+    // concat below — no need to re-prepend.
+    auto prependVptr = [](std::vector<std::string>& ftypes,
+                          std::vector<std::string>& fnames) {
+        ftypes.insert(ftypes.begin(), std::string("$vptr"));
+        fnames.insert(fnames.begin(), std::string("$vptr"));
+    };
     if (info.base_name.empty()) {
         info.base_field_count = 0;
+        if (info.is_virtual_class) {
+            // root virtual class with no base — prepend $vptr to own field_types.
+            std::vector<std::string> own_types(info.field_types);
+            std::vector<std::string> own_names(info.own_field_count);
+            for (auto& [name, idx] : info.field_index) own_names[idx] = name;
+            prependVptr(own_types, own_names);
+            info.field_types = std::move(own_types);
+            info.field_index.clear();
+            for (int i = 0; i < (int)own_names.size(); i++)
+                info.field_index[own_names[i]] = i;
+            info.own_field_count = (int)info.field_types.size();
+        }
         return;
     }
     auto bit = slid_info_.find(info.base_name);
@@ -485,6 +517,11 @@ void Codegen::resolveSlidInheritanceFor(SlidInfo& info) {
         throw std::runtime_error("cannot inherit from namespace '" + info.base_name + "'");
     resolveSlidInheritanceFor(base); // ensure base's flat layout is built first
     info.base_info = &base;
+    // virtual-base validation: a virtual class must have a virtual base.
+    if (info.is_virtual_class && !base.is_virtual_class)
+        throw std::runtime_error("class '" + info.name
+            + "' is virtual but its base '" + base.name
+            + "' is not — all ancestors of a virtual class must have a virtual destructor");
 
     // Save own fields (currently sole occupants of field_types/field_index).
     int own_count = info.own_field_count;
@@ -492,6 +529,8 @@ void Codegen::resolveSlidInheritanceFor(SlidInfo& info) {
                                        info.field_types.begin() + own_count);
     std::vector<std::string> own_names(own_count);
     for (auto& [name, idx] : info.field_index) own_names[idx] = name;
+    // If we're locally virtual but base isn't (caught by validation above),
+    // we'd need to prepend $vptr here. That branch is unreachable.
 
     // Rebuild as base prefix + own suffix.
     info.field_types = base.field_types;
@@ -511,6 +550,212 @@ void Codegen::resolveSlidInheritanceFor(SlidInfo& info) {
 
 void Codegen::resolveSlidInheritance() {
     for (auto& [name, info] : slid_info_) resolveSlidInheritanceFor(info);
+}
+
+void Codegen::classifyVirtualClasses() {
+    // step 1: locally_virtual = any virtual member or virtual ~.
+    for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) continue;
+        auto it = slid_info_.find(slid.name);
+        if (it == slid_info_.end()) continue;
+        SlidInfo& info = it->second;
+        if (slid.dtor_is_virtual) {
+            info.locally_virtual = true;
+            info.dtor_is_virtual = true;
+        }
+        for (auto& m : slid.methods) {
+            if (m.is_virtual) { info.locally_virtual = true; break; }
+        }
+    }
+    for (auto& em : program_.external_methods) {
+        auto it = slid_info_.find(em.slid_name);
+        if (it == slid_info_.end()) continue;
+        if (em.is_virtual) it->second.locally_virtual = true;
+    }
+    // step 1b: in a virtual class, the dtor is virtual unconditionally —
+    // the `virtual` keyword on `~` is optional/advisory. If the user wrote no
+    // dtor, auto-generate an empty one. Either way, mark has_dtor so scope-exit
+    // chains include this class.
+    for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) continue;
+        auto it = slid_info_.find(slid.name);
+        if (it == slid_info_.end()) continue;
+        SlidInfo& info = it->second;
+        if (!info.locally_virtual) continue;
+        info.dtor_is_virtual = true;
+        info.has_dtor = true;
+    }
+    // step 2: propagate is_virtual_class via base_name strings (base_info pointers
+    // aren't linked yet — resolveSlidInheritance runs after this). Fixed-point.
+    for (auto& [n, info] : slid_info_)
+        if (info.locally_virtual) info.is_virtual_class = true;
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (auto& [n, info] : slid_info_) {
+            if (info.is_virtual_class) continue;
+            if (info.base_name.empty()) continue;
+            auto bit = slid_info_.find(info.base_name);
+            if (bit == slid_info_.end()) continue;
+            if (bit->second.is_virtual_class) {
+                info.is_virtual_class = true;
+                changed = true;
+            }
+        }
+    }
+}
+
+void Codegen::buildVtables() {
+    // Topological order: base before derived. resolveSlidInheritance has linked
+    // base_info pointers, so we can walk chains via chainOf().
+    auto findSlid = [&](const std::string& name) -> const SlidDef* {
+        for (auto& s : program_.slids) if (s.name == name) return &s;
+        return nullptr;
+    };
+    // Build per-class in dependency order using chainOf.
+    std::set<std::string> built;
+    std::function<void(const std::string&)> build = [&](const std::string& name) {
+        if (!built.insert(name).second) return;
+        auto it = slid_info_.find(name);
+        if (it == slid_info_.end()) return;
+        SlidInfo& info = it->second;
+        if (!info.is_virtual_class) return;
+        if (info.base_info) build(info.base_info->name);
+
+        // Inherit base's vtable.
+        if (info.base_info) info.vtable = info.base_info->vtable;
+        const SlidDef* def = findSlid(name);
+        if (!def) return;
+
+        auto findSlot = [&](const std::string& mname,
+                            const std::vector<std::string>& pts) -> int {
+            for (int i = 0; i < (int)info.vtable.size(); i++)
+                if (info.vtable[i].method_name == mname && info.vtable[i].param_types == pts)
+                    return i;
+            return -1;
+        };
+        auto findSlotByName = [&](const std::string& mname) -> int {
+            for (int i = 0; i < (int)info.vtable.size(); i++)
+                if (info.vtable[i].method_name == mname) return i;
+            return -1;
+        };
+
+        // Apply own methods (original declaration). New virtual methods may only
+        // be added here, not in reopens.
+        for (auto& m : def->methods) {
+            std::vector<std::string> pts;
+            for (auto& [t, n] : m.params) pts.push_back(t);
+            int slot = findSlot(m.name, pts);
+            if (m.is_virtual) {
+                if (slot < 0) {
+                    // shadowing-by-name check: same name with different sig
+                    int by_name = findSlotByName(m.name);
+                    if (by_name >= 0)
+                        throw std::runtime_error("class '" + name + "': virtual method '"
+                            + m.name + "' signature does not match the inherited slot");
+                    // new slot
+                    SlidInfo::VtableSlot s;
+                    s.method_name = m.name;
+                    s.param_types = pts;
+                    s.return_type = m.return_type;
+                    s.is_pure = m.is_pure;
+                    if (!m.is_pure) {
+                        s.defining_class = name;
+                        s.mangled = mangleMethod(name, m.name, pts);
+                    }
+                    info.vtable.push_back(std::move(s));
+                } else {
+                    // override: must match return type exactly
+                    if (info.vtable[slot].return_type != m.return_type)
+                        throw std::runtime_error("class '" + name + "': virtual override '"
+                            + m.name + "' return type does not match base");
+                    if (m.is_pure) {
+                        info.vtable[slot].is_pure = true;
+                        info.vtable[slot].defining_class = "";
+                        info.vtable[slot].mangled = "";
+                    } else {
+                        info.vtable[slot].is_pure = false;
+                        info.vtable[slot].defining_class = name;
+                        info.vtable[slot].mangled = mangleMethod(name, m.name, pts);
+                    }
+                }
+            } else {
+                // non-virtual: must not shadow a base virtual of the same name
+                int by_name = findSlotByName(m.name);
+                if (by_name >= 0)
+                    throw std::runtime_error("class '" + name + "': method '" + m.name
+                        + "' shadows inherited virtual method — declare it 'virtual' to override");
+            }
+        }
+        // Apply external_methods (reopens). May NOT add new virtual slots; may
+        // only define an existing virtual slot. A non-virtual reopen of a name
+        // that matches a virtual slot is rejected.
+        for (auto& em : program_.external_methods) {
+            if (em.slid_name != name) continue;
+            if (em.method_name == "_" || em.method_name == "~") continue;
+            std::vector<std::string> pts;
+            for (auto& [t, n] : em.params) pts.push_back(t);
+            int slot = findSlot(em.method_name, pts);
+            if (em.is_virtual) {
+                if (slot < 0) {
+                    // either signature mismatch with a same-name inherited slot,
+                    // or attempt to add a new virtual via reopen.
+                    int by_name = findSlotByName(em.method_name);
+                    if (by_name >= 0)
+                        throw std::runtime_error("class '" + name + "': virtual method '"
+                            + em.method_name + "' signature does not match the inherited slot");
+                    throw std::runtime_error("class '" + name
+                        + "': new virtual methods may not be added in a reopen — '"
+                        + em.method_name + "' must be declared in the original class");
+                }
+                if (info.vtable[slot].return_type != em.return_type)
+                    throw std::runtime_error("class '" + name + "': virtual override '"
+                        + em.method_name + "' return type does not match base");
+                if (em.is_pure) {
+                    info.vtable[slot].is_pure = true;
+                    info.vtable[slot].defining_class = "";
+                    info.vtable[slot].mangled = "";
+                } else if (em.body) {
+                    info.vtable[slot].is_pure = false;
+                    info.vtable[slot].defining_class = name;
+                    info.vtable[slot].mangled = mangleMethod(name, em.method_name, pts);
+                }
+            } else {
+                int by_name = findSlotByName(em.method_name);
+                if (by_name >= 0)
+                    throw std::runtime_error("class '" + name + "': method '" + em.method_name
+                        + "' shadows inherited virtual method — declare it 'virtual' to override");
+            }
+        }
+    };
+    for (auto& [name, info] : slid_info_) build(name);
+}
+
+void Codegen::markImportableClasses() {
+    // A class is importable iff its name appears in program_.slid_modules — that
+    // map is populated during .slh import. Local-only classes are not importable.
+    for (auto& [name, info] : slid_info_) {
+        if (program_.slid_modules.count(name)) info.is_importable = true;
+    }
+}
+
+void Codegen::validatePureSlots() {
+    // F2 (C): every non-importable concrete virtual class must have all vtable
+    // slots filled. Importable classes defer to the linker.
+    for (auto& [name, info] : slid_info_) {
+        if (!info.is_virtual_class) continue;
+        if (info.is_importable) continue;
+        // a class is "concrete" here if any slot has a body. A class with all-pure
+        // slots is the abstract base — it's an error to instantiate but not to declare.
+        bool any_concrete = false;
+        for (auto& slot : info.vtable) if (!slot.is_pure) { any_concrete = true; break; }
+        if (!any_concrete) continue;
+        for (auto& slot : info.vtable) {
+            if (!slot.is_pure) continue;
+            throw std::runtime_error("class '" + name + "': virtual method '"
+                + slot.method_name + "' is declared pure (= delete) but is never defined");
+        }
+    }
 }
 
 bool Codegen::isAncestor(const std::string& base, const std::string& derived) {
@@ -765,7 +1010,11 @@ void Codegen::emit() {
     out_ << "target triple = \"x86_64-pc-linux-gnu\"\n\n";
 
     collectSlids();
+    classifyVirtualClasses();
     resolveSlidInheritance();
+    buildVtables();
+    markImportableClasses();
+    validatePureSlots();
     collectFunctionSignatures();
     scanForSlidTemplateUses();
 
@@ -981,6 +1230,14 @@ void Codegen::emit() {
         // inline ctor/dtor bodies count as locally defined
         if (slid.explicit_ctor_body) local_methods.insert(slid.name + "__$ctor");
         if (slid.dtor_body)          local_methods.insert(slid.name + "__$dtor");
+        // F1 (A): virtual classes with no explicit dtor get a synthetic empty
+        // virtual dtor emitted in this TU.
+        {
+            auto sit = slid_info_.find(slid.name);
+            if (sit != slid_info_.end() && sit->second.is_virtual_class
+                && !slid.has_explicit_dtor_decl)
+                local_methods.insert(slid.name + "__$dtor");
+        }
         // impl slids locally define __$pinit and __$sizeof
         if (slid.is_transport_impl) {
             local_methods.insert(slid.name + "__$pinit");
@@ -1067,6 +1324,41 @@ void Codegen::emit() {
                 if (!info.is_empty) out_ << "ptr";
                 for (auto& pt : ptypes) { if (!first) out_ << ", "; first = false; out_ << llvmType(pt); }
                 out_ << ")\n";
+            }
+        }
+    }
+
+    // emit declares for all virtual-method slot impls (both in this TU and
+    // imported), and for __cxa_pure_virtual stub used in pure slots.
+    {
+        bool any_virtual = false;
+        bool any_pure = false;
+        for (auto& [name, info] : slid_info_) {
+            if (!info.is_virtual_class) continue;
+            any_virtual = true;
+            for (auto& slot : info.vtable) if (slot.is_pure) { any_pure = true; break; }
+        }
+        if (any_pure) {
+            out_ << "declare void @__cxa_pure_virtual()\n";
+        }
+        if (any_virtual) {
+            // emit one vtable global per virtual class, internal linkage. Slot
+            // entries reference functions by their already-declared mangled
+            // names (declared above as part of method declares).
+            for (auto& [name, info] : slid_info_) {
+                if (!info.is_virtual_class) continue;
+                int n = (int)info.vtable.size();
+                out_ << "@_ZTV" << name << " = internal constant ["
+                     << n << " x ptr] [";
+                for (int i = 0; i < n; i++) {
+                    if (i > 0) out_ << ", ";
+                    if (info.vtable[i].is_pure) {
+                        out_ << "ptr @__cxa_pure_virtual";
+                    } else {
+                        out_ << "ptr @" << llvmGlobalName(info.vtable[i].mangled);
+                    }
+                }
+                out_ << "]\n";
             }
         }
     }
@@ -1265,23 +1557,22 @@ void Codegen::emitNestedFunction(
 }
 
 
+void Codegen::emitDtorChainCall(const std::string& slid_type, const std::string& target) {
+    auto chain = chainOf(slid_type);
+    // walk derived→base: chain is base→derived, so iterate in reverse.
+    for (int ci = (int)chain.size() - 1; ci >= 0; ci--) {
+        SlidInfo* c = chain[ci];
+        if (!c->has_dtor) continue;
+        out_ << "    call void @" << c->name << "__$dtor("
+             << (c->is_empty ? "" : "ptr " + target) << ")\n";
+    }
+}
+
 void Codegen::emitDtors() {
-    // For inheritance, dtors run derived→base. For a non-inherited class, the
-    // chain has one entry, so behavior is unchanged.
-    auto emitDtorChain = [&](const std::string& slid_type, const std::string& target) {
-        auto chain = chainOf(slid_type);
-        // walk derived→base: chain is base→derived, so iterate in reverse
-        for (int ci = (int)chain.size() - 1; ci >= 0; ci--) {
-            SlidInfo* c = chain[ci];
-            if (!c->has_dtor) continue;
-            out_ << "    call void @" << c->name << "__$dtor("
-                 << (c->is_empty ? "" : "ptr " + target) << ")\n";
-        }
-    };
     // flush expression-level temporaries first (before named locals)
     for (int i = (int)pending_temp_dtors_.size() - 1; i >= 0; i--) {
         auto& td = pending_temp_dtors_[i];
-        emitDtorChain(td.second, td.first);
+        emitDtorChainCall(td.second, td.first);
     }
     pending_temp_dtors_.clear();
     // call named-local dtors in reverse declaration order
@@ -1297,7 +1588,7 @@ void Codegen::emitDtors() {
         } else {
             target = locals_[e.var_name];
         }
-        emitDtorChain(e.slid_type, target);
+        emitDtorChainCall(e.slid_type, target);
     }
 }
 
@@ -1331,7 +1622,12 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     }
 
     // emit destructor: @ClassName__$dtor(ptr %self)
-    if (dtor_body) {
+    // F1 (A): virtual class with no explicit ~ gets a synthetic empty body.
+    bool synth_virtual_dtor = !dtor_body
+        && !slid.has_explicit_dtor_decl
+        && slid_info_.count(slid.name)
+        && slid_info_.at(slid.name).is_virtual_class;
+    if (dtor_body || synth_virtual_dtor) {
         locals_.clear();
         local_types_.clear();
         emitted_alloca_regs_.clear();
@@ -1344,7 +1640,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         out_ << "define " << (isExported(slid.name + "__$dtor") ? "" : "internal ") << "void @" << slid.name << "__$dtor("
              << (empty ? "" : "ptr %self") << ") {\n";
         out_ << "entry:\n";
-        emitBlock(*dtor_body);
+        if (dtor_body) emitBlock(*dtor_body);
         if (!block_terminated_) out_ << "    ret void\n";
         out_ << "}\n\n";
     }
@@ -2577,6 +2873,13 @@ void Codegen::emitTupleScalarBroadcastAtPtr(const std::string& ttype,
 // Returns the alloca register. Does NOT register for dtor (caller's responsibility if needed).
 std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
     auto& info = slid_info_[slid_name];
+    if (info.is_virtual_class) {
+        for (auto& slot : info.vtable) {
+            if (slot.is_pure)
+                throw std::runtime_error("cannot instantiate pure virtual class '" + slid_name
+                    + "': method '" + slot.method_name + "' is not defined");
+        }
+    }
     std::string reg = newTmp();
     if (info.has_pinit) {
         std::string sz = newTmp();
@@ -2592,16 +2895,26 @@ std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
     for (SlidInfo* c_info : chain) {
         const SlidDef* c_def = nullptr;
         for (auto& s : program_.slids) if (s.name == c_info->name) { c_def = &s; break; }
+        bool owns_vptr = c_info->is_virtual_class && c_info->base_info == nullptr;
+        if (c_info->is_virtual_class) {
+            std::string vptr_gep = newTmp();
+            out_ << "    " << vptr_gep << " = getelementptr %struct." << slid_name
+                 << ", ptr " << reg << ", i32 0, i32 0\n";
+            out_ << "    store ptr @_ZTV" << c_info->name
+                 << ", ptr " << vptr_gep << "\n";
+        }
         if (!c_info->has_pinit) {
-            for (int i = 0; i < c_info->own_field_count; i++) {
-                int flat_idx = c_info->base_field_count + i;
+            int vptr_local = owns_vptr ? 1 : 0;
+            int n_own = c_info->own_field_count - vptr_local;
+            for (int j = 0; j < n_own; j++) {
+                int flat_idx = c_info->base_field_count + vptr_local + j;
                 const std::string& ftype = info.field_types[flat_idx];
                 std::string gep = newTmp();
                 out_ << "    " << gep << " = getelementptr %struct." << slid_name
                      << ", ptr " << reg << ", i32 0, i32 " << flat_idx << "\n";
                 std::string val;
-                if (c_def && i < (int)c_def->fields.size() && c_def->fields[i].default_val)
-                    val = emitExpr(*c_def->fields[i].default_val);
+                if (c_def && j < (int)c_def->fields.size() && c_def->fields[j].default_val)
+                    val = emitExpr(*c_def->fields[j].default_val);
                 else
                     val = isInlineArrayType(ftype) ? "zeroinitializer"
                         : isIndirectType(ftype) ? "null"
@@ -2723,19 +3036,36 @@ void Codegen::emitConstructAtPtrs(const std::string& stype, const std::string& p
         return;
     }
 
-    // slid: walk inheritance chain base→derived using flat indices into the leaf's struct
+    // slid: walk inheritance chain base→derived using flat indices into the leaf's struct.
+    // Virtual classes have a $vptr at flat index 0 (synthetic, not in the user
+    // arg list); each class's ctor sets the vptr to its own vtable as the chain
+    // walks down (Itanium ABI), so the most-derived ctor leaves the correct
+    // vtable in place. user-arg index = flat_idx - args_vptr_skew.
     auto chain = chainOf(stype);
+    bool root_virtual = !slid_info_.at(stype).is_virtual_class ? false : true;
+    int args_vptr_skew = root_virtual ? 1 : 0;
     for (SlidInfo* c_info : chain) {
         const SlidDef* c_def = slidDefFor(c_info->name);
+        bool owns_vptr = c_info->is_virtual_class && c_info->base_info == nullptr;
+        if (c_info->is_virtual_class) {
+            std::string vptr_gep = emitFieldGep(stype, ptr, 0);
+            out_ << "    store ptr @_ZTV" << c_info->name
+                 << ", ptr " << vptr_gep << "\n";
+        }
         if (!c_info->has_pinit) {
-            for (int i = 0; i < c_info->own_field_count; i++) {
-                int flat_idx = c_info->base_field_count + i;
+            int vptr_local = owns_vptr ? 1 : 0;
+            int n_own = c_info->own_field_count - vptr_local;
+            for (int j = 0; j < n_own; j++) {
+                int flat_idx = c_info->base_field_count + vptr_local + j;
                 const std::string& ftype = fields[flat_idx];
+                int args_idx = flat_idx - args_vptr_skew;
                 const Expr* arg_expr = nullptr;
-                if (flat_idx < (int)overrides.size())      arg_expr = overrides[flat_idx];
-                else if (flat_idx < (int)args.size())      arg_expr = args[flat_idx];
-                else if (c_def && i < (int)c_def->fields.size() && c_def->fields[i].default_val)
-                    arg_expr = c_def->fields[i].default_val.get();
+                if (args_idx >= 0 && args_idx < (int)overrides.size())
+                    arg_expr = overrides[args_idx];
+                else if (args_idx >= 0 && args_idx < (int)args.size())
+                    arg_expr = args[args_idx];
+                else if (c_def && j < (int)c_def->fields.size() && c_def->fields[j].default_val)
+                    arg_expr = c_def->fields[j].default_val.get();
                 std::string gep = emitFieldGep(stype, ptr, flat_idx);
                 initFieldFromExpr(ftype, gep, arg_expr);
             }

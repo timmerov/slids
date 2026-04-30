@@ -1,30 +1,26 @@
 
 inheritance:
 multiple inheritance - no.
-virtual functions - next?
-compile error if the base class dtor is not virtual.
 
 improve error message.
 
 test incomplete templates.
 
-name collisions:
-this should be an error:
-String String;
-but if that's an error then so is this:
-Foo() { }
-Bar() { }
-Foo Bar;
-in other words, an identifier token can have only
-one possible interpretation within a scope.
-change scope and you can shadow names.
+revisit name collisions as needed.
 
 review enums.
 name collisions make long enums ugly.
-x = Piece.kKing;
-blech.
-Piece x = kKing;
-better.
+this idea is kinda growing on me.
+x is an int - must use fully qualified name.
+y is a Piece - may assuming context.
+int x = Piece.kKing;
+Piece y = kKing;
+piece is a Piece - switch assumes context.
+for Piece piece in Piece {
+    switch (piece) {
+    case kKing:
+    }
+}
 
 implement constants.
 const int useful_factor = 1.234;

@@ -32,7 +32,8 @@ SAMPLES = \
 	switch \
 	tuple \
 	type_conv \
-	type_infer
+	type_infer \
+	virtual
 
 .PHONY: all clean test update $(SAMPLES)
 

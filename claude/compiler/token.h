@@ -44,6 +44,7 @@ enum class TokenType {
     kDelete,
     kNullptr,
     kImport,
+    kVirtual,
     kEllipsis,
 
     // comparison operators

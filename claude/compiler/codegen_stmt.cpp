@@ -348,9 +348,16 @@ void Codegen::emitStmt(const Stmt& stmt) {
             block_terminated_ = false;
             out_ << end_lbl_outer << ":\n";
         } else {
-            if (is_slid && slid_info_[elem_type].has_dtor)
-                out_ << "    call void @" << elem_type << "__$dtor("
-                     << (slid_info_[elem_type].is_empty ? "" : "ptr " + ptr_val) << ")\n";
+            if (is_slid) {
+                // Walk the chain derived→base, calling each dtor in turn.
+                auto chain = chainOf(elem_type);
+                for (int ci = (int)chain.size() - 1; ci >= 0; ci--) {
+                    SlidInfo* c = chain[ci];
+                    if (!c->has_dtor) continue;
+                    out_ << "    call void @" << c->name << "__$dtor("
+                         << (c->is_empty ? "" : "ptr " + ptr_val) << ")\n";
+                }
+            }
             out_ << "    call void @free(ptr " << ptr_val << ")\n";
         }
         // nullify the pointer variable so it is left in a valid (null) state
@@ -456,6 +463,13 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // class instantiation
         if (slid_info_.count(eff_type)) {
             auto& info = slid_info_[eff_type];
+            if (info.is_virtual_class) {
+                for (auto& slot : info.vtable) {
+                    if (slot.is_pure)
+                        throw std::runtime_error("cannot instantiate pure virtual class '" + eff_type
+                            + "': method '" + slot.method_name + "' is not defined");
+                }
+            }
 
             // identity optimization: when init produces a fresh temp of the same type,
             // adopt that temp as the declared variable — no separate alloca, ctor, or copy.
@@ -1906,11 +1920,16 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
         std::string slid_name, obj_ptr;
         if (auto* ve = dynamic_cast<const VarExpr*>(mcs->object.get())) {
-            auto type_it = local_types_.find(ve->name);
-            if (type_it == local_types_.end())
-                throw std::runtime_error("unknown type for: " + ve->name);
-            slid_name = type_it->second;
-            obj_ptr = locals_[ve->name];
+            if (ve->name == "self" && !current_slid_.empty()) {
+                slid_name = current_slid_;
+                obj_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
+            } else {
+                auto type_it = local_types_.find(ve->name);
+                if (type_it == local_types_.end())
+                    throw std::runtime_error("unknown type for: " + ve->name);
+                slid_name = type_it->second;
+                obj_ptr = locals_[ve->name];
+            }
         } else if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(mcs->object.get())) {
             // method call on tuple element: tuple[i].method(args) or p^[i].method(args)
             std::string tup_type;
@@ -1975,14 +1994,36 @@ void Codegen::emitStmt(const Stmt& stmt) {
             return;
         }
         if (!slid_name.empty()) {
-            std::string base = slid_name + "__" + mcs->method;
-            std::string mangled = resolveOverloadForCall(base, mcs->args);
-            auto ret_it = func_return_types_.find(mangled);
-            if (ret_it == func_return_types_.end())
-                throw std::runtime_error("unknown method: " + mcs->method);
-            std::string ret_type = llvmType(ret_it->second);
-            auto& mptypes = func_param_types_[mangled];
-            bool empty = slid_info_[slid_name].is_empty;
+            auto& sinfo = slid_info_[slid_name];
+            // virtual dispatch: if the static type is virtual and this method
+            // matches a vtable slot, use the slot's resolved impl. Indirect
+            // call when the object is a pointer-deref; static call otherwise.
+            int vslot = -1;
+            if (sinfo.is_virtual_class) {
+                for (int i = 0; i < (int)sinfo.vtable.size(); i++) {
+                    if (sinfo.vtable[i].method_name != mcs->method) continue;
+                    if (sinfo.vtable[i].param_types.size() != mcs->args.size()) continue;
+                    vslot = i; break;
+                }
+            }
+            std::string mangled;
+            std::vector<std::string> mptypes;
+            std::string ret_slids;
+            if (vslot >= 0) {
+                mangled = sinfo.vtable[vslot].mangled;
+                mptypes = sinfo.vtable[vslot].param_types;
+                ret_slids = sinfo.vtable[vslot].return_type;
+            } else {
+                std::string base = slid_name + "__" + mcs->method;
+                mangled = resolveOverloadForCall(base, mcs->args);
+                auto ret_it = func_return_types_.find(mangled);
+                if (ret_it == func_return_types_.end())
+                    throw std::runtime_error("unknown method: " + mcs->method);
+                ret_slids = ret_it->second;
+                mptypes = func_param_types_[mangled];
+            }
+            std::string ret_type = llvmType(ret_slids);
+            bool empty = sinfo.is_empty;
             std::string arg_str = empty ? "" : "ptr " + obj_ptr;
             for (int i = 0; i < (int)mcs->args.size(); i++) {
                 std::string ptype_str = (i < (int)mptypes.size()) ? mptypes[i] : "";
@@ -1991,7 +2032,38 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (!arg_str.empty()) arg_str += ", ";
                 arg_str += ptype + " " + aval;
             }
-            if (ret_type == "void") {
+            // indirect call: when the static type is virtual AND the object's
+            // runtime type may differ from its static type. Two cases:
+            //   - pointer-deref: ptr^.method()
+            //   - explicit self: self.method() inside a virtual method (the
+            //     runtime type is the most-derived class, not current_slid_).
+            bool is_self = false;
+            if (auto* mve = dynamic_cast<const VarExpr*>(mcs->object.get()))
+                is_self = (mve->name == "self");
+            bool indirect = (vslot >= 0)
+                && (dynamic_cast<const DerefExpr*>(mcs->object.get()) != nullptr || is_self);
+            if (indirect) {
+                int n = (int)sinfo.vtable.size();
+                std::string vptr_field = newTmp();
+                out_ << "    " << vptr_field << " = getelementptr %struct."
+                     << slid_name << ", ptr " << obj_ptr << ", i32 0, i32 0\n";
+                std::string vtbl = newTmp();
+                out_ << "    " << vtbl << " = load ptr, ptr " << vptr_field << "\n";
+                std::string slot_ptr = newTmp();
+                out_ << "    " << slot_ptr << " = getelementptr [" << n
+                     << " x ptr], ptr " << vtbl << ", i32 0, i32 " << vslot << "\n";
+                std::string fn = newTmp();
+                out_ << "    " << fn << " = load ptr, ptr " << slot_ptr << "\n";
+                if (ret_type == "void" || ret_type.empty()) {
+                    out_ << "    call void " << fn << "(" << arg_str << ")\n";
+                } else {
+                    std::string tmp = newTmp();
+                    out_ << "    " << tmp << " = call " << ret_type << " " << fn
+                         << "(" << arg_str << ")\n";
+                }
+                return;
+            }
+            if (ret_type == "void" || ret_type.empty()) {
                 out_ << "    call void @" << llvmGlobalName(mangled) << "(" << arg_str << ")\n";
             } else {
                 std::string tmp = newTmp();
@@ -3091,21 +3163,64 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
 
         // implicit self method call (peer call inside a slid method) — takes precedence
-        // over global free functions per the bare-name lookup rule
+        // over global free functions per the bare-name lookup rule. For virtual
+        // classes, dispatch via %self's vptr so derived overrides win.
         if (!current_slid_.empty()) {
-            std::string base = current_slid_ + "__" + call->callee;
-            std::string mangled = resolveOverloadForCall(base, call->args);
-            auto mit = func_return_types_.find(mangled);
-            if (mit != func_return_types_.end()) {
-                std::string ret_type = llvmType(mit->second);
-                auto& mptypes = func_param_types_[mangled];
-                bool empty = slid_info_[current_slid_].is_empty;
-                std::string arg_str = empty ? "" : "ptr %self";
+            auto& csinfo = slid_info_[current_slid_];
+            int vslot = -1;
+            if (csinfo.is_virtual_class) {
+                for (int i = 0; i < (int)csinfo.vtable.size(); i++) {
+                    if (csinfo.vtable[i].method_name != call->callee) continue;
+                    if (csinfo.vtable[i].param_types.size() != call->args.size()) continue;
+                    vslot = i; break;
+                }
+            }
+            std::string mangled;
+            std::vector<std::string> mptypes_self;
+            std::string ret_slids;
+            if (vslot >= 0) {
+                mangled = csinfo.vtable[vslot].mangled;
+                mptypes_self = csinfo.vtable[vslot].param_types;
+                ret_slids = csinfo.vtable[vslot].return_type;
+            } else {
+                std::string base = current_slid_ + "__" + call->callee;
+                mangled = resolveOverloadForCall(base, call->args);
+                auto mit = func_return_types_.find(mangled);
+                if (mit == func_return_types_.end()) goto fallthrough_self;
+                ret_slids = mit->second;
+                mptypes_self = func_param_types_[mangled];
+            }
+            {
+                std::string ret_type = llvmType(ret_slids);
+                bool empty = csinfo.is_empty;
+                std::string self_str = self_ptr_.empty() ? "%self" : self_ptr_;
+                std::string arg_str = empty ? "" : "ptr " + self_str;
                 for (int i = 0; i < (int)call->args.size(); i++) {
-                    std::string ptype_str = (i < (int)mptypes.size()) ? mptypes[i] : "";
+                    std::string ptype_str = (i < (int)mptypes_self.size()) ? mptypes_self[i] : "";
                     std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
                     if (!arg_str.empty()) arg_str += ", ";
                     arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
+                }
+                if (vslot >= 0) {
+                    int n = (int)csinfo.vtable.size();
+                    std::string vptr_field = newTmp();
+                    out_ << "    " << vptr_field << " = getelementptr %struct."
+                         << current_slid_ << ", ptr " << self_str << ", i32 0, i32 0\n";
+                    std::string vtbl = newTmp();
+                    out_ << "    " << vtbl << " = load ptr, ptr " << vptr_field << "\n";
+                    std::string slot_ptr = newTmp();
+                    out_ << "    " << slot_ptr << " = getelementptr [" << n
+                         << " x ptr], ptr " << vtbl << ", i32 0, i32 " << vslot << "\n";
+                    std::string fn = newTmp();
+                    out_ << "    " << fn << " = load ptr, ptr " << slot_ptr << "\n";
+                    if (ret_type == "void" || ret_type.empty()) {
+                        out_ << "    call void " << fn << "(" << arg_str << ")\n";
+                    } else {
+                        std::string tmp = newTmp();
+                        out_ << "    " << tmp << " = call " << ret_type << " " << fn
+                             << "(" << arg_str << ")\n";
+                    }
+                    return;
                 }
                 if (ret_type == "void") {
                     out_ << "    call void @" << mangled << "(" << arg_str << ")\n";
@@ -3116,6 +3231,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
                 return;
             }
+            fallthrough_self: ;
         }
 
         // regular top-level function call as statement
@@ -3171,8 +3287,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 } else {
                     target = locals_[e.var_name];
                 }
-                out_ << "    call void @" << e.slid_type << "__$dtor("
-                     << (slid_info_[e.slid_type].is_empty ? "" : "ptr " + target) << ")\n";
+                emitDtorChainCall(e.slid_type, target);
             }
         }
         dtor_vars_.resize(dtor_mark);

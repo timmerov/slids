@@ -524,11 +524,16 @@ std::string Codegen::emitExpr(const Expr& expr) {
         // helper to get slid_name and obj_ptr from any object expression
         std::string slid_name, obj_ptr;
         if (auto* ve = dynamic_cast<const VarExpr*>(mc->object.get())) {
-            auto type_it = local_types_.find(ve->name);
-            if (type_it == local_types_.end())
-                throw std::runtime_error("unknown type for: " + ve->name);
-            slid_name = type_it->second;
-            obj_ptr = locals_[ve->name];
+            if (ve->name == "self" && !current_slid_.empty()) {
+                slid_name = current_slid_;
+                obj_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
+            } else {
+                auto type_it = local_types_.find(ve->name);
+                if (type_it == local_types_.end())
+                    throw std::runtime_error("unknown type for: " + ve->name);
+                slid_name = type_it->second;
+                obj_ptr = locals_[ve->name];
+            }
         } else if (auto* de = dynamic_cast<const DerefExpr*>(mc->object.get())) {
             // ptr^.method() — load the pointer, use as self
             if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
@@ -554,36 +559,94 @@ std::string Codegen::emitExpr(const Expr& expr) {
             return "";
         }
         if (!slid_name.empty()) {
-            std::string base = slid_name + "__" + mc->method;
-            std::string mangled = resolveOverloadForCall(base, mc->args);
-            auto ret_it = func_return_types_.find(mangled);
-            if (ret_it == func_return_types_.end())
-                throw std::runtime_error("unknown method: " + mc->method);
-            auto& mptypes = func_param_types_[mangled];
-            bool empty = slid_info_[slid_name].is_empty;
+            auto& sinfo = slid_info_[slid_name];
+            // virtual dispatch: if the static type is virtual and this method
+            // matches a vtable slot, prefer the slot's resolved impl. Indirect
+            // call when the object is a pointer-deref; static call otherwise.
+            int vslot = -1;
+            if (sinfo.is_virtual_class) {
+                for (int i = 0; i < (int)sinfo.vtable.size(); i++) {
+                    if (sinfo.vtable[i].method_name != mc->method) continue;
+                    if (sinfo.vtable[i].param_types.size() != mc->args.size()) continue;
+                    vslot = i; break;
+                }
+            }
+            std::string mangled;
+            std::vector<std::string> mptypes_vec;
+            std::string ret_slids;
+            if (vslot >= 0) {
+                mangled = sinfo.vtable[vslot].mangled;
+                mptypes_vec = sinfo.vtable[vslot].param_types;
+                ret_slids = sinfo.vtable[vslot].return_type;
+            } else {
+                std::string base = slid_name + "__" + mc->method;
+                mangled = resolveOverloadForCall(base, mc->args);
+                auto ret_it = func_return_types_.find(mangled);
+                if (ret_it == func_return_types_.end())
+                    throw std::runtime_error("unknown method: " + mc->method);
+                ret_slids = ret_it->second;
+                mptypes_vec = func_param_types_[mangled];
+            }
+            bool empty = sinfo.is_empty;
             std::string method_args;
             for (int i = 0; i < (int)mc->args.size(); i++) {
-                std::string ptype = (i < (int)mptypes.size()) ? llvmType(mptypes[i]) : "i32";
-                method_args += ", " + ptype + " " + emitExpr(*mc->args[i]);
+                std::string ptype_str = (i < (int)mptypes_vec.size()) ? mptypes_vec[i] : "";
+                std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
+                method_args += ", " + ptype + " " + emitArgForParam(*mc->args[i], ptype_str);
             }
             std::string self_arg = empty ? "" : "ptr " + obj_ptr;
-            if (slid_info_.count(ret_it->second)) {
-                std::string tmp = emitRawSlidAlloca(ret_it->second);
-                std::string sret_arg = "ptr sret(%struct." + ret_it->second + ") " + tmp;
+            // indirect call: ptr-deref source OR explicit self inside a virtual
+            // method (runtime type may differ from current_slid_).
+            bool is_self_e = false;
+            if (auto* mve = dynamic_cast<const VarExpr*>(mc->object.get()))
+                is_self_e = (mve->name == "self");
+            bool indirect = (vslot >= 0)
+                && (dynamic_cast<const DerefExpr*>(mc->object.get()) != nullptr || is_self_e);
+            if (indirect) {
+                int n = (int)sinfo.vtable.size();
+                std::string vptr_field = newTmp();
+                out_ << "    " << vptr_field << " = getelementptr %struct."
+                     << slid_name << ", ptr " << obj_ptr << ", i32 0, i32 0\n";
+                std::string vtbl = newTmp();
+                out_ << "    " << vtbl << " = load ptr, ptr " << vptr_field << "\n";
+                std::string slot_ptr = newTmp();
+                out_ << "    " << slot_ptr << " = getelementptr [" << n
+                     << " x ptr], ptr " << vtbl << ", i32 0, i32 " << vslot << "\n";
+                std::string fn = newTmp();
+                out_ << "    " << fn << " = load ptr, ptr " << slot_ptr << "\n";
+                if (slid_info_.count(ret_slids)) {
+                    std::string tmp = emitRawSlidAlloca(ret_slids);
+                    std::string sret_arg = "ptr sret(%struct." + ret_slids + ") " + tmp;
+                    std::string args = self_arg.empty() ? sret_arg : self_arg + ", " + sret_arg;
+                    out_ << "    call void " << fn << "(" << args << method_args << ")\n";
+                    return tmp;
+                }
+                std::string ret_type = llvmType(ret_slids);
+                std::string tmp = newTmp();
+                std::string args_prefix = self_arg;
+                if (args_prefix.empty() && !method_args.empty())
+                    method_args = method_args.substr(2);
+                if (ret_type == "void" || ret_type.empty()) {
+                    out_ << "    call void " << fn << "(" << args_prefix << method_args << ")\n";
+                    return "";
+                }
+                out_ << "    " << tmp << " = call " << ret_type << " " << fn
+                     << "(" << args_prefix << method_args << ")\n";
+                return tmp;
+            }
+            if (slid_info_.count(ret_slids)) {
+                std::string tmp = emitRawSlidAlloca(ret_slids);
+                std::string sret_arg = "ptr sret(%struct." + ret_slids + ") " + tmp;
                 std::string args = self_arg.empty() ? sret_arg : self_arg + ", " + sret_arg;
                 out_ << "    call void @" << llvmGlobalName(mangled)
                      << "(" << args << method_args << ")\n";
                 return tmp;
             }
-            std::string ret_type = llvmType(ret_it->second);
+            std::string ret_type = llvmType(ret_slids);
             std::string tmp = newTmp();
             std::string args_prefix = self_arg;
-            if (!args_prefix.empty() && !method_args.empty()) {
-                // method_args begins with ", " — fine
-            } else if (args_prefix.empty() && !method_args.empty()) {
-                // strip leading ", " from method_args
+            if (args_prefix.empty() && !method_args.empty())
                 method_args = method_args.substr(2);
-            }
             out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(mangled)
                  << "(" << args_prefix << method_args << ")\n";
             return tmp;
@@ -1648,6 +1711,16 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
     if (auto* ne = dynamic_cast<const NewScalarExpr*>(&expr)) {
         const std::string& stype = ne->elem_type;
+        if (slid_info_.count(stype)) {
+            auto& info = slid_info_[stype];
+            if (info.is_virtual_class) {
+                for (auto& slot : info.vtable) {
+                    if (slot.is_pure)
+                        throw std::runtime_error("cannot instantiate pure virtual class '" + stype
+                            + "': method '" + slot.method_name + "' is not defined");
+                }
+            }
+        }
         // compute sizeof(stype) and malloc
         std::string size_val;
         if (slid_info_.count(stype)) {
@@ -2185,10 +2258,32 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
         if (mc->method == "sizeof") return "i64";
         std::string slid_name;
         if (auto* ve = dynamic_cast<const VarExpr*>(mc->object.get())) {
-            auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end()) slid_name = tit->second;
+            if (ve->name == "self" && !current_slid_.empty()) slid_name = current_slid_;
+            else {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) slid_name = tit->second;
+            }
+        } else if (auto* de = dynamic_cast<const DerefExpr*>(mc->object.get())) {
+            if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto tit = local_types_.find(ve2->name);
+                if (tit != local_types_.end()) {
+                    std::string t = tit->second;
+                    if (!t.empty() && t.back() == '^') t.pop_back();
+                    else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t.resize(t.size()-2);
+                    slid_name = t;
+                }
+            }
         }
         if (!slid_name.empty()) {
+            // virtual class: prefer the vtable slot's resolved return type
+            auto sit = slid_info_.find(slid_name);
+            if (sit != slid_info_.end() && sit->second.is_virtual_class) {
+                for (auto& slot : sit->second.vtable) {
+                    if (slot.method_name == mc->method
+                        && slot.param_types.size() == mc->args.size())
+                        return llvmType(slot.return_type);
+                }
+            }
             std::string base = slid_name + "__" + mc->method;
             std::string mangled = resolveOverloadForCall(base, mc->args);
             auto rit = func_return_types_.find(mangled);

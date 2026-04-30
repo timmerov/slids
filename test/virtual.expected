@@ -1,0 +1,37 @@
+---- existing chain (stack) ----
+base.sum=18
+Base: hello n=1
+Base: catch
+Base: hello n=99
+derived.sum=5
+Base: hello n=2
+Derived: also hello n=2
+Derived: catch
+Base: hello n=99
+Derived: also hello n=99
+Derived: catch
+base_ptr^.sum=5
+Base: goodbye
+DerivedVirtual:vdtor
+BaseVirtual:vdtor
+PureVirtual:vdtor
+BaseVirtual:vdtor
+PureVirtual:vdtor
+---- heap (new/delete) ----
+Base: hello n=7
+Derived: also hello n=7
+DerivedVirtual:vdtor
+BaseVirtual:vdtor
+PureVirtual:vdtor
+---- middle auto-gen ----
+leaf.tag=300
+ChainLeaf:vdtor
+ChainBase:vdtor
+---- compile errors ----
+1: Not allowed: non-virtual cannot shadow inherited virtual method
+2: Not allowed: virtual override return type must match base
+3: Not allowed: virtual method signature must match the inherited slot
+4: Not allowed: new virtual methods may not be added in a reopen
+5: Not allowed: all ancestors of a virtual class must have a virtual destructor
+6: Not allowed: cannot instantiate a pure virtual class
+7: Not allowed: ctor and dtor must be declared together or both auto-generated

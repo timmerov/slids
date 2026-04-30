@@ -32,6 +32,7 @@ SAMPLES=(
     tuple
     type_conv
     type_infer
+    virtual
 )
 
 UPDATE=0

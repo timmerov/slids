@@ -27,6 +27,24 @@ struct SlidInfo {
     int own_field_count = 0;       // count of this class's own fields (the suffix in field_types)
     int base_field_count = 0;      // count of inherited fields (the prefix in field_types)
     bool inheritance_resolved = false;
+    // virtual class support. Set in classifyVirtualClasses(). vtable built in buildVtables().
+    bool locally_virtual = false;     // class declares its own virtual member or virtual ~
+    bool is_virtual_class = false;    // locally_virtual or any virtual ancestor
+    bool dtor_is_virtual = false;     // own dtor (or auto-generated) is virtual
+    // vtable slot. Built once per class. Walks base→derived, accumulating slots
+    // base-first then this class's new additions; overrides replace defining_class.
+    struct VtableSlot {
+        std::string method_name;             // user-level name (e.g. "hello")
+        std::vector<std::string> param_types;
+        std::string return_type;
+        std::string defining_class;          // class that supplies the body (or "" if pure)
+        std::string mangled;                 // mangled function symbol — empty if pure
+        bool is_pure = true;
+    };
+    std::vector<VtableSlot> vtable;
+    // After validateAndExportable(), true when the class name appears in a
+    // .slh header (cross-TU visible). End-of-TU pure-slot validation skips these.
+    bool is_importable = false;
 };
 
 // info about a nested function's capture set
@@ -169,6 +187,23 @@ private:
     // field_index/field_types as base prefix + own suffix, validate F2 collisions.
     void resolveSlidInheritance();
     void resolveSlidInheritanceFor(SlidInfo& info);
+    // Walks each class, sets locally_virtual (any own virtual member), then
+    // propagates is_virtual_class along the inheritance chain. Validates that
+    // every virtual class's base is also virtual (ancestor-dtor-virtuality).
+    void classifyVirtualClasses();
+    // Builds per-class vtable. Inherits base's slots; this class's additions:
+    // new virtual methods may only be added at original declaration (slid.methods),
+    // not in reopens (external_methods). Override replaces base's defining_class.
+    // Validates: signature exact match on override; `virtual` keyword required to
+    // override; non-virtual cannot shadow base virtual.
+    void buildVtables();
+    // Mark which classes are importable (declared in any .slh imported by this
+    // TU, or whose impl side has a `(...)` transport prefix in .slh). Used to
+    // gate end-of-TU pure-slot validation.
+    void markImportableClasses();
+    // End-of-TU validation (F2 (C)): every concrete non-importable virtual class
+    // must have all vtable slots filled.
+    void validatePureSlots();
     // Returns true if `derived` has `base` anywhere in its ancestor chain (proper ancestor).
     bool isAncestor(const std::string& base, const std::string& derived);
     // Returns the inheritance chain in base→derived order, including the slid itself.
@@ -331,6 +366,9 @@ private:
     void emitBlock(const BlockStmt& block);
     void emitStmt(const Stmt& stmt);
     void emitDtors(); // call dtors for all in-scope slid vars that have one
+    // Walk the inheritance chain derived→base and emit a dtor call for each
+    // class that has a dtor. Single source of truth for "destroy this object".
+    void emitDtorChainCall(const std::string& slid_type, const std::string& target);
     void emitStackRestore(int to_frame); // emit stackrestore for frames [top..to_frame]
     std::string emitExpr(const Expr& expr);
     std::string emitCondBool(const Expr& expr); // emit expr then icmp ne <type> val, 0 -> i1

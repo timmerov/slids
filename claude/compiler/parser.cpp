@@ -1475,6 +1475,10 @@ NestedFunctionDef Parser::parseNestedFunctionDef() {
 
 MethodDef Parser::parseMethodDef() {
     MethodDef m;
+    if (peek().type == TokenType::kVirtual) {
+        m.is_virtual = true;
+        advance();
+    }
     // new syntax: op overloads have no explicit return type (implied void / self)
     if (peek().type == TokenType::kIdentifier && peek().value == "op") {
         m.return_type = "void";
@@ -1507,7 +1511,17 @@ MethodDef Parser::parseMethodDef() {
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "expected ')'");
-    if (peek().type == TokenType::kSemicolon) {
+    if (peek().type == TokenType::kEquals
+        && pos_ + 1 < (int)tokens_.size()
+        && tokens_[pos_ + 1].type == TokenType::kDelete) {
+        // = delete; — pure-virtual marker. slot exists in vtable, no body emitted.
+        if (!m.is_virtual)
+            throw std::runtime_error("Line " + std::to_string(peek().line)
+                + ": '= delete' requires the method to be declared 'virtual'");
+        advance(); advance();
+        expect(TokenType::kSemicolon, "expected ';' after '= delete'");
+        m.is_pure = true;
+    } else if (peek().type == TokenType::kSemicolon) {
         advance(); // forward declaration — no body
     } else {
         std::vector<std::string> param_names;
@@ -1643,7 +1657,16 @@ SlidDef Parser::parseSlidDef() {
             }
             continue;
         }
-        // explicit destructor: ~() { ... }  or forward decl: ~();
+        // explicit destructor: ~() { ... }  or forward decl: ~();  or virtual ~() { ... }
+        bool dtor_virtual_prefix = false;
+        if (peek().type == TokenType::kVirtual
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kBitNot
+            && pos_ + 2 < (int)tokens_.size()
+            && tokens_[pos_ + 2].type == TokenType::kLParen) {
+            dtor_virtual_prefix = true;
+            advance(); // consume virtual
+        }
         if (peek().type == TokenType::kBitNot
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
@@ -1654,6 +1677,7 @@ SlidDef Parser::parseSlidDef() {
                 throw std::runtime_error("Line " + std::to_string(peek().line)
                     + ": destructor already defined in '" + slid.name + "'");
             slid.has_explicit_dtor_decl = true; // declared — consumer must call dtor
+            if (dtor_virtual_prefix) slid.dtor_is_virtual = true;
             if (peek().type == TokenType::kSemicolon) {
                 advance(); // forward declaration only
             } else {
@@ -1663,20 +1687,25 @@ SlidDef Parser::parseSlidDef() {
         }
         // method definition: starts with a type name followed by identifier followed by (
         // also handles operator methods: op=(...)  op<-(...)  op+(...)  etc.
+        // a leading `virtual` is part of the method decl — peek past it without
+        // moving pos_ (so isNestedSlidDecl, which runs first, isn't confused).
+        int virt_off = (peek().type == TokenType::kVirtual) ? 1 : 0;
         auto isMethodDecl = [&]() {
+            int base = pos_ + virt_off;
+            const Token& t0 = tokens_[base];
             // new syntax: op<symbol>( without explicit return type
-            if (peek().type == TokenType::kIdentifier && peek().value == "op") {
-                if (pos_ + 1 >= (int)tokens_.size()) return false;
-                auto t = tokens_[pos_ + 1].type;
+            if (t0.type == TokenType::kIdentifier && t0.value == "op") {
+                if (base + 1 >= (int)tokens_.size()) return false;
+                auto t = tokens_[base + 1].type;
                 // op[]= : op + []= + (
                 if (t == TokenType::kBracketAssign) {
-                    return pos_ + 2 < (int)tokens_.size() && tokens_[pos_ + 2].type == TokenType::kLParen;
+                    return base + 2 < (int)tokens_.size() && tokens_[base + 2].type == TokenType::kLParen;
                 }
                 // op[] : op + [ + ] + (
                 if (t == TokenType::kLBracket) {
-                    return pos_ + 3 < (int)tokens_.size()
-                        && tokens_[pos_ + 2].type == TokenType::kRBracket
-                        && tokens_[pos_ + 3].type == TokenType::kLParen;
+                    return base + 3 < (int)tokens_.size()
+                        && tokens_[base + 2].type == TokenType::kRBracket
+                        && tokens_[base + 3].type == TokenType::kLParen;
                 }
                 bool is_op_tok = (t == TokenType::kEquals   || t == TokenType::kArrowLeft
                     || t == TokenType::kArrowBoth || t == TokenType::kPlus   || t == TokenType::kMinus
@@ -1686,13 +1715,13 @@ SlidDef Parser::parseSlidDef() {
                     || t == TokenType::kLt        || t == TokenType::kGt
                     || t == TokenType::kLtEq      || t == TokenType::kGtEq);
                 if (!is_op_tok) return false;
-                if (pos_ + 2 >= (int)tokens_.size()) return false;
-                return tokens_[pos_ + 2].type == TokenType::kLParen;
+                if (base + 2 >= (int)tokens_.size()) return false;
+                return tokens_[base + 2].type == TokenType::kLParen;
             }
             // regular method: return-type name(
             // return type may include pointer/iterator suffixes: ^ or []
-            if (!(isTypeName(peek()) || isUserTypeName(peek()))) return false;
-            int name_pos = pos_ + 1;
+            if (!(isTypeName(t0) || isUserTypeName(t0))) return false;
+            int name_pos = base + 1;
             while (name_pos < (int)tokens_.size()) {
                 if (tokens_[name_pos].type == TokenType::kBitXor) {
                     name_pos++;
@@ -1857,6 +1886,10 @@ void Parser::parseExternalMethodBlock(Program& program) {
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
         ExternalMethodDef em;
         em.slid_name = slid_name;
+        if (peek().type == TokenType::kVirtual) {
+            em.is_virtual = true;
+            advance();
+        }
         // ctor: _() { ... }
         if (peek().type == TokenType::kIdentifier && peek().value == "_"
             && pos_ + 1 < (int)tokens_.size()
@@ -1869,7 +1902,7 @@ void Parser::parseExternalMethodBlock(Program& program) {
             program.external_methods.push_back(std::move(em));
             continue;
         }
-        // dtor: ~() { ... }
+        // dtor: ~() { ... }  or  virtual ~() { ... }
         if (peek().type == TokenType::kBitNot
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
@@ -1913,7 +1946,16 @@ void Parser::parseExternalMethodBlock(Program& program) {
             if (peek().type == TokenType::kComma) advance();
         }
         expect(TokenType::kRParen, "expected ')'");
-        if (peek().type == TokenType::kSemicolon) {
+        if (peek().type == TokenType::kEquals
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kDelete) {
+            if (!em.is_virtual)
+                throw std::runtime_error("Line " + std::to_string(peek().line)
+                    + ": '= delete' requires the method to be declared 'virtual'");
+            advance(); advance();
+            expect(TokenType::kSemicolon, "expected ';' after '= delete'");
+            em.is_pure = true;
+        } else if (peek().type == TokenType::kSemicolon) {
             advance(); // forward declaration — no body
         } else {
             std::vector<std::string> param_names;

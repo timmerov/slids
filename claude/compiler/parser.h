@@ -409,6 +409,8 @@ struct MethodDef {
     std::string name;
     std::vector<std::pair<std::string, std::string>> params;
     std::unique_ptr<BlockStmt> body;
+    bool is_virtual = false;  // `virtual` keyword present on the declaration
+    bool is_pure = false;     // body replaced by `= delete;` — slot exists, no impl
 };
 
 struct SlidDef {
@@ -424,6 +426,7 @@ struct SlidDef {
     bool has_trailing_ellipsis = false;
     bool has_explicit_ctor_decl = false; // _() was declared (with or without body)
     bool has_explicit_dtor_decl = false; // ~() was declared (with or without body)
+    bool dtor_is_virtual = false;        // `virtual ~()` — required when class is virtual
     bool is_transport_impl = false;      // this slid emits __$pinit for the consumer
     int public_field_count = 0;          // number of public fields before private ones (for __$pinit)
     bool is_local = true;                // false when template body loaded from an imported .sl file
@@ -470,6 +473,8 @@ struct ExternalMethodDef {
     std::string method_name;
     std::vector<std::pair<std::string, std::string>> params;
     std::unique_ptr<BlockStmt> body;
+    bool is_virtual = false;
+    bool is_pure = false;
 };
 
 struct Program {
