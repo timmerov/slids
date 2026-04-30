@@ -1,3 +1,9 @@
+/*
+test new and delete.
+
+including placement new.
+and directly calling the dtor.
+*/
 
 Simple(
     int x_ = 0,
@@ -21,7 +27,11 @@ Template<T>() {
     void test() {
         int8 buff[100];
         int8[] buffer = ^buff[0];
-        //T^ discard = new(buffer) T;
+        T^ discard = new(buffer) T;
+        new(buffer) T;
+        /* balance ctor/dtor. */
+        discard^.~();
+        discard^.~();
     }
 }
 

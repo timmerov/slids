@@ -2129,8 +2129,7 @@ bool Codegen::isPointerExpr(const Expr& expr) {
     if (dynamic_cast<const StringLiteralExpr*>(&expr)) return true;
     if (dynamic_cast<const NullptrExpr*>(&expr))       return true;
     if (dynamic_cast<const AddrOfExpr*>(&expr))        return true;
-    if (dynamic_cast<const NewExpr*>(&expr))           return true;
-    if (dynamic_cast<const NewScalarExpr*>(&expr))    return true;
+    if (!newExprResultType(expr).empty())              return true;
     if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
         if (!current_slid_.empty()) {
             auto& info = slid_info_[current_slid_];
@@ -2364,8 +2363,7 @@ std::string Codegen::exprType(const Expr& expr) {
     if (dynamic_cast<const SizeofExpr*>(&expr))       return "intptr";
     if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr))  return nc->target_type;
     if (auto* pc = dynamic_cast<const PtrCastExpr*>(&expr))   return pc->target_type;
-    if (auto* ne = dynamic_cast<const NewScalarExpr*>(&expr)) return ne->elem_type + "^";
-    if (auto* ne = dynamic_cast<const NewExpr*>(&expr))       return ne->elem_type + "[]";
+    if (auto t = newExprResultType(expr); !t.empty()) return t;
     if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
         if (!current_slid_.empty()) {
             auto& info = slid_info_[current_slid_];

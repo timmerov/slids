@@ -134,6 +134,15 @@ inline bool constExprToInt(const Expr& expr,
     return false;
 }
 
+// Result Slids type of a `new`-expression, or "" if `expr` is not one.
+// Single source of truth for the three new-expression node types.
+inline std::string newExprResultType(const Expr& expr) {
+    if (auto* ne = dynamic_cast<const NewExpr*>(&expr))          return ne->elem_type + "[]";
+    if (auto* ne = dynamic_cast<const NewScalarExpr*>(&expr))    return ne->elem_type + "^";
+    if (auto* ne = dynamic_cast<const PlacementNewExpr*>(&expr)) return ne->elem_type + "^";
+    return "";
+}
+
 // Returns true if this expression already produces a 0/1 i32 truth value —
 // i.e. it is a comparison or logical op. emitCondBool can skip the extra icmp.
 inline bool isAlreadyBool(const Expr& expr) {

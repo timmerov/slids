@@ -13,3 +13,7 @@ placement new
 constructor
 Simple: x=10 y=11 z=12
 destructor
+constructor
+constructor
+destructor
+destructor

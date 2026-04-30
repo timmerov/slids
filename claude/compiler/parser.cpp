@@ -963,6 +963,14 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         return stmt;
     }
 
+    // bare new-expression as a statement: new T(args);  new T[n];  new(addr) T(args);
+    // result is discarded; constructor side-effects still run.
+    if (t.type == TokenType::kNew) {
+        auto e = parsePostfix(parsePrimary());
+        expect(TokenType::kSemicolon, "expected ';'");
+        return make<ExprStmt>(t_start, std::move(e));
+    }
+
     // pre-increment/decrement statement: ++x;  ++ref^;  ++(ref^);
     if (t.type == TokenType::kPlusPlus || t.type == TokenType::kMinusMinus) {
         std::string op = (t.type == TokenType::kPlusPlus) ? "pre++" : "pre--";

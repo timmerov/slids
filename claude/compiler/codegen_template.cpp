@@ -115,6 +115,13 @@ static std::unique_ptr<Expr> cloneExpr(const Expr& expr,
         return std::make_unique<NewScalarExpr>(subTypeSuffix(e->elem_type, subst), std::move(args));
     }
 
+    if (auto* e = dynamic_cast<const PlacementNewExpr*>(&expr)) {
+        std::vector<std::unique_ptr<Expr>> args;
+        for (auto& a : e->args) args.push_back(cloneExpr(*a, subst));
+        return std::make_unique<PlacementNewExpr>(cloneExpr(*e->addr, subst),
+            subTypeSuffix(e->elem_type, subst), std::move(args));
+    }
+
     if (auto* e = dynamic_cast<const SizeofExpr*>(&expr)) {
         auto se = std::make_unique<SizeofExpr>();
         // If the operand is a VarExpr naming a template parameter, substitute

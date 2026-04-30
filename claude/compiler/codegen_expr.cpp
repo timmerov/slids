@@ -2400,12 +2400,8 @@ std::string Codegen::inferSlidType(const Expr& expr) {
         }
         return s + ")";
     }
-    // new Type[n] → Type[]
-    if (auto* ne = dynamic_cast<const NewExpr*>(&expr))        return ne->elem_type + "[]";
-    // new Type(args) → Type^
-    if (auto* ne = dynamic_cast<const NewScalarExpr*>(&expr))  return ne->elem_type + "^";
-    // new(addr) Type(args) → Type^
-    if (auto* ne = dynamic_cast<const PlacementNewExpr*>(&expr)) return ne->elem_type + "^";
+    // new T[n] → T[];  new T(args) and new(addr) T(args) → T^
+    if (auto t = newExprResultType(expr); !t.empty()) return t;
     // ^x → elem_type^ (take address). When the operand is an array element
     // (ArrayIndexExpr whose deepest base is an array local), produce an
     // iterator T[] instead — the storage is walkable, so arithmetic on the
