@@ -236,6 +236,11 @@ Derived^ derived_ptr = <Derived^> base^; // not every base pointer is a derived 
 This^ this_ptr = <This^> that_ptr;         // compile error: This and That are unrelated types.
 This^ this_ptr = <This^> <void^> that_ptr; // correct method.
 ```
+**References and iterators:** Reinterpretation of an iterator `[]` to a reference `^` of the same type is implicit. No explicit cast needed. Reinterpretation of a reference `^` to an iterator `[]` of a compatible type requires an explicit cast.
+```
+Type^ ref = same_type_iter;
+Type[] iter = <Type[]> compatible_type_ref;
+```
 ---
 
 ## Variables
