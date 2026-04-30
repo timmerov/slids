@@ -38,7 +38,7 @@
 - **Testing:**
   - Need unit tests and regression tests for pretty much everything.
   - Naming conventions: Claude used naming conventions in the parser. Test to ensure the user can use lower case classes and upper case functions.
-  - Functions declared in `.slh` are public entry points in `.o` files. Functions defined in `.sl` files are private and not exported in `.o` files. `main` and `__pinit` are exceptions. Explicit template instantiation is also public. Test this by trying to access a private imported class method.
+  - Functions declared in `.slh` are public entry points in `.o` files. Functions defined in `.sl` files are private and not exported in `.o` files. `main` and the lifecycle hooks (`__$ctor`, `__$dtor`, `__$sizeof`) of importable classes are exceptions. Explicit template instantiation is also public. Test this by trying to access a private imported class method.
 
 - **Returning:** Currently, a non-void function must end with a return statement - which is flawed but it kinda sorta works. We need to ensure every possible code path returns. And don't require a return if the end of block is unreachable.
 

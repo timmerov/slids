@@ -22,26 +22,64 @@ char Lexer::advance() {
 }
 
 void Lexer::skipWhitespaceAndComments() {
+    int depth = 0;
+    bool in_line = false;
     while (pos_ < (int)source_.size()) {
         char c = peek();
+        char d = peek2();
+        if (c == '/' && d == '/') {
+            in_line = true;
+            advance(); advance();
+            continue;
+        }
+        if (c == '/' && d == '*') {
+            depth++;
+            advance(); advance();
+            continue;
+        }
+        if (c == '*' && d == '/') {
+            if (depth == 0)
+                throw std::runtime_error("Line " + std::to_string(line_)
+                    + ": unmatched */");
+            depth--;
+            advance(); advance();
+            continue;
+        }
+        if (in_line) {
+            if (c == '\n') {
+                in_line = false;
+                advance();
+                continue;
+            }
+            if (c == '\\') {
+                int p = pos_ + 1;
+                while (p < (int)source_.size()
+                    && (source_[p] == ' ' || source_[p] == '\t'
+                        || source_[p] == '\r')) p++;
+                if (p < (int)source_.size() && source_[p] == '\n') {
+                    if (p != pos_ + 1)
+                        throw std::runtime_error("Line " + std::to_string(line_)
+                            + ": whitespace between line-continuation \\ and newline");
+                    advance(); advance();
+                    continue;
+                }
+            }
+            advance();
+            continue;
+        }
+        if (depth > 0) {
+            advance();
+            continue;
+        }
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
             advance();
-        } else if (c == '/' && peek2() == '/') {
-            while (pos_ < (int)source_.size() && peek() != '\n')
-                advance();
-        } else if (c == '/' && peek2() == '*') {
-            advance(); advance();
-            while (pos_ + 1 < (int)source_.size()) {
-                if (peek() == '*' && peek2() == '/') {
-                    advance(); advance();
-                    break;
-                }
-                advance();
-            }
-        } else {
-            break;
+            continue;
         }
+        break;
     }
+    if (depth > 0)
+        throw std::runtime_error("Line " + std::to_string(line_)
+            + ": unterminated block comment");
 }
 
 Token Lexer::readCharLiteral() {

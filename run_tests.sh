@@ -9,6 +9,7 @@ SAMPLES=(
     blocks
     cast
     class
+    comments
     constructor
     function1
     incomplete
