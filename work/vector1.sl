@@ -2,7 +2,6 @@
 use a template class declared in a header.
 */
 
-import string;
 import vector;
 
 Value(
@@ -14,27 +13,29 @@ Value(
     ~() {
         __println("Value:dtor");
     }
+    op<-(Value^ rhs) {
+        __println("Value::move");
+        x_ = rhs^.x_;
+    }
 }
 
 int32 main() {
-
+    __println("---Vector<int>---");
     {
-        int x = 42;
-        x.~();
-        Value v;
-        v.~();
+        Vector<int> intvec;
+        __println("resize(3)");
+        intvec.resize(3);
     }
-
-    Vector<int> intvec;
-    Vector<Value> valvec;
-    Vector<String> strvec;
-
-    intvec.resize(3);
-    valvec.resize(3);
-    strvec.resize(3);
-    println(String + "intvec.size()<10>=" + intvec.size());
-    println(String + "valvec.size()<10>=" + valvec.size());
-    println(String + "strvec.size()<10>=" + strvec.size());
+    __println("---Vector<Value>---");
+    {
+        Vector<Value> valvec;
+        __println("reserve(5)");
+        valvec.reserve(3);
+        __println("resize(3)");
+        valvec.resize(3);
+        __println("---dtors---");
+    }
+    __println("----------");
 
     return 0;
 }

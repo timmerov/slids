@@ -103,7 +103,8 @@ $(TMT_DIR)/template_test.ll: template_test.sl template_add.slh template_add.sl d
 
 vector1: $(BIN_DIR)/vector1
 
-$(BIN_DIR)/vector1: $(ST_DIR)/string.o $(VEC_DIR)/vector1.o $(VEC_INST_OBJ)
+#$(BIN_DIR)/vector1: $(ST_DIR)/string.o $(VEC_DIR)/vector1.o $(VEC_INST_OBJ)
+$(BIN_DIR)/vector1: $(VEC_DIR)/vector1.o $(VEC_INST_OBJ)
 	$(CXX) $^ -o $@
 
 $(VEC_DIR)/vector1.o: $(VEC_DIR)/vector1.ll

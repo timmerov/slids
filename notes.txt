@@ -1,5 +1,13 @@
 
-constant expressions.
+placement new doesn't work with templates?
+70:                new(ptr++) T;
+unexpected token 'new'
+
+support move through post in deref.
+43:            dst++^ <- src++^;
+move (<-) through post-inc-deref not supported
+45:            dst^ <- src^;
+move (<-) through deref not supported
 
 revisit initialization.
 
@@ -47,6 +55,7 @@ cause char[] matches to AnyTypePtr.
 
 aliases:
 alias int32 i32;
+alias i32 = int32;
 
 using:
 what's the slids equivalent of using?

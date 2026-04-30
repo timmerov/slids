@@ -17,6 +17,14 @@ Simple(
     }
 }
 
+Template<T>() {
+    void test() {
+        int8 buff[100];
+        int8[] buffer = ^buff[0];
+        //T^ discard = new(buffer) T;
+    }
+}
+
 int32 main() {
 
     /* create a single object. */
@@ -42,6 +50,9 @@ int32 main() {
     inplace^.~();
     /* free the memory. */
     delete where;
+
+    Template<Simple> tpt;
+    tpt.test();
 
     return 0;
 }

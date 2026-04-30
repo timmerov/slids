@@ -405,6 +405,7 @@ struct FieldDef {
     std::string type;
     std::string name;
     std::unique_ptr<Expr> default_val; // may be null
+    int tok = 0;                       // token index of the field name (for diagnostics)
 };
 
 struct MethodDef {
@@ -539,7 +540,7 @@ private:
 
     // scope stack for inferred declarations: tracks declared variable names per block
     std::vector<std::set<std::string>> scope_stack_;
-    void declareVar(const std::string& name);
+    void declareVar(const std::string& name, int name_tok);
     bool isInScope(const std::string& name) const;
 
     // field names of the slid currently being parsed (prevents field assignments being inferred as declarations)
@@ -589,12 +590,14 @@ private:
     // and build the matching specialized stmt node.
     std::unique_ptr<Stmt> parseLvalueTail(std::unique_ptr<Expr> lhs);
     std::unique_ptr<Stmt> buildAssignFromLhs(std::unique_ptr<Expr> lhs,
-                                             std::unique_ptr<Expr> rhs, bool is_move);
+                                             std::unique_ptr<Expr> rhs, bool is_move,
+                                             int op_tok);
     std::unique_ptr<Stmt> buildSwapFromLhs(std::unique_ptr<Expr> lhs,
                                             std::unique_ptr<Expr> rhs);
     std::unique_ptr<Stmt> buildCompoundAssignFromLhs(std::unique_ptr<Expr> lhs,
                                                       const std::string& op,
-                                                      std::unique_ptr<Expr> rhs);
+                                                      std::unique_ptr<Expr> rhs,
+                                                      int op_tok);
     std::unique_ptr<SwitchStmt> parseSwitchStmt();
 
     // expression precedence levels
