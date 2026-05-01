@@ -201,36 +201,14 @@ void Codegen::emitDestructure(
     }
 }
 
-// Deep-clone an expression. Used by CompoundAssignStmt's desugar fallback to
-// produce a fresh copy of the LHS for the BinaryExpr operand while moving the
-// original LHS sub-tree into the synthesized assign-family stmt.
-// Handles the shapes that can appear in lvalues plus common rvalue pieces.
+// Defined in codegen_template.cpp — single source of truth for AST cloning.
+// The desugar fallback in CompoundAssignStmt passes an empty subst.
+std::unique_ptr<Expr> cloneExpr(const Expr& expr,
+                                 const std::map<std::string, std::string>& subst);
+
 static std::unique_ptr<Expr> cloneExpr(const Expr& e) {
-    if (auto* ve = dynamic_cast<const VarExpr*>(&e))
-        return std::make_unique<VarExpr>(ve->name);
-    if (auto* il = dynamic_cast<const IntLiteralExpr*>(&e))
-        return std::make_unique<IntLiteralExpr>(il->value, il->is_char_literal, il->is_nondecimal);
-    if (auto* sl = dynamic_cast<const StringLiteralExpr*>(&e))
-        return std::make_unique<StringLiteralExpr>(sl->value);
-    if (auto* fl = dynamic_cast<const FloatLiteralExpr*>(&e))
-        return std::make_unique<FloatLiteralExpr>(fl->value);
-    if (dynamic_cast<const NullptrExpr*>(&e))
-        return std::make_unique<NullptrExpr>();
-    if (auto* de = dynamic_cast<const DerefExpr*>(&e))
-        return std::make_unique<DerefExpr>(cloneExpr(*de->operand));
-    if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&e))
-        return std::make_unique<FieldAccessExpr>(cloneExpr(*fa->object), fa->field);
-    if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&e))
-        return std::make_unique<ArrayIndexExpr>(cloneExpr(*ai->base), cloneExpr(*ai->index));
-    if (auto* pide = dynamic_cast<const PostIncDerefExpr*>(&e))
-        return std::make_unique<PostIncDerefExpr>(cloneExpr(*pide->operand), pide->op);
-    if (auto* be = dynamic_cast<const BinaryExpr*>(&e))
-        return std::make_unique<BinaryExpr>(be->op, cloneExpr(*be->left), cloneExpr(*be->right));
-    if (auto* ue = dynamic_cast<const UnaryExpr*>(&e))
-        return std::make_unique<UnaryExpr>(ue->op, cloneExpr(*ue->operand));
-    if (auto* ao = dynamic_cast<const AddrOfExpr*>(&e))
-        return std::make_unique<AddrOfExpr>(cloneExpr(*ao->operand));
-    throw CompileError{e.file_id, e.tok, "cloneExpr: unsupported expression shape"};
+    static const std::map<std::string, std::string> kEmpty;
+    return cloneExpr(e, kEmpty);
 }
 
 void Codegen::emitStmt(const Stmt& stmt) {

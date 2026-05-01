@@ -41,15 +41,17 @@ static std::string subTypeSuffix(const std::string& t,
 
 // --- Expression deep clone with type substitution ---
 
-static std::unique_ptr<Expr> cloneExpr(const Expr& expr,
-                                        const std::map<std::string, std::string>& subst);
+// External linkage so other TUs (e.g. codegen_stmt.cpp's compound-assign
+// desugar) can route through this single cloner with an empty subst.
+std::unique_ptr<Expr> cloneExpr(const Expr& expr,
+                                 const std::map<std::string, std::string>& subst);
 static std::unique_ptr<Expr> cloneExprImpl(const Expr& expr,
                                             const std::map<std::string, std::string>& subst);
 
 // Wrapper: propagate source-node file_id/tok to the cloned subtree's root so
 // downstream errors caret at the right source location.
-static std::unique_ptr<Expr> cloneExpr(const Expr& expr,
-                                        const std::map<std::string, std::string>& subst) {
+std::unique_ptr<Expr> cloneExpr(const Expr& expr,
+                                 const std::map<std::string, std::string>& subst) {
     auto r = cloneExprImpl(expr, subst);
     if (r) { r->file_id = expr.file_id; r->tok = expr.tok; }
     return r;
