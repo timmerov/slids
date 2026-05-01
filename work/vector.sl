@@ -66,18 +66,20 @@ Vector<T>(
 
             /* create new elements. */
             intptr i = size_;
-            T[] ptr = <T[]> storage_;
-            ptr += i;
-            while (i++ < new_size) {
-                new(ptr++) T;
-            }
+            int8[] ptr = storage_;
+            ptr += sizeof(T) * i;
+            /*while (i++ < new_size) {
+                new(ptr) T;
+                ptr += sizeof(T);
+            }*/
         } else {
             /* destruct old elements. */
             intptr i = new_size;
             T[] ptr = <T[]> storage_;
             ptr += i;
             while (i++ < size_) {
-                ptr++^.~();
+                ptr^.~();
+                ++ptr;
             }
         }
         /* update. */

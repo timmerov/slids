@@ -43,6 +43,17 @@ static std::string subTypeSuffix(const std::string& t,
 
 static std::unique_ptr<Expr> cloneExpr(const Expr& expr,
                                         const std::map<std::string, std::string>& subst);
+static std::unique_ptr<Expr> cloneExprImpl(const Expr& expr,
+                                            const std::map<std::string, std::string>& subst);
+
+// Wrapper: propagate source-node file_id/tok to the cloned subtree's root so
+// downstream errors caret at the right source location.
+static std::unique_ptr<Expr> cloneExpr(const Expr& expr,
+                                        const std::map<std::string, std::string>& subst) {
+    auto r = cloneExprImpl(expr, subst);
+    if (r) { r->file_id = expr.file_id; r->tok = expr.tok; }
+    return r;
+}
 
 static std::vector<std::unique_ptr<Expr>> cloneArgs(
     const std::vector<std::unique_ptr<Expr>>& args,
@@ -52,8 +63,8 @@ static std::vector<std::unique_ptr<Expr>> cloneArgs(
     return out;
 }
 
-static std::unique_ptr<Expr> cloneExpr(const Expr& expr,
-                                        const std::map<std::string, std::string>& subst) {
+static std::unique_ptr<Expr> cloneExprImpl(const Expr& expr,
+                                            const std::map<std::string, std::string>& subst) {
     if (auto* e = dynamic_cast<const IntLiteralExpr*>(&expr))
         return std::make_unique<IntLiteralExpr>(e->value, e->is_char_literal, e->is_nondecimal);
 
@@ -164,9 +175,20 @@ static std::unique_ptr<Expr> cloneExpr(const Expr& expr,
 
 static std::unique_ptr<BlockStmt> cloneBlock(const BlockStmt& block,
                                               const std::map<std::string, std::string>& subst);
+static std::unique_ptr<Stmt> cloneStmt(const Stmt& stmt,
+                                        const std::map<std::string, std::string>& subst);
+static std::unique_ptr<Stmt> cloneStmtImpl(const Stmt& stmt,
+                                            const std::map<std::string, std::string>& subst);
 
 static std::unique_ptr<Stmt> cloneStmt(const Stmt& stmt,
                                         const std::map<std::string, std::string>& subst) {
+    auto r = cloneStmtImpl(stmt, subst);
+    if (r) { r->file_id = stmt.file_id; r->tok = stmt.tok; }
+    return r;
+}
+
+static std::unique_ptr<Stmt> cloneStmtImpl(const Stmt& stmt,
+                                            const std::map<std::string, std::string>& subst) {
     if (auto* s = dynamic_cast<const VarDeclStmt*>(&stmt)) {
         std::vector<std::unique_ptr<Expr>> ctor_args;
         for (auto& a : s->ctor_args) ctor_args.push_back(cloneExpr(*a, subst));
@@ -310,12 +332,48 @@ static std::unique_ptr<Stmt> cloneStmt(const Stmt& stmt,
         return r;
     }
 
+    if (auto* s = dynamic_cast<const CompoundAssignStmt*>(&stmt))
+        return std::make_unique<CompoundAssignStmt>(
+            cloneExpr(*s->lhs, subst), s->op, cloneExpr(*s->rhs, subst));
+
+    if (auto* s = dynamic_cast<const ForTupleStmt*>(&stmt)) {
+        auto r = std::make_unique<ForTupleStmt>();
+        r->var_name = s->var_name;
+        for (auto& e : s->elements) r->elements.push_back(cloneExpr(*e, subst));
+        r->body = cloneBlock(*s->body, subst);
+        r->block_label = s->block_label;
+        return r;
+    }
+
+    if (auto* s = dynamic_cast<const ForArrayStmt*>(&stmt)) {
+        auto r = std::make_unique<ForArrayStmt>();
+        r->var_name = s->var_name;
+        r->array_expr = cloneExpr(*s->array_expr, subst);
+        r->body = cloneBlock(*s->body, subst);
+        r->block_label = s->block_label;
+        return r;
+    }
+
+    if (auto* s = dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) {
+        auto r = std::make_unique<NestedFunctionDefStmt>();
+        r->def.return_type = subTypeSuffix(s->def.return_type, subst);
+        for (auto& [t, n] : s->def.tuple_return_fields)
+            r->def.tuple_return_fields.emplace_back(subTypeSuffix(t, subst), n);
+        r->def.name = s->def.name;
+        for (auto& [t, n] : s->def.params)
+            r->def.params.emplace_back(subTypeSuffix(t, subst), n);
+        r->def.body = cloneBlock(*s->def.body, subst);
+        return r;
+    }
+
     throw CompileError{stmt.file_id, stmt.tok, "cloneStmt: unhandled statement type"};
 }
 
 static std::unique_ptr<BlockStmt> cloneBlock(const BlockStmt& block,
                                               const std::map<std::string, std::string>& subst) {
     auto r = std::make_unique<BlockStmt>();
+    r->file_id = block.file_id;
+    r->tok = block.tok;
     for (auto& s : block.stmts) r->stmts.push_back(cloneStmt(*s, subst));
     return r;
 }
