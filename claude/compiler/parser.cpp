@@ -793,7 +793,7 @@ static std::unique_ptr<Expr> normalizePostIncDeref(std::unique_ptr<Expr> e) {
 
 std::unique_ptr<Stmt> Parser::buildAssignFromLhs(
         std::unique_ptr<Expr> lhs, std::unique_ptr<Expr> rhs, bool is_move, int op_tok) {
-    [[maybe_unused]] int t_start = pos_;
+    int t_start = lhs->tok;
     lhs = normalizePostIncDeref(std::move(lhs));
 
     if (auto* ve = dynamic_cast<VarExpr*>(lhs.get())) {
@@ -829,7 +829,7 @@ std::unique_ptr<Stmt> Parser::buildAssignFromLhs(
 
 std::unique_ptr<Stmt> Parser::buildSwapFromLhs(
         std::unique_ptr<Expr> lhs, std::unique_ptr<Expr> rhs) {
-    [[maybe_unused]] int t_start = pos_;
+    int t_start = lhs->tok;
     lhs = normalizePostIncDeref(std::move(lhs));
     rhs = normalizePostIncDeref(std::move(rhs));
     return make<SwapStmt>(t_start, std::move(lhs), std::move(rhs));
@@ -838,7 +838,7 @@ std::unique_ptr<Stmt> Parser::buildSwapFromLhs(
 std::unique_ptr<Stmt> Parser::buildCompoundAssignFromLhs(
         std::unique_ptr<Expr> lhs, const std::string& op,
         std::unique_ptr<Expr> rhs, int op_tok) {
-    [[maybe_unused]] int t_start = pos_;
+    int t_start = lhs->tok;
     lhs = normalizePostIncDeref(std::move(lhs));
     if (!dynamic_cast<VarExpr*>(lhs.get())
         && !dynamic_cast<DerefExpr*>(lhs.get())

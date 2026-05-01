@@ -8,7 +8,7 @@ Vector<T>(
     ...,
     intptr size_ = 0,
     intptr capacity_ = 0,
-    T[] storage_ = nullptr
+    int8[] storage_ = nullptr
 ) {
     _() {
     }
@@ -33,11 +33,13 @@ Vector<T>(
         }
 
         /* allocate more storage. */
-        new_storage = new T[new_size];
+        byte_size = sizeof(T) * new_size;
+        new_storage = new int8[byte_size];
+
         /* move exising elements. */
         intptr i = 0;
-        T[] src = storage_;
-        T[] dst = new_storage;
+        T[] src = <T[]> storage_;
+        T[] dst = <T[]> new_storage;
         while (i++ < size_) {
             /* meh. not supported. */
             //dst++^ <- src++^;
@@ -55,7 +57,7 @@ Vector<T>(
     change the number of elements.
     preserve existing elements.
     */
-    void resize(intptr new_size) {/*
+    void resize(intptr new_size) {
 
         /* add more elements. */
         if (new_size > size_) {
@@ -64,19 +66,21 @@ Vector<T>(
 
             /* create new elements. */
             intptr i = size_;
-            T[] ptr = storage_ + i;
+            T[] ptr = <T[]> storage_;
+            ptr += i;
             while (i++ < new_size) {
                 new(ptr++) T;
             }
         } else {
             /* destruct old elements. */
             intptr i = new_size;
-            T[] ptr = storage_ + i;
+            T[] ptr = <T[]> storage_;
+            ptr += i;
             while (i++ < size_) {
                 ptr++^.~();
             }
         }
         /* update. */
         size_ = new_size;
-    */}
+    }
 }
