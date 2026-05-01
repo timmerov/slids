@@ -1,13 +1,6 @@
 
-placement new doesn't work with templates?
-70:                new(ptr++) T;
-unexpected token 'new'
-
-support move through post in deref.
-43:            dst++^ <- src++^;
-move (<-) through post-inc-deref not supported
-45:            dst^ <- src^;
-move (<-) through deref not supported
+op[] seems to have no checks.
+might want to look at other ops.
 
 revisit initialization.
 
