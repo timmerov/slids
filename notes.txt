@@ -2,6 +2,11 @@
 op[] seems to have no checks.
 might want to look at other ops.
 
+cogitate upon unary operators.
+bool b = ! object -> b = object.op!();
+obj_lhs = ! obj_rhs -> obj_lhs.op!(obj_rhs);
+
+
 revisit initialization.
 
 implement complex field access with tuples.

@@ -4,6 +4,7 @@
 #include <vector>
 #include <memory>
 #include <map>
+#include <optional>
 #include <set>
 
 // --- Expressions ---
@@ -573,6 +574,11 @@ private:
     bool isInstantiationLookahead() const;
     // lookahead: pos_ is at identifier used as a type name; returns true if a var-name identifier follows
     bool isVarDeclLookahead() const;
+
+    // op-symbol recognition: returns canonical "<sym>" (e.g. "+=", "<-", "[]=", "[]") if
+    // the token(s) at pos_+offset (peek) or pos_ (consume) form an overloadable op symbol.
+    std::optional<std::string> peekOpSymbolAt(int offset);
+    std::optional<std::string> consumeOpSymbol();
 
     SlidDef parseSlidDef();
     // collapse multiple SlidDef entries with the same class name into a single

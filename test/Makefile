@@ -22,6 +22,7 @@ SAMPLES = \
 	move \
 	nested \
 	new_delete \
+	operators \
 	parsing \
 	pointer \
 	rangedfor \

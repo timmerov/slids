@@ -18,7 +18,7 @@ void Codegen::error(const std::string& msg) {
         auto [f, t] = emit_stack_.back();
         throw CompileError{f, t, msg};
     }
-    error(msg);
+    throw CompileError{-1, 0, msg};
 }
 
 void Codegen::errorAtNode(const Stmt& s, const std::string& msg) {

@@ -124,6 +124,84 @@ bool Parser::isVarDeclLookahead() const {
     return i < (int)tokens_.size() && tokens_[i].type == TokenType::kIdentifier;
 }
 
+// Single source of truth for the overloadable operator symbols recognized by `op<sym>`.
+// Maps the leading TokenType to its canonical string form used in method names
+// (e.g. "op" + "+=" → "op+="). Multi-token forms ([] and []=) are handled inline
+// in the helpers below.
+static const std::map<TokenType, std::string> kOpSymbols = {
+    {TokenType::kEquals,    "="},
+    {TokenType::kArrowLeft, "<-"},
+    {TokenType::kArrowBoth, "<->"},
+    {TokenType::kPlus,      "+"},
+    {TokenType::kMinus,     "-"},
+    {TokenType::kStar,      "*"},
+    {TokenType::kSlash,     "/"},
+    {TokenType::kPercent,   "%"},
+    {TokenType::kBitAnd,    "&"},
+    {TokenType::kBitOr,     "|"},
+    {TokenType::kBitXor,    "^"},
+    {TokenType::kLShift,    "<<"},
+    {TokenType::kRShift,    ">>"},
+    {TokenType::kAnd,       "&&"},
+    {TokenType::kOr,        "||"},
+    {TokenType::kXorXor,    "^^"},
+    {TokenType::kPlusEq,    "+="},
+    {TokenType::kMinusEq,   "-="},
+    {TokenType::kStarEq,    "*="},
+    {TokenType::kSlashEq,   "/="},
+    {TokenType::kPercentEq, "%="},
+    {TokenType::kBitAndEq,  "&="},
+    {TokenType::kBitOrEq,   "|="},
+    {TokenType::kBitXorEq,  "^="},
+    {TokenType::kLShiftEq,  "<<="},
+    {TokenType::kRShiftEq,  ">>="},
+    {TokenType::kAndEq,     "&&="},
+    {TokenType::kOrEq,      "||="},
+    {TokenType::kXorXorEq,  "^^="},
+    {TokenType::kEqEq,      "=="},
+    {TokenType::kNotEq,     "!="},
+    {TokenType::kLt,        "<"},
+    {TokenType::kGt,        ">"},
+    {TokenType::kLtEq,      "<="},
+    {TokenType::kGtEq,      ">="},
+};
+
+std::optional<std::string> Parser::peekOpSymbolAt(int offset) {
+    int i = pos_ + offset;
+    if (i >= (int)tokens_.size()) return std::nullopt;
+    TokenType t = tokens_[i].type;
+    // multi-token forms
+    if (t == TokenType::kBracketAssign) return std::string("[]=");
+    if (t == TokenType::kLBracket
+        && i + 1 < (int)tokens_.size()
+        && tokens_[i + 1].type == TokenType::kRBracket) {
+        return std::string("[]");
+    }
+    auto it = kOpSymbols.find(t);
+    if (it == kOpSymbols.end()) return std::nullopt;
+    return it->second;
+}
+
+std::optional<std::string> Parser::consumeOpSymbol() {
+    if (pos_ >= (int)tokens_.size()) return std::nullopt;
+    TokenType t = tokens_[pos_].type;
+    if (t == TokenType::kBracketAssign) {
+        advance();
+        return std::string("[]=");
+    }
+    if (t == TokenType::kLBracket
+        && pos_ + 1 < (int)tokens_.size()
+        && tokens_[pos_ + 1].type == TokenType::kRBracket) {
+        advance(); // [
+        advance(); // ]
+        return std::string("[]");
+    }
+    auto it = kOpSymbols.find(t);
+    if (it == kOpSymbols.end()) return std::nullopt;
+    advance();
+    return it->second;
+}
+
 bool Parser::isTemplateCallLookahead() const {
     [[maybe_unused]] int t_start = pos_;
     // pos_ points at '<'; scan forward to see if this is name<Type,...>(
@@ -1537,22 +1615,8 @@ MethodDef Parser::parseMethodDef() {
         m.return_type = parseTypeName();
     }
     m.name = expect(TokenType::kIdentifier, "expected method name").value;
-    if (m.name == "op" && peek().type == TokenType::kEquals)     { advance(); m.name = "op="; }
-    else if (m.name == "op" && peek().type == TokenType::kArrowLeft) { advance(); m.name = "op<-"; }
-    else if (m.name == "op" && peek().type == TokenType::kArrowBoth) { advance(); m.name = "op<->"; }
-    else if (m.name == "op" && peek().type == TokenType::kPlus)    { advance(); m.name = "op+"; }
-    else if (m.name == "op" && peek().type == TokenType::kMinus)   { advance(); m.name = "op-"; }
-    else if (m.name == "op" && peek().type == TokenType::kStar)    { advance(); m.name = "op*"; }
-    else if (m.name == "op" && peek().type == TokenType::kSlash)   { advance(); m.name = "op/"; }
-    else if (m.name == "op" && peek().type == TokenType::kPlusEq)  { advance(); m.name = "op+="; }
-    else if (m.name == "op" && peek().type == TokenType::kMinusEq) { advance(); m.name = "op-="; }
-    else if (m.name == "op" && peek().type == TokenType::kStarEq)  { advance(); m.name = "op*="; }
-    else if (m.name == "op" && peek().type == TokenType::kSlashEq) { advance(); m.name = "op/="; }
-    else if (m.name == "op" && peek().type == TokenType::kBracketAssign) { advance(); m.name = "op[]="; }
-    else if (m.name == "op" && peek().type == TokenType::kLBracket) {
-        advance();
-        expect(TokenType::kRBracket, "expected ']'");
-        m.name = "op[]";
+    if (m.name == "op") {
+        if (auto sym = consumeOpSymbol()) m.name = "op" + *sym;
     }
     expect(TokenType::kLParen, "expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
@@ -1743,30 +1807,12 @@ SlidDef Parser::parseSlidDef() {
         auto isMethodDecl = [&]() {
             int base = pos_ + virt_off;
             const Token& t0 = tokens_[base];
-            // new syntax: op<symbol>( without explicit return type
+            // op<symbol>( without explicit return type
             if (t0.type == TokenType::kIdentifier && t0.value == "op") {
-                if (base + 1 >= (int)tokens_.size()) return false;
-                auto t = tokens_[base + 1].type;
-                // op[]= : op + []= + (
-                if (t == TokenType::kBracketAssign) {
-                    return base + 2 < (int)tokens_.size() && tokens_[base + 2].type == TokenType::kLParen;
-                }
-                // op[] : op + [ + ] + (
-                if (t == TokenType::kLBracket) {
-                    return base + 3 < (int)tokens_.size()
-                        && tokens_[base + 2].type == TokenType::kRBracket
-                        && tokens_[base + 3].type == TokenType::kLParen;
-                }
-                bool is_op_tok = (t == TokenType::kEquals   || t == TokenType::kArrowLeft
-                    || t == TokenType::kArrowBoth || t == TokenType::kPlus   || t == TokenType::kMinus
-                    || t == TokenType::kStar      || t == TokenType::kSlash  || t == TokenType::kPlusEq
-                    || t == TokenType::kMinusEq   || t == TokenType::kStarEq || t == TokenType::kSlashEq
-                    || t == TokenType::kEqEq      || t == TokenType::kNotEq
-                    || t == TokenType::kLt        || t == TokenType::kGt
-                    || t == TokenType::kLtEq      || t == TokenType::kGtEq);
-                if (!is_op_tok) return false;
-                if (base + 2 >= (int)tokens_.size()) return false;
-                return tokens_[base + 2].type == TokenType::kLParen;
+                auto sym = peekOpSymbolAt(virt_off + 1);
+                if (!sym) return false;
+                int op_end = base + 1 + (*sym == "[]" ? 2 : 1);
+                return op_end < (int)tokens_.size() && tokens_[op_end].type == TokenType::kLParen;
             }
             // regular method: return-type name(
             // return type may include pointer/iterator suffixes: ^ or []
@@ -1786,17 +1832,12 @@ SlidDef Parser::parseSlidDef() {
             if (name_pos + 1 >= (int)tokens_.size()) return false;
             if (tokens_[name_pos].type != TokenType::kIdentifier) return false;
             if (tokens_[name_pos + 1].type == TokenType::kLParen) return true;
-            // int op[]( pattern
-            if (tokens_[name_pos].value == "op"
-                    && tokens_[name_pos + 1].type == TokenType::kLBracket
-                    && name_pos + 3 < (int)tokens_.size()
-                    && tokens_[name_pos + 2].type == TokenType::kRBracket
-                    && tokens_[name_pos + 3].type == TokenType::kLParen) return true;
-            // old op= pattern: void op = (  (kept for backward compatibility)
+            // <return-type> op<sym>( pattern
             if (tokens_[name_pos].value != "op") return false;
-            if (name_pos + 2 >= (int)tokens_.size()) return false;
-            return (tokens_[name_pos + 1].type == TokenType::kEquals || tokens_[name_pos + 1].type == TokenType::kArrowLeft)
-                && tokens_[name_pos + 2].type == TokenType::kLParen;
+            auto sym = peekOpSymbolAt(name_pos + 1 - pos_);
+            if (!sym) return false;
+            int op_end = name_pos + 1 + (*sym == "[]" ? 2 : 1);
+            return op_end < (int)tokens_.size() && tokens_[op_end].type == TokenType::kLParen;
         };
         // nested slid def: Identifier ( <field-list-or-empty-or-...> ) { body }
         // distinguish from method decl (return type before identifier) and from a ctor
@@ -1978,17 +2019,9 @@ void Parser::parseExternalMethodBlock(Program& program) {
         if (em.method_name == slid_name) {
             errorAt(em_tok, "method '" + em.method_name + "' shares enclosing class name");
         }
-        if (em.method_name == "op" && peek().type == TokenType::kEquals)     { advance(); em.method_name = "op="; }
-        else if (em.method_name == "op" && peek().type == TokenType::kArrowLeft) { advance(); em.method_name = "op<-"; }
-        else if (em.method_name == "op" && peek().type == TokenType::kArrowBoth) { advance(); em.method_name = "op<->"; }
-        else if (em.method_name == "op" && peek().type == TokenType::kPlus)    { advance(); em.method_name = "op+"; }
-        else if (em.method_name == "op" && peek().type == TokenType::kMinus)   { advance(); em.method_name = "op-"; }
-        else if (em.method_name == "op" && peek().type == TokenType::kStar)    { advance(); em.method_name = "op*"; }
-        else if (em.method_name == "op" && peek().type == TokenType::kSlash)   { advance(); em.method_name = "op/"; }
-        else if (em.method_name == "op" && peek().type == TokenType::kPlusEq)  { advance(); em.method_name = "op+="; }
-        else if (em.method_name == "op" && peek().type == TokenType::kMinusEq) { advance(); em.method_name = "op-="; }
-        else if (em.method_name == "op" && peek().type == TokenType::kStarEq)  { advance(); em.method_name = "op*="; }
-        else if (em.method_name == "op" && peek().type == TokenType::kSlashEq) { advance(); em.method_name = "op/="; }
+        if (em.method_name == "op") {
+            if (auto sym = consumeOpSymbol()) em.method_name = "op" + *sym;
+        }
         expect(TokenType::kLParen, "expected '('");
         while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
             std::string type = parseTypeName();
@@ -2036,15 +2069,7 @@ FunctionDef Parser::parseFunctionDef() {
     {
         std::string fname = expect(TokenType::kIdentifier, "expected function name").value;
         if (fname == "op") {
-            static const std::map<TokenType, std::string> op_map = {
-                {TokenType::kPlus, "+"}, {TokenType::kMinus, "-"},
-                {TokenType::kStar, "*"}, {TokenType::kSlash, "/"},
-                {TokenType::kEqEq, "=="}, {TokenType::kNotEq, "!="},
-                {TokenType::kLt, "<"}, {TokenType::kGt, ">"},
-                {TokenType::kLtEq, "<="}, {TokenType::kGtEq, ">="},
-            };
-            auto it = op_map.find(peek().type);
-            if (it != op_map.end()) { advance(); fname = "op" + it->second; }
+            if (auto sym = consumeOpSymbol()) fname = "op" + *sym;
         }
         fn.name = fname;
         fn.user_name = fname;

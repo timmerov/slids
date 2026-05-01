@@ -44,6 +44,8 @@
 
 - **Returning:** Currently, a non-void function must end with a return statement - which is flawed but it kinda sorta works. We need to ensure every possible code path returns. And don't require a return if the end of block is unreachable.
 
+- **Unary operator overloads (deferred)**: Unary `op-`, `op~`, `op!` are not supported. Removed from the parser's `kOpSymbols` table and from `test/operators.sl`. Two coherent design models exist (self-is-operand returning new value à la `op==`; self-is-destination modifying in place à la binary `op+`); pick one before re-enabling. The lexer tokens for `~` and `!` remain — only the op-overload entries were removed.
+
 - **Optimize returning objects:**
   - Currently, a function returning an object copies the object to its retval. The retval should be the object - named value return optimization (NRVO).
     - **Status**: single-slid sret returns already do NRVO (the function writes directly into the caller's `%retval`).
