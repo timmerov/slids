@@ -25,7 +25,7 @@ Vector<T>(
     reserve space for more elements.
     preserve existing elements.
     */
-    void reserve(intptr new_size) {/*
+    void reserve(intptr new_size) {
 
         /* already have enough room. */
         if (new_size >= capacity_) {
@@ -34,7 +34,6 @@ Vector<T>(
 
         /* allocate more storage. */
         new_storage = new T[new_size];
-
         /* move exising elements. */
         intptr i = 0;
         T[] src = storage_;
@@ -42,9 +41,6 @@ Vector<T>(
         while (i++ < size_) {
             /* meh. not supported. */
             //dst++^ <- src++^;
-            //dst^ <- src^;
-            src++;
-            dst++;
         }
 
         /* free old storage. */
@@ -53,7 +49,7 @@ Vector<T>(
         /* update. */
         size_ = new_size;
         storage_ = new_storage;
-    */}
+    }
 
     /*
     change the number of elements.

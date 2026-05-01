@@ -29,9 +29,8 @@ Template<T>() {
         int8[] buffer = ^buff[0];
         T^ discard = new(buffer) T;
         new(buffer) T;
-        /* balance ctor/dtor. */
-        discard^.~();
-        discard^.~();
+        discard.~();
+        discard.~();
     }
 }
 

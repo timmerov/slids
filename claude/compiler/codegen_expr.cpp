@@ -921,15 +921,28 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
             // dereference: ++(ref^) or ref^++ — increment the value pointed to
             if (auto* de = dynamic_cast<const DerefExpr*>(u->operand.get())) {
-                // emit the pointer value itself (load the ptr variable)
+                // derive pointee LLVM width from the pointer variable's declared type
+                std::string pointee_llvm = "i32";
+                if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                    auto tit = local_types_.find(ve->name);
+                    if (tit != local_types_.end()) {
+                        std::string t = tit->second;
+                        if (isPtrType(t)) t.resize(t.size() - 2);
+                        else if (isRefType(t)) t.pop_back();
+                        pointee_llvm = llvmType(t);
+                    }
+                }
                 std::string ptr_val = emitExpr(*de->operand);
                 std::string old_val = newTmp();
-                out_ << "    " << old_val << " = load i32, ptr " << ptr_val << "\n";
+                out_ << "    " << old_val << " = load " << pointee_llvm << ", ptr " << ptr_val << "\n";
                 std::string new_val = newTmp();
-                out_ << "    " << new_val << " = " << instr << " i32 " << old_val << ", 1\n";
-                out_ << "    store i32 " << new_val << ", ptr " << ptr_val << "\n";
+                out_ << "    " << new_val << " = " << instr << " " << pointee_llvm << " " << old_val << ", 1\n";
+                out_ << "    store " << pointee_llvm << " " << new_val << ", ptr " << ptr_val << "\n";
                 return is_pre ? new_val : old_val;
             }
+
+            // operand's slids type — drives both ptr-vs-scalar dispatch and width
+            std::string operand_type;
 
             // field access via self in a method
             if (!current_slid_.empty()) {
@@ -943,6 +956,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                         out_ << "    " << gep << " = getelementptr %struct." << current_slid_
                              << ", ptr " << self << ", i32 0, i32 " << idx << "\n";
                         ptr = gep;
+                        operand_type = info.field_types[idx];
                     }
                 }
             }
@@ -954,23 +968,26 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 auto it = locals_.find(ve->name);
                 if (it == locals_.end()) error(std::string("undefined variable: " + ve->name));
                 ptr = it->second;
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end()) operand_type = tit->second;
             }
 
-            // check if the variable is a pointer type ([] — arithmetic allowed)
+            // check if the operand is a pointer type ([] — arithmetic allowed)
             // or a reference type (^ — arithmetic is a compile error)
             bool is_ptr_arith = false;
             std::string pointee_llvm = "i32";
-            if (auto* ve = dynamic_cast<const VarExpr*>(u->operand.get())) {
-                auto tit = local_types_.find(ve->name);
-                if (tit != local_types_.end()) {
-                    if (isRefType(tit->second))
-                        error(std::string("'" + u->op + "' on reference '" + ve->name +
-                            "': arithmetic on references is not allowed (use a pointer '[]' type)"));
-                    if (isPtrType(tit->second)) {
-                        is_ptr_arith = true;
-                        std::string pointee_type = tit->second.substr(0, tit->second.size()-2);
-                        pointee_llvm = llvmType(pointee_type);
-                    }
+            std::string scalar_llvm = "i32";
+            if (!operand_type.empty()) {
+                if (isRefType(operand_type)) {
+                    auto* ve = dynamic_cast<const VarExpr*>(u->operand.get());
+                    error(std::string("'" + u->op + "' on reference '" + (ve ? ve->name : std::string("?")) +
+                        "': arithmetic on references is not allowed (use a pointer '[]' type)"));
+                }
+                if (isPtrType(operand_type)) {
+                    is_ptr_arith = true;
+                    pointee_llvm = llvmType(operand_type.substr(0, operand_type.size()-2));
+                } else {
+                    scalar_llvm = llvmType(operand_type);
                 }
             }
 
@@ -983,9 +1000,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 out_ << "    " << new_val << " = getelementptr " << pointee_llvm << ", ptr " << old << ", i32 " << step << "\n";
                 out_ << "    store ptr " << new_val << ", ptr " << ptr << "\n";
             } else {
-                out_ << "    " << old << " = load i32, ptr " << ptr << "\n";
-                out_ << "    " << new_val << " = " << instr << " i32 " << old << ", 1\n";
-                out_ << "    store i32 " << new_val << ", ptr " << ptr << "\n";
+                out_ << "    " << old << " = load " << scalar_llvm << ", ptr " << ptr << "\n";
+                out_ << "    " << new_val << " = " << instr << " " << scalar_llvm << " " << old << ", 1\n";
+                out_ << "    store " << scalar_llvm << " " << new_val << ", ptr " << ptr << "\n";
             }
             return is_pre ? new_val : old;
         }
@@ -993,13 +1010,15 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string val = emitExpr(*u->operand);
         std::string tmp = newTmp();
         if (u->op == "!") {
-            out_ << "    " << tmp << " = icmp eq i32 " << val << ", 0\n";
+            std::string val_llvm = exprLlvmType(*u->operand);
+            out_ << "    " << tmp << " = icmp eq " << val_llvm << " " << val << ", 0\n";
             std::string tmp2 = newTmp();
             out_ << "    " << tmp2 << " = zext i1 " << tmp << " to i32\n";
             return tmp2;
         }
         if (u->op == "~") {
-            out_ << "    " << tmp << " = xor i32 " << val << ", -1\n";
+            std::string val_llvm = exprLlvmType(*u->operand);
+            out_ << "    " << tmp << " = xor " << val_llvm << " " << val << ", -1\n";
             return tmp;
         }
         error(std::string("unknown unary op: " + u->op));
