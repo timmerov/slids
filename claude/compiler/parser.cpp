@@ -711,110 +711,110 @@ std::unique_ptr<Expr> Parser::parseUnary() {
 }
 
 std::unique_ptr<Expr> Parser::parseMulDiv() {
-    [[maybe_unused]] int t_start = pos_;
     auto left = parseUnary();
     while (peek().type == TokenType::kStar  ||
            peek().type == TokenType::kSlash  ||
            peek().type == TokenType::kPercent) {
+        int op_tok = pos_;
         std::string op = advance().value;
-        left = make<BinaryExpr>(t_start, op, std::move(left), parseUnary());
+        left = make<BinaryExpr>(op_tok, op, std::move(left), parseUnary());
     }
     return left;
 }
 
 std::unique_ptr<Expr> Parser::parseAddSub() {
-    [[maybe_unused]] int t_start = pos_;
     auto left = parseMulDiv();
     while (peek().type == TokenType::kPlus ||
            peek().type == TokenType::kMinus) {
+        int op_tok = pos_;
         std::string op = advance().value;
-        left = make<BinaryExpr>(t_start, op, std::move(left), parseMulDiv());
+        left = make<BinaryExpr>(op_tok, op, std::move(left), parseMulDiv());
     }
     return left;
 }
 
 std::unique_ptr<Expr> Parser::parseShift() {
-    [[maybe_unused]] int t_start = pos_;
     auto left = parseAddSub();
     while (peek().type == TokenType::kLShift ||
            peek().type == TokenType::kRShift) {
+        int op_tok = pos_;
         std::string op = advance().value;
-        left = make<BinaryExpr>(t_start, op, std::move(left), parseAddSub());
+        left = make<BinaryExpr>(op_tok, op, std::move(left), parseAddSub());
     }
     return left;
 }
 
 std::unique_ptr<Expr> Parser::parseRelational() {
-    [[maybe_unused]] int t_start = pos_;
     auto left = parseShift();
     while (peek().type == TokenType::kLt   ||
            peek().type == TokenType::kGt   ||
            peek().type == TokenType::kLtEq ||
            peek().type == TokenType::kGtEq) {
+        int op_tok = pos_;
         std::string op = advance().value;
-        left = make<BinaryExpr>(t_start, op, std::move(left), parseShift());
+        left = make<BinaryExpr>(op_tok, op, std::move(left), parseShift());
     }
     return left;
 }
 
 std::unique_ptr<Expr> Parser::parseEquality() {
-    [[maybe_unused]] int t_start = pos_;
     auto left = parseRelational();
     while (peek().type == TokenType::kEqEq ||
            peek().type == TokenType::kNotEq) {
+        int op_tok = pos_;
         std::string op = advance().value;
-        left = make<BinaryExpr>(t_start, op, std::move(left), parseRelational());
+        left = make<BinaryExpr>(op_tok, op, std::move(left), parseRelational());
     }
     return left;
 }
 
 std::unique_ptr<Expr> Parser::parseBitAnd() {
-    [[maybe_unused]] int t_start = pos_;
     auto left = parseEquality();
     while (peek().type == TokenType::kBitAnd) {
+        int op_tok = pos_;
         advance();
-        left = make<BinaryExpr>(t_start, "&", std::move(left), parseEquality());
+        left = make<BinaryExpr>(op_tok, "&", std::move(left), parseEquality());
     }
     return left;
 }
 
 std::unique_ptr<Expr> Parser::parseBitXor() {
-    [[maybe_unused]] int t_start = pos_;
     auto left = parseBitAnd();
     while (peek().type == TokenType::kBitXor) {
+        int op_tok = pos_;
         advance();
-        left = make<BinaryExpr>(t_start, "^", std::move(left), parseBitAnd());
+        left = make<BinaryExpr>(op_tok, "^", std::move(left), parseBitAnd());
     }
     return left;
 }
 
 std::unique_ptr<Expr> Parser::parseBitOr() {
-    [[maybe_unused]] int t_start = pos_;
     auto left = parseBitXor();
     while (peek().type == TokenType::kBitOr) {
+        int op_tok = pos_;
         advance();
-        left = make<BinaryExpr>(t_start, "|", std::move(left), parseBitXor());
+        left = make<BinaryExpr>(op_tok, "|", std::move(left), parseBitXor());
     }
     return left;
 }
 
 std::unique_ptr<Expr> Parser::parseLogicalAnd() {
-    [[maybe_unused]] int t_start = pos_;
     auto left = parseBitOr();
     while (peek().type == TokenType::kAnd) {
+        int op_tok = pos_;
         advance();
-        left = make<BinaryExpr>(t_start, "&&", std::move(left), parseBitOr());
+        left = make<BinaryExpr>(op_tok, "&&", std::move(left), parseBitOr());
     }
     return left;
 }
 
 std::unique_ptr<Expr> Parser::parseExpr() {
-    [[maybe_unused]] int t_start = pos_;
     auto left = parseLogicalAnd();
     while (peek().type == TokenType::kOr ||
            peek().type == TokenType::kXorXor) {
+        int op_tok = pos_;
         std::string op = advance().value;
-        left = make<BinaryExpr>(t_start, op, std::move(left), parseLogicalAnd());
+        left = make<BinaryExpr>(op_tok, op, std::move(left), parseLogicalAnd());
     }
     return left;
 }
@@ -912,7 +912,6 @@ std::unique_ptr<Stmt> Parser::buildSwapFromLhs(
 std::unique_ptr<Stmt> Parser::buildCompoundAssignFromLhs(
         std::unique_ptr<Expr> lhs, const std::string& op,
         std::unique_ptr<Expr> rhs, int op_tok) {
-    int t_start = lhs->tok;
     lhs = normalizePostIncDeref(std::move(lhs));
     if (!dynamic_cast<VarExpr*>(lhs.get())
         && !dynamic_cast<DerefExpr*>(lhs.get())
@@ -921,7 +920,7 @@ std::unique_ptr<Stmt> Parser::buildCompoundAssignFromLhs(
         && !dynamic_cast<PostIncDerefExpr*>(lhs.get())) {
         errorAt(op_tok, "compound assignment requires an lvalue");
     }
-    return make<CompoundAssignStmt>(t_start,
+    return make<CompoundAssignStmt>(op_tok,
         std::move(lhs), op, std::move(rhs));
 }
 

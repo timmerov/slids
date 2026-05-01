@@ -38,9 +38,9 @@ std::string getLine(const SourceFile& f, int line) {
     return f.source.substr(start, end - start);
 }
 
-void printLine(std::ostream& os, int line_num, const std::string& text) {
+void printLine(std::ostream& os, int line_num, int digit_w, const std::string& text) {
     char buf[16];
-    snprintf(buf, sizeof(buf), "%2d:", line_num);
+    snprintf(buf, sizeof(buf), "%*d:", digit_w, line_num);
     os << buf << text << "\n";
 }
 
@@ -70,10 +70,12 @@ void SourceMap::render(int file_id, int tok, const std::string& msg, std::ostrea
     int last = loc.line + 2;
     int max_line = (int)f.line_starts.size();
     if (last > max_line) last = max_line;
+    // gutter width: enough digits for the largest line shown, minimum 2.
+    int digit_w = std::max(2, (int)std::to_string(last).size());
     for (int ln = first; ln <= loc.line; ln++)
-        printLine(os, ln, getLine(f, ln));
-    // caret line: 3 spaces for the gutter, then loc.col-1 spaces, then markers
-    os << "   ";
+        printLine(os, ln, digit_w, getLine(f, ln));
+    // caret line: gutter padding (digit_w digits + ':'), then loc.col-1 spaces, then markers
+    for (int i = 0; i < digit_w + 1; i++) os << ' ';
     for (int i = 1; i < loc.col; i++) os << ' ';
     if (loc.length <= 1) {
         os << '^';
@@ -86,6 +88,6 @@ void SourceMap::render(int file_id, int tok, const std::string& msg, std::ostrea
     }
     os << "\n";
     for (int ln = loc.line + 1; ln <= last; ln++)
-        printLine(os, ln, getLine(f, ln));
+        printLine(os, ln, digit_w, getLine(f, ln));
     os << msg << "\n";
 }

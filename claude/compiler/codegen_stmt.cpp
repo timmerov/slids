@@ -30,10 +30,11 @@ void Codegen::emitDestructure(
             std::string reg = reassign ? locals_[name] : uniqueAllocaReg(name);
             // slid or anon-tuple target: init path (alloca + ctor) unless reassigning.
             if (slid_info_.count(eff_type) || isAnonTupleType(eff_type)) {
+                requireCompatibleInit(eff_type, *te->values[i]);
                 std::string src_type = inferSlidType(*te->values[i]);
                 if (src_type != eff_type)
-                    error(std::string("type mismatch: cannot destructure '"
-                        + src_type + "' into '" + eff_type + " " + name + "'"));
+                    errorAtNode(*te->values[i], "cannot initialize '" + eff_type
+                        + "' from value of type '" + src_type + "'");
                 if (!reassign)
                     out_ << "    " << reg << " = alloca " << llvmType(eff_type) << "\n";
                 std::string src_ptr;
@@ -53,6 +54,7 @@ void Codegen::emitDestructure(
                 }
                 continue;
             }
+            requireCompatibleInit(eff_type, *te->values[i]);
             std::string llvm_t = llvmType(eff_type);
             if (!reassign)
                 out_ << "    " << reg << " = alloca " << llvm_t << "\n";
@@ -69,8 +71,8 @@ void Codegen::emitDestructure(
                         out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << llvm_t << "\n";
                     val = coerced;
                 } else {
-                    error(std::string("type mismatch: cannot destructure '"
-                        + inferSlidType(*te->values[i]) + "' into '" + eff_type + " " + name + "'"));
+                    errorAtNode(*te->values[i], "cannot initialize '" + eff_type
+                        + "' from value of type '" + inferSlidType(*te->values[i]) + "'");
                 }
             }
             out_ << "    store " << llvm_t << " " << val << ", ptr " << reg << "\n";
@@ -119,8 +121,8 @@ void Codegen::emitDestructure(
                 std::string reg = reassign ? locals_[name] : uniqueAllocaReg(name);
                 if (slid_info_.count(elem_type) || isAnonTupleType(elem_type)) {
                     if (!type.empty() && type != elem_type)
-                        error(std::string("type mismatch: cannot destructure '"
-                            + elem_type + "' into '" + eff_type + " " + name + "'"));
+                        error(std::string("cannot initialize '" + eff_type
+                            + "' from value of type '" + elem_type + "'"));
                     if (!reassign)
                         out_ << "    " << reg << " = alloca " << llvmType(elem_type) << "\n";
                     std::string src_gep = emitFieldGep(src_type, src_ptr, i);
@@ -149,8 +151,8 @@ void Codegen::emitDestructure(
                             out_ << "    " << coerced << " = trunc " << elem_llvm << " " << extracted << " to " << dst_llvm << "\n";
                         extracted = coerced;
                     } else {
-                        error(std::string("type mismatch: cannot destructure '"
-                            + elem_type + "' into '" + eff_type + " " + name + "'"));
+                        error(std::string("cannot initialize '" + eff_type
+                            + "' from value of type '" + elem_type + "'"));
                     }
                 }
                 if (!reassign)
@@ -459,7 +461,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             if (lve->name == eff_type && !locals_.count(lve->name)) {
                                 // check that op+= exists for the rhs
                                 std::string compound_base = eff_type + "__op+=";
-                                std::string mangled = resolveOpEq(compound_base, *be->right);
+                                std::string mangled = resolveSingleArgOverload(compound_base, *be->right);
                                 if (!mangled.empty())
                                     is_empty_plus = true;
                             }
@@ -499,7 +501,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     emitConstructAt(eff_type, reg, decl->ctor_args);
                     // call op+=(rhs)
                     std::string compound_base = eff_type + "__op+=";
-                    std::string mangled = resolveOpEq(compound_base, *be->right);
+                    std::string mangled = resolveSingleArgOverload(compound_base, *be->right);
                     auto& ptypes = func_param_types_[mangled];
                     std::string param_type = ptypes.empty() ? "" : ptypes[0];
                     std::string arg_val = emitArgForParam(*be->right, param_type);
@@ -571,7 +573,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     const Expr* init_expr = decl->init.get();
                     if (auto* tc = dynamic_cast<const TypeConvExpr*>(init_expr))
                         if (tc->target_type == eff_type) init_expr = tc->operand.get();
-                    std::string mangled = resolveOpEq(eff_type + "__" + op_name, *init_expr);
+                    std::string mangled = resolveSingleArgOverload(eff_type + "__" + op_name, *init_expr);
                     if (!mangled.empty()) {
                         auto& ptypes = func_param_types_[mangled];
                         std::string param_type = ptypes.empty() ? "" : ptypes[0];
@@ -579,6 +581,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
                         out_ << "    call void @" << llvmGlobalName(mangled)
                              << "(ptr " << reg << ", " << ptype_str << " " << arg_val << ")\n";
+                        // class <- pointer move: per spec, rhs pointer is set to nullptr.
+                        // gate on the rhs's actual type, not the param type — `op<-(Move^)`
+                        // takes a slid ref but the source `from` is a slid lvalue, not a pointer.
+                        if (decl->is_move && isIndirectType(inferSlidType(*init_expr)))
+                            emitNullOut(*init_expr);
                     } else {
                         // no matching op=/op<- found: synthesize a default field-by-field copy or move
                         // when init is the same slid type (value or reference)
@@ -734,7 +741,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
     if (auto* assign = dynamic_cast<const AssignStmt*>(&stmt)) {
         // self = expr — call op= on the current object
         if (assign->name == "self" && !current_slid_.empty()) {
-            std::string op_func = resolveOpEq(current_slid_ + "__op=", *assign->value);
+            std::string op_func = resolveSingleArgOverload(current_slid_ + "__op=", *assign->value);
             if (op_func.empty())
                 error(std::string("no matching op= on '" + current_slid_ + "' for 'self = <expr>'"));
             auto& ptypes = func_param_types_[op_func];
@@ -842,10 +849,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (tit != local_types_.end() && slid_info_.count(tit->second)) {
             if (auto* be = dynamic_cast<const BinaryExpr*>(assign->value.get())) {
                 if (auto* lve = dynamic_cast<const VarExpr*>(be->left.get())) {
-                    if (lve->name == assign->name) {
+                    if (lve->name == assign->name && isCompoundableOp(be->op)) {
                         const std::string& slid_name = tit->second;
                         std::string compound_base = slid_name + "__op" + be->op + "=";
-                        std::string mangled = resolveOpEq(compound_base, *be->right);
+                        std::string mangled = resolveSingleArgOverload(compound_base, *be->right);
                         if (!mangled.empty()) {
                             auto& ptypes = func_param_types_[mangled];
                             std::string param_type = ptypes.empty() ? "" : ptypes[0];
@@ -857,7 +864,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         }
                         // no direct op{op}=: try coercing rhs to the slid type via op=,
                         // then call op{op}=(slid^) — or fall back to op{op}(slid^, slid^).
-                        std::string coerce = resolveOpEq(slid_name + "__op=", *be->right);
+                        std::string coerce = resolveSingleArgOverload(slid_name + "__op=", *be->right);
                         if (!coerce.empty()) {
                             auto& sinfo = slid_info_[slid_name];
                             std::string tmp = emitRawSlidAlloca(slid_name);
@@ -1008,7 +1015,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // check for op= / op<- method on slid type
         if (tit != local_types_.end() && slid_info_.count(tit->second)) {
             std::string op_name = assign->is_move ? "op<-" : "op=";
-            std::string mangled = resolveOpEq(tit->second + "__" + op_name, *assign->value);
+            std::string mangled = resolveSingleArgOverload(tit->second + "__" + op_name, *assign->value);
             if (!mangled.empty()) {
                 auto& ptypes = func_param_types_[mangled];
                 std::string param_type = ptypes.empty() ? "" : ptypes[0];
@@ -1016,6 +1023,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
                 out_ << "    call void @" << llvmGlobalName(mangled)
                      << "(ptr " << it->second << ", " << ptype_str << " " << arg_val << ")\n";
+                // class <- pointer move: per spec, rhs pointer is set to nullptr.
+                // gate on the rhs's actual type, not the param type — `op<-(Move^)`
+                // takes a slid ref but the source `from` is a slid lvalue, not a pointer.
+                if (assign->is_move && isIndirectType(inferSlidType(*assign->value)))
+                    emitNullOut(*assign->value);
                 return;
             }
             // no matching op= / op<- found: synthesize a default field-by-field copy
@@ -1049,12 +1061,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
             emitNullOut(*assign->value);
             return;
         }
+        if (tit != local_types_.end())
+            requirePtrInit(tit->second, *assign->value);
         std::string val = emitExpr(*assign->value);
         bool is_ptr = tit != local_types_.end() && isIndirectType(tit->second);
         std::string store_type = is_ptr ? "ptr" : llvmType(tit != local_types_.end() ? tit->second : "int");
-        // catch mismatched pointer types (e.g. char[] into int[]) — non-pointer
-        // RHS is rejected by requirePtrInit above.
-        if (is_ptr) requirePtrInit(tit->second, *assign->value);
         // coerce integer widths if necessary (sext or trunc)
         if (!is_ptr && tit != local_types_.end()) {
             std::string src_t = exprLlvmType(*assign->value);
@@ -1171,7 +1182,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
         if (!slids_type.empty() && slid_info_.count(slids_type) && !addr.empty()) {
             std::string compound_base = slids_type + "__op" + cas->op + "=";
-            std::string mangled = resolveOpEq(compound_base, *cas->rhs);
+            std::string mangled = resolveSingleArgOverload(compound_base, *cas->rhs);
             if (!mangled.empty()) {
                 auto& ptypes = func_param_types_[mangled];
                 std::string param_type = ptypes.empty() ? "" : ptypes[0];
@@ -1189,44 +1200,50 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // Sub-expressions evaluate twice; safe for idempotent shapes (VarExpr
         // bases, literal/var indices, etc.).
         auto rhs_clone = cloneExpr(*cas->rhs);
+        int fid = cas->file_id, tok = cas->tok;
         if (auto* ve = dynamic_cast<const VarExpr*>(lhs)) {
-            auto bin = std::make_unique<BinaryExpr>(cas->op,
-                std::make_unique<VarExpr>(ve->name), std::move(rhs_clone));
+            auto bin = synthAt<BinaryExpr>(fid, tok, cas->op,
+                synthAt<VarExpr>(fid, tok, ve->name), std::move(rhs_clone));
             AssignStmt synth(ve->name, std::move(bin), false);
+            synth.file_id = fid; synth.tok = tok;
             emitStmt(synth);
             return;
         }
         if (auto* de = dynamic_cast<const DerefExpr*>(lhs)) {
-            auto bin = std::make_unique<BinaryExpr>(cas->op,
-                std::make_unique<DerefExpr>(cloneExpr(*de->operand)),
+            auto bin = synthAt<BinaryExpr>(fid, tok, cas->op,
+                synthAt<DerefExpr>(fid, tok, cloneExpr(*de->operand)),
                 std::move(rhs_clone));
             DerefAssignStmt synth(cloneExpr(*de->operand), std::move(bin));
+            synth.file_id = fid; synth.tok = tok;
             emitStmt(synth);
             return;
         }
         if (auto* fa = dynamic_cast<const FieldAccessExpr*>(lhs)) {
-            auto bin = std::make_unique<BinaryExpr>(cas->op,
-                std::make_unique<FieldAccessExpr>(cloneExpr(*fa->object), fa->field),
+            auto bin = synthAt<BinaryExpr>(fid, tok, cas->op,
+                synthAt<FieldAccessExpr>(fid, tok, cloneExpr(*fa->object), fa->field),
                 std::move(rhs_clone));
             FieldAssignStmt synth(cloneExpr(*fa->object), fa->field, std::move(bin), false);
+            synth.file_id = fid; synth.tok = tok;
             emitStmt(synth);
             return;
         }
         if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(lhs)) {
-            auto bin = std::make_unique<BinaryExpr>(cas->op,
-                std::make_unique<ArrayIndexExpr>(cloneExpr(*ai->base), cloneExpr(*ai->index)),
+            auto bin = synthAt<BinaryExpr>(fid, tok, cas->op,
+                synthAt<ArrayIndexExpr>(fid, tok, cloneExpr(*ai->base), cloneExpr(*ai->index)),
                 std::move(rhs_clone));
             IndexAssignStmt synth(cloneExpr(*ai->base), cloneExpr(*ai->index),
                 std::move(bin), false);
+            synth.file_id = fid; synth.tok = tok;
             emitStmt(synth);
             return;
         }
         if (auto* pide = dynamic_cast<const PostIncDerefExpr*>(lhs)) {
-            auto bin = std::make_unique<BinaryExpr>(cas->op,
-                std::make_unique<DerefExpr>(cloneExpr(*pide->operand)),
+            auto bin = synthAt<BinaryExpr>(fid, tok, cas->op,
+                synthAt<DerefExpr>(fid, tok, cloneExpr(*pide->operand)),
                 std::move(rhs_clone));
             PostIncDerefAssignStmt synth(cloneExpr(*pide->operand), pide->op,
                 std::move(bin));
+            synth.file_id = fid; synth.tok = tok;
             emitStmt(synth);
             return;
         }
@@ -1479,17 +1496,18 @@ void Codegen::emitStmt(const Stmt& stmt) {
         {
             auto tit = local_types_.find(ve->name);
             if (tit != local_types_.end() && slid_info_.count(tit->second)) {
-                std::string slid_name = tit->second;
-                std::string base_name = slid_name + "__op[]=";
-                auto oit = method_overloads_.find(base_name);
-                if (oit != method_overloads_.end() && !oit->second.empty()) {
-                    std::string mangled = oit->second[0].first;
+                std::string mangled = resolveSlidIndexAssign(tit->second, *ia->index);
+                if (!mangled.empty()) {
                     std::string obj_ptr = locals_[ve->name];
                     auto& mptypes = func_param_types_[mangled];
                     std::string idx_llvm = mptypes.empty() ? "i32" : llvmType(mptypes[0]);
                     std::string rhs_llvm = (mptypes.size() < 2) ? "i32" : llvmType(mptypes[1]);
-                    std::string idx_val = emitExpr(*ia->index);
-                    std::string rhs_val = emitExpr(*ia->value);
+                    std::string idx_val = mptypes.empty()
+                        ? emitExpr(*ia->index)
+                        : emitArgForParam(*ia->index, mptypes[0]);
+                    std::string rhs_val = (mptypes.size() < 2)
+                        ? emitExpr(*ia->value)
+                        : emitArgForParam(*ia->value, mptypes[1]);
                     out_ << "    call void @" << llvmGlobalName(mangled)
                          << "(ptr " << obj_ptr << ", " << idx_llvm << " " << idx_val
                          << ", " << rhs_llvm << " " << rhs_val << ")\n";
@@ -2082,7 +2100,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     out_ << "    call void @" << llvmGlobalName(move_func)
                          << "(ptr %retval, ptr " << src << ")\n";
                 } else {
-                    std::string copy_func = resolveOpEq(slid_name + "__op=", *ret->value);
+                    std::string copy_func = resolveSingleArgOverload(slid_name + "__op=", *ret->value);
                     if (!copy_func.empty()) {
                         auto& cptypes = func_param_types_[copy_func];
                         out_ << "    call void @" << llvmGlobalName(copy_func)

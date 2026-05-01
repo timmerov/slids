@@ -2,8 +2,22 @@
 #include "parser.h"
 #include <string>
 #include <map>
+#include <set>
 #include <vector>
 #include <algorithm>
+
+// op symbols that have a meaningful compound-assign form (op<sym>=) — used by
+// codegen to fuse `temp = lhs op rhs` into `temp op= rhs`. Comparison ops are
+// excluded because appending `=` to `<` or `>` produces another comparison op,
+// not a compound assign.
+inline bool isCompoundableOp(const std::string& op) {
+    static const std::set<std::string> ok = {
+        "+", "-", "*", "/", "%",
+        "&", "|", "^", "<<", ">>",
+        "&&", "||", "^^"
+    };
+    return ok.count(op) > 0;
+}
 
 // type ends in ^ — reference, no arithmetic
 inline bool isRefType(const std::string& t) {

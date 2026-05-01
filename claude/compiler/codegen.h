@@ -329,8 +329,26 @@ private:
     bool isUnsignedExpr(const Expr& expr);
     std::string resolveOperatorOverload(const std::string& op,
                                         const Expr& left, const Expr& right);
+    // Returns the mangled name of `<left_slid>__op<op>=(right)` if it exists AND
+    // `op` is compoundable. Empty otherwise. Used by binary-op codegen as both
+    // a "defer to fuse path" signal and the actual call target for the fuse.
+    std::string resolveCompoundFuse(const std::string& op,
+                                    const Expr& left, const Expr& right);
+    // True if `mangled` is registered as a class method (i.e., its first
+    // call-site argument is the implicit `self`). False for free functions
+    // and unknown names.
+    bool isMethodMangled(const std::string& mangled) const;
+    // Best-fit op[] overload for `slid_name` indexed by `index`. Returns the
+    // resolved mangled name, or the first-declared op[] overload if no clean
+    // match (preserves legacy first-overload behavior). Empty iff `slid_name`
+    // has no op[] defined.
+    std::string resolveSlidIndex(const std::string& slid_name, const Expr& index);
+    // Best-fit op[]= overload for `slid_name` indexed by `index`. Matches on
+    // the index (first) param only — value coercion is handled separately.
+    // Same fallback policy as resolveSlidIndex.
+    std::string resolveSlidIndexAssign(const std::string& slid_name, const Expr& index);
     std::string emitArgForParam(const Expr& arg, const std::string& param_type);
-    std::string resolveOpEq(const std::string& base, const Expr& arg);
+    std::string resolveSingleArgOverload(const std::string& base, const Expr& arg);
     // If `de` dereferences a slid pointer/reference, return the slid type name.
     // Empty if not a slid pointer or the operand can't be resolved.
     std::string derefSlidName(const DerefExpr& de);
@@ -445,6 +463,10 @@ private:
     std::string emitCondBool(const Expr& expr); // emit expr then icmp ne <type> val, 0 -> i1
     std::string exprLlvmType(const Expr& expr); // infer LLVM type without emitting IR
     void requirePtrInit(const std::string& dst_type, const Expr& src); // dst is ^ or [] -> src must be ptr w/ compatible pointee
+    // Reject "primitive lhs ← slid rhs" — there is no implicit slid-to-primitive
+    // conversion. Returns early when dst is itself indirect or a slid (those
+    // paths are handled by op= dispatch and requirePtrInit).
+    void requireCompatibleInit(const std::string& dst_type, const Expr& src);
     std::string inferSlidType(const Expr& expr); // infer Slids type string for type-inferred declarations
     std::string emitFieldPtr(const std::string& obj_name, const std::string& field);
     // If `base` is a VarExpr naming an inline-array local, emit a GEP to element
@@ -455,4 +477,16 @@ private:
     std::string newLabel(const std::string& prefix);
     std::string uniqueAllocaReg(const std::string& var_name);
     std::string llvmType(const std::string& slids_type);
+
+    // Construct an AST node and propagate source location. Mirrors Parser::make<>.
+    // Used by codegen-side desugaring (e.g. compound-assign rewrite) so that any
+    // diagnostic emitted on the synthesized node points at the original source
+    // token instead of token 0 / file 0.
+    template<typename T, typename... Args>
+    std::unique_ptr<T> synthAt(int file_id, int tok, Args&&... args) {
+        auto p = std::make_unique<T>(std::forward<Args>(args)...);
+        p->file_id = file_id;
+        p->tok = tok;
+        return p;
+    }
 };

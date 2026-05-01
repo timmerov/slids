@@ -174,17 +174,27 @@ std::string Codegen::emitExpr(const Expr& expr) {
         {
             auto tit = local_types_.find(ve->name);
             if (tit != local_types_.end() && slid_info_.count(tit->second)) {
-                std::string slid_name = tit->second;
-                std::string base_name = slid_name + "__op[]";
-                auto oit = method_overloads_.find(base_name);
-                if (oit != method_overloads_.end() && !oit->second.empty()) {
-                    std::string mangled = oit->second[0].first;
+                std::string mangled = resolveSlidIndex(tit->second, *indices[0]);
+                if (!mangled.empty()) {
                     auto rit = func_return_types_.find(mangled);
-                    std::string ret_type = (rit != func_return_types_.end()) ? llvmType(rit->second) : "i32";
+                    std::string ret_slids = (rit != func_return_types_.end()) ? rit->second : "";
                     std::string obj_ptr = locals_[ve->name];
                     auto& mptypes = func_param_types_[mangled];
                     std::string idx_llvm = mptypes.empty() ? "i32" : llvmType(mptypes[0]);
-                    std::string idx_val = emitExpr(*indices[0]);
+                    std::string idx_val = mptypes.empty()
+                        ? emitExpr(*indices[0])
+                        : emitArgForParam(*indices[0], mptypes[0]);
+                    if (!ret_slids.empty() && slid_info_.count(ret_slids)) {
+                        // slid return: function uses sret; caller passes a destination temp.
+                        std::string tmp_alloca = emitSlidAlloca(ret_slids);
+                        out_ << "    call void @" << llvmGlobalName(mangled)
+                             << "(ptr " << obj_ptr
+                             << ", ptr sret(%struct." << ret_slids << ") " << tmp_alloca
+                             << ", " << idx_llvm << " " << idx_val << ")\n";
+                        return tmp_alloca;
+                    }
+                    // primitive return: value-style call.
+                    std::string ret_type = ret_slids.empty() ? "i32" : llvmType(ret_slids);
                     std::string tmp = newTmp();
                     out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(mangled)
                          << "(ptr " << obj_ptr << ", " << idx_llvm << " " << idx_val << ")\n";
@@ -1113,7 +1123,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
             }
         }
 
-        if (b->op == "&&" || b->op == "||" || b->op == "^^") {
+        // Primitive short-circuit for &&/||/^^. Slid operands fall through to
+        // the op-overload dispatch below (Phase 3 fuse via op&&=/op||=/op^^=).
+        if ((b->op == "&&" || b->op == "||" || b->op == "^^")
+                && exprSlidType(*b->left).empty()
+                && exprSlidType(*b->right).empty()) {
             std::string result_ptr = newTmp() + "_sc";
             out_ << "    " << result_ptr << " = alloca i32\n";
             std::string left_val = emitExpr(*b->left);
@@ -1187,18 +1201,22 @@ std::string Codegen::emitExpr(const Expr& expr) {
             if (op_type.empty()) op_type = "i32";
         }
 
-        // operator overload — in-class method (op+(sa,sb) stored in self) or free function (sret)
-        // skip op+ when op+= is also defined: Phase 3 handles it more efficiently
+        // Operator-overload dispatch: three independent attempts, each with a
+        // "defer to compound-fuse" hint that yields when op<sym>= is also defined.
+        //
+        //   Phase 1 — direct overload: op<sym>(left, right).
+        //   Phase 2 — coerce right operand: op=(left_slid, right) then op<sym>(left, tmp).
+        //   Phase 3 — compound-fuse fallback: temp = left; temp.op<sym>=(right).
+        //
+        // Phases 1 and 2 abandon their own dispatch (set their candidate to "")
+        // when resolveCompoundFuse returns non-empty. Phase 3 uses the same
+        // helper to find its call target.
+        //
+        // Phase 1: in-class method (op+(sa,sb) stored in self) or free function (sret).
         {
             std::string op_func = resolveOperatorOverload(b->op, *b->left, *b->right);
-            if (!op_func.empty()) {
-                std::string left_slid = exprSlidType(*b->left);
-                if (!left_slid.empty()) {
-                    std::string compound_base = left_slid + "__op" + b->op + "=";
-                    if (method_overloads_.count(compound_base)
-                            && !resolveOpEq(compound_base, *b->right).empty())
-                        op_func = ""; // defer to Phase 3
-                }
+            if (!op_func.empty() && !resolveCompoundFuse(b->op, *b->left, *b->right).empty()) {
+                op_func = ""; // defer to Phase 3
             }
             if (!op_func.empty()) {
                 std::string ret = func_return_types_.count(op_func) ? func_return_types_[op_func] : "";
@@ -1233,14 +1251,26 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     out_ << "    call void @" << llvmGlobalName(op_func) << "(" << args << ")\n";
                     return tmp_alloca;
                 }
-                // free function returning a primitive type (e.g. bool op==(String^, String^))
+                // primitive-return op: class method (self = lhs, rhs is the explicit param) or
+                // free function (both operands are explicit params).
                 if (!res_slid.empty() && res_slid != "void") {
                     auto& ptypes = func_param_types_[op_func];
-                    std::string la = emitArgForParam(*b->left,  ptypes.size() > 0 ? ptypes[0] : "");
-                    std::string ra = emitArgForParam(*b->right, ptypes.size() > 1 ? ptypes[1] : "");
                     std::string args;
-                    if (ptypes.size() > 0) args = llvmType(ptypes[0]) + " " + la;
-                    if (ptypes.size() > 1) args += (args.empty() ? "" : ", ") + llvmType(ptypes[1]) + " " + ra;
+                    if (isMethodMangled(op_func)) {
+                        // method: self = left; ptypes are the explicit params (typically just rhs)
+                        std::string self_arg = emitArgForParam(*b->left, exprSlidType(*b->left) + "^");
+                        args = "ptr " + self_arg;
+                        if (ptypes.size() > 0) {
+                            std::string ra = emitArgForParam(*b->right, ptypes[0]);
+                            args += ", " + llvmType(ptypes[0]) + " " + ra;
+                        }
+                    } else {
+                        // free function: ptypes hold both operands
+                        std::string la = emitArgForParam(*b->left,  ptypes.size() > 0 ? ptypes[0] : "");
+                        std::string ra = emitArgForParam(*b->right, ptypes.size() > 1 ? ptypes[1] : "");
+                        if (ptypes.size() > 0) args = llvmType(ptypes[0]) + " " + la;
+                        if (ptypes.size() > 1) args += (args.empty() ? "" : ", ") + llvmType(ptypes[1]) + " " + ra;
+                    }
                     std::string ret_llvm = llvmType(res_slid);
                     std::string tmp = newTmp();
                     out_ << "    " << tmp << " = call " << ret_llvm << " @" << llvmGlobalName(op_func) << "(" << args << ")\n";
@@ -1249,19 +1279,15 @@ std::string Codegen::emitExpr(const Expr& expr) {
             }
         }
 
-        // Phase 2: implicit right-operand coercion
-        // left is a slid type, right doesn't match any overload — try coercing right via op=
-        // skip when op+= is available: Phase 3 handles it more efficiently
+        // Phase 2: implicit right-operand coercion.
+        // left is a slid type, right doesn't match any overload — try coercing right via op=.
         {
             std::string left_slid = exprSlidType(*b->left);
             if (!left_slid.empty()) {
-                std::string coerce_mangled = resolveOpEq(left_slid + "__op=", *b->right);
-                if (!coerce_mangled.empty()) {
-                    // skip if op+= also matches
-                    std::string compound_base = left_slid + "__op" + b->op + "=";
-                    if (method_overloads_.count(compound_base)
-                            && !resolveOpEq(compound_base, *b->right).empty())
-                        coerce_mangled = ""; // defer to Phase 3
+                std::string coerce_mangled = resolveSingleArgOverload(left_slid + "__op=", *b->right);
+                if (!coerce_mangled.empty()
+                        && !resolveCompoundFuse(b->op, *b->left, *b->right).empty()) {
+                    coerce_mangled = ""; // defer to Phase 3
                 }
                 if (!coerce_mangled.empty()) {
                     // find the op overload on left_slid that accepts (left_slid^, left_slid^)
@@ -1306,47 +1332,56 @@ std::string Codegen::emitExpr(const Expr& expr) {
             }
         }
 
-        // Phase 3: op+= fallback — no op+ defined, but op+= exists
-        // semantics: temp = copy(left); temp op= right; return temp
-        // optimization: if left is a fresh temp we own, skip the copy and call op+= in place
+        // Phase 3: op<sym>= fuse — call temp.op<sym>=(right) instead of op<sym>(left,right).
+        // Semantics: temp = copy(left); temp op= right; return temp.
+        // Optimization: if left is a fresh temp we own, skip the copy and call op<sym>= in place.
         {
-            std::string left_slid = exprSlidType(*b->left);
-            if (!left_slid.empty()) {
-                std::string compound_base = left_slid + "__op" + b->op + "=";
-                auto compound_it = method_overloads_.find(compound_base);
-                if (compound_it != method_overloads_.end()) {
-                    std::string compound_mangled = resolveOpEq(compound_base, *b->right);
-                    if (!compound_mangled.empty()) {
-                        std::string res_tmp;
-                        if (isFreshSlidTemp(*b->left)) {
-                            // left is a fresh temp we own — call op+= on it directly
-                            res_tmp = emitExpr(*b->left);
-                        } else {
-                            // left is a named variable — alloca new temp and copy left into it
-                            res_tmp = emitSlidAlloca(left_slid);
-                            std::string copy_mangled = resolveOpEq(left_slid + "__op=", *b->left);
-                            if (!copy_mangled.empty()) {
-                                auto& cptypes = func_param_types_[copy_mangled];
-                                std::string carg = emitArgForParam(*b->left,
-                                    cptypes.empty() ? "" : cptypes[0]);
-                                std::string cptype = cptypes.empty() ? "ptr" : llvmType(cptypes[0]);
-                                out_ << "    call void @" << llvmGlobalName(copy_mangled)
-                                     << "(ptr " << res_tmp << ", " << cptype << " " << carg << ")\n";
-                            } else {
-                                std::string src = emitArgForParam(*b->left, left_slid + "^");
-                                emitSlidSlotAssign(left_slid, res_tmp, src, /*is_move=*/false);
-                            }
-                        }
-                        // call op+= on result with right
-                        auto& iptypes = func_param_types_[compound_mangled];
-                        std::string iarg = emitArgForParam(*b->right,
-                            iptypes.empty() ? "" : iptypes[0]);
-                        std::string iptype = iptypes.empty() ? "ptr" : llvmType(iptypes[0]);
-                        out_ << "    call void @" << llvmGlobalName(compound_mangled)
-                             << "(ptr " << res_tmp << ", " << iptype << " " << iarg << ")\n";
-                        return res_tmp;
+            std::string compound_mangled = resolveCompoundFuse(b->op, *b->left, *b->right);
+            if (!compound_mangled.empty()) {
+                std::string left_slid = exprSlidType(*b->left);
+                std::string res_tmp;
+                if (isFreshSlidTemp(*b->left)) {
+                    // left is a fresh temp we own — call op<sym>= on it directly
+                    res_tmp = emitExpr(*b->left);
+                } else {
+                    // left is a named variable — alloca new temp and copy left into it
+                    res_tmp = emitSlidAlloca(left_slid);
+                    std::string copy_mangled = resolveSingleArgOverload(left_slid + "__op=", *b->left);
+                    if (!copy_mangled.empty()) {
+                        auto& cptypes = func_param_types_[copy_mangled];
+                        std::string carg = emitArgForParam(*b->left,
+                            cptypes.empty() ? "" : cptypes[0]);
+                        std::string cptype = cptypes.empty() ? "ptr" : llvmType(cptypes[0]);
+                        out_ << "    call void @" << llvmGlobalName(copy_mangled)
+                             << "(ptr " << res_tmp << ", " << cptype << " " << carg << ")\n";
+                    } else {
+                        std::string src = emitArgForParam(*b->left, left_slid + "^");
+                        emitSlidSlotAssign(left_slid, res_tmp, src, /*is_move=*/false);
                     }
                 }
+                // call op<sym>= on result with right
+                auto& iptypes = func_param_types_[compound_mangled];
+                std::string iarg = emitArgForParam(*b->right,
+                    iptypes.empty() ? "" : iptypes[0]);
+                std::string iptype = iptypes.empty() ? "ptr" : llvmType(iptypes[0]);
+                out_ << "    call void @" << llvmGlobalName(compound_mangled)
+                     << "(ptr " << res_tmp << ", " << iptype << " " << iarg << ")\n";
+                return res_tmp;
+            }
+        }
+
+        // No op overload matched. If either operand is a slid value (not a ref),
+        // there's no fallback — error rather than letting scalar codegen mistype it.
+        {
+            std::string left_slid  = exprSlidType(*b->left);
+            std::string right_slid = exprSlidType(*b->right);
+            bool left_is_slid_value  = !left_slid.empty()  && exprLlvmType(*b->left)  != "ptr";
+            bool right_is_slid_value = !right_slid.empty() && exprLlvmType(*b->right) != "ptr";
+            if (left_is_slid_value || right_is_slid_value) {
+                std::string lhs_t = left_slid.empty()  ? "<scalar>" : left_slid;
+                std::string rhs_t = right_slid.empty() ? "<scalar>" : right_slid;
+                errorAtNode(*b, "no matching 'op" + b->op + "' overload for "
+                              + lhs_t + " " + b->op + " " + rhs_t);
             }
         }
 
@@ -1881,7 +1916,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             emitConstructAtPtrs(stype, tmp_reg, {}, {});
 
             // call op= with the operand
-            std::string mangled = resolveOpEq(stype + "__op=", *nc->operand);
+            std::string mangled = resolveSingleArgOverload(stype + "__op=", *nc->operand);
             if (!mangled.empty()) {
                 auto& ptypes = func_param_types_[mangled];
                 std::string param_type = ptypes.empty() ? "" : ptypes[0];
@@ -2082,15 +2117,10 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // comparison operators always produce i1 -> zext to i32 in emitExpr
     if (auto* b = dynamic_cast<const BinaryExpr*>(&expr)) {
-        // check operator overload first
-        {
-            std::string op_func = resolveOperatorOverload(b->op, *b->left, *b->right);
-            if (!op_func.empty()) {
-                std::string ret = func_return_types_.count(op_func) ? func_return_types_[op_func] : "";
-                if (ret == "void") return "ptr"; // method overload: self is the alloca result
-                if (!ret.empty() && slid_info_.count(ret)) return "ptr"; // free function: sret alloca
-            }
-        }
+        // any phase that produces a slid value (direct overload, right-operand
+        // coercion, or op<sym>= fuse) lowers to a ptr (alloca temp). Defer to
+        // exprSlidType which already checks all three phases.
+        if (!exprSlidType(*b).empty()) return "ptr";
         if (b->op == "==" || b->op == "!=" || b->op == "<" ||
             b->op == ">"  || b->op == "<=" || b->op == ">=" ||
             b->op == "&&" || b->op == "||" || b->op == "^^")
@@ -2232,10 +2262,9 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             {
                 auto tit = local_types_.find(ve->name);
                 if (tit != local_types_.end() && slid_info_.count(tit->second)) {
-                    std::string base_name = tit->second + "__op[]";
-                    auto oit = method_overloads_.find(base_name);
-                    if (oit != method_overloads_.end() && !oit->second.empty()) {
-                        auto rit = func_return_types_.find(oit->second[0].first);
+                    std::string mangled = resolveSlidIndex(tit->second, *indices[0]);
+                    if (!mangled.empty()) {
+                        auto rit = func_return_types_.find(mangled);
                         if (rit != func_return_types_.end()) return llvmType(rit->second);
                     }
                 }
@@ -2367,8 +2396,25 @@ std::string Codegen::emitCondBool(const Expr& expr) {
 // When dst is a pointer (^) or iterator ([]) type, the source expression must
 // produce an LLVM ptr value. Reject scalar->pointer (e.g. `int[] p = arr[0];`),
 // which would otherwise emit `store ptr %i32val, ptr %dst` — invalid IR.
+void Codegen::requireCompatibleInit(const std::string& dst_type, const Expr& src) {
+    // Indirect (^/[]) lhs is handled by requirePtrInit's pointer-base check.
+    if (isIndirectType(dst_type)) return;
+    std::string src_slid = exprSlidType(src);
+    if (src_slid.empty() || !slid_info_.count(src_slid)) return;
+    // primitive dst ← slid rhs: no implicit slid-to-primitive conversion.
+    // slid dst ← different slid rhs: no implicit slid-to-slid conversion.
+    if (!slid_info_.count(dst_type) || dst_type != src_slid) {
+        errorAtNode(src, "cannot initialize '" + dst_type
+                       + "' from value of type '" + src_slid + "'");
+    }
+}
+
 void Codegen::requirePtrInit(const std::string& dst_type, const Expr& src) {
-    if (!isRefType(dst_type) && !isPtrType(dst_type)) return;
+    if (!isRefType(dst_type) && !isPtrType(dst_type)) {
+        // primitive dst: still need to reject slid-valued rhs (no implicit conversion).
+        requireCompatibleInit(dst_type, src);
+        return;
+    }
     std::string src_t = exprLlvmType(src);
     if (src_t != "ptr") {
         std::string src_slids = inferSlidType(src);
@@ -2628,10 +2674,9 @@ std::string Codegen::inferSlidType(const Expr& expr) {
             auto tit = local_types_.find(ve->name);
             // slid op[] return type
             if (tit != local_types_.end() && slid_info_.count(tit->second)) {
-                std::string base_name = tit->second + "__op[]";
-                auto oit = method_overloads_.find(base_name);
-                if (oit != method_overloads_.end() && !oit->second.empty()) {
-                    auto rit = func_return_types_.find(oit->second[0].first);
+                std::string mangled = resolveSlidIndex(tit->second, *indices[0]);
+                if (!mangled.empty()) {
+                    auto rit = func_return_types_.find(mangled);
                     if (rit != func_return_types_.end()) return rit->second;
                 }
             }

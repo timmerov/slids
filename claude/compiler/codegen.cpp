@@ -2364,7 +2364,7 @@ std::string Codegen::exprSlidType(const Expr& expr) {
         // Phase 2: exact overload not found, but left is a slid and right can be coerced via op=
         std::string left_slid = exprSlidType(*be->left);
         if (!left_slid.empty()) {
-            std::string coerce = resolveOpEq(left_slid + "__op=", *be->right);
+            std::string coerce = resolveSingleArgOverload(left_slid + "__op=", *be->right);
             if (!coerce.empty() && method_overloads_.count(left_slid + "__op" + be->op))
                 return left_slid;
         }
@@ -2589,33 +2589,39 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
     };
 
     // helper: does the right operand match param type p1?
-    auto rightMatchesParam = [&](const std::string& p1) -> bool {
+    auto argMatchesParam = [&](const Expr& arg, const std::string& p1) -> bool {
         bool p1_is_slid_ref = isRefType(p1) && slid_info_.count(p1.substr(0, p1.size()-1));
         bool p1_is_ptr = isIndirectType(p1); // ^ or [] — any pointer/reference type
-        // right is a string literal → matches slid ref (implicit temp) or ptr param
-        if (dynamic_cast<const StringLiteralExpr*>(&right)) return p1_is_slid_ref || p1_is_ptr;
-        // right is an integer/char literal → matches non-pointer param
-        if (dynamic_cast<const IntLiteralExpr*>(&right)) return !p1_is_ptr;
-        // right is a variable
-        if (auto* ve = dynamic_cast<const VarExpr*>(&right)) {
+        std::string p1_slid = p1_is_slid_ref ? p1.substr(0, p1.size()-1) : "";
+        // arg is a string literal → matches slid ref (implicit temp) or ptr param
+        if (dynamic_cast<const StringLiteralExpr*>(&arg)) return p1_is_slid_ref || p1_is_ptr;
+        // arg is an integer/char literal → matches non-pointer param
+        if (dynamic_cast<const IntLiteralExpr*>(&arg)) return !p1_is_ptr;
+        // arg is a variable
+        if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
             auto tit = local_types_.find(ve->name);
             if (tit != local_types_.end()) {
                 std::string t = tit->second;
-                bool is_slid = slid_info_.count(t) > 0;
-                bool is_slid_ref = (!t.empty() && t.back() == '^' && slid_info_.count(t.substr(0, t.size()-1)));
-                if (p1_is_slid_ref) return is_slid || is_slid_ref;
-                return !is_slid && !is_slid_ref;
+                std::string r_slid;
+                if (slid_info_.count(t)) r_slid = t;
+                else if (!t.empty() && t.back() == '^' && slid_info_.count(t.substr(0, t.size()-1)))
+                    r_slid = t.substr(0, t.size()-1);
+                if (p1_is_slid_ref) return !r_slid.empty() && r_slid == p1_slid;
+                return r_slid.empty();
             }
         }
-        // right is a DerefExpr → produces slid value
-        if (auto* de = dynamic_cast<const DerefExpr*>(&right)) {
-            if (!derefSlidName(*de).empty() && p1_is_slid_ref) return true;
-            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                auto tit = local_types_.find(ve->name);
-                if (tit != local_types_.end()) {
-                    std::string t = tit->second;
-                    if (!t.empty() && t.back() == '^') t.pop_back();
-                    if (slid_info_.count(t) && p1_is_slid_ref) return true;
+        // arg is a DerefExpr → produces slid value
+        if (auto* de = dynamic_cast<const DerefExpr*>(&arg)) {
+            if (p1_is_slid_ref) {
+                std::string ds = derefSlidName(*de);
+                if (!ds.empty()) return ds == p1_slid;
+                if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                    auto tit = local_types_.find(ve->name);
+                    if (tit != local_types_.end()) {
+                        std::string t = tit->second;
+                        if (!t.empty() && t.back() == '^') t.pop_back();
+                        if (slid_info_.count(t)) return t == p1_slid;
+                    }
                 }
             }
         }
@@ -2632,8 +2638,15 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
             if (moit != method_overloads_.end() && !moit->second.empty()) {
                 std::string best;
                 for (auto& [mangled, ptypes] : moit->second) {
-                    // method params are (sa, sb) — check right param (index 0 for methods vs 1 for free funcs)
-                    if (!ptypes.empty() && !rightMatchesParam(ptypes[ptypes.size() > 1 ? 1 : 0])) continue;
+                    if (ptypes.empty()) continue;
+                    // 2-arg method (binary op produces self): both ptypes are operand types.
+                    // 1-arg method (comparison / op[]): ptypes[0] is the rhs/index; self is lhs.
+                    if (ptypes.size() > 1) {
+                        if (!argMatchesParam(left,  ptypes[0])) continue;
+                        if (!argMatchesParam(right, ptypes[1])) continue;
+                    } else {
+                        if (!argMatchesParam(right, ptypes[0])) continue;
+                    }
                     if (best.empty() || ptypes.size() > func_param_types_[best].size())
                         best = mangled;
                 }
@@ -2658,7 +2671,7 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
         if (!slid_info_.count(slid_name)) continue;
         if (!leftMatchesSlid(slid_name)) continue;
         // check right param if present
-        if (ptypes.size() > 1 && !rightMatchesParam(ptypes[1])) continue;
+        if (ptypes.size() > 1 && !argMatchesParam(right, ptypes[1])) continue;
         // matched: prefer more specific (multi-param) overload
         if (best.empty() || ptypes.size() > func_param_types_[best].size())
             best = mangled;
@@ -2666,8 +2679,50 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
     return best;
 }
 
-// Resolve the best op= (or op<-) overload for the given argument expression.
-// Priority: slid ref > exact type name match > best-fit (smallest rank >= arg rank) > ptr/char[] fallback.
+std::string Codegen::resolveCompoundFuse(const std::string& op,
+                                          const Expr& left, const Expr& right) {
+    if (!isCompoundableOp(op)) return "";
+    std::string left_slid = exprSlidType(left);
+    if (left_slid.empty()) return "";
+    std::string base = left_slid + "__op" + op + "=";
+    if (!method_overloads_.count(base)) return "";
+    return resolveSingleArgOverload(base, right);
+}
+
+bool Codegen::isMethodMangled(const std::string& mangled) const {
+    for (auto& [base, overloads] : method_overloads_)
+        for (auto& [m, ptypes] : overloads)
+            if (m == mangled) return true;
+    return false;
+}
+
+std::string Codegen::resolveSlidIndex(const std::string& slid_name, const Expr& index) {
+    std::string base = slid_name + "__op[]";
+    auto oit = method_overloads_.find(base);
+    if (oit == method_overloads_.end() || oit->second.empty()) return "";
+    std::string mangled = resolveSingleArgOverload(base, index);
+    if (mangled.empty()) mangled = oit->second[0].first;
+    return mangled;
+}
+
+std::string Codegen::resolveSlidIndexAssign(const std::string& slid_name, const Expr& index) {
+    std::string base = slid_name + "__op[]=";
+    auto oit = method_overloads_.find(base);
+    if (oit == method_overloads_.end() || oit->second.empty()) return "";
+    // Reuse resolveSingleArgOverload by synthesizing a single-arg view of each
+    // op[]= overload — keeping the full mangled name, dropping all but the
+    // index (first) param. The dispatcher matches on the index, returns the
+    // original mangled name. Restore method_overloads_ after.
+    std::string synth = base + "__$idx_only$";
+    auto& bucket = method_overloads_[synth];
+    for (auto& [m, ptypes] : oit->second)
+        if (!ptypes.empty()) bucket.push_back({m, {ptypes[0]}});
+    std::string mangled = resolveSingleArgOverload(synth, index);
+    method_overloads_.erase(synth);
+    if (mangled.empty()) mangled = oit->second[0].first;
+    return mangled;
+}
+
 std::string Codegen::derefSlidName(const DerefExpr& de) {
     if (auto* ve = dynamic_cast<const VarExpr*>(de.operand.get())) {
         auto tit = local_types_.find(ve->name);
@@ -2689,7 +2744,10 @@ std::string Codegen::derefSlidName(const DerefExpr& de) {
     return "";
 }
 
-std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
+// Pick the best-fit single-argument overload for the given argument expression.
+// Used by op=, op<-, compound op<sym>=, and op[] dispatch.
+// Priority: slid ref > exact type name match > best-fit (smallest rank >= arg rank) > ptr/char[] fallback.
+std::string Codegen::resolveSingleArgOverload(const std::string& base, const Expr& arg) {
     auto oit = method_overloads_.find(base);
     if (oit == method_overloads_.end()) return "";
 
@@ -2709,6 +2767,7 @@ std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
     bool arg_is_scalar_int = false; // signed integer (including bool)
     bool arg_is_unsigned = false;
     std::string arg_int_type;       // specific type name when known (enables exact + best-fit matching)
+    std::string arg_slid_name;      // specific slid type name when arg_is_slid
 
     auto classify_int = [&](const std::string& t) {
         if (t == "char") { arg_is_char = true; arg_int_type = "char"; }
@@ -2730,6 +2789,7 @@ std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
             if (!t.empty() && t.back() == '^') t.pop_back();
             else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
             arg_is_slid = slid_info_.count(t) > 0;
+            if (arg_is_slid) arg_slid_name = t;
             if (!arg_is_slid && !isIndirectType(tit->second))
                 classify_int(tit->second);
         }
@@ -2742,12 +2802,15 @@ std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
             if (tit != local_types_.end()) {
                 if (isIndirectType(tit->second))
                     return "";  // ^ref is double-indirect: type error
-                if (slid_info_.count(tit->second))
+                if (slid_info_.count(tit->second)) {
                     arg_is_slid = true;  // ^slid_var is a valid slid ref
+                    arg_slid_name = tit->second;
+                }
             }
         }
     } else if (!exprSlidType(arg).empty()) {
         arg_is_slid = true; // e.g. result of op+ expression
+        arg_slid_name = exprSlidType(arg);
     } else {
         // use inferred LLVM type: map back to canonical type name for rank-based matching
         std::string lt = exprLlvmType(arg);
@@ -2766,10 +2829,11 @@ std::string Codegen::resolveOpEq(const std::string& base, const Expr& arg) {
         return !isIndirectType(pt) && pt != "char" && !unsigned_types.count(pt);
     };
 
-    // pass 1: slid ref exact match
+    // pass 1: slid ref exact match — same slid type
     for (auto& [m, ptypes] : oit->second) {
-        if (ptypes.size() != 1) continue;
-        if (arg_is_slid && isRefType(ptypes[0])) return m;
+        if (ptypes.size() != 1 || !isRefType(ptypes[0])) continue;
+        std::string param_slid = ptypes[0].substr(0, ptypes[0].size()-1);
+        if (arg_is_slid && param_slid == arg_slid_name) return m;
     }
 
     // pass 2: exact type name match for char/int/uint
