@@ -823,25 +823,18 @@ Operator overloads are defined inside the class body using the `op` keyword foll
 
 ```
 Value(int value_ = 0) {
-    _() {}
-    ~() {}
-
     op=(Value^ rhs) {
         value_ = rhs^.value_;
     }
-
     op=(int x) {
         value_ = x;
     }
-
     op+(Value^ a, Value^ b) {
         value_ = a^.value_ + b^.value_;
     }
-
     op+=(Value^ rhs) {
         value_ += rhs^.value_;
     }
-
     op+=(int x) {
         value_ += x;
     }
@@ -863,7 +856,6 @@ Supported operators: `=`, `<-`, `<->`, `+`, `-`, `*`, `/`, `+=`, `-=`, `*=`, `/=
 String(int size_ = 0, int capacity_ = 0, char[] storage_ = nullptr) {
     op=(char[] s);
     op=(String^ s);
-    op<-(String^ s);
 }
 ```
 
