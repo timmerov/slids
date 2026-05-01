@@ -13,6 +13,7 @@ Vector<T>(
     _() {
     }
     ~() {
+        destruct(0, size_);
         delete storage_;
     }
 
@@ -41,16 +42,14 @@ Vector<T>(
         T[] src = <T[]> storage_;
         T[] dst = <T[]> new_storage;
         while (i++ < size_) {
-            dst^ <- src^;
-            ++src;
-            ++dst;
+            dst++^ <- src++^;
         }
 
         /* free old storage. */
         delete storage_;
 
         /* update. */
-        size_ = new_size;
+        capacity_ = new_size;
         storage_ = new_storage;
     }
 
@@ -59,8 +58,8 @@ Vector<T>(
     preserve existing elements.
     */
     void resize(intptr new_size) {
-        grow();
-        shrink();
+        grow(new_size);
+        shrink(new_size);
     }
 
 /* private interface. */
@@ -75,13 +74,7 @@ Vector<T>(
         reserve(new_size);
 
         /* create new elements. */
-        intptr i = size_;
-        int8[] ptr = storage_;
-        ptr += sizeof(T) * i;
-        while (i++ < new_size) {
-            new(ptr) T;
-            ptr += sizeof(T);
-        }
+        construct(size_, new_size);
 
         /* update. */
         size_ = new_size;
@@ -94,15 +87,39 @@ Vector<T>(
         }
 
         /* destruct old elements. */
-        intptr i = new_size;
-        T[] ptr = <T[]> storage_;
-        ptr += i;
-        while (i++ < size_) {
-            ptr^.~();
-            ++ptr;
-        }
+        destruct(new_size, size_);
 
         /* update. */
         size_ = new_size;
+    }
+
+    /* construct new elements */
+    void construct(
+        intptr begin,
+        intptr end
+    ) {
+        intptr i = begin;
+        int8[] ptr = storage_;
+        ptr += sizeof(T) * i;
+        while (i++ < end) {
+            //__println("Vector<T>: placement new.");
+            new(ptr) T;
+            ptr += sizeof(T);
+        }
+    }
+
+    /* destruct elements. */
+    void destruct(
+        intptr begin,
+        intptr end
+    ) {
+        intptr i = begin;
+        T[] ptr = <T[]> storage_;
+        ptr += i;
+        while (i++ < end) {
+            //__println("Vector<T>: inline dtor.");
+            ptr^.~();
+            ++ptr;
+        }
     }
 }

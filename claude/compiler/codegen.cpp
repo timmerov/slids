@@ -2038,7 +2038,13 @@ std::string Codegen::resolveFreeFunctionMangledName(
     const std::string& name,
     size_t arg_count) const
 {
-    if (func_return_types_.count(name)) return name;
+    if (func_return_types_.count(name)) {
+        // Bare name resolves only if the registered function's arity matches.
+        // Without this gate, e.g. a zero-param `foo()` would absorb a `foo(1,2)` call.
+        auto pit = func_param_types_.find(name);
+        if (pit == func_param_types_.end() || pit->second.size() == arg_count)
+            return name;
+    }
     // nested function: signatures are registered under <parent>__<nested>.
     // Nested-fn names are unique within their parent so no arity match is needed.
     auto nit = nested_info_.find(name);
@@ -2082,7 +2088,10 @@ std::string Codegen::resolveMethodMangledName(
     std::string base = slid_name + "__" + method_name;
     auto it = method_overloads_.find(base);
     if (it == method_overloads_.end() || it->second.empty()) return base;
-    if (it->second.size() == 1) return it->second[0].first;
+    if (it->second.size() == 1) {
+        if (it->second[0].second.size() != params.size()) return base;
+        return it->second[0].first;
+    }
     // multiple overloads: match by exact param types
     std::vector<std::string> ptypes;
     for (auto& [t, n] : params) ptypes.push_back(t);
@@ -2098,6 +2107,23 @@ std::string Codegen::resolveOverloadForCall(
 {
     auto it = method_overloads_.find(base_mangled);
     if (it == method_overloads_.end() || it->second.empty()) return base_mangled;
+    // No overload's arity matches the call: explicit error so we don't fall
+    // through to the single-overload fast path or pass 1/2 (which all skip
+    // arity for size-1 or silently fail for size-N).
+    bool any_arity = false;
+    for (auto& [mangled, ptypes] : it->second)
+        if (ptypes.size() == args.size()) { any_arity = true; break; }
+    if (!any_arity) {
+        std::string arities;
+        for (size_t i = 0; i < it->second.size(); i++) {
+            if (i > 0) arities += "/";
+            arities += std::to_string(it->second[i].second.size());
+        }
+        size_t sep = base_mangled.rfind("__");
+        std::string method = (sep != std::string::npos) ? base_mangled.substr(sep+2) : base_mangled;
+        error("wrong number of arguments to '" + method + "': passed "
+              + std::to_string(args.size()) + ", expected " + arities);
+    }
     if (it->second.size() == 1) return it->second[0].first;
     // Pass 1: exact type match
     for (auto& [mangled, ptypes] : it->second) {
@@ -3470,6 +3496,28 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                     return loaded;
                 }
                 return emitExpr(*de->operand);
+            }
+        }
+        // PostIncDerefExpr of a slid pointer (sa++^): load the ptr, advance the
+        // iterator in-place, return the original (pre-advance) ptr. Mirrors the
+        // DerefExpr arm; needed because emitExpr on PostIncDerefExpr returns a
+        // loaded struct value, which is not what op<-/op= expect.
+        if (auto* pid = dynamic_cast<const PostIncDerefExpr*>(&arg)) {
+            if (auto* ve = dynamic_cast<const VarExpr*>(pid->operand.get())) {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end() && isPtrType(tit->second)) {
+                    std::string pointee = tit->second.substr(0, tit->second.size() - 2);
+                    if (slid_info_.count(pointee)) {
+                        std::string cur = newTmp();
+                        out_ << "    " << cur << " = load ptr, ptr " << locals_.at(ve->name) << "\n";
+                        int step = (pid->op == "++") ? 1 : -1;
+                        std::string nxt = newTmp();
+                        out_ << "    " << nxt << " = getelementptr " << llvmType(pointee)
+                             << ", ptr " << cur << ", i32 " << step << "\n";
+                        out_ << "    store ptr " << nxt << ", ptr " << locals_.at(ve->name) << "\n";
+                        return cur;
+                    }
+                }
             }
         }
         // anon-tuple-ref param: `(t1,...)^`

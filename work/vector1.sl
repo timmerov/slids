@@ -29,10 +29,14 @@ int32 main() {
     __println("---Vector<Value>---");
     {
         Vector<Value> valvec;
-        __println("reserve(5)");
-        valvec.reserve(3);
         __println("resize(3)");
         valvec.resize(3);
+        __println("reserve(5)");
+        valvec.reserve(5);
+        __println("resize(7)");
+        valvec.resize(7);
+        __println("resize(5)");
+        valvec.resize(5);
         __println("---dtors---");
     }
     __println("----------");
