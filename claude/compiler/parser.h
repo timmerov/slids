@@ -579,6 +579,10 @@ private:
     // the token(s) at pos_+offset (peek) or pos_ (consume) form an overloadable op symbol.
     std::optional<std::string> peekOpSymbolAt(int offset);
     std::optional<std::string> consumeOpSymbol();
+    // Validates the explicit-parameter count of an in-class op<sym> method.
+    // Errors at op_tok if the count doesn't match the spec for the named op.
+    // No-op for non-op names (regular methods).
+    void checkOpArity(const std::string& op_name, int actual, int op_tok);
 
     SlidDef parseSlidDef();
     // collapse multiple SlidDef entries with the same class name into a single

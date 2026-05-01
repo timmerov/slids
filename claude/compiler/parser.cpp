@@ -182,6 +182,30 @@ std::optional<std::string> Parser::peekOpSymbolAt(int offset) {
     return it->second;
 }
 
+void Parser::checkOpArity(const std::string& op_name, int actual, int op_tok) {
+    // Explicit-parameter counts for in-class op<sym> methods. self is implicit.
+    // Unary forms (op-, op~, op!) deferred per the spec — op- here means binary.
+    static const std::map<std::string, int> arity = {
+        {"op=", 1}, {"op<-", 1}, {"op<->", 1},
+        {"op+", 2}, {"op-", 2}, {"op*", 2}, {"op/", 2}, {"op%", 2},
+        {"op&", 2}, {"op|", 2}, {"op^", 2}, {"op<<", 2}, {"op>>", 2},
+        {"op&&", 2}, {"op||", 2}, {"op^^", 2},
+        {"op+=", 1}, {"op-=", 1}, {"op*=", 1}, {"op/=", 1}, {"op%=", 1},
+        {"op&=", 1}, {"op|=", 1}, {"op^=", 1}, {"op<<=", 1}, {"op>>=", 1},
+        {"op&&=", 1}, {"op||=", 1}, {"op^^=", 1},
+        {"op==", 1}, {"op!=", 1}, {"op<", 1}, {"op>", 1}, {"op<=", 1}, {"op>=", 1},
+        {"op[]", 1}, {"op[]=", 2},
+    };
+    auto it = arity.find(op_name);
+    if (it == arity.end()) return;
+    if (actual != it->second) {
+        errorAt(op_tok, "operator '" + op_name + "' requires exactly "
+            + std::to_string(it->second) + " parameter"
+            + (it->second == 1 ? "" : "s") + "; got "
+            + std::to_string(actual));
+    }
+}
+
 std::optional<std::string> Parser::consumeOpSymbol() {
     if (pos_ >= (int)tokens_.size()) return std::nullopt;
     TokenType t = tokens_[pos_].type;
@@ -1613,6 +1637,7 @@ MethodDef Parser::parseMethodDef() {
     } else {
         m.return_type = parseTypeName();
     }
+    int op_tok = pos_;
     m.name = expect(TokenType::kIdentifier, "expected method name").value;
     if (m.name == "op") {
         if (auto sym = consumeOpSymbol()) m.name = "op" + *sym;
@@ -1625,6 +1650,7 @@ MethodDef Parser::parseMethodDef() {
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "expected ')'");
+    checkOpArity(m.name, (int)m.params.size(), op_tok);
     if (peek().type == TokenType::kEquals
         && pos_ + 1 < (int)tokens_.size()
         && tokens_[pos_ + 1].type == TokenType::kDelete) {
@@ -2029,6 +2055,7 @@ void Parser::parseExternalMethodBlock(Program& program) {
             if (peek().type == TokenType::kComma) advance();
         }
         expect(TokenType::kRParen, "expected ')'");
+        checkOpArity(em.method_name, (int)em.params.size(), em_tok);
         if (peek().type == TokenType::kEquals
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kDelete) {
