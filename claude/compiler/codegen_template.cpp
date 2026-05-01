@@ -236,11 +236,11 @@ static std::unique_ptr<Stmt> cloneStmtImpl(const Stmt& stmt,
 
     if (auto* s = dynamic_cast<const DerefAssignStmt*>(&stmt))
         return std::make_unique<DerefAssignStmt>(
-            cloneExpr(*s->ptr, subst), cloneExpr(*s->value, subst));
+            cloneExpr(*s->ptr, subst), cloneExpr(*s->value, subst), s->is_move);
 
     if (auto* s = dynamic_cast<const PostIncDerefAssignStmt*>(&stmt))
         return std::make_unique<PostIncDerefAssignStmt>(
-            cloneExpr(*s->ptr, subst), s->op, cloneExpr(*s->value, subst));
+            cloneExpr(*s->ptr, subst), s->op, cloneExpr(*s->value, subst), s->is_move);
 
     if (auto* s = dynamic_cast<const IndexAssignStmt*>(&stmt))
         return std::make_unique<IndexAssignStmt>(

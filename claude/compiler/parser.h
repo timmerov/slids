@@ -295,8 +295,9 @@ struct SwapStmt : Stmt {
 struct DerefAssignStmt : Stmt {
     std::unique_ptr<Expr> ptr;   // the pointer expression
     std::unique_ptr<Expr> value;
-    DerefAssignStmt(std::unique_ptr<Expr> ptr, std::unique_ptr<Expr> val)
-        : ptr(std::move(ptr)), value(std::move(val)) {}
+    bool is_move = false;
+    DerefAssignStmt(std::unique_ptr<Expr> ptr, std::unique_ptr<Expr> val, bool m = false)
+        : ptr(std::move(ptr)), value(std::move(val)), is_move(m) {}
 };
 
 // ptr++^ = expr  — store val at current ptr, then advance ptr
@@ -304,8 +305,10 @@ struct PostIncDerefAssignStmt : Stmt {
     std::unique_ptr<Expr> ptr;   // the pointer variable
     std::string op;              // "++" or "--"
     std::unique_ptr<Expr> value;
-    PostIncDerefAssignStmt(std::unique_ptr<Expr> ptr, std::string op, std::unique_ptr<Expr> val)
-        : ptr(std::move(ptr)), op(std::move(op)), value(std::move(val)) {}
+    bool is_move = false;
+    PostIncDerefAssignStmt(std::unique_ptr<Expr> ptr, std::string op, std::unique_ptr<Expr> val,
+                           bool m = false)
+        : ptr(std::move(ptr)), op(std::move(op)), value(std::move(val)), is_move(m) {}
 };
 
 // lvalue op= rhs — compound assign with single LHS evaluation.

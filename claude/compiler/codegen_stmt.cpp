@@ -1234,7 +1234,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* da = dynamic_cast<const DerefAssignStmt*>(&stmt)) {
-        // ptr^ = val — load the pointer from its alloca, then store through it
+        // ptr^ = val / ptr^ <- val — store-through-pointer, with op=/op<- dispatch
+        // for slid pointees.
         std::string ptr_reg;
         std::string pointee_llvm = "i32";
         std::string pointee_type;
@@ -1254,6 +1255,14 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
         } else {
             ptr_reg = emitExpr(*da->ptr);
+        }
+        // slid pointee: dispatch op<-/op= via emitSlidSlotAssign so user-defined
+        // ops (and the field-walk fallback for pointer fields, dtor-bearing fields, etc.)
+        // run instead of a raw struct store.
+        if (!pointee_type.empty() && slid_info_.count(pointee_type)) {
+            std::string src_ptr = emitArgForParam(*da->value, pointee_type + "^");
+            emitSlidSlotAssign(pointee_type, ptr_reg, src_ptr, da->is_move);
+            return;
         }
         if (!pointee_type.empty()) requirePtrInit(pointee_type, *da->value);
         std::string val = emitExpr(*da->value);
@@ -1577,7 +1586,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* pida = dynamic_cast<const PostIncDerefAssignStmt*>(&stmt)) {
-        // ptr++^ = val — store val at current ptr, then advance ptr by one element
+        // ptr++^ = val / ptr++^ <- val — assign at current ptr, then advance.
         auto* ve = dynamic_cast<const VarExpr*>(pida->ptr.get());
         if (!ve) error(std::string("PostIncDerefAssign: only simple pointer variables supported"));
         auto it = locals_.find(ve->name);
@@ -1589,13 +1598,18 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string pointee_type = tit->second.substr(0, tit->second.size()-2);
         std::string pointee_llvm = llvmType(pointee_type);
         int step = (pida->op == "++") ? 1 : -1;
-        requirePtrInit(pointee_type, *pida->value);
         // load current ptr
         std::string cur_ptr = newTmp();
         out_ << "    " << cur_ptr << " = load ptr, ptr " << it->second << "\n";
-        // store value at current ptr
-        std::string val = emitExpr(*pida->value);
-        out_ << "    store " << pointee_llvm << " " << val << ", ptr " << cur_ptr << "\n";
+        // assign value at current ptr — slid pointee dispatches op<-/op=.
+        if (slid_info_.count(pointee_type)) {
+            std::string src_ptr = emitArgForParam(*pida->value, pointee_type + "^");
+            emitSlidSlotAssign(pointee_type, cur_ptr, src_ptr, pida->is_move);
+        } else {
+            requirePtrInit(pointee_type, *pida->value);
+            std::string val = emitExpr(*pida->value);
+            out_ << "    store " << pointee_llvm << " " << val << ", ptr " << cur_ptr << "\n";
+        }
         // advance ptr
         std::string new_ptr = newTmp();
         out_ << "    " << new_ptr << " = getelementptr " << pointee_llvm << ", ptr " << cur_ptr << ", i32 " << step << "\n";
@@ -1849,6 +1863,26 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (type_it == local_types_.end())
                     error(std::string("unknown type for: " + ve->name));
                 slid_name = type_it->second;
+                if (mcs->method == "~") {
+                    // Dtor is structural: valid on slids (dispatch), anon-tuples
+                    // (walk slots), and primitive types (no-op). Reject only the
+                    // pointer-to-slid case where the user likely meant the
+                    // pointed-to slid's dtor, not the pointer's.
+                    if (isIndirectType(slid_name)) {
+                        std::string pointee = isPtrType(slid_name)
+                            ? slid_name.substr(0, slid_name.size()-2)
+                            : slid_name.substr(0, slid_name.size()-1);
+                        if (slid_info_.count(pointee))
+                            error("dtor on '" + ve->name + "' of pointer type '" + slid_name +
+                                  "': use '" + ve->name + "^.~()' to dtor the pointed-to value");
+                    }
+                } else {
+                    if (isIndirectType(slid_name))
+                        error("method call on '" + ve->name + "' of pointer type '" + slid_name +
+                              "': use '" + ve->name + "^." + mcs->method + "()' for explicit dereference");
+                    if (!slid_info_.count(slid_name))
+                        error("method call on '" + ve->name + "': '" + slid_name + "' is not a slid type");
+                }
                 obj_ptr = locals_[ve->name];
             }
         } else if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(mcs->object.get())) {

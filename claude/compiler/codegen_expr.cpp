@@ -531,6 +531,22 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 if (type_it == local_types_.end())
                     error(std::string("unknown type for: " + ve->name));
                 slid_name = type_it->second;
+                if (mc->method == "~") {
+                    if (isIndirectType(slid_name)) {
+                        std::string pointee = isPtrType(slid_name)
+                            ? slid_name.substr(0, slid_name.size()-2)
+                            : slid_name.substr(0, slid_name.size()-1);
+                        if (slid_info_.count(pointee))
+                            error("dtor on '" + ve->name + "' of pointer type '" + slid_name +
+                                  "': use '" + ve->name + "^.~()' to dtor the pointed-to value");
+                    }
+                } else {
+                    if (isIndirectType(slid_name))
+                        error("method call on '" + ve->name + "' of pointer type '" + slid_name +
+                              "': use '" + ve->name + "^." + mc->method + "()' for explicit dereference");
+                    if (!slid_info_.count(slid_name))
+                        error("method call on '" + ve->name + "': '" + slid_name + "' is not a slid type");
+                }
                 obj_ptr = locals_[ve->name];
             }
         } else if (auto* de = dynamic_cast<const DerefExpr*>(mc->object.get())) {

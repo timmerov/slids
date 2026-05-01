@@ -28,7 +28,7 @@ Vector<T>(
     void reserve(intptr new_size) {
 
         /* already have enough room. */
-        if (new_size >= capacity_) {
+        if (new_size <= capacity_) {
             return;
         }
 
@@ -41,8 +41,9 @@ Vector<T>(
         T[] src = <T[]> storage_;
         T[] dst = <T[]> new_storage;
         while (i++ < size_) {
-            /* meh. not supported. */
-            //dst++^ <- src++^;
+            dst^ <- src^;
+            ++src;
+            ++dst;
         }
 
         /* free old storage. */
@@ -58,30 +59,49 @@ Vector<T>(
     preserve existing elements.
     */
     void resize(intptr new_size) {
+        grow();
+        shrink();
+    }
 
-        /* add more elements. */
-        if (new_size > size_) {
-            /* reserve space. */
-            reserve(new_size);
+/* private interface. */
 
-            /* create new elements. */
-            intptr i = size_;
-            int8[] ptr = storage_;
-            ptr += sizeof(T) * i;
-            /*while (i++ < new_size) {
-                new(ptr) T;
-                ptr += sizeof(T);
-            }*/
-        } else {
-            /* destruct old elements. */
-            intptr i = new_size;
-            T[] ptr = <T[]> storage_;
-            ptr += i;
-            while (i++ < size_) {
-                ptr^.~();
-                ++ptr;
-            }
+    /* add more elements. */
+    void grow(intptr new_size) {
+        if (new_size <= size_) {
+            return;
         }
+
+        /* reserve space. */
+        reserve(new_size);
+
+        /* create new elements. */
+        intptr i = size_;
+        int8[] ptr = storage_;
+        ptr += sizeof(T) * i;
+        while (i++ < new_size) {
+            new(ptr) T;
+            ptr += sizeof(T);
+        }
+
+        /* update. */
+        size_ = new_size;
+    }
+
+    /* remove elements. */
+    void shrink(intptr new_size) {
+        if (new_size >= size_) {
+            return;
+        }
+
+        /* destruct old elements. */
+        intptr i = new_size;
+        T[] ptr = <T[]> storage_;
+        ptr += i;
+        while (i++ < size_) {
+            ptr^.~();
+            ++ptr;
+        }
+
         /* update. */
         size_ = new_size;
     }

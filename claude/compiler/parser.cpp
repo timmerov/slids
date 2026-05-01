@@ -806,15 +806,11 @@ std::unique_ptr<Stmt> Parser::buildAssignFromLhs(
         return make<AssignStmt>(t_start, name, std::move(rhs), is_move);
     }
     if (auto* pide = dynamic_cast<PostIncDerefExpr*>(lhs.get())) {
-        if (is_move)
-            errorAt(op_tok, "move (<-) through post-inc-deref not supported");
         return make<PostIncDerefAssignStmt>(t_start,
-            std::move(pide->operand), pide->op, std::move(rhs));
+            std::move(pide->operand), pide->op, std::move(rhs), is_move);
     }
     if (auto* de = dynamic_cast<DerefExpr*>(lhs.get())) {
-        if (is_move)
-            errorAt(op_tok, "move (<-) through deref not supported");
-        return make<DerefAssignStmt>(t_start, std::move(de->operand), std::move(rhs));
+        return make<DerefAssignStmt>(t_start, std::move(de->operand), std::move(rhs), is_move);
     }
     if (auto* fa = dynamic_cast<FieldAccessExpr*>(lhs.get())) {
         return make<FieldAssignStmt>(t_start,
