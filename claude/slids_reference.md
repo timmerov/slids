@@ -1586,7 +1586,7 @@ block comments must be closed before the end of the file.
 
 /*
 you can mix them if you're sadistic enough.
-a word is a in a comment if it is between:
+a word is in a comment if it is between:
 1. the // and the end of line.
 2. the /* and the */.
 */
