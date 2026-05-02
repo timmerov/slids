@@ -71,6 +71,14 @@ String(...)
     /* overload + to concatenate two String-s. */
     op+(String^ sa, String^ sb);
 
+    /* binary comparisons */
+    bool op==(String^ s);
+    bool op!=(String^ s);
+    bool op<=(String^ s);
+    bool op>=(String^ s);
+    bool op<(String^ s);
+    bool op>(String^ s);
+
     /*
     overload index operation to fetch the indexed character.
     char ch = str[3];
@@ -118,14 +126,6 @@ String(...)
     /* return the substring. */
     String slice(intptr start, intptr count);
 }
-
-/* binary comparisons */
-bool op==(String^ sa, String^ sb);
-bool op!=(String^ sa, String^ sb);
-bool op<=(String^ sa, String^ sb);
-bool op>=(String^ sa, String^ sb);
-bool op<(String^ sa, String^ sb);
-bool op>(String^ sa, String^ sb);
 
 /* print the string. */
 void print(String^ s);

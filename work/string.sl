@@ -164,6 +164,42 @@ String (
         }
     }
 
+    /* binary equals */
+    bool op==(String^ s) {
+        cmp = compare(s);
+        return (cmp == 0);
+    }
+
+    /* binary not equals */
+    bool op!=(String^ s) {
+        cmp = compare(s);
+        return (cmp != 0);
+    }
+
+    /* binary less than or equals */
+    bool op<=(String^ s) {
+        cmp = compare(s);
+        return (cmp <= 0);
+    }
+
+    /* binary greater than or equals. */
+    bool op>=(String^ s) {
+        cmp = compare(s);
+        return (cmp >= 0);
+    }
+
+    /* binary less than. */
+    bool op<(String^ s) {
+        cmp = compare(s);
+        return (cmp < 0);
+    }
+
+    /* binary greater than */
+    bool op>(String^ s) {
+        cmp = compare(s);
+        return (cmp > 0);
+    }
+
     /*
     overload index operation to fetch the indexed character.
     char ch = str[3];
@@ -324,60 +360,6 @@ String (
             x /= 10;
         } (x);
     }
-}
-
-/* binary equals */
-bool op==(
-    String^ sa,
-    String^ sb
-) {
-    cmp = sa^.compare(sb);
-    return (cmp == 0);
-}
-
-/* binary not equals */
-bool op!=(
-    String^ sa,
-    String^ sb
-) {
-    cmp = sa^.compare(sb);
-    return (cmp != 0);
-}
-
-/* binary less than or equals */
-bool op<=(
-    String^ sa,
-    String^ sb
-) {
-    cmp = sa^.compare(sb);
-    return (cmp <= 0);
-}
-
-/* binary greater than or equals. */
-bool op>=(
-    String^ sa,
-    String^ sb
-) {
-    cmp = sa^.compare(sb);
-    return (cmp >= 0);
-}
-
-/* binary less than. */
-bool op<(
-    String^ sa,
-    String^ sb
-) {
-    cmp = sa^.compare(sb);
-    return (cmp < 0);
-}
-
-/* binary greater than */
-bool op>(
-    String^ sa,
-    String^ sb
-) {
-    cmp = sa^.compare(sb);
-    return (cmp > 0);
 }
 
 /* print the string. */

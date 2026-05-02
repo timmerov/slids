@@ -2128,9 +2128,13 @@ FunctionDef Parser::parseFunctionDef() {
         fn.return_type = parseTypeName();
     }
     {
+        int fname_tok = pos_;
         std::string fname = expect(TokenType::kIdentifier, "expected function name").value;
         if (fname == "op") {
-            if (auto sym = consumeOpSymbol()) fname = "op" + *sym;
+            if (auto sym = peekOpSymbolAt(0)) {
+                errorAt(fname_tok, "operator 'op" + *sym
+                    + "' must be a method of a class; free-function operators are not allowed");
+            }
         }
         fn.name = fname;
         fn.user_name = fname;

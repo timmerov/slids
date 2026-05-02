@@ -1,4 +1,6 @@
 
+apparently a function named op compiles.
+
 for loops:
 kinda hate the current syntax.
     for iter in container { }
