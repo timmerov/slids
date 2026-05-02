@@ -11,7 +11,7 @@ if the number is divisible by both print biz-buzz.
 */
 
 int32 main() {
-    for int i in (1..100+1) {
+    for int i in (1..<=100) {
         bool by3 = (i % 3 == 0);
         bool by5 = (i % 5 == 0);
         if (by3 && by5) {
