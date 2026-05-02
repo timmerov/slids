@@ -819,7 +819,7 @@ void Dog:perform2() { ... }           // external method def
 
 ## Operator overloading
 
-Operator overloads are defined inside the class body using the `op` keyword followed immediately by the operator symbol. No return type is written — the return value is always `self` (the object being modified).
+Operator overloads are defined inside the class body using the `op` keyword followed immediately by the operator symbol. Most operators have no return type, like the constructor `_` and destructor `~`. Comparison operators return `bool`. Indexing of a container class reads and writes the contained type.
 
 ```
 Value(int value_ = 0) {
@@ -841,23 +841,54 @@ Value(int value_ = 0) {
 }
 ```
 
-Supported operators: `=`, `<-`, `<->`, `+`, `-`, `*`, `/`, `+=`, `-=`, `*=`, `/=`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `[]`, `[]=`.
+### Catalog
 
-**Default copy operator.** If a class does not define `op=(SameType^)`, the compiler synthesizes one that copies each field by value. This means `Foo b = a;` always does the right thing for plain data types. Define your own `op=(Foo^)` to override — for example, when a field is a heap pointer that requires a deep copy.
+| Group | Operators | Signature shape |
+|---|---|---|
+| Assignment / move / swap | `=` `<-` `<->` | `op<sym>(Type^ rhs)` |
+| Arithmetic | `+` `-` `*` `/` `%` | `op<sym>(Type^ a, Type^ b)` |
+| Bitwise | `&` `\|` `^` `<<` `>>` | `op<sym>(Type^ a, Type^ b)` |
+| Logical | `&&` `\|\|` `^^` | `op<sym>(Type^ a, Type^ b)` |
+| Compound assignment | `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` `&&=` `\|\|=` `^^=` | `op<sym>(Type^ rhs)` |
+| Comparison | `==` `!=` `<` `>` `<=` `>=` | `bool op<sym>(Type^ rhs)` |
+| Indexing read | `[]` | `T op[](Idx idx)` |
+| Indexing write | `[]=` | `op[]=(Idx idx, T rhs)` |
 
-**Default move operator.** If a class does not define `op<-(SameType^)`, the compiler synthesizes one that moves each field. Value-typed fields (ints, floats, embedded structs with no dtor) are copied; pointer and iterator fields are transferred — their value is copied to the destination and the source is set to `nullptr`. This means `Foo b <- a;` works for plain data types without any user code. Define your own `op<-(Foo^)` to override — for example, when a heap resource needs extra bookkeeping, or when the source must be left in a non-default state.
+Unary `-`, `~`, `!` are not yet implemented.
 
-**Default swap operator.** If a class does not define `op<->(SameType^)`, the compiler synthesizes one that swaps each field. Value-typed fields and pointer/iterator fields are exchanged in place — pointers are *not* nullified, since both objects retain valid data after a swap. `op<->` may only take `SameType^`; other signatures are a compile error.
+### Rules
 
-**Assignment is a statement, not an expression.** Chained assignment (`x = y = 0;`) and assignment inside a condition (`if (x = 0)`) are not allowed.
+- **Operators are methods.** Every operator is a method of a class. There are no free-function operators.
+- **Most operators have no return value.** The product is `self`. The exceptions are comparison (returns `bool`) and indexing read (returns the contained type).
+- **Assignment is a statement.** `x = y = 0;` and `if (x = 0)` are compile errors.
+- **Multiple overloads.** A class may define multiple overloads of the same operator. The compiler picks the best match.
+- **Implicit conversion.** When no overload matches, the compiler tries harder using one round of type conversion `op=`.
+- **Swap `op<->` requires `SameType^`.** Other signatures are a compile error.
 
-**Forward declarations** inside the class body omit the body:
+### Default synthesis
+
+If a class does not define assignment operator`op=`, move operator `op<-`, or swap operator `op<->` with `SameType^` parameter, the compiler synthesizes one that applies the operation to every field.
+
+- **Assignment `op=(SameType^)`** — Fields with an assignment operator defined use it. All other fields are copied.
+- **Move `op<-(SameType^)`** — Fields with a move operator defined use it. Integer types are copied. Pointer types are copied, then the moved-from pointer (the rhs) is set to `nullptr`.
+- **`op<->(SameType^)`** — Fields with a swap operator defined use it. All other fields are swapped.
+
+### Forward declarations
+
+Inside the class body, omit the body to declare without defining:
+
 ```
 String(int size_ = 0, int capacity_ = 0, char[] storage_ = nullptr) {
     op=(char[] s);
     op=(String^ s);
+    op<-(String^ s);
 }
 ```
+
+### Errata
+
+Comparison operators technically may return any primitive type accepted as an `if` condition. Integer types and pointer types also work.
+Default synthesized operators handles a base class the same way it handles a field.
 
 ---
 
