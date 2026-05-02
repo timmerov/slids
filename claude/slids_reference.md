@@ -838,6 +838,12 @@ Value(int value_ = 0) {
     op+=(int x) {
         value_ += x;
     }
+    bool op==(Value^ rhs) {
+        return value_ == rhs^.value_;
+    }
+    int op[](int i) {
+        return value_;
+    }
 }
 ```
 
