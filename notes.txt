@@ -3,12 +3,31 @@ for loops:
 kinda hate the current syntax.
     for iter in container { }
 'in' should not be a keyword.
-possibilities:
-    for (int x : 0..10) { }
-    for (x : start..end) { }
+
+short forms:
+    for (x : 0..10) { }
+
+    /* enum.first_defined..<=enum.last_defined */
     for (x : enum) { }
+
+    /* fixed-sized array o plain data. */
+    for (x : array) { }
+
+    /* fixed-sized array of objects. */
+    for (ref : array) { }
+
+    /* iterate over the container. */
     for (iter : container) { }
+
+short forms de-sugar to the long form.
 long form for example:
+    /*
+    0. for
+    1. init tuple
+    2. condition tuple
+    3. update code
+    4. loop body
+    */
     for (
         int i = size,
         char[] src = src_buffer,
@@ -18,21 +37,6 @@ long form for example:
     } {
         dst^ = src^;
     }
-middle form?:
-    for (int x=0; x<10; ++x) { }
-
-range tuples:
-0..10
-0..10+2
-9..>=0-1
-start..end
-could be implemented as an iterator class.
-Range.begin() .end() .next()
-parameters: lo, hi, step, condition
-Range might be defined in a std slid library.
-with most integer types already instantiated.
-would need to flag that in range.slh.
-Range<int> = delete;
 
 revisit initialization.
 
@@ -40,6 +44,9 @@ implement complex field access with tuples.
 tuple[1].a_ is not yet supported.
 
 test incomplete templates.
+
+range tuples:
+maybe check for infinite loops.
 
 revisit name collisions as needed.
 
