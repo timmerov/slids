@@ -1032,6 +1032,35 @@ std::string Codegen::emitExpr(const Expr& expr) {
             }
             return is_pre ? new_val : old;
         }
+        // arity-0 slid dispatch: -a/+a/~a/!a where operand is a slid value, no slid LHS.
+        // Mirrors comparison: returns a built-in (bool/int/pointer).
+        if (u->op == "-" || u->op == "+" || u->op == "~" || u->op == "!") {
+            std::string operand_slid = inferSlidType(*u->operand);
+            if (!operand_slid.empty() && slid_info_.count(operand_slid)) {
+                std::string base = operand_slid + "__op" + u->op;
+                auto moit = method_overloads_.find(base);
+                std::string mangled, ret_type;
+                if (moit != method_overloads_.end()) {
+                    for (auto& [m, ptypes] : moit->second) {
+                        if (ptypes.empty()) {
+                            mangled = m;
+                            auto rit = func_return_types_.find(m);
+                            if (rit != func_return_types_.end()) ret_type = rit->second;
+                            break;
+                        }
+                    }
+                }
+                if (mangled.empty())
+                    error(std::string("no matching arity-0 'op" + u->op + "' for '"
+                        + operand_slid + "': define 'op" + u->op + "()' returning a built-in"));
+                std::string operand_ptr = emitArgForParam(*u->operand, operand_slid + "^");
+                std::string tmp_call = newTmp();
+                std::string llvm_ret = ret_type.empty() ? "i32" : llvmType(ret_type);
+                out_ << "    " << tmp_call << " = call " << llvm_ret
+                     << " @" << llvmGlobalName(mangled) << "(ptr " << operand_ptr << ")\n";
+                return tmp_call;
+            }
+        }
         // other unary ops — evaluate operand first
         std::string val = emitExpr(*u->operand);
         std::string tmp = newTmp();
@@ -1046,6 +1075,14 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string val_llvm = exprLlvmType(*u->operand);
             out_ << "    " << tmp << " = xor " << val_llvm << " " << val << ", -1\n";
             return tmp;
+        }
+        if (u->op == "-") {
+            std::string val_llvm = exprLlvmType(*u->operand);
+            out_ << "    " << tmp << " = sub " << val_llvm << " 0, " << val << "\n";
+            return tmp;
+        }
+        if (u->op == "+") {
+            return val;
         }
         error(std::string("unknown unary op: " + u->op));
     }
@@ -2156,6 +2193,19 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // unary: ! and ~ produce i32; inc/dec preserve operand type
     if (auto* u = dynamic_cast<const UnaryExpr*>(&expr)) {
+        // arity-0 slid dispatch: return type comes from the method
+        if (u->op == "-" || u->op == "+" || u->op == "~" || u->op == "!") {
+            std::string operand_slid = inferSlidType(*u->operand);
+            if (!operand_slid.empty() && slid_info_.count(operand_slid)) {
+                auto moit = method_overloads_.find(operand_slid + "__op" + u->op);
+                if (moit != method_overloads_.end())
+                    for (auto& [m, ptypes] : moit->second)
+                        if (ptypes.empty()) {
+                            auto rit = func_return_types_.find(m);
+                            return rit != func_return_types_.end() ? llvmType(rit->second) : "i32";
+                        }
+            }
+        }
         if (u->op == "!" || u->op == "~") return "i32";
         // pre/post inc/dec — same type as operand
         return exprLlvmType(*u->operand);
@@ -2705,8 +2755,20 @@ std::string Codegen::inferSlidType(const Expr& expr) {
         if (isAnonTupleType(rt)) return rt;
         return lt;
     }
-    // unary — propagate through
+    // unary — propagate through, except arity-0 slid dispatch returns the method's type
     if (auto* ue = dynamic_cast<const UnaryExpr*>(&expr)) {
+        if (ue->op == "-" || ue->op == "+" || ue->op == "~" || ue->op == "!") {
+            std::string operand_slid = inferSlidType(*ue->operand);
+            if (!operand_slid.empty() && slid_info_.count(operand_slid)) {
+                auto moit = method_overloads_.find(operand_slid + "__op" + ue->op);
+                if (moit != method_overloads_.end())
+                    for (auto& [m, ptypes] : moit->second)
+                        if (ptypes.empty()) {
+                            auto rit = func_return_types_.find(m);
+                            return rit != func_return_types_.end() ? rit->second : "";
+                        }
+            }
+        }
         if (ue->op == "-" || ue->op == "~" || ue->op == "!")
             return inferSlidType(*ue->operand);
     }

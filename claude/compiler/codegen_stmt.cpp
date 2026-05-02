@@ -566,6 +566,28 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             init_handled = true;
                         }
                     }
+                    // unary arity 1: Type r = -operand → r.op-(operand)
+                    if (!init_handled) {
+                        if (auto* ue = dynamic_cast<const UnaryExpr*>(decl->init.get())) {
+                            if (ue->op == "+" || ue->op == "-" || ue->op == "~" || ue->op == "!") {
+                                std::string op_func = resolveSingleArgOverload(eff_type + "__op" + ue->op, *ue->operand);
+                                if (!op_func.empty()) {
+                                    auto& ptypes = func_param_types_[op_func];
+                                    std::string ret = func_return_types_.count(op_func) ? func_return_types_[op_func] : "";
+                                    bool is_method = (ret == "void");
+                                    std::string args = is_method
+                                        ? "ptr " + reg
+                                        : "ptr sret(%struct." + eff_type + ") " + reg;
+                                    std::string param_type = ptypes.empty() ? "" : ptypes[0];
+                                    std::string arg_val = emitArgForParam(*ue->operand, param_type);
+                                    if (!ptypes.empty())
+                                        args += ", " + llvmType(ptypes[0]) + " " + arg_val;
+                                    out_ << "    call void @" << llvmGlobalName(op_func) << "(" << args << ")\n";
+                                    init_handled = true;
+                                }
+                            }
+                        }
+                    }
                 }
                 if (!init_handled) {
                     std::string op_name = decl->is_move ? "op<-" : "op=";
@@ -943,6 +965,43 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     if (ptypes.size() > 1) args += ", " + llvmType(ptypes[1]) + " " + ra;
                     out_ << "    call void @" << llvmGlobalName(op_func) << "(" << args << ")\n";
                     return;
+                }
+            }
+        }
+        // unary arity 1: lhs is slid, rhs is UnaryExpr (-operand etc.) → lhs.op-(operand)
+        if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+            if (auto* ue = dynamic_cast<const UnaryExpr*>(assign->value.get())) {
+                if (ue->op == "+" || ue->op == "-" || ue->op == "~" || ue->op == "!") {
+                    const std::string& slid_name = tit->second;
+                    std::string op_func = resolveSingleArgOverload(slid_name + "__op" + ue->op, *ue->operand);
+                    if (!op_func.empty()) {
+                        if (slid_info_.at(slid_name).has_dtor) {
+                            emitDtorChainCall(slid_name, it->second);
+                            auto& info = slid_info_[slid_name];
+                            for (int i = 0; i < (int)info.field_types.size(); i++) {
+                                std::string ft = llvmType(info.field_types[i]);
+                                std::string gep = newTmp();
+                                out_ << "    " << gep << " = getelementptr %struct." << slid_name
+                                     << ", ptr " << it->second << ", i32 0, i32 " << i << "\n";
+                                if (isIndirectType(info.field_types[i]))
+                                    out_ << "    store ptr null, ptr " << gep << "\n";
+                                else
+                                    out_ << "    store " << ft << " 0, ptr " << gep << "\n";
+                            }
+                        }
+                        auto& ptypes = func_param_types_[op_func];
+                        std::string ret = func_return_types_.count(op_func) ? func_return_types_[op_func] : "";
+                        bool is_method = (ret == "void");
+                        std::string args = is_method
+                            ? "ptr " + it->second
+                            : "ptr sret(%struct." + slid_name + ") " + it->second;
+                        std::string param_type = ptypes.empty() ? "" : ptypes[0];
+                        std::string arg_val = emitArgForParam(*ue->operand, param_type);
+                        if (!ptypes.empty())
+                            args += ", " + llvmType(ptypes[0]) + " " + arg_val;
+                        out_ << "    call void @" << llvmGlobalName(op_func) << "(" << args << ")\n";
+                        return;
+                    }
                 }
             }
         }

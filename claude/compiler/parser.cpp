@@ -164,6 +164,8 @@ static const std::map<TokenType, std::string> kOpSymbols = {
     {TokenType::kGt,        ">"},
     {TokenType::kLtEq,      "<="},
     {TokenType::kGtEq,      ">="},
+    {TokenType::kBitNot,    "~"},
+    {TokenType::kNot,       "!"},
 };
 
 std::optional<std::string> Parser::peekOpSymbolAt(int offset) {
@@ -183,27 +185,34 @@ std::optional<std::string> Parser::peekOpSymbolAt(int offset) {
 }
 
 void Parser::checkOpArity(const std::string& op_name, int actual, int op_tok) {
-    // Explicit-parameter counts for in-class op<sym> methods. self is implicit.
-    // Unary forms (op-, op~, op!) deferred per the spec — op- here means binary.
-    static const std::map<std::string, int> arity = {
-        {"op=", 1}, {"op<-", 1}, {"op<->", 1},
-        {"op+", 2}, {"op-", 2}, {"op*", 2}, {"op/", 2}, {"op%", 2},
-        {"op&", 2}, {"op|", 2}, {"op^", 2}, {"op<<", 2}, {"op>>", 2},
-        {"op&&", 2}, {"op||", 2}, {"op^^", 2},
-        {"op+=", 1}, {"op-=", 1}, {"op*=", 1}, {"op/=", 1}, {"op%=", 1},
-        {"op&=", 1}, {"op|=", 1}, {"op^=", 1}, {"op<<=", 1}, {"op>>=", 1},
-        {"op&&=", 1}, {"op||=", 1}, {"op^^=", 1},
-        {"op==", 1}, {"op!=", 1}, {"op<", 1}, {"op>", 1}, {"op<=", 1}, {"op>=", 1},
-        {"op[]", 1}, {"op[]=", 2},
+    // Allowed explicit-parameter counts per in-class op<sym>. self is implicit.
+    // Unary + and - accept arity 0 (self-only), 1 (unary), 2 (binary).
+    // Unary ~ and ! accept arity 0 (self-only), 1 (unary). No binary form.
+    static const std::map<std::string, std::vector<int>> arity = {
+        {"op=", {1}}, {"op<-", {1}}, {"op<->", {1}},
+        {"op+", {0, 1, 2}}, {"op-", {0, 1, 2}},
+        {"op*", {2}}, {"op/", {2}}, {"op%", {2}},
+        {"op&", {2}}, {"op|", {2}}, {"op^", {2}}, {"op<<", {2}}, {"op>>", {2}},
+        {"op&&", {2}}, {"op||", {2}}, {"op^^", {2}},
+        {"op~", {0, 1}}, {"op!", {0, 1}},
+        {"op+=", {1}}, {"op-=", {1}}, {"op*=", {1}}, {"op/=", {1}}, {"op%=", {1}},
+        {"op&=", {1}}, {"op|=", {1}}, {"op^=", {1}}, {"op<<=", {1}}, {"op>>=", {1}},
+        {"op&&=", {1}}, {"op||=", {1}}, {"op^^=", {1}},
+        {"op==", {1}}, {"op!=", {1}}, {"op<", {1}}, {"op>", {1}}, {"op<=", {1}}, {"op>=", {1}},
+        {"op[]", {1}}, {"op[]=", {2}},
     };
     auto it = arity.find(op_name);
     if (it == arity.end()) return;
-    if (actual != it->second) {
-        errorAt(op_tok, "operator '" + op_name + "' requires exactly "
-            + std::to_string(it->second) + " parameter"
-            + (it->second == 1 ? "" : "s") + "; got "
-            + std::to_string(actual));
+    const auto& allowed = it->second;
+    for (int n : allowed) if (n == actual) return;
+    std::string list;
+    for (size_t i = 0; i < allowed.size(); ++i) {
+        if (i > 0) list += (i + 1 == allowed.size()) ? " or " : ", ";
+        list += std::to_string(allowed[i]);
     }
+    errorAt(op_tok, "operator '" + op_name + "' requires "
+        + list + " parameter" + (allowed.size() == 1 && allowed[0] == 1 ? "" : "s")
+        + "; got " + std::to_string(actual));
 }
 
 std::optional<std::string> Parser::consumeOpSymbol() {
@@ -703,12 +712,11 @@ std::unique_ptr<Expr> Parser::parseUnary() {
     }
     if (peek().type == TokenType::kPlus) {
         advance();
-        return parsePrimary();
+        return make<UnaryExpr>(t_start, "+", parseUnary());
     }
     if (peek().type == TokenType::kMinus) {
         advance();
-        return make<BinaryExpr>(t_start, "-",
-            make<IntLiteralExpr>(t_start, 0), parsePrimary());
+        return make<UnaryExpr>(t_start, "-", parseUnary());
     }
     if (peek().type == TokenType::kNot) {
         advance();

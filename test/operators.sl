@@ -27,8 +27,8 @@ Indexing
     [] — read
     []= — write
 
-Unary (not yet implemented)
-    -, ~, !, (maybe +)
+Unary
+    +, -, ~, !
 
 Usage rules:
 
@@ -84,6 +84,20 @@ rules:
 
     int x = (Class lhs == Type rhs)
         -> x = lhs.op==(rhs)
+
+Unary on a slid operand has two forms — fresh-temp or
+self-only. Arity 0 mirrors comparison: self only, no rhs,
+returned type must be a built-in. Arity 1 produces self
+from the operand:
+
+    Class temp = - Type operand
+        -> temp.op-(operand)         (arity 1, returns self)
+
+    if (- Class operand) { }
+        -> operand.op-()             (arity 0, returns built-in)
+
+Of the unary operators, + and - also accept a binary form
+(covered above); ~ and ! do not.
 
 Indexing is a special case. Read may return any type:
 
@@ -226,6 +240,36 @@ Overload(int y_ = 0) {
     op[]=(Overload^ a, int b) {
         __println("Overload:op[]=(Overload^,int)");
     }
+    /* unary arity 0: self only, no operand. Built-in return like comparison. */
+    bool op+() {
+        __println("Overload:op+()");
+        return false;
+    }
+    bool op-() {
+        __println("Overload:op-()");
+        return false;
+    }
+    bool op~() {
+        __println("Overload:op~()");
+        return false;
+    }
+    bool op!() {
+        __println("Overload:op!()");
+        return false;
+    }
+    /* unary arity 1: returns self. */
+    op+(Overload^ a) {
+        __println("Overload:op+(Overload^)");
+    }
+    op-(Overload^ a) {
+        __println("Overload:op-(Overload^)");
+    }
+    op~(Overload^ a) {
+        __println("Overload:op~(Overload^)");
+    }
+    op!(Overload^ a) {
+        __println("Overload:op!(Overload^)");
+    }
 
     /* correct syntax. */
     op=(int a) {
@@ -343,6 +387,19 @@ Overload(int y_ = 0) {
     }
     op[]=(int a, int b) {
         __println("Overload:op[]=(int,int)");
+    }
+    /* unary arity 1: int operand. */
+    op+(int a) {
+        __println("Overload:op+(int)");
+    }
+    op-(int a) {
+        __println("Overload:op-(int)");
+    }
+    op~(int a) {
+        __println("Overload:op~(int)");
+    }
+    op!(int a) {
+        __println("Overload:op!(int)");
     }
 
     /* correct syntax. */
@@ -462,6 +519,19 @@ Overload(int y_ = 0) {
     op[]=(Simple^ a, Simple^ b) {
         __println("Overload:op[]=(Simple^,Simple^)");
     }
+    /* unary arity 1: Simple^ operand. */
+    op+(Simple^ a) {
+        __println("Overload:op+(Simple^)");
+    }
+    op-(Simple^ a) {
+        __println("Overload:op-(Simple^)");
+    }
+    op~(Simple^ a) {
+        __println("Overload:op~(Simple^)");
+    }
+    op!(Simple^ a) {
+        __println("Overload:op!(Simple^)");
+    }
 
     /* compile error: swap special case */
     // op<->(int a) { }
@@ -471,8 +541,6 @@ Overload(int y_ = 0) {
     // op=() { }
     // op<-() { }
     // op<->() { }
-    // op+(Overload^ a) { }
-    // op-(Overload^ a) { }
     // op*(Overload^ a) { }
     // op/(Overload^ a) { }
     // op%(Overload^ a) { }
@@ -544,6 +612,26 @@ Overload(int y_ = 0) {
     // bool op>=(Overload^ a, Overload^ b) { }
     // Overload op[](Overload^ a, Overload^ b) { }
     // op[]=(Overload^ a, Overload^ b, Overload^ c) { }
+
+    /* compile error: too many parameters; ~ and ! have no binary form. */
+    // op~(Overload^ a, Overload^ b) { }
+    // op!(Overload^ a, Overload^ b) { }
+}
+
+/* All cases here violate "must return built-in type". */
+BadReturn(int dummy_ = 0) {
+    /* unary arity 0 — must return built-in (bool/int/pointer). */
+    // Overload op+() { return Overload(); }
+    // Overload op-() { return Overload(); }
+    // Overload op~() { return Overload(); }
+    // Overload op!() { return Overload(); }
+    /* comparison — must return built-in. */
+    // Overload op==(Simple^ a) { return Overload(); }
+    // Overload op!=(Simple^ a) { return Overload(); }
+    // Overload op<(Simple^ a) { return Overload(); }
+    // Overload op>(Simple^ a) { return Overload(); }
+    // Overload op<=(Simple^ a) { return Overload(); }
+    // Overload op>=(Simple^ a) { return Overload(); }
 }
 
 Comparison(int z_ = 0) {
@@ -633,6 +721,17 @@ int32 main()
     if (a == b) { }
     value = a[b];
     a[b] = value;
+    /* unary arity 1: a = -b lowers to a.op-(b). */
+    a = -b;
+    a = +b;
+    a = ~b;
+    a = !b;
+    /* unary arity 0: -a (no slid LHS) lowers to a.op-() — built-in result. */
+    result = -a;
+    result = +a;
+    result = ~a;
+    result = !a;
+    if (-a) { }
 
     /* correct syntax. */
     a = x;
@@ -674,6 +773,11 @@ int32 main()
     if (a == x) { }
     value = a[x];
     a[x] = value;
+    /* unary arity 1: int operand. */
+    a = -x;
+    a = +x;
+    a = ~x;
+    a = !x;
 
     /* correct syntax. */
     a = d;
@@ -715,6 +819,11 @@ int32 main()
     if (a == d) { }
     e = a[d];
     a[d] = e;
+    /* unary arity 1: Simple^ operand. */
+    a = -d;
+    a = +d;
+    a = ~d;
+    a = !d;
 
     /* correct syntax. */
     Comparison a1;
@@ -739,77 +848,87 @@ int32 main()
     __println("3: Not allowed: op=()");
     __println("4: Not allowed: op<-()");
     __println("5: Not allowed: op<->()");
-    __println("6: Not allowed: op+(Overload^ a)");
-    __println("7: Not allowed: op-(Overload^ a)");
-    __println("8: Not allowed: op*(Overload^ a)");
-    __println("9: Not allowed: op/(Overload^ a)");
-    __println("10: Not allowed: op%(Overload^ a)");
-    __println("11: Not allowed: op&(Overload^ a)");
-    __println("12: Not allowed: op|(Overload^ a)");
-    __println("13: Not allowed: op^(Overload^ a)");
-    __println("14: Not allowed: op<<(Overload^ a)");
-    __println("15: Not allowed: op>>(Overload^ a)");
-    __println("16: Not allowed: op&&(Overload^ a)");
-    __println("17: Not allowed: op||(Overload^ a)");
-    __println("18: Not allowed: op^^(Overload^ a)");
-    __println("19: Not allowed: op+=()");
-    __println("20: Not allowed: op-=()");
-    __println("21: Not allowed: op*=()");
-    __println("22: Not allowed: op/=()");
-    __println("23: Not allowed: op%=()");
-    __println("24: Not allowed: op&=()");
-    __println("25: Not allowed: op|=()");
-    __println("26: Not allowed: op^=()");
-    __println("27: Not allowed: op<<=()");
-    __println("28: Not allowed: op>>=()");
-    __println("29: Not allowed: op&&=()");
-    __println("30: Not allowed: op||=()");
-    __println("31: Not allowed: op^^=()");
-    __println("32: Not allowed: bool op==()");
-    __println("33: Not allowed: bool op!=()");
-    __println("34: Not allowed: bool op<()");
-    __println("35: Not allowed: bool op>()");
-    __println("36: Not allowed: bool op<=()");
-    __println("37: Not allowed: bool op>=()");
-    __println("38: Not allowed: Overload op[]()");
-    __println("39: Not allowed: op[]=(Overload^ a)");
-    __println("40: Not allowed: op=(Overload^ a, Overload^ b)");
-    __println("41: Not allowed: op<-(Overload^ a, Overload^ b)");
-    __println("42: Not allowed: op<->(Overload^ a, Overload^ b)");
-    __println("43: Not allowed: op+(Overload^ a, Overload^ b, Overload^ c)");
-    __println("44: Not allowed: op-(Overload^ a, Overload^ b, Overload^ c)");
-    __println("45: Not allowed: op*(Overload^ a, Overload^ b, Overload^ c)");
-    __println("46: Not allowed: op/(Overload^ a, Overload^ b, Overload^ c)");
-    __println("47: Not allowed: op%(Overload^ a, Overload^ b, Overload^ c)");
-    __println("48: Not allowed: op&(Overload^ a, Overload^ b, Overload^ c)");
-    __println("49: Not allowed: op|(Overload^ a, Overload^ b, Overload^ c)");
-    __println("50: Not allowed: op^(Overload^ a, Overload^ b, Overload^ c)");
-    __println("51: Not allowed: op<<(Overload^ a, Overload^ b, Overload^ c)");
-    __println("52: Not allowed: op>>(Overload^ a, Overload^ b, Overload^ c)");
-    __println("53: Not allowed: op&&(Overload^ a, Overload^ b, Overload^ c)");
-    __println("54: Not allowed: op||(Overload^ a, Overload^ b, Overload^ c)");
-    __println("55: Not allowed: op^^(Overload^ a, Overload^ b, Overload^ c)");
-    __println("56: Not allowed: op+=(Overload^ a, Overload^ b)");
-    __println("57: Not allowed: op-=(Overload^ a, Overload^ b)");
-    __println("58: Not allowed: op*=(Overload^ a, Overload^ b)");
-    __println("59: Not allowed: op/=(Overload^ a, Overload^ b)");
-    __println("60: Not allowed: op%=(Overload^ a, Overload^ b)");
-    __println("61: Not allowed: op&=(Overload^ a, Overload^ b)");
-    __println("62: Not allowed: op|=(Overload^ a, Overload^ b)");
-    __println("63: Not allowed: op^=(Overload^ a, Overload^ b)");
-    __println("64: Not allowed: op<<=(Overload^ a, Overload^ b)");
-    __println("65: Not allowed: op>>=(Overload^ a, Overload^ b)");
-    __println("66: Not allowed: op&&=(Overload^ a, Overload^ b)");
-    __println("67: Not allowed: op||=(Overload^ a, Overload^ b)");
-    __println("68: Not allowed: op^^=(Overload^ a, Overload^ b)");
-    __println("69: Not allowed: bool op==(Overload^ a, Overload^ b)");
-    __println("70: Not allowed: bool op!=(Overload^ a, Overload^ b)");
-    __println("71: Not allowed: bool op<(Overload^ a, Overload^ b)");
-    __println("72: Not allowed: bool op>(Overload^ a, Overload^ b)");
-    __println("73: Not allowed: bool op<=(Overload^ a, Overload^ b)");
-    __println("74: Not allowed: bool op>=(Overload^ a, Overload^ b)");
-    __println("75: Not allowed: Overload op[](Overload^ a, Overload^ b)");
-    __println("76: Not allowed: op[]=(Overload^ a, Overload^ b, Overload^ c)");
+    __println("6: Not allowed: op*(Overload^ a)");
+    __println("7: Not allowed: op/(Overload^ a)");
+    __println("8: Not allowed: op%(Overload^ a)");
+    __println("9: Not allowed: op&(Overload^ a)");
+    __println("10: Not allowed: op|(Overload^ a)");
+    __println("11: Not allowed: op^(Overload^ a)");
+    __println("12: Not allowed: op<<(Overload^ a)");
+    __println("13: Not allowed: op>>(Overload^ a)");
+    __println("14: Not allowed: op&&(Overload^ a)");
+    __println("15: Not allowed: op||(Overload^ a)");
+    __println("16: Not allowed: op^^(Overload^ a)");
+    __println("17: Not allowed: op+=()");
+    __println("18: Not allowed: op-=()");
+    __println("19: Not allowed: op*=()");
+    __println("20: Not allowed: op/=()");
+    __println("21: Not allowed: op%=()");
+    __println("22: Not allowed: op&=()");
+    __println("23: Not allowed: op|=()");
+    __println("24: Not allowed: op^=()");
+    __println("25: Not allowed: op<<=()");
+    __println("26: Not allowed: op>>=()");
+    __println("27: Not allowed: op&&=()");
+    __println("28: Not allowed: op||=()");
+    __println("29: Not allowed: op^^=()");
+    __println("30: Not allowed: bool op==()");
+    __println("31: Not allowed: bool op!=()");
+    __println("32: Not allowed: bool op<()");
+    __println("33: Not allowed: bool op>()");
+    __println("34: Not allowed: bool op<=()");
+    __println("35: Not allowed: bool op>=()");
+    __println("36: Not allowed: Overload op[]()");
+    __println("37: Not allowed: op[]=(Overload^ a)");
+    __println("38: Not allowed: op=(Overload^ a, Overload^ b)");
+    __println("39: Not allowed: op<-(Overload^ a, Overload^ b)");
+    __println("40: Not allowed: op<->(Overload^ a, Overload^ b)");
+    __println("41: Not allowed: op+(Overload^ a, Overload^ b, Overload^ c)");
+    __println("42: Not allowed: op-(Overload^ a, Overload^ b, Overload^ c)");
+    __println("43: Not allowed: op*(Overload^ a, Overload^ b, Overload^ c)");
+    __println("44: Not allowed: op/(Overload^ a, Overload^ b, Overload^ c)");
+    __println("45: Not allowed: op%(Overload^ a, Overload^ b, Overload^ c)");
+    __println("46: Not allowed: op&(Overload^ a, Overload^ b, Overload^ c)");
+    __println("47: Not allowed: op|(Overload^ a, Overload^ b, Overload^ c)");
+    __println("48: Not allowed: op^(Overload^ a, Overload^ b, Overload^ c)");
+    __println("49: Not allowed: op<<(Overload^ a, Overload^ b, Overload^ c)");
+    __println("50: Not allowed: op>>(Overload^ a, Overload^ b, Overload^ c)");
+    __println("51: Not allowed: op&&(Overload^ a, Overload^ b, Overload^ c)");
+    __println("52: Not allowed: op||(Overload^ a, Overload^ b, Overload^ c)");
+    __println("53: Not allowed: op^^(Overload^ a, Overload^ b, Overload^ c)");
+    __println("54: Not allowed: op+=(Overload^ a, Overload^ b)");
+    __println("55: Not allowed: op-=(Overload^ a, Overload^ b)");
+    __println("56: Not allowed: op*=(Overload^ a, Overload^ b)");
+    __println("57: Not allowed: op/=(Overload^ a, Overload^ b)");
+    __println("58: Not allowed: op%=(Overload^ a, Overload^ b)");
+    __println("59: Not allowed: op&=(Overload^ a, Overload^ b)");
+    __println("60: Not allowed: op|=(Overload^ a, Overload^ b)");
+    __println("61: Not allowed: op^=(Overload^ a, Overload^ b)");
+    __println("62: Not allowed: op<<=(Overload^ a, Overload^ b)");
+    __println("63: Not allowed: op>>=(Overload^ a, Overload^ b)");
+    __println("64: Not allowed: op&&=(Overload^ a, Overload^ b)");
+    __println("65: Not allowed: op||=(Overload^ a, Overload^ b)");
+    __println("66: Not allowed: op^^=(Overload^ a, Overload^ b)");
+    __println("67: Not allowed: bool op==(Overload^ a, Overload^ b)");
+    __println("68: Not allowed: bool op!=(Overload^ a, Overload^ b)");
+    __println("69: Not allowed: bool op<(Overload^ a, Overload^ b)");
+    __println("70: Not allowed: bool op>(Overload^ a, Overload^ b)");
+    __println("71: Not allowed: bool op<=(Overload^ a, Overload^ b)");
+    __println("72: Not allowed: bool op>=(Overload^ a, Overload^ b)");
+    __println("73: Not allowed: Overload op[](Overload^ a, Overload^ b)");
+    __println("74: Not allowed: op[]=(Overload^ a, Overload^ b, Overload^ c)");
+    __println("75: Not allowed: op~(Overload^ a, Overload^ b)");
+    __println("76: Not allowed: op!(Overload^ a, Overload^ b)");
+    __println("77: Not allowed: Overload op+() (arity-0 unary returns class)");
+    __println("78: Not allowed: Overload op-() (arity-0 unary returns class)");
+    __println("79: Not allowed: Overload op~() (arity-0 unary returns class)");
+    __println("80: Not allowed: Overload op!() (arity-0 unary returns class)");
+    __println("81: Not allowed: Overload op==(Simple^ a) (comparison returns class)");
+    __println("82: Not allowed: Overload op!=(Simple^ a) (comparison returns class)");
+    __println("83: Not allowed: Overload op<(Simple^ a) (comparison returns class)");
+    __println("84: Not allowed: Overload op>(Simple^ a) (comparison returns class)");
+    __println("85: Not allowed: Overload op<=(Simple^ a) (comparison returns class)");
+    __println("86: Not allowed: Overload op>=(Simple^ a) (comparison returns class)");
 
     return 0;
 }

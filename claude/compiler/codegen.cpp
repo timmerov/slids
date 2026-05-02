@@ -226,6 +226,25 @@ void Codegen::collectFunctionSignatures() {
                         + "' must take exactly one parameter of type '" + want + "'"));
             }
         }
+        // Arity-0 unary (op+/-/~/!) and comparison ops (op==/!=/</></><=/>=)
+        // must return a built-in type. Empty ret means "returns self" — also a class.
+        static const std::set<std::string> cmp_ops = {
+            "op==", "op!=", "op<", "op>", "op<=", "op>="
+        };
+        static const std::set<std::string> unary_ops = {"op+", "op-", "op~", "op!"};
+        for (auto& [method_name, entries] : by_name) {
+            for (auto& e : entries) {
+                bool needs = false;
+                if (e.params.size() == 1 && cmp_ops.count(method_name)) needs = true;
+                if (e.params.empty() && unary_ops.count(method_name)) needs = true;
+                if (!needs) continue;
+                // "void" is the parser's default when no explicit return is given on
+                // an op-method, which means "returns self" — i.e. a class.
+                if (e.ret.empty() || e.ret == "void" || slid_info_.count(e.ret))
+                    error(std::string("operator '" + method_name + "' on slid '"
+                        + slid.name + "' must return a built-in type (bool/int/pointer), not a class"));
+            }
+        }
         for (auto& [method_name, entries] : by_name) {
             std::string base = slid.name + "__" + method_name;
             for (auto& e : entries) {
@@ -2636,15 +2655,20 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
             std::string method_base = slid_name + "__" + fname;
             auto moit = method_overloads_.find(method_base);
             if (moit != method_overloads_.end() && !moit->second.empty()) {
+                static const std::set<std::string> cmp_ops = {"==", "!=", "<", ">", "<=", ">="};
+                bool is_cmp = cmp_ops.count(op) > 0;
                 std::string best;
                 for (auto& [mangled, ptypes] : moit->second) {
                     if (ptypes.empty()) continue;
                     // 2-arg method (binary op produces self): both ptypes are operand types.
-                    // 1-arg method (comparison / op[]): ptypes[0] is the rhs/index; self is lhs.
+                    // 1-arg method: comparison style only (ptypes[0] is rhs; self is lhs).
+                    // Unary arity-1 overloads (op+/op-/op~/op!) live in the same bucket
+                    // but are dispatched separately — never match here.
                     if (ptypes.size() > 1) {
                         if (!argMatchesParam(left,  ptypes[0])) continue;
                         if (!argMatchesParam(right, ptypes[1])) continue;
                     } else {
+                        if (!is_cmp) continue;
                         if (!argMatchesParam(right, ptypes[0])) continue;
                     }
                     if (best.empty() || ptypes.size() > func_param_types_[best].size())
