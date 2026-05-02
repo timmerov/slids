@@ -1,4 +1,39 @@
 
+for loops:
+kinda hate the current syntax.
+    for iter in container { }
+'in' should not be a keyword.
+possibilities:
+    for (int x : 0..10) { }
+    for (x : start..end) { }
+    for (x : enum) { }
+    for (iter : container) { }
+long form for example:
+    for (
+        int i = size,
+        char[] src = src_buffer,
+        char[] dst = dst_buffer
+    ) (i >= 0) {
+        --i; ++src; ++dst;
+    } {
+        dst^ = src^;
+    }
+middle form?:
+    for (int x=0; x<10; ++x) { }
+
+range tuples:
+0..10
+0..10+2
+9..>=0-1
+start..end
+could be implemented as an iterator class.
+Range.begin() .end() .next()
+parameters: lo, hi, step, condition
+Range might be defined in a std slid library.
+with most integer types already instantiated.
+would need to flag that in range.slh.
+Range<int> = delete;
+
 cogitate upon unary operators.
 two use cases. both useful.
 are you broken?
@@ -16,9 +51,6 @@ revisit initialization.
 
 implement complex field access with tuples.
 tuple[1].a_ is not yet supported.
-
-inheritance:
-multiple inheritance - no.
 
 test incomplete templates.
 
@@ -149,13 +181,6 @@ Namespace<T> {
 }
 has potential.
 
-for loops:
-kinda hate the current syntax.
-'in' should not be a keyword.
-possibilities:
-    for (int x : (0..10)) { }
-blech.
-
 method name collisions:
 name collisions when adding methods in different files.
 source1.slh and source2.slh can both add String:foo().
@@ -179,3 +204,6 @@ T^ ref = ^vec[3];
 T^ ref = vec^[3];
 maybe just api.
 T^ ref = vec.at(3);
+
+inheritance:
+multiple inheritance - no.
