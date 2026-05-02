@@ -859,8 +859,8 @@ Value(int value_ = 0) {
 | Comparison | `==` `!=` `<` `>` `<=` `>=` | `bool op<sym>(Type^ rhs)` |
 | Indexing read | `[]` | `T op[](Idx idx)` |
 | Indexing write | `[]=` | `op[]=(Idx idx, T rhs)` |
-| Unary, fresh self | `+` `-` `~` `!` | `op<sym>(Type^ a)` |
-| Unary, self-only | `+` `-` `~` `!` | `bool op<sym>()` |
+| Unary, construction | `+` `-` `~` `!` | `op<sym>(Type^ a)` |
+| Unary, query | `+` `-` `~` `!` | `bool op<sym>()` |
 
 `~` and `!` have no binary form; otherwise both unary rows apply to all four ops.
 
