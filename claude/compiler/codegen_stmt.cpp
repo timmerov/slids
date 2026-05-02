@@ -2407,6 +2407,47 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* f = dynamic_cast<const ForRangeStmt*>(&stmt)) {
+        // Stage 2 typecheck: bound type must be integer; end/step must match
+        // the bound type (integer literals widen). Bound type comes from the
+        // explicit loop-var type, else from the start expression.
+        // TODO: warn when an integer literal value is too large for the bound type.
+        static const std::set<std::string> allowed_bound = {
+            "int", "int8", "int16", "int32", "int64",
+            "uint", "uint8", "uint16", "uint32", "uint64"
+        };
+        std::string bound_type = !f->var_type.empty()
+            ? f->var_type
+            : inferSlidType(*f->range_start);
+        if (!allowed_bound.count(bound_type)) {
+            error(std::string("for-range: bound type must be integer; got '"
+                + bound_type + "'"));
+        }
+        auto is_int_literal = [](const Expr& e) -> bool {
+            if (dynamic_cast<const IntLiteralExpr*>(&e)) return true;
+            if (auto* u = dynamic_cast<const UnaryExpr*>(&e)) {
+                if ((u->op == "-" || u->op == "+") &&
+                    dynamic_cast<const IntLiteralExpr*>(u->operand.get())) return true;
+            }
+            return false;
+        };
+        auto check_match = [&](const Expr& e, const char* what) {
+            if (is_int_literal(e)) return; // widens to bound_type
+            std::string et = inferSlidType(e);
+            if (et != bound_type)
+                error(std::string("for-range: " + std::string(what) + " type '"
+                    + et + "' does not match start type '" + bound_type + "'"));
+        };
+        // exact-match check only when bound type is implicit (taken from start);
+        // an explicit loop-var type widens/narrows operands as needed at codegen.
+        if (f->var_type.empty()) {
+            check_match(*f->range_end, "end");
+            if (f->range_step) check_match(*f->range_step, "step");
+        }
+
+        // Stage 3 codegen.
+        std::string llvm_t = llvmType(bound_type);
+        bool unsig = bound_type.size() >= 4 && bound_type.substr(0, 4) == "uint";
+
         std::string init_lbl = newLabel("for_init");
         std::string cond_lbl = newLabel("for_cond");
         std::string body_lbl = newLabel("for_body");
@@ -2416,40 +2457,46 @@ void Codegen::emitStmt(const Stmt& stmt) {
         break_label_ = end_lbl; continue_label_ = incr_lbl;
         loop_stack_.push_back({f->block_label, end_lbl, incr_lbl, ""});
 
-        std::string var_reg;
-        bool new_var = !f->var_type.empty();
-        if (new_var) {
-            // declare new loop variable
-            var_reg = uniqueAllocaReg(f->var_name);
-            out_ << "    " << var_reg << " = alloca i32\n";
-            locals_[f->var_name] = var_reg;
-        } else {
-            // reuse existing variable
-            auto it = locals_.find(f->var_name);
-            if (it == locals_.end())
-                error(std::string("for loop: undefined variable '" + f->var_name + "'"));
-            var_reg = it->second;
-        }
-        std::string end_reg = newTmp() + "_end";
-        out_ << "    " << end_reg << " = alloca i32\n";
+        // Always declare a fresh loop-var alloca; save+restore any prior
+        // same-name binding so the loop var is scope-local to the for body.
+        bool had_prev_local = locals_.count(f->var_name);
+        std::string prev_local_reg = had_prev_local ? locals_[f->var_name] : std::string();
+        bool had_prev_type = local_types_.count(f->var_name);
+        std::string prev_local_type = had_prev_type ? local_types_[f->var_name] : std::string();
+        std::string var_reg = uniqueAllocaReg(f->var_name);
+        out_ << "    " << var_reg << " = alloca " << llvm_t << "\n";
+        locals_[f->var_name] = var_reg;
+        local_types_[f->var_name] = bound_type;
+        // Synthetic end alloca; __$end_<n> avoids author-name collisions.
+        std::string end_reg = "%__$end_" + std::to_string(tmp_counter_++);
+        out_ << "    " << end_reg << " = alloca " << llvm_t << "\n";
 
         out_ << "    br label %" << init_lbl << "\n";
         block_terminated_ = false;
         out_ << init_lbl << ":\n";
         std::string start_val = emitExpr(*f->range_start);
-        out_ << "    store i32 " << start_val << ", ptr " << var_reg << "\n";
+        out_ << "    store " << llvm_t << " " << start_val << ", ptr " << var_reg << "\n";
         std::string end_val = emitExpr(*f->range_end);
-        out_ << "    store i32 " << end_val << ", ptr " << end_reg << "\n";
+        out_ << "    store " << llvm_t << " " << end_val << ", ptr " << end_reg << "\n";
+        // Step value: literal 1 if not specified. SSA-only — eval once at init.
+        std::string step_val = f->range_step ? emitExpr(*f->range_step) : std::string("1");
         out_ << "    br label %" << cond_lbl << "\n";
 
         block_terminated_ = false;
         out_ << cond_lbl << ":\n";
         std::string cur = newTmp();
-        out_ << "    " << cur << " = load i32, ptr " << var_reg << "\n";
+        out_ << "    " << cur << " = load " << llvm_t << ", ptr " << var_reg << "\n";
         std::string lim = newTmp();
-        out_ << "    " << lim << " = load i32, ptr " << end_reg << "\n";
+        out_ << "    " << lim << " = load " << llvm_t << ", ptr " << end_reg << "\n";
         std::string cmp = newTmp();
-        out_ << "    " << cmp << " = icmp slt i32 " << cur << ", " << lim << "\n";
+        std::string cmp_op;
+        if      (f->cmp == "<")  cmp_op = unsig ? "ult" : "slt";
+        else if (f->cmp == "<=") cmp_op = unsig ? "ule" : "sle";
+        else if (f->cmp == ">")  cmp_op = unsig ? "ugt" : "sgt";
+        else if (f->cmp == ">=") cmp_op = unsig ? "uge" : "sge";
+        else if (f->cmp == "!=") cmp_op = "ne";
+        else                     cmp_op = unsig ? "ult" : "slt";
+        out_ << "    " << cmp << " = icmp " << cmp_op << " " << llvm_t << " " << cur << ", " << lim << "\n";
         out_ << "    br i1 " << cmp << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
 
         block_terminated_ = false;
@@ -2467,16 +2514,26 @@ void Codegen::emitStmt(const Stmt& stmt) {
         block_terminated_ = false;
         out_ << incr_lbl << ":\n";
         std::string old_val = newTmp();
-        out_ << "    " << old_val << " = load i32, ptr " << var_reg << "\n";
+        out_ << "    " << old_val << " = load " << llvm_t << ", ptr " << var_reg << "\n";
         std::string new_val = newTmp();
-        out_ << "    " << new_val << " = add i32 " << old_val << ", 1\n";
-        out_ << "    store i32 " << new_val << ", ptr " << var_reg << "\n";
+        std::string instr;
+        if      (f->step_op == "+") instr = "add";
+        else if (f->step_op == "-") instr = "sub";
+        else if (f->step_op == "*") instr = "mul";
+        else if (f->step_op == "/") instr = unsig ? "udiv" : "sdiv";
+        else                        instr = "add";
+        out_ << "    " << new_val << " = " << instr << " " << llvm_t << " "
+             << old_val << ", " << step_val << "\n";
+        out_ << "    store " << llvm_t << " " << new_val << ", ptr " << var_reg << "\n";
         out_ << "    br label %" << cond_lbl << "\n";
 
         block_terminated_ = false;
         out_ << end_lbl << ":\n";
-        // intentionally do NOT erase new_var from locals_ — the variable persists
-        // after the loop (e.g. for use after a break, as in chess2.sl row/col)
+        // restore any prior same-name local binding the loop shadowed
+        if (had_prev_local) locals_[f->var_name] = prev_local_reg;
+        else                locals_.erase(f->var_name);
+        if (had_prev_type)  local_types_[f->var_name] = prev_local_type;
+        else                local_types_.erase(f->var_name);
         loop_stack_.pop_back();
         break_label_ = saved_break; continue_label_ = saved_continue;
         return;

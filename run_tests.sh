@@ -24,6 +24,7 @@ SAMPLES=(
     operators
     parsing
     pointer
+    ranges
     rangedfor
     returnslid
     sizeof

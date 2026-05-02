@@ -274,7 +274,10 @@ static std::unique_ptr<Stmt> cloneStmtImpl(const Stmt& stmt,
         r->var_type   = subTypeSuffix(s->var_type, subst);
         r->var_name   = s->var_name;
         r->range_start = cloneExpr(*s->range_start, subst);
+        r->cmp         = s->cmp;
         r->range_end   = cloneExpr(*s->range_end, subst);
+        r->step_op     = s->step_op;
+        if (s->range_step) r->range_step = cloneExpr(*s->range_step, subst);
         r->body        = cloneBlock(*s->body, subst);
         r->block_label = s->block_label;
         return r;

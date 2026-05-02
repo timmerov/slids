@@ -346,7 +346,10 @@ struct ForRangeStmt : Stmt {
     std::string var_type;   // empty = use existing variable
     std::string var_name;
     std::unique_ptr<Expr> range_start;
+    std::string cmp;        // "<", "<=", ">", ">=", "!="; default "<"
     std::unique_ptr<Expr> range_end;
+    std::string step_op;    // "+", "-", "*", "/"; default "+"
+    std::unique_ptr<Expr> range_step;  // null = default literal 1
     std::unique_ptr<BlockStmt> body;
     std::string block_label; // optional :name after }
 };

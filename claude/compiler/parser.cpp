@@ -1217,13 +1217,40 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         expect(TokenType::kLParen, "expected '('");
         auto first_expr = parseExpr();
         if (peek().type == TokenType::kDotDot) {
-            // for var in (start..end) — numeric range
+            // for var in (start .. <cmp> end <op> step) — numeric range
             advance(); // consume '..'
+            // optional cmp suffix: <, <=, >, >=, !=  (default <)
+            std::string cmp = "<";
+            if      (peek().type == TokenType::kLt)    { advance(); cmp = "<"; }
+            else if (peek().type == TokenType::kLtEq)  { advance(); cmp = "<="; }
+            else if (peek().type == TokenType::kGt)    { advance(); cmp = ">"; }
+            else if (peek().type == TokenType::kGtEq)  { advance(); cmp = ">="; }
+            else if (peek().type == TokenType::kNotEq) { advance(); cmp = "!="; }
+            // end and step are primaries (parseUnary level) — trailing arithmetic
+            // belongs to the step op, not the end expression. Use parens around
+            // the end expression to defeat that vexing-parse rule.
+            auto end_expr = parseUnary();
+            // optional step op + step value
+            std::string step_op = "+";
+            std::unique_ptr<Expr> step_expr;
+            TokenType nt = peek().type;
+            if (nt == TokenType::kPlus  || nt == TokenType::kMinus
+             || nt == TokenType::kStar  || nt == TokenType::kSlash) {
+                if      (nt == TokenType::kPlus)  step_op = "+";
+                else if (nt == TokenType::kMinus) step_op = "-";
+                else if (nt == TokenType::kStar)  step_op = "*";
+                else                              step_op = "/";
+                advance();
+                step_expr = parseUnary();
+            }
             auto stmt = make<ForRangeStmt>(t_start);
             stmt->var_type = for_var_type;
             stmt->var_name = for_var_name;
             stmt->range_start = std::move(first_expr);
-            stmt->range_end = parseExpr();
+            stmt->cmp = cmp;
+            stmt->range_end = std::move(end_expr);
+            stmt->step_op = step_op;
+            stmt->range_step = std::move(step_expr);
             expect(TokenType::kRParen, "expected ')'");
             stmt->body = parseBlock({for_var_name});
             if (peek().type == TokenType::kColon) {
