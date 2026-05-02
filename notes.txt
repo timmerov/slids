@@ -1,12 +1,17 @@
 
-op[] seems to have no checks.
-might want to look at other ops.
-
 cogitate upon unary operators.
+two use cases. both useful.
+are you broken?
 bool b = ! object -> b = object.op!();
+construct your opposite:
 obj_lhs = ! obj_rhs -> obj_lhs.op!(obj_rhs);
-
-
+claude approves.
+op- has three forms: bool (0 args),
+type conversion (1 arg), subtraction (2 args).
+distinguishable i guess.
+Vec3 going = - Vec3 coming;
+if (!file) ==> if (!file.is_open())
+BigBitArray outcasts = ~ BigBitArray incasts
 revisit initialization.
 
 implement complex field access with tuples.
