@@ -42,10 +42,10 @@
 
 - **Returning:** Currently, a non-void function must end with a return statement - which is flawed but it kinda sorta works. We need to ensure every possible code path returns. And don't require a return if the end of block is unreachable.
 
-- **For-loop syntax — remaining work.** Long form, short form (`for (var : iterable)`), range/tuple/string/array/enum/iterable-class shapes all landed. Surface keyword is `:`. All shapes desugar to `ForLongStmt` at parse time; codegen has one for-emit path. Still to do:
+- **For-loop syntax — remaining work.** Long form and short form for all six shapes (range/tuple-literal/tuple-named/string/fixed-array/enum/iterable-class) landed; all desugar to `ForLongStmt` at parse time. Class-typed iteration is forced explicit (`for (Class x : ...)` or `for (Class^ x : ...)`); bare `for (x : ...)` over class elements is a compile error. Loop var is hoisted (1 ctor + 1 dtor regardless of N for value form, 0 for ref form); homogeneous tuples iterate in place via codegen variable-index support. Still to do:
   - **Iteration protocol** for containers and author-defined iterables — surface form `obj.begin() / obj.end() / obj.next(prev)` lowered, but the protocol itself is still informal (no trait/concept).
   - **Loop-forever literal-fold check** for ranges composed entirely of integer literals (e.g. `step == 0`, `start == end` with strict cmp, sign mismatch between cmp direction and step sign).
-  - **Doc edit** to slids_reference.md — short form is currently documented in the old `for var in (...)` syntax; needs updating to the new `for (var : ...)` form across the For section.
+  - **Multi-dim array iteration semantics**: `int array[8][8]; for (x : array)` — three options on the table (flat / compile error / row iteration with `int^`); user hasn't chosen.
 
 - **Optimize returning objects:**
   - Currently, a function returning an object copies the object to its retval. The retval should be the object - named value return optimization (NRVO).
