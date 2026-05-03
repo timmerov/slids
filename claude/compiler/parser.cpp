@@ -62,6 +62,35 @@ bool Parser::isInScope(const std::string& name) const {
 
 Token& Parser::peek() { return tokens_[pos_]; }
 
+static bool isKeyword(TokenType t) {
+    switch (t) {
+        case TokenType::kInt: case TokenType::kInt8: case TokenType::kInt16:
+        case TokenType::kInt32: case TokenType::kInt64: case TokenType::kIntptr:
+        case TokenType::kUint: case TokenType::kUint8: case TokenType::kUint16:
+        case TokenType::kUint32: case TokenType::kUint64: case TokenType::kChar:
+        case TokenType::kFloat32: case TokenType::kFloat64:
+        case TokenType::kBool: case TokenType::kVoid:
+        case TokenType::kReturn: case TokenType::kTrue: case TokenType::kFalse:
+        case TokenType::kIf: case TokenType::kElse:
+        case TokenType::kWhile: case TokenType::kFor:
+        case TokenType::kBreak: case TokenType::kContinue:
+        case TokenType::kEnum: case TokenType::kSwitch:
+        case TokenType::kCase: case TokenType::kDefault:
+        case TokenType::kNew: case TokenType::kDelete: case TokenType::kNullptr:
+        case TokenType::kImport: case TokenType::kVirtual:
+        case TokenType::kSizeof: case TokenType::kOp: case TokenType::kMutable:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static std::string tokenLabel(const Token& t) {
+    return isKeyword(t.type)
+        ? "keyword '" + t.value + "'"
+        : "'" + t.value + "'";
+}
+
 Token& Parser::advance() {
     [[maybe_unused]] int t_start = pos_;
     Token& t = tokens_[pos_];
@@ -72,7 +101,7 @@ Token& Parser::advance() {
 Token& Parser::expect(TokenType type, const std::string& msg) {
     [[maybe_unused]] int t_start = pos_;
     if (peek().type != type)
-        errorHere(msg + ", got '" + peek().value + "'");
+        errorHere(msg + ", got " + tokenLabel(peek()));
     return advance();
 }
 
@@ -362,7 +391,7 @@ std::string Parser::parseTypeName() {
     }
     if (isTypeName(peek())) base = advance().value;
     else if (isUserTypeName(peek())) base = advance().value;
-    else errorHere("expected type name, got '" + peek().value + "'");
+    else errorHere("expected type name, got " + tokenLabel(peek()));
     // qualified nested-type suffix: Outer:Inner — consume only when the next-next token is
     // an identifier (the variable name), not a '(' (which would be an external-method def).
     if (peek().type == TokenType::kColon
@@ -628,7 +657,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
             return make<StringifyExpr>(src_tok, kw, nullptr);
         errorAt(src_tok, "unknown ## operator '" + kw + "'");
     }
-    errorHere("expected expression, got '" + t.value + "'");
+    errorHere("expected expression, got " + tokenLabel(t));
 }
 
 // postfix: handle .field and .method(args) chaining
@@ -1670,7 +1699,7 @@ NestedFunctionDef Parser::parseNestedFunctionDef() {
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         bool is_mutable = false;
         int mut_tok = pos_;
-        if (peek().type == TokenType::kIdentifier && peek().value == "mutable") {
+        if (peek().type == TokenType::kMutable) {
             advance();
             is_mutable = true;
         }
@@ -1697,21 +1726,24 @@ MethodDef Parser::parseMethodDef() {
         advance();
     }
     // new syntax: op overloads have no explicit return type (implied void / self)
-    if (peek().type == TokenType::kIdentifier && peek().value == "op") {
+    if (peek().type == TokenType::kOp) {
         m.return_type = "void";
     } else {
         m.return_type = parseTypeName();
     }
     int op_tok = pos_;
-    m.name = expect(TokenType::kIdentifier, "expected method name").value;
-    if (m.name == "op") {
+    if (peek().type == TokenType::kOp) {
+        advance();
         if (auto sym = consumeOpSymbol()) m.name = "op" + *sym;
+        else errorAt(op_tok, "expected operator symbol after 'op'");
+    } else {
+        m.name = expect(TokenType::kIdentifier, "expected method name").value;
     }
     expect(TokenType::kLParen, "expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         bool is_mutable = false;
         int mut_tok = pos_;
-        if (peek().type == TokenType::kIdentifier && peek().value == "mutable") {
+        if (peek().type == TokenType::kMutable) {
             advance();
             is_mutable = true;
         }
@@ -1908,7 +1940,7 @@ SlidDef Parser::parseSlidDef() {
             int base = pos_ + virt_off;
             const Token& t0 = tokens_[base];
             // op<symbol>( without explicit return type
-            if (t0.type == TokenType::kIdentifier && t0.value == "op") {
+            if (t0.type == TokenType::kOp) {
                 auto sym = peekOpSymbolAt(virt_off + 1);
                 if (!sym) return false;
                 int op_end = base + 1 + (*sym == "[]" ? 2 : 1);
@@ -1930,10 +1962,11 @@ SlidDef Parser::parseSlidDef() {
                 }
             }
             if (name_pos + 1 >= (int)tokens_.size()) return false;
-            if (tokens_[name_pos].type != TokenType::kIdentifier) return false;
+            if (tokens_[name_pos].type != TokenType::kIdentifier
+                && tokens_[name_pos].type != TokenType::kOp) return false;
             if (tokens_[name_pos + 1].type == TokenType::kLParen) return true;
             // <return-type> op<sym>( pattern
-            if (tokens_[name_pos].value != "op") return false;
+            if (tokens_[name_pos].type != TokenType::kOp) return false;
             auto sym = peekOpSymbolAt(name_pos + 1 - pos_);
             if (!sym) return false;
             int op_end = name_pos + 1 + (*sym == "[]" ? 2 : 1);
@@ -2051,7 +2084,7 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         bool is_mutable = false;
         int mut_tok = pos_;
-        if (peek().type == TokenType::kIdentifier && peek().value == "mutable") {
+        if (peek().type == TokenType::kMutable) {
             advance();
             is_mutable = true;
         }
@@ -2117,25 +2150,28 @@ void Parser::parseExternalMethodBlock(Program& program) {
             continue;
         }
         // new syntax: op overloads have no explicit return type
-        if (peek().type == TokenType::kIdentifier && peek().value == "op") {
+        if (peek().type == TokenType::kOp) {
             em.return_type = "void";
         } else {
             em.return_type = parseTypeName();
         }
         int em_tok = pos_;
-        em.method_name = expect(TokenType::kIdentifier, "expected method name").value;
+        if (peek().type == TokenType::kOp) {
+            advance();
+            if (auto sym = consumeOpSymbol()) em.method_name = "op" + *sym;
+            else errorAt(em_tok, "expected operator symbol after 'op'");
+        } else {
+            em.method_name = expect(TokenType::kIdentifier, "expected method name").value;
+        }
         // (P1) reopen merges into class scope — method name cannot equal class name.
         if (em.method_name == slid_name) {
             errorAt(em_tok, "method '" + em.method_name + "' shares enclosing class name");
-        }
-        if (em.method_name == "op") {
-            if (auto sym = consumeOpSymbol()) em.method_name = "op" + *sym;
         }
         expect(TokenType::kLParen, "expected '('");
         while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
             bool is_mutable = false;
             int mut_tok = pos_;
-            if (peek().type == TokenType::kIdentifier && peek().value == "mutable") {
+            if (peek().type == TokenType::kMutable) {
                 advance();
                 is_mutable = true;
             }
@@ -2188,13 +2224,14 @@ FunctionDef Parser::parseFunctionDef() {
     }
     {
         int fname_tok = pos_;
-        std::string fname = expect(TokenType::kIdentifier, "expected function name").value;
-        if (fname == "op") {
-            if (auto sym = peekOpSymbolAt(0)) {
-                errorAt(fname_tok, "operator 'op" + *sym
-                    + "' must be a method of a class; free-function operators are not allowed");
-            }
+        if (peek().type == TokenType::kOp) {
+            auto sym = peekOpSymbolAt(1);
+            errorAt(fname_tok, sym
+                ? "operator 'op" + *sym
+                    + "' must be a method of a class; free-function operators are not allowed"
+                : "'op' is reserved; free-function operators are not allowed");
         }
+        std::string fname = expect(TokenType::kIdentifier, "expected function name").value;
         fn.name = fname;
         fn.user_name = fname;
     }
@@ -2213,7 +2250,7 @@ FunctionDef Parser::parseFunctionDef() {
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         bool is_mutable = false;
         int mut_tok = pos_;
-        if (peek().type == TokenType::kIdentifier && peek().value == "mutable") {
+        if (peek().type == TokenType::kMutable) {
             advance();
             is_mutable = true;
         }

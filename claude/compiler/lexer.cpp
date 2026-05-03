@@ -211,6 +211,8 @@ Token Lexer::readIdentifierOrKeyword() {
     if (value == "import")   return Token(TokenType::kImport,   value);
     if (value == "virtual")  return Token(TokenType::kVirtual,  value);
     if (value == "sizeof")   return Token(TokenType::kSizeof,   value);
+    if (value == "op")       return Token(TokenType::kOp,       value);
+    if (value == "mutable")  return Token(TokenType::kMutable,  value);
 
     return Token(TokenType::kIdentifier, value);
 }
