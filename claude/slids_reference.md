@@ -994,70 +994,9 @@ while {
 } :outer (condition);
 ```
 
-### For — range-based
-
-Curly brackets are always required.
-
-Numeric range:
-```
-for (int i : 0..10) {
-    println(i);
-} :outer;
-```
-
-Collection iteration:
-```
-Vector primes = (2, 3, 5);
-
-for (int i : primes) {
-    println(i);
-}
-```
-
-Enum iteration — iterates over all values of an enum in declaration order:
-```
-enum Direction (
-    kNorth,
-    kSouth,
-    kEast,
-    kWest
-)
-
-for (Direction d : Direction) {
-    println(d);
-}
-```
-
-Combined with `switch` to dispatch on each value:
-```
-enum Piece (
-    kEmpty,
-    kKing,
-    kQueen,
-    kRook,
-    kBishop,
-    kKnight,
-    kPawn
-)
-
-for (Piece piece : Piece) {
-    switch (piece) {
-    case kKing:   __print("King");   break;
-    case kQueen:  __print("Queen");  break;
-    case kRook:   __print("Rook");   break;
-    default:      __print("Other");  break;
-    }
-}
-```
-
-Not legal:
-```
-for (int i : 0..10) print(i);  // error — {} required
-```
-
 ### For — short form
 
-`for ( [Type] var : iterable ) { body } [:label;]`
+Iterate over a various types of collections. Curly brackets around the loop body required. Types may be explicit or infered. Iterating over a collection of class objects is either by value or by reference. The author must explicitly specify which.
 
 ```
 for (i : 0..10)         { ... }    // numeric range
@@ -1067,19 +1006,26 @@ for (x : my_array)      { ... }    // fixed-size array
 for (d : Direction)     { ... }    // enum — first symbol through last, inclusive
 for (e : my_container)  { ... }    // any class providing begin(), end(), next(prev)
 ```
-
-Range syntax: `<start> .. [<cmp>] <end> [<op> <step>]`. Cmp is one of `<` (default), `<=`, `>`, `>=`, `!=`. Step op is one of `+` (default), `-`, `*`, `/`. If `end` is an arithmetic expression, parenthesize it — `(0..<=(10+2))` reads end as 12; `(0..<=10+2)` reads end as 10 with step +2.
+```
+Vector primes = (2, 3, 5);
+for (int i : primes) {
+    println(i);
+}
+```
 
 ### For — long form
 
-`for ( init ) ( cond ) { update } { body } [:label;]`
-
-Four slots. `init` and `cond` are data; `update` and `body` are code blocks. `init` is a comma-separated list of declarations and/or assignments — empty slots are allowed. Empty `cond` means `true`. `break` and `continue` inside `update` are not legal.
-
+Four clauses: initialization like function parameter list; condition like `if` and `while`; update code block; loop body code block. The condition is tested at the start of the pass. The update is applied at the end of the pass. Empty elements are valid. Empty condition equates to `true`.
 ```
+/* print pairs of numbers until they converge. */
 for (int x = 0, int y = 10) (x < y) { ++x; --y; } {
     __println("(" + x + "," + y + ")");
 }
+```
+
+Not legal:
+```
+for (int i : 0..10) print(i);  // error — {} required
 ```
 
 ### Switch
