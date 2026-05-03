@@ -11,7 +11,7 @@ enum Piece (
 
 int32 main() {
 
-    for Piece piece in Piece {
+    for (Piece piece : Piece) {
         switch (piece) {
         case kKing:
             __print("King");

@@ -230,7 +230,7 @@ void example_loop_shadows_outer() {
     // the for 'i' is in a different scope.
     // this currently is a compile error.
     // but should be allowed.
-    for int i in (0..10) { // allowed
+    for (int i : 0..10) { // allowed
         // this 'i' is in the same scope as the for 'i' — same-scope dup
         // int i = 42; // not allowed
         {
@@ -251,7 +251,7 @@ var `int i` in that one merged scope. Same codegen bug as
 example_loop_shadows_outer above — duplicate `%var_i` alloca.
 */
 void example_for_body_shadow() {
-    for int i in (0..10) {
+    for (int i : 0..10) {
         // for-body local duplicates the for-loop variable in same merged scope
         // int i = 5;
     }
@@ -261,8 +261,8 @@ void example_for_body_shadow() {
 ALLOWED: nested for's with the same index.
 */
 void example_nested_for_same_index() {
-    for int i in (0..10) {
-        for int i in (0..10) {
+    for (int i : 0..10) {
+        for (int i : 0..10) {
             // it's impossible to reach the outer 'i'
             // but that's okay.
         }
@@ -276,8 +276,8 @@ unreachable from inside the inner loop, which mirrors how an outer
 local becomes unreachable when shadowed by an inner local.
 */
 void example_block_label_shadow() {
-    for int i in (0..3) {
-        for int j in (0..3) {
+    for (int i : 0..3) {
+        for (int j : 0..3) {
             break outer; // breaks inner per innermost-match
         } :outer;
     } :outer;
@@ -289,9 +289,9 @@ with that loop; from inside loop A, `break outer` reaches A's outer;
 from inside loop B, B's outer. Unambiguous.
 */
 void example_block_label_siblings() {
-    for int i in (0..3) {
+    for (int i : 0..3) {
     } :outer;
-    for int j in (0..3) {
+    for (int j : 0..3) {
     } :outer;
 }
 
@@ -316,7 +316,7 @@ Cls09(int x_ = 0) {
 
     void via_loop() {
         // for-loop index collides with field name (P2)
-        // for int x_ in (0..10) {
+        // for (int x_ : 0..10) {
         // }
     }
 

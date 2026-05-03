@@ -7,7 +7,7 @@ println traces inside each block reveal the executed path.
 
 int32 main() {
     __println("== test01: for default name break ==");
-    for int i in (0..3) {
+    for (int i : 0..3) {
         __println("for i=" + i);
         if (i == 1) {
             break for;
@@ -17,7 +17,7 @@ int32 main() {
     __println("after-for");
 
     __println("== test02: for default name continue ==");
-    for int ic in (0..3) {
+    for (int ic : 0..3) {
         __println("for ic=" + ic);
         if (ic == 1) {
             continue for;
@@ -75,9 +75,9 @@ int32 main() {
     __println("after-switch");
 
     __println("== test07: nested fors, inner default vs outer label ==");
-    for int o in (0..3) {
+    for (int o : 0..3) {
         __println("outer o=" + o);
-        for int j in (0..3) {
+        for (int j : 0..3) {
             __println("  inner j=" + j);
             if (j == 1) {
                 break for;
@@ -89,9 +89,9 @@ int32 main() {
     __println("after-outer");
 
     __println("== test08: nested fors, inner break to outer label ==");
-    for int oo in (0..3) {
+    for (int oo : 0..3) {
         __println("outer oo=" + oo);
-        for int jj in (0..3) {
+        for (int jj : 0..3) {
             __println("  inner jj=" + jj);
             if (oo == 1 && jj == 1) {
                 break outer;
@@ -102,7 +102,7 @@ int32 main() {
     __println("after-outer");
 
     __println("== test09: for-tuple default name break ==");
-    for int t in (10, 20, 30) {
+    for (int t : (10, 20, 30)) {
         __println("t=" + t);
         if (t == 20) {
             break for;
@@ -111,7 +111,7 @@ int32 main() {
     __println("after-for-tuple");
 
     __println("== test10: switch inside for, break switch only kills switch ==");
-    for int k in (0..2) {
+    for (int k : 0..2) {
         __println("k=" + k);
         switch (k) {
         case 0:
@@ -126,7 +126,7 @@ int32 main() {
     __println("after-for");
 
     __println("== test11: naked break in for ==");
-    for int p in (0..3) {
+    for (int p : 0..3) {
         __println("for p=" + p);
         if (p == 1) {
             break;
@@ -136,7 +136,7 @@ int32 main() {
     __println("after-for");
 
     __println("== test12: naked continue in for ==");
-    for int q in (0..3) {
+    for (int q : 0..3) {
         __println("for q=" + q);
         if (q == 1) {
             continue;
@@ -146,7 +146,7 @@ int32 main() {
     __println("after-for");
 
     __println("== test13: naked break in switch inside for ==");
-    for int r in (0..2) {
+    for (int r : 0..2) {
         __println("r=" + r);
         switch (r) {
         case 0:
@@ -184,7 +184,7 @@ int32 main() {
     __println("after-while");
 
     __println("== test16: break 1 in switch in for exits the for ==");
-    for int v in (0..3) {
+    for (int v : 0..3) {
         __println("for v=" + v);
         switch (v) {
         case 1:
@@ -196,7 +196,7 @@ int32 main() {
     __println("after-for");
 
     __println("== test17: continue 1 in switch in for skips iteration ==");
-    for int w in (0..3) {
+    for (int w : 0..3) {
         __println("for w=" + w);
         switch (w) {
         case 1:
@@ -208,9 +208,9 @@ int32 main() {
     __println("after-for");
 
     __println("== test18: break 2 counts loops only, ignores switch ==");
-    for int x in (0..3) {
+    for (int x : 0..3) {
         __println("outer x=" + x);
-        for int y in (0..3) {
+        for (int y : 0..3) {
             __println("  inner y=" + y);
             switch (y) {
             case 1:
@@ -224,9 +224,9 @@ int32 main() {
     __println("after-outer");
 
     __println("== test19: continue 2 counts loops only, ignores switch ==");
-    for int xa in (0..2) {
+    for (int xa : 0..2) {
         __println("outer xa=" + xa);
-        for int ya in (0..3) {
+        for (int ya : 0..3) {
             __println("  inner ya=" + ya);
             switch (ya) {
             case 1:

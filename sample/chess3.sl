@@ -22,8 +22,8 @@ int32 main() {
     );
 
     (int row, int col) returnTupleMethod() {
-        for int row in (0..8) {
-            for int col in (0..8) {
+        for (int row : 0..8) {
+            for (int col : 0..8) {
                 if (board[row][col] == kKnight) {
                     return (row, col);
                 }

@@ -63,7 +63,6 @@ int32 main() {
     } :simple;
     __println("for ctor.dtor: after");
 
-/*
     /*
     print the ints in the range.
     */
@@ -85,9 +84,9 @@ int32 main() {
     __println();
 
     /* compile error */
-    for (x : (1, 1, 2, "Hello")) {
-        __println("compile error: tuple must be homogenous");
-    }
+    //for (x : (1, 1, 2, "Hello")) {
+    //    __println("compile error: tuple must be homogenous");
+    //}
 
     /* print the characters in a string literal */
     __print("for string literal:");
@@ -110,16 +109,14 @@ int32 main() {
     to the last symbol defined, inclusive.
     desugars to:
     init:
-        int a = lp.begin();
-        int __$end_0 = lp.end();
+        x = kFirst;
     condition:
-        a != __$end_0
+        x != kLast;
     update:
-        a = lp.next(a);
+        ++x;
     */
-    init:
     __print("for enum:");
-    for (x : "Hello") {
+    for (x : Bases) {
         __print(" " + x);
     }
     __println();
@@ -128,11 +125,12 @@ int32 main() {
     iterate over a container class.
     desugars to:
     init:
-        x = kFirst;
+        int a = lp.begin();
+        int __$end_0 = lp.end();
     condition:
-        x != kLast;
+        a != __$end_0
     update:
-        ++x;
+        a = lp.next(a);
     */
     Loop loop(17, 21);
     __print("for container:");
@@ -140,7 +138,6 @@ int32 main() {
         __print(" " + x);
     }
     __println();
-*/
 
     return 0;
 }

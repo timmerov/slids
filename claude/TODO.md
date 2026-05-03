@@ -42,11 +42,11 @@
 
 - **Returning:** Currently, a non-void function must end with a return statement - which is flawed but it kinda sorta works. We need to ensure every possible code path returns. And don't require a return if the end of block is unreachable.
 
-- **For-loop syntax — remaining work.** Integer ranges with cmp + step ops landed (`<start>..<cmp><end><op><step>`, see slids_reference.md). Surface keyword is `in`; switching to `:` sugar is deferred. Still to do:
-  - **For-mation long form** `for (init) (cond) { step } { body }` — not yet implemented.
-  - **Iteration protocol** for containers and author-defined iterables — design pending.
-  - **Tuple iteration** `for (x in tuple)` compile-time unroll per slot.
+- **For-loop syntax — remaining work.** Long form, short form (`for (var : iterable)`), range/tuple/string/array/enum/iterable-class shapes all landed. Surface keyword is `:`. All shapes desugar to `ForLongStmt` at parse time; codegen has one for-emit path. Still to do:
+  - **For-tuple over slid types with non-trivial copy/move/dtor**: the synthesized `ArrayDeclStmt` fills slots with bitwise load+store of the struct value (codegen_stmt.cpp:436), never invoking `op=` / `op<-`. Safe for POD slids; for slids with owning resources (e.g. `String`) it aliases storage between source and slot, and dtor-on-loop-exit double-frees. Same gap on the body side: per-iteration `x = arr[idx]` is a struct-copy decl, not a slid-aware assign. Reached via `for (x : (a, b))` where `a`, `b` are class instances. Fix: dispatch `op=` per slid element on both the array fill and the body's per-iter decl when `elem_type` is a slid with copy semantics.
+  - **Iteration protocol** for containers and author-defined iterables — surface form `obj.begin() / obj.end() / obj.next(prev)` lowered, but the protocol itself is still informal (no trait/concept).
   - **Loop-forever literal-fold check** for ranges composed entirely of integer literals (e.g. `step == 0`, `start == end` with strict cmp, sign mismatch between cmp direction and step sign).
+  - **Doc edit** to slids_reference.md — short form is currently documented in the old `for var in (...)` syntax; needs updating to the new `for (var : ...)` form across the For section.
 
 - **Optimize returning objects:**
   - Currently, a function returning an object copies the object to its retval. The retval should be the object - named value return optimization (NRVO).

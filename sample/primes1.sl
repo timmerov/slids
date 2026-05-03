@@ -10,9 +10,9 @@ print 10 primes per line.
 int32 main() {
     __println("all primes less than 1000:");
     int32 count = 0;
-    for int n in (2..1000) {
+    for (int n : 2..1000) {
         bool is_prime = 1;
-        for int i in (2..n) {
+        for (int i : 2..n) {
             /* this test failes when i >= 2^7 * sqrt(2) */
             if (i * i > n) {
                 break;

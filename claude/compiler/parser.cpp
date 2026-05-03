@@ -60,6 +60,12 @@ bool Parser::isInScope(const std::string& name) const {
     return false;
 }
 
+bool Parser::isArrayInScope(const std::string& name) const {
+    for (auto it = array_scope_stack_.rbegin(); it != array_scope_stack_.rend(); ++it)
+        if (it->count(name)) return true;
+    return false;
+}
+
 Token& Parser::peek() { return tokens_[pos_]; }
 
 static bool isKeyword(TokenType t) {
@@ -907,6 +913,7 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     [[maybe_unused]] int t_start = pos_;
     expect(TokenType::kLBrace, "expected '{'");
     scope_stack_.push_back({});
+    array_scope_stack_.push_back({});
     for (auto& n : predeclare)
         declareVar(n, t_start);
     auto block = make<BlockStmt>(t_start);
@@ -928,6 +935,7 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
         }
     }
     scope_stack_.pop_back();
+    array_scope_stack_.pop_back();
     expect(TokenType::kRBrace, "expected '}'");
     return block;
 }
@@ -1203,13 +1211,292 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
     if (t.type == TokenType::kFor) {
         advance();
-        // long form: for ( init ) ( cond ) { update } { body } [:label;]
-        // disambiguated from short form by '(' immediately after `for`.
+        // Both short and long forms start with '('. Discriminate by peeking
+        // past the '(' for the short-form patterns:
+        //   ( IDENT :          → short, no var-type
+        //   ( TYPE IDENT :     → short, with var-type
+        // Long-form init slots use '=' (or are empty), so ':' after the
+        // identifier is the discriminator.
         if (peek().type == TokenType::kLParen) {
+            int s = pos_ + 1; // first token after '('
+            bool short_form = false;
+            if (s < (int)tokens_.size()
+                && (isTypeName(tokens_[s]) || isUserTypeName(tokens_[s]))) {
+                if (s + 1 < (int)tokens_.size()
+                    && tokens_[s + 1].type == TokenType::kColon) {
+                    short_form = true;  // ( IDENT :
+                } else if (s + 2 < (int)tokens_.size()
+                        && tokens_[s + 1].type == TokenType::kIdentifier
+                        && tokens_[s + 2].type == TokenType::kColon) {
+                    short_form = true;  // ( TYPE IDENT :
+                }
+            }
+
+            if (short_form) {
+                expect(TokenType::kLParen, "expected '('");
+
+                // for-scope: covers the desugared init/cond/update + body.
+                // Loop var, synthesized helpers, and body locals all unwind here.
+                scope_stack_.push_back({});
+                array_scope_stack_.push_back({});
+
+                int t_var_tok = pos_;
+                std::string for_var_type, for_var_name;
+                if (peek().type == TokenType::kColon) {
+                    errorHere("expected variable name in for-iterator");
+                } else if (isTypeName(peek())) {
+                    for_var_type = parseTypeName();
+                    t_var_tok = pos_;
+                    for_var_name = expect(TokenType::kIdentifier,
+                        "expected variable name").value;
+                } else if (peek().type == TokenType::kIdentifier
+                        && pos_ + 1 < (int)tokens_.size()
+                        && tokens_[pos_ + 1].type == TokenType::kIdentifier) {
+                    for_var_type = parseTypeName();
+                    t_var_tok = pos_;
+                    for_var_name = expect(TokenType::kIdentifier,
+                        "expected variable name").value;
+                } else {
+                    t_var_tok = pos_;
+                    for_var_name = expect(TokenType::kIdentifier,
+                        "expected variable name").value;
+                }
+                expect(TokenType::kColon, "expected ':' in for-iterator");
+                declareVar(for_var_name, t_var_tok);
+
+                auto first_expr = parseExpr();
+
+                auto stmt = make<ForLongStmt>(t_start);
+                stmt->block_label = "for";
+
+                // tiny synthesis helpers — all bound to t_start so any later
+                // error attribution lands at the for keyword.
+                auto _intLit = [&](int64_t n) -> std::unique_ptr<Expr> {
+                    return make<IntLiteralExpr>(t_start, n);
+                };
+                auto _var = [&](const std::string& name) -> std::unique_ptr<Expr> {
+                    return make<VarExpr>(t_start, name);
+                };
+                auto _bin = [&](const std::string& op,
+                                 std::unique_ptr<Expr> l,
+                                 std::unique_ptr<Expr> r) -> std::unique_ptr<Expr> {
+                    return make<BinaryExpr>(t_start, op,
+                        std::move(l), std::move(r));
+                };
+                auto _decl = [&](const std::string& type, const std::string& name,
+                                  std::unique_ptr<Expr> init) -> std::unique_ptr<Stmt> {
+                    return make<VarDeclStmt>(t_start, type, name,
+                        std::move(init), std::vector<std::unique_ptr<Expr>>{}, false);
+                };
+                auto _assign = [&](const std::string& name,
+                                    std::unique_ptr<Expr> v) -> std::unique_ptr<Stmt> {
+                    return make<AssignStmt>(t_start, name, std::move(v), false);
+                };
+                auto _consumeLabel = [&] {
+                    if (peek().type == TokenType::kColon) {
+                        advance();
+                        stmt->block_label = expect(TokenType::kIdentifier,
+                            "expected label name").value;
+                        expect(TokenType::kSemicolon, "expected ';'");
+                    }
+                };
+                auto _popScope = [&] {
+                    scope_stack_.pop_back();
+                    array_scope_stack_.pop_back();
+                };
+
+                // Range: `start .. [cmp] end [op step]`
+                if (peek().type == TokenType::kDotDot) {
+                    advance();
+                    std::string cmp = "<";
+                    if      (peek().type == TokenType::kLt)    { advance(); cmp = "<"; }
+                    else if (peek().type == TokenType::kLtEq)  { advance(); cmp = "<="; }
+                    else if (peek().type == TokenType::kGt)    { advance(); cmp = ">"; }
+                    else if (peek().type == TokenType::kGtEq)  { advance(); cmp = ">="; }
+                    else if (peek().type == TokenType::kNotEq) { advance(); cmp = "!="; }
+                    auto end_expr = parseUnary();
+                    std::string step_op = "+";
+                    std::unique_ptr<Expr> step_expr;
+                    TokenType nt = peek().type;
+                    if (nt == TokenType::kPlus  || nt == TokenType::kMinus
+                     || nt == TokenType::kStar  || nt == TokenType::kSlash) {
+                        if      (nt == TokenType::kPlus)  step_op = "+";
+                        else if (nt == TokenType::kMinus) step_op = "-";
+                        else if (nt == TokenType::kStar)  step_op = "*";
+                        else                              step_op = "/";
+                        advance();
+                        step_expr = parseUnary();
+                    }
+                    expect(TokenType::kRParen, "expected ')'");
+
+                    std::string end_name = "__$end_" + std::to_string(synthetic_counter_++);
+                    std::string step_name;
+                    stmt->init_stmts.push_back(
+                        _decl(for_var_type, for_var_name, std::move(first_expr)));
+                    stmt->init_stmts.push_back(
+                        _decl(for_var_type, end_name, std::move(end_expr)));
+                    if (step_expr) {
+                        step_name = "__$step_" + std::to_string(synthetic_counter_++);
+                        stmt->init_stmts.push_back(
+                            _decl(for_var_type, step_name, std::move(step_expr)));
+                    }
+                    stmt->cond = _bin(cmp, _var(for_var_name), _var(end_name));
+                    std::unique_ptr<Expr> step_val =
+                        step_name.empty() ? _intLit(1) : _var(step_name);
+                    auto upd = make<BlockStmt>(t_start);
+                    upd->stmts.push_back(_assign(for_var_name,
+                        _bin(step_op, _var(for_var_name), std::move(step_val))));
+                    stmt->update_block = std::move(upd);
+                    stmt->body = parseBlock();
+                    _consumeLabel();
+                    _popScope();
+                    return stmt;
+                }
+
+                // Tuple: lower to backing array + index iteration. Codegen
+                // checks homogeneity when it sees ArrayDeclStmt.elem_type=="".
+                if (auto* te = dynamic_cast<TupleExpr*>(first_expr.get())) {
+                    expect(TokenType::kRParen, "expected ')'");
+                    int size = (int)te->values.size();
+                    std::string tup_name = "__$tup_" + std::to_string(synthetic_counter_++);
+                    std::string idx_name = "__$idx_" + std::to_string(synthetic_counter_++);
+                    auto adecl = make<ArrayDeclStmt>(t_start);
+                    adecl->elem_type = ""; // codegen infers from values[0]
+                    adecl->name = tup_name;
+                    adecl->dims = {size};
+                    adecl->init_values = std::move(te->values);
+                    stmt->init_stmts.push_back(std::move(adecl));
+                    stmt->init_stmts.push_back(_decl("int", idx_name, _intLit(0)));
+                    stmt->cond = _bin("<", _var(idx_name), _intLit(size));
+                    auto upd = make<BlockStmt>(t_start);
+                    upd->stmts.push_back(_assign(idx_name,
+                        _bin("+", _var(idx_name), _intLit(1))));
+                    stmt->update_block = std::move(upd);
+                    auto user_body = parseBlock();
+                    auto new_body = make<BlockStmt>(t_start);
+                    new_body->stmts.push_back(_decl(for_var_type, for_var_name,
+                        std::unique_ptr<Expr>(make<ArrayIndexExpr>(t_start,
+                            _var(tup_name), _var(idx_name)))));
+                    for (auto& s : user_body->stmts)
+                        new_body->stmts.push_back(std::move(s));
+                    stmt->body = std::move(new_body);
+                    _consumeLabel();
+                    _popScope();
+                    return stmt;
+                }
+
+                // Enum: VarExpr whose name matches a known enum type.
+                if (auto* ve = dynamic_cast<VarExpr*>(first_expr.get())) {
+                    auto eit = enum_sizes_.find(ve->name);
+                    if (eit != enum_sizes_.end()) {
+                        int size = eit->second;
+                        expect(TokenType::kRParen, "expected ')'");
+                        stmt->init_stmts.push_back(_decl("int", for_var_name, _intLit(0)));
+                        stmt->cond = _bin("<", _var(for_var_name), _intLit(size));
+                        auto upd = make<BlockStmt>(t_start);
+                        upd->stmts.push_back(_assign(for_var_name,
+                            _bin("+", _var(for_var_name), _intLit(1))));
+                        stmt->update_block = std::move(upd);
+                        stmt->body = parseBlock();
+                        _consumeLabel();
+                        _popScope();
+                        return stmt;
+                    }
+                }
+
+                // String literal: declare a base ptr + index iteration.
+                if (auto* sl = dynamic_cast<StringLiteralExpr*>(first_expr.get())) {
+                    int s_len = (int)sl->value.size();
+                    expect(TokenType::kRParen, "expected ')'");
+                    std::string base_name = "__$base_" + std::to_string(synthetic_counter_++);
+                    std::string idx_name  = "__$idx_"  + std::to_string(synthetic_counter_++);
+                    stmt->init_stmts.push_back(
+                        _decl("char[]", base_name, std::move(first_expr)));
+                    stmt->init_stmts.push_back(_decl("int", idx_name, _intLit(0)));
+                    stmt->cond = _bin("<", _var(idx_name), _intLit(s_len));
+                    auto upd = make<BlockStmt>(t_start);
+                    upd->stmts.push_back(_assign(idx_name,
+                        _bin("+", _var(idx_name), _intLit(1))));
+                    stmt->update_block = std::move(upd);
+                    auto user_body = parseBlock();
+                    auto new_body = make<BlockStmt>(t_start);
+                    new_body->stmts.push_back(_decl(for_var_type, for_var_name,
+                        std::unique_ptr<Expr>(make<ArrayIndexExpr>(t_start,
+                            _var(base_name), _var(idx_name)))));
+                    for (auto& s : user_body->stmts)
+                        new_body->stmts.push_back(std::move(s));
+                    stmt->body = std::move(new_body);
+                    _consumeLabel();
+                    _popScope();
+                    return stmt;
+                }
+
+                // VarExpr: known fixed-size array → sizeof+index, otherwise
+                // iterable class via begin/end/next.
+                if (auto* ve = dynamic_cast<VarExpr*>(first_expr.get())) {
+                    std::string iter_name = ve->name;
+                    bool is_array = isArrayInScope(iter_name);
+                    expect(TokenType::kRParen, "expected ')'");
+
+                    if (is_array) {
+                        std::string idx_name =
+                            "__$idx_" + std::to_string(synthetic_counter_++);
+                        // count = sizeof(arr) / sizeof(arr[0])
+                        auto so_arr = make<SizeofExpr>(t_start);
+                        so_arr->operand = _var(iter_name);
+                        auto so_elem = make<SizeofExpr>(t_start);
+                        so_elem->operand = std::unique_ptr<Expr>(
+                            make<ArrayIndexExpr>(t_start, _var(iter_name), _intLit(0)));
+                        std::unique_ptr<Expr> count_expr = _bin("/",
+                            std::move(so_arr), std::move(so_elem));
+                        stmt->init_stmts.push_back(_decl("int", idx_name, _intLit(0)));
+                        stmt->cond = _bin("<", _var(idx_name), std::move(count_expr));
+                        auto upd = make<BlockStmt>(t_start);
+                        upd->stmts.push_back(_assign(idx_name,
+                            _bin("+", _var(idx_name), _intLit(1))));
+                        stmt->update_block = std::move(upd);
+                        auto user_body = parseBlock();
+                        auto new_body = make<BlockStmt>(t_start);
+                        new_body->stmts.push_back(_decl(for_var_type, for_var_name,
+                            std::unique_ptr<Expr>(make<ArrayIndexExpr>(t_start,
+                                _var(iter_name), _var(idx_name)))));
+                        for (auto& s : user_body->stmts)
+                            new_body->stmts.push_back(std::move(s));
+                        stmt->body = std::move(new_body);
+                    } else {
+                        // Iterable class: begin/end/next.
+                        std::string end_name =
+                            "__$end_" + std::to_string(synthetic_counter_++);
+                        std::vector<std::unique_ptr<Expr>> beg_args, end_args, next_args;
+                        next_args.push_back(_var(for_var_name));
+                        stmt->init_stmts.push_back(_decl(for_var_type, for_var_name,
+                            std::unique_ptr<Expr>(make<MethodCallExpr>(t_start,
+                                _var(iter_name), "begin", std::move(beg_args)))));
+                        stmt->init_stmts.push_back(_decl(for_var_type, end_name,
+                            std::unique_ptr<Expr>(make<MethodCallExpr>(t_start,
+                                _var(iter_name), "end", std::move(end_args)))));
+                        stmt->cond = _bin("!=", _var(for_var_name), _var(end_name));
+                        auto upd = make<BlockStmt>(t_start);
+                        upd->stmts.push_back(_assign(for_var_name,
+                            std::unique_ptr<Expr>(make<MethodCallExpr>(t_start,
+                                _var(iter_name), "next", std::move(next_args)))));
+                        stmt->update_block = std::move(upd);
+                        stmt->body = parseBlock();
+                    }
+                    _consumeLabel();
+                    _popScope();
+                    return stmt;
+                }
+
+                errorHere("for-iterator: unsupported iterable shape");
+            }
+
+            // Long form: for ( init ) ( cond ) { update } { body } [:label;]
             auto stmt = make<ForLongStmt>(t_start);
             // for-scope: covers init, cond, update, body. push a parser scope frame
             // so init-tuple decls are visible in cond/update/body and don't leak out.
             scope_stack_.push_back({});
+            array_scope_stack_.push_back({});
 
             // init tuple: comma-separated slots; each is empty / `type name = expr`
             // / `name = expr` (decl-or-assign disambiguated by current scope).
@@ -1276,136 +1563,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             }
 
             scope_stack_.pop_back();
+            array_scope_stack_.pop_back();
             return stmt;
         }
-        // for EnumType var in EnumType { ... }  — enum iteration
-        // detected by: user type name, identifier, 'in', user type name (no '(')
-        if (isUserTypeName(peek())) {
-            int saved = pos_;
-            std::string var_type = advance().value;   // e.g. "Piece"
-            if (peek().type == TokenType::kIdentifier) {
-                std::string var_name = advance().value;
-                if (peek().type == TokenType::kIdentifier && peek().value == "in") {
-                    advance(); // consume 'in'
-                    if (isUserTypeName(peek())) {
-                        auto stmt = make<ForEnumStmt>(t_start);
-                        stmt->var_type = var_type;
-                        stmt->var_name = var_name;
-                        stmt->enum_name = advance().value;
-                        stmt->body = parseBlock({var_name});
-                        if (peek().type == TokenType::kColon) {
-                            advance();
-                            stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
-                            expect(TokenType::kSemicolon, "expected ';'");
-                        } else {
-                            stmt->block_label = "for";
-                        }
-                        return stmt;
-                    }
-                }
-            }
-            // not an enum-for — backtrack and fall through to range for
-            pos_ = saved;
-        }
-        // type is optional — "for int i in" vs "for i in" (reuse existing var)
-        std::string for_var_type, for_var_name;
-        if (isTypeName(peek())) {
-            for_var_type = parseTypeName();
-            for_var_name = expect(TokenType::kIdentifier, "expected variable name").value;
-        } else if (peek().type == TokenType::kIdentifier) {
-            for_var_type = ""; // reuse existing variable
-            for_var_name = advance().value;
-        } else {
-            errorHere("expected variable name in for loop");
-        }
-        {
-            Token in_tok = peek();
-            if (in_tok.type != TokenType::kIdentifier || in_tok.value != "in") {
-                errorHere("expected 'in'");
-            }
-            advance();
-        }
-        if (peek().type == TokenType::kStringLiteral || peek().type == TokenType::kIdentifier) {
-            auto stmt = make<ForArrayStmt>(t_start);
-            stmt->var_name = for_var_name;
-            stmt->array_expr = parseExpr();
-            stmt->body = parseBlock({for_var_name});
-            if (peek().type == TokenType::kColon) {
-                advance();
-                stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
-                expect(TokenType::kSemicolon, "expected ';'");
-            } else {
-                stmt->block_label = "for";
-            }
-            return stmt;
-        }
-        expect(TokenType::kLParen, "expected '('");
-        auto first_expr = parseExpr();
-        if (peek().type == TokenType::kDotDot) {
-            // for var in (start .. <cmp> end <op> step) — numeric range
-            advance(); // consume '..'
-            // optional cmp suffix: <, <=, >, >=, !=  (default <)
-            std::string cmp = "<";
-            if      (peek().type == TokenType::kLt)    { advance(); cmp = "<"; }
-            else if (peek().type == TokenType::kLtEq)  { advance(); cmp = "<="; }
-            else if (peek().type == TokenType::kGt)    { advance(); cmp = ">"; }
-            else if (peek().type == TokenType::kGtEq)  { advance(); cmp = ">="; }
-            else if (peek().type == TokenType::kNotEq) { advance(); cmp = "!="; }
-            // end and step are primaries (parseUnary level) — trailing arithmetic
-            // belongs to the step op, not the end expression. Use parens around
-            // the end expression to defeat that vexing-parse rule.
-            auto end_expr = parseUnary();
-            // optional step op + step value
-            std::string step_op = "+";
-            std::unique_ptr<Expr> step_expr;
-            TokenType nt = peek().type;
-            if (nt == TokenType::kPlus  || nt == TokenType::kMinus
-             || nt == TokenType::kStar  || nt == TokenType::kSlash) {
-                if      (nt == TokenType::kPlus)  step_op = "+";
-                else if (nt == TokenType::kMinus) step_op = "-";
-                else if (nt == TokenType::kStar)  step_op = "*";
-                else                              step_op = "/";
-                advance();
-                step_expr = parseUnary();
-            }
-            auto stmt = make<ForRangeStmt>(t_start);
-            stmt->var_type = for_var_type;
-            stmt->var_name = for_var_name;
-            stmt->range_start = std::move(first_expr);
-            stmt->cmp = cmp;
-            stmt->range_end = std::move(end_expr);
-            stmt->step_op = step_op;
-            stmt->range_step = std::move(step_expr);
-            expect(TokenType::kRParen, "expected ')'");
-            stmt->body = parseBlock({for_var_name});
-            if (peek().type == TokenType::kColon) {
-                advance();
-                stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
-                expect(TokenType::kSemicolon, "expected ';'");
-            } else {
-                stmt->block_label = "for";
-            }
-            return stmt;
-        } else {
-            // for var in (expr, expr, ...) — tuple iteration
-            auto stmt = make<ForTupleStmt>(t_start);
-            stmt->var_name = for_var_name;
-            stmt->elements.push_back(std::move(first_expr));
-            while (peek().type == TokenType::kComma) {
-                advance(); // consume ','
-                stmt->elements.push_back(parseExpr());
-            }
-            expect(TokenType::kRParen, "expected ')'");
-            stmt->body = parseBlock({for_var_name});
-            if (peek().type == TokenType::kColon) {
-                advance();
-                stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
-                expect(TokenType::kSemicolon, "expected ';'");
-            } else {
-                stmt->block_label = "for";
-            }
-            return stmt;
-        }
+        errorHere("expected '(' after 'for'");
     }
 
     // tuple return nested function or tuple destructure: starts with '('
@@ -1573,6 +1734,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             }
             expect(TokenType::kSemicolon, "expected ';'");
             declareVar(arr->name, vd_tok);
+            if (!array_scope_stack_.empty())
+                array_scope_stack_.back().insert(arr->name);
             return arr;
         }
 
@@ -1655,6 +1818,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             }
             expect(TokenType::kSemicolon, "expected ';'");
             declareVar(arr->name, name_tok);
+            if (!array_scope_stack_.empty())
+                array_scope_stack_.back().insert(arr->name);
             return arr;
         }
 
@@ -2455,7 +2620,9 @@ Program Parser::parse() {
         }
         // enum definition
         else if (peek().type == TokenType::kEnum) {
-            program.enums.push_back(parseEnumDef());
+            EnumDef e = parseEnumDef();
+            enum_sizes_[e.name] = (int)e.values.size();
+            program.enums.push_back(std::move(e));
         }
         // explicit template instantiation: Name<Types>(ParamTypes);
         else if (peek().type == TokenType::kIdentifier

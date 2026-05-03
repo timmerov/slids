@@ -3,3 +3,9 @@ for ctor.dtor: before
 Simple:ctor
 Simple:dtor
 for ctor.dtor: after
+for range: 0 1 2 3 4 5 6 7 8 9
+for tuple: 1 1 2 3 5 8
+for string literal: 72 101 108 108 111
+for fixed-size array: 1 1 2 3 5 8
+for enum: 0 1 2 3
+for container: 17 18 19 20 21

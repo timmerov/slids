@@ -353,43 +353,6 @@ struct ForLongStmt : Stmt {
     std::string block_label;
 };
 
-struct ForRangeStmt : Stmt {
-    std::string var_type;   // empty = use existing variable
-    std::string var_name;
-    std::unique_ptr<Expr> range_start;
-    std::string cmp;        // "<", "<=", ">", ">=", "!="; default "<"
-    std::unique_ptr<Expr> range_end;
-    std::string step_op;    // "+", "-", "*", "/"; default "+"
-    std::unique_ptr<Expr> range_step;  // null = default literal 1
-    std::unique_ptr<BlockStmt> body;
-    std::string block_label; // optional :name after }
-};
-
-// for var in (expr, expr, ...) — tuple iteration
-struct ForTupleStmt : Stmt {
-    std::string var_name;
-    std::vector<std::unique_ptr<Expr>> elements;
-    std::unique_ptr<BlockStmt> body;
-    std::string block_label;
-};
-
-// for var in "string" or for var in fixed_size_array_var
-struct ForArrayStmt : Stmt {
-    std::string var_name;
-    std::unique_ptr<Expr> array_expr;   // StringLiteralExpr or VarExpr
-    std::unique_ptr<BlockStmt> body;
-    std::string block_label;
-};
-
-// for EnumType var in EnumType { ... }
-struct ForEnumStmt : Stmt {
-    std::string var_type;   // the enum type name
-    std::string var_name;
-    std::string enum_name;  // the enum being iterated
-    std::unique_ptr<BlockStmt> body;
-    std::string block_label;
-};
-
 struct BreakStmt : Stmt {
     std::string label;  // empty = naked break
     int number = 0;     // 0 = not numbered
@@ -562,13 +525,26 @@ private:
 
     // scope stack for inferred declarations: tracks declared variable names per block
     std::vector<std::set<std::string>> scope_stack_;
+    // parallel stack tracking which declared names are fixed-size arrays —
+    // lets the short-form for-loop pick the array desugar (sizeof+index) over
+    // the iterable-class desugar (begin/end/next) without consulting types.
+    std::vector<std::set<std::string>> array_scope_stack_;
     void declareVar(const std::string& name, int name_tok);
     bool isInScope(const std::string& name) const;
+    bool isArrayInScope(const std::string& name) const;
 
     // field names of the slid currently being parsed (prevents field assignments being inferred as declarations)
     std::set<std::string> current_slid_fields_;
     // all parsed slid field names, keyed by slid name (used for external method blocks)
     std::map<std::string, std::set<std::string>> all_slid_fields_;
+    // enum type → value count; populated as enums are parsed. Used by the
+    // short-form for loop to recognize `for (x : EnumName)` and supply the
+    // iteration count for the desugared ForLongStmt.
+    std::map<std::string, int> enum_sizes_;
+    // monotonic counter for parser-synthesized loop locals (__$end_<n>,
+    // __$step_<n>, __$idx_<n>, __$tup_<n>). Names must not collide between
+    // nested loops in the same scope.
+    int synthetic_counter_ = 0;
     // class names seen so far in this TU — disambiguates lone `(...)` between
     // first-occurrence (open) and subsequent (closing). populated by tuple-form
     // decls and bare-block reopens.

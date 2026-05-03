@@ -926,8 +926,8 @@ Numbered `break N` and `continue N` count outward across `for` and `while` only 
 Naked `continue;` inside a `switch` is a compile error even when a loop encloses the switch. Use `continue N;` or `continue name;` to advance the intended loop.
 
 ```
-for int i in (0..10) {
-    for int j in (0..10) {
+for (int i : 0..10) {
+    for (int j : 0..10) {
         if (i == 5) break;            // exit inner for
         if (j == 2) continue;         // next iteration of inner for
         if (i == 7) break outer;      // exit outer for by name
@@ -936,7 +936,7 @@ for int i in (0..10) {
 ```
 
 ```
-for x in (0..10) {
+for (x : 0..10) {
     switch (x) {
     default:
         break for;                    // exit the for from inside the switch
@@ -1000,7 +1000,7 @@ Curly brackets are always required.
 
 Numeric range:
 ```
-for int i in (0..10) {
+for (int i : 0..10) {
     println(i);
 } :outer;
 ```
@@ -1009,7 +1009,7 @@ Collection iteration:
 ```
 Vector primes = (2, 3, 5);
 
-for int i in primes {
+for (int i : primes) {
     println(i);
 }
 ```
@@ -1023,7 +1023,7 @@ enum Direction (
     kWest
 )
 
-for Direction d in Direction {
+for (Direction d : Direction) {
     println(d);
 }
 ```
@@ -1040,7 +1040,7 @@ enum Piece (
     kPawn
 )
 
-for Piece piece in Piece {
+for (Piece piece : Piece) {
     switch (piece) {
     case kKing:   __print("King");   break;
     case kQueen:  __print("Queen");  break;
@@ -1052,7 +1052,34 @@ for Piece piece in Piece {
 
 Not legal:
 ```
-for int i in (0..10) print(i);  // error — {} required
+for (int i : 0..10) print(i);  // error — {} required
+```
+
+### For — short form
+
+`for ( [Type] var : iterable ) { body } [:label;]`
+
+```
+for (i : 0..10)         { ... }    // numeric range
+for (i : (1, 2, 3, 5))  { ... }    // tuple — all elements must be the same type
+for (ch : "Hello")      { ... }    // string literal — char per iteration
+for (x : my_array)      { ... }    // fixed-size array
+for (d : Direction)     { ... }    // enum — first symbol through last, inclusive
+for (e : my_container)  { ... }    // any class providing begin(), end(), next(prev)
+```
+
+Range syntax: `<start> .. [<cmp>] <end> [<op> <step>]`. Cmp is one of `<` (default), `<=`, `>`, `>=`, `!=`. Step op is one of `+` (default), `-`, `*`, `/`. If `end` is an arithmetic expression, parenthesize it — `(0..<=(10+2))` reads end as 12; `(0..<=10+2)` reads end as 10 with step +2.
+
+### For — long form
+
+`for ( init ) ( cond ) { update } { body } [:label;]`
+
+Four slots. `init` and `cond` are data; `update` and `body` are code blocks. `init` is a comma-separated list of declarations and/or assignments — empty slots are allowed. Empty `cond` means `true`. `break` and `continue` inside `update` are not legal.
+
+```
+for (int x = 0, int y = 10) (x < y) { ++x; --y; } {
+    __println("(" + x + "," + y + ")");
+}
 ```
 
 ### Switch
@@ -1635,7 +1662,7 @@ Counter {
 int32 main() {
     Counter c;
 
-    for int i in (0..5) {
+    for (int i : 0..5) {
         c.increment();
     }
 

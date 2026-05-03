@@ -1,42 +1,27 @@
 
-for loops:
-kinda hate the current syntax.
-    for iter in container { }
-'in' should not be a keyword.
+revisit for loops.
+lots of uncharted territory.
+for tuple of class objects.
+    the author must specify copy or reference.
+for fixed-sized multi-dim arrays
+    not allowed?
+can the loop var be a class object?
+    explicitly only.
+is a loop var reference mutable or const?
 
-short forms:
-    for (x : 0..10) { }
-
-    /* enum.first_defined..<=enum.last_defined */
-    for (x : enum) { }
-
-    /* fixed-sized array o plain data. */
-    for (x : array) { }
-
-    /* fixed-sized array of objects. */
-    for (ref : array) { }
-
-    /* iterate over the container. */
-    for (iter : container) { }
-
-short forms de-sugar to the long form.
-long form for example:
-    /*
-    0. for
-    1. init tuple
-    2. condition tuple
-    3. update code
-    4. loop body
-    */
-    for (
-        int i = size,
-        char[] src = src_buffer,
-        char[] dst = dst_buffer
-    ) (i >= 0) {
-        --i; ++src; ++dst;
-    } {
-        dst^ = src^;
-    }
+missing tests:
+test empty string.
+for int8 enum
+break and continue in loop body.
+break and continue in update.
+return from body.
+verfy scope of loop var.
+nested fors with different short forms.
+explicit types.
+type mismatches.
+empty clauses.
+switch break inside for.
+name shadowing.
 
 object.field_++ does not compile.
 

@@ -23,9 +23,9 @@ int32 main() {
 
 
     int counter = 0;
-    for int row in (0..8) {
+    for (int row : 0..8) {
         Piece[] ptr = ^board[row][0];
-        for int col in (0..8) {
+        for (int col : 0..8) {
             if (ptr^ == kKnight) {
                 ++counter;
                 __println(counter + ": Knight found at row " + row + ", col " + col);

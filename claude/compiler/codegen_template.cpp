@@ -269,27 +269,13 @@ static std::unique_ptr<Stmt> cloneStmtImpl(const Stmt& stmt,
         return r;
     }
 
-    if (auto* s = dynamic_cast<const ForRangeStmt*>(&stmt)) {
-        auto r = std::make_unique<ForRangeStmt>();
-        r->var_type   = subTypeSuffix(s->var_type, subst);
-        r->var_name   = s->var_name;
-        r->range_start = cloneExpr(*s->range_start, subst);
-        r->cmp         = s->cmp;
-        r->range_end   = cloneExpr(*s->range_end, subst);
-        r->step_op     = s->step_op;
-        if (s->range_step) r->range_step = cloneExpr(*s->range_step, subst);
-        r->body        = cloneBlock(*s->body, subst);
-        r->block_label = s->block_label;
-        return r;
-    }
-
-    if (auto* s = dynamic_cast<const ForEnumStmt*>(&stmt)) {
-        auto r = std::make_unique<ForEnumStmt>();
-        r->var_type   = s->var_type;
-        r->var_name   = s->var_name;
-        r->enum_name  = s->enum_name;
-        r->body       = cloneBlock(*s->body, subst);
-        r->block_label = s->block_label;
+    if (auto* s = dynamic_cast<const ForLongStmt*>(&stmt)) {
+        auto r = std::make_unique<ForLongStmt>();
+        for (auto& is : s->init_stmts) r->init_stmts.push_back(cloneStmt(*is, subst));
+        if (s->cond) r->cond = cloneExpr(*s->cond, subst);
+        r->update_block = cloneBlock(*s->update_block, subst);
+        r->body         = cloneBlock(*s->body, subst);
+        r->block_label  = s->block_label;
         return r;
     }
 
@@ -340,24 +326,6 @@ static std::unique_ptr<Stmt> cloneStmtImpl(const Stmt& stmt,
     if (auto* s = dynamic_cast<const CompoundAssignStmt*>(&stmt))
         return std::make_unique<CompoundAssignStmt>(
             cloneExpr(*s->lhs, subst), s->op, cloneExpr(*s->rhs, subst));
-
-    if (auto* s = dynamic_cast<const ForTupleStmt*>(&stmt)) {
-        auto r = std::make_unique<ForTupleStmt>();
-        r->var_name = s->var_name;
-        for (auto& e : s->elements) r->elements.push_back(cloneExpr(*e, subst));
-        r->body = cloneBlock(*s->body, subst);
-        r->block_label = s->block_label;
-        return r;
-    }
-
-    if (auto* s = dynamic_cast<const ForArrayStmt*>(&stmt)) {
-        auto r = std::make_unique<ForArrayStmt>();
-        r->var_name = s->var_name;
-        r->array_expr = cloneExpr(*s->array_expr, subst);
-        r->body = cloneBlock(*s->body, subst);
-        r->block_label = s->block_label;
-        return r;
-    }
 
     if (auto* s = dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) {
         auto r = std::make_unique<NestedFunctionDefStmt>();
