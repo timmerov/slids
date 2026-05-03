@@ -42,7 +42,11 @@
 
 - **Returning:** Currently, a non-void function must end with a return statement - which is flawed but it kinda sorta works. We need to ensure every possible code path returns. And don't require a return if the end of block is unreachable.
 
-- **For-loop syntax**: Two surface forms over one construct. **for-iterator** (short): `for (var : iterable) { body }` — `:` is parser sugar for `) (`. **for-mation** (long): `for (init) (cond) { step } { body }` — four enclosure groups; `(init)`/`(cond)` are data tuples, `{step}`/`{body}` are code blocks. Short desugars to long; bounds are hoisted to the init tuple so they evaluate once. Range expressions (`lo..hi`, `lo..<hi`, `lo..<=hi`) construct `Range<T>` values; the comparison suffix selects the cmp operator stored in the Range. Today `Range<T>` is compiler-blessed (parallel to `__println`); planned to become a libslid template class with pre-compiled common instantiations deleted (`Range<int> = delete;` etc.) to prevent user re-instantiation. Tuple iteration (`for (x : tuple)`) compile-time unrolls per slot. Iteration protocol shared by Range, containers, and author-defined iterables (exact shape TBD).
+- **For-loop syntax — remaining work.** Integer ranges with cmp + step ops landed (`<start>..<cmp><end><op><step>`, see slids_reference.md). Surface keyword is `in`; switching to `:` sugar is deferred. Still to do:
+  - **For-mation long form** `for (init) (cond) { step } { body }` — not yet implemented.
+  - **Iteration protocol** for containers and author-defined iterables — design pending.
+  - **Tuple iteration** `for (x in tuple)` compile-time unroll per slot.
+  - **Loop-forever literal-fold check** for ranges composed entirely of integer literals (e.g. `step == 0`, `start == end` with strict cmp, sign mismatch between cmp direction and step sign).
 
 - **Optimize returning objects:**
   - Currently, a function returning an object copies the object to its retval. The retval should be the object - named value return optimization (NRVO).

@@ -146,6 +146,12 @@ private:
         std::string continue_target; // "" for switch/plain blocks
         std::string stack_ptr_reg;  // @llvm.stacksave result for this loop body, or ""
         bool is_switch = false;     // true for switch frames; numbered break/continue skip these
+        // Set during ForLong update-block emission. Named/numbered break/continue
+        // resolution skips frames flagged hidden — the for-loop whose update slot
+        // is currently being emitted is not a valid break/continue target.
+        // (Naked break/continue are blocked separately by clearing
+        // break_label_ / continue_label_ during update emission.)
+        bool is_hidden = false;
     };
     std::vector<LoopFrame> loop_stack_;
 

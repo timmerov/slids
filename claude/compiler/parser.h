@@ -342,6 +342,17 @@ struct WhileStmt : Stmt {
     bool bottom_condition = false; // true for while { } (cond); form
 };
 
+// long for: for (init) (cond) { update } { body } :label;
+// init_stmts: per-slot VarDeclStmt or AssignStmt (empty slots produce no entry)
+// cond: nullptr means empty () => true
+struct ForLongStmt : Stmt {
+    std::vector<std::unique_ptr<Stmt>> init_stmts;
+    std::unique_ptr<Expr> cond;
+    std::unique_ptr<BlockStmt> update_block;
+    std::unique_ptr<BlockStmt> body;
+    std::string block_label;
+};
+
 struct ForRangeStmt : Stmt {
     std::string var_type;   // empty = use existing variable
     std::string var_name;

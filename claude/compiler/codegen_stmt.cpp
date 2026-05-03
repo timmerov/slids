@@ -2265,6 +2265,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (!brk->label.empty()) {
             // named break: find the frame with this label
             for (int i = (int)loop_stack_.size() - 1; i >= 0; i--) {
+                if (loop_stack_[i].is_hidden) continue;
                 if (loop_stack_[i].block_label == brk->label) {
                     target = loop_stack_[i].break_target;
                     target_frame = i;
@@ -2278,6 +2279,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             int count = 0;
             for (int i = (int)loop_stack_.size() - 1; i >= 0; i--) {
                 if (loop_stack_[i].is_switch) continue;
+                if (loop_stack_[i].is_hidden) continue;
                 count++;
                 if (count == brk->number) {
                     target = loop_stack_[i].break_target;
@@ -2302,6 +2304,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         int target_frame = (int)loop_stack_.size() - 1;
         if (!cont->label.empty()) {
             for (int i = (int)loop_stack_.size() - 1; i >= 0; i--) {
+                if (loop_stack_[i].is_hidden) continue;
                 if (loop_stack_[i].block_label == cont->label) {
                     target = loop_stack_[i].continue_target;
                     target_frame = i;
@@ -2315,6 +2318,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             int count = 0;
             for (int i = (int)loop_stack_.size() - 1; i >= 0; i--) {
                 if (loop_stack_[i].is_switch) continue;
+                if (loop_stack_[i].is_hidden) continue;
                 count++;
                 if (count == cont->number) {
                     target = loop_stack_[i].continue_target;
@@ -2403,6 +2407,109 @@ void Codegen::emitStmt(const Stmt& stmt) {
         out_ << end_lbl << ":\n";
         loop_stack_.pop_back();
         break_label_ = saved_break; continue_label_ = saved_continue;
+        return;
+    }
+
+    if (auto* fl = dynamic_cast<const ForLongStmt*>(&stmt)) {
+        std::string init_lbl   = newLabel("for_init");
+        std::string cond_lbl   = newLabel("for_cond");
+        std::string body_lbl   = newLabel("for_body");
+        std::string update_lbl = newLabel("for_update");
+        std::string end_lbl    = newLabel("for_end");
+
+        // for-scope: snapshot locals/types/dtor stack so init-tuple decls and
+        // any shadowing are unwound at end_lbl.
+        size_t dtor_mark = dtor_vars_.size();
+        auto saved_locals = locals_;
+        auto saved_local_types = local_types_;
+
+        std::string saved_break = break_label_, saved_continue = continue_label_;
+        break_label_ = end_lbl; continue_label_ = update_lbl;
+        loop_stack_.push_back({fl->block_label, end_lbl, update_lbl, "", false, false});
+
+        out_ << "    br label %" << init_lbl << "\n";
+        block_terminated_ = false;
+        out_ << init_lbl << ":\n";
+        for (auto& s : fl->init_stmts) emitStmt(*s);
+        out_ << "    br label %" << cond_lbl << "\n";
+
+        block_terminated_ = false;
+        out_ << cond_lbl << ":\n";
+        if (fl->cond) {
+            std::string c = emitCondBool(*fl->cond);
+            out_ << "    br i1 " << c << ", label %" << body_lbl
+                 << ", label %" << end_lbl << "\n";
+        } else {
+            out_ << "    br label %" << body_lbl << "\n";
+        }
+
+        block_terminated_ = false;
+        out_ << body_lbl << ":\n";
+        {
+            std::string sp = newTmp();
+            out_ << "    " << sp << " = call ptr @llvm.stacksave()\n";
+            loop_stack_.back().stack_ptr_reg = sp;
+            // emitStmt on BlockStmt snapshots its own dtor/locals frame so
+            // body-local decls don't leak into update.
+            emitStmt(*fl->body);
+            if (!block_terminated_) {
+                out_ << "    call void @llvm.stackrestore(ptr " << sp << ")\n";
+                out_ << "    br label %" << update_lbl << "\n";
+            }
+        }
+
+        block_terminated_ = false;
+        out_ << update_lbl << ":\n";
+        {
+            // Hide this loop frame from break/continue resolution. Naked
+            // break/continue in update is also blocked by clearing the labels.
+            // Per spec, break/continue is not allowed in the update block.
+            loop_stack_.back().is_hidden = true;
+            std::string saved_break_in = break_label_;
+            std::string saved_continue_in = continue_label_;
+            break_label_ = ""; continue_label_ = "";
+
+            std::string sp = newTmp();
+            out_ << "    " << sp << " = call ptr @llvm.stacksave()\n";
+            loop_stack_.back().stack_ptr_reg = sp;
+            emitStmt(*fl->update_block);
+            if (!block_terminated_) {
+                out_ << "    call void @llvm.stackrestore(ptr " << sp << ")\n";
+                out_ << "    br label %" << cond_lbl << "\n";
+            }
+
+            break_label_ = saved_break_in;
+            continue_label_ = saved_continue_in;
+            loop_stack_.back().is_hidden = false;
+        }
+
+        block_terminated_ = false;
+        out_ << end_lbl << ":\n";
+
+        // run dtors for init-tuple decls in reverse declaration order
+        for (int i = (int)dtor_vars_.size() - 1; i >= (int)dtor_mark; i--) {
+            auto& e = dtor_vars_[i];
+            std::string target;
+            if (e.tuple_index >= 0) {
+                std::string tuple_type = local_types_[e.var_name];
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr " << llvmType(tuple_type)
+                     << ", ptr " << locals_[e.var_name] << ", i32 0, i32 "
+                     << e.tuple_index << "\n";
+                target = gep;
+            } else {
+                target = locals_[e.var_name];
+            }
+            emitDtorChainCall(e.slid_type, target);
+        }
+        dtor_vars_.resize(dtor_mark);
+
+        locals_ = saved_locals;
+        local_types_ = saved_local_types;
+
+        loop_stack_.pop_back();
+        break_label_ = saved_break;
+        continue_label_ = saved_continue;
         return;
     }
 

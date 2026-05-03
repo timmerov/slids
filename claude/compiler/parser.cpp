@@ -1203,6 +1203,81 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
     if (t.type == TokenType::kFor) {
         advance();
+        // long form: for ( init ) ( cond ) { update } { body } [:label;]
+        // disambiguated from short form by '(' immediately after `for`.
+        if (peek().type == TokenType::kLParen) {
+            auto stmt = make<ForLongStmt>(t_start);
+            // for-scope: covers init, cond, update, body. push a parser scope frame
+            // so init-tuple decls are visible in cond/update/body and don't leak out.
+            scope_stack_.push_back({});
+
+            // init tuple: comma-separated slots; each is empty / `type name = expr`
+            // / `name = expr` (decl-or-assign disambiguated by current scope).
+            expect(TokenType::kLParen, "expected '('");
+            if (peek().type != TokenType::kRParen) {
+                while (true) {
+                    if (peek().type == TokenType::kComma
+                     || peek().type == TokenType::kRParen) {
+                        // empty slot — skip; produces no statement.
+                    } else if (isTypeName(peek())
+                            || (isUserTypeName(peek()) && isVarDeclLookahead())) {
+                        int slot_tok = pos_;
+                        std::string type = parseTypeName();
+                        int name_tok = pos_;
+                        std::string name = expect(TokenType::kIdentifier,
+                            "expected variable name").value;
+                        expect(TokenType::kEquals,
+                            "expected '=' in for-init slot");
+                        auto init = parseExpr();
+                        declareVar(name, name_tok);
+                        stmt->init_stmts.push_back(
+                            make<VarDeclStmt>(slot_tok, type, name, std::move(init)));
+                    } else if (peek().type == TokenType::kIdentifier) {
+                        int slot_tok = pos_;
+                        std::string name = advance().value;
+                        expect(TokenType::kEquals,
+                            "expected '=' in for-init slot");
+                        auto rhs = parseExpr();
+                        // buildAssignFromLhs picks VarDeclStmt (inferred) when
+                        // name is not yet in scope, AssignStmt when it is.
+                        auto lhs = make<VarExpr>(slot_tok, name);
+                        stmt->init_stmts.push_back(
+                            buildAssignFromLhs(std::move(lhs), std::move(rhs),
+                                               false, slot_tok));
+                    } else {
+                        errorHere("expected variable name in for-init tuple");
+                    }
+                    if (peek().type == TokenType::kComma) { advance(); continue; }
+                    break;
+                }
+            }
+            expect(TokenType::kRParen, "expected ')'");
+
+            // condition: empty () means true.
+            expect(TokenType::kLParen, "expected '(' for for-loop condition");
+            if (peek().type == TokenType::kRParen)
+                stmt->cond = nullptr;
+            else
+                stmt->cond = parseExpr();
+            expect(TokenType::kRParen, "expected ')'");
+
+            // update block, then body block.
+            stmt->update_block = parseBlock();
+            stmt->body = parseBlock();
+
+            // optional :label;
+            if (peek().type == TokenType::kColon) {
+                advance();
+                stmt->block_label = expect(TokenType::kIdentifier,
+                    "expected label name").value;
+                expect(TokenType::kSemicolon, "expected ';'");
+            } else {
+                stmt->block_label = "for";
+            }
+
+            scope_stack_.pop_back();
+            return stmt;
+        }
         // for EnumType var in EnumType { ... }  — enum iteration
         // detected by: user type name, identifier, 'in', user type name (no '(')
         if (isUserTypeName(peek())) {
