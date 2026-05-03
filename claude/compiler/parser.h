@@ -195,6 +195,7 @@ struct VarDeclStmt : Stmt {
     std::unique_ptr<Expr> init;           // null for default construction
     std::vector<std::unique_ptr<Expr>> ctor_args; // for Counter c(5)
     bool is_move = false;                 // true for Type name <- expr
+    bool is_loop_var = false;             // synthesized loop var in a for-iterator desugar
     VarDeclStmt(std::string type, std::string name,
                 std::unique_ptr<Expr> init,
                 std::vector<std::unique_ptr<Expr>> ctor_args = {},
@@ -526,12 +527,18 @@ private:
     // scope stack for inferred declarations: tracks declared variable names per block
     std::vector<std::set<std::string>> scope_stack_;
     // parallel stack tracking which declared names are fixed-size arrays —
-    // lets the short-form for-loop pick the array desugar (sizeof+index) over
-    // the iterable-class desugar (begin/end/next) without consulting types.
-    std::vector<std::set<std::string>> array_scope_stack_;
+    // map: name → element count (first dim). Lets the short-form for-loop pick
+    // the array desugar (count+index) over the iterable-class desugar
+    // (begin/end/next), and bake the count as a literal at parse time.
+    std::vector<std::map<std::string, int>> array_scope_stack_;
+    // parallel stack tracking which declared names are anon-tuple-typed (i.e.
+    // initialized from a tuple-literal RHS). Maps name → element count, so the
+    // short-form for-loop can synthesize per-slot ArrayIndexExpr accesses.
+    std::vector<std::map<std::string, int>> tuple_scope_stack_;
     void declareVar(const std::string& name, int name_tok);
     bool isInScope(const std::string& name) const;
-    bool isArrayInScope(const std::string& name) const;
+    int arrayCountInScope(const std::string& name) const; // 0 if not a fixed-size array local
+    int tupleSizeInScope(const std::string& name) const;  // 0 if not a tuple local
 
     // field names of the slid currently being parsed (prevents field assignments being inferred as declarations)
     std::set<std::string> current_slid_fields_;

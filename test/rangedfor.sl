@@ -76,6 +76,16 @@ int32 main() {
     print the ints in the tuple.
     this might de-sugar to printing the
     elements of an array initialized by a tuple.
+    desugars to:
+    init:
+        int $index = 0;
+        int x;
+    cond:
+        $index < number of tuple elements
+    update:
+        ++$index;
+    body:
+        x = tuple_as_array[$index];
     */
     __print("for tuple:");
     for (x : (1, 1, 2, 3, 5, 8)) {
@@ -138,6 +148,53 @@ int32 main() {
         __print(" " + x);
     }
     __println();
+
+    {
+        __println("begin tuple block");
+        tuple = (Simple, Simple);
+        __println("tuple declared");
+
+        /* compile error. uncomment to verify: caret on x, "cannot infer loop variable type for class-typed elements". */
+        //for (x : tuple) {
+        //    __println("compile error: cannot infer type iterating over class objects." );
+        //}
+
+        /*
+        iterate by value.
+        desugars to:
+        init:
+            int $index = 0;
+            Simple x;
+        cond:
+            $index < number of tuple elements
+        update:
+            ++$index;
+        body:
+            x = tuple_as_array[$index];
+        */
+        __println("iterate by value: begin");
+        for (Simple x : tuple) {
+            __println("iterate by value: loop");
+        }
+        __println("iterate by value: end");
+
+        /* iterate by reference.
+        desugars to:
+        init:
+            int $index = 0;
+            Simple^ x = ^tuple_as_array[0];
+        cond:
+            $index < number of tuple elements
+        update:
+            ++$index;
+            x = ^tuple_as_array[$index];
+        */
+        for (Simple^ x : tuple) {
+            __println("iterate by reference.");
+        }
+        __println("end tuple block");
+    }
+    __println("after tuple block");
 
     return 0;
 }

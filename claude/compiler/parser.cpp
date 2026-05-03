@@ -60,10 +60,20 @@ bool Parser::isInScope(const std::string& name) const {
     return false;
 }
 
-bool Parser::isArrayInScope(const std::string& name) const {
-    for (auto it = array_scope_stack_.rbegin(); it != array_scope_stack_.rend(); ++it)
-        if (it->count(name)) return true;
-    return false;
+int Parser::arrayCountInScope(const std::string& name) const {
+    for (auto it = array_scope_stack_.rbegin(); it != array_scope_stack_.rend(); ++it) {
+        auto sit = it->find(name);
+        if (sit != it->end()) return sit->second;
+    }
+    return 0;
+}
+
+int Parser::tupleSizeInScope(const std::string& name) const {
+    for (auto it = tuple_scope_stack_.rbegin(); it != tuple_scope_stack_.rend(); ++it) {
+        auto sit = it->find(name);
+        if (sit != it->end()) return sit->second;
+    }
+    return 0;
 }
 
 Token& Parser::peek() { return tokens_[pos_]; }
@@ -914,6 +924,7 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     expect(TokenType::kLBrace, "expected '{'");
     scope_stack_.push_back({});
     array_scope_stack_.push_back({});
+    tuple_scope_stack_.push_back({});
     for (auto& n : predeclare)
         declareVar(n, t_start);
     auto block = make<BlockStmt>(t_start);
@@ -936,6 +947,7 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     }
     scope_stack_.pop_back();
     array_scope_stack_.pop_back();
+    tuple_scope_stack_.pop_back();
     expect(TokenType::kRBrace, "expected '}'");
     return block;
 }
@@ -968,6 +980,12 @@ std::unique_ptr<Stmt> Parser::buildAssignFromLhs(
         std::string name = ve->name;
         if (!isInScope(name) && !current_slid_fields_.count(name) && name != "self") {
             declareVar(name, ve->tok);
+            // Track tuple-typed locals so the short-form for-loop can iterate
+            // them by synthesizing per-slot ArrayIndexExpr accesses.
+            if (auto* te = dynamic_cast<TupleExpr*>(rhs.get())) {
+                if (!tuple_scope_stack_.empty())
+                    tuple_scope_stack_.back()[name] = (int)te->values.size();
+            }
             return make<VarDeclStmt>(t_start, "", name, std::move(rhs),
                 std::vector<std::unique_ptr<Expr>>{}, is_move);
         }
@@ -1225,10 +1243,39 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 if (s + 1 < (int)tokens_.size()
                     && tokens_[s + 1].type == TokenType::kColon) {
                     short_form = true;  // ( IDENT :
-                } else if (s + 2 < (int)tokens_.size()
-                        && tokens_[s + 1].type == TokenType::kIdentifier
-                        && tokens_[s + 2].type == TokenType::kColon) {
-                    short_form = true;  // ( TYPE IDENT :
+                } else {
+                    // Walk past a type form (base name + optional qualifier,
+                    // template args, and ^/[] suffix), then look for IDENT ':'.
+                    int i = s + 1;
+                    if (i + 1 < (int)tokens_.size()
+                        && tokens_[i].type == TokenType::kColon
+                        && tokens_[i + 1].type == TokenType::kIdentifier) {
+                        i += 2;
+                    }
+                    if (i < (int)tokens_.size()
+                        && tokens_[i].type == TokenType::kLt) {
+                        int depth = 1;
+                        i++;
+                        while (i < (int)tokens_.size() && depth > 0
+                                && tokens_[i].type != TokenType::kEof) {
+                            if (tokens_[i].type == TokenType::kLt) depth++;
+                            else if (tokens_[i].type == TokenType::kGt) depth--;
+                            i++;
+                        }
+                    }
+                    if (i < (int)tokens_.size()
+                        && tokens_[i].type == TokenType::kBitXor) {
+                        i++;
+                    } else if (i + 1 < (int)tokens_.size()
+                            && tokens_[i].type == TokenType::kLBracket
+                            && tokens_[i + 1].type == TokenType::kRBracket) {
+                        i += 2;
+                    }
+                    if (i + 1 < (int)tokens_.size()
+                            && tokens_[i].type == TokenType::kIdentifier
+                            && tokens_[i + 1].type == TokenType::kColon) {
+                        short_form = true;  // ( TYPE [^|[]] IDENT :
+                    }
                 }
             }
 
@@ -1239,6 +1286,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 // Loop var, synthesized helpers, and body locals all unwind here.
                 scope_stack_.push_back({});
                 array_scope_stack_.push_back({});
+                tuple_scope_stack_.push_back({});
 
                 int t_var_tok = pos_;
                 std::string for_var_type, for_var_name;
@@ -1250,8 +1298,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     for_var_name = expect(TokenType::kIdentifier,
                         "expected variable name").value;
                 } else if (peek().type == TokenType::kIdentifier
-                        && pos_ + 1 < (int)tokens_.size()
-                        && tokens_[pos_ + 1].type == TokenType::kIdentifier) {
+                        && isVarDeclLookahead()) {
                     for_var_type = parseTypeName();
                     t_var_tok = pos_;
                     for_var_name = expect(TokenType::kIdentifier,
@@ -1288,6 +1335,21 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     return make<VarDeclStmt>(t_start, type, name,
                         std::move(init), std::vector<std::unique_ptr<Expr>>{}, false);
                 };
+                // Loop var decl — attributed to the loop-var token (so errors caret
+                // there) and tagged so codegen can enforce the "explicit type for
+                // class-typed iteration" rule.
+                auto _loopDecl = [&](std::unique_ptr<Expr> init) -> std::unique_ptr<Stmt> {
+                    auto d = make<VarDeclStmt>(t_var_tok, for_var_type, for_var_name,
+                        std::move(init), std::vector<std::unique_ptr<Expr>>{}, false);
+                    d->is_loop_var = true;
+                    return d;
+                };
+                auto _loopDeclNoInit = [&]() -> std::unique_ptr<Stmt> {
+                    auto d = make<VarDeclStmt>(t_var_tok, for_var_type, for_var_name,
+                        nullptr, std::vector<std::unique_ptr<Expr>>{}, false);
+                    d->is_loop_var = true;
+                    return d;
+                };
                 auto _assign = [&](const std::string& name,
                                     std::unique_ptr<Expr> v) -> std::unique_ptr<Stmt> {
                     return make<AssignStmt>(t_start, name, std::move(v), false);
@@ -1303,6 +1365,68 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 auto _popScope = [&] {
                     scope_stack_.pop_back();
                     array_scope_stack_.pop_back();
+                    tuple_scope_stack_.pop_back();
+                };
+                // Ref form: loop var is pointer-typed (Class^ or Class[]).
+                // Switches the desugar to alias-into-source instead of copy.
+                bool ref_form = !for_var_type.empty()
+                    && (for_var_type.back() == '^'
+                        || (for_var_type.size() >= 2
+                            && for_var_type.substr(for_var_type.size() - 2) == "[]"));
+                auto _addrOf = [&](std::unique_ptr<Expr> e) -> std::unique_ptr<Expr> {
+                    return make<AddrOfExpr>(t_start, std::move(e));
+                };
+                // Index-iteration finisher — common to tuple-literal / tuple-named
+                // / string-literal / fixed-size-array shapes. The caller has
+                // populated init_stmts with whatever source-setup it needs (e.g.
+                // capturing the tuple expression into a local), then calls this
+                // with the source-name and the literal element count.
+                //
+                // Value form:
+                //   init: T x [= src[0] if inferred type]; int $idx = 0;
+                //   cond: $idx < count
+                //   update: ++$idx
+                //   body: x = src[$idx]; <user body>
+                //
+                // Ref form:
+                //   init: T^ x = ^src[0]; int $idx = 0;
+                //   cond: $idx < count
+                //   update: ++$idx; x = ^src[$idx];
+                //   body: <user body>
+                auto _finishIter = [&](const std::string& source_name, int count) {
+                    std::string idx_name =
+                        "__$idx_" + std::to_string(synthetic_counter_++);
+                    auto _srcAt = [&](std::unique_ptr<Expr> idx) -> std::unique_ptr<Expr> {
+                        return make<ArrayIndexExpr>(t_start, _var(source_name),
+                            std::move(idx));
+                    };
+                    if (ref_form) {
+                        stmt->init_stmts.push_back(_loopDecl(_addrOf(_srcAt(_intLit(0)))));
+                    } else if (for_var_type.empty()) {
+                        // Inferred type: codegen reads elem type from src[0].
+                        stmt->init_stmts.push_back(_loopDecl(_srcAt(_intLit(0))));
+                    } else {
+                        stmt->init_stmts.push_back(_loopDeclNoInit());
+                    }
+                    stmt->init_stmts.push_back(_decl("int", idx_name, _intLit(0)));
+                    stmt->cond = _bin("<", _var(idx_name), _intLit(count));
+                    auto upd = make<BlockStmt>(t_start);
+                    upd->stmts.push_back(_assign(idx_name,
+                        _bin("+", _var(idx_name), _intLit(1))));
+                    if (ref_form) {
+                        upd->stmts.push_back(_assign(for_var_name,
+                            _addrOf(_srcAt(_var(idx_name)))));
+                    }
+                    stmt->update_block = std::move(upd);
+                    auto user_body = parseBlock();
+                    auto new_body = make<BlockStmt>(t_start);
+                    if (!ref_form) {
+                        new_body->stmts.push_back(_assign(for_var_name,
+                            _srcAt(_var(idx_name))));
+                    }
+                    for (auto& s : user_body->stmts)
+                        new_body->stmts.push_back(std::move(s));
+                    stmt->body = std::move(new_body);
                 };
 
                 // Range: `start .. [cmp] end [op step]`
@@ -1331,8 +1455,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
                     std::string end_name = "__$end_" + std::to_string(synthetic_counter_++);
                     std::string step_name;
-                    stmt->init_stmts.push_back(
-                        _decl(for_var_type, for_var_name, std::move(first_expr)));
+                    stmt->init_stmts.push_back(_loopDecl(std::move(first_expr)));
                     stmt->init_stmts.push_back(
                         _decl(for_var_type, end_name, std::move(end_expr)));
                     if (step_expr) {
@@ -1353,33 +1476,19 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     return stmt;
                 }
 
-                // Tuple: lower to backing array + index iteration. Codegen
-                // checks homogeneity when it sees ArrayDeclStmt.elem_type=="".
+                // Tuple literal: capture the tuple expression once into a local,
+                // then iterate it in place (variable-index on a homogeneous
+                // anon-tuple is permitted at codegen).
                 if (auto* te = dynamic_cast<TupleExpr*>(first_expr.get())) {
                     expect(TokenType::kRParen, "expected ')'");
                     int size = (int)te->values.size();
-                    std::string tup_name = "__$tup_" + std::to_string(synthetic_counter_++);
-                    std::string idx_name = "__$idx_" + std::to_string(synthetic_counter_++);
-                    auto adecl = make<ArrayDeclStmt>(t_start);
-                    adecl->elem_type = ""; // codegen infers from values[0]
-                    adecl->name = tup_name;
-                    adecl->dims = {size};
-                    adecl->init_values = std::move(te->values);
-                    stmt->init_stmts.push_back(std::move(adecl));
-                    stmt->init_stmts.push_back(_decl("int", idx_name, _intLit(0)));
-                    stmt->cond = _bin("<", _var(idx_name), _intLit(size));
-                    auto upd = make<BlockStmt>(t_start);
-                    upd->stmts.push_back(_assign(idx_name,
-                        _bin("+", _var(idx_name), _intLit(1))));
-                    stmt->update_block = std::move(upd);
-                    auto user_body = parseBlock();
-                    auto new_body = make<BlockStmt>(t_start);
-                    new_body->stmts.push_back(_decl(for_var_type, for_var_name,
-                        std::unique_ptr<Expr>(make<ArrayIndexExpr>(t_start,
-                            _var(tup_name), _var(idx_name)))));
-                    for (auto& s : user_body->stmts)
-                        new_body->stmts.push_back(std::move(s));
-                    stmt->body = std::move(new_body);
+                    std::string src_name =
+                        "__$src_" + std::to_string(synthetic_counter_++);
+                    // `auto __$src = (...);` — codegen materializes the tuple
+                    // into a fresh alloca and infers the anon-tuple type.
+                    stmt->init_stmts.push_back(
+                        _decl("", src_name, std::move(first_expr)));
+                    _finishIter(src_name, size);
                     _consumeLabel();
                     _popScope();
                     return stmt;
@@ -1404,72 +1513,47 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     }
                 }
 
-                // String literal: declare a base ptr + index iteration.
+                // String literal: bind to a `char[]` local once, then iterate.
                 if (auto* sl = dynamic_cast<StringLiteralExpr*>(first_expr.get())) {
                     int s_len = (int)sl->value.size();
                     expect(TokenType::kRParen, "expected ')'");
-                    std::string base_name = "__$base_" + std::to_string(synthetic_counter_++);
-                    std::string idx_name  = "__$idx_"  + std::to_string(synthetic_counter_++);
+                    std::string base_name =
+                        "__$base_" + std::to_string(synthetic_counter_++);
                     stmt->init_stmts.push_back(
                         _decl("char[]", base_name, std::move(first_expr)));
-                    stmt->init_stmts.push_back(_decl("int", idx_name, _intLit(0)));
-                    stmt->cond = _bin("<", _var(idx_name), _intLit(s_len));
-                    auto upd = make<BlockStmt>(t_start);
-                    upd->stmts.push_back(_assign(idx_name,
-                        _bin("+", _var(idx_name), _intLit(1))));
-                    stmt->update_block = std::move(upd);
-                    auto user_body = parseBlock();
-                    auto new_body = make<BlockStmt>(t_start);
-                    new_body->stmts.push_back(_decl(for_var_type, for_var_name,
-                        std::unique_ptr<Expr>(make<ArrayIndexExpr>(t_start,
-                            _var(base_name), _var(idx_name)))));
-                    for (auto& s : user_body->stmts)
-                        new_body->stmts.push_back(std::move(s));
-                    stmt->body = std::move(new_body);
+                    _finishIter(base_name, s_len);
                     _consumeLabel();
                     _popScope();
                     return stmt;
                 }
 
-                // VarExpr: known fixed-size array → sizeof+index, otherwise
-                // iterable class via begin/end/next.
+                // VarExpr: dispatch by parser-tracked kind.
+                //   tuple-typed local → iterate the source in place (codegen
+                //                       allows variable-index on homogeneous tuples)
+                //   fixed-size array  → iterate by parser-known count
+                //   else              → iterable class via begin/end/next
                 if (auto* ve = dynamic_cast<VarExpr*>(first_expr.get())) {
                     std::string iter_name = ve->name;
-                    bool is_array = isArrayInScope(iter_name);
+                    int tup_size = tupleSizeInScope(iter_name);
+                    if (tup_size > 0) {
+                        expect(TokenType::kRParen, "expected ')'");
+                        _finishIter(iter_name, tup_size);
+                        _consumeLabel();
+                        _popScope();
+                        return stmt;
+                    }
+                    int arr_count = arrayCountInScope(iter_name);
                     expect(TokenType::kRParen, "expected ')'");
 
-                    if (is_array) {
-                        std::string idx_name =
-                            "__$idx_" + std::to_string(synthetic_counter_++);
-                        // count = sizeof(arr) / sizeof(arr[0])
-                        auto so_arr = make<SizeofExpr>(t_start);
-                        so_arr->operand = _var(iter_name);
-                        auto so_elem = make<SizeofExpr>(t_start);
-                        so_elem->operand = std::unique_ptr<Expr>(
-                            make<ArrayIndexExpr>(t_start, _var(iter_name), _intLit(0)));
-                        std::unique_ptr<Expr> count_expr = _bin("/",
-                            std::move(so_arr), std::move(so_elem));
-                        stmt->init_stmts.push_back(_decl("int", idx_name, _intLit(0)));
-                        stmt->cond = _bin("<", _var(idx_name), std::move(count_expr));
-                        auto upd = make<BlockStmt>(t_start);
-                        upd->stmts.push_back(_assign(idx_name,
-                            _bin("+", _var(idx_name), _intLit(1))));
-                        stmt->update_block = std::move(upd);
-                        auto user_body = parseBlock();
-                        auto new_body = make<BlockStmt>(t_start);
-                        new_body->stmts.push_back(_decl(for_var_type, for_var_name,
-                            std::unique_ptr<Expr>(make<ArrayIndexExpr>(t_start,
-                                _var(iter_name), _var(idx_name)))));
-                        for (auto& s : user_body->stmts)
-                            new_body->stmts.push_back(std::move(s));
-                        stmt->body = std::move(new_body);
+                    if (arr_count > 0) {
+                        _finishIter(iter_name, arr_count);
                     } else {
                         // Iterable class: begin/end/next.
                         std::string end_name =
                             "__$end_" + std::to_string(synthetic_counter_++);
                         std::vector<std::unique_ptr<Expr>> beg_args, end_args, next_args;
                         next_args.push_back(_var(for_var_name));
-                        stmt->init_stmts.push_back(_decl(for_var_type, for_var_name,
+                        stmt->init_stmts.push_back(_loopDecl(
                             std::unique_ptr<Expr>(make<MethodCallExpr>(t_start,
                                 _var(iter_name), "begin", std::move(beg_args)))));
                         stmt->init_stmts.push_back(_decl(for_var_type, end_name,
@@ -1497,6 +1581,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             // so init-tuple decls are visible in cond/update/body and don't leak out.
             scope_stack_.push_back({});
             array_scope_stack_.push_back({});
+            tuple_scope_stack_.push_back({});
 
             // init tuple: comma-separated slots; each is empty / `type name = expr`
             // / `name = expr` (decl-or-assign disambiguated by current scope).
@@ -1564,6 +1649,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
             scope_stack_.pop_back();
             array_scope_stack_.pop_back();
+            tuple_scope_stack_.pop_back();
             return stmt;
         }
         errorHere("expected '(' after 'for'");
@@ -1734,8 +1820,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             }
             expect(TokenType::kSemicolon, "expected ';'");
             declareVar(arr->name, vd_tok);
-            if (!array_scope_stack_.empty())
-                array_scope_stack_.back().insert(arr->name);
+            if (!array_scope_stack_.empty() && !arr->dims.empty())
+                array_scope_stack_.back()[arr->name] = arr->dims[0];
             return arr;
         }
 
@@ -1818,8 +1904,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             }
             expect(TokenType::kSemicolon, "expected ';'");
             declareVar(arr->name, name_tok);
-            if (!array_scope_stack_.empty())
-                array_scope_stack_.back().insert(arr->name);
+            if (!array_scope_stack_.empty() && !arr->dims.empty())
+                array_scope_stack_.back()[arr->name] = arr->dims[0];
             return arr;
         }
 

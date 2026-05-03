@@ -25,8 +25,8 @@ SAMPLES=(
     operators
     parsing
     pointer
-    ranges
     rangedfor
+    ranges
     returnslid
     sizeof
     strlitcat

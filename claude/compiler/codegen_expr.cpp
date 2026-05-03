@@ -150,8 +150,25 @@ std::string Codegen::emitExpr(const Expr& expr) {
                             + "' is not a tuple at level " + std::to_string(level)));
                     auto elems = anonTupleElems(cur_type);
                     int idx;
-                    if (!constExprToInt(*indices[level], enum_values_, idx))
-                        error(std::string("tuple index must be a constant integer"));
+                    bool is_const = constExprToInt(*indices[level], enum_values_, idx);
+                    if (!is_const) {
+                        // Variable index is allowed only when the tuple is
+                        // homogeneous — slot type is statically known.
+                        bool homog = !elems.empty();
+                        for (auto& t : elems) if (t != elems[0]) { homog = false; break; }
+                        if (!homog)
+                            error(std::string("tuple index must be a constant integer"));
+                        std::string elem_t = elems[0];
+                        std::string elem_llvm = llvmType(elem_t);
+                        std::string idx_val = emitExpr(*indices[level]);
+                        std::string gep = newTmp();
+                        out_ << "    " << gep << " = getelementptr ["
+                             << elems.size() << " x " << elem_llvm
+                             << "], ptr " << cur_ptr << ", i32 0, i32 " << idx_val << "\n";
+                        cur_ptr = gep;
+                        cur_type = elem_t;
+                        continue;
+                    }
                     if (idx < 0 || idx >= (int)elems.size())
                         error(std::string("tuple index " + std::to_string(idx)
                             + " out of range (size " + std::to_string(elems.size()) + ")"));
@@ -223,6 +240,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string gep = newTmp();
             out_ << "    " << gep << " = getelementptr [" << total << " x " << elt << "], ptr "
                  << ainfo.alloca_reg << ", i32 0, i32 " << flat << "\n";
+            // slid-typed element: return the ptr (mirrors anon-tuple slid-slot
+            // semantics) so callers can pass it to op=/op<- or emitSlidSlotAssign.
+            if (slid_info_.count(ainfo.elem_type)) return gep;
             std::string val = newTmp();
             out_ << "    " << val << " = load " << elt << ", ptr " << gep << "\n";
             return val;
@@ -325,6 +345,46 @@ std::string Codegen::emitExpr(const Expr& expr) {
             }
             auto* ve = dynamic_cast<const VarExpr*>(cur);
             if (!ve) error(std::string("AddrOf: complex array base not supported"));
+            // anon-tuple base: GEP into the tuple's slot with constant indices.
+            // Variable indices allowed only when the tuple is homogeneous.
+            {
+                auto tit = local_types_.find(ve->name);
+                if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
+                    std::string cur_type = tit->second;
+                    std::string cur_ptr = locals_[ve->name];
+                    for (int level = 0; level < (int)indices.size(); level++) {
+                        if (!isAnonTupleType(cur_type))
+                            error(std::string("AddrOf: tuple walk hit non-tuple at level "
+                                + std::to_string(level)));
+                        auto elems = anonTupleElems(cur_type);
+                        int idx;
+                        bool is_const = constExprToInt(*indices[level], enum_values_, idx);
+                        if (!is_const) {
+                            bool homog = !elems.empty();
+                            for (auto& t : elems) if (t != elems[0]) { homog = false; break; }
+                            if (!homog)
+                                error(std::string("AddrOf: tuple index must be a constant integer"));
+                            std::string elem_t = elems[0];
+                            std::string elem_llvm = llvmType(elem_t);
+                            std::string idx_val = emitExpr(*indices[level]);
+                            std::string gep = newTmp();
+                            out_ << "    " << gep << " = getelementptr ["
+                                 << elems.size() << " x " << elem_llvm
+                                 << "], ptr " << cur_ptr << ", i32 0, i32 " << idx_val << "\n";
+                            cur_ptr = gep;
+                            cur_type = elem_t;
+                            continue;
+                        }
+                        if (idx < 0 || idx >= (int)elems.size())
+                            error(std::string("AddrOf: tuple index "
+                                + std::to_string(idx) + " out of range (size "
+                                + std::to_string(elems.size()) + ")"));
+                        cur_ptr = emitFieldGep(cur_type, cur_ptr, idx);
+                        cur_type = elems[idx];
+                    }
+                    return cur_ptr;
+                }
+            }
             auto ait = array_info_.find(ve->name);
             if (ait == array_info_.end())
                 error(std::string("AddrOf: undefined array '" + ve->name + "'"));
@@ -2298,8 +2358,16 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
                 if (!isAnonTupleType(cur_type)) return "i32";
                 auto elems = anonTupleElems(cur_type);
                 int idx;
-                if (!constExprToInt(*indices[level], enum_values_, idx)
-                    || idx < 0 || idx >= (int)elems.size())
+                bool is_const = constExprToInt(*indices[level], enum_values_, idx);
+                if (!is_const) {
+                    // Variable index on homogeneous tuple → elem type known.
+                    bool homog = !elems.empty();
+                    for (auto& t : elems) if (t != elems[0]) { homog = false; break; }
+                    if (!homog) return "i32";
+                    cur_type = elems[0];
+                    continue;
+                }
+                if (idx < 0 || idx >= (int)elems.size())
                     return "i32";
                 cur_type = elems[idx];
             }
@@ -2307,7 +2375,11 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
         }
         if (auto* ve = dynamic_cast<const VarExpr*>(cur)) {
             auto ait = array_info_.find(ve->name);
-            if (ait != array_info_.end()) return llvmType(ait->second.elem_type);
+            if (ait != array_info_.end()) {
+                // slid-typed element returns a ptr (see ArrayIndexExpr emit).
+                if (slid_info_.count(ait->second.elem_type)) return "ptr";
+                return llvmType(ait->second.elem_type);
+            }
             // slid op[] return type
             {
                 auto tit = local_types_.find(ve->name);
@@ -2713,8 +2785,16 @@ std::string Codegen::inferSlidType(const Expr& expr) {
                 if (!isAnonTupleType(cur_type)) return "int";
                 auto elems = anonTupleElems(cur_type);
                 int idx;
-                if (!constExprToInt(*indices[level], enum_values_, idx)
-                    || idx < 0 || idx >= (int)elems.size())
+                bool is_const = constExprToInt(*indices[level], enum_values_, idx);
+                if (!is_const) {
+                    // Variable index on homogeneous tuple → elem type known.
+                    bool homog = !elems.empty();
+                    for (auto& t : elems) if (t != elems[0]) { homog = false; break; }
+                    if (!homog) return "int";
+                    cur_type = elems[0];
+                    continue;
+                }
+                if (idx < 0 || idx >= (int)elems.size())
                     return "int";
                 cur_type = elems[idx];
             }

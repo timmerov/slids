@@ -1,8 +1,6 @@
 
 revisit for loops.
 lots of uncharted territory.
-for tuple of class objects.
-    the author must specify copy or reference.
 for fixed-sized multi-dim arrays
     not allowed?
 can the loop var be a class object?

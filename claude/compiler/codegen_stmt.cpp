@@ -435,11 +435,28 @@ void Codegen::emitStmt(const Stmt& stmt) {
         local_types_[arr->name] = elem_type + "[" + std::to_string(total) + "]";
         // store initializer values
         for (int i = 0; i < (int)arr->init_values.size(); i++) {
-            std::string val = emitExpr(*arr->init_values[i]);
             std::string gep = newTmp();
             out_ << "    " << gep << " = getelementptr [" << total << " x " << elt << "], ptr "
                  << reg << ", i32 0, i32 " << i << "\n";
-            out_ << "    store " << elt << " " << val << ", ptr " << gep << "\n";
+            if (slid_info_.count(elem_type)) {
+                // Slid element: default-construct in place + dispatch op=/op<-
+                // (or default field-walk) from the source. Pairs each slot
+                // with a dtor at scope exit.
+                std::string src_ptr;
+                if (auto* ve = dynamic_cast<const VarExpr*>(arr->init_values[i].get());
+                        ve && locals_.count(ve->name)) {
+                    src_ptr = locals_[ve->name];
+                } else {
+                    src_ptr = emitExpr(*arr->init_values[i]);
+                }
+                emitSlidSlotAssign(elem_type, gep, src_ptr,
+                    /*is_move=*/false, /*is_init=*/true);
+                if (hasDtorInChain(elem_type))
+                    dtor_vars_.push_back({arr->name, elem_type, i});
+            } else {
+                std::string val = emitExpr(*arr->init_values[i]);
+                out_ << "    store " << elt << " " << val << ", ptr " << gep << "\n";
+            }
         }
         return;
     }
@@ -453,6 +470,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
             inferred = inferSlidType(*decl->init);
         }
         const std::string& eff_type = decl->type.empty() ? inferred : decl->type;
+
+        // Class-typed iteration without an explicit loop var type is ambiguous —
+        // the author must pick value vs reference. Reject with caret on the loop
+        // var token (the synthesized decl carries it).
+        if (decl->is_loop_var && decl->type.empty() && slid_info_.count(eff_type)) {
+            errorAtNode(*decl,
+                "for-loop: cannot infer loop variable type for class-typed elements; "
+                "use 'Type " + decl->name + "' or 'Type^ " + decl->name + "'");
+        }
 
         // class instantiation
         if (slid_info_.count(eff_type)) {
@@ -649,7 +675,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         // any expr whose type matches eff_type: emitExpr returns a slid ptr.
                         if (src_ptr.empty() && inferSlidType(*init_expr) == eff_type)
                             src_ptr = emitExpr(*init_expr);
-                        if (!src_ptr.empty()) emitSlidSlotAssign(eff_type, reg, src_ptr, decl->is_move, /*is_init=*/true);
+                        // dst was already default-constructed by emitConstructAt above —
+                        // pass is_init=false so the field-walk doesn't re-construct.
+                        if (!src_ptr.empty()) emitSlidSlotAssign(eff_type, reg, src_ptr, decl->is_move, /*is_init=*/false);
                     }
                 }
             }
@@ -681,7 +709,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             error(std::string("slid tuple element type mismatch: expected '"
                                 + elems[i] + "', got '" + src_type + "'"));
                         std::string src_ptr;
-                        if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
+                        if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get());
+                                ve && locals_.count(ve->name)) {
                             src_ptr = locals_[ve->name];
                         } else {
                             src_ptr = emitExpr(*te->values[i]);

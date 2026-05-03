@@ -9,3 +9,23 @@ for string literal: 72 101 108 108 111
 for fixed-size array: 1 1 2 3 5 8
 for enum: 0 1 2 3
 for container: 17 18 19 20 21
+begin tuple block
+Simple:ctor
+Simple:ctor
+Simple:ctor
+Simple:ctor
+Simple:dtor
+Simple:dtor
+tuple declared
+iterate by value: begin
+Simple:ctor
+iterate by value: loop
+iterate by value: loop
+Simple:dtor
+iterate by value: end
+iterate by reference.
+iterate by reference.
+end tuple block
+Simple:dtor
+Simple:dtor
+after tuple block
