@@ -603,9 +603,9 @@ take_pair((100, 200));      // tuple-literal materialized + passed
 
 Both forms are equivalent. `^s` is preferred when you want to make the pass-by-reference explicit.
 
-> **TODO:** `^` is intended to pass by **immutable** reference — the callee observes but cannot alter the referred-to object. A keyword (likely `mutable`, exact syntax TBD) will let the caller grant write access for cases where mutation is intended. Today's implementation does not enforce immutability; code that relies on mutating a `^` parameter will need to be updated once enforcement lands.
+> **TODO:** `^` is intended to pass by **immutable** reference — the function has read-only access to the object. The intent of the `mutable` keyword bon pointer type parameters is to grant write access to the object. Const-correctness and mutability are not currently enforced.
 >
-> `self` inside a method body is **mutable by default** — methods may read and write the object's fields freely. A way to mark a method as non-mutating (so `self` is treated as immutable inside that method body) is TBD.
+> `self` inside a method body is **mutable by default** — methods may read and write the object's fields freely. A way to mark a method as const (so `self` cannot be modified) is TBD.
 
 **Returning a tuple:**
 ```
@@ -875,10 +875,11 @@ Value(int value_ = 0) {
 
 ### `mutable` parameters
 
-`mutable` on a pointer parameter (`^` / `[]`) marks it as modified by the call — required on `op<-` and `op<->`, optional elsewhere, illegal on non-pointer params.
+`mutable` on a pointer parameter (`^` / `[]`) indicates the function may modify the contents of the pointer. `mutable` is required on the parameters to move `op<-` and swap operators `op<->`. `mutable on a non-pointer or a non-parameter is a compile error. Const-correctness is not currently enforced. `mutable` is a hint to the authors that data is modifiable.
 
 ```
-op<-(mutable String^ rhs);
+op<-(mutable String^ rhs);   // move override
+op<->(mutable String^ rhs);  // swap override
 ```
 
 ### Default synthesis
