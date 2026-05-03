@@ -873,6 +873,14 @@ Value(int value_ = 0) {
 - **Implicit conversion.** When no overload matches, the compiler tries harder using one round of type conversion `op=`.
 - **Swap `op<->` requires `SameType^`.** Other signatures are a compile error.
 
+### `mutable` parameters
+
+`mutable` on a pointer parameter (`^` / `[]`) marks it as modified by the call — required on `op<-` and `op<->`, optional elsewhere, illegal on non-pointer params.
+
+```
+op<-(mutable String^ rhs);
+```
+
 ### Default synthesis
 
 If a class does not define assignment operator`op=`, move operator `op<-`, or swap operator `op<->` with `SameType^` parameter, the compiler synthesizes one that applies the operation to every field.
