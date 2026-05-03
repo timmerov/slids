@@ -38,10 +38,12 @@ long form for example:
         dst^ = src^;
     }
 
-revisit initialization.
+object.field_++ does not compile.
 
 implement complex field access with tuples.
 tuple[1].a_ is not yet supported.
+
+revisit initialization.
 
 test incomplete templates.
 
