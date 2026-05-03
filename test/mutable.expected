@@ -1,0 +1,3 @@
+01: Not allowed: void wrong1(mutable int x) (member, non-pointer)
+02: Not allowed: void wrong2(mutable int x) (free fn, non-pointer)
+03: Not allowed: op<-(BadBox<T>^ other) (template missing 'mutable')

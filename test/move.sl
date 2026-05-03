@@ -10,7 +10,7 @@ NoMove(
 Move(
     int x_
 ) {
-    op<-(Move^ rhs) {
+    op<-(mutable Move^ rhs) {
         x_ = rhs^.x_;
         __println("Move:<-=" + x_);
     }

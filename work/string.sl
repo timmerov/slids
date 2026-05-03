@@ -50,7 +50,7 @@ String (
     move operator.
     rhs may be self.
     */
-    op<-(String^ s) {
+    op<-(mutable String^ s) {
         /* don't steal our own resources. */
         if (s == ^self) {
             return;

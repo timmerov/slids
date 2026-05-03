@@ -47,7 +47,7 @@ Action(
         __println("Action:dtor");
     }
 
-    op<-(Action^ rhs) {
+    op<-(mutable Action^ rhs) {
         __println("Action:move");
     }
 }

@@ -25,7 +25,7 @@ String(...)
     move operator.
     rhs may be self.
     */
-    op<-(String^ s);
+    op<-(mutable String^ s);
 
     /*
     assignment and type conversion from
@@ -135,10 +135,10 @@ void println(String^ s);
 intptr strlen(char[] s);
 
 /* copy null terminated string from src to dst. */
-void strcpy(char[] dst, char[] src);
+void strcpy(mutable char[] dst, char[] src);
 
 /* copy at most count characters from src to dst. */
-void strcpy(char[] dst, char[] src, intptr count);
+void strcpy(mutable char[] dst, char[] src, intptr count);
 
 /*
 compare null terminated strings. return:

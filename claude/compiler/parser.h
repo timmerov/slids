@@ -419,6 +419,7 @@ struct MethodDef {
     std::string return_type;
     std::string name;
     std::vector<std::pair<std::string, std::string>> params;
+    std::vector<bool> param_mutable;  // parallel to params; true if 'mutable' on that param
     std::unique_ptr<BlockStmt> body;
     bool is_virtual = false;  // `virtual` keyword present on the declaration
     bool is_pure = false;     // body replaced by `= delete;` — slot exists, no impl
@@ -456,6 +457,7 @@ struct NestedFunctionDef {
     std::vector<std::pair<std::string, std::string>> tuple_return_fields;
     std::string name;
     std::vector<std::pair<std::string, std::string>> params;
+    std::vector<bool> param_mutable;  // parallel to params
     std::unique_ptr<BlockStmt> body;
 };
 
@@ -470,6 +472,7 @@ struct FunctionDef {
     std::string name;        // emit-time symbol name (mangled for template instantiations)
     std::string user_name;   // unmangled, source-level name (used for ##func, diagnostics)
     std::vector<std::pair<std::string, std::string>> params;
+    std::vector<bool> param_mutable;  // parallel to params
     std::unique_ptr<BlockStmt> body;
     std::vector<std::string> type_params; // non-empty for template functions: T add<T>(T a, T b)
     bool is_local = true;        // false when body loaded from a separate impl file
@@ -483,6 +486,7 @@ struct ExternalMethodDef {
     std::string return_type;
     std::string method_name;
     std::vector<std::pair<std::string, std::string>> params;
+    std::vector<bool> param_mutable;  // parallel to params
     std::unique_ptr<BlockStmt> body;
     bool is_virtual = false;
     bool is_pure = false;
@@ -586,6 +590,10 @@ private:
     // Errors at op_tok if the count doesn't match the spec for the named op.
     // No-op for non-op names (regular methods).
     void checkOpArity(const std::string& op_name, int actual, int op_tok);
+    void checkOpMutable(const std::string& op_name,
+                        const std::vector<std::pair<std::string,std::string>>& params,
+                        const std::vector<bool>& param_mutable,
+                        int op_tok);
 
     SlidDef parseSlidDef();
     // collapse multiple SlidDef entries with the same class name into a single

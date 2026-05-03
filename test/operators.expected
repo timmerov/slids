@@ -279,3 +279,6 @@ MoveTest[1]: (ptr==nullptr)=1
 84: Not allowed: Overload op>(Simple^ a) (comparison returns class)
 85: Not allowed: Overload op<=(Simple^ a) (comparison returns class)
 86: Not allowed: Overload op>=(Simple^ a) (comparison returns class)
+87: Not allowed: op<-(Overload^ a) (move pointer param missing 'mutable')
+88: Not allowed: op<->(Overload^ a) (swap pointer param missing 'mutable')
+89: Not allowed: op<-(mutable int a) ('mutable' only on '^' or '[]')

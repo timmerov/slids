@@ -4,7 +4,7 @@ unit tests for swap operator.
 
 /* class with swap operator. */
 Swap(int a_ = 0, int b_ = 0, int^ p_ = nullptr) {
-    op<->(Swap^ s) {
+    op<->(mutable Swap^ s) {
         __println("Swap[op<->]=op<->");
         a_ <-> s^.a_;
         p_ <-> s^.p_;
@@ -18,7 +18,7 @@ NoSwap(int a_ = 0, int b_ = 0, int^ p_ = nullptr) {
 /* class with wrong swap operator. */
 Wrong() {
     /* commented out compiler test:
-    op<->(NoSwap^ ns) {
+    op<->(mutable NoSwap^ ns) {
     }
     */
 }

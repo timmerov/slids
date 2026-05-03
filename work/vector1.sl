@@ -13,7 +13,7 @@ Value(
     ~() {
         __println("Value:dtor");
     }
-    op<-(Value^ rhs) {
+    op<-(mutable Value^ rhs) {
         __println("Value::move");
         x_ = rhs^.x_;
     }

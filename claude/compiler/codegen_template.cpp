@@ -367,6 +367,7 @@ static std::unique_ptr<Stmt> cloneStmtImpl(const Stmt& stmt,
         r->def.name = s->def.name;
         for (auto& [t, n] : s->def.params)
             r->def.params.emplace_back(subTypeSuffix(t, subst), n);
+        r->def.param_mutable = s->def.param_mutable;
         r->def.body = cloneBlock(*s->def.body, subst);
         return r;
     }
@@ -619,6 +620,7 @@ std::string Codegen::instantiateTemplate(const TemplateFuncEntry& entry,
     concrete.return_type = subTypeSuffix(tmpl.return_type, subst);
     for (int i = 0; i < (int)tmpl.params.size(); i++)
         concrete.params.emplace_back(ptypes[i], tmpl.params[i].second);
+    concrete.param_mutable = tmpl.param_mutable;
     concrete.body = cloneBlock(*tmpl.body, subst);
 
     // register signatures so call sites work

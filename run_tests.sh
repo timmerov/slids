@@ -19,6 +19,7 @@ SAMPLES=(
     macros
     math1 math2
     move
+    mutable
     nested
     new_delete
     operators

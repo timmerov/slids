@@ -125,10 +125,10 @@ Overload(int y_ = 0) {
     op=(Overload^ a) {
         __println("Overload:op=(Overload^)");
     }
-    op<-(Overload^ a) {
+    op<-(mutable Overload^ a) {
         __println("Overload:op<-(Overload^)");
     }
-    op<->(Overload^ a) {
+    op<->(mutable Overload^ a) {
         __println("Overload:op<->(Overload^)");
     }
     op+(Overload^ a, Overload^ b) {
@@ -406,7 +406,7 @@ Overload(int y_ = 0) {
     op=(Simple^ a) {
         __println("Overload:op=(Simple^)");
     }
-    op<-(Simple^ a) {
+    op<-(mutable Simple^ a) {
         __println("Overload:op<-(Simple^)");
     }
     /*op<->(Simple^ a) { }*/
@@ -634,6 +634,16 @@ BadReturn(int dummy_ = 0) {
     // Overload op>=(Simple^ a) { return Overload(); }
 }
 
+/* All cases here violate 'mutable' rules. Isolated so each
+   negative line stands alone when uncommented. */
+BadMutable(int dummy_ = 0) {
+    /* move/swap with pointer param require 'mutable'. */
+    // op<-(Overload^ a) { }
+    // op<->(Overload^ a) { }
+    /* 'mutable' applies only to pointer types '^' and '[]'. */
+    // op<-(mutable int a) { }
+}
+
 Comparison(int z_ = 0) {
     /* correct syntax: may return not-bool */
     int op==(Simple^ a) {
@@ -663,7 +673,7 @@ Comparison(int z_ = 0) {
 }
 
 MovePtr(int w_ = 0) {
-    op<-(void^ ptr) {
+    op<-(mutable void^ ptr) {
         __println("MovePtr:op<-(void^)");
     }
 }
@@ -929,6 +939,9 @@ int32 main()
     __println("84: Not allowed: Overload op>(Simple^ a) (comparison returns class)");
     __println("85: Not allowed: Overload op<=(Simple^ a) (comparison returns class)");
     __println("86: Not allowed: Overload op>=(Simple^ a) (comparison returns class)");
+    __println("87: Not allowed: op<-(Overload^ a) (move pointer param missing 'mutable')");
+    __println("88: Not allowed: op<->(Overload^ a) (swap pointer param missing 'mutable')");
+    __println("89: Not allowed: op<-(mutable int a) ('mutable' only on '^' or '[]')");
 
     return 0;
 }
