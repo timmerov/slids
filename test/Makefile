@@ -12,6 +12,7 @@ SAMPLES = \
 	class \
 	comments \
 	constructor \
+	for \
 	function1 \
 	incomplete \
 	indexop \
@@ -27,7 +28,6 @@ SAMPLES = \
 	parsing \
 	pointer \
 	ranges \
-	rangedfor \
 	returnslid \
 	sizeof \
 	strlitcat \

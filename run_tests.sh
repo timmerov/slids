@@ -11,6 +11,7 @@ SAMPLES=(
     class
     comments
     constructor
+    for
     function1
     incomplete
     indexop
@@ -25,7 +26,6 @@ SAMPLES=(
     operators
     parsing
     pointer
-    rangedfor
     ranges
     returnslid
     sizeof
