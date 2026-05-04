@@ -1,4 +1,8 @@
 
+optimize tuple construction:
+a tuple of objects constructs temp objects,
+then copies them into the tuple.
+
 revisit for loops.
 some uncharted territory.
 for fixed-sized multi-dim arrays

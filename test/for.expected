@@ -8,7 +8,6 @@ for tuple: 1 1 2 3 5 8
 for string literal: 72 101 108 108 111
 for fixed-size array: 1 1 2 3 5 8
 for enum: 0 1 2 3
-for container: 17 18 19 20 21
 begin tuple block
 Simple:ctor
 Simple:ctor
@@ -29,3 +28,56 @@ end tuple block
 Simple:dtor
 Simple:dtor
 after tuple block
+Simple[3] begin: expect 3 ctor/dtor
+Simple:ctor
+Simple:ctor
+Simple:ctor
+Simple:dtor
+Simple:dtor
+Simple:dtor
+Simple[3] end: expect 3 ctor/dtor
+Simple:ctor
+Simple:ctor
+Simple:ctor
+iterate Simple array by value: begin: expect 1 ctor/dtor
+Simple:ctor
+array of slid: iterate by value.
+array of slid: iterate by value.
+array of slid: iterate by value.
+Simple:dtor
+iterate Simple array by value: end: expect 1 ctor/dtor
+iterate Simple array by reference: begin: expect 0 ctor/dtor
+array of slid: iterate by reference.
+array of slid: iterate by reference.
+array of slid: iterate by reference.
+iterate Simple array by value: end: expect 0 ctor/dtor
+Simple:dtor
+Simple:dtor
+Simple:dtor
+iterate Simple tuple by value: begin: expect 3 ctor/dtor
+Simple:ctor
+Simple:ctor
+Simple:ctor
+Simple:ctor
+Simple:ctor
+tuple-literal of slid: iterate by value.
+tuple-literal of slid: iterate by value.
+Simple:dtor
+Simple:dtor
+Simple:dtor
+Simple:dtor
+Simple:dtor
+iterate Simple tuple by value: end: expect 3 ctor/dtor
+iterate Simple tuple by reference: begin: expect 2 ctor/dtor
+Simple:ctor
+Simple:ctor
+Simple:ctor
+Simple:ctor
+tuple-literal of slid: iterate by reference.
+tuple-literal of slid: iterate by reference.
+Simple:dtor
+Simple:dtor
+Simple:dtor
+Simple:dtor
+iterate Simple tuple by reference: begin: expect 2 ctor/dtor
+for container: 17 18 19 20 21

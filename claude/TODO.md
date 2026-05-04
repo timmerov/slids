@@ -47,6 +47,8 @@
   - **Loop-forever literal-fold check** for ranges composed entirely of integer literals (e.g. `step == 0`, `start == end` with strict cmp, sign mismatch between cmp direction and step sign).
   - **Multi-dim array iteration semantics**: `int array[8][8]; for (x : array)` — three options on the table (flat / compile error / row iteration with `int^`); user hasn't chosen.
 
+- **Elide slid prvalue temps into known slots**: When a slid-typed prvalue (e.g. inline ctor call `Simple(1)`) is used to initialize a destination at a known address — tuple-literal slot, function arg slot for a non-ref param, slid-typed local, slid-typed field — codegen should construct in place at the destination rather than materializing a temp and copy-initializing the slot from it. Tuple-literal slot init is the case that prompted the note (`for (Simple x : (Simple(1), Simple(2)))` produces 5 ctors / 5 dtors, expected 3). Same elision already happens for `Simple s(1);` locals; the path needs to be uniform across slot-init sites.
+
 - **Optimize returning objects:**
   - Currently, a function returning an object copies the object to its retval. The retval should be the object - named value return optimization (NRVO).
     - **Status**: single-slid sret returns already do NRVO (the function writes directly into the caller's `%retval`).

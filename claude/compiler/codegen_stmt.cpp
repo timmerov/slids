@@ -462,6 +462,18 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 out_ << "    store " << elt << " " << val << ", ptr " << gep << "\n";
             }
         }
+        // No initializer: slid elements get default-constructed per slot
+        // (primitives are left uninitialized per spec).
+        if (arr->init_values.empty() && slid_info_.count(elem_type)) {
+            for (int i = 0; i < total; i++) {
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr [" << total << " x " << elt
+                     << "], ptr " << reg << ", i32 0, i32 " << i << "\n";
+                emitConstructAtPtrs(elem_type, gep, {}, {});
+                if (hasDtorInChain(elem_type))
+                    dtor_vars_.push_back({arr->name, elem_type, i});
+            }
+        }
         return;
     }
 

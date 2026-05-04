@@ -199,20 +199,30 @@ int32 main() {
     //    __println("compile error: cannot iterate over a multi-dimensional array.");
     //}
 
+    __println("Simple[3] begin: expect 3 ctor/dtor");
     {
-        Simple sarray[3];
+        Simple array[3];
+    }
+    __println("Simple[3] end: expect 3 ctor/dtor");
+
+    {
+        Simple array[3];
         /* compile error. */
-        //for (x : sarray) {
+        //for (x : array) {
         //    __println("compile error: need explicit declaration: object or reference.");
         //}
         /* iterate by value. */
-        for (Simple x : sarray) {
+        __println("iterate Simple array by value: begin: expect 1 ctor/dtor");
+        for (Simple x : array) {
             __println("array of slid: iterate by value.");
         }
+        __println("iterate Simple array by value: end: expect 1 ctor/dtor");
         /* iterate by reference. */
-        for (Simple^ x : sarray) {
+        __println("iterate Simple array by reference: begin: expect 0 ctor/dtor");
+        for (Simple^ x : array) {
             __println("array of slid: iterate by reference.");
         }
+        __println("iterate Simple array by value: end: expect 0 ctor/dtor");
     }
 
     {
@@ -221,13 +231,17 @@ int32 main() {
         //    __println("compile error: tuple-literal of slid needs explicit type.");
         //}
         /* iterate by value. */
+        __println("iterate Simple tuple by value: begin: expect 3 ctor/dtor");
         for (Simple x : (Simple(1), Simple(2))) {
             __println("tuple-literal of slid: iterate by value.");
         }
+        __println("iterate Simple tuple by value: end: expect 3 ctor/dtor");
         /* iterate by reference. */
+        __println("iterate Simple tuple by reference: begin: expect 2 ctor/dtor");
         for (Simple^ x : (Simple(1), Simple(2))) {
             __println("tuple-literal of slid: iterate by reference.");
         }
+        __println("iterate Simple tuple by reference: begin: expect 2 ctor/dtor");
     }
 
     /*
