@@ -83,21 +83,30 @@ int32 main() {
     of the same type.
     */
     char[] not_int_ptr = nullptr;
+    //-EXPECT-ERROR-DEFERRED: char[] - int[] subtraction not focused as a typed-pointer-mismatch error
     //diff = not_int_ptr - ptr;
+    //-EXPECT-ERROR: pointer comparison requires same pointee type
     //bool cond = (not_int_ptr == ptr);
+    //-EXPECT-ERROR: pointer comparison requires same pointee type
     //bool cond = (not_int_ptr != ptr);
+    //-EXPECT-ERROR: pointer comparison requires same pointee type
     //bool cond = (not_int_ptr < ptr);
+    //-EXPECT-ERROR: pointer comparison requires same pointee type
     //bool cond = (not_int_ptr <= ptr);
+    //-EXPECT-ERROR: pointer comparison requires same pointee type
     //bool cond = (not_int_ptr > ptr);
+    //-EXPECT-ERROR: pointer comparison requires same pointee type
     //bool cond = (not_int_ptr >= ptr);
 
-    /*
-    these should be compiler errors.
-    */
+    //-EXPECT-ERROR: pointer + pointer is not allowed
     //ptr += ptr;
+    //-EXPECT-ERROR-DEFERRED: ptr -= ptr not focused as a typed-pointer error
     //ptr -= ptr;
+    //-EXPECT-ERROR-DEFERRED: ptr *= ptr not focused as a typed-pointer error
     //ptr *= ptr;
+    //-EXPECT-ERROR-DEFERRED: ptr /= ptr not focused as a typed-pointer error
     //ptr /= ptr;
+    //-EXPECT-ERROR-DEFERRED: ptr %= ptr not focused as a typed-pointer error
     //ptr %= ptr;
 
     void^ void_ptr = other;
@@ -106,11 +115,7 @@ int32 main() {
     other = <int[]> void_ptr;
     __println("int^ = int[] void^ pass");
 
-    /*
-    this should be a compile error.
-    pointers can only be assigned to
-    pointers of the same type.
-    */
+    //-EXPECT-ERROR-DEFERRED: cross-type pointer assign char[] → int[] not focused as a typed-pointer error
     //ptr = not_int_ptr;
 
     /* reference tests. ^ is a reference: no arithmetic. */
@@ -153,20 +158,27 @@ int32 main() {
         __println("null_ref!=nullptr<false>=false");
     }
 
-    /*
-    these should be compile errors.
-    references do not support pointer arithmetic.
-    */
+    //-EXPECT-ERROR: arithmetic on references is not allowed
     //++ref;
+    //-EXPECT-ERROR: arithmetic on references is not allowed
     //--ref;
+    //-EXPECT-ERROR-DEFERRED: ref += 1 — not focused as a reference-arithmetic error
     //ref += 1;
+    //-EXPECT-ERROR-DEFERRED: ref -= 1 — not focused as a reference-arithmetic error
     //ref -= 1;
+    //-EXPECT-ERROR-DEFERRED: ref = ref + 1 — not focused as a reference-arithmetic error
     //ref = ref + 1;
+    //-EXPECT-ERROR-DEFERRED: ref = ref - 1 — not focused as a reference-arithmetic error
     //ref = ref - 1;
+    //-EXPECT-ERROR-DEFERRED: ref - ref2 — not focused as a reference-arithmetic error
     //ref = ref - ref2;
+    //-EXPECT-ERROR: references only support '==' and '!='
     //bool rcond = (ref < ref2);
+    //-EXPECT-ERROR: references only support '==' and '!='
     //bool rcond = (ref <= ref2);
+    //-EXPECT-ERROR: references only support '==' and '!='
     //bool rcond = (ref > ref2);
+    //-EXPECT-ERROR: references only support '==' and '!='
     //bool rcond = (ref >= ref2);
 
     /* hybrid pointer/reference tests. pointer demotes to reference. */
@@ -197,22 +209,31 @@ int32 main() {
         __println("ref!=ref2<true>=false");
     }
 
-    /*
-    these should be compile errors.
-    pointer cannot promote to reference.
-    */
+    //-EXPECT-ERROR: references cannot promote to iterators
     //ptr = ref;
+    //-EXPECT-ERROR-DEFERRED: ptr < ref — pointer/reference cross-comparison not focused yet
     //bool hcond = (ptr < ref);
+    //-EXPECT-ERROR-DEFERRED: ptr <= ref — pointer/reference cross-comparison not focused yet
     //bool hcond = (ptr <= ref);
+    //-EXPECT-ERROR-DEFERRED: ptr > ref — pointer/reference cross-comparison not focused yet
     //bool hcond = (ptr > ref);
+    //-EXPECT-ERROR-DEFERRED: ptr >= ref — pointer/reference cross-comparison not focused yet
     //bool hcond = (ptr >= ref);
+    //-EXPECT-ERROR-DEFERRED: ref < ptr — pointer/reference cross-comparison not focused yet
     //bool hcond = (ref < ptr);
+    //-EXPECT-ERROR-DEFERRED: ref <= ptr — pointer/reference cross-comparison not focused yet
     //bool hcond = (ref <= ptr);
+    //-EXPECT-ERROR-DEFERRED: ref > ptr — pointer/reference cross-comparison not focused yet
     //bool hcond = (ref > ptr);
+    //-EXPECT-ERROR-DEFERRED: ref >= ptr — pointer/reference cross-comparison not focused yet
     //bool hcond = (ref >= ptr);
+    //-EXPECT-ERROR-DEFERRED: ptr += ref — pointer/reference cross-arith not focused yet
     //ptr += ref;
+    //-EXPECT-ERROR-DEFERRED: ptr -= ref — pointer/reference cross-arith not focused yet
     //ptr -= ref;
+    //-EXPECT-ERROR-DEFERRED: ptr = ptr + ref — pointer/reference cross-arith not focused yet
     //ptr = ptr + ref;
+    //-EXPECT-ERROR-DEFERRED: ptr = ptr - ref — pointer/reference cross-arith not focused yet
     //ptr = ptr - ref;
 
     return 0;

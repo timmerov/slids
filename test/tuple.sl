@@ -143,8 +143,9 @@ int32 main() {
     d <- (60, 61, 62);
     d.print("d<-");
 
-    /* compile errors. */
+    //-EXPECT-ERROR: too many initializers: 'Simple' has 3 fields, got 5
     //Simple e(1, 2, 3, 4, 5);
+    //-EXPECT-ERROR: tuple has 5 values but 'Simple' has 3 accessible fields
     //d = (1, 2, 3, 4, 5);
 
     /* creating accessing. */
@@ -167,12 +168,15 @@ int32 main() {
     tuple = tuple2;
     __println("tuple = (" + tuple[0] + "," + tuple[1] + "," + tuple[2] + ")");
 
-    /* compile errors */
+    //-EXPECT-ERROR-DEFERRED: 5-element tuple literal into 3-element local — error wording not focused yet
     //tuple = (1, 2, 3, 4, 5);
+    //-EXPECT-ERROR-DEFERRED: heterogeneous tuple literal — error wording not focused yet
     //tuple = (1, "Hello", 3);
     big_tuple = (1, 2, 3, 4, 5);
+    //-EXPECT-ERROR-DEFERRED: 5-element tuple var into 3-element local — error wording not focused yet
     //tuple = big_tuple;
     wrong_tuple = (1, "Hello", 3);
+    //-EXPECT-ERROR-DEFERRED: heterogeneous tuple var assignment — error wording not focused yet
     //tuple = wrong_tuple;
 
     /* destructuring. */

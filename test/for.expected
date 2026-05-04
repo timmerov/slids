@@ -5,7 +5,6 @@ Simple:dtor
 for ctor.dtor: after
 for range: 0 1 2 3 4 5 6 7 8 9
 for tuple: 1 1 2 3 5 8
-01: heterogeneous tuple
 for string literal: 72 101 108 108 111
 for fixed-size array: 1 1 2 3 5 8
 for enum: 0 1 2 3
@@ -17,7 +16,6 @@ Simple:ctor
 Simple:dtor
 Simple:dtor
 tuple declared
-02: bare iter over tuple-named of slid
 iterate by value: begin
 Simple:ctor
 iterate by value: loop
@@ -30,7 +28,6 @@ end tuple block
 Simple:dtor
 Simple:dtor
 after tuple block
-03: multi-dimensional array
 Simple[3] begin: expect 3 ctor/dtor
 Simple:ctor
 Simple:ctor
@@ -42,7 +39,6 @@ Simple[3] end: expect 3 ctor/dtor
 Simple:ctor
 Simple:ctor
 Simple:ctor
-04: bare iter over Simple array
 iterate Simple array by value: begin: expect 1 ctor/dtor
 Simple:ctor
 array of slid: iterate by value.
@@ -58,7 +54,6 @@ iterate Simple array by value: end: expect 0 ctor/dtor
 Simple:dtor
 Simple:dtor
 Simple:dtor
-05: bare iter over tuple-literal of slid
 iterate Simple tuple by value: begin: expect 3 ctor/dtor
 Simple:ctor
 Simple:ctor
@@ -77,24 +72,9 @@ tuple-literal of slid: iterate by reference.
 Simple:dtor
 Simple:dtor
 iterate Simple tuple by reference: begin: expect 2 ctor/dtor
-06: bare iter over tuple-literal of anon-tuple
-07: bare iter over fixed-array of anon-tuple
-08: bare iter over tuple-named of anon-tuple
 for container by reference: 17 18 19 20 21
 for container by value: 13 17 19
-09: bare iter Flexible (both protocols)
 for container by value: 13 17 19
 for container by reference: 13 17 19
-10: TypeMismatch1 — begin/end/next return types differ
-11: TypeMismatch2 — begin/end/next return types differ
-12: TypeMismatch3 — begin/end/next return types differ
-13: TypeMismatch4 — next param type differs
-14: IncompleteByValue — op[] but no size
-15: IncompleteByRef — begin/end but no next
-16: MalformedSize — size takes a parameter
-17: MalformedNext — next takes 0 parameters
-18: NotIterable — no protocol methods
-19: BothSame — both protocols return identical type
-20: Flexible — explicit type matches neither protocol return
 for good-by-value, bad-by-ref: 100 101 102
 for bad-by-value, good-by-ref: 200 201 202

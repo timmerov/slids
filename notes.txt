@@ -2,8 +2,6 @@
 test if works as expected:
 x = ^y^;
 
-automate negative tests.
-
 optimize tuple construction:
 a tuple of objects constructs temp objects,
 then copies them into the tuple.

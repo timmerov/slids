@@ -339,8 +339,7 @@ int32 main() {
     }
     __println();
 
-    __println("01: heterogeneous tuple");
-    /* compile error */
+    //-EXPECT-ERROR-DEFERRED: heterogeneous tuple element-typing not validated as a focused diagnostic
     //for (x : (1, 1, 2, "Hello")) {
     //    __println("compile error: tuple must be homogenous");
     //}
@@ -383,8 +382,7 @@ int32 main() {
         tuple = (Simple, Simple);
         __println("tuple declared");
 
-        __println("02: bare iter over tuple-named of slid");
-        /* compile error. uncomment to verify: caret on x. */
+        //-EXPECT-ERROR: cannot infer loop type variable
         //for (x : tuple) {
         //    __println("compile error: cannot infer type iterating over class objects." );
         //}
@@ -426,8 +424,7 @@ int32 main() {
     }
     __println("after tuple block");
 
-    __println("03: multi-dimensional array");
-    /* compile error. */
+    //-EXPECT-ERROR: multi-dimensional fixed-size array iteration not supported
     //int board[8][8];
     //for (x : board) {
     //    __println("compile error: cannot iterate over a multi-dimensional array.");
@@ -441,8 +438,7 @@ int32 main() {
 
     {
         Simple array[3];
-        __println("04: bare iter over Simple array");
-        /* compile error. */
+        //-EXPECT-ERROR: cannot infer loop type variable
         //for (x : array) {
         //    __println("compile error: need explicit declaration: object or reference.");
         //}
@@ -461,8 +457,7 @@ int32 main() {
     }
 
     {
-        __println("05: bare iter over tuple-literal of slid");
-        /* compile error: cannot infer non-primitive element type. */
+        //-EXPECT-ERROR: cannot infer loop type variable
         //for (x : (Simple(1), Simple(2))) {
         //    __println("compile error: tuple-literal of slid needs explicit type.");
         //}
@@ -483,22 +478,18 @@ int32 main() {
     {
         /* anon-tuple element type — same inference rule as slid elements. */
 
-        __println("06: bare iter over tuple-literal of anon-tuple");
-        /* compile error: cannot infer loop type variable. */
+        //-EXPECT-ERROR: cannot infer loop type variable
         //for (x : ((1, 2), (3, 4))) {
         //    __println("compile error: tuple-literal of anon-tuple needs explicit type.");
         //}
 
-        __println("07: bare iter over fixed-array of anon-tuple");
-        /* compile error: cannot infer loop type variable.
-           parser does not yet accept anon-tuple-element fixed-array decls. */
+        //-EXPECT-ERROR-DEFERRED: parser does not yet accept anon-tuple-element fixed-array decls
         //(int, int) pairs[3] = ((1, 2), (3, 4), (5, 6));
         //for (x : pairs) {
         //    __println("compile error: fixed-array of anon-tuple needs explicit type.");
         //}
 
-        __println("08: bare iter over tuple-named of anon-tuple");
-        /* compile error: cannot infer loop type variable. */
+        //-EXPECT-ERROR: cannot infer loop type variable
         //triples = ((1, 2, 3), (4, 5, 6));
         //for (x : triples) {
         //    __println("compile error: tuple-named of anon-tuple needs explicit type.");
@@ -552,8 +543,7 @@ int32 main() {
         /* iterate over a container class with both index and size. */
         Flexible container;
 
-        __println("09: bare iter Flexible (both protocols)");
-        /* compile error. cannot infer type. */
+        //-EXPECT-ERROR: defines both op[]/size and begin/end/next; explicit loop var type required
         //for (x : container) {
         //    __print("compile error: cannot infer type.");
         //}
@@ -576,19 +566,19 @@ int32 main() {
     TypeMismatch2 mismatch2;
     TypeMismatch3 mismatch3;
     TypeMismatch4 mismatch4;
-    __println("10: TypeMismatch1 — begin/end/next return types differ");
+    //-EXPECT-ERROR: 'TypeMismatch1' begin/end/next return types differ
     //for (x : mismatch1) {
     //    __print("compile error: begin/end/next must all use the same type.");
     //}
-    __println("11: TypeMismatch2 — begin/end/next return types differ");
+    //-EXPECT-ERROR: 'TypeMismatch2' begin/end/next return types differ
     //for (x : mismatch2) {
     //    __print("compile error: begin/end/next must all use the same type.");
     //}
-    __println("12: TypeMismatch3 — begin/end/next return types differ");
+    //-EXPECT-ERROR: 'TypeMismatch3' begin/end/next return types differ
     //for (x : mismatch3) {
     //    __print("compile error: begin/end/next must all use the same type.");
     //}
-    __println("13: TypeMismatch4 — next param type differs");
+    //-EXPECT-ERROR: 'TypeMismatch4' next parameter type
     //for (x : mismatch4) {
     //    __print("compile error: begin/end/next must all use the same type.");
     //}
@@ -602,44 +592,37 @@ int32 main() {
         BothSame          bs;
         Flexible          fx;
 
-        __println("14: IncompleteByValue — op[] but no size");
-        /* "defines op[] but not size" */
+        //-EXPECT-ERROR: 'IncompleteByValue' defines op[] but not size
         //for (x : iv) {
         //    __print("compile error: incomplete by-value protocol.");
         //}
 
-        __println("15: IncompleteByRef — begin/end but no next");
-        /* "defines some of begin/end/next but not all (missing: next)" */
+        //-EXPECT-ERROR: 'IncompleteByRef' defines some of begin/end/next but not all
         //for (x : ir) {
         //    __print("compile error: incomplete by-reference protocol.");
         //}
 
-        __println("16: MalformedSize — size takes a parameter");
-        /* "size must take 0 parameters, got 1" */
+        //-EXPECT-ERROR: 'MalformedSize' size must take 0 parameters
         //for (x : ms) {
         //    __print("compile error: malformed size arity.");
         //}
 
-        __println("17: MalformedNext — next takes 0 parameters");
-        /* "next must take 1 parameter, got 0" */
+        //-EXPECT-ERROR: 'MalformedNext' next must take 1 parameter
         //for (x : mn) {
         //    __print("compile error: malformed next arity.");
         //}
 
-        __println("18: NotIterable — no protocol methods");
-        /* "is not iterable: has neither op[]/size nor begin/end/next" */
+        //-EXPECT-ERROR: 'NotIterable' is not iterable
         //for (x : ni) {
         //    __print("compile error: not iterable.");
         //}
 
-        __println("19: BothSame — both protocols return identical type");
-        /* "defines both ... with identical return types; cannot disambiguate" */
+        //-EXPECT-ERROR: 'BothSame' defines both op[]/size and begin/end/next with identical return types
         //for (int x : bs) {
         //    __print("compile error: both protocols return identical type.");
         //}
 
-        __println("20: Flexible — explicit type matches neither protocol return");
-        /* "loop var type 'bool' matches neither op[] return ('int') nor begin return ('int^')" */
+        //-EXPECT-ERROR: matches neither op[] return
         //for (bool x : fx) {
         //    __print("compile error: explicit type matches neither protocol return.");
         //}

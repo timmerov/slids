@@ -39,7 +39,7 @@ SAMPLES = \
 	type_infer \
 	virtual
 
-.PHONY: all clean test update $(SAMPLES)
+.PHONY: all clean test update negatives $(SAMPLES)
 
 all: $(SAMPLES)
 
@@ -48,6 +48,9 @@ test: all
 
 update: all
 	@../run_tests.sh --update
+
+negatives:
+	@./run_negatives.sh $(addsuffix .sl,$(SAMPLES))
 
 define SAMPLE_RULES
 $(1): $(BIN_DIR)/$(1)
