@@ -39,6 +39,22 @@ inline bool isIndirectType(const std::string& t) {
     return isRefType(t) || isPtrType(t) || isInlineArrayType(t);
 }
 
+// Built-in scalar / pointer types — anything that isn't a slid, anon-tuple,
+// or fixed-size array. Used by the for-loop inference rule: bare `for (x : ...)`
+// over a non-primitive element type is a compile error.
+inline bool isPrimitive(const std::string& t) {
+    if (t.empty()) return false;
+    if (isRefType(t) || isPtrType(t)) return true;
+    static const std::set<std::string> ok = {
+        "int", "int8", "int16", "int32", "int64",
+        "uint", "uint8", "uint16", "uint32", "uint64",
+        "intptr", "anyptr",
+        "bool", "char",
+        "float32", "float64",
+    };
+    return ok.count(t) > 0;
+}
+
 // Quote a global/function name if it contains non-identifier characters (e.g. "op+")
 inline std::string llvmGlobalName(const std::string& name) {
     for (char c : name) {

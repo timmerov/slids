@@ -26,7 +26,14 @@ Simple(int x_ = 0) {
     }
 }
 
-Loop(
+enum Bases (
+    kFirst,
+    kSecond,
+    kThird,
+    kLast
+)
+
+BeginEndInt(
     int low_,
     int high_
 ) {
@@ -43,12 +50,6 @@ Loop(
     }
 }
 
-enum Bases (
-    kFirst,
-    kSecond,
-    kThird,
-    kLast
-)
 
 int32 main() {
 
@@ -151,7 +152,7 @@ int32 main() {
         tuple = (Simple, Simple);
         __println("tuple declared");
 
-        /* compile error. uncomment to verify: caret on x, "cannot infer loop variable type for class-typed elements". */
+        /* compile error. uncomment to verify: caret on x. */
         //for (x : tuple) {
         //    __println("compile error: cannot infer type iterating over class objects." );
         //}
@@ -244,23 +245,47 @@ int32 main() {
         __println("iterate Simple tuple by reference: begin: expect 2 ctor/dtor");
     }
 
-    /*
-    iterate over a container class.
-    desugars to:
-    init:
-        int a = lp.begin();
-        int __$end_0 = lp.end();
-    condition:
-        a != __$end_0
-    update:
-        a = lp.next(a);
-    */
-    Loop loop(17, 21);
-    __print("for container:");
-    for (x : loop) {
-        __print(" " + x);
+    {
+        /* anon-tuple element type — same inference rule as slid elements. */
+
+        /* compile error: cannot infer loop type variable. */
+        //for (x : ((1, 2), (3, 4))) {
+        //    __println("compile error: tuple-literal of anon-tuple needs explicit type.");
+        //}
+
+        /* compile error: cannot infer loop type variable.
+           parser does not yet accept anon-tuple-element fixed-array decls. */
+        //(int, int) pairs[3] = ((1, 2), (3, 4), (5, 6));
+        //for (x : pairs) {
+        //    __println("compile error: fixed-array of anon-tuple needs explicit type.");
+        //}
+
+        /* compile error: cannot infer loop type variable. */
+        //triples = ((1, 2, 3), (4, 5, 6));
+        //for (x : triples) {
+        //    __println("compile error: tuple-named of anon-tuple needs explicit type.");
+        //}
     }
-    __println();
+
+    {
+        /*
+        iterate over a container class with begin and end, infer type.
+        desugars to:
+        init:
+            int a = lp.begin();
+            int __$end_0 = lp.end();
+        condition:
+            a != __$end_0
+        update:
+            a = lp.next(a);
+        */
+        BeginEndInt loop(17, 21);
+        __print("for container:");
+        for (x : loop) {
+            __print(" " + x);
+        }
+        __println();
+    }
 
     return 0;
 }

@@ -487,13 +487,13 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
         const std::string& eff_type = decl->type.empty() ? inferred : decl->type;
 
-        // Class-typed iteration without an explicit loop var type is ambiguous —
-        // the author must pick value vs reference. Reject with caret on the loop
-        // var token (the synthesized decl carries it).
-        if (decl->is_loop_var && decl->type.empty() && slid_info_.count(eff_type)) {
+        // Non-primitive element types (slid, anon-tuple, fixed-array) require an
+        // explicit loop var — the author must pick value vs reference. Reject with
+        // caret on the loop var token (the synthesized decl carries it).
+        if (decl->is_loop_var && decl->type.empty() && !isPrimitive(eff_type)) {
             errorAtNode(*decl,
-                "for-loop: cannot infer loop variable type for class-typed elements; "
-                "use 'Type " + decl->name + "' or 'Type^ " + decl->name + "'");
+                "for-loop: cannot infer loop type variable: "
+                "use explicit 'Type " + decl->name + "' or 'Type^ " + decl->name + "'");
         }
 
         // class instantiation
