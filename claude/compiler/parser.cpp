@@ -40,7 +40,7 @@ void Parser::declareVar(const std::string& name, int name_tok) {
         errorAt(name_tok, "'" + name + "' shadows field of enclosing class");
     }
     if (!scope_stack_.empty()) {
-        if (!scope_stack_.back().insert(name).second) {
+        if (!scope_stack_.back().emplace(name, LocalInfo{}).second) {
             errorAt(name_tok, "local '" + name + "' already declared in same scope");
         }
     }
@@ -60,18 +60,34 @@ bool Parser::isInScope(const std::string& name) const {
     return false;
 }
 
-int Parser::arrayCountInScope(const std::string& name) const {
-    for (auto it = array_scope_stack_.rbegin(); it != array_scope_stack_.rend(); ++it) {
+Parser::LocalInfo* Parser::findLocal(const std::string& name) {
+    for (auto it = scope_stack_.rbegin(); it != scope_stack_.rend(); ++it) {
         auto sit = it->find(name);
-        if (sit != it->end()) return sit->second;
+        if (sit != it->end()) return &sit->second;
+    }
+    return nullptr;
+}
+
+int Parser::arrayCountInScope(const std::string& name) const {
+    for (auto it = scope_stack_.rbegin(); it != scope_stack_.rend(); ++it) {
+        auto sit = it->find(name);
+        if (sit != it->end()) return sit->second.is_array ? sit->second.array_count : 0;
+    }
+    return 0;
+}
+
+int Parser::arrayRankInScope(const std::string& name) const {
+    for (auto it = scope_stack_.rbegin(); it != scope_stack_.rend(); ++it) {
+        auto sit = it->find(name);
+        if (sit != it->end()) return sit->second.is_array ? sit->second.array_rank : 0;
     }
     return 0;
 }
 
 int Parser::tupleSizeInScope(const std::string& name) const {
-    for (auto it = tuple_scope_stack_.rbegin(); it != tuple_scope_stack_.rend(); ++it) {
+    for (auto it = scope_stack_.rbegin(); it != scope_stack_.rend(); ++it) {
         auto sit = it->find(name);
-        if (sit != it->end()) return sit->second;
+        if (sit != it->end()) return sit->second.is_tuple ? sit->second.tuple_count : 0;
     }
     return 0;
 }
@@ -923,8 +939,6 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     [[maybe_unused]] int t_start = pos_;
     expect(TokenType::kLBrace, "expected '{'");
     scope_stack_.push_back({});
-    array_scope_stack_.push_back({});
-    tuple_scope_stack_.push_back({});
     for (auto& n : predeclare)
         declareVar(n, t_start);
     auto block = make<BlockStmt>(t_start);
@@ -946,8 +960,6 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
         }
     }
     scope_stack_.pop_back();
-    array_scope_stack_.pop_back();
-    tuple_scope_stack_.pop_back();
     expect(TokenType::kRBrace, "expected '}'");
     return block;
 }
@@ -983,8 +995,10 @@ std::unique_ptr<Stmt> Parser::buildAssignFromLhs(
             // Track tuple-typed locals so the short-form for-loop can iterate
             // them by synthesizing per-slot ArrayIndexExpr accesses.
             if (auto* te = dynamic_cast<TupleExpr*>(rhs.get())) {
-                if (!tuple_scope_stack_.empty())
-                    tuple_scope_stack_.back()[name] = (int)te->values.size();
+                if (auto* li = findLocal(name)) {
+                    li->is_tuple = true;
+                    li->tuple_count = (int)te->values.size();
+                }
             }
             return make<VarDeclStmt>(t_start, "", name, std::move(rhs),
                 std::vector<std::unique_ptr<Expr>>{}, is_move);
@@ -1285,8 +1299,6 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 // for-scope: covers the desugared init/cond/update + body.
                 // Loop var, synthesized helpers, and body locals all unwind here.
                 scope_stack_.push_back({});
-                array_scope_stack_.push_back({});
-                tuple_scope_stack_.push_back({});
 
                 int t_var_tok = pos_;
                 std::string for_var_type, for_var_name;
@@ -1364,8 +1376,6 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 };
                 auto _popScope = [&] {
                     scope_stack_.pop_back();
-                    array_scope_stack_.pop_back();
-                    tuple_scope_stack_.pop_back();
                 };
                 // Ref form: loop var is pointer-typed (Class^ or Class[]).
                 // Switches the desugar to alias-into-source instead of copy.
@@ -1543,9 +1553,12 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         return stmt;
                     }
                     int arr_count = arrayCountInScope(iter_name);
+                    int arr_rank = arrayRankInScope(iter_name);
                     expect(TokenType::kRParen, "expected ')'");
 
                     if (arr_count > 0) {
+                        if (arr_rank > 1)
+                            errorAt(ve->tok, "short-form for: multi-dimensional fixed-size array iteration not supported");
                         _finishIter(iter_name, arr_count);
                     } else {
                         // Iterable class: begin/end/next.
@@ -1580,8 +1593,6 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             // for-scope: covers init, cond, update, body. push a parser scope frame
             // so init-tuple decls are visible in cond/update/body and don't leak out.
             scope_stack_.push_back({});
-            array_scope_stack_.push_back({});
-            tuple_scope_stack_.push_back({});
 
             // init tuple: comma-separated slots; each is empty / `type name = expr`
             // / `name = expr` (decl-or-assign disambiguated by current scope).
@@ -1648,8 +1659,6 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             }
 
             scope_stack_.pop_back();
-            array_scope_stack_.pop_back();
-            tuple_scope_stack_.pop_back();
             return stmt;
         }
         errorHere("expected '(' after 'for'");
@@ -1820,8 +1829,13 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             }
             expect(TokenType::kSemicolon, "expected ';'");
             declareVar(arr->name, vd_tok);
-            if (!array_scope_stack_.empty() && !arr->dims.empty())
-                array_scope_stack_.back()[arr->name] = arr->dims[0];
+            if (!arr->dims.empty()) {
+                if (auto* li = findLocal(arr->name)) {
+                    li->is_array = true;
+                    li->array_count = arr->dims[0];
+                    li->array_rank = (int)arr->dims.size();
+                }
+            }
             return arr;
         }
 
@@ -1904,8 +1918,13 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             }
             expect(TokenType::kSemicolon, "expected ';'");
             declareVar(arr->name, name_tok);
-            if (!array_scope_stack_.empty() && !arr->dims.empty())
-                array_scope_stack_.back()[arr->name] = arr->dims[0];
+            if (!arr->dims.empty()) {
+                if (auto* li = findLocal(arr->name)) {
+                    li->is_array = true;
+                    li->array_count = arr->dims[0];
+                    li->array_rank = (int)arr->dims.size();
+                }
+            }
             return arr;
         }
 

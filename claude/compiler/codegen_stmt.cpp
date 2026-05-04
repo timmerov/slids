@@ -935,7 +935,6 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         // then call op{op}=(slid^) — or fall back to op{op}(slid^, slid^).
                         std::string coerce = resolveSingleArgOverload(slid_name + "__op=", *be->right);
                         if (!coerce.empty()) {
-                            auto& sinfo = slid_info_[slid_name];
                             std::string tmp = emitRawSlidAlloca(slid_name);
                             emitConstructAtPtrs(slid_name, tmp, {}, {});
                             auto& cptypes = func_param_types_[coerce];

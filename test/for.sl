@@ -196,5 +196,11 @@ int32 main() {
     }
     __println("after tuple block");
 
+    /* compile error. */
+    //int board[8][8];
+    //for (x : board) {
+    //    __println("compile error: cannot iterate over a multi-dimensional array.");
+    //}
+
     return 0;
 }

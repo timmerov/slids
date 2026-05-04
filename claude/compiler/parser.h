@@ -524,21 +524,23 @@ private:
     bool isUserTypeName(const Token& t) const;
     std::string parseTypeName();
 
-    // scope stack for inferred declarations: tracks declared variable names per block
-    std::vector<std::set<std::string>> scope_stack_;
-    // parallel stack tracking which declared names are fixed-size arrays —
-    // map: name → element count (first dim). Lets the short-form for-loop pick
-    // the array desugar (count+index) over the iterable-class desugar
-    // (begin/end/next), and bake the count as a literal at parse time.
-    std::vector<std::map<std::string, int>> array_scope_stack_;
-    // parallel stack tracking which declared names are anon-tuple-typed (i.e.
-    // initialized from a tuple-literal RHS). Maps name → element count, so the
-    // short-form for-loop can synthesize per-slot ArrayIndexExpr accesses.
-    std::vector<std::map<std::string, int>> tuple_scope_stack_;
+    // Per-scope record for each declared local. Visibility (the name being in
+    // the map at all) drives decl-vs-assign disambiguation; the optional
+    // properties feed shape-aware downstream logic (short-form for, etc).
+    struct LocalInfo {
+        bool is_array = false;
+        int  array_count = 0;   // outer dim
+        int  array_rank = 0;    // number of dims; >1 rejected by short-form for
+        bool is_tuple = false;
+        int  tuple_count = 0;   // anon-tuple element count
+    };
+    std::vector<std::map<std::string, LocalInfo>> scope_stack_;
     void declareVar(const std::string& name, int name_tok);
     bool isInScope(const std::string& name) const;
     int arrayCountInScope(const std::string& name) const; // 0 if not a fixed-size array local
+    int arrayRankInScope(const std::string& name) const;  // 0 if not a fixed-size array local
     int tupleSizeInScope(const std::string& name) const;  // 0 if not a tuple local
+    LocalInfo* findLocal(const std::string& name);        // innermost frame; nullptr if not in scope
 
     // field names of the slid currently being parsed (prevents field assignments being inferred as declarations)
     std::set<std::string> current_slid_fields_;

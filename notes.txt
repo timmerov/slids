@@ -1,11 +1,19 @@
 
 revisit for loops.
-lots of uncharted territory.
+some uncharted territory.
 for fixed-sized multi-dim arrays
     not allowed?
 can the loop var be a class object?
     explicitly only.
 is a loop var reference mutable or const?
+for container by value or reference?
+for p=begin p!=end p=next
+for idx=0 idx<size ++idx x=obj[idx]
+
+int board[8][8];
+for (int x : board) {
+    /* what does this do? */
+}
 
 missing tests:
 test empty string.
@@ -59,13 +67,17 @@ any pointer type can be set to nullptr.
 it might be useful to expose AnyTypePtr.
 this would be used for virtual methods.
 Base() {
-    virtual void foo(AnyTypePtr ptr);
+    /* this pointer matches any pointer type. */
+    virtual alias void^ foo(alias void^ ptr);
 }
 Derived() {
-    virtual void foo(char[] ptr);
+    /* matches the alias void^ */
+    virtual int[] foo(char[] ptr);
 }
 Derived:foo matches to Base:foo.
 cause char[] matches to AnyTypePtr.
+fill vector with derived classes.
+iterate through the vector using a Base^.
 
 aliases:
 alias int32 i32;
