@@ -63,12 +63,8 @@ iterate Simple tuple by value: begin: expect 3 ctor/dtor
 Simple:ctor
 Simple:ctor
 Simple:ctor
-Simple:ctor
-Simple:ctor
 tuple-literal of slid: iterate by value.
 tuple-literal of slid: iterate by value.
-Simple:dtor
-Simple:dtor
 Simple:dtor
 Simple:dtor
 Simple:dtor
@@ -76,12 +72,8 @@ iterate Simple tuple by value: end: expect 3 ctor/dtor
 iterate Simple tuple by reference: begin: expect 2 ctor/dtor
 Simple:ctor
 Simple:ctor
-Simple:ctor
-Simple:ctor
 tuple-literal of slid: iterate by reference.
 tuple-literal of slid: iterate by reference.
-Simple:dtor
-Simple:dtor
 Simple:dtor
 Simple:dtor
 iterate Simple tuple by reference: begin: expect 2 ctor/dtor

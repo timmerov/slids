@@ -724,6 +724,17 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         if (src_type != elems[i])
                             error(std::string("slid tuple element type mismatch: expected '"
                                 + elems[i] + "', got '" + src_type + "'"));
+                        // Prvalue elision: when the slot value is an inline ctor
+                        // call for the same slid type, construct directly at the
+                        // slot — skipping the materialize-temp + field-by-field copy.
+                        if (auto* ce = dynamic_cast<const CallExpr*>(te->values[i].get())) {
+                            if (ce->callee == elems[i]) {
+                                emitConstructAt(elems[i], gep, ce->args);
+                                if (hasDtorInChain(elems[i]))
+                                    dtor_vars_.push_back({decl->name, elems[i], i});
+                                continue;
+                            }
+                        }
                         std::string src_ptr;
                         if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get());
                                 ve && locals_.count(ve->name)) {

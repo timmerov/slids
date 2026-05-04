@@ -200,7 +200,7 @@ int32 main() {
 
     /* constructables. */
     {
-        __println("6 ctor, 2 move, 6 dtor.");
+        __println("4 ctor, 2 move, 4 dtor.");
         xtor_tuple = (Action(0), Action(2));
         xtor1_tuple = xtor_tuple;
         xtor_tuple = xtor1_tuple;
@@ -261,7 +261,7 @@ int32 main() {
 
     /* tuple[N] <- val move: dispatches op<- on the slot's slid type. */
     {
-        __println("-- tuple[N] <- move test: expect 5 ctor, 1 move, 5 dtor --");
+        __println("-- tuple[N] <- move test: expect 3 ctor, 1 move, 3 dtor --");
         at = (Action(0), Action(1));
         at[0] <- Action(2);
     }
@@ -420,6 +420,34 @@ int32 main() {
         __println("-- slid temp in call arg test --");
         takeAction(Action(99));
     }
+
+    /* slid prvalue elision — verification tests. Expected counts assume the
+       elision is in place. Today's compiler may produce extra ctor/dtor pairs
+       for sites that still materialize a temp before copying into the slot. */
+
+    /* (a) slid local with `=` init from inline ctor call. */
+    {
+        __println("-- slid local prvalue init: expect 1 ctor, 1 dtor --");
+        Action act_local = Action(70);
+    }
+
+    /* (b) tuple slot init from inline ctor calls. */
+    {
+        __println("-- tuple slot prvalue init: expect 2 ctor, 2 dtor --");
+        tuple_act = (Action(80), Action(81));
+    }
+
+    /* (c) fixed-size array elem init from inline ctor calls. May not parse
+       today if Action requires args and array decl tries to default-construct. */
+    //{
+    //    __println("-- array elem prvalue init: expect 3 ctor, 3 dtor --");
+    //    Action arr_act[3] = (Action(90), Action(91), Action(92));
+    //}
+
+    /* Note: slids forbids class-type by-value parameters, so the
+       arg-slot prvalue elision case isn't reachable — class args pass
+       by reference (Action^), and the existing `takeAction(Action(99))`
+       test above already produces 1 ctor / 1 dtor without elision. */
 
     return 0;
 }

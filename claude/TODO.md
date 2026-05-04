@@ -48,7 +48,10 @@
   - **Multi-overload op[]/begin**: spec leans yes-but-deferred (for.sl open question). Today `recordSlidMethods` records last-seen signature only.
   - **Param-typed source iteration**: when the for source is a function parameter, the parser doesn't track the type, so the dispatch falls into the "neither protocol" error with an empty type name. Fix: thread param types into `parseBlock`'s predeclare list.
 
-- **Elide slid prvalue temps into known slots**: When a slid-typed prvalue (e.g. inline ctor call `Simple(1)`) is used to initialize a destination at a known address — tuple-literal slot, function arg slot for a non-ref param, slid-typed local, slid-typed field — codegen should construct in place at the destination rather than materializing a temp and copy-initializing the slot from it. Tuple-literal slot init is the case that prompted the note (`for (Simple x : (Simple(1), Simple(2)))` produces 5 ctors / 5 dtors, expected 3). Same elision already happens for `Simple s(1);` locals; the path needs to be uniform across slot-init sites.
+- **Elide slid prvalue temps into known slots** — *partially landed*. Tuple-literal slot init now constructs the prvalue ctor call directly at the slot (codegen_expr.cpp TupleExpr arm + codegen_stmt.cpp slid-tuple VarDeclStmt arm). `for (Simple x : (Simple(1), Simple(2)))` now runs 3 ctor / 3 dtor; tuple.sl Action blocks tightened. Slid local `Simple s = Simple(1)` already elided pre-existing. Remaining sites:
+  - Field init: `obj.field_ = Simple(1)` materializes a temp, dispatches op= on the field. Elision into a populated field requires dtor-then-ctor — semantically distinct from slot init; deferred.
+  - Array elem init: `Action arr[3] = (Action(0), Action(1), Action(2))` blocked by ArrayDeclStmt's lack of per-slot ctor-with-args support.
+  - Function arg slot: not a target — slids forbids class-type by-value parameters.
 
 - **Optimize returning objects:**
   - Currently, a function returning an object copies the object to its retval. The retval should be the object - named value return optimization (NRVO).

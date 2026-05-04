@@ -1995,6 +1995,15 @@ std::string Codegen::emitExpr(const Expr& expr) {
             out_ << "    " << gep << " = getelementptr " << struct_llvm
                  << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
             if (slid_info_.count(elem_ttype)) {
+                // Prvalue elision: when the slot value is an inline ctor call
+                // for the same slid type, construct directly at the slot —
+                // skipping the materialize-temp + field-by-field copy.
+                if (auto* ce = dynamic_cast<const CallExpr*>(te->values[i].get())) {
+                    if (ce->callee == elem_ttype && slid_info_.count(ce->callee)) {
+                        emitConstructAt(elem_ttype, gep, ce->args);
+                        continue;
+                    }
+                }
                 std::string src_ptr;
                 if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
                     auto lit = locals_.find(ve->name);

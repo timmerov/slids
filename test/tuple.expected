@@ -20,13 +20,9 @@ slid_tuple[1]: (x,y,z)=(4,5,6)
 slid_tuple[0] after element-write: (x,y,z)=(7,8,9)
 p: (x,y,z)=(7,8,9)
 q: (x,y,z)=(4,5,6)
-6 ctor, 2 move, 6 dtor.
+4 ctor, 2 move, 4 dtor.
 Action:ctor
 Action:ctor
-Action:ctor
-Action:ctor
-Action:dtor
-Action:dtor
 Action:ctor
 Action:ctor
 Action:move
@@ -71,13 +67,9 @@ diff = (9,18,27)
 prod = (10,21,36)
 ss[0]: (x,y,z)=(11,22,33)
 ss[1]: (x,y,z)=(44,55,66)
--- tuple[N] <- move test: expect 5 ctor, 1 move, 5 dtor --
+-- tuple[N] <- move test: expect 3 ctor, 1 move, 3 dtor --
 Action:ctor
 Action:ctor
-Action:ctor
-Action:ctor
-Action:dtor
-Action:dtor
 Action:ctor
 Action:move
 Action:dtor
@@ -128,4 +120,12 @@ b_nest = ((11,12),(13,14))
 -- slid temp in call arg test --
 Action:ctor
 takeAction received
+Action:dtor
+-- slid local prvalue init: expect 1 ctor, 1 dtor --
+Action:ctor
+Action:dtor
+-- tuple slot prvalue init: expect 2 ctor, 2 dtor --
+Action:ctor
+Action:ctor
+Action:dtor
 Action:dtor
