@@ -533,6 +533,7 @@ private:
         int  array_rank = 0;    // number of dims; >1 rejected by short-form for
         bool is_tuple = false;
         int  tuple_count = 0;   // anon-tuple element count
+        std::string type;       // declared type ("" when not tracked / inferred)
     };
     std::vector<std::map<std::string, LocalInfo>> scope_stack_;
     void declareVar(const std::string& name, int name_tok);
@@ -540,7 +541,35 @@ private:
     int arrayCountInScope(const std::string& name) const; // 0 if not a fixed-size array local
     int arrayRankInScope(const std::string& name) const;  // 0 if not a fixed-size array local
     int tupleSizeInScope(const std::string& name) const;  // 0 if not a tuple local
+    std::string typeInScope(const std::string& name) const; // "" if not recorded
     LocalInfo* findLocal(const std::string& name);        // innermost frame; nullptr if not in scope
+
+    // Per-class info populated as top-level slid defs are parsed (recordSlidMethods).
+    // method_names mirrors sigs.keys for fast presence checks; sigs carries the
+    // full per-method return type and parameter type list, used by the for-iter
+    // protocol classifier (single-overload assumption per spec).
+    struct MethodSig {
+        std::string return_type;
+        std::vector<std::string> param_types;
+    };
+    struct ClassInfo {
+        std::set<std::string> method_names;
+        std::map<std::string, MethodSig> sigs;
+    };
+    std::map<std::string, ClassInfo> class_info_;
+    void recordSlidMethods(const SlidDef& s);
+
+    // For-iterator protocol classifier. Each protocol (op[]/size for by-value,
+    // begin/end/next for by-reference) is one of three states; the for-iter arm
+    // dispatches Good and reports Bad with a focused reason.
+    enum class ProtocolStatus { Absent, Good, Bad };
+    struct ProtocolDiag {
+        ProtocolStatus status = ProtocolStatus::Absent;
+        std::string reason;        // populated when status == Bad
+        std::string return_type;   // populated when status == Good (for tie-break)
+    };
+    ProtocolDiag classifyByValue(const ClassInfo& ci, const std::string& class_name) const;
+    ProtocolDiag classifyByRef(const ClassInfo& ci, const std::string& class_name) const;
 
     // field names of the slid currently being parsed (prevents field assignments being inferred as declarations)
     std::set<std::string> current_slid_fields_;

@@ -473,6 +473,10 @@ private:
     // conversion. Returns early when dst is itself indirect or a slid (those
     // paths are handled by op= dispatch and requirePtrInit).
     void requireCompatibleInit(const std::string& dst_type, const Expr& src);
+    // Emit init/assign value with nullptr-compatibility check. nullptr → ^/[] returns
+    // "null"; nullptr → intptr returns "0" (i64 zero); nullptr → any other
+    // primitive errors. Otherwise delegates to emitExpr.
+    std::string valOrNullptrCheck(const std::string& dst_type, const Expr& src);
     std::string inferSlidType(const Expr& expr); // infer Slids type string for type-inferred declarations
     std::string emitFieldPtr(const std::string& obj_name, const std::string& field);
     // If `base` is a VarExpr naming an inline-array local, emit a GEP to element

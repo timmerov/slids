@@ -92,6 +92,118 @@ int Parser::tupleSizeInScope(const std::string& name) const {
     return 0;
 }
 
+std::string Parser::typeInScope(const std::string& name) const {
+    for (auto it = scope_stack_.rbegin(); it != scope_stack_.rend(); ++it) {
+        auto sit = it->find(name);
+        if (sit != it->end()) return sit->second.type;
+    }
+    return "";
+}
+
+void Parser::recordSlidMethods(const SlidDef& s) {
+    auto& info = class_info_[s.name];
+    for (auto& m : s.methods) {
+        info.method_names.insert(m.name);
+        MethodSig sig;
+        sig.return_type = m.return_type;
+        for (auto& p : m.params) sig.param_types.push_back(p.first);
+        info.sigs[m.name] = std::move(sig);
+    }
+}
+
+Parser::ProtocolDiag Parser::classifyByValue(const ClassInfo& ci,
+                                              const std::string& cname) const {
+    bool has_op = ci.method_names.count("op[]") != 0;
+    bool has_size = ci.method_names.count("size") != 0;
+    ProtocolDiag d;
+    if (!has_op && !has_size) { d.status = ProtocolStatus::Absent; return d; }
+    if (!has_op || !has_size) {
+        d.status = ProtocolStatus::Bad;
+        d.reason = "type '" + cname + "' defines "
+            + std::string(has_op ? "op[] but not size" : "size but not op[]");
+        return d;
+    }
+    auto& op_sig = ci.sigs.at("op[]");
+    auto& sz_sig = ci.sigs.at("size");
+    if (op_sig.param_types.size() != 1) {
+        d.status = ProtocolStatus::Bad;
+        d.reason = "type '" + cname + "' op[] must take 1 parameter, got "
+            + std::to_string(op_sig.param_types.size());
+        return d;
+    }
+    if (!sz_sig.param_types.empty()) {
+        d.status = ProtocolStatus::Bad;
+        d.reason = "type '" + cname + "' size must take 0 parameters, got "
+            + std::to_string(sz_sig.param_types.size());
+        return d;
+    }
+    d.status = ProtocolStatus::Good;
+    d.return_type = op_sig.return_type;
+    return d;
+}
+
+Parser::ProtocolDiag Parser::classifyByRef(const ClassInfo& ci,
+                                            const std::string& cname) const {
+    bool has_b = ci.method_names.count("begin") != 0;
+    bool has_e = ci.method_names.count("end") != 0;
+    bool has_n = ci.method_names.count("next") != 0;
+    ProtocolDiag d;
+    int present = (int)has_b + (int)has_e + (int)has_n;
+    if (present == 0) { d.status = ProtocolStatus::Absent; return d; }
+    if (present < 3) {
+        std::string missing;
+        auto add = [&](const char* nm) {
+            if (!missing.empty()) missing += ", ";
+            missing += nm;
+        };
+        if (!has_b) add("begin");
+        if (!has_e) add("end");
+        if (!has_n) add("next");
+        d.status = ProtocolStatus::Bad;
+        d.reason = "type '" + cname + "' defines some of begin/end/next but not all (missing: "
+            + missing + ")";
+        return d;
+    }
+    auto& b_sig = ci.sigs.at("begin");
+    auto& e_sig = ci.sigs.at("end");
+    auto& n_sig = ci.sigs.at("next");
+    if (b_sig.return_type != e_sig.return_type
+            || b_sig.return_type != n_sig.return_type) {
+        d.status = ProtocolStatus::Bad;
+        d.reason = "type '" + cname + "' begin/end/next return types differ: begin returns '"
+            + b_sig.return_type + "', end returns '" + e_sig.return_type
+            + "', next returns '" + n_sig.return_type + "'";
+        return d;
+    }
+    if (!b_sig.param_types.empty()) {
+        d.status = ProtocolStatus::Bad;
+        d.reason = "type '" + cname + "' begin must take 0 parameters, got "
+            + std::to_string(b_sig.param_types.size());
+        return d;
+    }
+    if (!e_sig.param_types.empty()) {
+        d.status = ProtocolStatus::Bad;
+        d.reason = "type '" + cname + "' end must take 0 parameters, got "
+            + std::to_string(e_sig.param_types.size());
+        return d;
+    }
+    if (n_sig.param_types.size() != 1) {
+        d.status = ProtocolStatus::Bad;
+        d.reason = "type '" + cname + "' next must take 1 parameter, got "
+            + std::to_string(n_sig.param_types.size());
+        return d;
+    }
+    if (n_sig.param_types[0] != b_sig.return_type) {
+        d.status = ProtocolStatus::Bad;
+        d.reason = "type '" + cname + "' next parameter type '" + n_sig.param_types[0]
+            + "' must match begin/end/next return type '" + b_sig.return_type + "'";
+        return d;
+    }
+    d.status = ProtocolStatus::Good;
+    d.return_type = b_sig.return_type;
+    return d;
+}
+
 Token& Parser::peek() { return tokens_[pos_]; }
 
 static bool isKeyword(TokenType t) {
@@ -1403,23 +1515,37 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 //   cond: $idx < count
                 //   update: ++$idx; x = ^src[$idx];
                 //   body: <user body>
-                auto _finishIter = [&](const std::string& source_name, int count) {
+                auto _finishIter = [&](const std::string& source_name,
+                                       std::unique_ptr<Expr> count_expr,
+                                       bool is_iter_class) {
                     std::string idx_name =
                         "__$idx_" + std::to_string(synthetic_counter_++);
+                    std::string end_name =
+                        "__$end_" + std::to_string(synthetic_counter_++);
                     auto _srcAt = [&](std::unique_ptr<Expr> idx) -> std::unique_ptr<Expr> {
                         return make<ArrayIndexExpr>(t_start, _var(source_name),
                             std::move(idx));
                     };
+                    std::unique_ptr<Stmt> loop_var_decl;
                     if (ref_form) {
-                        stmt->init_stmts.push_back(_loopDecl(_addrOf(_srcAt(_intLit(0)))));
+                        loop_var_decl = _loopDecl(_addrOf(_srcAt(_intLit(0))));
                     } else if (for_var_type.empty()) {
                         // Inferred type: codegen reads elem type from src[0].
-                        stmt->init_stmts.push_back(_loopDecl(_srcAt(_intLit(0))));
+                        loop_var_decl = _loopDecl(_srcAt(_intLit(0)));
                     } else {
-                        stmt->init_stmts.push_back(_loopDeclNoInit());
+                        loop_var_decl = _loopDeclNoInit();
                     }
+                    // Iterable-class iteration uses exactly-one-protocol detection
+                    // to pick by-value vs by-ref; no further explicit-type rule
+                    // applies, so suppress the predicate trigger on the loop var.
+                    if (is_iter_class) {
+                        if (auto* d = dynamic_cast<VarDeclStmt*>(loop_var_decl.get()))
+                            d->is_loop_var = false;
+                    }
+                    stmt->init_stmts.push_back(std::move(loop_var_decl));
                     stmt->init_stmts.push_back(_decl("int", idx_name, _intLit(0)));
-                    stmt->cond = _bin("<", _var(idx_name), _intLit(count));
+                    stmt->init_stmts.push_back(_decl("int", end_name, std::move(count_expr)));
+                    stmt->cond = _bin("<", _var(idx_name), _var(end_name));
                     auto upd = make<BlockStmt>(t_start);
                     upd->stmts.push_back(_assign(idx_name,
                         _bin("+", _var(idx_name), _intLit(1))));
@@ -1498,7 +1624,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     // into a fresh alloca and infers the anon-tuple type.
                     stmt->init_stmts.push_back(
                         _decl("", src_name, std::move(first_expr)));
-                    _finishIter(src_name, size);
+                    _finishIter(src_name, _intLit(size), /*is_iter_class=*/false);
                     _consumeLabel();
                     _popScope();
                     return stmt;
@@ -1531,23 +1657,25 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         "__$base_" + std::to_string(synthetic_counter_++);
                     stmt->init_stmts.push_back(
                         _decl("char[]", base_name, std::move(first_expr)));
-                    _finishIter(base_name, s_len);
+                    _finishIter(base_name, _intLit(s_len), /*is_iter_class=*/false);
                     _consumeLabel();
                     _popScope();
                     return stmt;
                 }
 
                 // VarExpr: dispatch by parser-tracked kind.
-                //   tuple-typed local → iterate the source in place (codegen
-                //                       allows variable-index on homogeneous tuples)
+                //   tuple-typed local → iterate in place (codegen allows
+                //                       variable-index on homogeneous tuples)
                 //   fixed-size array  → iterate by parser-known count
-                //   else              → iterable class via begin/end/next
+                //   else              → iterable class: pick by-value (op[]/size)
+                //                       or by-reference (begin/end/next) by which
+                //                       protocol the source's class defines.
                 if (auto* ve = dynamic_cast<VarExpr*>(first_expr.get())) {
                     std::string iter_name = ve->name;
                     int tup_size = tupleSizeInScope(iter_name);
                     if (tup_size > 0) {
                         expect(TokenType::kRParen, "expected ')'");
-                        _finishIter(iter_name, tup_size);
+                        _finishIter(iter_name, _intLit(tup_size), /*is_iter_class=*/false);
                         _consumeLabel();
                         _popScope();
                         return stmt;
@@ -1559,26 +1687,87 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     if (arr_count > 0) {
                         if (arr_rank > 1)
                             errorAt(ve->tok, "short-form for: multi-dimensional fixed-size array iteration not supported");
-                        _finishIter(iter_name, arr_count);
+                        _finishIter(iter_name, _intLit(arr_count), /*is_iter_class=*/false);
                     } else {
-                        // Iterable class: begin/end/next.
-                        std::string end_name =
-                            "__$end_" + std::to_string(synthetic_counter_++);
-                        std::vector<std::unique_ptr<Expr>> beg_args, end_args, next_args;
-                        next_args.push_back(_var(for_var_name));
-                        stmt->init_stmts.push_back(_loopDecl(
-                            std::unique_ptr<Expr>(make<MethodCallExpr>(t_start,
-                                _var(iter_name), "begin", std::move(beg_args)))));
-                        stmt->init_stmts.push_back(_decl(for_var_type, end_name,
-                            std::unique_ptr<Expr>(make<MethodCallExpr>(t_start,
-                                _var(iter_name), "end", std::move(end_args)))));
-                        stmt->cond = _bin("!=", _var(for_var_name), _var(end_name));
-                        auto upd = make<BlockStmt>(t_start);
-                        upd->stmts.push_back(_assign(for_var_name,
-                            std::unique_ptr<Expr>(make<MethodCallExpr>(t_start,
-                                _var(iter_name), "next", std::move(next_args)))));
-                        stmt->update_block = std::move(upd);
-                        stmt->body = parseBlock();
+                        std::string src_type = typeInScope(iter_name);
+                        auto mit = class_info_.find(src_type);
+                        ClassInfo empty_ci;
+                        const ClassInfo& ci = (mit != class_info_.end()) ? mit->second : empty_ci;
+                        ProtocolDiag idx_diag = classifyByValue(ci, src_type);
+                        ProtocolDiag ref_diag = classifyByRef(ci, src_type);
+                        // Pick protocol. With both Good, explicit loop var
+                        // type breaks the tie by matching one return; bare
+                        // form requires explicit, identical returns are
+                        // unbreakable. Per spec lines 25-27, a Bad protocol
+                        // alongside a Good one is silently overlooked.
+                        bool pick_by_value = false;
+                        bool pick_by_ref = false;
+                        if (idx_diag.status == ProtocolStatus::Good
+                                && ref_diag.status == ProtocolStatus::Good) {
+                            if (for_var_type.empty()) {
+                                errorAt(ve->tok, "for-iterator: type '" + src_type
+                                    + "' defines both op[]/size and begin/end/next; "
+                                    "explicit loop var type required");
+                            }
+                            if (idx_diag.return_type == ref_diag.return_type) {
+                                errorAt(ve->tok, "for-iterator: type '" + src_type
+                                    + "' defines both op[]/size and begin/end/next "
+                                    "with identical return types; cannot disambiguate");
+                            }
+                            if (for_var_type == idx_diag.return_type)        pick_by_value = true;
+                            else if (for_var_type == ref_diag.return_type)   pick_by_ref = true;
+                            else
+                                errorAt(ve->tok, "for-iterator: loop var type '" + for_var_type
+                                    + "' matches neither op[] return ('" + idx_diag.return_type
+                                    + "') nor begin return ('" + ref_diag.return_type + "')");
+                        } else if (idx_diag.status == ProtocolStatus::Good) {
+                            pick_by_value = true;
+                        } else if (ref_diag.status == ProtocolStatus::Good) {
+                            pick_by_ref = true;
+                        } else if (idx_diag.status == ProtocolStatus::Absent
+                                && ref_diag.status == ProtocolStatus::Absent) {
+                            errorAt(ve->tok, "for-iterator: type '" + src_type
+                                + "' is not iterable: has neither op[]/size nor begin/end/next");
+                        } else {
+                            std::string msg = "for-iterator: ";
+                            if (idx_diag.status == ProtocolStatus::Bad) msg += idx_diag.reason;
+                            if (ref_diag.status == ProtocolStatus::Bad) {
+                                if (idx_diag.status == ProtocolStatus::Bad) msg += "; ";
+                                msg += ref_diag.reason;
+                            }
+                            errorAt(ve->tok, msg);
+                        }
+                        if (pick_by_value) {
+                            // Lower to the same index/end-driven shape as
+                            // tuple/array iteration; count is container.size().
+                            std::vector<std::unique_ptr<Expr>> size_args;
+                            std::unique_ptr<Expr> size_call(make<MethodCallExpr>(t_start,
+                                _var(iter_name), "size", std::move(size_args)));
+                            _finishIter(iter_name, std::move(size_call), /*is_iter_class=*/true);
+                        } else if (pick_by_ref) {
+                            // Loop var is the iterator; cond uses c.end();
+                            // update calls c.next(iter).
+                            std::string end_name =
+                                "__$end_" + std::to_string(synthetic_counter_++);
+                            std::vector<std::unique_ptr<Expr>> beg_args, end_args, next_args;
+                            next_args.push_back(_var(for_var_name));
+                            auto loop_var_decl = _loopDecl(
+                                std::unique_ptr<Expr>(make<MethodCallExpr>(t_start,
+                                    _var(iter_name), "begin", std::move(beg_args))));
+                            if (auto* d = dynamic_cast<VarDeclStmt*>(loop_var_decl.get()))
+                                d->is_loop_var = false;
+                            stmt->init_stmts.push_back(std::move(loop_var_decl));
+                            stmt->init_stmts.push_back(_decl(for_var_type, end_name,
+                                std::unique_ptr<Expr>(make<MethodCallExpr>(t_start,
+                                    _var(iter_name), "end", std::move(end_args)))));
+                            stmt->cond = _bin("!=", _var(for_var_name), _var(end_name));
+                            auto upd = make<BlockStmt>(t_start);
+                            upd->stmts.push_back(_assign(for_var_name,
+                                std::unique_ptr<Expr>(make<MethodCallExpr>(t_start,
+                                    _var(iter_name), "next", std::move(next_args)))));
+                            stmt->update_block = std::move(upd);
+                            stmt->body = parseBlock();
+                        }
                     }
                     _consumeLabel();
                     _popScope();
@@ -1879,6 +2068,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             auto init = parseExpr();
             expect(TokenType::kSemicolon, "expected ';'");
             declareVar(name, name_tok);
+            if (auto* li = findLocal(name)) li->type = type;
             return make<VarDeclStmt>(t_start, type, name, std::move(init));
         }
         if (peek().type == TokenType::kArrowLeft) {
@@ -1886,6 +2076,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             auto init = parseExpr();
             expect(TokenType::kSemicolon, "expected ';'");
             declareVar(name, name_tok);
+            if (auto* li = findLocal(name)) li->type = type;
             return make<VarDeclStmt>(t_start, type, name, std::move(init), std::vector<std::unique_ptr<Expr>>{}, true);
         }
 
@@ -1944,6 +2135,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         }
         expect(TokenType::kSemicolon, "expected ';'");
         declareVar(name, name_tok);
+        if (auto* li = findLocal(name)) li->type = type;
         return make<VarDeclStmt>(t_start, type, name, std::move(init), std::move(ctor_args));
     }
 
@@ -2679,6 +2871,7 @@ Program Parser::parse() {
                 if (!fn.body) program.functions.push_back(std::move(fn));
             for (auto& slid : hdr.slids) {
                 program.slid_modules[slid.name] = module;
+                recordSlidMethods(slid);
                 program.slids.push_back(std::move(slid));
             }
 
@@ -2712,13 +2905,16 @@ Program Parser::parse() {
                         bool replaced = false;
                         for (auto& prog_slid : program.slids) {
                             if (prog_slid.name == impl_slid.name && !prog_slid.type_params.empty()) {
+                                recordSlidMethods(impl_slid);
                                 prog_slid = std::move(impl_slid);
                                 replaced = true;
                                 break;
                             }
                         }
-                        if (!replaced)
+                        if (!replaced) {
+                            recordSlidMethods(impl_slid);
                             program.slids.push_back(std::move(impl_slid));
+                        }
                     }
                 }
             }
@@ -2756,7 +2952,9 @@ Program Parser::parse() {
             && pos_ + 1 < (int)tokens_.size()
             && (tokens_[pos_ + 1].type == TokenType::kLParen
                 || tokens_[pos_ + 1].type == TokenType::kLt)) {
-            program.slids.push_back(parseSlidDef());
+            SlidDef slid = parseSlidDef();
+            recordSlidMethods(slid);
+            program.slids.push_back(std::move(slid));
         }
         // derived class definition or forward decl: Base : Derived(...)  or  Base : Derived;
         else if (peek().type == TokenType::kIdentifier
@@ -2772,10 +2970,12 @@ Program Parser::parse() {
                 fwd.name = advance().value;
                 fwd.base_name = base_name;
                 advance(); // consume ';'
+                recordSlidMethods(fwd);
                 program.slids.push_back(std::move(fwd));
             } else {
                 SlidDef slid = parseSlidDef();
                 slid.base_name = base_name;
+                recordSlidMethods(slid);
                 program.slids.push_back(std::move(slid));
             }
         }
@@ -2815,6 +3015,7 @@ Program Parser::parse() {
                 std::string canonical = parent_name + "." + n.name;
                 n.name = canonical;
                 hoist(n, canonical);
+                recordSlidMethods(n);
                 program.slids.push_back(std::move(n));
             }
         };

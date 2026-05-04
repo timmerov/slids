@@ -737,7 +737,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         continue;
                     }
                     requirePtrInit(elems[i], *te->values[i]);
-                    std::string val = emitExpr(*te->values[i]);
+                    std::string val = valOrNullptrCheck(elems[i], *te->values[i]);
                     out_ << "    store " << llvmType(elems[i]) << " " << val << ", ptr " << gep << "\n";
                     if (decl->is_move && isIndirectType(elems[i]))
                         emitNullOut(*te->values[i]);
@@ -789,7 +789,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         local_types_[decl->name] = eff_type;
         if (!decl->init) return; // uninitialized — alloca only
         requirePtrInit(eff_type, *decl->init);
-        std::string val = emitExpr(*decl->init);
+        std::string val = valOrNullptrCheck(eff_type, *decl->init);
         // coerce integer or float widths if necessary
         if (!isIndirectType(eff_type)) {
             std::string src_t = exprLlvmType(*decl->init);
@@ -849,7 +849,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
                 out_ << "    " << gep << " = getelementptr %struct." << current_slid_
                      << ", ptr " << self << ", i32 0, i32 " << idx << "\n";
-                std::string val = emitExpr(*assign->value);
+                std::string val = valOrNullptrCheck(info.field_types[idx], *assign->value);
                 out_ << "    store " << field_type << " " << val << ", ptr " << gep << "\n";
                 if (assign->is_move && isIndirectType(info.field_types[idx]))
                     emitNullOut(*assign->value);
@@ -1184,7 +1184,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
         if (tit != local_types_.end())
             requirePtrInit(tit->second, *assign->value);
-        std::string val = emitExpr(*assign->value);
+        std::string val = (tit != local_types_.end())
+            ? valOrNullptrCheck(tit->second, *assign->value)
+            : emitExpr(*assign->value);
         bool is_ptr = tit != local_types_.end() && isIndirectType(tit->second);
         std::string store_type = is_ptr ? "ptr" : llvmType(tit != local_types_.end() ? tit->second : "int");
         // coerce integer widths if necessary (sext or trunc)
@@ -2304,7 +2306,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         out_ << "    ret " << current_func_return_type_ << " " << loaded << "\n";
                     } else {
                         requirePtrInit(current_func_slids_return_type_, *ret->value);
-                        std::string val = emitExpr(*ret->value);
+                        std::string val = valOrNullptrCheck(current_func_slids_return_type_, *ret->value);
                         emitDtors();
                         out_ << "    ret " << current_func_return_type_ << " " << val << "\n";
                     }

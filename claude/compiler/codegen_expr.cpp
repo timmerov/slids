@@ -385,6 +385,30 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     return cur_ptr;
                 }
             }
+            // Fixed-size array slid field: ^self.field[i] inside a method body.
+            // Mirrors the read arm above, stopping at the element GEP.
+            if (!current_slid_.empty()) {
+                auto& info = slid_info_[current_slid_];
+                auto fit = info.field_index.find(ve->name);
+                if (fit != info.field_index.end()
+                        && isInlineArrayType(info.field_types[fit->second])) {
+                    std::string ft = info.field_types[fit->second];
+                    auto lb = ft.rfind('[');
+                    std::string elem_type = ft.substr(0, lb);
+                    std::string sz_str = ft.substr(lb + 1, ft.size() - lb - 2);
+                    std::string elt = llvmType(elem_type);
+                    std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
+                    std::string field_gep = newTmp();
+                    out_ << "    " << field_gep << " = getelementptr %struct." << current_slid_
+                         << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
+                    std::string idx_llvm = exprLlvmType(*indices[0]);
+                    std::string idx_val = emitExpr(*indices[0]);
+                    std::string elem_gep = newTmp();
+                    out_ << "    " << elem_gep << " = getelementptr [" << sz_str << " x " << elt
+                         << "], ptr " << field_gep << ", i32 0, " << idx_llvm << " " << idx_val << "\n";
+                    return elem_gep;
+                }
+            }
             auto ait = array_info_.find(ve->name);
             if (ait == array_info_.end())
                 error(std::string("AddrOf: undefined array '" + ve->name + "'"));
@@ -2529,6 +2553,15 @@ void Codegen::requireCompatibleInit(const std::string& dst_type, const Expr& src
         errorAtNode(src, "cannot initialize '" + dst_type
                        + "' from value of type '" + src_slid + "'");
     }
+}
+
+std::string Codegen::valOrNullptrCheck(const std::string& dst_type, const Expr& src) {
+    if (dynamic_cast<const NullptrExpr*>(&src)) {
+        if (isIndirectType(dst_type)) return "null";
+        if (dst_type == "intptr") return "0";
+        errorAtNode(src, "cannot assign nullptr to type '" + dst_type + "'");
+    }
+    return emitExpr(src);
 }
 
 void Codegen::requirePtrInit(const std::string& dst_type, const Expr& src) {

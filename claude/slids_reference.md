@@ -996,22 +996,21 @@ while {
 
 ### For — short form
 
-Iterate over a various types of collections. Curly brackets around the loop body required. Types may be explicit or infered. Iterating over a collection of class objects is either by value or by reference. The author must explicitly specify which.
+Iterate over various types of collections. Curly brackets around the loop body required. Loop var type is inferred unless declared explicitly.
 
 ```
 for (i : 0..10)         { ... }    // numeric range
 for (i : (1, 2, 3, 5))  { ... }    // tuple — all elements must be the same type
 for (ch : "Hello")      { ... }    // string literal — char per iteration
-for (x : my_array)      { ... }    // fixed-size array
+for (x : my_array)      { ... }    // fixed-size array (one-dimensional)
 for (d : Direction)     { ... }    // enum — first symbol through last, inclusive
-for (e : my_container)  { ... }    // any class providing begin(), end(), next(prev)
+for (e : my_container)  { ... }    // class — see below
 ```
-```
-Vector primes = (2, 3, 5);
-for (int i : primes) {
-    println(i);
-}
-```
+
+For tuple, array, and string shapes with non-primitive elements (slid, anon-tuple, fixed-array), the loop var type must be declared.
+
+**Class iteration** — If the class defines `op[]` and `size()`, iteration is **value**. If it defines `begin()`, `end()`, and `next(prev)`, iteration is by **reference**.
+If both are defined, the loop var must be explicitly declared.
 
 ### For — long form
 

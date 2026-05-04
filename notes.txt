@@ -5,14 +5,7 @@ then copies them into the tuple.
 
 revisit for loops.
 some uncharted territory.
-for fixed-sized multi-dim arrays
-    not allowed?
-can the loop var be a class object?
-    explicitly only.
 is a loop var reference mutable or const?
-for container by value or reference?
-for p=begin p!=end p=next
-for idx=0 idx<size ++idx x=obj[idx]
 
 int board[8][8];
 for (int x : board) {

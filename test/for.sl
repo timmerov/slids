@@ -15,6 +15,20 @@ infer the loop var type.
 if both are defined then the loop var declaration
 must be explicit.
 compile error if both sets return the same type.
+
+compile errors:
+if short-for by reference is used, then...
+begin, end, next must all return exactly the same type.
+the next parameter must also be that type.
+begin, end, next must have 0, 0, 1 parameters.
+
+allowed:
+begin, end, next are not required to conform.
+they just can't be used for short-for.
+
+open questions:
+do we allow return type overloads in general?
+do we allow multiple sets of begin or []? lean yes, defer.
 */
 
 Simple(int x_ = 0) {
@@ -50,6 +64,222 @@ BeginEndInt(
     }
 }
 
+IndexSizeInt(
+    int table_[3]
+) {
+    _() {
+        /* workaround missing feature. */
+        table_[0] = 13;
+        table_[1] = 17;
+        table_[2] = 19;
+    }
+    ~() {}
+
+    int size() {
+        return 3;
+    }
+
+    int op[](int index) {
+        return table_[index];
+    }
+}
+
+Flexible(
+    int table_[3]
+) {
+    _() {
+        /* workaround missing feature. */
+        table_[0] = 13;
+        table_[1] = 17;
+        table_[2] = 19;
+    }
+    ~() {}
+
+    int size() {
+        return 3;
+    }
+
+    int op[](int index) {
+        return table_[index];
+    }
+
+    int^ begin() {
+        return ^table_[0];
+    }
+
+    int^ end() {
+        return ^table_[3];
+    }
+
+    int^ next(int^ prev) {
+        piter = <int[]> prev;
+        return piter + 1;
+    }
+}
+
+TypeMismatch1(
+    int x_
+) {
+    int begin() {
+        return 0;
+    }
+
+    int^ end() {
+        return nullptr;
+    }
+
+    int^ next(int^ prev) {
+        return nullptr;
+    }
+}
+
+TypeMismatch2(
+    int x_
+) {
+    int^ begin() {
+        return nullptr;
+    }
+
+    int end() {
+        return 0;
+    }
+
+    int^ next(int^ prev) {
+        return nullptr;
+    }
+}
+
+TypeMismatch3(
+    int x_
+) {
+    int^ begin() {
+        return nullptr;
+    }
+
+    int^ end() {
+        return nullptr;
+    }
+
+    int next(int^ prev) {
+        return 0;
+    }
+}
+
+TypeMismatch4(
+    int x_
+) {
+    int^ begin() {
+        return nullptr;
+    }
+
+    int^ end() {
+        return nullptr;
+    }
+
+    int^ next(int prev) {
+        return nullptr;
+    }
+}
+
+/* Incomplete by-value: op[] without size. */
+IncompleteByValue(int x_) {
+    int op[](int index) {
+        return 0;
+    }
+}
+
+/* Incomplete by-reference: begin and end but no next. */
+IncompleteByRef(int x_) {
+    int begin() {
+        return 0;
+    }
+    int end() {
+        return 0;
+    }
+}
+
+/* Malformed by-value: size takes a parameter (should take 0). */
+MalformedSize(int x_) {
+    int size(int extra) {
+        return 0;
+    }
+    int op[](int index) {
+        return 0;
+    }
+}
+
+/* Malformed by-reference: next takes 0 parameters (should take 1). */
+MalformedNext(int x_) {
+    int begin() {
+        return 0;
+    }
+    int end() {
+        return 0;
+    }
+    int next() {
+        return 0;
+    }
+}
+
+/* Not iterable: no protocol methods. */
+NotIterable(int x_) {}
+
+/* Both Good with identical return types — cannot disambiguate. */
+BothSame(int x_) {
+    int size() {
+        return 0;
+    }
+    int op[](int index) {
+        return 0;
+    }
+    int begin() {
+        return 0;
+    }
+    int end() {
+        return 0;
+    }
+    int next(int prev) {
+        return prev + 1;
+    }
+}
+
+/* By-value Good, by-reference malformed: iterates via op[]/size; begin/end/next overlooked. */
+GoodValueBadRef(int x_) {
+    int size() {
+        return 3;
+    }
+    int op[](int index) {
+        return 100 + index;
+    }
+    int begin() {
+        return 0;
+    }
+    int end() {
+        return 0;
+    }
+    int next() {
+        return 0;
+    }
+}
+
+/* By-reference Good, by-value malformed: iterates via begin/end/next; op[]/size overlooked. */
+BadValueGoodRef(int x_) {
+    int size(int extra) {
+        return 0;
+    }
+    int op[](int index) {
+        return 0;
+    }
+    int begin() {
+        return 200;
+    }
+    int end() {
+        return 203;
+    }
+    int next(int prev) {
+        return prev + 1;
+    }
+}
 
 int32 main() {
 
@@ -109,6 +339,7 @@ int32 main() {
     }
     __println();
 
+    __println("01: heterogeneous tuple");
     /* compile error */
     //for (x : (1, 1, 2, "Hello")) {
     //    __println("compile error: tuple must be homogenous");
@@ -152,6 +383,7 @@ int32 main() {
         tuple = (Simple, Simple);
         __println("tuple declared");
 
+        __println("02: bare iter over tuple-named of slid");
         /* compile error. uncomment to verify: caret on x. */
         //for (x : tuple) {
         //    __println("compile error: cannot infer type iterating over class objects." );
@@ -194,6 +426,7 @@ int32 main() {
     }
     __println("after tuple block");
 
+    __println("03: multi-dimensional array");
     /* compile error. */
     //int board[8][8];
     //for (x : board) {
@@ -208,6 +441,7 @@ int32 main() {
 
     {
         Simple array[3];
+        __println("04: bare iter over Simple array");
         /* compile error. */
         //for (x : array) {
         //    __println("compile error: need explicit declaration: object or reference.");
@@ -227,6 +461,7 @@ int32 main() {
     }
 
     {
+        __println("05: bare iter over tuple-literal of slid");
         /* compile error: cannot infer non-primitive element type. */
         //for (x : (Simple(1), Simple(2))) {
         //    __println("compile error: tuple-literal of slid needs explicit type.");
@@ -248,11 +483,13 @@ int32 main() {
     {
         /* anon-tuple element type — same inference rule as slid elements. */
 
+        __println("06: bare iter over tuple-literal of anon-tuple");
         /* compile error: cannot infer loop type variable. */
         //for (x : ((1, 2), (3, 4))) {
         //    __println("compile error: tuple-literal of anon-tuple needs explicit type.");
         //}
 
+        __println("07: bare iter over fixed-array of anon-tuple");
         /* compile error: cannot infer loop type variable.
            parser does not yet accept anon-tuple-element fixed-array decls. */
         //(int, int) pairs[3] = ((1, 2), (3, 4), (5, 6));
@@ -260,6 +497,7 @@ int32 main() {
         //    __println("compile error: fixed-array of anon-tuple needs explicit type.");
         //}
 
+        __println("08: bare iter over tuple-named of anon-tuple");
         /* compile error: cannot infer loop type variable. */
         //triples = ((1, 2, 3), (4, 5, 6));
         //for (x : triples) {
@@ -272,16 +510,154 @@ int32 main() {
         iterate over a container class with begin and end, infer type.
         desugars to:
         init:
-            int a = lp.begin();
-            int __$end_0 = lp.end();
+            int iter = container.begin();
+            int __$end_0 = container.end();
         condition:
-            a != __$end_0
+            iter != __$end_0
         update:
-            a = lp.next(a);
+            iter = container.next(a);
         */
-        BeginEndInt loop(17, 21);
-        __print("for container:");
-        for (x : loop) {
+        BeginEndInt container(17, 21);
+        __print("for container by reference:");
+        for (iter : container) {
+            __print(" " + iter);
+        }
+        __println();
+    }
+
+    {
+        /*
+        iterate over a container class with index and size, infer type.
+        desugars to:
+        init:
+            int value;
+            int __$index_0 = 0;
+            int __$end_0 = container.size();
+        condition:
+            __$index_0 < __$end_0
+        update:
+            __$index_0 += 1;
+        body:
+            value = container[__$index];
+        */
+        IndexSizeInt container;
+        __print("for container by value:");
+        for (value : container) {
+            __print(" " + value);
+        }
+        __println();
+    }
+
+    {
+        /* iterate over a container class with both index and size. */
+        Flexible container;
+
+        __println("09: bare iter Flexible (both protocols)");
+        /* compile error. cannot infer type. */
+        //for (x : container) {
+        //    __print("compile error: cannot infer type.");
+        //}
+
+        __print("for container by value:");
+        for (int value : container) {
+            __print(" " + value);
+        }
+        __println();
+
+        __print("for container by reference:");
+        for (int^ iter : container) {
+            __print(" " + iter^);
+        }
+        __println();
+    }
+
+    /* compile errors. */
+    TypeMismatch1 mismatch1;
+    TypeMismatch2 mismatch2;
+    TypeMismatch3 mismatch3;
+    TypeMismatch4 mismatch4;
+    __println("10: TypeMismatch1 — begin/end/next return types differ");
+    //for (x : mismatch1) {
+    //    __print("compile error: begin/end/next must all use the same type.");
+    //}
+    __println("11: TypeMismatch2 — begin/end/next return types differ");
+    //for (x : mismatch2) {
+    //    __print("compile error: begin/end/next must all use the same type.");
+    //}
+    __println("12: TypeMismatch3 — begin/end/next return types differ");
+    //for (x : mismatch3) {
+    //    __print("compile error: begin/end/next must all use the same type.");
+    //}
+    __println("13: TypeMismatch4 — next param type differs");
+    //for (x : mismatch4) {
+    //    __print("compile error: begin/end/next must all use the same type.");
+    //}
+
+    {
+        IncompleteByValue iv;
+        IncompleteByRef   ir;
+        MalformedSize     ms;
+        MalformedNext     mn;
+        NotIterable       ni;
+        BothSame          bs;
+        Flexible          fx;
+
+        __println("14: IncompleteByValue — op[] but no size");
+        /* "defines op[] but not size" */
+        //for (x : iv) {
+        //    __print("compile error: incomplete by-value protocol.");
+        //}
+
+        __println("15: IncompleteByRef — begin/end but no next");
+        /* "defines some of begin/end/next but not all (missing: next)" */
+        //for (x : ir) {
+        //    __print("compile error: incomplete by-reference protocol.");
+        //}
+
+        __println("16: MalformedSize — size takes a parameter");
+        /* "size must take 0 parameters, got 1" */
+        //for (x : ms) {
+        //    __print("compile error: malformed size arity.");
+        //}
+
+        __println("17: MalformedNext — next takes 0 parameters");
+        /* "next must take 1 parameter, got 0" */
+        //for (x : mn) {
+        //    __print("compile error: malformed next arity.");
+        //}
+
+        __println("18: NotIterable — no protocol methods");
+        /* "is not iterable: has neither op[]/size nor begin/end/next" */
+        //for (x : ni) {
+        //    __print("compile error: not iterable.");
+        //}
+
+        __println("19: BothSame — both protocols return identical type");
+        /* "defines both ... with identical return types; cannot disambiguate" */
+        //for (int x : bs) {
+        //    __print("compile error: both protocols return identical type.");
+        //}
+
+        __println("20: Flexible — explicit type matches neither protocol return");
+        /* "loop var type 'bool' matches neither op[] return ('int') nor begin return ('int^')" */
+        //for (bool x : fx) {
+        //    __print("compile error: explicit type matches neither protocol return.");
+        //}
+    }
+
+    {
+        /* Good protocol present alongside a malformed one: spec says the
+           non-conforming protocol is silently overlooked. */
+        GoodValueBadRef gvbr;
+        __print("for good-by-value, bad-by-ref:");
+        for (x : gvbr) {
+            __print(" " + x);
+        }
+        __println();
+
+        BadValueGoodRef bvgr;
+        __print("for bad-by-value, good-by-ref:");
+        for (x : bvgr) {
             __print(" " + x);
         }
         __println();
