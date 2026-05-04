@@ -43,6 +43,7 @@ enum class TokenType {
     kNew,
     kDelete,
     kNullptr,
+    kSelf,
     kImport,
     kVirtual,
     kOp,

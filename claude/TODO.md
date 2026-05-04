@@ -39,6 +39,7 @@
   - Need unit tests and regression tests for pretty much everything.
   - Naming conventions: Claude used naming conventions in the parser. Test to ensure the user can use lower case classes and upper case functions.
   - Functions declared in `.slh` are public entry points in `.o` files. Functions defined in `.sl` files are private and not exported in `.o` files. `main` and the lifecycle hooks (`__$ctor`, `__$dtor`, `__$sizeof`) of importable classes are exceptions. Explicit template instantiation is also public. Test this by trying to access a private imported class method.
+  - **Compile-error test automation.** for.sl, pointer.sl, and others have many `//`-disabled cases annotated as expected compile errors. Today the catalog workflow uncomments one at a time, builds, observes the diagnostic, recomments — entirely manual. Want a way to encode "this snippet should error with message containing X" so the test harness uncomments-builds-asserts-recomments mechanically. Possible shape: special comment markers around each negative case (e.g. `//-EXPECT-ERROR: <substring>`) parsed by a runner script that drives slidsc on isolated copies, verifies the diagnostic, reports pass/fail. Bonus: catches regressions where a fix accidentally removes an error.
 
 - **Returning:** Currently, a non-void function must end with a return statement - which is flawed but it kinda sorta works. We need to ensure every possible code path returns. And don't require a return if the end of block is unreachable.
 
@@ -52,6 +53,8 @@
   - Field init: `obj.field_ = Simple(1)` materializes a temp, dispatches op= on the field. Elision into a populated field requires dtor-then-ctor — semantically distinct from slot init; deferred.
   - Array elem init: `Action arr[3] = (Action(0), Action(1), Action(2))` blocked by ArrayDeclStmt's lack of per-slot ctor-with-args support.
   - Function arg slot: not a target — slids forbids class-type by-value parameters.
+
+- **Codegen scope state — frames host locals.** After unifying `locals_` + `local_types_` into a single `LocalInfo { reg; type; }` map and adding the `scope_stack_` for snapshot/restore, the next step matches the parser's literal shape: move the locals map *into* each scope frame so reads walk the stack innermost-first. Enables true cross-scope shadowing (an inner-scope local hiding an outer-scope name without losing the outer entry on pop) and cleaner break/continue cleanup (iterate frames between current point and target loop, dtor each). Touches ~268 read sites that currently hit the flat map. Mechanical sweep: replace `locals_.find/at/count/[]` with helpers that walk `scope_stack_`. Defer until the immediate scope-stack discipline lands and shakes out.
 
 - **Optimize returning objects:**
   - Currently, a function returning an object copies the object to its retval. The retval should be the object - named value return optimization (NRVO).

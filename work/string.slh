@@ -92,10 +92,13 @@ String(...)
     op[]=(intptr index, char rhs);
 
     /* begin iterator */
-    char[] begin();
+    char^ begin();
 
     /* end iterator */
-    char[] end();
+    char^ end();
+
+    /* update iterator */
+    char^ next(char^ prev);
 
     /* return size of string. */
     intptr size();

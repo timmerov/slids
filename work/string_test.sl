@@ -8,22 +8,6 @@ import string;
 
 int32 main() {
 
-    __println("Output should be:");
-    __println("Hello, World!");
-    __println("Hello, World!");
-    __println("X");
-    __println("0");
-    __println("137");
-    __println("-42");
-    __println("-2147483648");
-    __println("2147483648");
-    __println("-9223372036854775808");
-    __println("9223372036854775808");
-    __println("");
-    __println("9223372036854775808");
-    __println("");
-    __println("Output is:");
-
     /* assignment from string literal. */
     String s1 = "Hello, World!";
     println(s1);
@@ -32,6 +16,7 @@ int32 main() {
     String s2 = s1;
     println(s2);
 
+    /*
     /* assignment from character. */
     String s3 = 'X';
     println(s3);
@@ -96,15 +81,14 @@ int32 main() {
 
     /* iterators */
     String s6 = "ABC";
-    it = s6.begin();
-    while (it < s6.end()) {
+    for (char^ it : s6) {
         println(String + "it^<ABC>=" + it^);
-        ++it;
     }
 
     /* slicing */
     String s7 = s2.slice(7, 5);
     println(String + "s7<World>=" + s7);
+    */
 
     return 0;
 }

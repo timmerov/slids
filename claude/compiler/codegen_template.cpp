@@ -418,12 +418,12 @@ std::vector<std::string> Codegen::inferTypeArgs(
         // get Slids type of actual argument
         std::string arg_slids;
         if (auto* ve = dynamic_cast<const VarExpr*>(args[i].get())) {
-            auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end()) arg_slids = tit->second;
+            auto tit = locals_.find(ve->name);
+            if (tit != locals_.end()) arg_slids = tit->second.type;
         } else if (auto* ao = dynamic_cast<const AddrOfExpr*>(args[i].get())) {
             if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
-                auto tit = local_types_.find(ve->name);
-                if (tit != local_types_.end()) arg_slids = tit->second + "^";
+                auto tit = locals_.find(ve->name);
+                if (tit != locals_.end()) arg_slids = tit->second.type + "^";
             }
         } else if (dynamic_cast<const IntLiteralExpr*>(args[i].get())) {
             arg_slids = "int";
@@ -564,12 +564,17 @@ std::string Codegen::instantiateTemplate(const TemplateFuncEntry& entry,
     for (int i = 0; i < (int)tmpl.type_params.size(); i++)
         subst[tmpl.type_params[i]] = type_args[i];
 
-    // post-substitution param types (with class-type auto-promote to ref)
+    // post-substitution param types (with class-type auto-promote to ref).
+    // promoted[i] tracks which params got the value→ref promotion — used by
+    // codegen to enable auto-deref on uses inside the instantiated body.
     std::vector<std::string> ptypes;
+    std::vector<bool> promoted;
     for (auto& [ptype, pname] : tmpl.params) {
         std::string pt = subTypeSuffix(ptype, subst);
-        if (slid_info_.count(pt)) pt += "^";
+        bool p = false;
+        if (slid_info_.count(pt)) { pt += "^"; p = true; }
         ptypes.push_back(pt);
+        promoted.push_back(p);
     }
 
     // mangled name: <name>__<typeArg>...__<paramToken>...
@@ -589,6 +594,7 @@ std::string Codegen::instantiateTemplate(const TemplateFuncEntry& entry,
     for (int i = 0; i < (int)tmpl.params.size(); i++)
         concrete.params.emplace_back(ptypes[i], tmpl.params[i].second);
     concrete.param_mutable = tmpl.param_mutable;
+    concrete.param_auto_promoted = std::move(promoted);
     concrete.body = cloneBlock(*tmpl.body, subst);
 
     // register signatures so call sites work

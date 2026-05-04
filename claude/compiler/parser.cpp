@@ -47,10 +47,10 @@ void Parser::declareVar(const std::string& name, int name_tok) {
 }
 
 static void rejectReserved(int file_id, int tok, const std::string& name, const char* role) {
-    if (name == "self") {
-        throw CompileError{file_id, tok,
-            "'" + name + "' is reserved and cannot be used as " + role};
-    }
+    // 'self' is now a kSelf keyword token at the lexer level — never reaches here
+    // as an identifier. Function/class/method/enum names that try to use 'self'
+    // hit a token-mismatch error at the parser level instead.
+    (void)file_id; (void)tok; (void)name; (void)role;
 }
 
 bool Parser::isInScope(const std::string& name) const {
@@ -698,6 +698,10 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         auto call = make<CallExpr>(t_start, fn, std::move(args));
         call->qualifier = "::";
         return call;
+    }
+    if (t.type == TokenType::kSelf) {
+        advance();
+        return make<VarExpr>(t_start, t.value);
     }
     if (t.type == TokenType::kIdentifier) {
         advance();
@@ -2139,8 +2143,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         return make<VarDeclStmt>(t_start, type, name, std::move(init), std::move(ctor_args));
     }
 
-    // identifier — assignment, compound assignment, method call, or function call
-    if (t.type == TokenType::kIdentifier) {
+    // identifier (or self) — assignment, compound assignment, method call, or function call.
+    // self routes through the same arms; the qualified-call / template-call sub-arms
+    // never fire because self isn't followed by ':' or '<' in legal source.
+    if (t.type == TokenType::kIdentifier || t.type == TokenType::kSelf) {
         std::string name = t.value;
         advance();
 

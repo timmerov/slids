@@ -85,8 +85,34 @@ private:
     int tmp_counter_;
     int label_counter_;
 
-    std::map<std::string, std::string> locals_;      // var name -> alloca reg
-    std::map<std::string, std::string> local_types_; // var name -> declared type (slid name or "int^" etc)
+    // Per-local state, unified from two parallel maps. `reg` is the alloca
+    // register name (e.g. "%var_x"); `type` is the slids type string (slid
+    // name, "int^", "(int,int)", etc.). All declarations co-populate both
+    // fields; reads pick the field they need.
+    struct LocalInfo {
+        std::string reg;
+        std::string type;
+        // true for template-promoted class-T params: source had `T x` with T=Slid;
+        // template instantiation promoted to `Slid^ x` for ABI; uses inside the
+        // body should auto-deref (treat as Slid value) for op-method dispatch.
+        // User-explicit `Slid^ x` params have this false — no auto-deref.
+        bool was_auto_promoted = false;
+    };
+    std::map<std::string, LocalInfo> locals_;
+
+    // Scope stack — one frame per nested block. Push on entering a block,
+    // pop on exit. Pop emits dtors registered during the block in reverse
+    // order, then restores the locals_ snapshot. Matches the parser's
+    // `scope_stack_` shape (per-frame map of LocalInfo). Three pieces of
+    // bookkeeping previously parallel (dtor_mark + saved_locals + saved_local_types)
+    // collapsed into one frame struct.
+    struct ScopeFrame {
+        size_t dtor_mark;
+        std::map<std::string, LocalInfo> saved_locals;
+    };
+    std::vector<ScopeFrame> scope_stack_;
+    void pushScope();
+    void popScope();
     std::set<std::string> emitted_alloca_regs_;      // all alloca register names emitted in current function
     std::map<std::string, std::string> func_return_types_;
     std::map<std::string, std::vector<std::string>> func_param_types_; // func name -> param types

@@ -21,13 +21,13 @@ void Codegen::emitDestructure(
             // if name is already in scope AND no explicit type: reassign the existing local
             bool reassign = type.empty() && locals_.count(name) > 0;
             if (reassign) {
-                auto ltit = local_types_.find(name);
-                if (ltit == local_types_.end() || ltit->second != eff_type)
+                auto ltit = locals_.find(name);
+                if (ltit == locals_.end() || ltit->second.type != eff_type)
                     error(std::string("destructure reassign: '" + name
-                        + "' has type '" + (ltit==local_types_.end()?"<unknown>":ltit->second)
+                        + "' has type '" + (ltit==locals_.end()?"<unknown>":ltit->second.type)
                         + "' but source element is '" + eff_type + "'"));
             }
-            std::string reg = reassign ? locals_[name] : uniqueAllocaReg(name);
+            std::string reg = reassign ? locals_[name].reg : uniqueAllocaReg(name);
             // slid or anon-tuple target: init path (alloca + ctor) unless reassigning.
             if (slid_info_.count(eff_type) || isAnonTupleType(eff_type)) {
                 requireCompatibleInit(eff_type, *te->values[i]);
@@ -40,15 +40,14 @@ void Codegen::emitDestructure(
                 std::string src_ptr;
                 if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
                     auto lit = locals_.find(ve->name);
-                    src_ptr = (lit != locals_.end()) ? lit->second : emitExpr(*te->values[i]);
+                    src_ptr = (lit != locals_.end()) ? lit->second.reg : emitExpr(*te->values[i]);
                 } else {
                     src_ptr = emitExpr(*te->values[i]);
                 }
                 bool is_move = isFreshSlidTemp(*te->values[i]);
                 emitSlidSlotAssign(eff_type, reg, src_ptr, is_move, /*is_init=*/!reassign);
                 if (!reassign) {
-                    locals_[name] = reg;
-                    local_types_[name] = eff_type;
+                    locals_[name] = {reg, eff_type};
                     if (slid_info_.count(eff_type) && hasDtorInChain(eff_type))
                         dtor_vars_.push_back({name, eff_type});
                 }
@@ -77,8 +76,7 @@ void Codegen::emitDestructure(
             }
             out_ << "    store " << llvm_t << " " << val << ", ptr " << reg << "\n";
             if (!reassign) {
-                locals_[name] = reg;
-                local_types_[name] = eff_type;
+                locals_[name] = {reg, eff_type};
             }
         }
         return;
@@ -86,15 +84,15 @@ void Codegen::emitDestructure(
     // VarExpr of anon-tuple type: per-slot GEP; slid/anon-tuple slots move element-wise,
     // scalar slots take the extractvalue + store path (IR byte-identical to pre-refactor).
     if (auto* ve = dynamic_cast<const VarExpr*>(&init)) {
-        auto tit = local_types_.find(ve->name);
-        if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
-            auto elems = anonTupleElems(tit->second);
+        auto tit = locals_.find(ve->name);
+        if (tit != locals_.end() && isAnonTupleType(tit->second.type)) {
+            auto elems = anonTupleElems(tit->second.type);
             if (elems.size() != targets.size())
                 error(std::string("destructure size mismatch: "
                     + std::to_string(targets.size()) + " targets, "
                     + std::to_string(elems.size()) + " elements in '" + ve->name + "'"));
-            const std::string& src_type = tit->second;
-            const std::string& src_ptr = locals_[ve->name];
+            const std::string& src_type = tit->second.type;
+            const std::string& src_ptr = locals_[ve->name].reg;
             // Any slid/anon-tuple slot? If so, we need per-slot GEP rather than a whole-struct load.
             bool any_struct_slot = false;
             for (auto& e : elems)
@@ -112,13 +110,13 @@ void Codegen::emitDestructure(
                 std::string eff_type = type.empty() ? elem_type : type;
                 bool reassign = type.empty() && locals_.count(name) > 0;
                 if (reassign) {
-                    auto ltit = local_types_.find(name);
-                    if (ltit == local_types_.end() || ltit->second != eff_type)
+                    auto ltit = locals_.find(name);
+                    if (ltit == locals_.end() || ltit->second.type != eff_type)
                         error(std::string("destructure reassign: '" + name
-                            + "' has type '" + (ltit==local_types_.end()?"<unknown>":ltit->second)
+                            + "' has type '" + (ltit==locals_.end()?"<unknown>":ltit->second.type)
                             + "' but source element is '" + eff_type + "'"));
                 }
-                std::string reg = reassign ? locals_[name] : uniqueAllocaReg(name);
+                std::string reg = reassign ? locals_[name].reg : uniqueAllocaReg(name);
                 if (slid_info_.count(elem_type) || isAnonTupleType(elem_type)) {
                     if (!type.empty() && type != elem_type)
                         error(std::string("cannot initialize '" + eff_type
@@ -128,8 +126,7 @@ void Codegen::emitDestructure(
                     std::string src_gep = emitFieldGep(src_type, src_ptr, i);
                     emitSlidSlotAssign(elem_type, reg, src_gep, /*is_move=*/true, /*is_init=*/!reassign);
                     if (!reassign) {
-                        locals_[name] = reg;
-                        local_types_[name] = eff_type;
+                        locals_[name] = {reg, eff_type};
                         if (slid_info_.count(elem_type) && hasDtorInChain(elem_type))
                             dtor_vars_.push_back({name, elem_type});
                     }
@@ -159,8 +156,7 @@ void Codegen::emitDestructure(
                     out_ << "    " << reg << " = alloca " << dst_llvm << "\n";
                 out_ << "    store " << dst_llvm << " " << extracted << ", ptr " << reg << "\n";
                 if (!reassign) {
-                    locals_[name] = reg;
-                    local_types_[name] = eff_type;
+                    locals_[name] = {reg, eff_type};
                 }
             }
             return;
@@ -183,22 +179,21 @@ void Codegen::emitDestructure(
             error(std::string("destructure type inference from non-tuple-variable source not supported yet"));
         bool reassign = type.empty() && locals_.count(name) > 0;
         if (reassign) {
-            auto ltit = local_types_.find(name);
-            if (ltit == local_types_.end() || ltit->second != eff_type)
+            auto ltit = locals_.find(name);
+            if (ltit == locals_.end() || ltit->second.type != eff_type)
                 error(std::string("destructure reassign: '" + name
-                    + "' has type '" + (ltit==local_types_.end()?"<unknown>":ltit->second)
+                    + "' has type '" + (ltit==locals_.end()?"<unknown>":ltit->second.type)
                     + "' but source element is '" + eff_type + "'"));
         }
         std::string llvm_t = llvmType(eff_type);
-        std::string reg = reassign ? locals_[name] : uniqueAllocaReg(name);
+        std::string reg = reassign ? locals_[name].reg : uniqueAllocaReg(name);
         if (!reassign)
             out_ << "    " << reg << " = alloca " << llvm_t << "\n";
         std::string extracted = newTmp();
         out_ << "    " << extracted << " = extractvalue " << tuple_type << " " << result << ", " << i << "\n";
         out_ << "    store " << llvm_t << " " << extracted << ", ptr " << reg << "\n";
         if (!reassign) {
-            locals_[name] = reg;
-            local_types_[name] = eff_type;
+            locals_[name] = {reg, eff_type};
         }
     }
 }
@@ -220,26 +215,26 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (auto* ve = dynamic_cast<const VarExpr*>(&src)) {
             auto it = locals_.find(ve->name);
             if (it != locals_.end())
-                out_ << "    store ptr null, ptr " << it->second << "\n";
+                out_ << "    store ptr null, ptr " << it->second.reg << "\n";
         } else if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&src)) {
             std::string obj_ptr;
             std::string stype;
             if (auto* ve2 = dynamic_cast<const VarExpr*>(fa->object.get())) {
                 auto it = locals_.find(ve2->name);
-                auto tit = local_types_.find(ve2->name);
-                if (it != locals_.end()) obj_ptr = it->second;
-                if (tit != local_types_.end()) stype = tit->second;
+                auto tit = locals_.find(ve2->name);
+                if (it != locals_.end()) obj_ptr = it->second.reg;
+                if (tit != locals_.end()) stype = tit->second.type;
             } else if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
                 if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
                     auto it = locals_.find(ve2->name);
-                    auto tit = local_types_.find(ve2->name);
+                    auto tit = locals_.find(ve2->name);
                     if (it != locals_.end()) {
                         std::string loaded = newTmp();
-                        out_ << "    " << loaded << " = load ptr, ptr " << it->second << "\n";
+                        out_ << "    " << loaded << " = load ptr, ptr " << it->second.reg << "\n";
                         obj_ptr = loaded;
                     }
-                    if (tit != local_types_.end()) {
-                        stype = tit->second;
+                    if (tit != locals_.end()) {
+                        stype = tit->second.type;
                         if (!stype.empty() && stype.back() == '^') stype.pop_back();
                         else if (stype.size() >= 2 && stype.substr(stype.size()-2) == "[]")
                             stype = stype.substr(0, stype.size()-2);
@@ -340,7 +335,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (auto* ve = dynamic_cast<const VarExpr*>(ds->operand.get())) {
             auto it = locals_.find(ve->name);
             if (it != locals_.end()) {
-                out_ << "    store ptr null, ptr " << it->second << "\n";
+                out_ << "    store ptr null, ptr " << it->second.reg << "\n";
             } else if (!current_slid_.empty()) {
                 // bare field name inside a method: GEP through self and store null
                 auto& info = slid_info_[current_slid_];
@@ -362,25 +357,25 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     auto it = locals_.find(ve2->name);
                     if (it != locals_.end()) {
                         std::string loaded = newTmp();
-                        out_ << "    " << loaded << " = load ptr, ptr " << it->second << "\n";
+                        out_ << "    " << loaded << " = load ptr, ptr " << it->second.reg << "\n";
                         self = loaded;
                     }
                 }
             } else if (auto* ve2 = dynamic_cast<const VarExpr*>(fa->object.get())) {
                 auto it = locals_.find(ve2->name);
-                if (it != locals_.end()) self = it->second;
+                if (it != locals_.end()) self = it->second.reg;
             }
             if (!self.empty() && !current_slid_.empty()) {
                 // find the slid type for fa->object
                 std::string stype = current_slid_;
                 if (auto* ve2 = dynamic_cast<const VarExpr*>(fa->object.get())) {
-                    auto tit = local_types_.find(ve2->name);
-                    if (tit != local_types_.end()) stype = tit->second;
+                    auto tit = locals_.find(ve2->name);
+                    if (tit != locals_.end()) stype = tit->second.type;
                 } else if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
                     if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                        auto tit = local_types_.find(ve2->name);
-                        if (tit != local_types_.end()) {
-                            std::string t = tit->second;
+                        auto tit = locals_.find(ve2->name);
+                        if (tit != locals_.end()) {
+                            std::string t = tit->second.type;
                             if (!t.empty() && (t.back() == '^' || (t.size()>=2 && t.substr(t.size()-2)=="[]")))
                                 t = t.substr(0, t.find_first_of("^["));
                             stype = t;
@@ -434,9 +429,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
         ainfo.alloca_reg = reg;
         array_info_[arr->name] = ainfo;
         parent_array_info_[arr->name] = ainfo;
-        locals_[arr->name] = reg; // allow array to be captured by nested functions
-        // expose flat shape to consumers that read local_types_ (for-array etc.)
-        local_types_[arr->name] = elem_type + "[" + std::to_string(total) + "]";
+        // allow array to be captured by nested functions and expose flat
+        // shape (e.g. "int[6]") to consumers (for-array etc.).
+        locals_[arr->name] = {reg, elem_type + "[" + std::to_string(total) + "]"};
         // store initializer values
         for (int i = 0; i < (int)arr->init_values.size(); i++) {
             std::string gep = newTmp();
@@ -449,7 +444,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 std::string src_ptr;
                 if (auto* ve = dynamic_cast<const VarExpr*>(arr->init_values[i].get());
                         ve && locals_.count(ve->name)) {
-                    src_ptr = locals_[ve->name];
+                    src_ptr = locals_[ve->name].reg;
                 } else {
                     src_ptr = emitExpr(*arr->init_values[i]);
                 }
@@ -533,8 +528,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (!phase1_handles && !is_empty_plus && isFreshSlidTemp(*decl->init)
                         && exprSlidType(*decl->init) == eff_type) {
                     std::string temp_ptr = emitExpr(*decl->init);
-                    locals_[decl->name] = temp_ptr;
-                    local_types_[decl->name] = eff_type;
+                    locals_[decl->name] = {temp_ptr, eff_type};
                     // consume-the-temp: ownership transfers from the temp to this decl's
                     // scope-exit dtor. Unregister the pending temp entry to avoid double-dtor.
                     for (auto it = pending_temp_dtors_.begin();
@@ -556,8 +550,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     } else {
                         out_ << "    " << reg << " = alloca %struct." << eff_type << "\n";
                     }
-                    locals_[decl->name] = reg;
-                    local_types_[decl->name] = eff_type;
+                    locals_[decl->name] = {reg, eff_type};
                     emitConstructAt(eff_type, reg, decl->ctor_args);
                     // call op+=(rhs)
                     std::string compound_base = eff_type + "__op+=";
@@ -582,8 +575,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             } else {
                 out_ << "    " << reg << " = alloca %struct." << eff_type << "\n";
             }
-            locals_[decl->name] = reg;
-            local_types_[decl->name] = eff_type;
+            locals_[decl->name] = {reg, eff_type};
 
             // Type name = (a, b, c);  or  Type name(a, b) = (c, d);
             // rhs tuple overrides lhs ctor_args per position; missing rhs positions fall back to lhs.
@@ -673,14 +665,14 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         // when init is the same slid type (value or reference)
                         std::string src_ptr;
                         if (auto* ve = dynamic_cast<const VarExpr*>(init_expr)) {
-                            auto tit2 = local_types_.find(ve->name);
+                            auto tit2 = locals_.find(ve->name);
                             auto lit  = locals_.find(ve->name);
-                            if (tit2 != local_types_.end() && lit != locals_.end()) {
-                                if (tit2->second == eff_type) {
-                                    src_ptr = lit->second;
-                                } else if (tit2->second == eff_type + "^") {
+                            if (tit2 != locals_.end() && lit != locals_.end()) {
+                                if (tit2->second.type == eff_type) {
+                                    src_ptr = lit->second.reg;
+                                } else if (tit2->second.type == eff_type + "^") {
                                     std::string loaded = newTmp();
-                                    out_ << "    " << loaded << " = load ptr, ptr " << lit->second << "\n";
+                                    out_ << "    " << loaded << " = load ptr, ptr " << lit->second.reg << "\n";
                                     src_ptr = loaded;
                                 }
                             }
@@ -711,8 +703,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string struct_llvm = llvmType(eff_type);
             std::string reg = uniqueAllocaReg(decl->name);
             out_ << "    " << reg << " = alloca " << struct_llvm << "\n";
-            locals_[decl->name] = reg;
-            local_types_[decl->name] = eff_type;
+            locals_[decl->name] = {reg, eff_type};
             if (auto* te = dynamic_cast<const TupleExpr*>(decl->init.get())) {
                 for (int i = 0; i < (int)elems.size() && i < (int)te->values.size(); i++) {
                     std::string gep = newTmp();
@@ -738,7 +729,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         std::string src_ptr;
                         if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get());
                                 ve && locals_.count(ve->name)) {
-                            src_ptr = locals_[ve->name];
+                            src_ptr = locals_[ve->name].reg;
                         } else {
                             src_ptr = emitExpr(*te->values[i]);
                         }
@@ -764,7 +755,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (auto* ve = dynamic_cast<const VarExpr*>(decl->init.get())) {
                 auto lit = locals_.find(ve->name);
                 if (lit == locals_.end()) error(std::string("undefined tuple source: " + ve->name));
-                src_ptr = lit->second;
+                src_ptr = lit->second.reg;
             } else {
                 // non-variable source (e.g. tuple-returning call): emit into a temp alloca
                 std::string val = emitExpr(*decl->init);
@@ -796,8 +787,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string reg = uniqueAllocaReg(decl->name);
         std::string llvm_t = llvmType(eff_type);
         out_ << "    " << reg << " = alloca " << llvm_t << "\n";
-        locals_[decl->name] = reg;
-        local_types_[decl->name] = eff_type;
+        locals_[decl->name] = {reg, eff_type};
         if (!decl->init) return; // uninitialized — alloca only
         requirePtrInit(eff_type, *decl->init);
         std::string val = valOrNullptrCheck(eff_type, *decl->init);
@@ -870,10 +860,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
         auto it = locals_.find(assign->name);
         if (it == locals_.end())
             error(std::string("undefined variable: " + assign->name));
-        auto tit = local_types_.find(assign->name);
+        auto tit = locals_.find(assign->name);
         // anonymous-tuple local LHS: route per the element-wise rule.
-        if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
-            const std::string& lhs_t = tit->second;
+        if (tit != locals_.end() && isAnonTupleType(tit->second.type)) {
+            const std::string& lhs_t = tit->second.type;
             auto elems = anonTupleElems(lhs_t);
             // tuple-literal rhs: tuple = (a, b, ...); — per-element, partial overwrite allowed
             if (auto* te = dynamic_cast<const TupleExpr*>(assign->value.get())) {
@@ -885,7 +875,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 for (int i = 0; i < (int)te->values.size(); i++) {
                     const std::string& ft = elems[i];
                     std::string elem_llvm = llvmType(ft);
-                    std::string gep = emitFieldGep(lhs_t, it->second, i);
+                    std::string gep = emitFieldGep(lhs_t, it->second.reg, i);
                     // slid-typed element: copy/move from a same-typed source
                     if (slid_info_.count(ft)) {
                         std::string src_type = inferSlidType(*te->values[i]);
@@ -894,7 +884,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                 + ft + "', got '" + src_type + "'"));
                         std::string src_ptr;
                         if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
-                            src_ptr = locals_[ve->name];
+                            src_ptr = locals_[ve->name].reg;
                         } else {
                             src_ptr = emitExpr(*te->values[i]);
                         }
@@ -933,20 +923,20 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string src_ptr;
             if (auto* ve = dynamic_cast<const VarExpr*>(assign->value.get())) {
                 auto lit = locals_.find(ve->name);
-                if (lit != locals_.end()) src_ptr = lit->second;
+                if (lit != locals_.end()) src_ptr = lit->second.reg;
             }
             if (src_ptr.empty())
                 error(std::string("tuple copy from non-variable source not supported"));
-            emitSlidSlotAssign(lhs_t, it->second, src_ptr, assign->is_move);
+            emitSlidSlotAssign(lhs_t, it->second.reg, src_ptr, assign->is_move);
             return;
         }
         // compound assignment: x = x op rhs → detect and dispatch to op{op}= directly
         // (parser desugars x += rhs into x = x + rhs; we undo that here for slid types)
-        if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+        if (tit != locals_.end() && slid_info_.count(tit->second.type)) {
             if (auto* be = dynamic_cast<const BinaryExpr*>(assign->value.get())) {
                 if (auto* lve = dynamic_cast<const VarExpr*>(be->left.get())) {
                     if (lve->name == assign->name && isCompoundableOp(be->op)) {
-                        const std::string& slid_name = tit->second;
+                        const std::string& slid_name = tit->second.type;
                         std::string compound_base = slid_name + "__op" + be->op + "=";
                         std::string mangled = resolveSingleArgOverload(compound_base, *be->right);
                         if (!mangled.empty()) {
@@ -955,7 +945,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             std::string arg_val = emitArgForParam(*be->right, param_type);
                             std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
                             out_ << "    call void @" << llvmGlobalName(mangled)
-                                 << "(ptr " << it->second << ", " << ptype_str << " " << arg_val << ")\n";
+                                 << "(ptr " << it->second.reg << ", " << ptype_str << " " << arg_val << ")\n";
                             return;
                         }
                         // no direct op{op}=: try coercing rhs to the slid type via op=,
@@ -978,7 +968,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                     if (ptypes.size() == 1 && isRefType(ptypes[0])) { via_ref = m; break; }
                             if (!via_ref.empty()) {
                                 out_ << "    call void @" << llvmGlobalName(via_ref)
-                                     << "(ptr " << it->second << ", ptr " << tmp << ")\n";
+                                     << "(ptr " << it->second.reg << ", ptr " << tmp << ")\n";
                             } else {
                                 // fall back to op{op}(slid^, slid^) — result stored into lhs (sret)
                                 std::string op_base = slid_name + "__op" + be->op;
@@ -987,7 +977,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                     for (auto& [m, ptypes] : oppit->second)
                                         if (ptypes.size() == 2 && isRefType(ptypes[0]) && isRefType(ptypes[1])) {
                                             out_ << "    call void @" << llvmGlobalName(m)
-                                                 << "(ptr " << it->second << ", ptr " << it->second
+                                                 << "(ptr " << it->second.reg << ", ptr " << it->second.reg
                                                  << ", ptr " << tmp << ")\n";
                                             break;
                                         }
@@ -1000,21 +990,21 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
         }
         // check for operator overload: lhs is slid type, rhs is BinaryExpr
-        if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+        if (tit != locals_.end() && slid_info_.count(tit->second.type)) {
             if (auto* be = dynamic_cast<const BinaryExpr*>(assign->value.get())) {
                 std::string op_func = resolveOperatorOverload(be->op, *be->left, *be->right);
                 if (!op_func.empty()) {
                     // call op func with sret into lhs alloca
                     // first call dtor on existing lhs value
-                    const std::string& slid_name = tit->second;
+                    const std::string& slid_name = tit->second.type;
                     if (slid_info_.at(slid_name).has_dtor) {
-                        emitDtorChainCall(slid_name, it->second);
+                        emitDtorChainCall(slid_name, it->second.reg);
                         // re-init fields to zero/null
                         auto& info = slid_info_[slid_name];
                         for (int i = 0; i < (int)info.field_types.size(); i++) {
                             std::string ft = llvmType(info.field_types[i]);
                             std::string gep = newTmp();
-                            out_ << "    " << gep << " = getelementptr %struct." << slid_name << ", ptr " << it->second << ", i32 0, i32 " << i << "\n";
+                            out_ << "    " << gep << " = getelementptr %struct." << slid_name << ", ptr " << it->second.reg << ", i32 0, i32 " << i << "\n";
                             if (isIndirectType(info.field_types[i]))
                                 out_ << "    store ptr null, ptr " << gep << "\n";
                             else
@@ -1026,9 +1016,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     auto& ptypes = func_param_types_[op_func];
                     std::string args;
                     if (is_method2) {
-                        args = "ptr " + it->second;
+                        args = "ptr " + it->second.reg;
                     } else {
-                        args = "ptr sret(%struct." + slid_name + ") " + it->second;
+                        args = "ptr sret(%struct." + slid_name + ") " + it->second.reg;
                     }
                     // left arg
                     std::string la = emitArgForParam(*be->left, ptypes.size() > 0 ? ptypes[0] : "");
@@ -1042,20 +1032,20 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
         }
         // unary arity 1: lhs is slid, rhs is UnaryExpr (-operand etc.) → lhs.op-(operand)
-        if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+        if (tit != locals_.end() && slid_info_.count(tit->second.type)) {
             if (auto* ue = dynamic_cast<const UnaryExpr*>(assign->value.get())) {
                 if (ue->op == "+" || ue->op == "-" || ue->op == "~" || ue->op == "!") {
-                    const std::string& slid_name = tit->second;
+                    const std::string& slid_name = tit->second.type;
                     std::string op_func = resolveSingleArgOverload(slid_name + "__op" + ue->op, *ue->operand);
                     if (!op_func.empty()) {
                         if (slid_info_.at(slid_name).has_dtor) {
-                            emitDtorChainCall(slid_name, it->second);
+                            emitDtorChainCall(slid_name, it->second.reg);
                             auto& info = slid_info_[slid_name];
                             for (int i = 0; i < (int)info.field_types.size(); i++) {
                                 std::string ft = llvmType(info.field_types[i]);
                                 std::string gep = newTmp();
                                 out_ << "    " << gep << " = getelementptr %struct." << slid_name
-                                     << ", ptr " << it->second << ", i32 0, i32 " << i << "\n";
+                                     << ", ptr " << it->second.reg << ", i32 0, i32 " << i << "\n";
                                 if (isIndirectType(info.field_types[i]))
                                     out_ << "    store ptr null, ptr " << gep << "\n";
                                 else
@@ -1066,8 +1056,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         std::string ret = func_return_types_.count(op_func) ? func_return_types_[op_func] : "";
                         bool is_method = (ret == "void");
                         std::string args = is_method
-                            ? "ptr " + it->second
-                            : "ptr sret(%struct." + slid_name + ") " + it->second;
+                            ? "ptr " + it->second.reg
+                            : "ptr sret(%struct." + slid_name + ") " + it->second.reg;
                         std::string param_type = ptypes.empty() ? "" : ptypes[0];
                         std::string arg_val = emitArgForParam(*ue->operand, param_type);
                         if (!ptypes.empty())
@@ -1079,9 +1069,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
         }
         // tuple literal rhs: d = (a, b, c); or d <- (a, b, c); — per-field writes.
-        if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+        if (tit != locals_.end() && slid_info_.count(tit->second.type)) {
             if (auto* te = dynamic_cast<const TupleExpr*>(assign->value.get())) {
-                const std::string& slid_name = tit->second;
+                const std::string& slid_name = tit->second.type;
                 auto& info = slid_info_[slid_name];
                 int nfields = (int)info.field_types.size();
                 if ((int)te->values.size() > nfields)
@@ -1091,7 +1081,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 for (int i = 0; i < (int)te->values.size(); i++) {
                     const std::string& ft = info.field_types[i];
                     std::string elem_llvm = llvmType(ft);
-                    std::string gep = emitFieldGep(slid_name, it->second, i);
+                    std::string gep = emitFieldGep(slid_name, it->second.reg, i);
                     // slid-typed field: dispatch per the element-wise rule
                     if (slid_info_.count(ft)) {
                         std::string src_type = inferSlidType(*te->values[i]);
@@ -1100,7 +1090,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                 + "' reassignment: expected '" + ft + "', got '" + src_type + "'"));
                         std::string src_ptr;
                         if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
-                            src_ptr = locals_[ve->name];
+                            src_ptr = locals_[ve->name].reg;
                         } else {
                             src_ptr = emitExpr(*te->values[i]);
                         }
@@ -1115,7 +1105,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                 + ft + "', got '" + src_type + "'"));
                         std::string src_ptr;
                         if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
-                            src_ptr = locals_[ve->name];
+                            src_ptr = locals_[ve->name].reg;
                         }
                         if (src_ptr.empty())
                             error(std::string("tuple-typed field copy from non-variable source not supported"));
@@ -1145,16 +1135,16 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
 
         // check for op= / op<- method on slid type
-        if (tit != local_types_.end() && slid_info_.count(tit->second)) {
+        if (tit != locals_.end() && slid_info_.count(tit->second.type)) {
             std::string op_name = assign->is_move ? "op<-" : "op=";
-            std::string mangled = resolveSingleArgOverload(tit->second + "__" + op_name, *assign->value);
+            std::string mangled = resolveSingleArgOverload(tit->second.type + "__" + op_name, *assign->value);
             if (!mangled.empty()) {
                 auto& ptypes = func_param_types_[mangled];
                 std::string param_type = ptypes.empty() ? "" : ptypes[0];
                 std::string arg_val = emitArgForParam(*assign->value, param_type);
                 std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
                 out_ << "    call void @" << llvmGlobalName(mangled)
-                     << "(ptr " << it->second << ", " << ptype_str << " " << arg_val << ")\n";
+                     << "(ptr " << it->second.reg << ", " << ptype_str << " " << arg_val << ")\n";
                 // class <- pointer move: per spec, rhs pointer is set to nullptr.
                 // gate on the rhs's actual type, not the param type — `op<-(Move^)`
                 // takes a slid ref but the source `from` is a slid lvalue, not a pointer.
@@ -1164,17 +1154,16 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
             // no matching op= / op<- found: synthesize a default field-by-field copy
             {
-                const std::string& slid_name = tit->second;
+                const std::string& slid_name = tit->second.type;
                 std::string src_ptr;
                 if (auto* ve = dynamic_cast<const VarExpr*>(assign->value.get())) {
-                    auto tit2 = local_types_.find(ve->name);
-                    auto lit  = locals_.find(ve->name);
-                    if (tit2 != local_types_.end() && lit != locals_.end()) {
-                        if (tit2->second == slid_name) {
-                            src_ptr = lit->second;
-                        } else if (tit2->second == slid_name + "^") {
+                    auto lit = locals_.find(ve->name);
+                    if (lit != locals_.end()) {
+                        if (lit->second.type == slid_name) {
+                            src_ptr = lit->second.reg;
+                        } else if (lit->second.type == slid_name + "^") {
                             std::string loaded = newTmp();
-                            out_ << "    " << loaded << " = load ptr, ptr " << lit->second << "\n";
+                            out_ << "    " << loaded << " = load ptr, ptr " << lit->second.reg << "\n";
                             src_ptr = loaded;
                         }
                     }
@@ -1182,28 +1171,28 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 // any other expr whose type matches slid_name: emitExpr returns a slid ptr.
                 if (src_ptr.empty() && inferSlidType(*assign->value) == slid_name)
                     src_ptr = emitExpr(*assign->value);
-                if (!src_ptr.empty()) { emitSlidSlotAssign(slid_name, it->second, src_ptr, assign->is_move); return; }
+                if (!src_ptr.empty()) { emitSlidSlotAssign(slid_name, it->second.reg, src_ptr, assign->is_move); return; }
             }
         }
         // pointer move: copy source to dest, null source
-        if (assign->is_move && tit != local_types_.end() && isIndirectType(tit->second)) {
-            requirePtrInit(tit->second, *assign->value);
+        if (assign->is_move && tit != locals_.end() && isIndirectType(tit->second.type)) {
+            requirePtrInit(tit->second.type, *assign->value);
             std::string src_val = emitExpr(*assign->value);
-            out_ << "    store ptr " << src_val << ", ptr " << it->second << "\n";
+            out_ << "    store ptr " << src_val << ", ptr " << it->second.reg << "\n";
             emitNullOut(*assign->value);
             return;
         }
-        if (tit != local_types_.end())
-            requirePtrInit(tit->second, *assign->value);
-        std::string val = (tit != local_types_.end())
-            ? valOrNullptrCheck(tit->second, *assign->value)
+        if (tit != locals_.end())
+            requirePtrInit(tit->second.type, *assign->value);
+        std::string val = (tit != locals_.end())
+            ? valOrNullptrCheck(tit->second.type, *assign->value)
             : emitExpr(*assign->value);
-        bool is_ptr = tit != local_types_.end() && isIndirectType(tit->second);
-        std::string store_type = is_ptr ? "ptr" : llvmType(tit != local_types_.end() ? tit->second : "int");
+        bool is_ptr = tit != locals_.end() && isIndirectType(tit->second.type);
+        std::string store_type = is_ptr ? "ptr" : llvmType(tit != locals_.end() ? tit->second.type : "int");
         // coerce integer widths if necessary (sext or trunc)
-        if (!is_ptr && tit != local_types_.end()) {
+        if (!is_ptr && tit != locals_.end()) {
             std::string src_t = exprLlvmType(*assign->value);
-            if (src_t == "ptr" && tit->second == "intptr") {
+            if (src_t == "ptr" && tit->second.type == "intptr") {
                 std::string coerced = newTmp();
                 out_ << "    " << coerced << " = ptrtoint ptr " << val << " to i64\n";
                 val = coerced;
@@ -1220,7 +1209,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             }
         }
-        out_ << "    store " << store_type << " " << val << ", ptr " << it->second << "\n";
+        out_ << "    store " << store_type << " " << val << ", ptr " << it->second.reg << "\n";
         return;
     }
 
@@ -1236,10 +1225,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
         auto resolveAddr = [&]() {
             if (auto* ve = dynamic_cast<const VarExpr*>(lhs)) {
                 auto lit = locals_.find(ve->name);
-                auto tit = local_types_.find(ve->name);
-                if (lit != locals_.end() && tit != local_types_.end()) {
-                    addr = lit->second;
-                    slids_type = tit->second;
+                auto tit = locals_.find(ve->name);
+                if (lit != locals_.end() && tit != locals_.end()) {
+                    addr = lit->second.reg;
+                    slids_type = tit->second.type;
                     return;
                 }
                 if (!current_slid_.empty() && slid_info_.count(current_slid_)) {
@@ -1260,12 +1249,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (auto* de = dynamic_cast<const DerefExpr*>(lhs)) {
                 if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
                     auto lit = locals_.find(ve->name);
-                    auto tit = local_types_.find(ve->name);
-                    if (lit != locals_.end() && tit != local_types_.end()) {
+                    auto tit = locals_.find(ve->name);
+                    if (lit != locals_.end() && tit != locals_.end()) {
                         std::string loaded = newTmp();
-                        out_ << "    " << loaded << " = load ptr, ptr " << lit->second << "\n";
+                        out_ << "    " << loaded << " = load ptr, ptr " << lit->second.reg << "\n";
                         addr = loaded;
-                        std::string pt = tit->second;
+                        std::string pt = tit->second.type;
                         if (isPtrType(pt)) pt = pt.substr(0, pt.size()-2);
                         else if (!pt.empty() && pt.back() == '^') pt = pt.substr(0, pt.size()-1);
                         slids_type = pt;
@@ -1276,15 +1265,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (auto* fa = dynamic_cast<const FieldAccessExpr*>(lhs)) {
                 if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
                     auto lit = locals_.find(ve->name);
-                    auto tit = local_types_.find(ve->name);
-                    if (lit != locals_.end() && tit != local_types_.end()
-                        && slid_info_.count(tit->second)) {
-                        auto& info = slid_info_[tit->second];
+                    auto tit = locals_.find(ve->name);
+                    if (lit != locals_.end() && tit != locals_.end()
+                        && slid_info_.count(tit->second.type)) {
+                        auto& info = slid_info_[tit->second.type];
                         auto fit = info.field_index.find(fa->field);
                         if (fit != info.field_index.end()) {
                             std::string gep = newTmp();
-                            out_ << "    " << gep << " = getelementptr %struct." << tit->second
-                                 << ", ptr " << lit->second << ", i32 0, i32 " << fit->second << "\n";
+                            out_ << "    " << gep << " = getelementptr %struct." << tit->second.type
+                                 << ", ptr " << lit->second.reg << ", i32 0, i32 " << fit->second << "\n";
                             addr = gep;
                             slids_type = info.field_types[fit->second];
                         }
@@ -1394,15 +1383,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
             auto it = locals_.find(ve->name);
             if (it == locals_.end())
                 error(std::string("DerefAssign: undefined variable '" + ve->name + "'"));
-            auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end() && isIndirectType(tit->second)) {
+            auto tit = locals_.find(ve->name);
+            if (tit != locals_.end() && isIndirectType(tit->second.type)) {
                 std::string loaded_ptr = newTmp();
-                out_ << "    " << loaded_ptr << " = load ptr, ptr " << it->second << "\n";
+                out_ << "    " << loaded_ptr << " = load ptr, ptr " << it->second.reg << "\n";
                 ptr_reg = loaded_ptr;
-                pointee_type = ( isPtrType(tit->second) ? tit->second.substr(0, tit->second.size()-2) : tit->second.substr(0, tit->second.size()-1) );
+                pointee_type = ( isPtrType(tit->second.type) ? tit->second.type.substr(0, tit->second.type.size()-2) : tit->second.type.substr(0, tit->second.type.size()-1) );
                 pointee_llvm = llvmType(pointee_type);
             } else {
-                ptr_reg = it->second;
+                ptr_reg = it->second.reg;
             }
         } else {
             ptr_reg = emitExpr(*da->ptr);
@@ -1428,9 +1417,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (auto* fa = dynamic_cast<const FieldAccessExpr*>(ia->base.get())) {
             auto* ove = dynamic_cast<const VarExpr*>(fa->object.get());
             if (!ove) error(std::string("IndexAssign: complex field object not supported"));
-            auto tit = local_types_.find(ove->name);
-            if (tit == local_types_.end()) error(std::string("IndexAssign: unknown type for '" + ove->name + "'"));
-            std::string slid_name = tit->second;
+            auto tit = locals_.find(ove->name);
+            if (tit == locals_.end()) error(std::string("IndexAssign: unknown type for '" + ove->name + "'"));
+            std::string slid_name = tit->second.type;
             auto& info = slid_info_[slid_name];
             auto fit = info.field_index.find(fa->field);
             if (fit == info.field_index.end()) error(std::string("IndexAssign: unknown field '" + fa->field + "'"));
@@ -1445,7 +1434,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     error(std::string("tuple index " + std::to_string(idx)
                         + " out of range (size " + std::to_string(elems.size()) + ")"));
                 const std::string& elem_slids = elems[idx];
-                std::string obj_ptr = locals_[ove->name];
+                std::string obj_ptr = locals_[ove->name].reg;
                 std::string field_gep = newTmp();
                 out_ << "    " << field_gep << " = getelementptr %struct." << slid_name
                      << ", ptr " << obj_ptr << ", i32 0, i32 " << fit->second << "\n";
@@ -1458,7 +1447,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     std::string src_ptr;
                     if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
                         auto lit = locals_.find(rve->name);
-                        if (lit != locals_.end()) src_ptr = lit->second;
+                        if (lit != locals_.end()) src_ptr = lit->second.reg;
                     } else {
                         std::string v = emitExpr(*ia->value);
                         if (isAnonTupleType(elem_slids)) {
@@ -1488,7 +1477,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string elem_type = ft.substr(0, lb);
             std::string sz_str = ft.substr(lb + 1, ft.size() - lb - 2);
             std::string elt = llvmType(elem_type);
-            std::string obj_ptr = locals_[ove->name];
+            std::string obj_ptr = locals_[ove->name].reg;
             std::string field_gep = newTmp();
             out_ << "    " << field_gep << " = getelementptr %struct." << slid_name
                  << ", ptr " << obj_ptr << ", i32 0, i32 " << fit->second << "\n";
@@ -1506,9 +1495,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // anon-tuple-ref element write: p^[N] = val where p is (t1,...)^
         if (auto* de = dynamic_cast<const DerefExpr*>(ia->base.get())) {
             if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                auto tit = local_types_.find(ve->name);
-                if (tit != local_types_.end()) {
-                    std::string t = tit->second;
+                auto tit = locals_.find(ve->name);
+                if (tit != locals_.end()) {
+                    std::string t = tit->second.type;
                     if (!t.empty() && t.back() == '^') t.pop_back();
                     else if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
                         t.resize(t.size()-2);
@@ -1522,14 +1511,14 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                 + " out of range (size " + std::to_string(elems.size()) + ")"));
                         std::string base_ptr = newTmp();
                         out_ << "    " << base_ptr << " = load ptr, ptr "
-                             << locals_.at(ve->name) << "\n";
+                             << locals_.at(ve->name).reg << "\n";
                         std::string slot_gep = emitFieldGep(t, base_ptr, idx);
                         const std::string& elem_slids = elems[idx];
                         if (slid_info_.count(elem_slids) || isAnonTupleType(elem_slids)) {
                             std::string src_ptr;
                             if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
                                 auto lit = locals_.find(rve->name);
-                                if (lit != locals_.end()) src_ptr = lit->second;
+                                if (lit != locals_.end()) src_ptr = lit->second.reg;
                             } else {
                                 std::string v = emitExpr(*ia->value);
                                 if (isAnonTupleType(elem_slids)) {
@@ -1563,9 +1552,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
         // anonymous tuple element write: tuple[N] = val — N must be a compile-time constant
         {
-            auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
-                auto elems = anonTupleElems(tit->second);
+            auto tit = locals_.find(ve->name);
+            if (tit != locals_.end() && isAnonTupleType(tit->second.type)) {
+                auto elems = anonTupleElems(tit->second.type);
                 int idx;
                 if (!constExprToInt(*ia->index, enum_values_, idx))
                     error(std::string("tuple index must be a constant integer"));
@@ -1574,7 +1563,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         + " out of range (size " + std::to_string(elems.size()) + ")"));
                 std::string elem_slids = elems[idx];
                 std::string elem_llvm = llvmType(elem_slids);
-                std::string gep = emitFieldGep(tit->second, locals_[ve->name], idx);
+                std::string gep = emitFieldGep(tit->second.type, locals_[ve->name].reg, idx);
                 // slid or anon-tuple element: route through element-wise walker for op= dispatch
                 if (slid_info_.count(elem_slids) || isAnonTupleType(elem_slids)) {
                     std::string src_type = inferSlidType(*ia->value);
@@ -1584,7 +1573,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     std::string src_ptr;
                     if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
                         auto lit = locals_.find(rve->name);
-                        if (lit != locals_.end()) src_ptr = lit->second;
+                        if (lit != locals_.end()) src_ptr = lit->second.reg;
                     } else {
                         std::string v = emitExpr(*ia->value);
                         if (isAnonTupleType(elem_slids)) {
@@ -1628,11 +1617,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
         // slid op[]= dispatch
         {
-            auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end() && slid_info_.count(tit->second)) {
-                std::string mangled = resolveSlidIndexAssign(tit->second, *ia->index);
+            auto tit = locals_.find(ve->name);
+            if (tit != locals_.end() && slid_info_.count(tit->second.type)) {
+                std::string mangled = resolveSlidIndexAssign(tit->second.type, *ia->index);
                 if (!mangled.empty()) {
-                    std::string obj_ptr = locals_[ve->name];
+                    std::string obj_ptr = locals_[ve->name].reg;
                     auto& mptypes = func_param_types_[mangled];
                     std::string idx_llvm = mptypes.empty() ? "i32" : llvmType(mptypes[0]);
                     std::string rhs_llvm = (mptypes.size() < 2) ? "i32" : llvmType(mptypes[1]);
@@ -1711,13 +1700,13 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // check local pointer variable
         if (base_ptr.empty()) {
             auto lit = locals_.find(ve->name);
-            auto tit = local_types_.find(ve->name);
-            if (lit != locals_.end() && tit != local_types_.end()) {
-                std::string lt = tit->second;
+            auto tit = locals_.find(ve->name);
+            if (lit != locals_.end() && tit != locals_.end()) {
+                std::string lt = tit->second.type;
                 if (lt.size() >= 2 && lt.substr(lt.size()-2) == "[]") {
                     elem_type_str = lt.substr(0, lt.size()-2);
                     base_ptr = newTmp();
-                    out_ << "    " << base_ptr << " = load ptr, ptr " << lit->second << "\n";
+                    out_ << "    " << base_ptr << " = load ptr, ptr " << lit->second.reg << "\n";
                 }
             }
         }
@@ -1744,15 +1733,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
         auto it = locals_.find(ve->name);
         if (it == locals_.end())
             error(std::string("PostIncDerefAssign: undefined variable '" + ve->name + "'"));
-        auto tit = local_types_.find(ve->name);
-        if (tit == local_types_.end() || !isPtrType(tit->second))
+        auto tit = locals_.find(ve->name);
+        if (tit == locals_.end() || !isPtrType(tit->second.type))
             error(std::string("PostIncDerefAssign: '" + ve->name + "' is not a pointer ([]) type"));
-        std::string pointee_type = tit->second.substr(0, tit->second.size()-2);
+        std::string pointee_type = tit->second.type.substr(0, tit->second.type.size()-2);
         std::string pointee_llvm = llvmType(pointee_type);
         int step = (pida->op == "++") ? 1 : -1;
         // load current ptr
         std::string cur_ptr = newTmp();
-        out_ << "    " << cur_ptr << " = load ptr, ptr " << it->second << "\n";
+        out_ << "    " << cur_ptr << " = load ptr, ptr " << it->second.reg << "\n";
         // assign value at current ptr — slid pointee dispatches op<-/op=.
         if (slid_info_.count(pointee_type)) {
             std::string src_ptr = emitArgForParam(*pida->value, pointee_type + "^");
@@ -1765,7 +1754,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // advance ptr
         std::string new_ptr = newTmp();
         out_ << "    " << new_ptr << " = getelementptr " << pointee_llvm << ", ptr " << cur_ptr << ", i32 " << step << "\n";
-        out_ << "    store ptr " << new_ptr << ", ptr " << it->second << "\n";
+        out_ << "    store ptr " << new_ptr << ", ptr " << it->second.reg << "\n";
         return;
     }
 
@@ -1781,19 +1770,19 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 auto* ve = dynamic_cast<const VarExpr*>(pide.operand.get());
                 if (!ve) error(std::string("SwapStmt: only simple pointer variables supported"));
                 auto it  = locals_.find(ve->name);
-                auto tit = local_types_.find(ve->name);
+                auto tit = locals_.find(ve->name);
                 if (it == locals_.end())
                     error(std::string("SwapStmt: undefined variable '" + ve->name + "'"));
-                if (tit == local_types_.end() || !isPtrType(tit->second))
+                if (tit == locals_.end() || !isPtrType(tit->second.type))
                     error(std::string("SwapStmt: '" + ve->name + "' is not a pointer ([]) type"));
-                std::string pointee_type = tit->second.substr(0, tit->second.size()-2);
+                std::string pointee_type = tit->second.type.substr(0, tit->second.type.size()-2);
                 std::string pointee_llvm = llvmType(pointee_type);
                 int step = (pide.op == "++") ? 1 : -1;
                 std::string cur = newTmp();
-                out_ << "    " << cur << " = load ptr, ptr " << it->second << "\n";
+                out_ << "    " << cur << " = load ptr, ptr " << it->second.reg << "\n";
                 std::string nxt = newTmp();
                 out_ << "    " << nxt << " = getelementptr " << pointee_llvm << ", ptr " << cur << ", i32 " << step << "\n";
-                out_ << "    store ptr " << nxt << ", ptr " << it->second << "\n";
+                out_ << "    store ptr " << nxt << ", ptr " << it->second.reg << "\n";
                 return {cur, pointee_llvm};
             };
             auto [lptr, ltype] = emitPtrAndAdvance(*l_pide);
@@ -1815,9 +1804,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
             if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
                 auto lit = locals_.find(ve->name);
-                auto tit = local_types_.find(ve->name);
-                if (lit != locals_.end() && tit != local_types_.end())
-                    return {lit->second, tit->second};
+                auto tit = locals_.find(ve->name);
+                if (lit != locals_.end() && tit != locals_.end())
+                    return {lit->second.reg, tit->second.type};
                 if (!current_slid_.empty()) {
                     auto& info = slid_info_[current_slid_];
                     auto fit = info.field_index.find(ve->name);
@@ -1835,10 +1824,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (auto* de = dynamic_cast<const DerefExpr*>(faE->object.get())) {
                     if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
                         auto lit = locals_.find(ve->name);
-                        auto tit = local_types_.find(ve->name);
-                        if (lit == locals_.end() || tit == local_types_.end())
+                        auto tit = locals_.find(ve->name);
+                        if (lit == locals_.end() || tit == locals_.end())
                             error(std::string("SwapStmt: undefined variable '" + ve->name + "'"));
-                        std::string t = tit->second;
+                        std::string t = tit->second.type;
                         std::string pointee;
                         if (isPtrType(t)) pointee = t.substr(0, t.size()-2);
                         else if (!t.empty() && t.back() == '^') pointee = t.substr(0, t.size()-1);
@@ -1851,7 +1840,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             error(std::string("SwapStmt: unknown field '" + faE->field
                                 + "' on '" + pointee + "'"));
                         std::string ptr_val = newTmp();
-                        out_ << "    " << ptr_val << " = load ptr, ptr " << lit->second << "\n";
+                        out_ << "    " << ptr_val << " = load ptr, ptr " << lit->second.reg << "\n";
                         std::string gep = newTmp();
                         out_ << "    " << gep << " = getelementptr %struct." << pointee
                              << ", ptr " << ptr_val << ", i32 0, i32 " << fit->second << "\n";
@@ -1899,15 +1888,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string slid_name;
             if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
                 auto it = locals_.find(ve->name);
-                auto tit = local_types_.find(ve->name);
-                if (tit != local_types_.end() && isIndirectType(tit->second)) {
+                auto tit = locals_.find(ve->name);
+                if (tit != locals_.end() && isIndirectType(tit->second.type)) {
                     std::string loaded = newTmp();
-                    out_ << "    " << loaded << " = load ptr, ptr " << it->second << "\n";
+                    out_ << "    " << loaded << " = load ptr, ptr " << it->second.reg << "\n";
                     ptr_val = loaded;
-                    slid_name = ( isPtrType(tit->second) ? tit->second.substr(0, tit->second.size()-2) : tit->second.substr(0, tit->second.size()-1) );
+                    slid_name = ( isPtrType(tit->second.type) ? tit->second.type.substr(0, tit->second.type.size()-2) : tit->second.type.substr(0, tit->second.type.size()-1) );
                 } else {
-                    ptr_val = it->second;
-                    if (tit != local_types_.end()) slid_name = tit->second;
+                    ptr_val = it->second.reg;
+                    if (tit != locals_.end()) slid_name = tit->second.type;
                 }
             } else {
                 ptr_val = emitExpr(*de->operand);
@@ -1930,9 +1919,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
             std::string gep = emitFieldPtr(ve->name, fa->field);
             std::string slid_name;
-            auto type_it = local_types_.find(ve->name);
-            if (type_it != local_types_.end()) {
-                slid_name = type_it->second;
+            auto type_it = locals_.find(ve->name);
+            if (type_it != locals_.end()) {
+                slid_name = type_it->second.type;
             } else if (!current_slid_.empty()) {
                 auto& parent_info = slid_info_[current_slid_];
                 slid_name = parent_info.field_types[parent_info.field_index.at(ve->name)];
@@ -1952,11 +1941,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
             auto* bve = dynamic_cast<const VarExpr*>(ai->base.get());
             if (!bve)
                 error(std::string("chained indexed FieldAssign: complex base not supported"));
-            auto tit = local_types_.find(bve->name);
-            if (tit == local_types_.end() || !isAnonTupleType(tit->second))
+            auto tit = locals_.find(bve->name);
+            if (tit == locals_.end() || !isAnonTupleType(tit->second.type))
                 error(std::string("chained indexed FieldAssign: '" + bve->name
                     + "' is not a tuple"));
-            auto elems = anonTupleElems(tit->second);
+            auto elems = anonTupleElems(tit->second.type);
             int idx;
             if (!constExprToInt(*ai->index, enum_values_, idx))
                 error(std::string("tuple index must be a constant integer"));
@@ -1976,7 +1965,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             const std::string& ft = info.field_types[field_idx];
             requirePtrInit(ft, *fa->value);
             std::string ft_llvm = llvmType(ft);
-            std::string slot_gep = emitFieldGep(tit->second, locals_[bve->name], idx);
+            std::string slot_gep = emitFieldGep(tit->second.type, locals_[bve->name].reg, idx);
             std::string field_gep = newTmp();
             out_ << "    " << field_gep << " = getelementptr %struct." << slid_name
                  << ", ptr " << slot_gep << ", i32 0, i32 " << field_idx << "\n";
@@ -1994,8 +1983,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (mcs->method == "sizeof") {
             std::string slid_name;
             if (auto* ve = dynamic_cast<const VarExpr*>(mcs->object.get())) {
-                auto tit = local_types_.find(ve->name);
-                if (tit != local_types_.end()) slid_name = tit->second;
+                auto tit = locals_.find(ve->name);
+                if (tit != locals_.end()) slid_name = tit->second.type;
                 else if (slid_info_.count(ve->name)) slid_name = ve->name;
             }
             if (!slid_name.empty()) {
@@ -2011,10 +2000,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 slid_name = current_slid_;
                 obj_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
             } else {
-                auto type_it = local_types_.find(ve->name);
-                if (type_it == local_types_.end())
+                auto type_it = locals_.find(ve->name);
+                if (type_it == locals_.end())
                     error(std::string("unknown type for: " + ve->name));
-                slid_name = type_it->second;
+                slid_name = type_it->second.type;
                 if (mcs->method == "~") {
                     // Dtor is structural: valid on slids (dispatch), anon-tuples
                     // (walk slots), and primitive types (no-op). Reject only the
@@ -2035,23 +2024,23 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     if (!slid_info_.count(slid_name))
                         error("method call on '" + ve->name + "': '" + slid_name + "' is not a slid type");
                 }
-                obj_ptr = locals_[ve->name];
+                obj_ptr = locals_[ve->name].reg;
             }
         } else if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(mcs->object.get())) {
             // method call on tuple element: tuple[i].method(args) or p^[i].method(args)
             std::string tup_type;
             std::string tup_ptr;
             if (auto* bve = dynamic_cast<const VarExpr*>(ai->base.get())) {
-                auto tit = local_types_.find(bve->name);
-                if (tit != local_types_.end() && isAnonTupleType(tit->second)) {
-                    tup_type = tit->second;
-                    tup_ptr = locals_[bve->name];
+                auto tit = locals_.find(bve->name);
+                if (tit != locals_.end() && isAnonTupleType(tit->second.type)) {
+                    tup_type = tit->second.type;
+                    tup_ptr = locals_[bve->name].reg;
                 }
             } else if (auto* de = dynamic_cast<const DerefExpr*>(ai->base.get())) {
                 if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                    auto tit = local_types_.find(ve->name);
-                    if (tit != local_types_.end()) {
-                        std::string t = tit->second;
+                    auto tit = locals_.find(ve->name);
+                    if (tit != locals_.end()) {
+                        std::string t = tit->second.type;
                         if (!t.empty() && t.back() == '^') t.pop_back();
                         else if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
                             t.resize(t.size()-2);
@@ -2059,7 +2048,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             tup_type = t;
                             tup_ptr = newTmp();
                             out_ << "    " << tup_ptr << " = load ptr, ptr "
-                                 << locals_.at(ve->name) << "\n";
+                                 << locals_.at(ve->name).reg << "\n";
                         }
                     }
                 }
@@ -2083,13 +2072,13 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
         } else if (auto* de = dynamic_cast<const DerefExpr*>(mcs->object.get())) {
             if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                auto type_it = local_types_.find(ve2->name);
-                if (type_it == local_types_.end())
+                auto type_it = locals_.find(ve2->name);
+                if (type_it == locals_.end())
                     error(std::string("unknown type for: " + ve2->name));
-                slid_name = type_it->second;
+                slid_name = type_it->second.type;
                 if (isRefType(slid_name)) slid_name.pop_back(); else if (isPtrType(slid_name)) slid_name.resize(slid_name.size()-2);
                 std::string loaded = newTmp();
-                out_ << "    " << loaded << " = load ptr, ptr " << locals_[ve2->name] << "\n";
+                out_ << "    " << loaded << " = load ptr, ptr " << locals_[ve2->name].reg << "\n";
                 obj_ptr = loaded;
             }
         }
@@ -2187,11 +2176,25 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string src;
             bool src_is_fresh_temp = false;  // true if src is a new alloca not in dtor_vars_
             if (ve) {
-                auto tit = local_types_.find(ve->name);
-                if (tit == local_types_.end() || !slid_info_.count(tit->second))
+                auto tit = locals_.find(ve->name);
+                if (tit == locals_.end())
                     error(std::string("sret: return value must be a slid type"));
-                slid_name = tit->second;
-                src = locals_.at(ve->name);
+                if (slid_info_.count(tit->second.type)) {
+                    slid_name = tit->second.type;
+                    src = locals_.at(ve->name).reg;
+                } else if (tit->second.was_auto_promoted
+                        && !tit->second.type.empty()
+                        && tit->second.type.back() == '^'
+                        && slid_info_.count(tit->second.type.substr(0, tit->second.type.size()-1))) {
+                    // template-promoted T^ source: load the ref, treat the
+                    // pointed-to slid as the return source.
+                    slid_name = tit->second.type.substr(0, tit->second.type.size()-1);
+                    src = newTmp();
+                    out_ << "    " << src << " = load ptr, ptr "
+                         << locals_.at(ve->name).reg << "\n";
+                } else {
+                    error(std::string("sret: return value must be a slid type"));
+                }
             } else {
                 // expression: emit it (BinaryExpr/CallExpr produce a fresh alloca)
                 slid_name = exprSlidType(*ret->value);
@@ -2265,7 +2268,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         if (slid_info_.count(elem_type) || isAnonTupleType(elem_type)) {
                             std::string src_ptr;
                             if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
-                                src_ptr = locals_[ve->name];
+                                src_ptr = locals_[ve->name].reg;
                             } else {
                                 src_ptr = emitExpr(*te->values[i]);
                             }
@@ -2292,7 +2295,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     if (has_struct_slot) {
                         std::string src_ptr;
                         if (auto* ve = dynamic_cast<const VarExpr*>(ret->value.get())) {
-                            src_ptr = locals_[ve->name];
+                            src_ptr = locals_[ve->name].reg;
                         } else {
                             std::string val = emitExpr(*ret->value);
                             src_ptr = newTmp();
@@ -2422,12 +2425,16 @@ void Codegen::emitStmt(const Stmt& stmt) {
              << ", label %" << (if_stmt->else_block ? else_lbl : end_lbl) << "\n";
         block_terminated_ = false;
         out_ << then_lbl << ":\n";
+        pushScope();
         emitBlock(*if_stmt->then_block);
+        popScope();
         if (!block_terminated_) out_ << "    br label %" << end_lbl << "\n";
         if (if_stmt->else_block) {
             block_terminated_ = false;
             out_ << else_lbl << ":\n";
+            pushScope();
             emitBlock(*if_stmt->else_block);
+            popScope();
             if (!block_terminated_) out_ << "    br label %" << end_lbl << "\n";
         }
         block_terminated_ = false;
@@ -2450,7 +2457,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
             { std::string sp = newTmp();
               out_ << "    " << sp << " = call ptr @llvm.stacksave()\n";
               loop_stack_.back().stack_ptr_reg = sp;
+              pushScope();
               emitBlock(*w->body);
+              popScope();
               if (!block_terminated_) {
                   out_ << "    call void @llvm.stackrestore(ptr " << sp << ")\n";
                   out_ << "    br label %" << cond_lbl << "\n";
@@ -2471,7 +2480,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
             { std::string sp = newTmp();
               out_ << "    " << sp << " = call ptr @llvm.stacksave()\n";
               loop_stack_.back().stack_ptr_reg = sp;
+              pushScope();
               emitBlock(*w->body);
+              popScope();
               if (!block_terminated_) {
                   out_ << "    call void @llvm.stackrestore(ptr " << sp << ")\n";
                   out_ << "    br label %" << cond_lbl << "\n";
@@ -2492,11 +2503,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string update_lbl = newLabel("for_update");
         std::string end_lbl    = newLabel("for_end");
 
-        // for-scope: snapshot locals/types/dtor stack so init-tuple decls and
-        // any shadowing are unwound at end_lbl.
-        size_t dtor_mark = dtor_vars_.size();
-        auto saved_locals = locals_;
-        auto saved_local_types = local_types_;
+        // for-scope: pushScope so init-tuple decls and any shadowing are
+        // unwound at end_lbl; popScope at the end runs init-scope dtors.
+        pushScope();
 
         std::string saved_break = break_label_, saved_continue = continue_label_;
         break_label_ = end_lbl; continue_label_ = update_lbl;
@@ -2561,26 +2570,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         block_terminated_ = false;
         out_ << end_lbl << ":\n";
 
-        // run dtors for init-tuple decls in reverse declaration order
-        for (int i = (int)dtor_vars_.size() - 1; i >= (int)dtor_mark; i--) {
-            auto& e = dtor_vars_[i];
-            std::string target;
-            if (e.tuple_index >= 0) {
-                std::string tuple_type = local_types_[e.var_name];
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr " << llvmType(tuple_type)
-                     << ", ptr " << locals_[e.var_name] << ", i32 0, i32 "
-                     << e.tuple_index << "\n";
-                target = gep;
-            } else {
-                target = locals_[e.var_name];
-            }
-            emitDtorChainCall(e.slid_type, target);
-        }
-        dtor_vars_.resize(dtor_mark);
-
-        locals_ = saved_locals;
-        local_types_ = saved_local_types;
+        popScope();
 
         loop_stack_.pop_back();
         break_label_ = saved_break;
@@ -2620,13 +2610,16 @@ void Codegen::emitStmt(const Stmt& stmt) {
         out_ << "    ]\n";
         block_terminated_ = true;
 
-        // emit each case body — fallthrough to next case if no break
+        // emit each case body — each case is its own scope so slid locals
+        // declared in `case N:` get dtor'd at case-end (and at break).
+        // Fallthrough emits a br to the next case label after popScope.
         for (int i = 0; i < (int)sw->cases.size(); i++) {
             block_terminated_ = false;
             out_ << case_lbls[i] << ":\n";
+            pushScope();
             for (auto& s : sw->cases[i].stmts)
                 emitStmt(*s);
-            // fallthrough: branch to next case label, or end if last
+            popScope();
             if (!block_terminated_) {
                 std::string next = (i + 1 < (int)case_lbls.size())
                     ? case_lbls[i + 1] : end_lbl;
@@ -2730,11 +2723,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         return;
                     }
                     // char[] pointer variable (initialized from string literal): print as string
-                    auto tit = local_types_.find(ve->name);
-                    if (tit != local_types_.end() && tit->second == "char[]") {
+                    auto tit = locals_.find(ve->name);
+                    if (tit != locals_.end() && tit->second.type == "char[]") {
                         auto lit = locals_.find(ve->name);
                         std::string ptr_val = newTmp();
-                        out_ << "    " << ptr_val << " = load ptr, ptr " << lit->second << "\n";
+                        out_ << "    " << ptr_val << " = load ptr, ptr " << lit->second.reg << "\n";
                         std::string fmt = newTmp();
                         std::string fmt_name = newline ? "@.fmt_str" : "@.fmt_str_nonl";
                         int fmt_size = newline ? 4 : 3;
@@ -2796,8 +2789,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
                 bool is_uint = false;
                 if (auto* ve = dynamic_cast<const VarExpr*>(segments[0])) {
-                    auto tit = local_types_.find(ve->name);
-                    if (tit != local_types_.end() && tit->second == "uint") is_uint = true;
+                    auto tit = locals_.find(ve->name);
+                    if (tit != locals_.end() && tit->second.type == "uint") is_uint = true;
                     if (!is_uint && !current_slid_.empty()) {
                         auto& info = slid_info_[current_slid_];
                         auto fit = info.field_index.find(ve->name);
@@ -2864,8 +2857,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     }
                     bool seg_is_uint = false;
                     if (auto* ve = dynamic_cast<const VarExpr*>(segments[si])) {
-                        auto tit = local_types_.find(ve->name);
-                        if (tit != local_types_.end() && tit->second == "uint") seg_is_uint = true;
+                        auto tit = locals_.find(ve->name);
+                        if (tit != locals_.end() && tit->second.type == "uint") seg_is_uint = true;
                         if (!seg_is_uint && !current_slid_.empty()) {
                             auto& info = slid_info_[current_slid_];
                             auto fit = info.field_index.find(ve->name);
@@ -2919,7 +2912,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string arg_str;
             if (info.captures.size() == 1) {
                 std::string cap = *info.captures.begin();
-                arg_str = "ptr " + locals_[cap];
+                arg_str = "ptr " + locals_[cap].reg;
             } else if (info.captures.size() >= 2) {
                 // build frame struct on stack and fill in ptrs
                 std::string frame = newTmp() + "_frame";
@@ -2929,7 +2922,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     std::string gep = newTmp();
                     out_ << "    " << gep << " = getelementptr %frame." << info.parent_name
                          << ", ptr " << frame << ", i32 0, i32 " << i << "\n";
-                    out_ << "    store ptr " << locals_[ordered_caps[i]] << ", ptr " << gep << "\n";
+                    out_ << "    store ptr " << locals_[ordered_caps[i]].reg << ", ptr " << gep << "\n";
                 }
                 arg_str = "ptr " + frame;
             }
@@ -3058,31 +3051,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* block = dynamic_cast<const BlockStmt*>(&stmt)) {
-        // naked block — save dtor depth and locals snapshot; restore on exit for block-scoped RAII
-        size_t dtor_mark = dtor_vars_.size();
-        auto saved_locals = locals_;
-        auto saved_local_types = local_types_;
+        pushScope();
         emitBlock(*block);
-        // destroy block-scoped variables in reverse declaration order
-        if (!block_terminated_) {
-            for (int i = (int)dtor_vars_.size() - 1; i >= (int)dtor_mark; i--) {
-                auto& e = dtor_vars_[i];
-                std::string target;
-                if (e.tuple_index >= 0) {
-                    std::string tuple_type = local_types_[e.var_name];
-                    std::string gep = newTmp();
-                    out_ << "    " << gep << " = getelementptr " << llvmType(tuple_type)
-                         << ", ptr " << locals_[e.var_name] << ", i32 0, i32 " << e.tuple_index << "\n";
-                    target = gep;
-                } else {
-                    target = locals_[e.var_name];
-                }
-                emitDtorChainCall(e.slid_type, target);
-            }
-        }
-        dtor_vars_.resize(dtor_mark);
-        locals_ = saved_locals;
-        local_types_ = saved_local_types;
+        popScope();
         return;
     }
 

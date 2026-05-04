@@ -208,6 +208,7 @@ Token Lexer::readIdentifierOrKeyword() {
     if (value == "new")      return Token(TokenType::kNew,      value);
     if (value == "delete")   return Token(TokenType::kDelete,   value);
     if (value == "nullptr")  return Token(TokenType::kNullptr,  value);
+    if (value == "self")     return Token(TokenType::kSelf,     value);
     if (value == "import")   return Token(TokenType::kImport,   value);
     if (value == "virtual")  return Token(TokenType::kVirtual,  value);
     if (value == "sizeof")   return Token(TokenType::kSizeof,   value);

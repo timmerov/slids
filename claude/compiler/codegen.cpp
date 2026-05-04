@@ -1569,10 +1569,10 @@ void Codegen::emitNestedFunction(
     const NestedFuncInfo& info)
 {
     locals_.clear();
-    local_types_.clear();
     emitted_alloca_regs_.clear();
     array_info_.clear();
     dtor_vars_.clear();
+    scope_stack_.clear();
     tmp_counter_ = 0;
     label_counter_ = 0;
     break_label_ = "";
@@ -1614,7 +1614,7 @@ void Codegen::emitNestedFunction(
 
     // helper: after restoring a capture ptr, also restore array_info if it was a parent array
     auto restoreCapture = [&](const std::string& var, const std::string& ptr) {
-        locals_[var] = ptr;
+        locals_[var].reg = ptr;
         if (parent_array_info_.count(var)) {
             ArrayInfo ainfo = parent_array_info_[var];
             ainfo.alloca_reg = ptr;
@@ -1645,8 +1645,7 @@ void Codegen::emitNestedFunction(
         std::string reg = uniqueAllocaReg(name);
         out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
         out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
-        locals_[name] = reg;
-        local_types_[name] = type;
+        locals_[name] = {reg, type};
     }
 
     emitBlock(*fn.body);
@@ -1702,6 +1701,33 @@ void Codegen::emitDtorChainCall(const std::string& slid_type, const std::string&
     out_ << "    call void @" << slid_type << "__$dtor(ptr " << target << ")\n";
 }
 
+void Codegen::pushScope() {
+    scope_stack_.push_back({dtor_vars_.size(), locals_});
+}
+
+void Codegen::popScope() {
+    auto& frame = scope_stack_.back();
+    if (!block_terminated_) {
+        for (int i = (int)dtor_vars_.size() - 1; i >= (int)frame.dtor_mark; i--) {
+            auto& e = dtor_vars_[i];
+            std::string target;
+            if (e.tuple_index >= 0) {
+                std::string tuple_type = locals_[e.var_name].type;
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr " << llvmType(tuple_type)
+                     << ", ptr " << locals_[e.var_name].reg << ", i32 0, i32 " << e.tuple_index << "\n";
+                target = gep;
+            } else {
+                target = locals_[e.var_name].reg;
+            }
+            emitDtorChainCall(e.slid_type, target);
+        }
+    }
+    dtor_vars_.resize(frame.dtor_mark);
+    locals_ = std::move(frame.saved_locals);
+    scope_stack_.pop_back();
+}
+
 void Codegen::emitDtors() {
     // flush expression-level temporaries first (before named locals)
     for (int i = (int)pending_temp_dtors_.size() - 1; i >= 0; i--) {
@@ -1714,13 +1740,13 @@ void Codegen::emitDtors() {
         auto& e = dtor_vars_[i];
         std::string target;
         if (e.tuple_index >= 0) {
-            std::string tuple_type = local_types_[e.var_name];
+            std::string tuple_type = locals_[e.var_name].type;
             std::string gep = newTmp();
             out_ << "    " << gep << " = getelementptr " << llvmType(tuple_type)
-                 << ", ptr " << locals_[e.var_name] << ", i32 0, i32 " << e.tuple_index << "\n";
+                 << ", ptr " << locals_[e.var_name].reg << ", i32 0, i32 " << e.tuple_index << "\n";
             target = gep;
         } else {
-            target = locals_[e.var_name];
+            target = locals_[e.var_name].reg;
         }
         emitDtorChainCall(e.slid_type, target);
     }
@@ -1762,13 +1788,14 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     // tail-calls __$ctor_body to do the rest of construction.
     if (emit_ctor_pair) {
         locals_.clear();
-        local_types_.clear();
         emitted_alloca_regs_.clear();
         tmp_counter_ = 0;
         label_counter_ = 0;
         block_terminated_ = false;
         current_slid_ = slid.name;
         self_ptr_ = "%self";
+        locals_["self"].type = slid.name;
+        locals_["self"].reg = "%self";
 
         out_ << "define " << (isExported(slid.name + "__$ctor") ? "" : "internal ")
              << "void @" << slid.name << "__$ctor(ptr %self) {\n";
@@ -1812,13 +1839,14 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     // 4. user body (implicit ctor_body, then explicit _() body)
     if (emit_ctor_pair) {
         locals_.clear();
-        local_types_.clear();
         emitted_alloca_regs_.clear();
         tmp_counter_ = 0;
         label_counter_ = 0;
         block_terminated_ = false;
         current_slid_ = slid.name;
         self_ptr_ = "%self";
+        locals_["self"].type = slid.name;
+        locals_["self"].reg = "%self";
 
         out_ << "define internal void @" << slid.name << "__$ctor_body(ptr %self) {\n";
         out_ << "entry:\n";
@@ -1888,13 +1916,14 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     bool need_dtor_fn = info.has_explicit_ctor && info.has_dtor && has_body_here;
     if (need_dtor_fn) {
         locals_.clear();
-        local_types_.clear();
         emitted_alloca_regs_.clear();
         tmp_counter_ = 0;
         label_counter_ = 0;
         block_terminated_ = false;
         current_slid_ = slid.name;
         self_ptr_ = "%self";
+        locals_["self"].type = slid.name;
+        locals_["self"].reg = "%self";
 
         out_ << "define " << (isExported(slid.name + "__$dtor") ? "" : "internal ")
              << "void @" << slid.name << "__$dtor(ptr %self) {\n";
@@ -2162,24 +2191,24 @@ bool Codegen::isPointerExpr(const Expr& expr) {
             if (fit != info.field_index.end())
                 return isIndirectType(info.field_types[fit->second]);
         }
-        auto tit = local_types_.find(ve->name);
-        if (tit != local_types_.end()) return isIndirectType(tit->second);
+        auto tit = locals_.find(ve->name);
+        if (tit != locals_.end()) return isIndirectType(tit->second.type);
     }
     // field access through ptr dereference: sa^.storage_
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
         std::string slid_name;
         if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
             if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                auto tit = local_types_.find(ve2->name);
-                if (tit != local_types_.end()) {
-                    slid_name = tit->second;
+                auto tit = locals_.find(ve2->name);
+                if (tit != locals_.end()) {
+                    slid_name = tit->second.type;
                     if (isRefType(slid_name)) slid_name.pop_back();
                     else if (isPtrType(slid_name)) slid_name.resize(slid_name.size()-2);
                 }
             }
         } else if (auto* ve2 = dynamic_cast<const VarExpr*>(fa->object.get())) {
-            auto tit = local_types_.find(ve2->name);
-            if (tit != local_types_.end()) slid_name = tit->second;
+            auto tit = locals_.find(ve2->name);
+            if (tit != locals_.end()) slid_name = tit->second.type;
         }
         if (!slid_name.empty() && slid_info_.count(slid_name)) {
             auto& info = slid_info_[slid_name];
@@ -2202,8 +2231,8 @@ bool Codegen::isUnsignedExpr(const Expr& expr) {
             if (fit != info.field_index.end())
                 return utypes.count(info.field_types[fit->second]) > 0;
         }
-        auto tit = local_types_.find(ve->name);
-        if (tit != local_types_.end()) return utypes.count(tit->second) > 0;
+        auto tit = locals_.find(ve->name);
+        if (tit != locals_.end()) return utypes.count(tit->second.type) > 0;
     }
 
     // field access: obj^.field_ or obj.field_
@@ -2211,16 +2240,16 @@ bool Codegen::isUnsignedExpr(const Expr& expr) {
         std::string slid_name;
         if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
             if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                auto tit = local_types_.find(ve2->name);
-                if (tit != local_types_.end()) {
-                    slid_name = tit->second;
+                auto tit = locals_.find(ve2->name);
+                if (tit != locals_.end()) {
+                    slid_name = tit->second.type;
                     if (isRefType(slid_name))      slid_name.pop_back();
                     else if (isPtrType(slid_name)) slid_name.resize(slid_name.size()-2);
                 }
             }
         } else if (auto* ve2 = dynamic_cast<const VarExpr*>(fa->object.get())) {
-            auto tit = local_types_.find(ve2->name);
-            if (tit != local_types_.end()) slid_name = tit->second;
+            auto tit = locals_.find(ve2->name);
+            if (tit != locals_.end()) slid_name = tit->second.type;
         }
         if (!slid_name.empty() && slid_info_.count(slid_name)) {
             auto& info = slid_info_[slid_name];
@@ -2276,12 +2305,11 @@ std::string Codegen::exprSlidType(const Expr& expr) {
     if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr))
         if (slid_info_.count(nc->target_type)) return nc->target_type;
     if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
-        if (ve->name == "self" && !current_slid_.empty()) return current_slid_;
-        auto tit = local_types_.find(ve->name);
-        if (tit != local_types_.end() && slid_info_.count(tit->second))
-            return tit->second;
+        auto tit = locals_.find(ve->name);
+        if (tit != locals_.end() && slid_info_.count(tit->second.type))
+            return tit->second.type;
         // type name used directly as an anonymous temp (not in locals_)
-        if (tit == local_types_.end() && slid_info_.count(ve->name))
+        if (tit == locals_.end() && slid_info_.count(ve->name))
             return ve->name;
     }
     // DerefExpr: sa^ where sa: SlidType^ — produces SlidType
@@ -2321,8 +2349,8 @@ std::string Codegen::exprSlidType(const Expr& expr) {
             if (ve->name == "self" && !current_slid_.empty())
                 obj_slid = current_slid_;
             else {
-                auto tit = local_types_.find(ve->name);
-                if (tit != local_types_.end()) obj_slid = tit->second;
+                auto tit = locals_.find(ve->name);
+                if (tit != locals_.end()) obj_slid = tit->second.type;
             }
         }
         if (!obj_slid.empty()) {
@@ -2396,8 +2424,8 @@ std::string Codegen::exprType(const Expr& expr) {
             if (fit != info.field_index.end())
                 return info.field_types[fit->second];
         }
-        auto tit = local_types_.find(ve->name);
-        if (tit != local_types_.end()) return tit->second;
+        auto tit = locals_.find(ve->name);
+        if (tit != locals_.end()) return tit->second.type;
         if (slid_info_.count(ve->name)) return ve->name;
         return "";
     }
@@ -2438,14 +2466,14 @@ std::string Codegen::exprType(const Expr& expr) {
                 }
             }
             if (obj_slid.empty()) {
-                auto tit = local_types_.find(ve2->name);
-                if (tit != local_types_.end()) obj_slid = tit->second;
+                auto tit = locals_.find(ve2->name);
+                if (tit != locals_.end()) obj_slid = tit->second.type;
             }
         } else if (auto* de2 = dynamic_cast<const DerefExpr*>(fa->object.get())) {
             if (auto* ve2 = dynamic_cast<const VarExpr*>(de2->operand.get())) {
-                auto tit = local_types_.find(ve2->name);
-                if (tit != local_types_.end()) {
-                    obj_slid = tit->second;
+                auto tit = locals_.find(ve2->name);
+                if (tit != locals_.end()) {
+                    obj_slid = tit->second.type;
                     if (isRefType(obj_slid)) obj_slid.pop_back();
                     else if (isPtrType(obj_slid)) obj_slid.resize(obj_slid.size()-2);
                 }
@@ -2481,8 +2509,8 @@ std::string Codegen::exprType(const Expr& expr) {
             if (ve->name == "self" && !current_slid_.empty())
                 obj_slid = current_slid_;
             else {
-                auto tit = local_types_.find(ve->name);
-                if (tit != local_types_.end()) obj_slid = tit->second;
+                auto tit = locals_.find(ve->name);
+                if (tit != locals_.end()) obj_slid = tit->second.type;
             }
         } else {
             obj_slid = exprSlidType(*mc->object);
@@ -2531,14 +2559,20 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
                                               const Expr& left, const Expr& right) {
     std::string fname = "op" + op;
 
-    // helper: extract the slid type name from the left operand expression
+    // helper: extract the slid type name from the left operand expression.
+    // Pointer-typed operands (T^ / T[]) intentionally do not match — slids has
+    // no auto-deref for op-method dispatch; the user writes ptr^ explicitly.
     auto leftSlidName = [&]() -> std::string {
         if (auto* ve = dynamic_cast<const VarExpr*>(&left)) {
-            auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end()) {
-                std::string t = tit->second;
+            auto tit = locals_.find(ve->name);
+            if (tit != locals_.end()) {
+                const std::string& t = tit->second.type;
                 if (slid_info_.count(t)) return t;
-                if (!t.empty() && t.back() == '^') { t.pop_back(); if (slid_info_.count(t)) return t; }
+                // template-promoted T^ param: strip ^ to dispatch via T.
+                if (tit->second.was_auto_promoted && !t.empty() && t.back() == '^') {
+                    std::string base = t.substr(0, t.size()-1);
+                    if (slid_info_.count(base)) return base;
+                }
             }
             // type name used as anonymous temp
             else if (slid_info_.count(ve->name)) return ve->name;
@@ -2564,9 +2598,12 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
     auto leftMatchesSlid = [&](const std::string& slid_name) -> bool {
         // VarExpr: local variable of exact slid type, or type name used as anonymous temp
         if (auto* ve = dynamic_cast<const VarExpr*>(&left)) {
-            auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end() && tit->second == slid_name) return true;
-            if (tit == local_types_.end() && ve->name == slid_name) return true;
+            auto tit = locals_.find(ve->name);
+            if (tit != locals_.end() && tit->second.type == slid_name) return true;
+            // template-promoted T^ param matches T for op-method dispatch.
+            if (tit != locals_.end() && tit->second.was_auto_promoted
+                    && tit->second.type == slid_name + "^") return true;
+            if (tit == locals_.end() && ve->name == slid_name) return true;
         }
         // DerefExpr: sa^ where sa: SlidType^
         if (auto* de = dynamic_cast<const DerefExpr*>(&left)) {
@@ -2598,9 +2635,9 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
         if (dynamic_cast<const IntLiteralExpr*>(&arg)) return !p1_is_ptr;
         // arg is a variable
         if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
-            auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end()) {
-                std::string t = tit->second;
+            auto tit = locals_.find(ve->name);
+            if (tit != locals_.end()) {
+                std::string t = tit->second.type;
                 std::string r_slid;
                 if (slid_info_.count(t)) r_slid = t;
                 else if (!t.empty() && t.back() == '^' && slid_info_.count(t.substr(0, t.size()-1)))
@@ -2615,9 +2652,9 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
                 std::string ds = derefSlidName(*de);
                 if (!ds.empty()) return ds == p1_slid;
                 if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                    auto tit = local_types_.find(ve->name);
-                    if (tit != local_types_.end()) {
-                        std::string t = tit->second;
+                    auto tit = locals_.find(ve->name);
+                    if (tit != locals_.end()) {
+                        std::string t = tit->second.type;
                         if (!t.empty() && t.back() == '^') t.pop_back();
                         if (slid_info_.count(t)) return t == p1_slid;
                     }
@@ -2729,9 +2766,9 @@ std::string Codegen::resolveSlidIndexAssign(const std::string& slid_name, const 
 
 std::string Codegen::derefSlidName(const DerefExpr& de) {
     if (auto* ve = dynamic_cast<const VarExpr*>(de.operand.get())) {
-        auto tit = local_types_.find(ve->name);
-        if (tit == local_types_.end()) return "";
-        std::string t = tit->second;
+        auto tit = locals_.find(ve->name);
+        if (tit == locals_.end()) return "";
+        std::string t = tit->second.type;
         if (isPtrType(t)) t.resize(t.size() - 2);
         else if (!t.empty() && t.back() == '^') t.pop_back();
         else return "";
@@ -2787,28 +2824,28 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
     } else if (auto* nc = dynamic_cast<const TypeConvExpr*>(&arg)) {
         classify_int(nc->target_type);
     } else if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
-        auto tit = local_types_.find(ve->name);
-        if (tit != local_types_.end()) {
-            std::string t = tit->second;
+        auto tit = locals_.find(ve->name);
+        if (tit != locals_.end()) {
+            std::string t = tit->second.type;
             if (!t.empty() && t.back() == '^') t.pop_back();
             else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
             arg_is_slid = slid_info_.count(t) > 0;
             if (arg_is_slid) arg_slid_name = t;
-            if (!arg_is_slid && !isIndirectType(tit->second))
-                classify_int(tit->second);
+            if (!arg_is_slid && !isIndirectType(tit->second.type))
+                classify_int(tit->second.type);
         }
     } else if (auto* ao = dynamic_cast<const AddrOfExpr*>(&arg)) {
         // ^x: addr-of x
         // ^x where x: SlidType (non-indirect) → SlidType^ — valid slid ref arg
         // ^x where x: SlidType^ or char[] → double-indirect — no match for any overload
         if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
-            auto tit = local_types_.find(ve->name);
-            if (tit != local_types_.end()) {
-                if (isIndirectType(tit->second))
+            auto tit = locals_.find(ve->name);
+            if (tit != locals_.end()) {
+                if (isIndirectType(tit->second.type))
                     return "";  // ^ref is double-indirect: type error
-                if (slid_info_.count(tit->second)) {
+                if (slid_info_.count(tit->second.type)) {
                     arg_is_slid = true;  // ^slid_var is a valid slid ref
-                    arg_slid_name = tit->second;
+                    arg_slid_name = tit->second.type;
                 }
             }
         }
@@ -3542,17 +3579,17 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
         // ^s — explicit address-of a slid local: pass its alloca ptr directly
         if (auto* ao = dynamic_cast<const AddrOfExpr*>(&arg)) {
             if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
-                auto lit = local_types_.find(ve->name);
-                if (lit != local_types_.end() && slid_info_.count(lit->second))
-                    return locals_.at(ve->name);
+                auto lit = locals_.find(ve->name);
+                if (lit != locals_.end() && slid_info_.count(lit->second.type))
+                    return locals_.at(ve->name).reg;
             }
             return emitExpr(arg);
         }
         // s — implicit address-of (auto-promote slid local to ref)
         if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
-            auto lit = local_types_.find(ve->name);
-            if (lit != local_types_.end() && slid_info_.count(lit->second)) {
-                return locals_.at(ve->name);
+            auto lit = locals_.find(ve->name);
+            if (lit != locals_.end() && slid_info_.count(lit->second.type)) {
+                return locals_.at(ve->name).reg;
             }
         }
         // DerefExpr of a slid pointer (sa^): pass the pointer value directly without re-deref.
@@ -3560,7 +3597,7 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
             if (!derefSlidName(*de).empty()) {
                 if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
                     std::string loaded = newTmp();
-                    out_ << "    " << loaded << " = load ptr, ptr " << locals_.at(ve->name) << "\n";
+                    out_ << "    " << loaded << " = load ptr, ptr " << locals_.at(ve->name).reg << "\n";
                     return loaded;
                 }
                 return emitExpr(*de->operand);
@@ -3572,17 +3609,17 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
         // loaded struct value, which is not what op<-/op= expect.
         if (auto* pid = dynamic_cast<const PostIncDerefExpr*>(&arg)) {
             if (auto* ve = dynamic_cast<const VarExpr*>(pid->operand.get())) {
-                auto tit = local_types_.find(ve->name);
-                if (tit != local_types_.end() && isPtrType(tit->second)) {
-                    std::string pointee = tit->second.substr(0, tit->second.size() - 2);
+                auto tit = locals_.find(ve->name);
+                if (tit != locals_.end() && isPtrType(tit->second.type)) {
+                    std::string pointee = tit->second.type.substr(0, tit->second.type.size() - 2);
                     if (slid_info_.count(pointee)) {
                         std::string cur = newTmp();
-                        out_ << "    " << cur << " = load ptr, ptr " << locals_.at(ve->name) << "\n";
+                        out_ << "    " << cur << " = load ptr, ptr " << locals_.at(ve->name).reg << "\n";
                         int step = (pid->op == "++") ? 1 : -1;
                         std::string nxt = newTmp();
                         out_ << "    " << nxt << " = getelementptr " << llvmType(pointee)
                              << ", ptr " << cur << ", i32 " << step << "\n";
-                        out_ << "    store ptr " << nxt << ", ptr " << locals_.at(ve->name) << "\n";
+                        out_ << "    store ptr " << nxt << ", ptr " << locals_.at(ve->name).reg << "\n";
                         return cur;
                     }
                 }
@@ -3594,24 +3631,24 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
             // ^my_tuple → pass alloca ptr
             if (auto* ao = dynamic_cast<const AddrOfExpr*>(&arg)) {
                 if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
-                    auto lit = local_types_.find(ve->name);
-                    if (lit != local_types_.end() && isAnonTupleType(lit->second))
-                        return locals_.at(ve->name);
+                    auto lit = locals_.find(ve->name);
+                    if (lit != locals_.end() && isAnonTupleType(lit->second.type))
+                        return locals_.at(ve->name).reg;
                 }
             }
             // bare my_tuple → auto-promote (analogous to implicit slid-ref promotion)
             if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
-                auto lit = local_types_.find(ve->name);
-                if (lit != local_types_.end() && isAnonTupleType(lit->second))
-                    return locals_.at(ve->name);
+                auto lit = locals_.find(ve->name);
+                if (lit != locals_.end() && isAnonTupleType(lit->second.type))
+                    return locals_.at(ve->name).reg;
             }
             // deref of a tuple-ref local: load the ptr
             if (auto* de = dynamic_cast<const DerefExpr*>(&arg)) {
                 if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                    auto lit = local_types_.find(ve->name);
-                    if (lit != local_types_.end() && lit->second == param_type) {
+                    auto lit = locals_.find(ve->name);
+                    if (lit != locals_.end() && lit->second.type == param_type) {
                         std::string loaded = newTmp();
-                        out_ << "    " << loaded << " = load ptr, ptr " << locals_.at(ve->name) << "\n";
+                        out_ << "    " << loaded << " = load ptr, ptr " << locals_.at(ve->name).reg << "\n";
                         return loaded;
                     }
                 }
@@ -3643,8 +3680,8 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                     // get raw Slids type of arg (works for non-slid types like char[] too)
                     std::string arg_slids;
                     if (auto* ve2 = dynamic_cast<const VarExpr*>(&arg)) {
-                        auto tit2 = local_types_.find(ve2->name);
-                        if (tit2 != local_types_.end()) arg_slids = tit2->second;
+                        auto tit2 = locals_.find(ve2->name);
+                        if (tit2 != locals_.end()) arg_slids = tit2->second.type;
                     }
                     if (arg_slids.empty()) arg_slids = exprSlidType(arg);
                     if (arg_slids.empty() && dynamic_cast<const StringLiteralExpr*>(&arg)) arg_slids = "char[]";
@@ -3704,8 +3741,8 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                 if (auto* nc = dynamic_cast<const TypeConvExpr*>(&arg))
                     src_unsigned = unsigned_types.count(nc->target_type) > 0;
                 else if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
-                    auto tit = local_types_.find(ve->name);
-                    if (tit != local_types_.end()) src_unsigned = unsigned_types.count(tit->second) > 0;
+                    auto tit = locals_.find(ve->name);
+                    if (tit != locals_.end()) src_unsigned = unsigned_types.count(tit->second.type) > 0;
                 }
                 std::string op = src_unsigned ? "zext" : "sext";
                 std::string tmp = newTmp();
@@ -3724,9 +3761,9 @@ void Codegen::emitSlidMethod(const SlidDef& slid,
                               const std::vector<std::pair<std::string,std::string>>& params,
                               const BlockStmt& body) {
     locals_.clear();
-    local_types_.clear();
     emitted_alloca_regs_.clear();
     dtor_vars_.clear();
+    scope_stack_.clear();
     tmp_counter_ = 0;
     label_counter_ = 0;
     break_label_ = "";
@@ -3734,6 +3771,8 @@ void Codegen::emitSlidMethod(const SlidDef& slid,
     current_slid_ = slid.name;
     block_terminated_ = false;
     current_func_name_ = method_user_name;
+    locals_["self"].type = slid.name;
+    locals_["self"].reg = "%self";
 
     bool uses_sret = !return_type.empty() && slid_info_.count(return_type) > 0;
     current_func_uses_sret_ = uses_sret;
@@ -3761,8 +3800,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid,
         std::string reg = uniqueAllocaReg(name);
         out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
         out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
-        locals_[name] = reg;
-        local_types_[name] = type;
+        locals_[name] = {reg, type};
     }
 
     emitBlock(body);
@@ -3802,10 +3840,10 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     if (!fn.body) return; // forward declaration
 
     locals_.clear();
-    local_types_.clear();
     array_info_.clear();
     parent_array_info_.clear();
     dtor_vars_.clear();
+    scope_stack_.clear();
     tmp_counter_ = 0;
     label_counter_ = 0;
     break_label_ = "";
@@ -3849,12 +3887,13 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     out_ << "define " << (isExported(emit_name) ? "" : "internal ") << ret_type << " @" << llvmGlobalName(emit_name) << "(" << param_str << ") {\n";
     out_ << "entry:\n";
 
-    for (auto& [type, name] : fn.params) {
+    for (int i = 0; i < (int)fn.params.size(); i++) {
+        auto& [type, name] = fn.params[i];
         std::string reg = uniqueAllocaReg(name);
         out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
         out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
-        locals_[name] = reg;
-        local_types_[name] = type;
+        bool promoted = i < (int)fn.param_auto_promoted.size() && fn.param_auto_promoted[i];
+        locals_[name] = {reg, type, promoted};
     }
 
     emitBlock(*fn.body);
@@ -3915,13 +3954,10 @@ std::string Codegen::emitFieldPtr(const std::string& obj_name, const std::string
     std::string slid_name;
     std::string obj_ptr;
 
-    auto type_it = local_types_.find(obj_name);
-    if (type_it != local_types_.end()) {
-        slid_name = type_it->second;
-        auto loc_it = locals_.find(obj_name);
-        if (loc_it == locals_.end())
-            error(std::string("undefined variable: " + obj_name));
-        obj_ptr = loc_it->second;
+    auto type_it = locals_.find(obj_name);
+    if (type_it != locals_.end()) {
+        slid_name = type_it->second.type;
+        obj_ptr = type_it->second.reg;
     } else if (!current_slid_.empty()) {
         // obj_name may be a field of the current slid, accessed via %self
         auto& parent_info = slid_info_[current_slid_];

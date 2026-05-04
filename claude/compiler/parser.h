@@ -448,6 +448,7 @@ struct FunctionDef {
     std::string user_name;   // unmangled, source-level name (used for ##func, diagnostics)
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params
+    std::vector<bool> param_auto_promoted;  // parallel to params; true when class-T value→ref auto-promoted at template instantiation
     std::unique_ptr<BlockStmt> body;
     std::vector<std::string> type_params; // non-empty for template functions: T add<T>(T a, T b)
     bool is_local = true;        // false when body loaded from a separate impl file

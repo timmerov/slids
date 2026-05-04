@@ -154,8 +154,8 @@ String (
     op+(String^ sa, String^ sb) {
         /* special case if sb is self. */
         if (sb == ^self) {
-            sc = sb;
-            self = sa + sc;
+            stmp = self;
+            self = sa^ + stmp;
         } else {
             /* this works even if sa is self. */
             reserve(sa^.size_ + sb^.size_);
@@ -222,13 +222,19 @@ String (
     }
 
     /* begin iterator */
-    char[] begin() {
+    char^ begin() {
         return storage_;
     }
 
     /* end iterator */
-    char[] end() {
+    char^ end() {
         return storage_ + size_;
+    }
+
+    /* update iterator */
+    char^ next(char^ prev) {
+        iter = <char[]> prev;
+        return iter + 1;
     }
 
     /* set to empty string. */
