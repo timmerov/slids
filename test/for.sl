@@ -1,5 +1,20 @@
 /*
 develop syntax for ranged for.
+
+valid container types for short-for:
+range, enum, array, tuple, class.
+caveats:
+array must be one-dimensional.
+tuple must be homogeneous - the same type.
+it's literally cast to an array.
+we iterate over a class by value or reference.
+by value if op[] and size() are defined
+by reference if begin(), end(), next() are defined.
+if one of those sets are defined then we can
+infer the loop var type.
+if both are defined then the loop var declaration
+must be explicit.
+compile error if both sets return the same type.
 */
 
 Simple(int x_ = 0) {
@@ -131,24 +146,6 @@ int32 main() {
     }
     __println();
 
-    /*
-    iterate over a container class.
-    desugars to:
-    init:
-        int a = lp.begin();
-        int __$end_0 = lp.end();
-    condition:
-        a != __$end_0
-    update:
-        a = lp.next(a);
-    */
-    Loop loop(17, 21);
-    __print("for container:");
-    for (x : loop) {
-        __print(" " + x);
-    }
-    __println();
-
     {
         __println("begin tuple block");
         tuple = (Simple, Simple);
@@ -201,6 +198,55 @@ int32 main() {
     //for (x : board) {
     //    __println("compile error: cannot iterate over a multi-dimensional array.");
     //}
+
+    {
+        Simple sarray[3];
+        /* compile error. */
+        //for (x : sarray) {
+        //    __println("compile error: need explicit declaration: object or reference.");
+        //}
+        /* iterate by value. */
+        for (Simple x : sarray) {
+            __println("array of slid: iterate by value.");
+        }
+        /* iterate by reference. */
+        for (Simple^ x : sarray) {
+            __println("array of slid: iterate by reference.");
+        }
+    }
+
+    {
+        /* compile error: cannot infer non-primitive element type. */
+        //for (x : (Simple(1), Simple(2))) {
+        //    __println("compile error: tuple-literal of slid needs explicit type.");
+        //}
+        /* iterate by value. */
+        for (Simple x : (Simple(1), Simple(2))) {
+            __println("tuple-literal of slid: iterate by value.");
+        }
+        /* iterate by reference. */
+        for (Simple^ x : (Simple(1), Simple(2))) {
+            __println("tuple-literal of slid: iterate by reference.");
+        }
+    }
+
+    /*
+    iterate over a container class.
+    desugars to:
+    init:
+        int a = lp.begin();
+        int __$end_0 = lp.end();
+    condition:
+        a != __$end_0
+    update:
+        a = lp.next(a);
+    */
+    Loop loop(17, 21);
+    __print("for container:");
+    for (x : loop) {
+        __print(" " + x);
+    }
+    __println();
 
     return 0;
 }

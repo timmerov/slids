@@ -421,7 +421,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         + elem_type + "')");
             }
         }
-        std::string reg = "%arr_" + arr->name;
+        std::string base = "%arr_" + arr->name;
+        std::string reg = base;
+        if (emitted_alloca_regs_.count(reg))
+            reg = base + "_" + std::to_string(tmp_counter_++);
+        emitted_alloca_regs_.insert(reg);
         std::string elt = llvmType(elem_type);
         out_ << "    " << reg << " = alloca [" << total << " x " << elt << "]\n";
         ArrayInfo ainfo;
