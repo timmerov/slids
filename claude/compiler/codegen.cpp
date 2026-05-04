@@ -1794,6 +1794,10 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         block_terminated_ = false;
         current_slid_ = slid.name;
         self_ptr_ = "%self";
+        // Add self to the scope table so type-aware lookups (inferSlidType,
+        // op-method dispatch) find it like any other local. The .reg field
+        // is set to the entry value; runtime remap (during inline-ctor-body
+        // emission for new T[n]) lives in self_ptr_, not here.
         locals_["self"].type = slid.name;
         locals_["self"].reg = "%self";
 
@@ -2346,6 +2350,8 @@ std::string Codegen::exprSlidType(const Expr& expr) {
     if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
         std::string obj_slid;
         if (auto* ve = dynamic_cast<const VarExpr*>(mc->object.get())) {
+            // self short-circuits to current_slid_; equivalent to looking up
+            // locals_["self"].type (set at method entry to the same value).
             if (ve->name == "self" && !current_slid_.empty())
                 obj_slid = current_slid_;
             else {
@@ -2506,6 +2512,7 @@ std::string Codegen::exprType(const Expr& expr) {
     if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
         std::string obj_slid;
         if (auto* ve = dynamic_cast<const VarExpr*>(mc->object.get())) {
+            // self short-circuit; same value as locals_["self"].type.
             if (ve->name == "self" && !current_slid_.empty())
                 obj_slid = current_slid_;
             else {
@@ -3563,7 +3570,9 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                 pending_temp_dtors_.push_back({tmp_reg, slid_name});
             return tmp_reg;
         }
-        // self — implicit object pointer, pass as current_slid_^ reference
+        // self as a function argument — pass self_ptr_ directly so the
+        // receiver inherits any inline-ctor-body remap (cannot be replaced
+        // by locals_["self"].reg, which is fixed to "%self").
         if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
             if (ve->name == "self" && !current_slid_.empty())
                 return self_ptr_.empty() ? "%self" : self_ptr_;

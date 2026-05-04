@@ -676,6 +676,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                     src_ptr = loaded;
                                 }
                             }
+                            // Slid-typed local init from self (e.g. Foo x = self;).
+                            // Use self_ptr_ for the source — fixed by locals_["self"].reg
+                            // for the entry case, but self_ptr_ tracks any inline-ctor-body remap.
                             if (src_ptr.empty() && ve->name == "self"
                                     && !current_slid_.empty() && current_slid_ == eff_type)
                                 src_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
@@ -825,7 +828,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* assign = dynamic_cast<const AssignStmt*>(&stmt)) {
-        // self = expr — call op= on the current object
+        // self = expr — special semantic: write the result through op= on the
+        // current object. self isn't a regular local that can be reassigned;
+        // this dispatches op= dispatch on the current_slid_ class with self_ptr_
+        // as the receiver (handles inline-ctor-body remap).
         if (assign->name == "self" && !current_slid_.empty()) {
             std::string op_func = resolveSingleArgOverload(current_slid_ + "__op=", *assign->value);
             if (op_func.empty())
@@ -1996,6 +2002,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
         std::string slid_name, obj_ptr;
         if (auto* ve = dynamic_cast<const VarExpr*>(mcs->object.get())) {
+            // self.method() statement form — type from current_slid_, address
+            // from self_ptr_ (remap-aware; see codegen.h doc).
             if (ve->name == "self" && !current_slid_.empty()) {
                 slid_name = current_slid_;
                 obj_ptr = self_ptr_.empty() ? "%self" : self_ptr_;

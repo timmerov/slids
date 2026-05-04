@@ -11,7 +11,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
         return std::to_string(i->value);
 
     if (auto* v = dynamic_cast<const VarExpr*>(&expr)) {
-        // self — pointer to the current object
+        // self as a value — return its current address (self_ptr_; remap-aware).
+        // Empty/namespace classes have no self; reject the read explicitly.
         if (v->name == "self" && !current_slid_.empty()) {
             auto& info = slid_info_[current_slid_];
             if (info.is_empty)
@@ -333,7 +334,12 @@ std::string Codegen::emitExpr(const Expr& expr) {
         }
         // ^x — return the alloca register (its address)
         if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
-            // ^self — address of the current object (implicit method parameter)
+            // ^self — special case for two reasons:
+            //   1) Validation: empty/namespace classes have no self to address.
+            //   2) Address: read self_ptr_, not locals_["self"].reg, because
+            //      self_ptr_ may be remapped during inline ctor body emission
+            //      (new T[n]) where each per-iteration alloca temporarily
+            //      becomes self.
             if (ve->name == "self") {
                 if (!current_slid_.empty()) {
                     auto& info = slid_info_[current_slid_];
@@ -630,6 +636,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
         // helper to get slid_name and obj_ptr from any object expression
         std::string slid_name, obj_ptr;
         if (auto* ve = dynamic_cast<const VarExpr*>(mc->object.get())) {
+            // self.method() — special path: take obj_ptr from self_ptr_ to
+            // honor inline-ctor-body remap (see self_ptr_ doc in codegen.h).
             if (ve->name == "self" && !current_slid_.empty()) {
                 slid_name = current_slid_;
                 obj_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
@@ -716,6 +724,10 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string self_arg = empty ? "" : "ptr " + obj_ptr;
             // indirect call: ptr-deref source OR explicit self inside a virtual
             // method (runtime type may differ from current_slid_).
+            // is_self_e flags self.method() — the receiver is the current
+            // object whose vtable must be consulted at runtime even when the
+            // method's static type matches current_slid_, because a derived
+            // class may have overridden it.
             bool is_self_e = false;
             if (auto* mve = dynamic_cast<const VarExpr*>(mc->object.get()))
                 is_self_e = (mve->name == "self");
@@ -1879,6 +1891,14 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     out_ << "    store " << llvmType(info.field_types[i]) << " " << val << ", ptr " << gep << "\n";
                 }
                 if (slid_def && slid_def->ctor_body) {
+                    // Inline ctor body emission for `new T[n]` — each slot's
+                    // ctor runs with self_ptr_ remapped to the per-iteration
+                    // alloca. References to `self` inside the ctor body must
+                    // resolve to this temporary self via self_ptr_, not via
+                    // locals_["self"].reg (which is fixed at function entry).
+                    // This is the only mid-function self_ptr_ remap; it's why
+                    // self_ptr_ exists as a separate variable from
+                    // locals_["self"].reg (see codegen.h).
                     std::string saved_slid = current_slid_;
                     std::string saved_self = self_ptr_;
                     current_slid_ = ne->elem_type;
@@ -2468,6 +2488,8 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
         if (mc->method == "sizeof") return "i64";
         std::string slid_name;
         if (auto* ve = dynamic_cast<const VarExpr*>(mc->object.get())) {
+            // self short-circuits to current_slid_ (equivalent to locals_["self"].type
+            // but avoids the map lookup; both yield the same value).
             if (ve->name == "self" && !current_slid_.empty()) slid_name = current_slid_;
             else {
                 auto tit = locals_.find(ve->name);

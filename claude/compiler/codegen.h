@@ -154,6 +154,17 @@ private:
     std::string break_label_;
     std::string continue_label_;
     std::string current_slid_;
+    // `self` has dual representation. `locals_["self"]` carries the type
+    // (current_slid_) for type-aware queries (inferSlidType, op-method
+    // dispatch, field lookup) and is set once at method/ctor/dtor entry.
+    // `self_ptr_` carries the live LLVM ptr value, which can be REMAPPED
+    // mid-emit during inline-ctor-body emission for `new T[n]` (see
+    // codegen_expr.cpp where self_ptr_ is reassigned to the per-iteration
+    // alloca). Code that needs the address reads self_ptr_ (with "%self"
+    // fallback for the entry case); code that needs the type reads
+    // locals_["self"].type. Several `ve->name == "self"` checks throughout
+    // the codegen sit in this niche — they exist because the regular
+    // locals_-driven paths can't see the self_ptr_ remap.
     std::string self_ptr_;
     bool block_terminated_ = false; // true after br/ret, reset at each new label
     bool current_func_uses_sret_ = false; // true when current function uses sret for return

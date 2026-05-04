@@ -1106,6 +1106,11 @@ std::unique_ptr<Stmt> Parser::buildAssignFromLhs(
 
     if (auto* ve = dynamic_cast<VarExpr*>(lhs.get())) {
         std::string name = ve->name;
+        // `name != "self"` carve-out: `self = expr;` parses as
+        // VarExpr(name="self") on the LHS (kSelf primary arm produces a
+        // VarExpr). Without this clause, the path below would treat self as
+        // an inferred-type new local declaration. self is implicit, never a
+        // declared local — fall through to AssignStmt instead.
         if (!isInScope(name) && !current_slid_fields_.count(name) && name != "self") {
             declareVar(name, ve->tok);
             // Track tuple-typed locals so the short-form for-loop can iterate
