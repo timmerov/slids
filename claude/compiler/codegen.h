@@ -92,11 +92,6 @@ private:
     struct LocalInfo {
         std::string reg;
         std::string type;
-        // true for template-promoted class-T params: source had `T x` with T=Slid;
-        // template instantiation promoted to `Slid^ x` for ABI; uses inside the
-        // body should auto-deref (treat as Slid value) for op-method dispatch.
-        // User-explicit `Slid^ x` params have this false — no auto-deref.
-        bool was_auto_promoted = false;
     };
     std::map<std::string, LocalInfo> locals_;
 

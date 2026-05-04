@@ -2568,11 +2568,6 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
             if (tit != locals_.end()) {
                 const std::string& t = tit->second.type;
                 if (slid_info_.count(t)) return t;
-                // template-promoted T^ param: strip ^ to dispatch via T.
-                if (tit->second.was_auto_promoted && !t.empty() && t.back() == '^') {
-                    std::string base = t.substr(0, t.size()-1);
-                    if (slid_info_.count(base)) return base;
-                }
             }
             // type name used as anonymous temp
             else if (slid_info_.count(ve->name)) return ve->name;
@@ -2600,9 +2595,6 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
         if (auto* ve = dynamic_cast<const VarExpr*>(&left)) {
             auto tit = locals_.find(ve->name);
             if (tit != locals_.end() && tit->second.type == slid_name) return true;
-            // template-promoted T^ param matches T for op-method dispatch.
-            if (tit != locals_.end() && tit->second.was_auto_promoted
-                    && tit->second.type == slid_name + "^") return true;
             if (tit == locals_.end() && ve->name == slid_name) return true;
         }
         // DerefExpr: sa^ where sa: SlidType^
@@ -3887,13 +3879,11 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     out_ << "define " << (isExported(emit_name) ? "" : "internal ") << ret_type << " @" << llvmGlobalName(emit_name) << "(" << param_str << ") {\n";
     out_ << "entry:\n";
 
-    for (int i = 0; i < (int)fn.params.size(); i++) {
-        auto& [type, name] = fn.params[i];
+    for (auto& [type, name] : fn.params) {
         std::string reg = uniqueAllocaReg(name);
         out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
         out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
-        bool promoted = i < (int)fn.param_auto_promoted.size() && fn.param_auto_promoted[i];
-        locals_[name] = {reg, type, promoted};
+        locals_[name] = {reg, type};
     }
 
     emitBlock(*fn.body);

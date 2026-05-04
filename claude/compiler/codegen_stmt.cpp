@@ -2177,23 +2177,35 @@ void Codegen::emitStmt(const Stmt& stmt) {
             bool src_is_fresh_temp = false;  // true if src is a new alloca not in dtor_vars_
             if (ve) {
                 auto tit = locals_.find(ve->name);
-                if (tit == locals_.end())
+                if (tit == locals_.end() || !slid_info_.count(tit->second.type))
                     error(std::string("sret: return value must be a slid type"));
-                if (slid_info_.count(tit->second.type)) {
-                    slid_name = tit->second.type;
-                    src = locals_.at(ve->name).reg;
-                } else if (tit->second.was_auto_promoted
-                        && !tit->second.type.empty()
-                        && tit->second.type.back() == '^'
-                        && slid_info_.count(tit->second.type.substr(0, tit->second.type.size()-1))) {
-                    // template-promoted T^ source: load the ref, treat the
-                    // pointed-to slid as the return source.
-                    slid_name = tit->second.type.substr(0, tit->second.type.size()-1);
-                    src = newTmp();
-                    out_ << "    " << src << " = load ptr, ptr "
-                         << locals_.at(ve->name).reg << "\n";
-                } else {
-                    error(std::string("sret: return value must be a slid type"));
+                slid_name = tit->second.type;
+                src = locals_.at(ve->name).reg;
+            } else if (auto* de = dynamic_cast<const DerefExpr*>(ret->value.get())) {
+                // After the cloner-rewrite, `return b;` for an auto-promoted T^
+                // local b becomes `return b^;` — DerefExpr value. The "slid
+                // value" lives at the address held by b, which is what we
+                // need to pass as the sret source.
+                if (auto* dve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                    auto tit = locals_.find(dve->name);
+                    if (tit != locals_.end() && isIndirectType(tit->second.type)) {
+                        std::string pointee = isPtrType(tit->second.type)
+                            ? tit->second.type.substr(0, tit->second.type.size()-2)
+                            : tit->second.type.substr(0, tit->second.type.size()-1);
+                        if (slid_info_.count(pointee)) {
+                            slid_name = pointee;
+                            src = newTmp();
+                            out_ << "    " << src << " = load ptr, ptr "
+                                 << locals_.at(dve->name).reg << "\n";
+                        }
+                    }
+                }
+                if (slid_name.empty()) {
+                    slid_name = exprSlidType(*ret->value);
+                    if (slid_name.empty())
+                        error(std::string("sret: return expression must produce a slid type"));
+                    src = emitExpr(*ret->value);
+                    src_is_fresh_temp = true;
                 }
             } else {
                 // expression: emit it (BinaryExpr/CallExpr produce a fresh alloca)

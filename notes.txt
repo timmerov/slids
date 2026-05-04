@@ -1,5 +1,8 @@
 
-negative tests.
+test if works as expected:
+x = ^y^;
+
+automate negative tests.
 
 optimize tuple construction:
 a tuple of objects constructs temp objects,

@@ -39,6 +39,34 @@ static std::string subTypeSuffix(const std::string& t,
     return subType(t, subst);
 }
 
+// --- Auto-promote rewrite state ---
+//
+// Stack of "names currently treated as auto-derefed" sets — one frame per
+// nested block during a clone walk. instantiateTemplate seeds the initial
+// frame from the template's auto-promoted params. cloneExpr's VarExpr arm
+// wraps any matching name in DerefExpr; cloneStmt's AssignStmt arm converts
+// to DerefAssignStmt; VarDeclStmt removes shadowing names from the top frame
+// for the rest of the block.
+static std::vector<std::set<std::string>> g_promoted_stack;
+
+static bool isPromoted(const std::string& name) {
+    if (g_promoted_stack.empty()) return false;
+    return g_promoted_stack.back().count(name) > 0;
+}
+
+static void enterPromoteScope() {
+    if (g_promoted_stack.empty()) g_promoted_stack.push_back({});
+    else g_promoted_stack.push_back(g_promoted_stack.back());
+}
+
+static void exitPromoteScope() {
+    if (!g_promoted_stack.empty()) g_promoted_stack.pop_back();
+}
+
+static void shadowPromoted(const std::string& name) {
+    if (!g_promoted_stack.empty()) g_promoted_stack.back().erase(name);
+}
+
 // --- Expression deep clone with type substitution ---
 
 // External linkage so other TUs (e.g. codegen_stmt.cpp's compound-assign
@@ -79,8 +107,15 @@ static std::unique_ptr<Expr> cloneExprImpl(const Expr& expr,
     if (dynamic_cast<const NullptrExpr*>(&expr))
         return std::make_unique<NullptrExpr>();
 
-    if (auto* e = dynamic_cast<const VarExpr*>(&expr))
-        return std::make_unique<VarExpr>(e->name);
+    if (auto* e = dynamic_cast<const VarExpr*>(&expr)) {
+        auto var = std::make_unique<VarExpr>(e->name);
+        if (isPromoted(e->name)) {
+            // template-promoted T^ param — rewrite read sites to deref.
+            var->file_id = e->file_id; var->tok = e->tok;
+            return std::make_unique<DerefExpr>(std::move(var));
+        }
+        return var;
+    }
 
     if (auto* e = dynamic_cast<const BinaryExpr*>(&expr))
         return std::make_unique<BinaryExpr>(e->op,
@@ -194,15 +229,26 @@ static std::unique_ptr<Stmt> cloneStmtImpl(const Stmt& stmt,
     if (auto* s = dynamic_cast<const VarDeclStmt*>(&stmt)) {
         std::vector<std::unique_ptr<Expr>> ctor_args;
         for (auto& a : s->ctor_args) ctor_args.push_back(cloneExpr(*a, subst));
+        // The new local shadows any promoted name with the same identifier
+        // for the rest of this scope frame.
+        shadowPromoted(s->name);
         return std::make_unique<VarDeclStmt>(
             subTypeSuffix(s->type, subst), s->name,
             s->init ? cloneExpr(*s->init, subst) : nullptr,
             std::move(ctor_args), s->is_move);
     }
 
-    if (auto* s = dynamic_cast<const AssignStmt*>(&stmt))
-        return std::make_unique<AssignStmt>(s->name,
-            cloneExpr(*s->value, subst), s->is_move);
+    if (auto* s = dynamic_cast<const AssignStmt*>(&stmt)) {
+        auto value = cloneExpr(*s->value, subst);
+        if (isPromoted(s->name)) {
+            // b = expr  →  b^ = expr  (DerefAssignStmt — value-write through ref).
+            auto var = std::make_unique<VarExpr>(s->name);
+            var->file_id = stmt.file_id; var->tok = stmt.tok;
+            return std::make_unique<DerefAssignStmt>(
+                std::move(var), std::move(value), s->is_move);
+        }
+        return std::make_unique<AssignStmt>(s->name, std::move(value), s->is_move);
+    }
 
     if (auto* s = dynamic_cast<const FieldAssignStmt*>(&stmt))
         return std::make_unique<FieldAssignStmt>(
@@ -348,7 +394,9 @@ static std::unique_ptr<BlockStmt> cloneBlock(const BlockStmt& block,
     auto r = std::make_unique<BlockStmt>();
     r->file_id = block.file_id;
     r->tok = block.tok;
+    enterPromoteScope();
     for (auto& s : block.stmts) r->stmts.push_back(cloneStmt(*s, subst));
+    exitPromoteScope();
     return r;
 }
 
@@ -594,8 +642,19 @@ std::string Codegen::instantiateTemplate(const TemplateFuncEntry& entry,
     for (int i = 0; i < (int)tmpl.params.size(); i++)
         concrete.params.emplace_back(ptypes[i], tmpl.params[i].second);
     concrete.param_mutable = tmpl.param_mutable;
-    concrete.param_auto_promoted = std::move(promoted);
+    concrete.param_auto_promoted = promoted;
+
+    // Seed the cloner's promote stack with the auto-promoted param names.
+    // cloneBlock will wrap reads of these names in DerefExpr and convert
+    // assigns to DerefAssignStmt.
+    std::set<std::string> promoted_names;
+    for (int i = 0; i < (int)tmpl.params.size(); i++)
+        if (i < (int)promoted.size() && promoted[i])
+            promoted_names.insert(tmpl.params[i].second);
+    g_promoted_stack.clear();
+    g_promoted_stack.push_back(std::move(promoted_names));
     concrete.body = cloneBlock(*tmpl.body, subst);
+    g_promoted_stack.clear();
 
     // register signatures so call sites work
     func_return_types_[mangled] = concrete.return_type;

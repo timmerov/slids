@@ -318,6 +318,19 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* ao = dynamic_cast<const AddrOfExpr*>(&expr)) {
+        // ^(p^) — cancel: address of the pointed-to value IS the inner ptr.
+        // Used by the cloner-rewrite for ^b on auto-promoted ref locals.
+        if (auto* de = dynamic_cast<const DerefExpr*>(ao->operand.get())) {
+            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto it = locals_.find(ve->name);
+                if (it != locals_.end() && isIndirectType(it->second.type)) {
+                    std::string loaded = newTmp();
+                    out_ << "    " << loaded << " = load ptr, ptr "
+                         << it->second.reg << "\n";
+                    return loaded;
+                }
+            }
+        }
         // ^x — return the alloca register (its address)
         if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
             // ^self — address of the current object (implicit method parameter)
