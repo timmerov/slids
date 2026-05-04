@@ -98,4 +98,21 @@ fi
 
 echo ""
 echo "$pass passed, $fail failed"
+
+# Negative compile-error suite — disabled cases marked with //-EXPECT-ERROR:
+# in test/*.sl. Counted into the overall pass/fail tally; non-zero failures
+# fail the run.
+echo ""
+NEG_SCRIPT="$TEST_DIR/run_negatives.sh"
+if [[ -x "$NEG_SCRIPT" ]]; then
+    NEG_SAMPLES=()
+    for t in "${SAMPLES[@]}"; do NEG_SAMPLES+=("$TEST_DIR/$t.sl"); done
+    if "$NEG_SCRIPT" "${NEG_SAMPLES[@]}"; then
+        :
+    else
+        ((fail++)) || true
+        errors+=("negatives")
+    fi
+fi
+
 [[ $fail -eq 0 ]]
