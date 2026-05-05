@@ -407,12 +407,10 @@ void strcpy(
     char[] src,
     intptr count
 ) {
-    while (count > 0) {
-        ch = src++^;
-        dst++^ = ch;
-        if (ch == 0) {
-            break;
-        }
-        --count;
+    for (ch = 'A') (count > 0 && ch) {
+        --count; ++src; ++dst;
+    } {
+        ch = src^;
+        dst^ = ch;
     }
 }

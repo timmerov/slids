@@ -38,11 +38,14 @@ Vector<T>(
         new_storage = new int8[byte_size];
 
         /* move exising elements. */
-        intptr i = 0;
-        T[] src = <T[]> storage_;
-        T[] dst = <T[]> new_storage;
-        while (i++ < size_) {
-            dst++^ <- src++^;
+        for (
+            intptr i = 0,
+            T[] src = <T[]> storage_,
+            T[] dst = <T[]> new_storage
+        ) (i < size_) {
+            ++i; ++src; ++dst;
+        } {
+            dst^ <- src^;
         }
 
         /* free old storage. */
@@ -98,13 +101,14 @@ Vector<T>(
         intptr begin,
         intptr end
     ) {
-        intptr i = begin;
-        int8[] ptr = storage_;
-        ptr += sizeof(T) * i;
-        while (i++ < end) {
+        for (
+            intptr i = begin,
+            int8[] ptr = <int8[]> storage_ + sizeof(T) * i
+        ) (i < end) {
+            ++i; ptr += sizeof(T);
+        } {
             //__println("Vector<T>: placement new.");
             new(ptr) T;
-            ptr += sizeof(T);
         }
     }
 
@@ -113,13 +117,14 @@ Vector<T>(
         intptr begin,
         intptr end
     ) {
-        intptr i = begin;
-        T[] ptr = <T[]> storage_;
-        ptr += i;
-        while (i++ < end) {
+        for (
+            intptr i = begin,
+            T[] ptr = <T[]> storage_ + 1
+        ) (i < end) {
+            ++i; ++ptr;
+        } {
             //__println("Vector<T>: inline dtor.");
             ptr^.~();
-            ++ptr;
         }
     }
 }
