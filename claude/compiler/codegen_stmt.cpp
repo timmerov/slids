@@ -5,6 +5,141 @@
 #include <functional>
 #include <stdexcept>
 
+Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
+    if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
+        auto it = locals_.find(ve->name);
+        if (it != locals_.end()) return {it->second.reg, it->second.type};
+        if (!current_slid_.empty()) {
+            auto& info = slid_info_[current_slid_];
+            auto fit = info.field_index.find(ve->name);
+            if (fit != info.field_index.end()) {
+                std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr %struct." << current_slid_
+                     << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
+                return {gep, info.field_types[fit->second]};
+            }
+        }
+        errorAtNode(e, "resolveLvalue: undefined variable '" + ve->name + "'");
+    }
+    if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&e)) {
+        auto obj = resolveLvalue(*fa->object);
+        std::string stype = obj.type;
+        std::string addr = obj.addr;
+        if (isPtrType(stype) || isRefType(stype)) {
+            std::string loaded = newTmp();
+            out_ << "    " << loaded << " = load ptr, ptr " << addr << "\n";
+            addr = loaded;
+            stype = isPtrType(stype) ? stype.substr(0, stype.size() - 2)
+                                     : stype.substr(0, stype.size() - 1);
+        }
+        auto sit = slid_info_.find(stype);
+        if (sit == slid_info_.end())
+            errorAtNode(e, "resolveLvalue: '" + stype + "' is not a slid type");
+        auto fit = sit->second.field_index.find(fa->field);
+        if (fit == sit->second.field_index.end())
+            errorAtNode(e, "resolveLvalue: unknown field '" + fa->field
+                + "' on '" + stype + "'");
+        std::string gep = newTmp();
+        out_ << "    " << gep << " = getelementptr %struct." << stype
+             << ", ptr " << addr << ", i32 0, i32 " << fit->second << "\n";
+        return {gep, sit->second.field_types[fit->second]};
+    }
+    if (auto* de = dynamic_cast<const DerefExpr*>(&e)) {
+        // post-inc/dec deref: the side-effect ordering is "load OLD, advance,
+        // return OLD as the deref'd address". Special-case it here rather than
+        // composing through the generic UnaryExpr arm (which advances first).
+        if (auto* ue = dynamic_cast<const UnaryExpr*>(de->operand.get())) {
+            if (ue->op == "post++" || ue->op == "post--") {
+                auto base = resolveLvalue(*ue->operand);
+                std::string pointee;
+                if (isPtrType(base.type))      pointee = base.type.substr(0, base.type.size() - 2);
+                else if (isRefType(base.type)) pointee = base.type.substr(0, base.type.size() - 1);
+                else errorAtNode(e, "resolveLvalue: post-inc/dec deref of non-pointer type '" + base.type + "'");
+                std::string loaded = newTmp();
+                out_ << "    " << loaded << " = load ptr, ptr " << base.addr << "\n";
+                int step = (ue->op == "post++") ? 1 : -1;
+                std::string nxt = newTmp();
+                out_ << "    " << nxt << " = getelementptr " << llvmType(pointee)
+                     << ", ptr " << loaded << ", i32 " << step << "\n";
+                out_ << "    store ptr " << nxt << ", ptr " << base.addr << "\n";
+                return {loaded, pointee};
+            }
+        }
+        auto base = resolveLvalue(*de->operand);
+        std::string pointee;
+        if (isPtrType(base.type))      pointee = base.type.substr(0, base.type.size() - 2);
+        else if (isRefType(base.type)) pointee = base.type.substr(0, base.type.size() - 1);
+        else errorAtNode(e, "resolveLvalue: deref of non-pointer type '" + base.type + "'");
+        std::string loaded = newTmp();
+        out_ << "    " << loaded << " = load ptr, ptr " << base.addr << "\n";
+        return {loaded, pointee};
+    }
+    if (auto* ue = dynamic_cast<const UnaryExpr*>(&e)) {
+        if (ue->op == "pre++" || ue->op == "pre--") {
+            auto base = resolveLvalue(*ue->operand);
+            std::string pointee;
+            if (isPtrType(base.type))      pointee = base.type.substr(0, base.type.size() - 2);
+            else if (isRefType(base.type)) pointee = base.type.substr(0, base.type.size() - 1);
+            else errorAtNode(e, "resolveLvalue: pre-inc/dec of non-pointer type '" + base.type + "'");
+            std::string loaded = newTmp();
+            out_ << "    " << loaded << " = load ptr, ptr " << base.addr << "\n";
+            int step = (ue->op == "pre++") ? 1 : -1;
+            std::string nxt = newTmp();
+            out_ << "    " << nxt << " = getelementptr " << llvmType(pointee)
+                 << ", ptr " << loaded << ", i32 " << step << "\n";
+            out_ << "    store ptr " << nxt << ", ptr " << base.addr << "\n";
+            return {base.addr, base.type};
+        }
+    }
+    if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&e)) {
+        auto [gep0, et0] = emitInlineArrayElemPtr(*ai->base, *ai->index);
+        if (!gep0.empty()) return {gep0, et0};
+        auto base = resolveLvalue(*ai->base);
+        // anon-tuple slot: GEP into struct field at constant index
+        if (isAnonTupleType(base.type)) {
+            auto elems = anonTupleElems(base.type);
+            int idx;
+            if (!constExprToInt(*ai->index, enum_values_, idx))
+                errorAtNode(e, "resolveLvalue: tuple index must be a constant integer");
+            if (idx < 0 || idx >= (int)elems.size())
+                errorAtNode(e, "resolveLvalue: tuple index "
+                    + std::to_string(idx) + " out of range");
+            std::string gep = emitFieldGep(base.type, base.addr, idx);
+            return {gep, elems[idx]};
+        }
+        // pointer / iterator base: load base, GEP by index
+        if (isPtrType(base.type) || isRefType(base.type)) {
+            std::string elem_type = isPtrType(base.type)
+                ? base.type.substr(0, base.type.size() - 2)
+                : base.type.substr(0, base.type.size() - 1);
+            std::string base_ptr = newTmp();
+            out_ << "    " << base_ptr << " = load ptr, ptr " << base.addr << "\n";
+            std::string idx_llvm = exprLlvmType(*ai->index);
+            std::string idx_val = emitExpr(*ai->index);
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr " << llvmType(elem_type)
+                 << ", ptr " << base_ptr << ", " << idx_llvm << " " << idx_val << "\n";
+            return {gep, elem_type};
+        }
+        // inline-array base reached through a chain (e.g. obj.arr_[i])
+        if (isInlineArrayType(base.type)) {
+            auto lb = base.type.rfind('[');
+            std::string elem_type = base.type.substr(0, lb);
+            std::string sz_str = base.type.substr(lb + 1, base.type.size() - lb - 2);
+            std::string elt = llvmType(elem_type);
+            std::string idx_llvm = exprLlvmType(*ai->index);
+            std::string idx_val = emitExpr(*ai->index);
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr [" << sz_str << " x " << elt
+                 << "], ptr " << base.addr << ", i32 0, " << idx_llvm << " " << idx_val << "\n";
+            return {gep, elem_type};
+        }
+        errorAtNode(e, "resolveLvalue: unsupported array-index lvalue");
+    }
+    errorAtNode(e, "resolveLvalue: unsupported lvalue shape");
+}
+
 void Codegen::emitDestructure(
     const std::vector<std::pair<std::string,std::string>>& targets,
     const Expr& init) {
@@ -331,68 +466,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
             out_ << "    call void @free(ptr " << ptr_val << ")\n";
         }
-        // nullify the pointer variable so it is left in a valid (null) state
-        if (auto* ve = dynamic_cast<const VarExpr*>(ds->operand.get())) {
-            auto it = locals_.find(ve->name);
-            if (it != locals_.end()) {
-                out_ << "    store ptr null, ptr " << it->second.reg << "\n";
-            } else if (!current_slid_.empty()) {
-                // bare field name inside a method: GEP through self and store null
-                auto& info = slid_info_[current_slid_];
-                auto fit = info.field_index.find(ve->name);
-                if (fit != info.field_index.end()) {
-                    std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
-                    std::string gep = newTmp();
-                    out_ << "    " << gep << " = getelementptr %struct." << current_slid_
-                         << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
-                    out_ << "    store ptr null, ptr " << gep << "\n";
-                }
-            }
-        } else if (auto* fa = dynamic_cast<const FieldAccessExpr*>(ds->operand.get())) {
-            // delete obj.field_ — write null back through the field GEP
-            // Re-emit the GEP for the field and store null
-            std::string self;
-            if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
-                if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                    auto it = locals_.find(ve2->name);
-                    if (it != locals_.end()) {
-                        std::string loaded = newTmp();
-                        out_ << "    " << loaded << " = load ptr, ptr " << it->second.reg << "\n";
-                        self = loaded;
-                    }
-                }
-            } else if (auto* ve2 = dynamic_cast<const VarExpr*>(fa->object.get())) {
-                auto it = locals_.find(ve2->name);
-                if (it != locals_.end()) self = it->second.reg;
-            }
-            if (!self.empty() && !current_slid_.empty()) {
-                // find the slid type for fa->object
-                std::string stype = current_slid_;
-                if (auto* ve2 = dynamic_cast<const VarExpr*>(fa->object.get())) {
-                    auto tit = locals_.find(ve2->name);
-                    if (tit != locals_.end()) stype = tit->second.type;
-                } else if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
-                    if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                        auto tit = locals_.find(ve2->name);
-                        if (tit != locals_.end()) {
-                            std::string t = tit->second.type;
-                            if (!t.empty() && (t.back() == '^' || (t.size()>=2 && t.substr(t.size()-2)=="[]")))
-                                t = t.substr(0, t.find_first_of("^["));
-                            stype = t;
-                        }
-                    }
-                }
-                auto sit = slid_info_.find(stype);
-                if (sit != slid_info_.end()) {
-                    auto fit = sit->second.field_index.find(fa->field);
-                    if (fit != sit->second.field_index.end()) {
-                        std::string gep = newTmp();
-                        out_ << "    " << gep << " = getelementptr %struct." << stype
-                             << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
-                        out_ << "    store ptr null, ptr " << gep << "\n";
-                    }
-                }
-            }
+        // nullify the pointer variable so it is left in a valid (null) state.
+        // Gate on AST kind so non-lvalue operands (e.g. `delete getNew();`)
+        // silently skip — matches the prior behavior.
+        const Expr* op_expr = ds->operand.get();
+        if (dynamic_cast<const VarExpr*>(op_expr)
+            || dynamic_cast<const FieldAccessExpr*>(op_expr)
+            || dynamic_cast<const ArrayIndexExpr*>(op_expr)) {
+            auto lv = resolveLvalue(*op_expr);
+            out_ << "    store ptr null, ptr " << lv.addr << "\n";
         }
         return;
     }
@@ -1385,16 +1467,6 @@ void Codegen::emitStmt(const Stmt& stmt) {
             emitStmt(synth);
             return;
         }
-        if (auto* pide = dynamic_cast<const PostIncDerefExpr*>(lhs)) {
-            auto bin = synthAt<BinaryExpr>(fid, tok, cas->op,
-                synthAt<DerefExpr>(fid, tok, cloneExpr(*pide->operand)),
-                std::move(rhs_clone));
-            PostIncDerefAssignStmt synth(cloneExpr(*pide->operand), pide->op,
-                std::move(bin));
-            synth.file_id = fid; synth.tok = tok;
-            emitStmt(synth);
-            return;
-        }
         error(std::string("compound assignment: unsupported LHS shape"));
     }
 
@@ -1419,7 +1491,17 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 ptr_reg = it->second.reg;
             }
         } else {
+            // generic operand (e.g., UnaryExpr post++): emitExpr returns the
+            // pointer value (with side-effect emitted). Derive pointee type
+            // from inferSlidType so the store width / op-dispatch are correct.
             ptr_reg = emitExpr(*da->ptr);
+            std::string ot = inferSlidType(*da->ptr);
+            if (isPtrType(ot) || isRefType(ot)) {
+                pointee_type = isPtrType(ot)
+                    ? ot.substr(0, ot.size() - 2)
+                    : ot.substr(0, ot.size() - 1);
+                pointee_llvm = llvmType(pointee_type);
+            }
         }
         // slid pointee: dispatch op<-/op= via emitSlidSlotAssign so user-defined
         // ops (and the field-walk fallback for pointer fields, dtor-bearing fields, etc.)
@@ -1668,6 +1750,18 @@ void Codegen::emitStmt(const Stmt& stmt) {
         {
             auto [gep, et] = emitInlineArrayElemPtr(*ia->base, *ia->index);
             if (!gep.empty()) {
+                // slid / anon-tuple element: dispatch user op= / op<- (or
+                // synthesized field-walk) so move semantics fire correctly.
+                if (slid_info_.count(et) || isAnonTupleType(et)) {
+                    std::string src_ptr;
+                    if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
+                        auto lit = locals_.find(rve->name);
+                        if (lit != locals_.end()) src_ptr = lit->second.reg;
+                    }
+                    if (src_ptr.empty()) src_ptr = emitExpr(*ia->value);
+                    emitSlidSlotAssign(et, gep, src_ptr, ia->is_move);
+                    return;
+                }
                 requirePtrInit(et, *ia->value);
                 std::string rhs = emitExpr(*ia->value);
                 out_ << "    store " << llvmType(et) << " " << rhs << ", ptr " << gep << "\n";
@@ -1751,116 +1845,16 @@ void Codegen::emitStmt(const Stmt& stmt) {
         return;
     }
 
-    if (auto* pida = dynamic_cast<const PostIncDerefAssignStmt*>(&stmt)) {
-        // ptr++^ = val / ptr++^ <- val — assign at current ptr, then advance.
-        auto* ve = dynamic_cast<const VarExpr*>(pida->ptr.get());
-        if (!ve) error(std::string("PostIncDerefAssign: only simple pointer variables supported"));
-        auto it = locals_.find(ve->name);
-        if (it == locals_.end())
-            error(std::string("PostIncDerefAssign: undefined variable '" + ve->name + "'"));
-        auto tit = locals_.find(ve->name);
-        if (tit == locals_.end() || !isPtrType(tit->second.type))
-            error(std::string("PostIncDerefAssign: '" + ve->name + "' is not a pointer ([]) type"));
-        std::string pointee_type = tit->second.type.substr(0, tit->second.type.size()-2);
-        std::string pointee_llvm = llvmType(pointee_type);
-        int step = (pida->op == "++") ? 1 : -1;
-        // load current ptr
-        std::string cur_ptr = newTmp();
-        out_ << "    " << cur_ptr << " = load ptr, ptr " << it->second.reg << "\n";
-        // assign value at current ptr — slid pointee dispatches op<-/op=.
-        if (slid_info_.count(pointee_type)) {
-            std::string src_ptr = emitArgForParam(*pida->value, pointee_type + "^");
-            emitSlidSlotAssign(pointee_type, cur_ptr, src_ptr, pida->is_move);
-        } else {
-            requirePtrInit(pointee_type, *pida->value);
-            std::string val = emitExpr(*pida->value);
-            out_ << "    store " << pointee_llvm << " " << val << ", ptr " << cur_ptr << "\n";
-        }
-        // advance ptr
-        std::string new_ptr = newTmp();
-        out_ << "    " << new_ptr << " = getelementptr " << pointee_llvm << ", ptr " << cur_ptr << ", i32 " << step << "\n";
-        out_ << "    store ptr " << new_ptr << ", ptr " << it->second.reg << "\n";
-        return;
-    }
-
     if (auto* sw = dynamic_cast<const SwapStmt*>(&stmt)) {
         // lhs <-> rhs — swap values at two lvalue locations.
-        // Recursive lvalue resolver: each AST kind contributes one orthogonal
-        // step (var lookup, load through pointer, GEP into field, GEP into
-        // inline-array element). PostIncDerefExpr advances the iterator as
-        // an immediate side effect, matching original ptr++^ semantics.
-        auto varAddr = [&](const std::string& name) -> std::pair<std::string,std::string> {
-            auto lit = locals_.find(name);
-            if (lit != locals_.end()) return {lit->second.reg, lit->second.type};
-            if (!current_slid_.empty()) {
-                auto& info = slid_info_[current_slid_];
-                auto fit = info.field_index.find(name);
-                if (fit != info.field_index.end()) {
-                    std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
-                    std::string gep = newTmp();
-                    out_ << "    " << gep << " = getelementptr %struct." << current_slid_
-                         << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
-                    return {gep, info.field_types[fit->second]};
-                }
-            }
-            error(std::string("SwapStmt: undefined variable '" + name + "'"));
-            return {"",""};
-        };
-        auto stripIndir = [&](const std::string& t) -> std::string {
-            if (isPtrType(t)) return t.substr(0, t.size()-2);
-            if (!t.empty() && t.back() == '^') return t.substr(0, t.size()-1);
-            error(std::string("SwapStmt: type '" + t + "' is not a pointer/reference"));
-            return "";
-        };
-        std::function<std::pair<std::string,std::string>(const Expr&)> resolve =
-            [&](const Expr& e) -> std::pair<std::string,std::string> {
-            if (auto* ve = dynamic_cast<const VarExpr*>(&e)) return varAddr(ve->name);
-            if (auto* de = dynamic_cast<const DerefExpr*>(&e)) {
-                auto [a, t] = resolve(*de->operand);
-                std::string pointee = stripIndir(t);
-                std::string loaded = newTmp();
-                out_ << "    " << loaded << " = load ptr, ptr " << a << "\n";
-                return {loaded, pointee};
-            }
-            if (auto* p = dynamic_cast<const PostIncDerefExpr*>(&e)) {
-                auto [a, t] = resolve(*p->operand);
-                std::string pointee = stripIndir(t);
-                std::string loaded = newTmp();
-                out_ << "    " << loaded << " = load ptr, ptr " << a << "\n";
-                int step = (p->op == "++") ? 1 : -1;
-                std::string nxt = newTmp();
-                out_ << "    " << nxt << " = getelementptr " << llvmType(pointee)
-                     << ", ptr " << loaded << ", i32 " << step << "\n";
-                out_ << "    store ptr " << nxt << ", ptr " << a << "\n";
-                return {loaded, pointee};
-            }
-            if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&e)) {
-                auto [a, t] = resolve(*fa->object);
-                if (!slid_info_.count(t))
-                    error(std::string("SwapStmt: '" + t + "' is not a slid type"));
-                auto& info = slid_info_[t];
-                auto fit = info.field_index.find(fa->field);
-                if (fit == info.field_index.end())
-                    error(std::string("SwapStmt: unknown field '" + fa->field
-                        + "' on '" + t + "'"));
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr %struct." << t
-                     << ", ptr " << a << ", i32 0, i32 " << fit->second << "\n";
-                return {gep, info.field_types[fit->second]};
-            }
-            if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&e)) {
-                auto [gep, et] = emitInlineArrayElemPtr(*ai->base, *ai->index);
-                if (!gep.empty()) return {gep, et};
-            }
-            error(std::string("SwapStmt: unsupported lvalue shape"));
-            return {"",""};
-        };
-        auto [a_ptr, a_type] = resolve(*sw->lhs);
-        auto [b_ptr, b_type] = resolve(*sw->rhs);
-        if (a_type != b_type)
+        auto a = resolveLvalue(*sw->lhs);
+        auto b = resolveLvalue(*sw->rhs);
+        if (a.type != b.type)
             error(std::string("SwapStmt: type mismatch — '"
-                + a_type + "' vs '" + b_type + "'"));
-        const std::string& t = a_type;
+                + a.type + "' vs '" + b.type + "'"));
+        const std::string& t = a.type;
+        const std::string& a_ptr = a.addr;
+        const std::string& b_ptr = b.addr;
         // slid type: dispatch user op<-> if defined, else default per-field swap
         if (slid_info_.count(t)) {
             emitSlidSlotSwap(t, a_ptr, b_ptr);
@@ -1886,11 +1880,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* fa = dynamic_cast<const FieldAssignStmt*>(&stmt)) {
-        // handle ptr^.field = val — object is a DerefExpr
-        if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
+        // handle ptr^.field = val — object is a DerefExpr with VarExpr operand.
+        // Non-VarExpr operands (e.g., DerefExpr(UnaryExpr(post++, ...)) — the
+        // natural form of p++^.field) fall through to the generic fallback below.
+        if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get());
+            de && dynamic_cast<const VarExpr*>(de->operand.get())) {
             std::string ptr_val;
             std::string slid_name;
-            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+            auto* ve = dynamic_cast<const VarExpr*>(de->operand.get());
+            {
                 auto it = locals_.find(ve->name);
                 auto tit = locals_.find(ve->name);
                 if (tit != locals_.end() && isIndirectType(tit->second.type)) {
@@ -1902,8 +1900,6 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     ptr_val = it->second.reg;
                     if (tit != locals_.end()) slid_name = tit->second.type;
                 }
-            } else {
-                ptr_val = emitExpr(*de->operand);
             }
             if (slid_name.empty() || !slid_info_.count(slid_name))
                 error(std::string("DerefFieldAssign: unknown slid type for field '" + fa->field + "'"));
@@ -1940,46 +1936,40 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 emitNullOut(*fa->value);
             return;
         }
-        // chained indexed field: tuple[idx].field = val  (or  <- val)
-        if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(fa->object.get())) {
-            auto* bve = dynamic_cast<const VarExpr*>(ai->base.get());
-            if (!bve)
-                error(std::string("chained indexed FieldAssign: complex base not supported"));
-            auto tit = locals_.find(bve->name);
-            if (tit == locals_.end() || !isAnonTupleType(tit->second.type))
-                error(std::string("chained indexed FieldAssign: '" + bve->name
-                    + "' is not a tuple"));
-            auto elems = anonTupleElems(tit->second.type);
-            int idx;
-            if (!constExprToInt(*ai->index, enum_values_, idx))
-                error(std::string("tuple index must be a constant integer"));
-            if (idx < 0 || idx >= (int)elems.size())
-                error(std::string("tuple index " + std::to_string(idx)
-                    + " out of range (size " + std::to_string(elems.size()) + ")"));
-            const std::string& slid_name = elems[idx];
-            if (!slid_info_.count(slid_name))
-                error(std::string("chained indexed FieldAssign: tuple element "
-                    + std::to_string(idx) + " is not a slid type"));
-            auto& info = slid_info_[slid_name];
-            auto fit = info.field_index.find(fa->field);
-            if (fit == info.field_index.end())
-                error(std::string("unknown field '" + fa->field
-                    + "' on slid '" + slid_name + "'"));
-            int field_idx = fit->second;
-            const std::string& ft = info.field_types[field_idx];
+        // generic fallback: object is any lvalue resolveLvalue can handle.
+        // Subsumes the prior tuple[N].field = val branch and previously-erroring
+        // shapes (chained o.i_.x_ = v, p++^.x_ = v, arr[i].x_ = v with slid array).
+        {
+            auto obj_lv = resolveLvalue(*fa->object);
+            std::string stype = obj_lv.type;
+            std::string addr = obj_lv.addr;
+            if (isPtrType(stype) || isRefType(stype)) {
+                std::string loaded = newTmp();
+                out_ << "    " << loaded << " = load ptr, ptr " << addr << "\n";
+                addr = loaded;
+                stype = isPtrType(stype) ? stype.substr(0, stype.size()-2)
+                                         : stype.substr(0, stype.size()-1);
+            }
+            auto sit = slid_info_.find(stype);
+            if (sit == slid_info_.end())
+                error(std::string("FieldAssign: '" + stype
+                    + "' is not a slid type for field '" + fa->field + "'"));
+            auto fit = sit->second.field_index.find(fa->field);
+            if (fit == sit->second.field_index.end())
+                error(std::string("FieldAssign: unknown field '" + fa->field
+                    + "' on '" + stype + "'"));
+            const std::string& ft = sit->second.field_types[fit->second];
             requirePtrInit(ft, *fa->value);
             std::string ft_llvm = llvmType(ft);
-            std::string slot_gep = emitFieldGep(tit->second.type, locals_[bve->name].reg, idx);
             std::string field_gep = newTmp();
-            out_ << "    " << field_gep << " = getelementptr %struct." << slid_name
-                 << ", ptr " << slot_gep << ", i32 0, i32 " << field_idx << "\n";
+            out_ << "    " << field_gep << " = getelementptr %struct." << stype
+                 << ", ptr " << addr << ", i32 0, i32 " << fit->second << "\n";
             std::string val = emitExpr(*fa->value);
             out_ << "    store " << ft_llvm << " " << val << ", ptr " << field_gep << "\n";
             if (fa->is_move && isIndirectType(ft))
                 emitNullOut(*fa->value);
             return;
         }
-        error(std::string("complex field assignment not yet supported"));
     }
 
     if (auto* mcs = dynamic_cast<const MethodCallStmt*>(&stmt)) {

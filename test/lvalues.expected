@@ -6,7 +6,6 @@ inline-arr: arrV[2]=30
 -- field access --
 obj-field: p.x_=10
 deref-field: p.y_=20
-tup-elem-field: slid_tup[1].x_=99
 -- index --
 inline-arr: arrI[1]=200
 iter: arrI[2]=333
@@ -20,14 +19,8 @@ pre-dec^: arrD[0]=55
 -- parens --
 (xp)=: xp=7
 paren-inc-deref: arrP=100,2,3,200
-paren-swap: arrQ=4,2,3,1
 -- swap --
-var: a=2 b=1
 inline-arr: arrS=4,2,3,1
-slid: pa=(3,4) pb=(1,2)
--- move --
-s is null after move
-d[0]=1
 -- compound primitive --
 x+=5: 15
 x-=2: 13
@@ -41,3 +34,29 @@ arrC: 10,120,30,35
 bd: count=3 last_int=42
 -- chain optimization --
 chain bc: count=6 last_int=3
+-- delete + nullify chains --
+box.p_ nulled=1
+pa[0] nulled=1
+-- chained field assign --
+o.i_.x_=99
+-- slid array element field --
+sa[1].x_=77
+-- slid array op= / op<- --
+aa[0].x_=77
+ab[0].x_=88
+sm.x_ after move=0
+-- post-inc-deref + field --
+ar[0].x_=42
+-- compound chains --
+oc.i_.x_=12
+ac[1].x_=15
+-- addr-of chains --
+via ra: oa.i_.x_=99
+via rb: ad[0]=99
+via rc: sf[0].x_=42
+-- ++/-- on chains --
+++cn.v_: 6
+ai[1]++: 21
+-- auto-promote chains --
+show(h.inner_)=42
+show(sh[1])=77

@@ -98,15 +98,6 @@ struct DerefExpr : Expr {
     DerefExpr(std::unique_ptr<Expr> op) : operand(std::move(op)) {}
 };
 
-// ptr++^  — post-increment pointer then dereference the OLD address (rvalue)
-// or used as lvalue: ptr++^ = val  — store val at current ptr, then increment ptr
-struct PostIncDerefExpr : Expr {
-    std::unique_ptr<Expr> operand; // the pointer variable
-    std::string op; // "++" or "--"
-    PostIncDerefExpr(std::unique_ptr<Expr> op_expr, std::string op)
-        : operand(std::move(op_expr)), op(std::move(op)) {}
-};
-
 // take address: ^x  (prefix)
 struct AddrOfExpr : Expr {
     std::unique_ptr<Expr> operand;
@@ -300,17 +291,6 @@ struct DerefAssignStmt : Stmt {
     bool is_move = false;
     DerefAssignStmt(std::unique_ptr<Expr> ptr, std::unique_ptr<Expr> val, bool m = false)
         : ptr(std::move(ptr)), value(std::move(val)), is_move(m) {}
-};
-
-// ptr++^ = expr  — store val at current ptr, then advance ptr
-struct PostIncDerefAssignStmt : Stmt {
-    std::unique_ptr<Expr> ptr;   // the pointer variable
-    std::string op;              // "++" or "--"
-    std::unique_ptr<Expr> value;
-    bool is_move = false;
-    PostIncDerefAssignStmt(std::unique_ptr<Expr> ptr, std::string op, std::unique_ptr<Expr> val,
-                           bool m = false)
-        : ptr(std::move(ptr)), op(std::move(op)), value(std::move(val)), is_move(m) {}
 };
 
 // lvalue op= rhs — compound assign with single LHS evaluation.

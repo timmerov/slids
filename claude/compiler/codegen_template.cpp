@@ -133,9 +133,6 @@ static std::unique_ptr<Expr> cloneExprImpl(const Expr& expr,
     if (auto* e = dynamic_cast<const AddrOfExpr*>(&expr))
         return std::make_unique<AddrOfExpr>(cloneExpr(*e->operand, subst));
 
-    if (auto* e = dynamic_cast<const PostIncDerefExpr*>(&expr))
-        return std::make_unique<PostIncDerefExpr>(cloneExpr(*e->operand, subst), e->op);
-
     if (auto* e = dynamic_cast<const ArrayIndexExpr*>(&expr))
         return std::make_unique<ArrayIndexExpr>(cloneExpr(*e->base, subst),
                                                 cloneExpr(*e->index, subst));
@@ -283,10 +280,6 @@ static std::unique_ptr<Stmt> cloneStmtImpl(const Stmt& stmt,
     if (auto* s = dynamic_cast<const DerefAssignStmt*>(&stmt))
         return std::make_unique<DerefAssignStmt>(
             cloneExpr(*s->ptr, subst), cloneExpr(*s->value, subst), s->is_move);
-
-    if (auto* s = dynamic_cast<const PostIncDerefAssignStmt*>(&stmt))
-        return std::make_unique<PostIncDerefAssignStmt>(
-            cloneExpr(*s->ptr, subst), s->op, cloneExpr(*s->value, subst), s->is_move);
 
     if (auto* s = dynamic_cast<const IndexAssignStmt*>(&stmt))
         return std::make_unique<IndexAssignStmt>(

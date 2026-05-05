@@ -185,9 +185,18 @@ std::string Codegen::emitExpr(const Expr& expr) {
             }
         }
 
-        // non-anon-tuple bases only handled for VarExpr roots below
+        // non-anon-tuple bases only handled for VarExpr roots below.
+        // Generic fallback for non-VarExpr bases (e.g. obj.arr_[i],
+        // arr[i].field where the chain ends in a non-tuple slid).
         auto* ve = dynamic_cast<const VarExpr*>(cur);
-        if (!ve) error(std::string("complex array base not supported"));
+        if (!ve) {
+            auto lv = resolveLvalue(expr);
+            if (slid_info_.count(lv.type)) return lv.addr;
+            std::string tmp = newTmp();
+            out_ << "    " << tmp << " = load " << llvmType(lv.type)
+                 << ", ptr " << lv.addr << "\n";
+            return tmp;
+        }
 
         // slid op[] dispatch
         {
@@ -452,7 +461,12 @@ std::string Codegen::emitExpr(const Expr& expr) {
                  << ainfo.alloca_reg << ", i32 0, i32 " << flat << "\n";
             return gep; // pointer to the element, no load
         }
-        error(std::string("AddrOf: unsupported operand"));
+        // generic fallback: any lvalue resolveLvalue can handle (chained fields,
+        // post/pre-inc-deref via UnaryExpr, etc.).
+        {
+            auto lv = resolveLvalue(*ao->operand);
+            return lv.addr;
+        }
     }
 
     if (auto* de = dynamic_cast<const DerefExpr*>(&expr)) {
@@ -500,32 +514,6 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string tmp = newTmp();
         out_ << "    " << tmp << " = load " << pointee_llvm << ", ptr " << ptr_reg << "\n";
         return tmp;
-    }
-
-    if (auto* pide = dynamic_cast<const PostIncDerefExpr*>(&expr)) {
-        // ptr++^ — load value at current ptr, then advance ptr
-        auto* ve = dynamic_cast<const VarExpr*>(pide->operand.get());
-        if (!ve) error(std::string("PostIncDerefExpr: only simple pointer variables supported"));
-        auto it = locals_.find(ve->name);
-        if (it == locals_.end())
-            error(std::string("PostIncDerefExpr: undefined variable '" + ve->name + "'"));
-        auto tit = locals_.find(ve->name);
-        if (tit == locals_.end() || !isPtrType(tit->second.type))
-            error(std::string("PostIncDerefExpr: '" + ve->name + "' is not a pointer ([]) type"));
-        std::string pointee_type = tit->second.type.substr(0, tit->second.type.size()-2);
-        std::string pointee_llvm = llvmType(pointee_type);
-        int step = (pide->op == "++") ? 1 : -1;
-        // load current ptr
-        std::string cur_ptr = newTmp();
-        out_ << "    " << cur_ptr << " = load ptr, ptr " << it->second.reg << "\n";
-        // load value at current ptr
-        std::string val = newTmp();
-        out_ << "    " << val << " = load " << pointee_llvm << ", ptr " << cur_ptr << "\n";
-        // advance ptr
-        std::string new_ptr = newTmp();
-        out_ << "    " << new_ptr << " = getelementptr " << pointee_llvm << ", ptr " << cur_ptr << ", i32 " << step << "\n";
-        out_ << "    store ptr " << new_ptr << ", ptr " << it->second.reg << "\n";
-        return val;
     }
 
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
@@ -581,42 +569,17 @@ std::string Codegen::emitExpr(const Expr& expr) {
             out_ << "    " << tmp << " = load " << field_type << ", ptr " << gep << "\n";
             return tmp;
         }
-        // chained indexed rvalue: tuple[idx].field
-        if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(fa->object.get())) {
-            auto* bve = dynamic_cast<const VarExpr*>(ai->base.get());
-            if (!bve)
-                error(std::string("chained indexed FieldAccess: complex base not supported"));
-            auto tit = locals_.find(bve->name);
-            if (tit == locals_.end() || !isAnonTupleType(tit->second.type))
-                error(std::string("chained indexed FieldAccess: '" + bve->name
-                    + "' is not a tuple"));
-            auto elems = anonTupleElems(tit->second.type);
-            int idx;
-            if (!constExprToInt(*ai->index, enum_values_, idx))
-                error(std::string("tuple index must be a constant integer"));
-            if (idx < 0 || idx >= (int)elems.size())
-                error(std::string("tuple index " + std::to_string(idx)
-                    + " out of range (size " + std::to_string(elems.size()) + ")"));
-            const std::string& slid_name = elems[idx];
-            if (!slid_info_.count(slid_name))
-                error(std::string("chained indexed FieldAccess: tuple element "
-                    + std::to_string(idx) + " is not a slid type"));
-            auto& info = slid_info_[slid_name];
-            auto fit = info.field_index.find(fa->field);
-            if (fit == info.field_index.end())
-                error(std::string("unknown field '" + fa->field
-                    + "' on slid '" + slid_name + "'"));
-            int field_idx = fit->second;
-            std::string field_type = llvmType(info.field_types[field_idx]);
-            std::string slot_gep = emitFieldGep(tit->second.type, locals_[bve->name].reg, idx);
-            std::string field_gep = newTmp();
-            out_ << "    " << field_gep << " = getelementptr %struct." << slid_name
-                 << ", ptr " << slot_gep << ", i32 0, i32 " << field_idx << "\n";
+        // generic fallback: any chain resolveLvalue can handle (subsumes the
+        // tuple[idx].field case and previously-erroring shapes like
+        // obj.sub_.field, p++^.field, arr[i].field on a slid array).
+        {
+            auto lv = resolveLvalue(*fa);
+            if (slid_info_.count(lv.type)) return lv.addr;  // slid: callers expect ptr
             std::string tmp = newTmp();
-            out_ << "    " << tmp << " = load " << field_type << ", ptr " << field_gep << "\n";
+            out_ << "    " << tmp << " = load " << llvmType(lv.type)
+                 << ", ptr " << lv.addr << "\n";
             return tmp;
         }
-        error(std::string("complex field access not yet supported"));
     }
 
     if (auto* mc = dynamic_cast<const MethodCallExpr*>(&expr)) {
@@ -1078,35 +1041,14 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 return is_pre ? new_val : old_val;
             }
 
-            // operand's slids type — drives both ptr-vs-scalar dispatch and width
+            // operand's slids type — drives both ptr-vs-scalar dispatch and width.
+            // Generic lvalue resolution covers local var, self-field, FieldAccess,
+            // ArrayIndex, and chained shapes uniformly.
             std::string operand_type;
-
-            // field access via self in a method
-            if (!current_slid_.empty()) {
-                auto* ve = dynamic_cast<const VarExpr*>(u->operand.get());
-                if (ve) {
-                    auto& info = slid_info_[current_slid_];
-                    if (info.field_index.count(ve->name)) {
-                        int idx = info.field_index[ve->name];
-                        std::string gep = newTmp();
-                        std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
-                        out_ << "    " << gep << " = getelementptr %struct." << current_slid_
-                             << ", ptr " << self << ", i32 0, i32 " << idx << "\n";
-                        ptr = gep;
-                        operand_type = info.field_types[idx];
-                    }
-                }
-            }
-
-            // plain local variable
-            if (ptr.empty()) {
-                auto* ve = dynamic_cast<const VarExpr*>(u->operand.get());
-                if (!ve) error(std::string("++/-- requires a variable"));
-                auto it = locals_.find(ve->name);
-                if (it == locals_.end()) error(std::string("undefined variable: " + ve->name));
-                ptr = it->second.reg;
-                auto tit = locals_.find(ve->name);
-                if (tit != locals_.end()) operand_type = tit->second.type;
+            {
+                auto lv = resolveLvalue(*u->operand);
+                ptr = lv.addr;
+                operand_type = lv.type;
             }
 
             // check if the operand is a pointer type ([] — arithmetic allowed)
@@ -2385,18 +2327,6 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
         return "i32";
     }
 
-    // PostIncDerefExpr: ptr++^ — element type of the pointer
-    if (auto* pi = dynamic_cast<const PostIncDerefExpr*>(&expr)) {
-        if (auto* ve = dynamic_cast<const VarExpr*>(pi->operand.get())) {
-            auto tit = locals_.find(ve->name);
-            if (tit != locals_.end()) {
-                std::string t = tit->second.type;
-                if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
-                    return llvmType(t.substr(0, t.size()-2));
-            }
-        }
-        return "i32";
-    }
 
     // array index — elem type
     if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&expr)) {
@@ -2828,13 +2758,6 @@ std::string Codegen::inferSlidType(const Expr& expr) {
         if (!pt.empty() && pt.back() == '^') return pt.substr(0, pt.size()-1);
         return pt;
     }
-    // ptr++^ / ptr--^ → element type
-    if (auto* pid = dynamic_cast<const PostIncDerefExpr*>(&expr)) {
-        std::string pt = inferSlidType(*pid->operand);
-        if (pt.size() >= 2 && pt.substr(pt.size()-2) == "[]") return pt.substr(0, pt.size()-2);
-        if (!pt.empty() && pt.back() == '^') return pt.substr(0, pt.size()-1);
-        return pt;
-    }
     // array index — return type of op[] if base is a slid, else element type of pointer/array
     if (auto* aie = dynamic_cast<const ArrayIndexExpr*>(&expr)) {
         (void)aie;
@@ -2957,6 +2880,11 @@ std::string Codegen::inferSlidType(const Expr& expr) {
             }
         }
         if (ue->op == "-" || ue->op == "~" || ue->op == "!")
+            return inferSlidType(*ue->operand);
+        // pre/post inc/dec — same type as operand (used by DerefExpr / DerefAssign
+        // to derive pointee type when the natural form is DerefExpr(UnaryExpr(post++,...))).
+        if (ue->op == "pre++" || ue->op == "pre--"
+            || ue->op == "post++" || ue->op == "post--")
             return inferSlidType(*ue->operand);
     }
     // sizeof → intptr

@@ -996,7 +996,6 @@ void Codegen::collectStringConstants() {
         }
         if (auto* u = dynamic_cast<const UnaryExpr*>(e))       { collectExpr(u->operand.get(), false); return; }
         if (auto* d = dynamic_cast<const DerefExpr*>(e))       { collectExpr(d->operand.get(), false); return; }
-        if (auto* p = dynamic_cast<const PostIncDerefExpr*>(e)){ collectExpr(p->operand.get(), false); return; }
         if (auto* a = dynamic_cast<const AddrOfExpr*>(e))      { collectExpr(a->operand.get(), false); return; }
         if (auto* tc = dynamic_cast<const TypeConvExpr*>(e))   { collectExpr(tc->operand.get(), false); return; }
         if (auto* pc = dynamic_cast<const PtrCastExpr*>(e))    { collectExpr(pc->operand.get(), false); return; }
@@ -2445,11 +2444,6 @@ std::string Codegen::exprType(const Expr& expr) {
         if (isPtrType(t)) return t.substr(0, t.size() - 2);
         return "";
     }
-    if (auto* pi = dynamic_cast<const PostIncDerefExpr*>(&expr)) {
-        std::string t = exprType(*pi->operand);
-        if (isPtrType(t)) return t.substr(0, t.size() - 2);
-        return "";
-    }
     if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&expr)) {
         std::string t = exprType(*ai->base);
         if (isPtrType(t)) return t.substr(0, t.size() - 2);
@@ -3604,28 +3598,6 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                 return emitExpr(*de->operand);
             }
         }
-        // PostIncDerefExpr of a slid pointer (sa++^): load the ptr, advance the
-        // iterator in-place, return the original (pre-advance) ptr. Mirrors the
-        // DerefExpr arm; needed because emitExpr on PostIncDerefExpr returns a
-        // loaded struct value, which is not what op<-/op= expect.
-        if (auto* pid = dynamic_cast<const PostIncDerefExpr*>(&arg)) {
-            if (auto* ve = dynamic_cast<const VarExpr*>(pid->operand.get())) {
-                auto tit = locals_.find(ve->name);
-                if (tit != locals_.end() && isPtrType(tit->second.type)) {
-                    std::string pointee = tit->second.type.substr(0, tit->second.type.size() - 2);
-                    if (slid_info_.count(pointee)) {
-                        std::string cur = newTmp();
-                        out_ << "    " << cur << " = load ptr, ptr " << locals_.at(ve->name).reg << "\n";
-                        int step = (pid->op == "++") ? 1 : -1;
-                        std::string nxt = newTmp();
-                        out_ << "    " << nxt << " = getelementptr " << llvmType(pointee)
-                             << ", ptr " << cur << ", i32 " << step << "\n";
-                        out_ << "    store ptr " << nxt << ", ptr " << locals_.at(ve->name).reg << "\n";
-                        return cur;
-                    }
-                }
-            }
-        }
         // anon-tuple-ref param: `(t1,...)^`
         std::string tup_inner = param_type.substr(0, param_type.size() - 1);
         if (isAnonTupleType(tup_inner)) {
@@ -3665,6 +3637,23 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
             }
         }
     }
+    // generic lvalue auto-promote for slid / anon-tuple ref params: chained
+    // obj.f_, arr[i], p++^.f_, ptr^.f_, etc. The per-shape arms above cover
+    // the common cases; this catches the rest where resolveLvalue returns
+    // an address whose type matches the callee's expected pointee.
+    if (want_ptr) {
+        std::string inner = param_type.substr(0, param_type.size() - 1);
+        if (slid_info_.count(inner) || isAnonTupleType(inner)) {
+            bool addressable = dynamic_cast<const FieldAccessExpr*>(&arg)
+                || dynamic_cast<const ArrayIndexExpr*>(&arg)
+                || dynamic_cast<const DerefExpr*>(&arg);
+            if (addressable) {
+                auto lv = resolveLvalue(arg);
+                if (lv.type == inner) return lv.addr;
+            }
+        }
+    }
+
     // implicit construction: non-slid value passed to SlidType^ param — find matching op=
     if (want_ptr) {
         std::string slid_name = param_type.substr(0, param_type.size() - 1);

@@ -515,6 +515,18 @@ private:
     // [index] and return {gep_register, slids_elem_type}. Otherwise {"", ""}.
     std::pair<std::string, std::string>
     emitInlineArrayElemPtr(const Expr& base, const Expr& index);
+
+    // Resolved lvalue: an LLVM ptr register holding the address of an
+    // addressable expression, plus the slids-form type at that address.
+    // Single recursive walker, intended to replace per-context resolvers
+    // (DeleteStmt nullify, SwapStmt slot, FieldAssignStmt object, etc.).
+    // Errors on non-addressable shapes — call sites that may have non-lvalue
+    // operands must dispatch on AST kind first.
+    struct Lvalue {
+        std::string addr;   // LLVM ptr register
+        std::string type;   // slids type at that address
+    };
+    Lvalue resolveLvalue(const Expr& e);
     std::string newTmp();
     std::string newLabel(const std::string& prefix);
     std::string uniqueAllocaReg(const std::string& var_name);

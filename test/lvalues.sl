@@ -28,6 +28,22 @@ void mutate_param(int p) {
     __println("mutate_param: p=" + p);
 }
 
+/* Types for the chained / generic lvalue tests at the bottom of main(). */
+S(int x_ = 0) {
+    op=(int v) { x_ = v; }
+    op=(S^ rhs) { x_ = rhs^.x_; }
+    op<-(mutable S^ rhs) {
+        x_ = rhs^.x_;
+        rhs^.x_ = 0;
+    }
+}
+Inner(int x_ = 0) {}
+Outer(Inner i_ = Inner()) {}
+Holder(S inner_ = S()) {}
+Box(int^ p_ = nullptr) {}
+
+int show(S^ s) { return s^.x_; }
+
 int32 main() {
 
     /* variables: local, param, self, inline array */
@@ -61,10 +77,6 @@ int32 main() {
         Pair^ pp = ^p;
         pp^.y_ = 20;
         __println("deref-field: p.y_=" + p.y_);
-
-        slid_tup = (Pair(1, 2), Pair(3, 4));
-        slid_tup[1].x_ = 99;
-        __println("tup-elem-field: slid_tup[1].x_=" + slid_tup[1].x_);
     }
 
     /* index: array, iterator, tuple */
@@ -120,44 +132,17 @@ int32 main() {
         (p1++)^ = 100;
         (p2--)^ = 200;
         __println("paren-inc-deref: arrP=" + arrP[0] + "," + arrP[1] + "," + arrP[2] + "," + arrP[3]);
-
-        int arrQ[4] = (1, 2, 3, 4);
-        int[] q1 = ^arrQ[0];
-        int[] q2 = ^arrQ[3];
-        (q1++)^ <-> (q2--)^;
-        __println("paren-swap: arrQ=" + arrQ[0] + "," + arrQ[1] + "," + arrQ[2] + "," + arrQ[3]);
     }
 
-    /* swap <-> */
+    /* swap <-> — inline-array element. var swap and slid swap are
+       in swap.sl; iterator-with-paren swap is the post-inc-deref form
+       covered there too. */
     {
         __println("-- swap --");
-
-        int a = 1; int b = 2;
-        a <-> b;
-        __println("var: a=" + a + " b=" + b);
 
         int arrS[4] = (1, 2, 3, 4);
         arrS[0] <-> arrS[3];
         __println("inline-arr: arrS=" + arrS[0] + "," + arrS[1] + "," + arrS[2] + "," + arrS[3]);
-
-        Pair pa(1, 2);
-        Pair pb(3, 4);
-        pa <-> pb;
-        __println("slid: pa=(" + pa.x_ + "," + pa.y_ + ") pb=(" + pb.x_ + "," + pb.y_ + ")");
-    }
-
-    /* move <- */
-    {
-        __println("-- move --");
-
-        int[] s = new int[3];
-        s[0] = 1; s[1] = 2; s[2] = 3;
-        int[] d <- s;
-        if (s == nullptr) {
-            __println("s is null after move");
-        }
-        __println("d[0]=" + d[0]);
-        delete d;
     }
 
     /* compound on each lvalue shape */
@@ -205,6 +190,136 @@ int32 main() {
 
         bc = Buffer + "x" + 1 + "y" + 2 + "z" + 3;
         __println("chain bc: count=" + bc.count_ + " last_int=" + bc.last_int_);
+    }
+
+    /* ---------- chained / generic lvalue shapes ---------- */
+
+    /* DeleteStmt nullify on field chain and inline-array slot */
+    {
+        __println("-- delete + nullify chains --");
+
+        Box bx(new int(7));
+        delete bx.p_;
+        bool nb = (bx.p_ == nullptr);
+        __println("box.p_ nulled=" + nb);
+
+        int^ pa[2];
+        pa[0] = new int(1);
+        pa[1] = new int(2);
+        delete pa[0];
+        bool np = (pa[0] == nullptr);
+        __println("pa[0] nulled=" + np);
+        delete pa[1];
+    }
+
+    /* FieldAssign — chained slid field write+read */
+    {
+        __println("-- chained field assign --");
+
+        Outer o;
+        o.i_.x_ = 99;
+        __println("o.i_.x_=" + o.i_.x_);
+    }
+
+    /* FieldAssign — slid array element field */
+    {
+        __println("-- slid array element field --");
+
+        S sa[3];
+        sa[1].x_ = 77;
+        __println("sa[1].x_=" + sa[1].x_);
+    }
+
+    /* IndexAssign — slid array op= / op<- dispatch */
+    {
+        __println("-- slid array op= / op<- --");
+
+        S aa[2];
+        S sc(77);
+        aa[0] = sc;
+        __println("aa[0].x_=" + aa[0].x_);
+
+        S ab[2];
+        S sm(88);
+        ab[0] <- sm;
+        __println("ab[0].x_=" + ab[0].x_);
+        __println("sm.x_ after move=" + sm.x_);
+    }
+
+    /* FieldAssign — post-inc-deref + field */
+    {
+        __println("-- post-inc-deref + field --");
+
+        S ar[3];
+        S[] pp = ^ar[0];
+        pp++^.x_ = 42;
+        __println("ar[0].x_=" + ar[0].x_);
+    }
+
+    /* CompoundAssign on chained shapes */
+    {
+        __println("-- compound chains --");
+
+        Outer oc;
+        oc.i_.x_ = 5;
+        oc.i_.x_ += 7;
+        __println("oc.i_.x_=" + oc.i_.x_);
+
+        S ac[3];
+        ac[1].x_ = 10;
+        ac[1].x_ += 5;
+        __println("ac[1].x_=" + ac[1].x_);
+    }
+
+    /* AddrOf — chained field, post-inc-deref, post-inc-deref+field */
+    {
+        __println("-- addr-of chains --");
+
+        Outer oa;
+        oa.i_.x_ = 1;
+        int^ ra = ^oa.i_.x_;
+        ra^ = 99;
+        __println("via ra: oa.i_.x_=" + oa.i_.x_);
+
+        int ad[3] = (10, 20, 30);
+        int[] pd = ^ad[0];
+        int^ rb = ^(pd++^);
+        rb^ = 99;
+        __println("via rb: ad[0]=" + ad[0]);
+
+        S sf[3];
+        S[] pf = ^sf[0];
+        int^ rc = ^pf++^.x_;
+        rc^ = 42;
+        __println("via rc: sf[0].x_=" + sf[0].x_);
+    }
+
+    /* ++/-- on FieldAccess and ArrayIndex */
+    {
+        __println("-- ++/-- on chains --");
+
+        Counter cn(5);
+        ++cn.v_;
+        __println("++cn.v_: " + cn.v_);
+
+        int ai[3] = (10, 20, 30);
+        ai[1]++;
+        __println("ai[1]++: " + ai[1]);
+    }
+
+    /* Auto-promote chained args to T^ params */
+    {
+        __println("-- auto-promote chains --");
+
+        Holder h;
+        h.inner_.x_ = 42;
+        int g1 = show(h.inner_);
+        __println("show(h.inner_)=" + g1);
+
+        S sh[3];
+        sh[1].x_ = 77;
+        int g2 = show(sh[1]);
+        __println("show(sh[1])=" + g2);
     }
 
     return 0;

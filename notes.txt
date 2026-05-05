@@ -1,6 +1,5 @@
 
-many tests are skipped because the error message sucks.
-give them focused diagnostics.
+^^ interferes with pointer double deref.
 
 test if works as expected:
 x = ^y^;
@@ -12,6 +11,7 @@ then copies them into the tuple.
 revisit for loops.
 some uncharted territory.
 is a loop var reference mutable or const?
+const by default.
 
 int board[8][8];
 for (int x : board) {
@@ -38,6 +38,7 @@ implement complex field access with tuples.
 tuple[1].a_ is not yet supported.
 
 revisit initialization.
+(int, int) pairs[3] = ((1, 2), (3, 4), (5, 6));
 
 test incomplete templates.
 

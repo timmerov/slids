@@ -856,16 +856,13 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
             advance();
             base = make<DerefExpr>(t_start, std::move(base));
         } else if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
-            std::string op = (peek().type == TokenType::kPlusPlus) ? "++" : "--";
+            std::string op = (peek().type == TokenType::kPlusPlus) ? "post++" : "post--";
             advance();
-            // ptr++^ — post-inc/dec then deref: treat as PostIncDerefExpr
-            if (peek().type == TokenType::kBitXor) {
-                advance();
-                base = make<PostIncDerefExpr>(t_start, std::move(base), op);
-            } else {
-                std::string uop = (op == "++") ? "post++" : "post--";
-                base = make<UnaryExpr>(t_start, uop, std::move(base));
-            }
+            // ptr++^ now parses as the natural composition: UnaryExpr(post++)
+            // built here, then the next loop iteration sees `^` and wraps as
+            // DerefExpr. resolveLvalue's DerefExpr arm special-cases the
+            // post-inc/dec composition to preserve OLD-load + advance semantics.
+            base = make<UnaryExpr>(t_start, op, std::move(base));
         } else {
             break;
         }
@@ -1080,29 +1077,9 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     return block;
 }
 
-// Normalize DerefExpr(UnaryExpr("post++"|"post--", VarExpr)) to PostIncDerefExpr,
-// so that paren-wrapped post-inc-deref `(p++)^` produces the same AST as the
-// unparenthesized `p++^`. Caller passes ownership; receives ownership back
-// (possibly the same object if no rewrite was needed).
-static std::unique_ptr<Expr> normalizePostIncDeref(std::unique_ptr<Expr> e) {
-    auto* de = dynamic_cast<DerefExpr*>(e.get());
-    if (!de) return e;
-    auto* ue = dynamic_cast<UnaryExpr*>(de->operand.get());
-    if (!ue || (ue->op != "post++" && ue->op != "post--")) return e;
-    auto* ve = dynamic_cast<VarExpr*>(ue->operand.get());
-    if (!ve) return e;
-    std::string op = (ue->op == "post++") ? "++" : "--";
-    auto var = std::make_unique<VarExpr>(ve->name);
-    var->file_id = ve->file_id; var->tok = ve->tok;
-    auto pid = std::make_unique<PostIncDerefExpr>(std::move(var), op);
-    pid->file_id = ve->file_id; pid->tok = ve->tok;
-    return pid;
-}
-
 std::unique_ptr<Stmt> Parser::buildAssignFromLhs(
         std::unique_ptr<Expr> lhs, std::unique_ptr<Expr> rhs, bool is_move, int op_tok) {
     int t_start = lhs->tok;
-    lhs = normalizePostIncDeref(std::move(lhs));
 
     if (auto* ve = dynamic_cast<VarExpr*>(lhs.get())) {
         std::string name = ve->name;
@@ -1126,10 +1103,6 @@ std::unique_ptr<Stmt> Parser::buildAssignFromLhs(
         }
         return make<AssignStmt>(t_start, name, std::move(rhs), is_move);
     }
-    if (auto* pide = dynamic_cast<PostIncDerefExpr*>(lhs.get())) {
-        return make<PostIncDerefAssignStmt>(t_start,
-            std::move(pide->operand), pide->op, std::move(rhs), is_move);
-    }
     if (auto* de = dynamic_cast<DerefExpr*>(lhs.get())) {
         return make<DerefAssignStmt>(t_start, std::move(de->operand), std::move(rhs), is_move);
     }
@@ -1147,20 +1120,16 @@ std::unique_ptr<Stmt> Parser::buildAssignFromLhs(
 std::unique_ptr<Stmt> Parser::buildSwapFromLhs(
         std::unique_ptr<Expr> lhs, std::unique_ptr<Expr> rhs) {
     int t_start = lhs->tok;
-    lhs = normalizePostIncDeref(std::move(lhs));
-    rhs = normalizePostIncDeref(std::move(rhs));
     return make<SwapStmt>(t_start, std::move(lhs), std::move(rhs));
 }
 
 std::unique_ptr<Stmt> Parser::buildCompoundAssignFromLhs(
         std::unique_ptr<Expr> lhs, const std::string& op,
         std::unique_ptr<Expr> rhs, int op_tok) {
-    lhs = normalizePostIncDeref(std::move(lhs));
     if (!dynamic_cast<VarExpr*>(lhs.get())
         && !dynamic_cast<DerefExpr*>(lhs.get())
         && !dynamic_cast<FieldAccessExpr*>(lhs.get())
-        && !dynamic_cast<ArrayIndexExpr*>(lhs.get())
-        && !dynamic_cast<PostIncDerefExpr*>(lhs.get())) {
+        && !dynamic_cast<ArrayIndexExpr*>(lhs.get())) {
         errorAt(op_tok, "compound assignment requires an lvalue");
     }
     return make<CompoundAssignStmt>(op_tok,

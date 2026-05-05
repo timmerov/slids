@@ -87,7 +87,7 @@ int32 main() {
     __println("nok_a[1]=" + nok_a);
     __println("nok_b[1]=" + nok_b);
 
-    /* side effects */
+    /* side effects — post-inc/dec deref */
     int arr[4] = (100, 200, 300, 400);
     int[] p1 = ^arr[0];
     int[] p2 = ^arr[3];
@@ -98,12 +98,18 @@ int32 main() {
     __println("b1[1]=" + b1);
     __println("b2[1]=" + b2);
 
+    /* side effects — pre-inc/dec deref */
+    p1 = ^arr[3];
+    p2 = ^arr[0];
+    (--p1)^ <-> (++p2)^;
+    bool b1b = (p1 == ^arr[2]);
+    bool b2b = (p2 == ^arr[1]);
+    __println("arr[400,300,200,100]=(" + arr[0] + "," + arr[1] + "," + arr[2] + "," + arr[3] + ")");
+    __println("b1b[1]=" + b1b);
+    __println("b2b[1]=" + b2b);
+
     /* ----------------------------------------------------------
-       SwapStmt lvalue gap — POSITIVE tests.
-       These are the spec for the next compiler change. They fail
-       to compile today with "SwapStmt: unsupported lvalue shape";
-       the codegen fix grows resolveLvalue's bare-DerefExpr arm
-       and they go green.
+       SwapStmt lvalue shapes — bare deref, mixed post-inc, field.
        ---------------------------------------------------------- */
 
     /* bare ptr^ <-> ptr^ — value swap through two int^ references. */
@@ -152,20 +158,6 @@ int32 main() {
        NEGATIVE tests — //-EXPECT-ERROR markers drive
        test/run_negatives.sh.
        ---------------------------------------------------------- */
-
-    /* deferred — parser does not yet accept (--p1)^ / (++p2)^ as swap operands.
-       separate from the SwapStmt codegen fix above. */
-    //-EXPECT-ERROR-DEFERRED: parser does not yet accept (--p1)^ / (++p2)^ as swap operands
-    //{
-    //    p1 = ^arr[3];
-    //    p2 = ^arr[0];
-    //    (--p1)^ <-> (++p2)^;
-    //    bool b1b = (p1 == ^arr[2]);
-    //    bool b2b = (p2 == ^arr[1]);
-    //    __println("arr[400,300,200,100]=(" + arr[0] + "," + arr[1] + "," + arr[2] + "," + arr[3] + ")");
-    //    __println("b1b[1]=" + b1b);
-    //    __println("b2b[1]=" + b2b);
-    //}
 
     /* always-error — type mismatch (int vs bool). */
     //-EXPECT-ERROR: SwapStmt: type mismatch
