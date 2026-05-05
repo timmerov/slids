@@ -268,10 +268,13 @@ String (
 
     /* reverse the order of the characters. */
     void reverse() {
-        lo = storage_;
-        hi = storage_ + size_ - 1;
-        while (lo < hi) {
-            lo++^ <-> hi--^;
+        for (
+            lo = storage_,
+            hi = storage_ + size_ - 1
+        ) (lo < hi) {
+            ++lo; --hi;
+        } {
+            lo^ <-> hi^;
         }
     }
 
@@ -383,14 +386,7 @@ void println(String^ s) {
 /* return length of null terminated string. */
 intptr strlen(char[] s) {
     intptr len = 0;
-    while () {
-        char ch = s^;
-        if (ch == 0) {
-            break;
-        }
-        ++s;
-        ++len;
-    }
+    for () (s^) { ++s; ++len; } {}
     return len;
 }
 
@@ -399,12 +395,9 @@ void strcpy(
     char[] dst,
     char[] src
 ) {
-    while () {
-        ch = src++^;
-        dst++^ = ch;
-        if (ch == 0) {
-            break;
-        }
+    for (ch = 'A') (ch) { ++src; ++dst; } {
+        ch = src^;
+        dst^ = ch;
     }
 }
 

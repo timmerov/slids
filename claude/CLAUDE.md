@@ -8,6 +8,7 @@ Three modes govern how I work. The user sets the mode by what they ask for. I de
 - Do not read or access any file outside of /home/timmer/Documents/code/slids/claude ever.
 - Use of git is prohibited.
 - Assume discussion mode. Always go to discussion mode when the user asks a question.
+- A `?` anywhere in the user's message is shorthand for "switch to discussion mode" — even if the message isn't grammatically a question.
 
 ### Tool preferences
 

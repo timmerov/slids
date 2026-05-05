@@ -98,17 +98,82 @@ int32 main() {
     __println("b1[1]=" + b1);
     __println("b2[1]=" + b2);
 
-    /* pre-increment doesn't yet parse correctly */
-    /*
-    p1 = ^arr[3];
-    p2 = ^arr[0];
-    (--p1)^ <-> (++p2)^;
-    b1 = (p1 == ^arr[2]);
-    b2 = (p2 == ^arr[1]);
-    __println("arr[400,300,200,100]=(" + arr[0] + "," + arr[1] + "," + arr[2] + "," + arr[3] + ")");
-    __println("b1[1]=" + b1);
-    __println("b2[1]=" + b2);
-    */
+    /* ----------------------------------------------------------
+       SwapStmt lvalue gap — POSITIVE tests.
+       These are the spec for the next compiler change. They fail
+       to compile today with "SwapStmt: unsupported lvalue shape";
+       the codegen fix grows resolveLvalue's bare-DerefExpr arm
+       and they go green.
+       ---------------------------------------------------------- */
+
+    /* bare ptr^ <-> ptr^ — value swap through two int^ references. */
+    {
+        int xa = 1;
+        int xb = 2;
+        int^ ra = ^xa;
+        int^ rb = ^xb;
+        ra^ <-> rb^;
+        __println("xa[2]=" + xa);
+        __println("xb[1]=" + xb);
+    }
+
+    /* same shape, char[] iterators — the string.sl reverse() pattern. */
+    {
+        char buf[4] = ('a', 'b', 'c', 'd');
+        char[] lo = ^buf[0];
+        char[] hi = ^buf[3];
+        lo^ <-> hi^;
+        __println("buf[dbca]=(" + buf[0] + "," + buf[1] + "," + buf[2] + "," + buf[3] + ")");
+    }
+
+    /* mixed PostIncDeref + bare DerefExpr — one side advances, other doesn't. */
+    {
+        int arr2[2] = (1, 2);
+        int[] ia = ^arr2[0];
+        int[] ib = ^arr2[1];
+        ia++^ <-> ib^;
+        __println("arr2[2,1]=(" + arr2[0] + "," + arr2[1] + ")");
+        bool ma = (ia == ^arr2[1]);
+        bool mb = (ib == ^arr2[1]);
+        __println("ma[1]=" + ma);
+        __println("mb[1]=" + mb);
+    }
+
+    /* obj.x <-> obj.y on a value local — direct FieldAccessExpr.
+       falls out of the recursive resolver. */
+    {
+        Swap sw(7, 9, nullptr);
+        sw.a_ <-> sw.b_;
+        __println("sw.a_[9]=" + sw.a_);
+        __println("sw.b_[7]=" + sw.b_);
+    }
+
+    /* ----------------------------------------------------------
+       NEGATIVE tests — //-EXPECT-ERROR markers drive
+       test/run_negatives.sh.
+       ---------------------------------------------------------- */
+
+    /* deferred — parser does not yet accept (--p1)^ / (++p2)^ as swap operands.
+       separate from the SwapStmt codegen fix above. */
+    //-EXPECT-ERROR-DEFERRED: parser does not yet accept (--p1)^ / (++p2)^ as swap operands
+    //{
+    //    p1 = ^arr[3];
+    //    p2 = ^arr[0];
+    //    (--p1)^ <-> (++p2)^;
+    //    bool b1b = (p1 == ^arr[2]);
+    //    bool b2b = (p2 == ^arr[1]);
+    //    __println("arr[400,300,200,100]=(" + arr[0] + "," + arr[1] + "," + arr[2] + "," + arr[3] + ")");
+    //    __println("b1b[1]=" + b1b);
+    //    __println("b2b[1]=" + b2b);
+    //}
+
+    /* always-error — type mismatch (int vs bool). */
+    //-EXPECT-ERROR: SwapStmt: type mismatch
+    //{
+    //    int xv = 1;
+    //    bool bv = true;
+    //    xv <-> bv;
+    //}
 
     return 0;
 }

@@ -16,7 +16,6 @@ int32 main() {
     String s2 = s1;
     println(s2);
 
-    /*
     /* assignment from character. */
     String s3 = 'X';
     println(s3);
@@ -88,7 +87,6 @@ int32 main() {
     /* slicing */
     String s7 = s2.slice(7, 5);
     println(String + "s7<World>=" + s7);
-    */
 
     return 0;
 }
