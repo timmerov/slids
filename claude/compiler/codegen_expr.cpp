@@ -1535,7 +1535,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string left_llvm  = exprLlvmType(*b->left);
         std::string right_llvm = exprLlvmType(*b->right);
 
-        // reference (^) type restrictions: only == and != are allowed
+        // pointer ([]) and reference (^) type restrictions.
+        // Order: cross (ptr × ref) is most specific, then ref-only.
         if (left_llvm == "ptr" || right_llvm == "ptr") {
             auto getVarSlidsType = [&](const Expr& e) -> std::string {
                 if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
@@ -1548,11 +1549,38 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string rslids = getVarSlidsType(*b->right);
             bool left_ref  = isRefType(lslids);
             bool right_ref = isRefType(rslids);
+            bool left_iter = isPtrType(lslids);
+            bool right_iter = isPtrType(rslids);
+
+            static const std::set<std::string> arith_ops_pr =
+                {"+","-","*","/","%","&","|","^","<<",">>"};
+            static const std::set<std::string> ord_ops_pr = {"<","<=",">",">="};
+
+            // Cross: one pointer ([]) and one reference (^). Allow == / != only.
+            bool cross = (left_iter && right_ref) || (left_ref && right_iter);
+            if (cross) {
+                const std::string& iter_t = left_iter ? lslids : rslids;
+                const std::string& ref_t  = left_ref  ? lslids : rslids;
+                if (b->op != "==" && b->op != "!=") {
+                    if (ord_ops_pr.count(b->op))
+                        error(std::string("'" + b->op + "' between pointer '" + iter_t
+                            + "' and reference '" + ref_t
+                            + "' is not allowed (use '==' or '!=')"));
+                    if (arith_ops_pr.count(b->op))
+                        error(std::string("'" + b->op + "' between pointer '" + iter_t
+                            + "' and reference '" + ref_t + "' is not allowed"));
+                }
+            }
+            // Reference-only: split arithmetic vs ordered-comparison wording.
             if (left_ref || right_ref) {
-                if (b->op != "==" && b->op != "!=")
+                const std::string& which = left_ref ? lslids : rslids;
+                if (arith_ops_pr.count(b->op))
+                    error(std::string("'" + b->op + "' on reference '" + which
+                        + "': arithmetic on references is not allowed (use a pointer '[]' type)"));
+                if (ord_ops_pr.count(b->op))
                     error(std::string("operator '" + b->op + "' is not allowed on reference type '"
-                        + (left_ref ? lslids : rslids) + "': references only support '==' and '!='"));
-                // == and != require same base type (strip either ^ or [] suffix)
+                        + which + "': references only support '==' and '!='"));
+                // == / != require same base type (strip either ^ or [] suffix).
                 auto refBase = [](const std::string& t) -> std::string {
                     if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return t.substr(0, t.size()-2);
                     if (!t.empty() && t.back() == '^') return t.substr(0, t.size()-1);

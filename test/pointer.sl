@@ -83,7 +83,7 @@ int32 main() {
     of the same type.
     */
     char[] not_int_ptr = nullptr;
-    //-EXPECT-ERROR-DEFERRED: char[] - int[] subtraction not focused as a typed-pointer-mismatch error
+    //-EXPECT-ERROR: pointer subtraction requires same pointee type
     //diff = not_int_ptr - ptr;
     //-EXPECT-ERROR: pointer comparison requires same pointee type
     //bool cond = (not_int_ptr == ptr);
@@ -98,15 +98,15 @@ int32 main() {
     //-EXPECT-ERROR: pointer comparison requires same pointee type
     //bool cond = (not_int_ptr >= ptr);
 
-    //-EXPECT-ERROR: pointer + pointer is not allowed
+    //-EXPECT-ERROR: '+=' between two pointer operands
     //ptr += ptr;
-    //-EXPECT-ERROR-DEFERRED: ptr -= ptr not focused as a typed-pointer error
+    //-EXPECT-ERROR: '-=' between two pointer operands
     //ptr -= ptr;
-    //-EXPECT-ERROR-DEFERRED: ptr *= ptr not focused as a typed-pointer error
+    //-EXPECT-ERROR: '*=' between two pointer operands
     //ptr *= ptr;
-    //-EXPECT-ERROR-DEFERRED: ptr /= ptr not focused as a typed-pointer error
+    //-EXPECT-ERROR: '/=' between two pointer operands
     //ptr /= ptr;
-    //-EXPECT-ERROR-DEFERRED: ptr %= ptr not focused as a typed-pointer error
+    //-EXPECT-ERROR: '%=' between two pointer operands
     //ptr %= ptr;
 
     void^ void_ptr = other;
@@ -115,7 +115,7 @@ int32 main() {
     other = <int[]> void_ptr;
     __println("int^ = int[] void^ pass");
 
-    //-EXPECT-ERROR-DEFERRED: cross-type pointer assign char[] → int[] not focused as a typed-pointer error
+    //-EXPECT-ERROR: cannot initialize 'int[]' from value of type 'char[]'
     //ptr = not_int_ptr;
 
     /* reference tests. ^ is a reference: no arithmetic. */
@@ -162,15 +162,15 @@ int32 main() {
     //++ref;
     //-EXPECT-ERROR: arithmetic on references is not allowed
     //--ref;
-    //-EXPECT-ERROR-DEFERRED: ref += 1 — not focused as a reference-arithmetic error
+    //-EXPECT-ERROR: arithmetic on references is not allowed
     //ref += 1;
-    //-EXPECT-ERROR-DEFERRED: ref -= 1 — not focused as a reference-arithmetic error
+    //-EXPECT-ERROR: arithmetic on references is not allowed
     //ref -= 1;
-    //-EXPECT-ERROR-DEFERRED: ref = ref + 1 — not focused as a reference-arithmetic error
+    //-EXPECT-ERROR: arithmetic on references is not allowed
     //ref = ref + 1;
-    //-EXPECT-ERROR-DEFERRED: ref = ref - 1 — not focused as a reference-arithmetic error
+    //-EXPECT-ERROR: arithmetic on references is not allowed
     //ref = ref - 1;
-    //-EXPECT-ERROR-DEFERRED: ref - ref2 — not focused as a reference-arithmetic error
+    //-EXPECT-ERROR: arithmetic on references is not allowed
     //ref = ref - ref2;
     //-EXPECT-ERROR: references only support '==' and '!='
     //bool rcond = (ref < ref2);
@@ -211,29 +211,29 @@ int32 main() {
 
     //-EXPECT-ERROR: references cannot promote to iterators
     //ptr = ref;
-    //-EXPECT-ERROR-DEFERRED: ptr < ref — pointer/reference cross-comparison not focused yet
+    //-EXPECT-ERROR: '<' between pointer 'int[]' and reference 'int^'
     //bool hcond = (ptr < ref);
-    //-EXPECT-ERROR-DEFERRED: ptr <= ref — pointer/reference cross-comparison not focused yet
+    //-EXPECT-ERROR: '<=' between pointer 'int[]' and reference 'int^'
     //bool hcond = (ptr <= ref);
-    //-EXPECT-ERROR-DEFERRED: ptr > ref — pointer/reference cross-comparison not focused yet
+    //-EXPECT-ERROR: '>' between pointer 'int[]' and reference 'int^'
     //bool hcond = (ptr > ref);
-    //-EXPECT-ERROR-DEFERRED: ptr >= ref — pointer/reference cross-comparison not focused yet
+    //-EXPECT-ERROR: '>=' between pointer 'int[]' and reference 'int^'
     //bool hcond = (ptr >= ref);
-    //-EXPECT-ERROR-DEFERRED: ref < ptr — pointer/reference cross-comparison not focused yet
+    //-EXPECT-ERROR: '<' between pointer 'int[]' and reference 'int^'
     //bool hcond = (ref < ptr);
-    //-EXPECT-ERROR-DEFERRED: ref <= ptr — pointer/reference cross-comparison not focused yet
+    //-EXPECT-ERROR: '<=' between pointer 'int[]' and reference 'int^'
     //bool hcond = (ref <= ptr);
-    //-EXPECT-ERROR-DEFERRED: ref > ptr — pointer/reference cross-comparison not focused yet
+    //-EXPECT-ERROR: '>' between pointer 'int[]' and reference 'int^'
     //bool hcond = (ref > ptr);
-    //-EXPECT-ERROR-DEFERRED: ref >= ptr — pointer/reference cross-comparison not focused yet
+    //-EXPECT-ERROR: '>=' between pointer 'int[]' and reference 'int^'
     //bool hcond = (ref >= ptr);
-    //-EXPECT-ERROR-DEFERRED: ptr += ref — pointer/reference cross-arith not focused yet
+    //-EXPECT-ERROR: '+' between pointer 'int[]' and reference 'int^'
     //ptr += ref;
-    //-EXPECT-ERROR-DEFERRED: ptr -= ref — pointer/reference cross-arith not focused yet
+    //-EXPECT-ERROR: '-' between pointer 'int[]' and reference 'int^'
     //ptr -= ref;
-    //-EXPECT-ERROR-DEFERRED: ptr = ptr + ref — pointer/reference cross-arith not focused yet
+    //-EXPECT-ERROR: '+' between pointer 'int[]' and reference 'int^'
     //ptr = ptr + ref;
-    //-EXPECT-ERROR-DEFERRED: ptr = ptr - ref — pointer/reference cross-arith not focused yet
+    //-EXPECT-ERROR: '-' between pointer 'int[]' and reference 'int^'
     //ptr = ptr - ref;
 
     return 0;

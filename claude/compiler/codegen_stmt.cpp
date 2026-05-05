@@ -1309,6 +1309,25 @@ void Codegen::emitStmt(const Stmt& stmt) {
         };
         resolveAddr();
 
+        // Pointer LHS with pointer RHS: arithmetic compound-assigns are not
+        // a pointer-producing operation. Catch all five (+ - * / %) here so
+        // the compound family has a single focused diagnostic instead of
+        // falling into the per-op BinaryExpr arms (which mix wordings and
+        // miss '-=' entirely, since ptr - ptr is a valid intptr expression).
+        if (isPtrType(slids_type)) {
+            std::string rhs_type;
+            if (auto* ve = dynamic_cast<const VarExpr*>(cas->rhs.get())) {
+                auto tit = locals_.find(ve->name);
+                if (tit != locals_.end()) rhs_type = tit->second.type;
+            }
+            if (isPtrType(rhs_type)) {
+                static const std::set<std::string> bad = {"+","-","*","/","%"};
+                if (bad.count(cas->op))
+                    error(std::string("'" + cas->op + "=' between two pointer operands "
+                        "is not allowed (result is not a pointer)"));
+            }
+        }
+
         if (!slids_type.empty() && slid_info_.count(slids_type) && !addr.empty()) {
             std::string compound_base = slids_type + "__op" + cas->op + "=";
             std::string mangled = resolveSingleArgOverload(compound_base, *cas->rhs);

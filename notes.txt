@@ -1,4 +1,7 @@
 
+many tests are skipped because the error message sucks.
+give them focused diagnostics.
+
 test if works as expected:
 x = ^y^;
 
