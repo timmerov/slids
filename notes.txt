@@ -137,6 +137,38 @@ self is always mutable.
 we might want to be able to make self const.
 notes on this are in future directory.
 
+more const correctness:
+alias ConstString = <const> String;
+<const> looks like a reinterpretation pointer cast.
+auto-generates a class level view of string
+but things begin returns a const reference.
+and methods that modify self are hidden or
+trip a compile error.
+
+more const correctness:
+mutable/const-ness is preserved through normal
+pointer casting.
+it can be changed via casts:
+const_ptr = <const> mutable_ptr;
+mutable_ptr = <mutable> const_ptr;
+no cast needed safe direction:
+const_ptr = mutable_ptr;
+compile error unsafe directin:
+mutable_ptr = const_ptr;
+chained not integrated:
+int_ptr = <const> <int[]> void_ptr;
+
+more const correctness:
+string.slh:
+import string.const.slh;
+since the format is <same_name>.const.slh the file
+is skipped if it doesn't exist.
+string.sl:
+transport string.slh;
+writes string.const.slh to the transport directory?
+then a packager can combine string.slh and string.const.slh
+into the string.slh released to the public.
+
 namespaces:
 somewhat implemented.
     Math(
