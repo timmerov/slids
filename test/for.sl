@@ -339,7 +339,7 @@ int32 main() {
     }
     __println();
 
-    //-EXPECT-ERROR-DEFERRED: heterogeneous tuple element-typing not validated as a focused diagnostic
+    //-EXPECT-ERROR: variable index on heterogeneous tuple
     //for (x : (1, 1, 2, "Hello")) {
     //    __println("compile error: tuple must be homogenous");
     //}

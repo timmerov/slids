@@ -168,15 +168,15 @@ int32 main() {
     tuple = tuple2;
     __println("tuple = (" + tuple[0] + "," + tuple[1] + "," + tuple[2] + ")");
 
-    //-EXPECT-ERROR-DEFERRED: 5-element tuple literal into 3-element local — error wording not focused yet
+    //-EXPECT-ERROR: 5 values but 'tuple' has 3 elements
     //tuple = (1, 2, 3, 4, 5);
-    //-EXPECT-ERROR-DEFERRED: heterogeneous tuple literal — error wording not focused yet
+    //-EXPECT-ERROR: cannot assign 'char[]' to tuple element 1 of type 'int'
     //tuple = (1, "Hello", 3);
     big_tuple = (1, 2, 3, 4, 5);
-    //-EXPECT-ERROR-DEFERRED: 5-element tuple var into 3-element local — error wording not focused yet
+    //-EXPECT-ERROR: cannot assign '(int,int,int,int,int)' to tuple variable 'tuple' of type '(int,int,int)'
     //tuple = big_tuple;
     wrong_tuple = (1, "Hello", 3);
-    //-EXPECT-ERROR-DEFERRED: heterogeneous tuple var assignment — error wording not focused yet
+    //-EXPECT-ERROR: cannot assign '(int,char[],int)' to tuple variable 'tuple' of type '(int,int,int)'
     //tuple = wrong_tuple;
 
     /* destructuring. */

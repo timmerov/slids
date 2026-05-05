@@ -158,7 +158,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
                         bool homog = !elems.empty();
                         for (auto& t : elems) if (t != elems[0]) { homog = false; break; }
                         if (!homog)
-                            error(std::string("tuple index must be a constant integer"));
+                            error(std::string("variable index on heterogeneous tuple '"
+                                + cur_type + "' is not allowed: variable index requires all elements to have the same type"));
                         std::string elem_t = elems[0];
                         std::string elem_llvm = llvmType(elem_t);
                         std::string idx_val = emitExpr(*indices[level]);
@@ -382,7 +383,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
                             bool homog = !elems.empty();
                             for (auto& t : elems) if (t != elems[0]) { homog = false; break; }
                             if (!homog)
-                                error(std::string("AddrOf: tuple index must be a constant integer"));
+                                error(std::string("AddrOf: variable index on heterogeneous tuple '"
+                                    + cur_type + "' is not allowed"));
                             std::string elem_t = elems[0];
                             std::string elem_llvm = llvmType(elem_t);
                             std::string idx_val = emitExpr(*indices[level]);
