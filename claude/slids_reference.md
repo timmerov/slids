@@ -1147,8 +1147,8 @@ int x = 42;
 int^ ptr = ^x;        // ptr points to x
 ptr^ = 7;             // x is now 7
 
-int^ ^ ptrptr = ^ptr; // ptrptr points to ptr
-ptrptr^ ^ = 3;        // x is now 3
+int^^ ptrptr = ^ptr;  // ptrptr points to ptr
+ptrptr^^ = 3;         // x is now 3
 print(x);             // prints 3
 
 // member access through pointer

@@ -7,6 +7,39 @@
 #include <sstream>
 #include <map>
 
+// Tokens that can begin an expression. Used by parsePostfix to disambiguate
+// postfix-^ / postfix-^^ from binary-^ / binary-^^: if the token after a `^`
+// (or `^^`) can start an expression, leave the operator for the binary loop;
+// otherwise consume it as postfix dereference.
+//
+// Tokens with both prefix and postfix forms (++, --) or with binary forms that
+// compete with postfix-^ (+, -) are intentionally excluded: postfix wins, and
+// authors parenthesize for the prefix reading. kBitXor is also excluded so
+// runs of `^` (lexer rule 1) all consume as postfix derefs.
+static bool isOperandStartingToken(TokenType t) {
+    switch (t) {
+        case TokenType::kIdentifier:
+        case TokenType::kIntLiteral:
+        case TokenType::kUintLiteral:
+        case TokenType::kCharLiteral:
+        case TokenType::kFloatLiteral:
+        case TokenType::kStringLiteral:
+        case TokenType::kLParen:
+        case TokenType::kNot:
+        case TokenType::kBitNot:
+        case TokenType::kHash:
+        case TokenType::kNew:
+        case TokenType::kSelf:
+        case TokenType::kNullptr:
+        case TokenType::kSizeof:
+        case TokenType::kTrue:
+        case TokenType::kFalse:
+            return true;
+        default:
+            return false;
+    }
+}
+
 Parser::Parser(SourceMap& sm, int file_id, std::vector<Token> tokens,
                std::string source_dir,
                std::vector<std::string> import_paths,
@@ -289,8 +322,10 @@ bool Parser::isVarDeclLookahead() const {
         if (i >= (int)tokens_.size() || tokens_[i].type != TokenType::kGt) return false;
         i++;
     }
-    // optional ^ or []
-    if (i < (int)tokens_.size() && tokens_[i].type == TokenType::kBitXor) i++;
+    // optional ^, ^^, or []
+    if (i < (int)tokens_.size()
+        && (tokens_[i].type == TokenType::kBitXor
+         || tokens_[i].type == TokenType::kXorXor)) i++;
     else if (i + 1 < (int)tokens_.size()
              && tokens_[i].type == TokenType::kLBracket
              && tokens_[i+1].type == TokenType::kRBracket) i += 2;
@@ -446,6 +481,7 @@ bool Parser::isTemplateCallLookahead() const {
                || isUserTypeName(ti)
                || ti.type == TokenType::kComma
                || ti.type == TokenType::kBitXor
+               || ti.type == TokenType::kXorXor
                || ti.type == TokenType::kLBracket
                || ti.type == TokenType::kRBracket;
         if (!ok) return false;
@@ -466,6 +502,7 @@ bool Parser::isInstantiationLookahead() const {
         bool ok = isTypeName(ti) || isUserTypeName(ti)
                || ti.type == TokenType::kComma
                || ti.type == TokenType::kBitXor
+               || ti.type == TokenType::kXorXor
                || ti.type == TokenType::kLBracket
                || ti.type == TokenType::kRBracket;
         if (!ok) return false;
@@ -496,6 +533,7 @@ bool Parser::isTemplateTypeArgLookahead() const {
         bool ok = isTypeName(ti) || isUserTypeName(ti)
                || ti.type == TokenType::kComma
                || ti.type == TokenType::kBitXor
+               || ti.type == TokenType::kXorXor
                || ti.type == TokenType::kLBracket
                || ti.type == TokenType::kRBracket;
         if (!ok) return false;
@@ -523,6 +561,7 @@ std::string Parser::parseTypeName() {
         // fall through to the trailing ^/[] loop below
         while (true) {
             if (peek().type == TokenType::kBitXor) { advance(); base += "^"; }
+            else if (peek().type == TokenType::kXorXor) { advance(); base += "^^"; }
             else if (peek().type == TokenType::kLBracket
                        && pos_ + 1 < (int)tokens_.size()
                        && tokens_[pos_ + 1].type == TokenType::kRBracket) {
@@ -568,6 +607,9 @@ std::string Parser::parseTypeName() {
         if (peek().type == TokenType::kBitXor) {
             advance();
             base += "^";
+        } else if (peek().type == TokenType::kXorXor) {
+            advance();
+            base += "^^";
         } else if (peek().type == TokenType::kLBracket
                    && pos_ + 1 < (int)tokens_.size()
                    && tokens_[pos_ + 1].type == TokenType::kRBracket) {
@@ -845,16 +887,20 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
             }
         } else if (peek().type == TokenType::kBitXor) {
             // postfix ^ is dereference only when NOT followed by an expression operand
-            // (if followed by identifier/literal/lparen it's binary XOR, handled by parseBitXor)
+            // (if followed by an operand-starter it's binary XOR, handled by parseBitXor)
             int next = pos_ + 1;
             TokenType ntt = (next < (int)tokens_.size()) ? tokens_[next].type : TokenType::kEof;
-            bool next_is_operand =
-                ntt == TokenType::kIdentifier || ntt == TokenType::kIntLiteral ||
-                ntt == TokenType::kStringLiteral || ntt == TokenType::kLParen ||
-                ntt == TokenType::kTrue || ntt == TokenType::kFalse;
-            if (next_is_operand) break; // leave ^ for parseBitXor
+            if (isOperandStartingToken(ntt)) break; // leave ^ for parseBitXor
             advance();
             base = make<DerefExpr>(t_start, std::move(base));
+        } else if (peek().type == TokenType::kXorXor) {
+            // postfix ^^ is double-dereference when NOT followed by an operand-starter
+            // (if followed by an operand-starter it's binary logical XOR, handled by parseExpr)
+            int next = pos_ + 1;
+            TokenType ntt = (next < (int)tokens_.size()) ? tokens_[next].type : TokenType::kEof;
+            if (isOperandStartingToken(ntt)) break; // leave ^^ for parseExpr
+            advance();
+            base = make<DerefExpr>(t_start, make<DerefExpr>(t_start, std::move(base)));
         } else if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
             std::string op = (peek().type == TokenType::kPlusPlus) ? "post++" : "post--";
             advance();
@@ -1368,7 +1414,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         }
                     }
                     if (i < (int)tokens_.size()
-                        && tokens_[i].type == TokenType::kBitXor) {
+                        && (tokens_[i].type == TokenType::kBitXor
+                         || tokens_[i].type == TokenType::kXorXor)) {
                         i++;
                     } else if (i + 1 < (int)tokens_.size()
                             && tokens_[i].type == TokenType::kLBracket
@@ -2468,7 +2515,8 @@ SlidDef Parser::parseSlidDef() {
             if (!(isTypeName(t0) || isUserTypeName(t0))) return false;
             int name_pos = base + 1;
             while (name_pos < (int)tokens_.size()) {
-                if (tokens_[name_pos].type == TokenType::kBitXor) {
+                if (tokens_[name_pos].type == TokenType::kBitXor
+                    || tokens_[name_pos].type == TokenType::kXorXor) {
                     name_pos++;
                 } else if (tokens_[name_pos].type == TokenType::kLBracket
                            && name_pos + 1 < (int)tokens_.size()

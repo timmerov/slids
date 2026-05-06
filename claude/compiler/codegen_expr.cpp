@@ -507,6 +507,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
                         ? ot.substr(0, ot.size()-2)
                         : ot.substr(0, ot.size()-1);
                     pointee_llvm = llvmType(pointee_type);
+                } else if (!ot.empty()) {
+                    errorAtNode(*de->operand, "cannot dereference value of type '"
+                        + ot + "': only reference (^) and pointer ([]) types can be dereferenced");
                 }
             }
         }
@@ -1155,10 +1158,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string val = emitExpr(*u->operand);
         std::string tmp = newTmp();
         if (u->op == "!") {
-            std::string val_llvm = exprLlvmType(*u->operand);
-            out_ << "    " << tmp << " = icmp eq " << val_llvm << " " << val << ", 0\n";
+            std::string truthy = emitToBool(val, exprLlvmType(*u->operand));
+            std::string negated = newTmp();
+            out_ << "    " << negated << " = xor i1 " << truthy << ", true\n";
             std::string tmp2 = newTmp();
-            out_ << "    " << tmp2 << " = zext i1 " << tmp << " to i32\n";
+            out_ << "    " << tmp2 << " = zext i1 " << negated << " to i32\n";
             return tmp2;
         }
         if (u->op == "~") {
@@ -1258,9 +1262,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string result_ptr = newTmp() + "_sc";
             out_ << "    " << result_ptr << " = alloca i32\n";
             std::string left_val = emitExpr(*b->left);
-            std::string left_bool = newTmp();
-            std::string left_type = exprLlvmType(*b->left);
-            out_ << "    " << left_bool << " = icmp ne " << left_type << " " << left_val << ", 0\n";
+            std::string left_bool = emitToBool(left_val, exprLlvmType(*b->left));
             std::string eval_right = newLabel("sc_right");
             std::string done       = newLabel("sc_done");
 
@@ -1287,9 +1289,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 emitPrePass(*b->right);
             }
             std::string right_val = emitExpr(*b->right);
-            std::string right_bool = newTmp();
-            std::string right_type = exprLlvmType(*b->right);
-            out_ << "    " << right_bool << " = icmp ne " << right_type << " " << right_val << ", 0\n";
+            std::string right_bool = emitToBool(right_val, exprLlvmType(*b->right));
             if (right_is_phrase) flushPostIncQueue();
             std::string right_int = newTmp();
             if (b->op == "^^") {
@@ -2576,6 +2576,18 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
     return "i32";
 }
 
+std::string Codegen::emitToBool(const std::string& val, const std::string& llvm_type) {
+    std::string b = newTmp();
+    if (llvm_type == "ptr") {
+        out_ << "    " << b << " = icmp ne ptr " << val << ", null\n";
+    } else if (llvm_type == "float" || llvm_type == "double") {
+        out_ << "    " << b << " = fcmp une " << llvm_type << " " << val << ", 0.0\n";
+    } else {
+        out_ << "    " << b << " = icmp ne " << llvm_type << " " << val << ", 0\n";
+    }
+    return b;
+}
+
 std::string Codegen::emitCondBool(const Expr& expr) {
     std::string val = emitExpr(expr);
     // comparison/logical ops already produce an i32 0 or 1 via zext —
@@ -2585,14 +2597,7 @@ std::string Codegen::emitCondBool(const Expr& expr) {
         out_ << "    " << cond_bool << " = trunc i32 " << val << " to i1\n";
         return cond_bool;
     }
-    std::string t = exprLlvmType(expr);
-    std::string cond_bool = newTmp();
-    if (t == "ptr") {
-        out_ << "    " << cond_bool << " = icmp ne ptr " << val << ", null\n";
-    } else {
-        out_ << "    " << cond_bool << " = icmp ne " << t << " " << val << ", 0\n";
-    }
-    return cond_bool;
+    return emitToBool(val, exprLlvmType(expr));
 }
 
 // When dst is a pointer (^) or iterator ([]) type, the source expression must
@@ -2931,7 +2936,8 @@ std::string Codegen::inferSlidType(const Expr& expr) {
                         }
             }
         }
-        if (ue->op == "-" || ue->op == "~" || ue->op == "!")
+        if (ue->op == "!") return "bool";
+        if (ue->op == "-" || ue->op == "~")
             return inferSlidType(*ue->operand);
         // pre/post inc/dec — same type as operand (used by DerefExpr / DerefAssign
         // to derive pointee type when the natural form is DerefExpr(UnaryExpr(post++,...))).

@@ -17,6 +17,8 @@ SAMPLES = \
 	incomplete \
 	indexop \
 	inheritance \
+	lexer \
+	logicops \
 	lvalues \
 	macros \
 	math1 math2 \

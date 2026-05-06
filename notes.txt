@@ -1,6 +1,4 @@
 
-^^ interferes with pointer double deref.
-
 test if works as expected:
 x = ^y^;
 

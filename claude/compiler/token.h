@@ -48,6 +48,8 @@ enum class TokenType {
     kVirtual,
     kOp,
     kMutable,
+    kConst,
+    kAlias,
     kEllipsis,
 
     // comparison operators

@@ -214,6 +214,8 @@ Token Lexer::readIdentifierOrKeyword() {
     if (value == "sizeof")   return Token(TokenType::kSizeof,   value);
     if (value == "op")       return Token(TokenType::kOp,       value);
     if (value == "mutable")  return Token(TokenType::kMutable,  value);
+    if (value == "const")    return Token(TokenType::kConst,    value);  // reserved for future use
+    if (value == "alias")    return Token(TokenType::kAlias,    value);
 
     return Token(TokenType::kIdentifier, value);
 }
@@ -319,14 +321,21 @@ std::vector<Token> Lexer::tokenize() {
                     } else if (peek() == '=') { advance(); emit(TokenType::kBitOrEq, "|="); }
                     else                      {            emit(TokenType::kBitOr,   "|");  }
                     break;
-                case '^':
-                    if (peek() == '^') {
-                        advance();
+                case '^': {
+                    // first '^' already consumed; count remaining consecutive '^'s
+                    int n = 1;
+                    while (peek() == '^') { advance(); n++; }
+                    if (n >= 3) {
+                        for (int k = 0; k < n; k++) emit(TokenType::kBitXor, "^");
+                    } else if (n == 2) {
                         if (peek() == '=') { advance(); emit(TokenType::kXorXorEq, "^^="); }
                         else               {            emit(TokenType::kXorXor,   "^^");  }
-                    } else if (peek() == '=') { advance(); emit(TokenType::kBitXorEq, "^="); }
-                    else                      {            emit(TokenType::kBitXor,   "^");  }
+                    } else { // n == 1
+                        if (peek() == '=') { advance(); emit(TokenType::kBitXorEq, "^="); }
+                        else               {            emit(TokenType::kBitXor,   "^");  }
+                    }
                     break;
+                }
                 case '~':
                     emit(TokenType::kBitNot, "~");
                     break;

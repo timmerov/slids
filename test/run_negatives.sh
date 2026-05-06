@@ -103,10 +103,13 @@ for src in "$@"; do
         fi
 
         # produce the temp variant: uncomment lines [body_start..body_end].
+        # the body lines were matched as ^[[:space:]]*// already, so removing
+        # the first `//` yields the original line content (portable across
+        # mawk/gawk/POSIX — sub() backref \1 is gawk-only).
         case_file="$TMPDIR/case_${line_no}.sl"
         awk -v b="$body_start" -v e="$body_end" '
             NR >= b && NR <= e {
-                sub(/^([[:space:]]*)\/\//, "\\1")
+                sub(/\/\//, "")
             }
             { print }
         ' "$src" > "$case_file"

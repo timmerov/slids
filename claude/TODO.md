@@ -65,8 +65,6 @@
 
 - **Destructure-target FieldAccess slots**: `(p.a_, x) = (10, 20);` is rejected by the parser today (TupleDestructureStmt allows only bare names, typed names, or empty slots). Decide whether to extend the spec to allow `obj.field` and `arr[i]` slots; if yes, parser + codegen support is mechanical.
 
-- **`^^` lex collision**: The double-pointer syntax `int^^ pp = ^p; pp^^ = 3;` shown in the reference doc is currently blocked by the lexer treating `^^` as a single logical-XOR token. Workaround in the doc is `int^ ^` (with space). Either keep the workaround permanently and remove the example phrasing, or split `^^` into two tokens at lex and let the parser fold for binary XOR (similar to how some languages handle `>>` in templates).
-
 - **`__println` chars-as-ints in concatenation**: When `__println` concatenates a `char` with `+`, the segment formats as an integer (`buf[dbca]=(100,98,99,97)` from swap.sl line 126). The intent is `(d,b,c,a)`. The format dispatch in the println intrinsic doesn't pick `%c` for char-typed segments; it falls through to `%d`. Add a `char` branch to the per-segment format dispatch in the println codegen.
 
 - **PPID — residual gaps after phrase-based scheduling.** All phrase sites in the spec are wired (statement-in-block, call/method/ctor arg slots, tuple-literal slots, anon-tuple destructure slots, if/while/long-for cond, switch scrutinee, long-for init slots, `&&`/`||` right operand). Pre-extract walks the phrase AST at entry; post-extract drains the queue at exit. Compound-assign single-eval covers slid LHS with `op<op>` (no `op<op>=`) inline. Remaining:

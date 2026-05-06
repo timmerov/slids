@@ -507,6 +507,9 @@ private:
     void emitStackRestore(int to_frame); // emit stackrestore for frames [top..to_frame]
     std::string emitExpr(const Expr& expr);
     std::string emitCondBool(const Expr& expr); // emit expr then icmp ne <type> val, 0 -> i1
+    // coerce a value of any built-in type to i1 truthy: ptr → != null,
+    // float/double → fcmp une <T> X, 0.0, integer → icmp ne <T> X, 0.
+    std::string emitToBool(const std::string& val, const std::string& llvm_type);
     std::string exprLlvmType(const Expr& expr); // infer LLVM type without emitting IR
     void requirePtrInit(const std::string& dst_type, const Expr& src); // dst is ^ or [] -> src must be ptr w/ compatible pointee
     // Reject "primitive lhs ← slid rhs" — there is no implicit slid-to-primitive

@@ -1572,11 +1572,90 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (!addr.empty() && !slid_info_.count(slids_type)
             && !isAnonTupleType(slids_type)) {
             const std::string& op = cas->op;
+            bool is_logical = (op == "&&" || op == "||" || op == "^^");
+            if (isRefType(slids_type)) {
+                error(std::string("'" + op + "=' on reference '" + slids_type
+                    + "': arithmetic on references is not allowed (use a pointer '[]' type)"));
+            }
+            if (is_logical && (isPtrType(slids_type) || isIndirectType(slids_type))) {
+                error(std::string("'" + op + "=' on pointer '" + slids_type
+                    + "': logical compound assign produces bool, cannot assign to pointer"));
+            }
+            if (is_logical) {
+                // Short-circuit (&&, ||) or always-eval (^^) producing an i1,
+                // then extend to the lvalue's width and store. Mirrors the
+                // BinaryExpr path in codegen_expr.cpp:1255.
+                std::string llt = llvmType(slids_type);
+                std::string lhs_load = newTmp();
+                out_ << "    " << lhs_load << " = load " << llt << ", ptr " << addr << "\n";
+                std::string left_bool = emitToBool(lhs_load, llt);
+                std::string res_ptr = newTmp() + "_sca";
+                out_ << "    " << res_ptr << " = alloca i1\n";
+                std::string eval_right = newLabel("sca_right");
+                std::string done       = newLabel("sca_done");
+                if (op == "&&") {
+                    out_ << "    store i1 false, ptr " << res_ptr << "\n";
+                    out_ << "    br i1 " << left_bool << ", label %" << eval_right
+                         << ", label %" << done << "\n";
+                } else if (op == "||") {
+                    out_ << "    store i1 true, ptr " << res_ptr << "\n";
+                    out_ << "    br i1 " << left_bool << ", label %" << done
+                         << ", label %" << eval_right << "\n";
+                } else { // ^^
+                    out_ << "    store i1 false, ptr " << res_ptr << "\n";
+                    out_ << "    br label %" << eval_right << "\n";
+                }
+                out_ << eval_right << ":\n";
+                bool right_is_phrase = (op == "&&" || op == "||");
+                if (right_is_phrase) {
+                    pushPostIncQueue();
+                    emitPrePass(*cas->rhs);
+                }
+                std::string right_val = emitExpr(*cas->rhs);
+                std::string right_bool = emitToBool(right_val, exprLlvmType(*cas->rhs));
+                if (right_is_phrase) flushPostIncQueue();
+                std::string final_i1;
+                if (op == "^^") {
+                    final_i1 = newTmp();
+                    out_ << "    " << final_i1 << " = xor i1 " << left_bool
+                         << ", " << right_bool << "\n";
+                } else {
+                    final_i1 = right_bool;
+                }
+                out_ << "    store i1 " << final_i1 << ", ptr " << res_ptr << "\n";
+                out_ << "    br label %" << done << "\n";
+                out_ << done << ":\n";
+                std::string loaded = newTmp();
+                out_ << "    " << loaded << " = load i1, ptr " << res_ptr << "\n";
+                std::string ext;
+                if (llt == "float" || llt == "double") {
+                    ext = newTmp();
+                    out_ << "    " << ext << " = uitofp i1 " << loaded
+                         << " to " << llt << "\n";
+                } else if (llt == "i1") {
+                    ext = loaded;
+                } else {
+                    ext = newTmp();
+                    out_ << "    " << ext << " = zext i1 " << loaded
+                         << " to " << llt << "\n";
+                }
+                out_ << "    store " << llt << " " << ext
+                     << ", ptr " << addr << "\n";
+                return;
+            }
             if (isPtrType(slids_type)) {
                 // pointer iter += int / -= int via GEP
                 if (op != "+" && op != "-")
                     error(std::string("'" + op + "=' on pointer type '"
                         + slids_type + "' is not allowed"));
+                std::string rhs_slids;
+                if (auto* ve = dynamic_cast<const VarExpr*>(cas->rhs.get())) {
+                    auto tit = locals_.find(ve->name);
+                    if (tit != locals_.end()) rhs_slids = tit->second.type;
+                }
+                if (isRefType(rhs_slids))
+                    error(std::string("'" + op + "' between pointer '" + slids_type
+                        + "' and reference '" + rhs_slids + "' is not allowed"));
                 std::string elem = slids_type.substr(0, slids_type.size() - 2);
                 std::string rhs_llt = exprLlvmType(*cas->rhs);
                 std::string rhs_v = emitExpr(*cas->rhs);
@@ -1613,9 +1692,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 else if (op == "*") instr = "mul";
                 else if (op == "/") instr = is_unsigned ? "udiv" : "sdiv";
                 else if (op == "%") instr = is_unsigned ? "urem" : "srem";
-                else if (op == "&" || op == "&&") instr = "and";
-                else if (op == "|" || op == "||") instr = "or";
-                else if (op == "^" || op == "^^") instr = "xor";
+                else if (op == "&") instr = "and";
+                else if (op == "|") instr = "or";
+                else if (op == "^") instr = "xor";
                 else if (op == "<<") instr = "shl";
                 else if (op == ">>") instr = is_unsigned ? "lshr" : "ashr";
             }
