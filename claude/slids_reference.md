@@ -1168,24 +1168,36 @@ int diff = iter - arr; // distance between two iterators
 
 ## Pre/post-inc/dec
 
-`++` and `--` on a variable schedule a side effect.
+`++` and `--` on all variables are extracted from the body of a **phrase**. All pre-increments are performed at the start of the phrase. All post-increments is performed at the end of the phrase. Multiple increments on the same variable stack.
 
-- **Pre-form** (`++x`, `--x`) applies the side effect immediately. Subsequent reads of the variable in the same expression see the advanced value.
-- **Post-form** (`x++`, `x--`) defers the side effect to the next terminator (`,`, `;`, or closing `)` of a parenthesized condition or argument list). Reads of the variable before that terminator see the value prior to the advance.
-- A side effect inside an unreached branch (e.g. the `if` body when the condition is false) does not fire.
+A phrase is:
+
+| Form | Phrase |
+|---|---|
+| `phrase;` | statements in a block |
+| `f(phrase, phrase, ...)` | function/method arguments |
+| `(phrase, phrase, ...)` | tuple-literal elements |
+| `(phrase, phrase, ...) = rhs` | tuple destructure slots |
+| `for (phrase, phrase, ...) (cond) {update} {body}` | initializations elements in long-for |
+| `if (phrase)`, `while (phrase)`, `for (...) (phrase) ...` | conditions |
+| `switch (phrase)` | dispatch expression |
+| `for (var : phrase)` | short-for container/range |
+| `parent && phrase`, `parent \|\| phrase` | the right operand |
+
+In general, there are no sub-phrases. The exceptions to are noted above: function arguments, tuples, and the rhs of logical operations that can be short-circuited - '&&' and '||'.
+All other sites where `++` can be used are part of the surrounding phrase.
 
 ```
-int arr[4] = (10, 20, 30, 40);
-int[] p = ^arr[0];
+x = p++^;             // p is incremented after the assignment of x.
+x = (++p)^ + (++p)^;  // p is incremented twice before the assignment of x.
+x = (++p)^ + q--^     // p is incremented before. q is decremented after.
+x = (cond && b++);    // b is incremented iff cond is true.
 
-x = p++^ + p^;     // x = 10 + 10 = 20; p advances at `;` to ^arr[1]
-y = (++p)^;        // p advances now to ^arr[2]; y = *p = 30
-
-int n = 5;
-int m = n++ + n;   // m = 5 + 5 = 10; n advances at `;` to 6
+a = 1;
+x = foo(a++, ++a);    // foo(1,3) arguments are separate phrases.
 ```
 
-Pointers (`T[]`) advance by one element per inc/dec. Integer and float scalars increment or decrement by 1.
+Pointers `Type[]` advance by one element. Integer and float scalars increment or decrement by 1.
 
 ---
 
