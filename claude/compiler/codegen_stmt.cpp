@@ -5,6 +5,61 @@
 #include <functional>
 #include <stdexcept>
 
+void Codegen::pushPostIncQueue() {
+    post_inc_stack_.emplace_back();
+}
+
+// Emit the deferred advance for one queued entry. Inlined here as a lambda
+// captured by flushPostIncQueue / schedulePostInc, since PendingAdvance is
+// private to Codegen.
+//   Pointer → load ptr, GEP ±step, store ptr
+//   Int     → load Ti, add/sub 1, store Ti
+//   Float   → load Tf, fadd/fsub 1.0, store Tf
+
+void Codegen::flushPostIncQueue() {
+    if (post_inc_stack_.empty()) return;
+    auto frame = std::move(post_inc_stack_.back());
+    post_inc_stack_.pop_back();
+    auto emit = [&](const PendingAdvance& pa) {
+        std::string cur = newTmp();
+        if (pa.kind == PendingAdvance::Pointer) {
+            out_ << "    " << cur << " = load ptr, ptr " << pa.addr << "\n";
+            std::string nxt = newTmp();
+            out_ << "    " << nxt << " = getelementptr " << pa.llvm_type
+                 << ", ptr " << cur << ", i32 " << pa.step << "\n";
+            out_ << "    store ptr " << nxt << ", ptr " << pa.addr << "\n";
+            return;
+        }
+        bool is_float = (pa.kind == PendingAdvance::Float);
+        out_ << "    " << cur << " = load " << pa.llvm_type
+             << ", ptr " << pa.addr << "\n";
+        std::string nxt = newTmp();
+        std::string instr = is_float
+            ? (pa.step > 0 ? "fadd" : "fsub")
+            : (pa.step > 0 ? "add"  : "sub");
+        std::string lit = is_float ? "1.0" : "1";
+        out_ << "    " << nxt << " = " << instr << " " << pa.llvm_type
+             << " " << cur << ", " << lit << "\n";
+        out_ << "    store " << pa.llvm_type << " " << nxt
+             << ", ptr " << pa.addr << "\n";
+    };
+    for (auto& pa : frame) emit(pa);
+}
+
+void Codegen::schedulePostInc(PendingAdvance::Kind kind,
+                              const std::string& addr,
+                              const std::string& llvm_type, int step) {
+    if (post_inc_stack_.empty()) {
+        // Fallback: no active phrase frame, push a one-shot frame and flush
+        // immediately so the side effect isn't dropped. Sites that should
+        // defer must wrap with push/flush.
+        post_inc_stack_.push_back({{kind, addr, llvm_type, step}});
+        flushPostIncQueue();
+        return;
+    }
+    post_inc_stack_.back().push_back({kind, addr, llvm_type, step});
+}
+
 Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
     if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
         auto it = locals_.find(ve->name);
@@ -46,9 +101,10 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
         return {gep, sit->second.field_types[fit->second]};
     }
     if (auto* de = dynamic_cast<const DerefExpr*>(&e)) {
-        // post-inc/dec deref: the side-effect ordering is "load OLD, advance,
-        // return OLD as the deref'd address". Special-case it here rather than
-        // composing through the generic UnaryExpr arm (which advances first).
+        // post-inc/dec deref under PPID: load OLD pointer (return as deref'd
+        // address), schedule the advance for the next terminator. Pre-form
+        // (UnaryExpr pre++/pre--) is handled in the UnaryExpr arm below and
+        // applies the side effect immediately.
         if (auto* ue = dynamic_cast<const UnaryExpr*>(de->operand.get())) {
             if (ue->op == "post++" || ue->op == "post--") {
                 auto base = resolveLvalue(*ue->operand);
@@ -59,10 +115,8 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
                 std::string loaded = newTmp();
                 out_ << "    " << loaded << " = load ptr, ptr " << base.addr << "\n";
                 int step = (ue->op == "post++") ? 1 : -1;
-                std::string nxt = newTmp();
-                out_ << "    " << nxt << " = getelementptr " << llvmType(pointee)
-                     << ", ptr " << loaded << ", i32 " << step << "\n";
-                out_ << "    store ptr " << nxt << ", ptr " << base.addr << "\n";
+                schedulePostInc(PendingAdvance::Pointer, base.addr,
+                                llvmType(pointee), step);
                 return {loaded, pointee};
             }
         }
@@ -791,6 +845,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
             locals_[decl->name] = {reg, eff_type};
             if (auto* te = dynamic_cast<const TupleExpr*>(decl->init.get())) {
                 for (int i = 0; i < (int)elems.size() && i < (int)te->values.size(); i++) {
+                    // PPID per-`,` flush: each tuple-literal slot is its own phrase.
+                    pushPostIncQueue();
+                    struct FlushGuard { Codegen* cg; ~FlushGuard() { cg->flushPostIncQueue(); } } _g{this};
                     std::string gep = newTmp();
                     out_ << "    " << gep << " = getelementptr " << struct_llvm
                          << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
@@ -1302,94 +1359,18 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* cas = dynamic_cast<const CompoundAssignStmt*>(&stmt)) {
-        // Step 1: detect direct slid op<op>= dispatch — single-eval, no temp.
-        // Only fires when the LHS resolves to a slid type that defines op<op>=
-        // for the rhs; otherwise we desugar to the matching specialized
-        // assign-family stmt and let its existing handler run.
-        std::string slids_type;
-        std::string addr;
+        // Single-eval LHS — resolveLvalue fires LHS side effects exactly once.
+        // Step 1 below dispatches user op<op>= for slid LHS using `addr`;
+        // Step 2 (new) handles primitive / pointer-iter LHS in-place;
+        // Step 3 (existing desugar) is the fallback for slid LHS without
+        // op<op>= (synthesizes op<op> + op= via Assign-family).
+        // Parser whitelist (parser.cpp buildCompoundAssignFromLhs) restricts LHS
+        // to VarExpr / DerefExpr / FieldAccessExpr / ArrayIndexExpr — all
+        // resolveLvalue-able. Single-eval ensures LHS side effects fire once.
         const Expr* lhs = cas->lhs.get();
-
-        auto resolveAddr = [&]() {
-            if (auto* ve = dynamic_cast<const VarExpr*>(lhs)) {
-                auto lit = locals_.find(ve->name);
-                auto tit = locals_.find(ve->name);
-                if (lit != locals_.end() && tit != locals_.end()) {
-                    addr = lit->second.reg;
-                    slids_type = tit->second.type;
-                    return;
-                }
-                if (!current_slid_.empty() && slid_info_.count(current_slid_)) {
-                    auto& info = slid_info_[current_slid_];
-                    auto fit = info.field_index.find(ve->name);
-                    if (fit != info.field_index.end()) {
-                        std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
-                        std::string gep = newTmp();
-                        out_ << "    " << gep << " = getelementptr %struct."
-                             << current_slid_ << ", ptr " << self
-                             << ", i32 0, i32 " << fit->second << "\n";
-                        addr = gep;
-                        slids_type = info.field_types[fit->second];
-                    }
-                }
-                return;
-            }
-            if (auto* de = dynamic_cast<const DerefExpr*>(lhs)) {
-                if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                    auto lit = locals_.find(ve->name);
-                    auto tit = locals_.find(ve->name);
-                    if (lit != locals_.end() && tit != locals_.end()) {
-                        std::string loaded = newTmp();
-                        out_ << "    " << loaded << " = load ptr, ptr " << lit->second.reg << "\n";
-                        addr = loaded;
-                        std::string pt = tit->second.type;
-                        if (isPtrType(pt)) pt = pt.substr(0, pt.size()-2);
-                        else if (!pt.empty() && pt.back() == '^') pt = pt.substr(0, pt.size()-1);
-                        slids_type = pt;
-                    }
-                }
-                return;
-            }
-            if (auto* fa = dynamic_cast<const FieldAccessExpr*>(lhs)) {
-                if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
-                    auto lit = locals_.find(ve->name);
-                    auto tit = locals_.find(ve->name);
-                    if (lit != locals_.end() && tit != locals_.end()
-                        && slid_info_.count(tit->second.type)) {
-                        auto& info = slid_info_[tit->second.type];
-                        auto fit = info.field_index.find(fa->field);
-                        if (fit != info.field_index.end()) {
-                            std::string gep = newTmp();
-                            out_ << "    " << gep << " = getelementptr %struct." << tit->second.type
-                                 << ", ptr " << lit->second.reg << ", i32 0, i32 " << fit->second << "\n";
-                            addr = gep;
-                            slids_type = info.field_types[fit->second];
-                        }
-                    }
-                }
-                return;
-            }
-            if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(lhs)) {
-                if (auto* ve = dynamic_cast<const VarExpr*>(ai->base.get())) {
-                    auto ait = array_info_.find(ve->name);
-                    if (ait != array_info_.end()) {
-                        int total = 1;
-                        for (int d : ait->second.dims) total *= d;
-                        std::string elt = llvmType(ait->second.elem_type);
-                        std::string idx_llvm = exprLlvmType(*ai->index);
-                        std::string idx_val = emitExpr(*ai->index);
-                        std::string gep = newTmp();
-                        out_ << "    " << gep << " = getelementptr [" << total << " x " << elt
-                             << "], ptr " << ait->second.alloca_reg << ", i32 0, "
-                             << idx_llvm << " " << idx_val << "\n";
-                        addr = gep;
-                        slids_type = ait->second.elem_type;
-                    }
-                }
-                return;
-            }
-        };
-        resolveAddr();
+        auto lv = resolveLvalue(*lhs);
+        std::string addr = lv.addr;
+        std::string slids_type = lv.type;
 
         // Pointer LHS with pointer RHS: arithmetic compound-assigns are not
         // a pointer-producing operation. Catch all five (+ - * / %) here so
@@ -1424,7 +1405,95 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
         }
 
-        // Step 2: desugar to the matching specialized assign-family stmt.
+        // Step 2: primitive / pointer-iter LHS — single-eval load/op/store
+        // through the resolved address. LHS side effects fired exactly once
+        // by resolveLvalue above; this block does NOT re-emit the LHS.
+        // (Slid LHS without op<op>= falls through to Step 3 desugar.)
+        if (!addr.empty() && !slid_info_.count(slids_type)
+            && !isAnonTupleType(slids_type)) {
+            const std::string& op = cas->op;
+            if (isPtrType(slids_type)) {
+                // pointer iter += int / -= int via GEP
+                if (op != "+" && op != "-")
+                    error(std::string("'" + op + "=' on pointer type '"
+                        + slids_type + "' is not allowed"));
+                std::string elem = slids_type.substr(0, slids_type.size() - 2);
+                std::string rhs_llt = exprLlvmType(*cas->rhs);
+                std::string rhs_v = emitExpr(*cas->rhs);
+                std::string idx = rhs_v;
+                if (op == "-") {
+                    std::string neg = newTmp();
+                    out_ << "    " << neg << " = sub " << rhs_llt
+                         << " 0, " << rhs_v << "\n";
+                    idx = neg;
+                }
+                std::string old_v = newTmp();
+                out_ << "    " << old_v << " = load ptr, ptr " << addr << "\n";
+                std::string new_v = newTmp();
+                out_ << "    " << new_v << " = getelementptr " << llvmType(elem)
+                     << ", ptr " << old_v << ", " << rhs_llt << " " << idx << "\n";
+                out_ << "    store ptr " << new_v << ", ptr " << addr << "\n";
+                return;
+            }
+            // Primitive int / float: pick LLVM op, load-op-store.
+            static const std::set<std::string> unsigned_types = {
+                "uint","uint8","uint16","uint32","uint64","char"
+            };
+            bool is_unsigned = unsigned_types.count(slids_type) > 0;
+            bool is_float = (slids_type == "float32" || slids_type == "float64");
+            std::string instr;
+            if (is_float) {
+                if (op == "+") instr = "fadd";
+                else if (op == "-") instr = "fsub";
+                else if (op == "*") instr = "fmul";
+                else if (op == "/") instr = "fdiv";
+            } else {
+                if (op == "+") instr = "add";
+                else if (op == "-") instr = "sub";
+                else if (op == "*") instr = "mul";
+                else if (op == "/") instr = is_unsigned ? "udiv" : "sdiv";
+                else if (op == "%") instr = is_unsigned ? "urem" : "srem";
+                else if (op == "&" || op == "&&") instr = "and";
+                else if (op == "|" || op == "||") instr = "or";
+                else if (op == "^" || op == "^^") instr = "xor";
+                else if (op == "<<") instr = "shl";
+                else if (op == ">>") instr = is_unsigned ? "lshr" : "ashr";
+            }
+            if (instr.empty())
+                error(std::string("'" + op + "=' is not supported for type '"
+                    + slids_type + "'"));
+            std::string llt = llvmType(slids_type);
+            std::string old_v = newTmp();
+            out_ << "    " << old_v << " = load " << llt << ", ptr " << addr << "\n";
+            std::string rhs_v = emitExpr(*cas->rhs);
+            std::string rhs_llt = exprLlvmType(*cas->rhs);
+            // Coerce integer rhs to lhs width if needed.
+            if (!is_float && rhs_llt != llt
+                && !rhs_llt.empty() && rhs_llt[0] == 'i'
+                && !llt.empty() && llt[0] == 'i') {
+                int rw = std::stoi(rhs_llt.substr(1));
+                int dw = std::stoi(llt.substr(1));
+                if (rw < dw) {
+                    std::string ext = newTmp();
+                    out_ << "    " << ext << " = "
+                         << (is_unsigned ? "zext " : "sext ")
+                         << rhs_llt << " " << rhs_v << " to " << llt << "\n";
+                    rhs_v = ext;
+                } else if (rw > dw) {
+                    std::string trc = newTmp();
+                    out_ << "    " << trc << " = trunc "
+                         << rhs_llt << " " << rhs_v << " to " << llt << "\n";
+                    rhs_v = trc;
+                }
+            }
+            std::string new_v = newTmp();
+            out_ << "    " << new_v << " = " << instr
+                 << " " << llt << " " << old_v << ", " << rhs_v << "\n";
+            out_ << "    store " << llt << " " << new_v << ", ptr " << addr << "\n";
+            return;
+        }
+
+        // Step 3: desugar to the matching specialized assign-family stmt.
         // Existing handlers cover primitives, pointer arithmetic (iter += int),
         // slid op<op> + op= for slid types without op<op>=, etc.
         // Sub-expressions evaluate twice; safe for idempotent shapes (VarExpr

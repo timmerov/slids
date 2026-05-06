@@ -3333,6 +3333,14 @@ void Codegen::emitInitFieldsAtPtrs(const std::string& stype, const std::string& 
 
     auto initFieldFromExpr = [&](const std::string& ftype, const std::string& gep,
                                  const Expr* arg_expr) {
+        // PPID per-`,` flush: each ctor arg slot is its own phrase. Push/flush
+        // around the field's expression evaluation so post-inc/dec side
+        // effects fire between consecutive ctor args.
+        pushPostIncQueue();
+        struct FlushOnExit {
+            Codegen* cg;
+            ~FlushOnExit() { cg->flushPostIncQueue(); }
+        } _flush{this};
         if (slid_info_.count(ftype)) {
             if (!arg_expr) {
                 // Default-init the field's primitives only. The outer
@@ -3538,6 +3546,13 @@ void Codegen::emitStackRestore(int to_frame) {
 // Emit an argument expression, taking pointer-vs-value into account.
 // If param_type ends with '^' and the arg is a slid local, pass its alloca ptr directly.
 // If param_type is 'SlidType^' and arg is a string literal, construct an implicit temporary.
+std::string Codegen::emitPhraseArg(const Expr& arg, const std::string& param_type) {
+    pushPostIncQueue();
+    std::string r = emitArgForParam(arg, param_type);
+    flushPostIncQueue();
+    return r;
+}
+
 std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_type) {
     bool want_ptr = !param_type.empty() && param_type.back() == '^';
     if (want_ptr) {
@@ -3925,7 +3940,12 @@ void Codegen::emitBlock(const BlockStmt& block) {
     for (auto& stmt : block.stmts) {
         if (block_terminated_) break; // dead code after terminator — skip
         size_t temp_mark = pending_temp_dtors_.size();
+        // PPID: each statement is its own phrase. Scheduled post-inc/dec
+        // side effects from expressions evaluated during emitStmt drain at
+        // the end of the statement (the `;` terminator).
+        pushPostIncQueue();
         emitStmt(*stmt);
+        flushPostIncQueue();
         // destroy implicit temporaries created during this statement.
         // Single dispatcher call per temp — the dtor function (or inline walk)
         // chains to its base internally.

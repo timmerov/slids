@@ -60,3 +60,38 @@ ai[1]++: 21
 -- auto-promote chains --
 show(h.inner_)=42
 show(sh[1])=77
+-- ppid: post-inc deferred --
+sum=20
+p_at_arr1=1
+-- ppid: pre-inc immediate --
+sum=40
+p_at_arr1=1
+-- ppid: compound + post-inc-deref --
+arr[0]=52
+arr[1]=20
+p_at_arr1=1
+-- ppid: field-chain post-inc-deref --
+arr[0]=99
+arr[1]=20
+ph.p_ at arr[1]=1
+-- ppid: distinct-ptr swap with post-inc --
+a[0]=100
+b[0]=10
+pa_at_a1=1
+pb_at_b1=1
+-- ppid: scalar post-inc deferred --
+y=10
+x=6
+-- ppid: two scalar post-incs --
+w=10
+z=7
+-- ppid: float scalar post-inc --
+g=1.500000
+f=2.500000
+-- ppid: per-comma flush in call args --
+s=30
+p at arr[1]=1
+-- ppid: per-comma flush in tuple literal --
+t[0]=10
+t[1]=20
+p at arr[1]=1

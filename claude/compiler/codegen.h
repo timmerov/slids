@@ -386,6 +386,13 @@ private:
     // Same fallback policy as resolveSlidIndex.
     std::string resolveSlidIndexAssign(const std::string& slid_name, const Expr& index);
     std::string emitArgForParam(const Expr& arg, const std::string& param_type);
+    // PPID per-`,` flush: wraps emitArgForParam with push/flush so that the
+    // arg's post-inc/dec side effects fire at the comma boundary before the
+    // next arg starts evaluating. Use ONLY at source-level comma loops
+    // (CallExpr / MethodCallExpr / TupleExpr / ctor args). Internal
+    // op-method dispatches use plain emitArgForParam — those have no source
+    // comma between operands.
+    std::string emitPhraseArg(const Expr& arg, const std::string& param_type);
     std::string resolveSingleArgOverload(const std::string& base, const Expr& arg);
     // If `de` dereferences a slid pointer/reference, return the slid type name.
     // Empty if not a slid pointer or the operand can't be resolved.
@@ -527,6 +534,26 @@ private:
         std::string type;   // slids type at that address
     };
     Lvalue resolveLvalue(const Expr& e);
+
+    // Per-phrase post-inc/dec schedule. PPID model: post-inc/dec defers its
+    // side effect to the next terminator (`,`, `;`, or closing `)` of a
+    // condition / argument list). Each "phrase" — between two consecutive
+    // terminators — has its own queue frame on this stack.
+    //
+    // Lifecycle: pushPostIncQueue at phrase entry; emit operands; flushPostIncQueue
+    // at the terminator (drains the top frame's pending advances, pops).
+    struct PendingAdvance {
+        enum Kind { Pointer, Int, Float } kind;
+        std::string addr;       // ptr to the storage (operand alloca / GEP)
+        std::string llvm_type;  // for Pointer: pointee element type (GEP stride)
+                                // for Int / Float: storage value type
+        int step;               // +1 for ++, -1 for --
+    };
+    std::vector<std::vector<PendingAdvance>> post_inc_stack_;
+    void pushPostIncQueue();
+    void flushPostIncQueue();
+    void schedulePostInc(PendingAdvance::Kind kind, const std::string& addr,
+                         const std::string& llvm_type, int step);
     std::string newTmp();
     std::string newLabel(const std::string& prefix);
     std::string uniqueAllocaReg(const std::string& var_name);

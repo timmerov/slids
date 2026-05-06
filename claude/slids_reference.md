@@ -406,6 +406,44 @@ if (c == b)     { }   // comparison yields 0 or 1 (int8), promoted as needed
 
 ---
 
+## Operator precedence
+
+From highest to lowest precedence.
+
+| Level | Group | Operators | Assoc. |
+|---|---|---|---|
+| 1 | Primary | identifier, literal, `(...)`, `(type=expr)`, `new T(...)`, `new T[n]`, `sizeof(...)`, `##macro` | — |
+| 2 | Postfix | `.field`, `[idx]`, `^` (deref), `++` `--` (post) | left-to-right |
+| 3 | Prefix unary | `++` `--` (pre), `+` `-` `!` `~`, `^` (addr-of), `<Type>` (pointer cast) | right-to-left |
+| 4 | Multiplicative | `*` `/` `%` | left-to-right |
+| 5 | Additive | `+` `-` | left-to-right |
+| 6 | Shift | `<<` `>>` | left-to-right |
+| 7 | Relational | `<` `<=` `>` `>=` | left-to-right |
+| 8 | Equality | `==` `!=` | left-to-right |
+| 9 | Bitwise AND | `&` | left-to-right |
+| 10 | Bitwise XOR | `^` (binary) | left-to-right |
+| 11 | Bitwise OR | `\|` | left-to-right |
+| 12 | Logical AND | `&&` | left-to-right |
+| 13 | Logical OR / XOR | `\|\|` `^^` | left-to-right |
+
+### Statement-level operators
+
+Not part of the expression precedence ladder — these introduce statements, not expressions.
+
+- assign / move / swap: `=`, `<-`, `<->`
+- compound assign: `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` `&&=` `\|\|=` `^^=`
+
+### Context-restricted syntax
+
+These tokens have meaning only in specific syntactic positions, not as general operators.
+
+- `..` — range, only inside `for (i : a..b)` headers and slice `[a..b]`
+- `:` — separator (for-header, scope `Slid:method`, switch `case 1:`, inheritance `Base : Derived`, block label `:name`)
+- `,` — list separator (call args, tuple literal, destructure target)
+- `::` — global-qualifier prefix (`::name(args)`)
+
+---
+
 ## Tuples
 
 A tuple is a comma-separated list enclosed in `()`. Slids has three kinds of tuples, distinguished by what their elements look like.
@@ -1125,6 +1163,29 @@ iter++;                // advance to next element
 iter--;                // back one
 int diff = iter - arr; // distance between two iterators
 ```
+
+---
+
+## Pre/post-inc/dec
+
+`++` and `--` on a variable schedule a side effect.
+
+- **Pre-form** (`++x`, `--x`) applies the side effect immediately. Subsequent reads of the variable in the same expression see the advanced value.
+- **Post-form** (`x++`, `x--`) defers the side effect to the next terminator (`,`, `;`, or closing `)` of a parenthesized condition or argument list). Reads of the variable before that terminator see the value prior to the advance.
+- A side effect inside an unreached branch (e.g. the `if` body when the condition is false) does not fire.
+
+```
+int arr[4] = (10, 20, 30, 40);
+int[] p = ^arr[0];
+
+x = p++^ + p^;     // x = 10 + 10 = 20; p advances at `;` to ^arr[1]
+y = (++p)^;        // p advances now to ^arr[2]; y = *p = 30
+
+int n = 5;
+int m = n++ + n;   // m = 5 + 5 = 10; n advances at `;` to 6
+```
+
+Pointers (`T[]`) advance by one element per inc/dec. Integer and float scalars increment or decrement by 1.
 
 ---
 

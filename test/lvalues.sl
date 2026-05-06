@@ -41,8 +41,10 @@ Inner(int x_ = 0) {}
 Outer(Inner i_ = Inner()) {}
 Holder(S inner_ = S()) {}
 Box(int^ p_ = nullptr) {}
+PtrHolder(int[] p_ = nullptr) {}
 
 int show(S^ s) { return s^.x_; }
+int sum2(int a, int b) { return a + b; }
 
 int32 main() {
 
@@ -320,6 +322,139 @@ int32 main() {
         sh[1].x_ = 77;
         int g2 = show(sh[1]);
         __println("show(sh[1])=" + g2);
+    }
+
+    /* PPID — post-inc/dec on a pointer defers to end of statement. */
+    {
+        __println("-- ppid: post-inc deferred --");
+
+        int arr[4] = (10, 20, 30, 40);
+        int[] p = ^arr[0];
+        /* Both p^ reads see *p before the post-inc applies. */
+        int sum = p++^ + p^;
+        __println("sum=" + sum);
+        /* p advances once at `;`. */
+        bool at_arr1 = (p == ^arr[1]);
+        __println("p_at_arr1=" + at_arr1);
+    }
+
+    /* PPID — pre-inc applies immediately. */
+    {
+        __println("-- ppid: pre-inc immediate --");
+
+        int arr[4] = (10, 20, 30, 40);
+        int[] p = ^arr[0];
+        /* ++p applies first; subsequent p^ reads the advanced location. */
+        int sum = (++p)^ + p^;
+        __println("sum=" + sum);
+        bool at_arr1 = (p == ^arr[1]);
+        __println("p_at_arr1=" + at_arr1);
+    }
+
+    /* PPID — compound-assign with post-inc-deref LHS, single-eval. */
+    {
+        __println("-- ppid: compound + post-inc-deref --");
+
+        int arr[4] = (10, 20, 30, 40);
+        int[] p = ^arr[0];
+        p++^ += 42;
+        /* Expected: arr[0] = 10+42 = 52; p advances once at `;`. */
+        __println("arr[0]=" + arr[0]);
+        __println("arr[1]=" + arr[1]);
+        bool at_arr1 = (p == ^arr[1]);
+        __println("p_at_arr1=" + at_arr1);
+    }
+
+    /* PPID — field-chain post-inc-deref. The pointer lives in a slid field;
+       the schedule fires at `;`, advancing the field. */
+    {
+        __println("-- ppid: field-chain post-inc-deref --");
+
+        int arr[4] = (10, 20, 30, 40);
+        PtrHolder ph(^arr[0]);
+        ph.p_++^ = 99;
+        /* Expected: arr[0] = 99; arr[1] untouched; ph.p_ advances to ^arr[1]. */
+        __println("arr[0]=" + arr[0]);
+        __println("arr[1]=" + arr[1]);
+        bool at_arr1 = (ph.p_ == ^arr[1]);
+        __println("ph.p_ at arr[1]=" + at_arr1);
+    }
+
+    /* PPID — distinct-pointer swap with post-inc on both sides. Both schedules
+       fire at the swap's `;`, advancing each pointer once. */
+    {
+        __println("-- ppid: distinct-ptr swap with post-inc --");
+
+        int a[4] = (10, 20, 30, 40);
+        int b[4] = (100, 200, 300, 400);
+        int[] pa = ^a[0];
+        int[] pb = ^b[0];
+        pa++^ <-> pb++^;
+        /* Expected: a[0] gets b's value (100), b[0] gets a's (10);
+           pa advances to ^a[1], pb advances to ^b[1]. */
+        __println("a[0]=" + a[0]);
+        __println("b[0]=" + b[0]);
+        bool pa_at_a1 = (pa == ^a[1]);
+        bool pb_at_b1 = (pb == ^b[1]);
+        __println("pa_at_a1=" + pa_at_a1);
+        __println("pb_at_b1=" + pb_at_b1);
+    }
+
+    /* PPID — scalar post-inc deferred. Both reads of x see OLD value. */
+    {
+        __println("-- ppid: scalar post-inc deferred --");
+
+        int x = 5;
+        int y = x++ + x;
+        __println("y=" + y);
+        __println("x=" + x);
+    }
+
+    /* PPID — two scalar post-incs in one statement. */
+    {
+        __println("-- ppid: two scalar post-incs --");
+
+        int z = 5;
+        int w = z++ + z++;
+        __println("w=" + w);
+        __println("z=" + z);
+    }
+
+    /* PPID — float scalar post-inc. */
+    {
+        __println("-- ppid: float scalar post-inc --");
+
+        float64 f = 1.5;
+        float64 g = f++;
+        __println("g=" + g);
+        __println("f=" + f);
+    }
+
+    /* PPID — per-`,` flush in function-call args. Each comma is a phrase
+       boundary; the schedule between args fires before the next arg starts. */
+    {
+        __println("-- ppid: per-comma flush in call args --");
+
+        int arr[4] = (10, 20, 30, 40);
+        int[] p = ^arr[0];
+        /* sum reads p++^ (=10), comma flushes → p advances; then p^ (=20). */
+        int s = sum2(p++^, p^);
+        __println("s=" + s);
+        bool at_arr1 = (p == ^arr[1]);
+        __println("p at arr[1]=" + at_arr1);
+    }
+
+    /* PPID — per-`,` flush in tuple literal. */
+    {
+        __println("-- ppid: per-comma flush in tuple literal --");
+
+        int arr[4] = (10, 20, 30, 40);
+        int[] p = ^arr[0];
+        (int, int) t = (p++^, p^);
+        __println("t[0]=" + t[0]);
+        __println("t[1]=" + t[1]);
+        bool at_arr1 = (p == ^arr[1]);
+        __println("p at arr[1]=" + at_arr1);
     }
 
     return 0;

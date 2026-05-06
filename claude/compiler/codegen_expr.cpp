@@ -684,7 +684,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             for (int i = 0; i < (int)mc->args.size(); i++) {
                 std::string ptype_str = (i < (int)mptypes_vec.size()) ? mptypes_vec[i] : "";
                 std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
-                method_args += ", " + ptype + " " + emitArgForParam(*mc->args[i], ptype_str);
+                method_args += ", " + ptype + " " + emitPhraseArg(*mc->args[i], ptype_str);
             }
             std::string self_arg = empty ? "" : "ptr " + obj_ptr;
             // indirect call: ptr-deref source OR explicit self inside a virtual
@@ -777,7 +777,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     std::string ptype_str = (i < (int)mptypes_q.size()) ? mptypes_q[i] : "";
                     std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
                     method_args_q += ", " + ptype + " "
-                        + emitArgForParam(*call->args[i], ptype_str);
+                        + emitPhraseArg(*call->args[i], ptype_str);
                 }
                 std::string self_arg_q = empty ? "" : "ptr " + self_str;
                 if (slid_info_.count(rit_q->second)) {
@@ -814,7 +814,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 if (i > 0) arg_str += ", ";
                 std::string ptype_str = (i < (int)ptypes.size()) ? ptypes[i] : "";
                 std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
-                arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
+                arg_str += ptype + " " + emitPhraseArg(*call->args[i], ptype_str);
             }
             if (slid_info_.count(rit->second)) {
                 std::string tmp = emitRawSlidAlloca(rit->second);
@@ -845,7 +845,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 if (i > 0) arg_str += ", ";
                 std::string ptype_str = (i < (int)ptypes.size()) ? ptypes[i] : "";
                 std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
-                arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
+                arg_str += ptype + " " + emitPhraseArg(*call->args[i], ptype_str);
             }
             if (slid_info_.count(it->second)) {
                 std::string tmp = emitRawSlidAlloca(it->second);
@@ -926,7 +926,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 for (int i = 0; i < (int)call->args.size(); i++) {
                     if (i > 0) arg_str += ", ";
                     std::string ptype = (i < (int)ptypes.size()) ? ptypes[i] : "int";
-                    arg_str += llvmType(ptype) + " " + emitArgForParam(*call->args[i], ptype);
+                    arg_str += llvmType(ptype) + " " + emitPhraseArg(*call->args[i], ptype);
                 }
                 // sret if return type is a slid
                 if (slid_info_.count(ret_slid)) {
@@ -959,7 +959,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     std::string ptype_str = (i < (int)mptypes.size()) ? mptypes[i] : "";
                     std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
                     if (!arg_str.empty()) arg_str += ", ";
-                    arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
+                    arg_str += ptype + " " + emitPhraseArg(*call->args[i], ptype_str);
                 }
                 if (slid_info_.count(mit->second)) {
                     std::string tmp = emitRawSlidAlloca(mit->second);
@@ -993,7 +993,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             if (i > 0) arg_str += ", ";
             std::string ptype_str = (i < (int)ptypes.size()) ? ptypes[i] : "";
             std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
-            arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
+            arg_str += ptype + " " + emitPhraseArg(*call->args[i], ptype_str);
         }
         // sret: callee returns a slid type — allocate temp, call with ptr sret, return temp
         if (slid_info_.count(it->second)) {
@@ -1071,19 +1071,40 @@ std::string Codegen::emitExpr(const Expr& expr) {
             }
 
             std::string old = newTmp();
-            std::string new_val = newTmp();
+            int step = (instr == "add" || instr == "fadd") ? 1 : -1;
             if (is_ptr_arith) {
-                // pointer arithmetic: load ptr, GEP ±1, store back
+                // pointer arithmetic. Pre-form applies the advance immediately;
+                // post-form (PPID) schedules the advance for the next terminator.
                 out_ << "    " << old << " = load ptr, ptr " << ptr << "\n";
-                int step = (instr == "add") ? 1 : -1;
-                out_ << "    " << new_val << " = getelementptr " << pointee_llvm << ", ptr " << old << ", i32 " << step << "\n";
-                out_ << "    store ptr " << new_val << ", ptr " << ptr << "\n";
-            } else {
-                out_ << "    " << old << " = load " << scalar_llvm << ", ptr " << ptr << "\n";
-                out_ << "    " << new_val << " = " << instr << " " << scalar_llvm << " " << old << ", 1\n";
-                out_ << "    store " << scalar_llvm << " " << new_val << ", ptr " << ptr << "\n";
+                if (is_pre) {
+                    std::string new_val = newTmp();
+                    out_ << "    " << new_val << " = getelementptr " << pointee_llvm
+                         << ", ptr " << old << ", i32 " << step << "\n";
+                    out_ << "    store ptr " << new_val << ", ptr " << ptr << "\n";
+                    return new_val;
+                }
+                schedulePostInc(PendingAdvance::Pointer, ptr, pointee_llvm, step);
+                return old;
             }
-            return is_pre ? new_val : old;
+            // scalar inc/dec: pre applies immediately; post defers to the
+            // enclosing terminator under PPID. Float scalars use fadd/fsub.
+            bool is_float = (scalar_llvm == "float" || scalar_llvm == "double");
+            out_ << "    " << old << " = load " << scalar_llvm << ", ptr " << ptr << "\n";
+            if (is_pre) {
+                std::string new_val = newTmp();
+                std::string scalar_instr = is_float
+                    ? (step > 0 ? "fadd" : "fsub")
+                    : (step > 0 ? "add" : "sub");
+                std::string lit = is_float ? "1.0" : "1";
+                out_ << "    " << new_val << " = " << scalar_instr
+                     << " " << scalar_llvm << " " << old << ", " << lit << "\n";
+                out_ << "    store " << scalar_llvm << " " << new_val
+                     << ", ptr " << ptr << "\n";
+                return new_val;
+            }
+            schedulePostInc(is_float ? PendingAdvance::Float : PendingAdvance::Int,
+                            ptr, scalar_llvm, step);
+            return old;
         }
         // arity-0 slid dispatch: -a/+a/~a/!a where operand is a slid value, no slid LHS.
         // Mirrors comparison: returns a built-in (bool/int/pointer).
@@ -1995,6 +2016,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string reg = newTmp();
         out_ << "    " << reg << " = alloca " << struct_llvm << "\n";
         for (int i = 0; i < (int)te->values.size(); i++) {
+            // PPID per-`,` flush: each tuple element is its own phrase.
+            pushPostIncQueue();
             std::string elem_ttype = inferSlidType(*te->values[i]);
             std::string gep = newTmp();
             out_ << "    " << gep << " = getelementptr " << struct_llvm
@@ -2006,6 +2029,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 if (auto* ce = dynamic_cast<const CallExpr*>(te->values[i].get())) {
                     if (ce->callee == elem_ttype && slid_info_.count(ce->callee)) {
                         emitConstructAt(elem_ttype, gep, ce->args);
+                        flushPostIncQueue();
                         continue;
                     }
                 }
@@ -2017,11 +2041,13 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     src_ptr = emitExpr(*te->values[i]);
                 }
                 emitSlidSlotAssign(elem_ttype, gep, src_ptr, /*is_move=*/false, /*is_init=*/true);
+                flushPostIncQueue();
                 continue;
             }
             std::string val = emitExpr(*te->values[i]);
             out_ << "    store " << llvmType(elem_ttype) << " " << val
                  << ", ptr " << gep << "\n";
+            flushPostIncQueue();
         }
         std::string loaded = newTmp();
         out_ << "    " << loaded << " = load " << struct_llvm
