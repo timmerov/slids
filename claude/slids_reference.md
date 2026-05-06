@@ -1182,7 +1182,7 @@ A phrase is:
 | `if (phrase)`, `while (phrase)`, `for (...) (phrase) ...` | conditions |
 | `switch (phrase)` | dispatch expression |
 | `for (var : phrase)` | short-for container/range |
-| `parent && phrase`, `parent \|\| phrase` | rhs of `&&` and `||` |
+| `parent && phrase`, `parent \|\| phrase` | rhs of `&&` and `\|\|` |
 
 In general, there are no sub-phrases. The exceptions to are noted above: function arguments, tuples, and the rhs of logical operations that can be short-circuited - '&&' and '||'. All other sites where `++` can be used are part of the surrounding phrase.
 
