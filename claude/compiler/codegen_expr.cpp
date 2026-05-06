@@ -1016,6 +1016,22 @@ std::string Codegen::emitExpr(const Expr& expr) {
             u->op == "post++" || u->op == "post--") {
 
             bool is_pre = (u->op == "pre++" || u->op == "pre--");
+            // Pre-extract: when the advance has already fired at phrase entry,
+            // the eval site just loads the (advanced) value via the operand's
+            // lvalue. Idempotent for simple operands; complex operand side
+            // effects re-fire here (limitation; phrase a non-trivial pre as a
+            // separate statement to avoid).
+            if (is_pre && preAlreadyDone(u)) {
+                auto lv = resolveLvalue(*u->operand);
+                std::string loaded = newTmp();
+                if (isPtrType(lv.type) || isRefType(lv.type)) {
+                    out_ << "    " << loaded << " = load ptr, ptr " << lv.addr << "\n";
+                } else {
+                    out_ << "    " << loaded << " = load " << llvmType(lv.type)
+                         << ", ptr " << lv.addr << "\n";
+                }
+                return loaded;
+            }
             std::string instr = (u->op == "pre++" || u->op == "post++") ? "add" : "sub";
             std::string ptr;
 
@@ -1262,10 +1278,19 @@ std::string Codegen::emitExpr(const Expr& expr) {
             }
 
             out_ << eval_right << ":\n";
+            // PPID: && / || right operand is its own phrase — neither pre nor
+            // post fires when short-circuited. ^^ always evaluates both sides
+            // so it does not introduce a phrase boundary.
+            bool right_is_phrase = (b->op == "&&" || b->op == "||");
+            if (right_is_phrase) {
+                pushPostIncQueue();
+                emitPrePass(*b->right);
+            }
             std::string right_val = emitExpr(*b->right);
             std::string right_bool = newTmp();
             std::string right_type = exprLlvmType(*b->right);
             out_ << "    " << right_bool << " = icmp ne " << right_type << " " << right_val << ", 0\n";
+            if (right_is_phrase) flushPostIncQueue();
             std::string right_int = newTmp();
             if (b->op == "^^") {
                 std::string xor_result = newTmp();
@@ -2016,8 +2041,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string reg = newTmp();
         out_ << "    " << reg << " = alloca " << struct_llvm << "\n";
         for (int i = 0; i < (int)te->values.size(); i++) {
-            // PPID per-`,` flush: each tuple element is its own phrase.
+            // PPID: each tuple element is its own phrase.
             pushPostIncQueue();
+            emitPrePass(*te->values[i]);
             std::string elem_ttype = inferSlidType(*te->values[i]);
             std::string gep = newTmp();
             out_ << "    " << gep << " = getelementptr " << struct_llvm

@@ -7,6 +7,7 @@
 
 void Codegen::pushPostIncQueue() {
     post_inc_stack_.emplace_back();
+    pre_done_stack_.emplace_back();
 }
 
 // Emit the deferred advance for one queued entry. Inlined here as a lambda
@@ -20,6 +21,7 @@ void Codegen::flushPostIncQueue() {
     if (post_inc_stack_.empty()) return;
     auto frame = std::move(post_inc_stack_.back());
     post_inc_stack_.pop_back();
+    if (!pre_done_stack_.empty()) pre_done_stack_.pop_back();
     auto emit = [&](const PendingAdvance& pa) {
         std::string cur = newTmp();
         if (pa.kind == PendingAdvance::Pointer) {
@@ -54,10 +56,154 @@ void Codegen::schedulePostInc(PendingAdvance::Kind kind,
         // immediately so the side effect isn't dropped. Sites that should
         // defer must wrap with push/flush.
         post_inc_stack_.push_back({{kind, addr, llvm_type, step}});
+        pre_done_stack_.emplace_back();
         flushPostIncQueue();
         return;
     }
     post_inc_stack_.back().push_back({kind, addr, llvm_type, step});
+}
+
+bool Codegen::preAlreadyDone(const UnaryExpr* u) {
+    if (pre_done_stack_.empty()) return false;
+    return pre_done_stack_.back().count(u) > 0;
+}
+
+// Walk a phrase's expression AST; for each pre-inc/dec UnaryExpr encountered,
+// resolve the operand's lvalue, emit the advance, and mark the node so the
+// later eval site loads (rather than re-emitting). Stops at sub-phrase
+// boundaries (call/method/ctor args, tuple elements, &&/|| right operand) —
+// each of those runs its own pre-pass at its own entry.
+void Codegen::emitPrePass(const Expr& root) {
+    std::function<void(const Expr&)> walk = [&](const Expr& e) {
+        if (auto* u = dynamic_cast<const UnaryExpr*>(&e)) {
+            if (u->op == "pre++" || u->op == "pre--") {
+                // Resolve operand lvalue (note: if operand has its own side
+                // effects like arr[i++], they fire here at phrase entry).
+                auto lv = resolveLvalue(*u->operand);
+                bool is_inc = (u->op == "pre++");
+                int step = is_inc ? 1 : -1;
+                std::string old_val = newTmp();
+                if (isPtrType(lv.type)) {
+                    std::string pointee = lv.type.substr(0, lv.type.size() - 2);
+                    std::string pointee_llvm = llvmType(pointee);
+                    out_ << "    " << old_val << " = load ptr, ptr " << lv.addr << "\n";
+                    std::string nxt = newTmp();
+                    out_ << "    " << nxt << " = getelementptr " << pointee_llvm
+                         << ", ptr " << old_val << ", i32 " << step << "\n";
+                    out_ << "    store ptr " << nxt << ", ptr " << lv.addr << "\n";
+                } else if (isRefType(lv.type)) {
+                    error(std::string("'" + u->op + "' on reference: arithmetic on references is not allowed (use a pointer '[]' type)"));
+                } else {
+                    std::string scalar_llvm = llvmType(lv.type);
+                    bool is_float = (scalar_llvm == "float" || scalar_llvm == "double");
+                    out_ << "    " << old_val << " = load " << scalar_llvm << ", ptr " << lv.addr << "\n";
+                    std::string nxt = newTmp();
+                    std::string instr = is_float ? (is_inc ? "fadd" : "fsub")
+                                                  : (is_inc ? "add" : "sub");
+                    std::string lit = is_float ? "1.0" : "1";
+                    out_ << "    " << nxt << " = " << instr << " " << scalar_llvm
+                         << " " << old_val << ", " << lit << "\n";
+                    out_ << "    store " << scalar_llvm << " " << nxt << ", ptr " << lv.addr << "\n";
+                }
+                if (!pre_done_stack_.empty()) pre_done_stack_.back().insert(u);
+                // Don't recurse into operand — its side effects already fired
+                // via resolveLvalue above.
+                return;
+            }
+            // post++/post-- — leave for phrase-exit flush; recurse into
+            // operand to find any inner pres.
+            walk(*u->operand);
+            return;
+        }
+        if (auto* b = dynamic_cast<const BinaryExpr*>(&e)) {
+            walk(*b->left);
+            // && / || right operand is a sub-phrase; ^^ always evaluates.
+            if (b->op == "&&" || b->op == "||") return;
+            walk(*b->right);
+            return;
+        }
+        if (dynamic_cast<const CallExpr*>(&e)) return;       // args are sub-phrases
+        if (dynamic_cast<const MethodCallExpr*>(&e)) return; // args are sub-phrases
+        if (dynamic_cast<const TupleExpr*>(&e)) return;      // values are sub-phrases
+        if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&e)) {
+            walk(*fa->object);
+            return;
+        }
+        if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&e)) {
+            walk(*ai->base);
+            walk(*ai->index);
+            return;
+        }
+        if (auto* de = dynamic_cast<const DerefExpr*>(&e)) {
+            walk(*de->operand);
+            return;
+        }
+        if (auto* ao = dynamic_cast<const AddrOfExpr*>(&e)) {
+            walk(*ao->operand);
+            return;
+        }
+        // Leaves (VarExpr, literals, NullptrExpr, ...) and unhandled wrappers
+        // contribute nothing. Add cases here if a wrapper hides pres.
+    };
+    walk(root);
+}
+
+// Statement-level pre-pass: walk into the statement's expression children,
+// applying the expr-level pre-pass to each. Skips statement types that
+// delegate to sub-phrases for all of their expressions (if/while/for/switch/
+// block/destructure — those wire pre-pass at the sub-phrase site). Skips
+// CallStmt / MethodCallStmt whose args are sub-phrases (each arg is wrapped
+// at emitPhraseArg).
+void Codegen::emitPrePass(const Stmt& root) {
+    if (auto* es = dynamic_cast<const ExprStmt*>(&root)) {
+        if (es->expr) emitPrePass(*es->expr);
+        return;
+    }
+    if (auto* as = dynamic_cast<const AssignStmt*>(&root)) {
+        if (as->value) emitPrePass(*as->value);
+        return;
+    }
+    if (auto* vd = dynamic_cast<const VarDeclStmt*>(&root)) {
+        if (vd->init) emitPrePass(*vd->init);
+        // Note: ctor_args are sub-phrases handled by initFieldFromExpr.
+        return;
+    }
+    if (auto* rs = dynamic_cast<const ReturnStmt*>(&root)) {
+        if (rs->value) emitPrePass(*rs->value);
+        return;
+    }
+    if (auto* cas = dynamic_cast<const CompoundAssignStmt*>(&root)) {
+        if (cas->lhs) emitPrePass(*cas->lhs);
+        if (cas->rhs) emitPrePass(*cas->rhs);
+        return;
+    }
+    if (auto* ds = dynamic_cast<const DeleteStmt*>(&root)) {
+        if (ds->operand) emitPrePass(*ds->operand);
+        return;
+    }
+    if (auto* ss = dynamic_cast<const SwapStmt*>(&root)) {
+        if (ss->lhs) emitPrePass(*ss->lhs);
+        if (ss->rhs) emitPrePass(*ss->rhs);
+        return;
+    }
+    if (auto* fa = dynamic_cast<const FieldAssignStmt*>(&root)) {
+        if (fa->object) emitPrePass(*fa->object);
+        if (fa->value) emitPrePass(*fa->value);
+        return;
+    }
+    if (auto* ia = dynamic_cast<const IndexAssignStmt*>(&root)) {
+        if (ia->base) emitPrePass(*ia->base);
+        if (ia->index) emitPrePass(*ia->index);
+        if (ia->value) emitPrePass(*ia->value);
+        return;
+    }
+    if (auto* da = dynamic_cast<const DerefAssignStmt*>(&root)) {
+        if (da->ptr) emitPrePass(*da->ptr);
+        if (da->value) emitPrePass(*da->value);
+        return;
+    }
+    // Other stmt types (if/while/for/switch/block/destructure/call/methodcall/
+    // break/continue) either delegate to sub-phrases or have no expressions.
 }
 
 Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
@@ -131,6 +277,12 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
     }
     if (auto* ue = dynamic_cast<const UnaryExpr*>(&e)) {
         if (ue->op == "pre++" || ue->op == "pre--") {
+            // Pre-extract: the advance fired at phrase entry; the operand's
+            // lvalue is unchanged. Just resolve it again. (For lvalues without
+            // side effects in their address computation — VarExpr, FieldAccess,
+            // etc. — re-resolution is idempotent.)
+            if (preAlreadyDone(ue))
+                return resolveLvalue(*ue->operand);
             auto base = resolveLvalue(*ue->operand);
             std::string pointee;
             if (isPtrType(base.type))      pointee = base.type.substr(0, base.type.size() - 2);
@@ -206,6 +358,10 @@ void Codegen::emitDestructure(
         for (int i = 0; i < (int)targets.size(); i++) {
             auto& [type, name] = targets[i];
             if (name.empty()) continue; // empty slot — skip this element
+            // PPID: each destructure slot is its own phrase.
+            pushPostIncQueue();
+            emitPrePass(*te->values[i]);
+            struct FlushGuard { Codegen* cg; ~FlushGuard() { cg->flushPostIncQueue(); } } _g{this};
             std::string eff_type = type.empty() ? inferSlidType(*te->values[i]) : type;
             // if name is already in scope AND no explicit type: reassign the existing local
             bool reassign = type.empty() && locals_.count(name) > 0;
@@ -295,6 +451,9 @@ void Codegen::emitDestructure(
             for (int i = 0; i < (int)targets.size(); i++) {
                 auto& [type, name] = targets[i];
                 if (name.empty()) continue; // empty slot
+                // PPID: each destructure slot is its own phrase.
+                pushPostIncQueue();
+                struct FlushGuard { Codegen* cg; ~FlushGuard() { cg->flushPostIncQueue(); } } _g{this};
                 const std::string& elem_type = elems[i];
                 std::string eff_type = type.empty() ? elem_type : type;
                 bool reassign = type.empty() && locals_.count(name) > 0;
@@ -845,8 +1004,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
             locals_[decl->name] = {reg, eff_type};
             if (auto* te = dynamic_cast<const TupleExpr*>(decl->init.get())) {
                 for (int i = 0; i < (int)elems.size() && i < (int)te->values.size(); i++) {
-                    // PPID per-`,` flush: each tuple-literal slot is its own phrase.
+                    // PPID: each tuple-literal slot is its own phrase.
                     pushPostIncQueue();
+                    emitPrePass(*te->values[i]);
                     struct FlushGuard { Codegen* cg; ~FlushGuard() { cg->flushPostIncQueue(); } } _g{this};
                     std::string gep = newTmp();
                     out_ << "    " << gep << " = getelementptr " << struct_llvm
@@ -1493,11 +1653,51 @@ void Codegen::emitStmt(const Stmt& stmt) {
             return;
         }
 
+        // Step 3a: slid LHS without op<op>= — emit inline op<op> dispatch
+        // using the resolved `addr` for both the binary call's left input and
+        // the op= destination. Single-eval LHS; no clone-desugar (which would
+        // re-fire any post-inc/dec inside the LHS expression under PPID).
+        if (!addr.empty() && slid_info_.count(slids_type)) {
+            std::string op_base = slids_type + "__op" + cas->op;
+            auto moit = method_overloads_.find(op_base);
+            std::string op_func;
+            std::string second_ptype;
+            if (moit != method_overloads_.end()) {
+                std::string want_first = slids_type + "^";
+                for (auto& [m, ptypes] : moit->second) {
+                    if (ptypes.size() == 2 && ptypes[0] == want_first) {
+                        op_func = m;
+                        second_ptype = ptypes[1];
+                        break;
+                    }
+                }
+            }
+            if (!op_func.empty()) {
+                std::string res_tmp = emitSlidAlloca(slids_type);
+                std::string rhs_arg = emitArgForParam(*cas->rhs, second_ptype);
+                std::string ret = func_return_types_.count(op_func) ? func_return_types_[op_func] : "";
+                bool is_method = (ret == "void");
+                std::string args = is_method
+                    ? ("ptr " + res_tmp)
+                    : ("ptr sret(%struct." + slids_type + ") " + res_tmp);
+                args += ", " + llvmType(slids_type + "^") + " " + addr;
+                args += ", " + llvmType(second_ptype) + " " + rhs_arg;
+                out_ << "    call void @" << llvmGlobalName(op_func)
+                     << "(" << args << ")\n";
+                emitSlidSlotAssign(slids_type, addr, res_tmp,
+                                   /*is_move=*/false, /*is_init=*/false);
+                return;
+            }
+            // No matching op<op> overload — fall through to Step 3 desugar
+            // (which will produce its own diagnostic).
+        }
+
         // Step 3: desugar to the matching specialized assign-family stmt.
         // Existing handlers cover primitives, pointer arithmetic (iter += int),
         // slid op<op> + op= for slid types without op<op>=, etc.
         // Sub-expressions evaluate twice; safe for idempotent shapes (VarExpr
-        // bases, literal/var indices, etc.).
+        // bases, literal/var indices, etc.). Anon-tuple LHS still uses this
+        // path; single-eval for tuple LHS is a separate TODO.
         auto rhs_clone = cloneExpr(*cas->rhs);
         int fid = cas->file_id, tok = cas->tok;
         if (auto* ve = dynamic_cast<const VarExpr*>(lhs)) {
@@ -2186,7 +2386,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             for (int i = 0; i < (int)mcs->args.size(); i++) {
                 std::string ptype_str = (i < (int)mptypes.size()) ? mptypes[i] : "";
                 std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
-                std::string aval = emitArgForParam(*mcs->args[i], ptype_str);
+                std::string aval = emitPhraseArg(*mcs->args[i], ptype_str);
                 if (!arg_str.empty()) arg_str += ", ";
                 arg_str += ptype + " " + aval;
             }
@@ -2497,7 +2697,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string then_lbl = newLabel("if_then");
         std::string else_lbl = newLabel("if_else");
         std::string end_lbl  = newLabel("if_end");
+        // PPID: cond is its own phrase — pre fires at entry, post fires at `)`.
+        pushPostIncQueue();
+        emitPrePass(*if_stmt->cond);
         std::string cond_bool = emitCondBool(*if_stmt->cond);
+        flushPostIncQueue();
         out_ << "    br i1 " << cond_bool << ", label %" << then_lbl
              << ", label %" << (if_stmt->else_block ? else_lbl : end_lbl) << "\n";
         block_terminated_ = false;
@@ -2544,13 +2748,21 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
             block_terminated_ = false;
             out_ << cond_lbl << ":\n";
+            // PPID: while cond is its own phrase.
+            pushPostIncQueue();
+            emitPrePass(*w->cond);
             std::string cond_bool = emitCondBool(*w->cond);
+            flushPostIncQueue();
             out_ << "    br i1 " << cond_bool << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
         } else {
             out_ << "    br label %" << cond_lbl << "\n";
             block_terminated_ = false;
             out_ << cond_lbl << ":\n";
+            // PPID: while cond is its own phrase.
+            pushPostIncQueue();
+            emitPrePass(*w->cond);
             std::string cond_bool = emitCondBool(*w->cond);
+            flushPostIncQueue();
             out_ << "    br i1 " << cond_bool << ", label %" << body_lbl << ", label %" << end_lbl << "\n";
             block_terminated_ = false;
             out_ << body_lbl << ":\n";
@@ -2591,13 +2803,23 @@ void Codegen::emitStmt(const Stmt& stmt) {
         out_ << "    br label %" << init_lbl << "\n";
         block_terminated_ = false;
         out_ << init_lbl << ":\n";
-        for (auto& s : fl->init_stmts) emitStmt(*s);
+        // PPID: each comma-separated init element is its own phrase.
+        for (auto& s : fl->init_stmts) {
+            pushPostIncQueue();
+            emitPrePass(*s);
+            emitStmt(*s);
+            flushPostIncQueue();
+        }
         out_ << "    br label %" << cond_lbl << "\n";
 
         block_terminated_ = false;
         out_ << cond_lbl << ":\n";
         if (fl->cond) {
+            // PPID: long-for cond is its own phrase.
+            pushPostIncQueue();
+            emitPrePass(*fl->cond);
             std::string c = emitCondBool(*fl->cond);
+            flushPostIncQueue();
             out_ << "    br i1 " << c << ", label %" << body_lbl
                  << ", label %" << end_lbl << "\n";
         } else {
@@ -2663,7 +2885,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
         continue_label_ = "";
         loop_stack_.push_back({sw->block_label, end_lbl, "", "", true});
 
+        // PPID: switch scrutinee is its own phrase.
+        pushPostIncQueue();
+        emitPrePass(*sw->expr);
         std::string disc = emitExpr(*sw->expr);
+        flushPostIncQueue();
 
         // build per-case labels
         std::vector<std::string> case_lbls;
@@ -2968,7 +3194,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 for (int i = 0; i < (int)call->args.size(); i++) {
                     if (i > 0) arg_str += ", ";
                     std::string ptype = (i < (int)ptypes.size()) ? ptypes[i] : "int";
-                    arg_str += llvmType(ptype) + " " + emitArgForParam(*call->args[i], ptype);
+                    arg_str += llvmType(ptype) + " " + emitPhraseArg(*call->args[i], ptype);
                 }
                 if (ret_type == "void")
                     out_ << "    call void @" << llvmGlobalName(mangled) << "(" << arg_str << ")\n";
@@ -3009,7 +3235,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (!arg_str.empty()) arg_str += ", ";
                 std::string ptype_str = (i < (int)nptypes_cs.size()) ? nptypes_cs[i] : "";
                 std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
-                arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
+                arg_str += ptype + " " + emitPhraseArg(*call->args[i], ptype_str);
             }
 
             if (ret_type == "void") {
@@ -3059,7 +3285,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     std::string ptype_str = (i < (int)mptypes_self.size()) ? mptypes_self[i] : "";
                     std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
                     if (!arg_str.empty()) arg_str += ", ";
-                    arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
+                    arg_str += ptype + " " + emitPhraseArg(*call->args[i], ptype_str);
                 }
                 if (vslot >= 0) {
                     int n = (int)csinfo.vtable.size();
@@ -3107,7 +3333,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (i > 0) arg_str += ", ";
                 std::string ptype_str = (i < (int)rptypes.size()) ? rptypes[i] : "";
                 std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
-                arg_str += ptype + " " + emitArgForParam(*call->args[i], ptype_str);
+                arg_str += ptype + " " + emitPhraseArg(*call->args[i], ptype_str);
             }
             if (ret_type == "void") {
                 out_ << "    call void @" << resolved_callee << "(" << arg_str << ")\n";

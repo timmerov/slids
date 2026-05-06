@@ -25,6 +25,7 @@ SAMPLES=(
     new_delete
     operators
     parsing
+    phrases
     pointer
     ranges
     returnslid

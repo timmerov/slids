@@ -4,6 +4,7 @@
 #include <ostream>
 #include <map>
 #include <set>
+#include <unordered_set>
 #include <vector>
 #include <functional>
 
@@ -540,8 +541,8 @@ private:
     // condition / argument list). Each "phrase" — between two consecutive
     // terminators — has its own queue frame on this stack.
     //
-    // Lifecycle: pushPostIncQueue at phrase entry; emit operands; flushPostIncQueue
-    // at the terminator (drains the top frame's pending advances, pops).
+    // Lifecycle: pushPostIncQueue at phrase entry; emitPrePass to fire pre
+    // advances; emit operands; flushPostIncQueue at exit (drains posts, pops).
     struct PendingAdvance {
         enum Kind { Pointer, Int, Float } kind;
         std::string addr;       // ptr to the storage (operand alloca / GEP)
@@ -550,10 +551,18 @@ private:
         int step;               // +1 for ++, -1 for --
     };
     std::vector<std::vector<PendingAdvance>> post_inc_stack_;
+    // Pre-pass: marks UnaryExpr(pre++/pre--) nodes whose advance has already
+    // fired at phrase entry, so the eval site loads the stored (advanced)
+    // value rather than re-emitting the advance. Parallel stack to
+    // post_inc_stack_; pushed/popped together.
+    std::vector<std::unordered_set<const UnaryExpr*>> pre_done_stack_;
     void pushPostIncQueue();
     void flushPostIncQueue();
     void schedulePostInc(PendingAdvance::Kind kind, const std::string& addr,
                          const std::string& llvm_type, int step);
+    void emitPrePass(const Expr& root);
+    void emitPrePass(const Stmt& root);
+    bool preAlreadyDone(const UnaryExpr* u);
     std::string newTmp();
     std::string newLabel(const std::string& prefix);
     std::string uniqueAllocaReg(const std::string& var_name);

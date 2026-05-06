@@ -3333,10 +3333,10 @@ void Codegen::emitInitFieldsAtPtrs(const std::string& stype, const std::string& 
 
     auto initFieldFromExpr = [&](const std::string& ftype, const std::string& gep,
                                  const Expr* arg_expr) {
-        // PPID per-`,` flush: each ctor arg slot is its own phrase. Push/flush
-        // around the field's expression evaluation so post-inc/dec side
-        // effects fire between consecutive ctor args.
+        // PPID: each ctor arg slot is its own phrase. Pre fires at entry; post
+        // queued during eval drains at the slot's exit.
         pushPostIncQueue();
+        if (arg_expr) emitPrePass(*arg_expr);
         struct FlushOnExit {
             Codegen* cg;
             ~FlushOnExit() { cg->flushPostIncQueue(); }
@@ -3548,6 +3548,7 @@ void Codegen::emitStackRestore(int to_frame) {
 // If param_type is 'SlidType^' and arg is a string literal, construct an implicit temporary.
 std::string Codegen::emitPhraseArg(const Expr& arg, const std::string& param_type) {
     pushPostIncQueue();
+    emitPrePass(arg);
     std::string r = emitArgForParam(arg, param_type);
     flushPostIncQueue();
     return r;
@@ -3940,10 +3941,10 @@ void Codegen::emitBlock(const BlockStmt& block) {
     for (auto& stmt : block.stmts) {
         if (block_terminated_) break; // dead code after terminator — skip
         size_t temp_mark = pending_temp_dtors_.size();
-        // PPID: each statement is its own phrase. Scheduled post-inc/dec
-        // side effects from expressions evaluated during emitStmt drain at
-        // the end of the statement (the `;` terminator).
+        // PPID: each statement is its own phrase. Pre advances fire at entry;
+        // post advances queued during emitStmt drain at the end (`;`).
         pushPostIncQueue();
+        emitPrePass(*stmt);
         emitStmt(*stmt);
         flushPostIncQueue();
         // destroy implicit temporaries created during this statement.
