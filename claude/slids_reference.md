@@ -608,15 +608,6 @@ Alias rules:
 - Aliases are not fields — they do not take up additional storage
 - Aliases are always read/write — assigning to an alias writes through to the original
 
-### Limitations
-
-- **`new` of an anon-tuple** — `tup_ptr = new (int, int);` is not a supported syntax. Heap allocation is currently only for named types `new SlidType(args)`, `new T[n]`. Anon-tuples live as locals or on the slid-field/tuple-slot they're embedded in. May be added.
-- **Range expressions** `a..b` and tuple/range interaction `2 * (1..3)` — not designed.
-- **Type widening across slots** — slot/element types must match exactly; no implicit promotion (e.g. `(int, int) + 1.5` is a compile error). May relax later.
-- **Method dispatch on a slid slot reached through a tuple-returning call** — `make_tuple()[0]` reads the slot, but `make_tuple()[0].method()` is not yet wired.
-- **`tuple.count()`** — not implemented. Element count is known at compile time but isn't exposed through a method.
-- **Runtime-indexed tuple element access** — `tuple[i]` with a non-constant `i` is not supported because heterogeneous slots can't be type-checked at runtime. Tuples must be unrolled at compile time (no construct for that yet).
-
 ---
 
 ## Slids
