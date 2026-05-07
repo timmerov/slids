@@ -1,9 +1,4 @@
 
-object.field_++ does not compile.
-
-implement complex field access with tuples.
-tuple[1].a_ is not yet supported.
-
 revisit initialization.
 (int, int) pairs[3] = ((1, 2), (3, 4), (5, 6));
 review passing initializers to classes whose fields
@@ -11,6 +6,28 @@ are classes.
 right now can pass one initializer.
 properly would be to nest tuples.
 
+"fixed arrays require an element type."
+oh really?
+
+unhelpful caret:
+alisa TupleType =
+                ^
+return-type function-name expected-(
+
+allegedly new tuple doesn't work:
+tuple_ptr = new (int, int);
+
+alleged compile error:
+type mismatch int v float.
+tuple = (5, 5) + 1.5
+
+alleged error:
+function returns tuple.
+tuple can't be indexed.
+returns_tuple()[0];
+
+tuple.count() not implemented.
+no need until can index at runtime.
 
 test if works as expected:
 x = ^y^;

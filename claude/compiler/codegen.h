@@ -595,6 +595,19 @@ private:
     };
     Lvalue resolveLvalue(const Expr& e);
 
+    // Per-layer subscript driller. Each iteration reclassifies `type`:
+    // anon-tuple → struct-field GEP; slid with op[] → call dispatch; inline
+    // array → array GEP; ptr/iter → load + GEP. Used by the AIE arm of
+    // resolveLvalue and by emitExpr's AIE wrapper after they produce the
+    // first (addr, type).
+    Lvalue drillIndexChain(std::string addr, std::string type,
+        const std::vector<const Expr*>& indices, int from, const Expr& err_site);
+
+    // Type-only mirror of drillIndexChain: walks indices against `type`
+    // without emitting IR. Used by inferSlidType for AIE chains.
+    std::string drillIndexedType(std::string type,
+        const std::vector<const Expr*>& indices, int from);
+
     // Per-phrase post-inc/dec schedule. PPID model: post-inc/dec defers its
     // side effect to the next terminator (`,`, `;`, or closing `)` of a
     // condition / argument list). Each "phrase" — between two consecutive

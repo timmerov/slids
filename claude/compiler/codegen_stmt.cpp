@@ -299,51 +299,202 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
         }
     }
     if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&e)) {
-        auto [gep0, et0] = emitInlineArrayElemPtr(*ai->base, *ai->index);
-        if (!gep0.empty()) return {gep0, et0};
-        auto base = resolveLvalue(*ai->base);
-        // anon-tuple slot: GEP into struct field at constant index
-        if (isAnonTupleType(base.type)) {
-            auto elems = anonTupleElems(base.type);
-            int idx;
-            if (!constExprToInt(*ai->index, enum_values_, idx))
-                errorAtNode(e, "Tuple index must be a constant integer.");
-            if (idx < 0 || idx >= (int)elems.size())
-                errorAtNode(e, "Tuple index "
-                    + std::to_string(idx) + " is out of range.");
-            std::string gep = emitFieldGep(base.type, base.addr, idx);
-            return {gep, elems[idx]};
+        (void)ai;
+        // Walk the consecutive AIE chain, collecting indices outer→inner so
+        // each layer can reclassify its own base type. The deepest non-AIE
+        // base is `cur`.
+        std::vector<const Expr*> indices;
+        const Expr* cur = &e;
+        while (auto* a = dynamic_cast<const ArrayIndexExpr*>(cur)) {
+            indices.insert(indices.begin(), a->index.get());
+            cur = a->base.get();
         }
-        // pointer / iterator base: load base, GEP by index
-        if (isPtrType(base.type) || isRefType(base.type)) {
-            std::string elem_type = isPtrType(base.type)
-                ? base.type.substr(0, base.type.size() - 2)
-                : base.type.substr(0, base.type.size() - 1);
-            std::string base_ptr = newTmp();
-            out_ << "    " << base_ptr << " = load ptr, ptr " << base.addr << "\n";
-            std::string idx_llvm = exprLlvmType(*ai->index);
-            std::string idx_val = emitExpr(*ai->index);
-            std::string gep = newTmp();
-            out_ << "    " << gep << " = getelementptr " << llvmType(elem_type)
-                 << ", ptr " << base_ptr << ", " << idx_llvm << " " << idx_val << "\n";
-            return {gep, elem_type};
+        std::string addr, type;
+        int consumed = 0;
+        // Multi-dim native array prefix: when the deepest base is a fixed-size
+        // array local (storage is a flat alloca), fold up to dims.size()
+        // indices into one row-major GEP. Remaining indices then drill through
+        // whatever element type produces.
+        if (auto* ve = dynamic_cast<const VarExpr*>(cur)) {
+            auto ait = array_info_.find(ve->name);
+            if (ait != array_info_.end()) {
+                auto& ainfo = ait->second;
+                int n = std::min((int)indices.size(), (int)ainfo.dims.size());
+                std::string flat = emitExpr(*indices[0]);
+                for (int k = 1; k < n; k++) {
+                    int stride = ainfo.dims[k];
+                    std::string mul = newTmp();
+                    out_ << "    " << mul << " = mul i32 " << flat
+                         << ", " << stride << "\n";
+                    std::string iv = emitExpr(*indices[k]);
+                    std::string add = newTmp();
+                    out_ << "    " << add << " = add i32 " << mul
+                         << ", " << iv << "\n";
+                    flat = add;
+                }
+                int total = 1;
+                for (int d : ainfo.dims) total *= d;
+                std::string elt = llvmType(ainfo.elem_type);
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr [" << total
+                     << " x " << elt << "], ptr " << ainfo.alloca_reg
+                     << ", i32 0, i32 " << flat << "\n";
+                addr = gep;
+                type = ainfo.elem_type;
+                consumed = n;
+            }
         }
-        // inline-array base reached through a chain (e.g. obj.arr_[i])
-        if (isInlineArrayType(base.type)) {
-            auto lb = base.type.rfind('[');
-            std::string elem_type = base.type.substr(0, lb);
-            std::string sz_str = base.type.substr(lb + 1, base.type.size() - lb - 2);
-            std::string elt = llvmType(elem_type);
-            std::string idx_llvm = exprLlvmType(*ai->index);
-            std::string idx_val = emitExpr(*ai->index);
-            std::string gep = newTmp();
-            out_ << "    " << gep << " = getelementptr [" << sz_str << " x " << elt
-                 << "], ptr " << base.addr << ", i32 0, " << idx_llvm << " " << idx_val << "\n";
-            return {gep, elem_type};
+        if (addr.empty()) {
+            auto base = resolveLvalue(*cur);
+            addr = base.addr;
+            type = base.type;
         }
-        errorAtNode(e, "Unsupported array-index lvalue.");
+        return drillIndexChain(addr, type, indices, consumed, e);
     }
     errorAtNode(e, "Unsupported lvalue shape.");
+}
+
+Codegen::Lvalue Codegen::drillIndexChain(std::string addr, std::string type,
+        const std::vector<const Expr*>& indices, int from, const Expr& err_site) {
+    for (int i = from; i < (int)indices.size(); i++) {
+        const Expr& idx = *indices[i];
+        // anon-tuple slot
+        if (isAnonTupleType(type)) {
+            auto elems = anonTupleElems(type);
+            int k;
+            if (constExprToInt(idx, enum_values_, k)) {
+                if (k < 0 || k >= (int)elems.size())
+                    errorAtNode(err_site, "Tuple index "
+                        + std::to_string(k) + " is out of range.");
+                addr = emitFieldGep(type, addr, k);
+                type = elems[k];
+                continue;
+            }
+            // variable index: only allowed on a homogeneous tuple.
+            bool homog = !elems.empty();
+            for (auto& t : elems) if (t != elems[0]) { homog = false; break; }
+            if (!homog)
+                errorAtNode(err_site, "Variable index on heterogeneous tuple '"
+                    + type + "' is not allowed.");
+            std::string elem_t = elems[0];
+            std::string elem_llvm = llvmType(elem_t);
+            std::string iv = emitExpr(idx);
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr ["
+                 << elems.size() << " x " << elem_llvm
+                 << "], ptr " << addr << ", i32 0, i32 " << iv << "\n";
+            addr = gep;
+            type = elem_t;
+            continue;
+        }
+        // slid with op[] dispatch
+        if (slid_info_.count(type)) {
+            std::string mangled = resolveSlidIndex(type, idx);
+            if (mangled.empty())
+                errorAtNode(err_site, "Type '" + type
+                    + "' has no op[] for the given index.");
+            auto& mptypes = func_param_types_[mangled];
+            std::string idx_llvm = mptypes.empty() ? "i32" : llvmType(mptypes[0]);
+            std::string idx_val = mptypes.empty()
+                ? emitExpr(idx)
+                : emitArgForParam(idx, mptypes[0]);
+            auto rit = func_return_types_.find(mangled);
+            std::string ret_t = (rit != func_return_types_.end()) ? rit->second : "";
+            if (!ret_t.empty() && slid_info_.count(ret_t)) {
+                // sret return: caller-allocated destination.
+                std::string slot = emitSlidAlloca(ret_t);
+                out_ << "    call void @" << llvmGlobalName(mangled)
+                     << "(ptr " << addr
+                     << ", ptr sret(%struct." << ret_t << ") " << slot
+                     << ", " << idx_llvm << " " << idx_val << ")\n";
+                addr = slot;
+                type = ret_t;
+            } else {
+                std::string ret_llvm = ret_t.empty() ? "i32" : llvmType(ret_t);
+                std::string tmp = newTmp();
+                out_ << "    " << tmp << " = call " << ret_llvm
+                     << " @" << llvmGlobalName(mangled)
+                     << "(ptr " << addr << ", " << idx_llvm
+                     << " " << idx_val << ")\n";
+                // Spill the primitive result so the chain can keep operating
+                // on an addr. A trailing emitExpr load folds into LLVM SROA.
+                std::string slot = newTmp();
+                out_ << "    " << slot << " = alloca " << ret_llvm << "\n";
+                out_ << "    store " << ret_llvm << " " << tmp
+                     << ", ptr " << slot << "\n";
+                addr = slot;
+                type = ret_t.empty() ? "int" : ret_t;
+            }
+            continue;
+        }
+        // inline array (e.g. obj.arr_[i] reached through a chain)
+        if (isInlineArrayType(type)) {
+            auto lb = type.rfind('[');
+            std::string elem_type = type.substr(0, lb);
+            std::string sz_str = type.substr(lb + 1, type.size() - lb - 2);
+            std::string elt = llvmType(elem_type);
+            std::string idx_llvm = exprLlvmType(idx);
+            std::string iv = emitExpr(idx);
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr [" << sz_str
+                 << " x " << elt << "], ptr " << addr
+                 << ", i32 0, " << idx_llvm << " " << iv << "\n";
+            addr = gep;
+            type = elem_type;
+            continue;
+        }
+        // pointer / iterator base
+        if (isPtrType(type) || isRefType(type)) {
+            std::string elem_type = isPtrType(type)
+                ? type.substr(0, type.size() - 2)
+                : type.substr(0, type.size() - 1);
+            std::string base_ptr = newTmp();
+            out_ << "    " << base_ptr << " = load ptr, ptr " << addr << "\n";
+            std::string idx_llvm = exprLlvmType(idx);
+            std::string iv = emitExpr(idx);
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr " << llvmType(elem_type)
+                 << ", ptr " << base_ptr << ", " << idx_llvm << " " << iv << "\n";
+            addr = gep;
+            type = elem_type;
+            continue;
+        }
+        errorAtNode(err_site, "Type '" + type + "' is not indexable.");
+    }
+    return {addr, type};
+}
+
+std::string Codegen::drillIndexedType(std::string type,
+        const std::vector<const Expr*>& indices, int from) {
+    for (int i = from; i < (int)indices.size(); i++) {
+        if (isAnonTupleType(type)) {
+            auto elems = anonTupleElems(type);
+            int k;
+            if (constExprToInt(*indices[i], enum_values_, k)) {
+                if (k < 0 || k >= (int)elems.size()) return "int";
+                type = elems[k];
+            } else {
+                bool homog = !elems.empty();
+                for (auto& t : elems) if (t != elems[0]) { homog = false; break; }
+                type = homog ? elems[0] : "int";
+            }
+        } else if (slid_info_.count(type)) {
+            std::string mangled = resolveSlidIndex(type, *indices[i]);
+            if (mangled.empty()) return "int";
+            auto rit = func_return_types_.find(mangled);
+            type = (rit != func_return_types_.end()) ? rit->second : "int";
+        } else if (isInlineArrayType(type)) {
+            auto lb = type.rfind('[');
+            type = type.substr(0, lb);
+        } else if (isPtrType(type) || isRefType(type)) {
+            type = isPtrType(type)
+                ? type.substr(0, type.size() - 2)
+                : type.substr(0, type.size() - 1);
+        } else {
+            return "int";
+        }
+    }
+    return type;
 }
 
 void Codegen::emitDestructure(
@@ -1874,331 +2025,196 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* ia = dynamic_cast<const IndexAssignStmt*>(&stmt)) {
-        // base[index] = value — pointer-type indexed store
+        // base[index] = value — chained-write driller. Walks the AIE chain on
+        // ia->base, drills all-but-last indices to a (slot-parent, type), then
+        // dispatches the final write step on type. Symmetric to the read-side
+        // resolveLvalue AIE arm; multi-dim native array prefix is identical.
 
-        // obj.field[index] = value — inline array field on an external object
-        if (auto* fa = dynamic_cast<const FieldAccessExpr*>(ia->base.get())) {
-            auto* ove = dynamic_cast<const VarExpr*>(fa->object.get());
-            if (!ove) error(std::string("Complex field object not supported"));
-            auto tit = locals_.find(ove->name);
-            if (tit == locals_.end()) error(std::string("Unknown type for '" + ove->name + "'"));
-            std::string slid_name = tit->second.type;
-            auto& info = slid_info_[slid_name];
-            auto fit = info.field_index.find(fa->field);
-            if (fit == info.field_index.end()) error(std::string("Unknown field '" + fa->field + "'"));
-            std::string ft = info.field_types[fit->second];
-            // anon-tuple field: GEP into the field and delegate to tuple-element store logic
-            if (isAnonTupleType(ft)) {
-                auto elems = anonTupleElems(ft);
-                int idx;
-                if (!constExprToInt(*ia->index, enum_values_, idx))
-                    error(std::string("Tuple index must be a constant integer"));
-                if (idx < 0 || idx >= (int)elems.size())
-                    error(std::string("Tuple index " + std::to_string(idx)
-                        + " out of range (size " + std::to_string(elems.size()) + ")"));
-                const std::string& elem_slids = elems[idx];
-                std::string obj_ptr = locals_[ove->name].reg;
-                std::string field_gep = newTmp();
-                out_ << "    " << field_gep << " = getelementptr %struct." << slid_name
-                     << ", ptr " << obj_ptr << ", i32 0, i32 " << fit->second << "\n";
-                std::string slot_gep = emitFieldGep(ft, field_gep, idx);
-                if (slid_info_.count(elem_slids) || isAnonTupleType(elem_slids)) {
-                    std::string src_type = inferSlidType(*ia->value);
-                    if (src_type != elem_slids)
-                        error(std::string("Tuple element write: expected '"
-                            + elem_slids + "', got '" + src_type + "'"));
-                    std::string src_ptr;
-                    if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
-                        auto lit = locals_.find(rve->name);
-                        if (lit != locals_.end()) src_ptr = lit->second.reg;
-                    } else {
-                        std::string v = emitExpr(*ia->value);
-                        if (isAnonTupleType(elem_slids)) {
-                            std::string tmp = newTmp();
-                            out_ << "    " << tmp << " = alloca " << llvmType(elem_slids) << "\n";
-                            out_ << "    store " << llvmType(elem_slids) << " " << v
-                                 << ", ptr " << tmp << "\n";
-                            src_ptr = tmp;
-                        } else {
-                            src_ptr = v;
-                        }
-                    }
-                    emitSlidSlotAssign(elem_slids, slot_gep, src_ptr, ia->is_move);
-                    return;
+        // Final-step writer: stores rhs into a resolved (slot_addr, slot_type).
+        // Slid / anon-tuple slots dispatch through emitSlidSlotAssign so user
+        // op= / op<- and the field-walk fallback fire. Primitive slots width-
+        // coerce; indirect slots null out the source on move.
+        auto emitSlotWrite = [&](const std::string& slot_addr,
+                                  const std::string& slot_type) {
+            if (slid_info_.count(slot_type) || isAnonTupleType(slot_type)) {
+                std::string src_ptr;
+                if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
+                    auto lit = locals_.find(rve->name);
+                    if (lit != locals_.end()) src_ptr = lit->second.reg;
                 }
-                // scalar slot
-                requirePtrInit(elem_slids, *ia->value);
-                std::string rhs_val = emitExpr(*ia->value);
-                out_ << "    store " << llvmType(elem_slids) << " " << rhs_val
-                     << ", ptr " << slot_gep << "\n";
-                if (ia->is_move && isIndirectType(elem_slids))
-                    emitNullOut(*ia->value);
+                if (src_ptr.empty()) {
+                    std::string v = emitExpr(*ia->value);
+                    if (isAnonTupleType(slot_type)) {
+                        // emitExpr returns a loaded struct SSA for tuple
+                        // values — spill so the field walk has a ptr.
+                        std::string tmp = newTmp();
+                        out_ << "    " << tmp << " = alloca "
+                             << llvmType(slot_type) << "\n";
+                        out_ << "    store " << llvmType(slot_type) << " "
+                             << v << ", ptr " << tmp << "\n";
+                        src_ptr = tmp;
+                    } else {
+                        src_ptr = v;
+                    }
+                }
+                emitSlidSlotAssign(slot_type, slot_addr, src_ptr, ia->is_move);
                 return;
             }
-            if (!isInlineArrayType(ft)) error(std::string("Field '" + fa->field + "' is not an inline array"));
-            auto lb = ft.rfind('[');
-            std::string elem_type = ft.substr(0, lb);
-            std::string sz_str = ft.substr(lb + 1, ft.size() - lb - 2);
-            std::string elt = llvmType(elem_type);
-            std::string obj_ptr = locals_[ove->name].reg;
-            std::string field_gep = newTmp();
-            out_ << "    " << field_gep << " = getelementptr %struct." << slid_name
-                 << ", ptr " << obj_ptr << ", i32 0, i32 " << fit->second << "\n";
-            std::string idx_llvm = exprLlvmType(*ia->index);
-            std::string idx_val = emitExpr(*ia->index);
-            std::string elem_gep = newTmp();
-            out_ << "    " << elem_gep << " = getelementptr [" << sz_str << " x " << elt
-                 << "], ptr " << field_gep << ", i32 0, " << idx_llvm << " " << idx_val << "\n";
-            requirePtrInit(elem_type, *ia->value);
+            requirePtrInit(slot_type, *ia->value);
             std::string rhs_val = emitExpr(*ia->value);
-            out_ << "    store " << elt << " " << rhs_val << ", ptr " << elem_gep << "\n";
+            std::string elem_llvm = llvmType(slot_type);
+            if (!isIndirectType(slot_type)) {
+                std::string src_t = exprLlvmType(*ia->value);
+                static const std::map<std::string,int> rank =
+                    {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+                auto sit = rank.find(src_t), dit = rank.find(elem_llvm);
+                if (sit != rank.end() && dit != rank.end()
+                        && sit->second != dit->second) {
+                    std::string coerced = newTmp();
+                    if (dit->second > sit->second)
+                        out_ << "    " << coerced << " = sext " << src_t
+                             << " " << rhs_val << " to " << elem_llvm << "\n";
+                    else
+                        out_ << "    " << coerced << " = trunc " << src_t
+                             << " " << rhs_val << " to " << elem_llvm << "\n";
+                    rhs_val = coerced;
+                }
+            }
+            out_ << "    store " << elem_llvm << " " << rhs_val
+                 << ", ptr " << slot_addr << "\n";
+            if (ia->is_move && isIndirectType(slot_type))
+                emitNullOut(*ia->value);
+        };
+
+        // Walk ia->base AIE chain, append ia->index as the final write index.
+        std::vector<const Expr*> indices;
+        const Expr* cur = ia->base.get();
+        while (auto* a = dynamic_cast<const ArrayIndexExpr*>(cur)) {
+            indices.insert(indices.begin(), a->index.get());
+            cur = a->base.get();
+        }
+        indices.push_back(ia->index.get());
+
+        // Seed (addr, type). Multi-dim native array prefix folds dims.size()
+        // indices flat when the deepest base is a fixed-size array local
+        // and indices supply at least that many.
+        std::string addr, type;
+        int consumed = 0;
+        if (auto* ve = dynamic_cast<const VarExpr*>(cur)) {
+            auto ait = array_info_.find(ve->name);
+            if (ait != array_info_.end()
+                    && (int)indices.size() >= (int)ait->second.dims.size()) {
+                auto& ainfo = ait->second;
+                int n = (int)ainfo.dims.size();
+                std::string flat = emitExpr(*indices[0]);
+                for (int k = 1; k < n; k++) {
+                    int stride = ainfo.dims[k];
+                    std::string mul = newTmp();
+                    out_ << "    " << mul << " = mul i32 " << flat
+                         << ", " << stride << "\n";
+                    std::string iv = emitExpr(*indices[k]);
+                    std::string add = newTmp();
+                    out_ << "    " << add << " = add i32 " << mul
+                         << ", " << iv << "\n";
+                    flat = add;
+                }
+                int total = 1;
+                for (int d : ainfo.dims) total *= d;
+                std::string elt = llvmType(ainfo.elem_type);
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr [" << total
+                     << " x " << elt << "], ptr " << ainfo.alloca_reg
+                     << ", i32 0, i32 " << flat << "\n";
+                addr = gep;
+                type = ainfo.elem_type;
+                consumed = n;
+            }
+        }
+        if (addr.empty()) {
+            auto base = resolveLvalue(*cur);
+            addr = base.addr;
+            type = base.type;
+        }
+
+        // Drill the middle indices so addr/type land at the parent of the
+        // final write slot (or at the slot itself when the multi-dim prefix
+        // already consumed everything).
+        int last_pos = (int)indices.size() - 1;
+        if (consumed < last_pos) {
+            std::vector<const Expr*> mid(
+                indices.begin() + consumed, indices.begin() + last_pos);
+            auto lv = drillIndexChain(addr, type, mid, 0, *ia->index);
+            addr = lv.addr;
+            type = lv.type;
+        }
+
+        if (consumed == (int)indices.size()) {
+            // Multi-dim prefix consumed every index — addr is the slot.
+            emitSlotWrite(addr, type);
             return;
         }
 
-        // anon-tuple-ref element write: p^[N] = val where p is (t1,...)^
-        if (auto* de = dynamic_cast<const DerefExpr*>(ia->base.get())) {
-            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                auto tit = locals_.find(ve->name);
-                if (tit != locals_.end()) {
-                    std::string t = tit->second.type;
-                    if (!t.empty() && t.back() == '^') t.pop_back();
-                    else if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
-                        t.resize(t.size()-2);
-                    if (isAnonTupleType(t)) {
-                        auto elems = anonTupleElems(t);
-                        int idx;
-                        if (!constExprToInt(*ia->index, enum_values_, idx))
-                            error(std::string("Tuple index must be a constant integer"));
-                        if (idx < 0 || idx >= (int)elems.size())
-                            error(std::string("Tuple index " + std::to_string(idx)
-                                + " out of range (size " + std::to_string(elems.size()) + ")"));
-                        std::string base_ptr = newTmp();
-                        out_ << "    " << base_ptr << " = load ptr, ptr "
-                             << locals_.at(ve->name).reg << "\n";
-                        std::string slot_gep = emitFieldGep(t, base_ptr, idx);
-                        const std::string& elem_slids = elems[idx];
-                        if (slid_info_.count(elem_slids) || isAnonTupleType(elem_slids)) {
-                            std::string src_ptr;
-                            if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
-                                auto lit = locals_.find(rve->name);
-                                if (lit != locals_.end()) src_ptr = lit->second.reg;
-                            } else {
-                                std::string v = emitExpr(*ia->value);
-                                if (isAnonTupleType(elem_slids)) {
-                                    std::string tmp = newTmp();
-                                    out_ << "    " << tmp << " = alloca "
-                                         << llvmType(elem_slids) << "\n";
-                                    out_ << "    store " << llvmType(elem_slids) << " "
-                                         << v << ", ptr " << tmp << "\n";
-                                    src_ptr = tmp;
-                                } else {
-                                    src_ptr = v;
-                                }
-                            }
-                            emitSlidSlotAssign(elem_slids, slot_gep, src_ptr, ia->is_move);
-                            return;
-                        }
-                        requirePtrInit(elem_slids, *ia->value);
-                        std::string rhs_val = emitExpr(*ia->value);
-                        out_ << "    store " << llvmType(elem_slids) << " " << rhs_val
-                             << ", ptr " << slot_gep << "\n";
-                        if (ia->is_move && isIndirectType(elem_slids))
-                            emitNullOut(*ia->value);
-                        return;
-                    }
-                }
-            }
+        const Expr& last = *indices.back();
+        if (isAnonTupleType(type)) {
+            auto elems = anonTupleElems(type);
+            int idx;
+            if (!constExprToInt(last, enum_values_, idx))
+                errorAtNode(*ia, "Tuple index must be a constant integer.");
+            if (idx < 0 || idx >= (int)elems.size())
+                errorAtNode(*ia, "Tuple index "
+                    + std::to_string(idx) + " is out of range.");
+            std::string slot = emitFieldGep(type, addr, idx);
+            emitSlotWrite(slot, elems[idx]);
+            return;
         }
-
-        auto* ve = dynamic_cast<const VarExpr*>(ia->base.get());
-        if (!ve) error(std::string("Complex base not supported"));
-
-        // anonymous tuple element write: tuple[N] = val — N must be a compile-time constant
-        {
-            auto tit = locals_.find(ve->name);
-            if (tit != locals_.end() && isAnonTupleType(tit->second.type)) {
-                auto elems = anonTupleElems(tit->second.type);
-                int idx;
-                if (!constExprToInt(*ia->index, enum_values_, idx))
-                    error(std::string("Tuple index must be a constant integer"));
-                if (idx < 0 || idx >= (int)elems.size())
-                    error(std::string("Tuple index " + std::to_string(idx)
-                        + " out of range (size " + std::to_string(elems.size()) + ")"));
-                std::string elem_slids = elems[idx];
-                std::string elem_llvm = llvmType(elem_slids);
-                std::string gep = emitFieldGep(tit->second.type, locals_[ve->name].reg, idx);
-                // slid or anon-tuple element: route through element-wise walker for op= dispatch
-                if (slid_info_.count(elem_slids) || isAnonTupleType(elem_slids)) {
-                    std::string src_type = inferSlidType(*ia->value);
-                    if (src_type != elem_slids)
-                        error(std::string("Tuple element write: expected '"
-                            + elem_slids + "', got '" + src_type + "'"));
-                    std::string src_ptr;
-                    if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
-                        auto lit = locals_.find(rve->name);
-                        if (lit != locals_.end()) src_ptr = lit->second.reg;
-                    } else {
-                        std::string v = emitExpr(*ia->value);
-                        if (isAnonTupleType(elem_slids)) {
-                            // emitExpr(TupleExpr or similar) returns a loaded struct SSA.
-                            // Materialize to a ptr so emitSlidSlotAssign's field walk works.
-                            std::string tmp = newTmp();
-                            out_ << "    " << tmp << " = alloca " << llvmType(elem_slids) << "\n";
-                            out_ << "    store " << llvmType(elem_slids) << " " << v
-                                 << ", ptr " << tmp << "\n";
-                            src_ptr = tmp;
-                        } else {
-                            // slid: emitExpr returns the ptr directly
-                            src_ptr = v;
-                        }
-                    }
-                    if (src_ptr.empty())
-                        error(std::string("Tuple element write from unsupported source"));
-                    emitSlidSlotAssign(elem_slids, gep, src_ptr, ia->is_move);
-                    return;
-                }
-                requirePtrInit(elem_slids, *ia->value);
-                std::string rhs_val = emitExpr(*ia->value);
-                // width-coerce integer widths (sext/trunc) to match the field type
-                if (!isIndirectType(elem_slids)) {
-                    std::string src_t = exprLlvmType(*ia->value);
-                    static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
-                    auto sit = rank.find(src_t), dit = rank.find(elem_llvm);
-                    if (sit != rank.end() && dit != rank.end() && sit->second != dit->second) {
-                        std::string coerced = newTmp();
-                        if (dit->second > sit->second)
-                            out_ << "    " << coerced << " = sext " << src_t << " " << rhs_val << " to " << elem_llvm << "\n";
-                        else
-                            out_ << "    " << coerced << " = trunc " << src_t << " " << rhs_val << " to " << elem_llvm << "\n";
-                        rhs_val = coerced;
-                    }
-                }
-                out_ << "    store " << elem_llvm << " " << rhs_val << ", ptr " << gep << "\n";
-                return;
-            }
+        if (slid_info_.count(type)) {
+            std::string mangled = resolveSlidIndexAssign(type, last);
+            if (mangled.empty())
+                errorAtNode(*ia, "Type '" + type
+                    + "' has no op[]= for the given index.");
+            auto& mptypes = func_param_types_[mangled];
+            std::string idx_llvm = mptypes.empty() ? "i32" : llvmType(mptypes[0]);
+            std::string rhs_llvm = (mptypes.size() < 2) ? "i32" : llvmType(mptypes[1]);
+            std::string idx_val = mptypes.empty()
+                ? emitExpr(last)
+                : emitArgForParam(last, mptypes[0]);
+            std::string rhs_val = (mptypes.size() < 2)
+                ? emitExpr(*ia->value)
+                : emitArgForParam(*ia->value, mptypes[1]);
+            out_ << "    call void @" << llvmGlobalName(mangled)
+                 << "(ptr " << addr << ", " << idx_llvm << " " << idx_val
+                 << ", " << rhs_llvm << " " << rhs_val << ")\n";
+            return;
         }
-
-        // slid op[]= dispatch
-        {
-            auto tit = locals_.find(ve->name);
-            if (tit != locals_.end() && slid_info_.count(tit->second.type)) {
-                std::string mangled = resolveSlidIndexAssign(tit->second.type, *ia->index);
-                if (!mangled.empty()) {
-                    std::string obj_ptr = locals_[ve->name].reg;
-                    auto& mptypes = func_param_types_[mangled];
-                    std::string idx_llvm = mptypes.empty() ? "i32" : llvmType(mptypes[0]);
-                    std::string rhs_llvm = (mptypes.size() < 2) ? "i32" : llvmType(mptypes[1]);
-                    std::string idx_val = mptypes.empty()
-                        ? emitExpr(*ia->index)
-                        : emitArgForParam(*ia->index, mptypes[0]);
-                    std::string rhs_val = (mptypes.size() < 2)
-                        ? emitExpr(*ia->value)
-                        : emitArgForParam(*ia->value, mptypes[1]);
-                    out_ << "    call void @" << llvmGlobalName(mangled)
-                         << "(ptr " << obj_ptr << ", " << idx_llvm << " " << idx_val
-                         << ", " << rhs_llvm << " " << rhs_val << ")\n";
-                    return;
-                }
-            }
+        if (isInlineArrayType(type)) {
+            auto lb = type.rfind('[');
+            std::string elem_type = type.substr(0, lb);
+            std::string sz_str = type.substr(lb + 1, type.size() - lb - 2);
+            std::string elt = llvmType(elem_type);
+            std::string idx_llvm = exprLlvmType(last);
+            std::string iv = emitExpr(last);
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr [" << sz_str
+                 << " x " << elt << "], ptr " << addr
+                 << ", i32 0, " << idx_llvm << " " << iv << "\n";
+            emitSlotWrite(gep, elem_type);
+            return;
         }
-
-        // inline-array local: arr[i] = val (or arr[i] <- val)
-        {
-            auto [gep, et] = emitInlineArrayElemPtr(*ia->base, *ia->index);
-            if (!gep.empty()) {
-                // slid / anon-tuple element: dispatch user op= / op<- (or
-                // synthesized field-walk) so move semantics fire correctly.
-                if (slid_info_.count(et) || isAnonTupleType(et)) {
-                    std::string src_ptr;
-                    if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
-                        auto lit = locals_.find(rve->name);
-                        if (lit != locals_.end()) src_ptr = lit->second.reg;
-                    }
-                    if (src_ptr.empty()) src_ptr = emitExpr(*ia->value);
-                    emitSlidSlotAssign(et, gep, src_ptr, ia->is_move);
-                    return;
-                }
-                requirePtrInit(et, *ia->value);
-                std::string rhs = emitExpr(*ia->value);
-                out_ << "    store " << llvmType(et) << " " << rhs << ", ptr " << gep << "\n";
-                if (ia->is_move && isIndirectType(et))
-                    emitNullOut(*ia->value);
-                return;
-            }
+        if (isPtrType(type) || isRefType(type)) {
+            std::string elem_type = isPtrType(type)
+                ? type.substr(0, type.size() - 2)
+                : type.substr(0, type.size() - 1);
+            std::string base_ptr = newTmp();
+            out_ << "    " << base_ptr << " = load ptr, ptr " << addr << "\n";
+            std::string idx_llvm = exprLlvmType(last);
+            std::string iv = emitExpr(last);
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr " << llvmType(elem_type)
+                 << ", ptr " << base_ptr << ", " << idx_llvm << " " << iv << "\n";
+            emitSlotWrite(gep, elem_type);
+            return;
         }
-
-        // fixed-size array field store inside method body (e.g. int rgb_[3])
-        if (!current_slid_.empty()) {
-            auto& info = slid_info_[current_slid_];
-            auto fit = info.field_index.find(ve->name);
-            if (fit != info.field_index.end() && isInlineArrayType(info.field_types[fit->second])) {
-                std::string ft = info.field_types[fit->second];
-                auto lb = ft.rfind('[');
-                std::string elem_type = ft.substr(0, lb);
-                std::string sz_str = ft.substr(lb + 1, ft.size() - lb - 2);
-                std::string elt = llvmType(elem_type);
-                std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
-                std::string field_gep = newTmp();
-                out_ << "    " << field_gep << " = getelementptr %struct." << current_slid_
-                     << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
-                std::string idx_llvm = exprLlvmType(*ia->index);
-                std::string idx_val = emitExpr(*ia->index);
-                std::string elem_gep = newTmp();
-                out_ << "    " << elem_gep << " = getelementptr [" << sz_str << " x " << elt
-                     << "], ptr " << field_gep << ", i32 0, " << idx_llvm << " " << idx_val << "\n";
-                requirePtrInit(elem_type, *ia->value);
-                std::string rhs_val = emitExpr(*ia->value);
-                out_ << "    store " << elt << " " << rhs_val << ", ptr " << elem_gep << "\n";
-                return;
-            }
-        }
-
-        std::string base_ptr;
-        std::string elem_type_str;
-        // check if it's a field in the current slid
-        if (!current_slid_.empty()) {
-            auto& info = slid_info_[current_slid_];
-            auto fit = info.field_index.find(ve->name);
-            if (fit != info.field_index.end()) {
-                std::string ft = info.field_types[fit->second];
-                if (ft.size() >= 2 && ft.substr(ft.size()-2) == "[]") {
-                    elem_type_str = ft.substr(0, ft.size()-2);
-                    std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
-                    std::string fgep = newTmp();
-                    out_ << "    " << fgep << " = getelementptr %struct." << current_slid_
-                         << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
-                    base_ptr = newTmp();
-                    out_ << "    " << base_ptr << " = load ptr, ptr " << fgep << "\n";
-                }
-            }
-        }
-        // check local pointer variable
-        if (base_ptr.empty()) {
-            auto lit = locals_.find(ve->name);
-            auto tit = locals_.find(ve->name);
-            if (lit != locals_.end() && tit != locals_.end()) {
-                std::string lt = tit->second.type;
-                if (lt.size() >= 2 && lt.substr(lt.size()-2) == "[]") {
-                    elem_type_str = lt.substr(0, lt.size()-2);
-                    base_ptr = newTmp();
-                    out_ << "    " << base_ptr << " = load ptr, ptr " << lit->second.reg << "\n";
-                }
-            }
-        }
-        if (base_ptr.empty())
-            error(std::string("Variable '" + ve->name + "' is not a pointer type."));
-
-        std::string idx_llvm = exprLlvmType(*ia->index);
-        std::string idx_val = emitExpr(*ia->index);
-        std::string elt = llvmType(elem_type_str);
-        std::string gep = newTmp();
-        out_ << "    " << gep << " = getelementptr " << elt << ", ptr " << base_ptr << ", " << idx_llvm << " " << idx_val << "\n";
-        requirePtrInit(elem_type_str, *ia->value);
-        std::string rhs = emitExpr(*ia->value);
-        out_ << "    store " << elt << " " << rhs << ", ptr " << gep << "\n";
-        if (ia->is_move && isIndirectType(elem_type_str))
-            emitNullOut(*ia->value);
-        return;
+        errorAtNode(*ia, "Type '" + type + "' is not indexable for write.");
     }
 
     if (auto* sw = dynamic_cast<const SwapStmt*>(&stmt)) {

@@ -10,6 +10,7 @@ SAMPLES = \
 	alias \
 	blocks \
 	cast \
+	chain \
 	class \
 	comments \
 	constructor \
