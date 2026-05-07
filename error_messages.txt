@@ -1,0 +1,244 @@
+# slidsc compiler error messages — 229 total
+# Format: <file>:<line>  [<kind>]  <message>   (<…> = runtime-substituted segment)
+
+==== compiler/codegen.cpp (39 messages) ====
+  compiler/codegen.cpp:237  [error]  Operator op<-> on class '<…>' must take exactly one parameter of type '<…>'.
+  compiler/codegen.cpp:256  [error]  Operator '<…>' on class '<…>' must return a built-in type (bool, int, pointer), not a class.
+  compiler/codegen.cpp:516  [error]  Class '<…>' declares '<…>()' but not '<…>()'; the constructor and destructor must be declared together, or both auto-generated.
+  compiler/codegen.cpp:555  [error]  Base class '<…>' of class '<…>' is not defined.
+  compiler/codegen.cpp:559  [error]  Cannot inherit from namespace '<…>'.
+  compiler/codegen.cpp:564  [error]  Class '<…>' is virtual but its base '<…>' is not; all ancestors of a virtual class must have a virtual destructor.
+  compiler/codegen.cpp:585  [error]  Field '<…>' in class '<…>' collides with a field inherited from '<…>'.
+  compiler/codegen.cpp:696  [error]  Class '<…>' virtual method '<…>' signature does not match the inherited slot.
+  compiler/codegen.cpp:713  [error]  Class '<…>' virtual override '<…>' return type does not match the base method.
+  compiler/codegen.cpp:731  [error]  Class '<…>' method '<…>' shadows an inherited virtual method; declare it 'virtual' to override.
+  compiler/codegen.cpp:750  [error]  Class '<…>' virtual method '<…>' signature does not match the inherited slot.
+  compiler/codegen.cpp:752  [error]  Class '<…>' may not add new virtual methods in a reopen; '<…>' must be declared in the original class.
+  compiler/codegen.cpp:757  [error]  Class '<…>' virtual override '<…>' return type does not match the base method.
+  compiler/codegen.cpp:772  [error]  Class '<…>' method '<…>' shadows an inherited virtual method; declare it 'virtual' to override.
+  compiler/codegen.cpp:840  [error]  In class '<…>', '<…>' may not be applied to '<…>()'.
+  compiler/codegen.cpp:847  [error]  In class '<…>', '<…>() = default' has no matching base method.
+  compiler/codegen.cpp:850  [error]  In class '<…>', '<…>() = delete' is non-virtual but has no matching base method; pure-virtual introduction requires 'virtual'.
+  compiler/codegen.cpp:880  [error]  In class '<…>', method '<…>()' is <…> in '<…>' and may not be defined here.
+  compiler/codegen.cpp:990  [error]  Class '<…>' virtual method '<…>' is declared pure (= delete) but is never defined.
+  compiler/codegen.cpp:1261  [error]  Unknown template '<…>'.
+  compiler/codegen.cpp:1293  [error]  No overload of '<…>' matches the requested parameter signature for instantiation.
+  compiler/codegen.cpp:1316  [error]  In <…>, parameter '<…>' has class type '<…>' and cannot be passed by value; use '<…>^'.
+  compiler/codegen.cpp:1319  [error]  In <…>, parameter '<…>' has tuple type '<…>' and cannot be passed by value; use '<…>^'.
+  compiler/codegen.cpp:2201  [error]  Ambiguous template overload for '<…>'.
+  compiler/codegen.cpp:2292  [error]  Wrong number of arguments to '<…>': passed <…>, expected <…>.
+  compiler/codegen.cpp:3242  [error]  Swap of inline-array fields is not yet supported (field type '<…>').
+  compiler/codegen.cpp:3284  [error]  Class element type '<…>' has no op<…>(<…>^, <…>^).
+  compiler/codegen.cpp:3313  [error]  Unsupported elementwise op '<…>'.
+  compiler/codegen.cpp:3356  [error]  Class slot '<…>' has no op<…>(<…>^, <…>) for broadcast.
+  compiler/codegen.cpp:3370  [error]  Tuple slot type '<…>' does not match scalar type '<…>' in broadcast.
+  compiler/codegen.cpp:3387  [error]  Unsupported broadcast op '<…>'.
+  compiler/codegen.cpp:3406  [error]  Cannot instantiate pure virtual class '<…>': method '<…>' is not defined.
+  compiler/codegen.cpp:3458  [error]  Too many initializers for '<…>': it has <…> fields, got <…>.
+  compiler/codegen.cpp:3461  [error]  Too many tuple values for '<…>': it has <…> fields, got <…>.
+  compiler/codegen.cpp:3956  [error]  Method '<…>' is missing a return statement.
+  compiler/codegen.cpp:4047  [error]  Function '<…>' is missing a return statement.
+  compiler/codegen.cpp:4112  [error]  Unknown type for variable '<…>'.
+  compiler/codegen.cpp:4121  [error]  Unknown type for variable: <…>
+  compiler/codegen.cpp:4127  [error]  Unknown field '<…>' on type '<…>'.
+
+==== compiler/codegen_expr.cpp (57 messages) ====
+  compiler/codegen_expr.cpp:19  [error]  <…>namespace 'empty class '<…>' has no self
+  compiler/codegen_expr.cpp:57  [error]  Undefined variable: <…>
+  compiler/codegen_expr.cpp:150  [error]  Chained tuple index: '<…>' is not a tuple at level <…>
+  compiler/codegen_expr.cpp:161  [error]  Variable index on heterogeneous tuple '<…>' is not allowed: variable index requires all elements to have the same type
+  compiler/codegen_expr.cpp:175  [error]  Tuple index <…> out of range (size <…>)
+  compiler/codegen_expr.cpp:319  [error]  Undefined array: <…>
+  compiler/codegen_expr.cpp:357  [error]  <…>namespace 'empty class '<…>' has no self
+  compiler/codegen_expr.cpp:364  [error]  Undefined variable '<…>'
+  compiler/codegen_expr.cpp:376  [error]  Complex array base not supported
+  compiler/codegen_expr.cpp:386  [error]  Tuple walk hit non-tuple at level <…>
+  compiler/codegen_expr.cpp:395  [error]  Variable index on heterogeneous tuple '<…>' is not allowed
+  compiler/codegen_expr.cpp:409  [error]  Tuple index <…> out of range (size <…>)
+  compiler/codegen_expr.cpp:444  [error]  Undefined array '<…>'
+  compiler/codegen_expr.cpp:480  [error]  Undefined variable '<…>'
+  compiler/codegen_expr.cpp:491  [error]  Cannot dereference '<…>' of type '<…>': only reference (^) and pointer ([]) types can be dereferenced
+  compiler/codegen_expr.cpp:544  [error]  Unknown slid type for field '<…>'
+  compiler/codegen_expr.cpp:548  [error]  Unknown field: <…>
+  compiler/codegen_expr.cpp:598  [error]  Sizeof(): cannot determine slid type
+  compiler/codegen_expr.cpp:615  [error]  Unknown type for: <…>
+  compiler/codegen_expr.cpp:623  [error]  Dtor on '<…>' of pointer type '<…>': use '<…>^.~()' to dtor the pointed-to value
+  compiler/codegen_expr.cpp:628  [error]  Method call on '<…>' of pointer type '<…>': use '<…>^.<…>()' for explicit dereference
+  compiler/codegen_expr.cpp:631  [error]  Method call on '<…>': '<…>' is not a slid type
+  compiler/codegen_expr.cpp:640  [error]  Unknown type for: <…>
+  compiler/codegen_expr.cpp:663  [error]  Class '<…>': call to deleted method '<…>()' (deleted in '<…>')
+  compiler/codegen_expr.cpp:701  [error]  Unknown method: <…>
+  compiler/codegen_expr.cpp:773  [error]  Complex method call not yet supported
+  compiler/codegen_expr.cpp:781  [error]  Unknown slid: <…>
+  compiler/codegen_expr.cpp:787  [error]  Operator '<…>' is not a namespace; use instance.method() instead
+  compiler/codegen_expr.cpp:794  [error]  Unknown method: <…>:<…>
+  compiler/codegen_expr.cpp:833  [error]  Unknown namespace function: <…>:<…>
+  compiler/codegen_expr.cpp:863  [error]  Undefined global function: <…>
+  compiler/codegen_expr.cpp:1011  [error]  Undefined function: <…>
+  compiler/codegen_expr.cpp:1101  [error]  Operator '<…>' on reference '<…>?': arithmetic on references is not allowed (use a pointer '[]' type)
+  compiler/codegen_expr.cpp:1167  [error]  No matching arity-0 'op<…>' for '<…>': define 'op<…>()' returning a built-in
+  compiler/codegen_expr.cpp:1201  [error]  Unknown unary op: <…>
+  compiler/codegen_expr.cpp:1232  [error]  Tuple type mismatch in elementwise '<…>': <…> vs <…>
+  compiler/codegen_expr.cpp:1235  [error]  Operator '<…>' not supported element-wise on tuples
+  compiler/codegen_expr.cpp:1252  [error]  Operator '<…>' not supported element-wise on tuples
+  compiler/codegen_expr.cpp:1258  [error]  Broadcast: non-tuple operand of '<…>' must be a primitive scalar; got '<…>'
+  compiler/codegen_expr.cpp:1576  [error]  Operator '<…>' between pointer '<…>' and reference '<…>' is not allowed (use '==' or '!=')
+  compiler/codegen_expr.cpp:1580  [error]  Operator '<…>' between pointer '<…>' and reference '<…>' is not allowed
+  compiler/codegen_expr.cpp:1588  [error]  Operator '<…>' on reference '<…>': arithmetic on references is not allowed (use a pointer '[]' type)
+  compiler/codegen_expr.cpp:1591  [error]  Operator '<…>' is not allowed on reference type '<…>': references only support '==' and '!='
+  compiler/codegen_expr.cpp:1601  [error]  Reference comparison requires same type: '<…>' vs '<…>'
+  compiler/codegen_expr.cpp:1623  [error]  Pointer comparison requires same pointee type: '<…>[]' vs '<…>[]'
+  compiler/codegen_expr.cpp:1630  [error]  Pointer + pointer is not allowed
+  compiler/codegen_expr.cpp:1632  [error]  Operator '<…>' is not allowed on pointer types
+  compiler/codegen_expr.cpp:1677  [error]  Pointer subtraction requires same pointee type: '<…>[]' vs '<…>[]'
+  compiler/codegen_expr.cpp:1755  [error]  Unknown operator: <…>
+  compiler/codegen_expr.cpp:1972  [error]  Cannot instantiate pure virtual class '<…>': method '<…>' is not defined
+  compiler/codegen_expr.cpp:2005  [error]  Placement new: address must be void, int8, or uint8 pointer, got '<…>'
+  compiler/codegen_expr.cpp:2015  [error]  ##name requires a simple variable
+  compiler/codegen_expr.cpp:2209  [error]  Cannot cast pointer of unrelated type '<…>' to '<…>'
+  compiler/codegen_expr.cpp:2228  [error]  Unsupported expression type
+  compiler/codegen_expr.cpp:2657  [error]  Cannot initialize '<…>' from value of type '<…>'
+  compiler/codegen_expr.cpp:2676  [error]  Cannot initialize '<…>' from value of type '<…>'
+  compiler/codegen_expr.cpp:2681  [error]  Cannot initialize iterator '<…>' from reference '<…>': references cannot promote to iterators
+
+==== compiler/codegen_stmt.cpp (81 messages) ====
+  compiler/codegen_stmt.cpp:95  [error]  Operator '<…>' on reference: arithmetic on references is not allowed (use a pointer '[]' type)
+  compiler/codegen_stmt.cpp:355  [error]  Destructure size mismatch: <…> targets, <…> values
+  compiler/codegen_stmt.cpp:371  [error]  Destructure reassign: '<…>' has type '<…><unknown><…>' but source element is '<…>'
+  compiler/codegen_stmt.cpp:436  [error]  Destructure size mismatch: <…> targets, <…> elements in '<…>'
+  compiler/codegen_stmt.cpp:463  [error]  Destructure reassign: '<…>' has type '<…><unknown><…>' but source element is '<…>'
+  compiler/codegen_stmt.cpp:470  [error]  Cannot initialize '<…>' from value of type '<…>'
+  compiler/codegen_stmt.cpp:499  [error]  Cannot initialize '<…>' from value of type '<…>'
+  compiler/codegen_stmt.cpp:527  [error]  Destructure type inference from non-tuple-variable source not supported yet
+  compiler/codegen_stmt.cpp:532  [error]  Destructure reassign: '<…>' has type '<…><unknown><…>' but source element is '<…>'
+  compiler/codegen_stmt.cpp:704  [error]  Array '<…>' has no element type and no initializer to infer from.
+  compiler/codegen_stmt.cpp:775  [error]  Inferred variable declaration requires initializer
+  compiler/codegen_stmt.cpp:795  [error]  Cannot instantiate pure virtual class '<…>': method '<…>' is not defined
+  compiler/codegen_stmt.cpp:1018  [error]  Slid tuple element type mismatch: expected '<…>', got '<…>'
+  compiler/codegen_stmt.cpp:1054  [error]  Cannot initialize tuple '<…>' from expression of type '<…>'
+  compiler/codegen_stmt.cpp:1059  [error]  Undefined tuple source: <…>
+  compiler/codegen_stmt.cpp:1087  [error]  Unknown type '<…>'
+  compiler/codegen_stmt.cpp:1137  [error]  No matching op= on '<…>' for 'self = <expr>'
+  compiler/codegen_stmt.cpp:1167  [error]  Undefined variable: <…>
+  compiler/codegen_stmt.cpp:1177  [error]  Tuple has <…> values but '<…>' has <…> elements
+  compiler/codegen_stmt.cpp:1188  [error]  Slid tuple element type mismatch: expected '<…>', got '<…>'
+  compiler/codegen_stmt.cpp:1212  [error]  Type mismatch: cannot assign '<…>' to tuple element <…> of type '<…>'
+  compiler/codegen_stmt.cpp:1226  [error]  Type mismatch: cannot assign '<…>' to tuple variable '<…>' of type '<…>'
+  compiler/codegen_stmt.cpp:1234  [error]  Tuple copy from non-variable source not supported
+  compiler/codegen_stmt.cpp:1383  [error]  Tuple has <…> values but '<…>' has <…> accessible fields
+  compiler/codegen_stmt.cpp:1394  [error]  Slid field '<…>' reassignment: expected '<…>', got '<…>'
+  compiler/codegen_stmt.cpp:1409  [error]  Tuple field reassignment: expected '<…>', got '<…>'
+  compiler/codegen_stmt.cpp:1416  [error]  Tuple-typed field copy from non-variable source not supported
+  compiler/codegen_stmt.cpp:1549  [error]  Operator '<…>=' between two pointer operands is not allowed (result is not a pointer)
+  compiler/codegen_stmt.cpp:1577  [error]  Operator '<…>=' on reference '<…>': arithmetic on references is not allowed (use a pointer '[]' type)
+  compiler/codegen_stmt.cpp:1581  [error]  Operator '<…>=' on pointer '<…>': logical compound assign produces bool, cannot assign to pointer
+  compiler/codegen_stmt.cpp:1649  [error]  Operator '<…>=' on pointer type '<…>' is not allowed
+  compiler/codegen_stmt.cpp:1657  [error]  Operator '<…>' between pointer '<…>' and reference '<…>' is not allowed
+  compiler/codegen_stmt.cpp:1702  [error]  Operator '<…>=' is not supported for type '<…>'
+  compiler/codegen_stmt.cpp:1818  [error]  Compound assignment: unsupported LHS shape
+  compiler/codegen_stmt.cpp:1830  [error]  Undefined variable '<…>'
+  compiler/codegen_stmt.cpp:1874  [error]  Complex field object not supported
+  compiler/codegen_stmt.cpp:1876  [error]  Unknown type for '<…>'
+  compiler/codegen_stmt.cpp:1880  [error]  Unknown field '<…>'
+  compiler/codegen_stmt.cpp:1887  [error]  Tuple index must be a constant integer
+  compiler/codegen_stmt.cpp:1889  [error]  Tuple index <…> out of range (size <…>)
+  compiler/codegen_stmt.cpp:1900  [error]  Tuple element write: expected '<…>', got '<…>'
+  compiler/codegen_stmt.cpp:1930  [error]  Field '<…>' is not an inline array
+  compiler/codegen_stmt.cpp:1963  [error]  Tuple index must be a constant integer
+  compiler/codegen_stmt.cpp:1965  [error]  Tuple index <…> out of range (size <…>)
+  compiler/codegen_stmt.cpp:2006  [error]  Complex base not supported
+  compiler/codegen_stmt.cpp:2015  [error]  Tuple index must be a constant integer
+  compiler/codegen_stmt.cpp:2017  [error]  Tuple index <…> out of range (size <…>)
+  compiler/codegen_stmt.cpp:2026  [error]  Tuple element write: expected '<…>', got '<…>'
+  compiler/codegen_stmt.cpp:2048  [error]  Tuple element write from unsupported source
+  compiler/codegen_stmt.cpp:2181  [error]  Variable '<…>' is not a pointer type.
+  compiler/codegen_stmt.cpp:2201  [error]  Type mismatch — '<…>' vs '<…>'
+  compiler/codegen_stmt.cpp:2218  [error]  Swap of inline-array variables not yet supported
+  compiler/codegen_stmt.cpp:2253  [error]  Unknown slid type for field '<…>'
+  compiler/codegen_stmt.cpp:2303  [error]  FieldAssign: '<…>' is not a slid type for field '<…>'
+  compiler/codegen_stmt.cpp:2307  [error]  Unknown field '<…>' on '<…>'
+  compiler/codegen_stmt.cpp:2349  [error]  Unknown type for: <…>
+  compiler/codegen_stmt.cpp:2361  [error]  Dtor on '<…>' of pointer type '<…>': use '<…>^.~()' to dtor the pointed-to value
+  compiler/codegen_stmt.cpp:2366  [error]  Method call on '<…>' of pointer type '<…>': use '<…>^.<…>()' for explicit dereference
+  compiler/codegen_stmt.cpp:2369  [error]  Method call on '<…>': '<…>' is not a slid type
+  compiler/codegen_stmt.cpp:2404  [error]  Tuple index must be a constant integer
+  compiler/codegen_stmt.cpp:2406  [error]  Tuple index <…> out of range (size <…>)
+  compiler/codegen_stmt.cpp:2409  [error]  Tuple element <…> is not a slid type
+  compiler/codegen_stmt.cpp:2430  [error]  Unknown type for: <…>
+  compiler/codegen_stmt.cpp:2435  [error]  Method call: not enough pointer levels in '<…>' for <…>-deep deref
+  compiler/codegen_stmt.cpp:2465  [error]  Class '<…>': call to deleted method '<…>()' (deleted in '<…>')
+  compiler/codegen_stmt.cpp:2508  [error]  Unknown method: <…>
+  compiler/codegen_stmt.cpp:2562  [error]  Complex method call statement not yet supported
+  compiler/codegen_stmt.cpp:2575  [error]  Sret: return value must be a slid type
+  compiler/codegen_stmt.cpp:2600  [error]  Sret: return expression must produce a slid type
+  compiler/codegen_stmt.cpp:2608  [error]  Sret: return expression must produce a slid type
+  compiler/codegen_stmt.cpp:2760  [error]  Break: unknown label '<…>'
+  compiler/codegen_stmt.cpp:2775  [error]  Break <…>: not enough enclosing loops
+  compiler/codegen_stmt.cpp:2777  [error]  Break outside of loop
+  compiler/codegen_stmt.cpp:2799  [error]  Continue: unknown label '<…>'
+  compiler/codegen_stmt.cpp:2814  [error]  Continue <…>: not enough enclosing loops
+  compiler/codegen_stmt.cpp:2816  [error]  Continue outside of loop
+  compiler/codegen_stmt.cpp:3039  [error]  Switch case value must be a constant integer or enum
+  compiler/codegen_stmt.cpp:3079  [error]  <…> expects 0 or 1 arguments
+  compiler/codegen_stmt.cpp:3082  [error]  __print() requires an argument
+  compiler/codegen_stmt.cpp:3477  [error]  Unknown function: <…>
+  compiler/codegen_stmt.cpp:3492  [error]  Unsupported statement type
+
+==== compiler/codegen_template.cpp (7 messages) ====
+  compiler/codegen_template.cpp:205  [compileerror]  Unhandled expression type during template instantiation.
+  compiler/codegen_template.cpp:382  [compileerror]  Unhandled statement type during template instantiation.
+  compiler/codegen_template.cpp:435  [error]  Cannot match type '<…>' to template parameter '<…>' (inferred as reference type '<…>')
+  compiler/codegen_template.cpp:485  [error]  Cannot infer template type '<…>' for '<…>': provide explicit type argument
+  compiler/codegen_template.cpp:599  [error]  Template '<…>': expected <…> type argument(s), got <…>
+  compiler/codegen_template.cpp:676  [error]  Unknown template class: <…>
+  compiler/codegen_template.cpp:680  [error]  Template class '<…>': expected <…> type argument(s), got <…>
+
+==== compiler/lexer.cpp (3 messages) ====
+  compiler/lexer.cpp:52  [lexer]  unmatched */
+  compiler/lexer.cpp:70  [lexer]  whitespace between line-continuation \ and newline
+  compiler/lexer.cpp:90  [lexer]  unterminated block comment
+
+==== compiler/parser.cpp (42 messages) ====
+  compiler/parser.cpp:84  [compileerror]  Alias '<…>' is already declared in the same scope.
+  compiler/parser.cpp:117  [compileerror]  Local '<…>' shadows a field of the enclosing class.
+  compiler/parser.cpp:127  [compileerror]  Local '<…>' is already declared in the same scope.
+  compiler/parser.cpp:482  [errorAt]  Operator '<…>' requires <…> parameter<…>s; got <…>.
+  compiler/parser.cpp:494  [errorAt]  Pointer parameter '<…>' of <…> requires 'mutable'.
+  compiler/parser.cpp:913  [errorAt]  Unknown ## operator '<…>'.
+  compiler/parser.cpp:993  [errorAt]  The '#' operator requires a simple variable name.
+  compiler/parser.cpp:1186  [compileerror]  Nested function '<…>' is redefined with the same signature in the same block.
+  compiler/parser.cpp:1236  [errorAt]  Invalid assignment target.
+  compiler/parser.cpp:1252  [errorAt]  Compound assignment requires an lvalue.
+  compiler/parser.cpp:1787  [errorAt]  Short-form for-loops do not support multi-dimensional fixed-size array iteration.
+  compiler/parser.cpp:1806  [errorAt]  Type '<…>' defines both op[]/size and begin/end/next; the for-iterator requires an explicit loop variable type.
+  compiler/parser.cpp:1811  [errorAt]  Type '<…>' defines both op[]/size and begin/end/next with identical return types; the for-iterator cannot disambiguate.
+  compiler/parser.cpp:1818  [errorAt]  For-iterator loop variable type '<…>' matches neither the op[] return type ('<…>') nor the begin return type ('<…>').
+  compiler/parser.cpp:1827  [errorAt]  Type '<…>' is not iterable: it defines neither op[]/size nor begin/end/next.
+  compiler/parser.cpp:2159  [errorAt]  Variable '<…>' shadows type '<…>' in the same declaration.
+  compiler/parser.cpp:2335  [compileerror]  Nested function '<…>' shadows a field of the enclosing class.
+  compiler/parser.cpp:2350  [errorAt]  The 'mutable' keyword applies only to pointer types '^' and '[]'.
+  compiler/parser.cpp:2382  [errorAt]  Expected an operator symbol after 'op'.
+  compiler/parser.cpp:2396  [errorAt]  The 'mutable' keyword applies only to pointer types '^' and '[]'.
+  compiler/parser.cpp:2444  [compileerror]  Class '<…>' is already complete; further field or declaration reopens are not permitted.
+  compiler/parser.cpp:2523  [compileerror]  Class field '<…>' conflicts with the class name.
+  compiler/parser.cpp:2534  [compileerror]  Duplicate class field '<…>' in class '<…>'.
+  compiler/parser.cpp:2563  [compileerror]  Constructor is already defined in class '<…>'.
+  compiler/parser.cpp:2596  [compileerror]  Destructor is already defined in class '<…>'.
+  compiler/parser.cpp:2702  [errorAt]  Method '<…>' shares the name of its enclosing class.
+  compiler/parser.cpp:2776  [errorAt]  The 'mutable' keyword applies only to pointer types '^' and '[]'.
+  compiler/parser.cpp:2857  [errorAt]  Expected an operator symbol after 'op'.
+  compiler/parser.cpp:2863  [errorAt]  Method '<…>' shares the name of its enclosing class.
+  compiler/parser.cpp:2875  [errorAt]  The 'mutable' keyword applies only to pointer types '^' and '[]'.
+  compiler/parser.cpp:2928  [errorAt]  <…>Operator 'op<…>' must be a method of a class; free-function operators are not allowed.The keyword 'op' is reserved; free-function operators are not allowed.
+  compiler/parser.cpp:2960  [errorAt]  The 'mutable' keyword applies only to pointer types '^' and '[]'.
+  compiler/parser.cpp:2972  [errorAt]  Parameter '<…>' shares the name of its enclosing function.
+  compiler/parser.cpp:3013  [compileerror]  Cannot find '<…>.slh' on the import path.
+  compiler/parser.cpp:3207  [compileerror]  Enum value '<…>' appears in both '<…>' and '<…>'.
+  compiler/parser.cpp:3215  [compileerror]  Function '<…>' collides with an enum value from '<…>'.
+  compiler/parser.cpp:3222  [compileerror]  Class or namespace '<…>' collides with an enum value from '<…>'.
+  compiler/parser.cpp:3229  [compileerror]  Enum type '<…>' collides with an enum value from '<…>'.
+  compiler/parser.cpp:3248  [compileerror]  Function '<…>' is redefined with the same signature.
+  compiler/parser.cpp:3354  [compileerror]  Class '<…>' has a duplicate method '<…>' with the same signature.
+  compiler/parser.cpp:3390  [compileerror]  Derived field '<…>' in class '<…>' shadows a method inherited from '<…>'.
+  compiler/parser.cpp:3396  [compileerror]  Derived method '<…>' in class '<…>' shadows a field inherited from '<…>'.
+
