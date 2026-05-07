@@ -423,6 +423,15 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 slid_name = derefSlidName(*de);
                 if (!slid_name.empty()) obj_ptr = emitExpr(*de->operand);
             }
+        } else if (dynamic_cast<const ArrayIndexExpr*>(mc->object.get())
+                || dynamic_cast<const FieldAccessExpr*>(mc->object.get())) {
+            // Chained lvalue receiver — same as the stmt-form arm. resolveLvalue
+            // drills the chain to (addr, slid type) and method dispatch follows.
+            auto lv = resolveLvalue(*mc->object);
+            if (slid_info_.count(lv.type)) {
+                slid_name = lv.type;
+                obj_ptr = lv.addr;
+            }
         }
         if (!slid_name.empty() && mc->method == "~") {
             emitExplicitDtor(slid_name, obj_ptr);

@@ -463,14 +463,18 @@ int32 main() {
     __println("ti2_arr[0]=(" + ti2_arr[0][0] + "," + ti2_arr[0][1] + ")");
     __println("ti2_arr[1]=(" + ti2_arr[1][0] + "," + ti2_arr[1][1] + ")");
 
-    /* slid-typed anon-tuple array — matches the chain.sl shape. */
+    /* slid-typed anon-tuple array — matches the chain.sl shape. Method call
+       on a chained AIE receiver routes through resolveLvalue. */
     ts_pair0 = (Simple(1,2,3), Simple(4,5,6));
     ts_pair1 = (Simple(7,8,9), Simple(10,11,12));
     (Simple, Simple) ts_arr[2] = (ts_pair0, ts_pair1);
-    ts_v0 = ts_arr[0][0];
-    ts_v0.print("ts_arr[0][0]");
-    ts_v1 = ts_arr[1][1];
-    ts_v1.print("ts_arr[1][1]");
+    ts_arr[0][0].print("ts_arr[0][0]");
+    ts_arr[1][1].print("ts_arr[1][1]");
+
+    /* slid array, single-level AIE method call. */
+    Simple sims[2];
+    sims[0].print("sims[0]");
+    sims[1].print("sims[1]");
 
     /* uninitialized anon-tuple-typed array, then per-slot writes. */
     (int, int) ti2_blank[3];

@@ -1,4 +1,14 @@
 
+claude things:
+"Virtual dispatch through chained AIE/FieldAccess still falls
+to static dispatch — the indirect flag (codegen_stmt.cpp:2535)
+only triggers on DerefExpr or self."
+
+claude things:
+"Method call on a non-lvalue receiver (foo().bar(), (a + b).bar())
+still errors. Out of scope; would require a temp-spill before dispatch,
+similar to the rvalue-base spill in the emitExpr(AIE) wrapper."
+
 revisit initialization.
 (int, int) pairs[3] = ((1, 2), (3, 4), (5, 6));
 review passing initializers to classes whose fields

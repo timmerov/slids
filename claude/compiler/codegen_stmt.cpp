@@ -2404,50 +2404,18 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
                 obj_ptr = locals_[ve->name].reg;
             }
-        } else if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(mcs->object.get())) {
-            // method call on tuple element: tuple[i].method(args) or p^[i].method(args)
-            std::string tup_type;
-            std::string tup_ptr;
-            if (auto* bve = dynamic_cast<const VarExpr*>(ai->base.get())) {
-                auto tit = locals_.find(bve->name);
-                if (tit != locals_.end() && isAnonTupleType(tit->second.type)) {
-                    tup_type = tit->second.type;
-                    tup_ptr = locals_[bve->name].reg;
-                }
-            } else if (auto* de = dynamic_cast<const DerefExpr*>(ai->base.get())) {
-                if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
-                    auto tit = locals_.find(ve->name);
-                    if (tit != locals_.end()) {
-                        std::string t = tit->second.type;
-                        if (!t.empty() && t.back() == '^') t.pop_back();
-                        else if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
-                            t.resize(t.size()-2);
-                        if (isAnonTupleType(t)) {
-                            tup_type = t;
-                            tup_ptr = newTmp();
-                            out_ << "    " << tup_ptr << " = load ptr, ptr "
-                                 << locals_.at(ve->name).reg << "\n";
-                        }
-                    }
-                }
+        } else if (dynamic_cast<const ArrayIndexExpr*>(mcs->object.get())
+                || dynamic_cast<const FieldAccessExpr*>(mcs->object.get())) {
+            // Chained lvalue receiver: AIE chain, FieldAccess, or composition.
+            // resolveLvalue's AIE arm drills every chain shape (anon-tuple slot,
+            // slid array, slid op[]→slid, FieldAccess→...) into a single
+            // (addr, slid type), which is exactly what method dispatch needs.
+            auto lv = resolveLvalue(*mcs->object);
+            if (slid_info_.count(lv.type)) {
+                slid_name = lv.type;
+                obj_ptr = lv.addr;
             }
-            if (!tup_type.empty()) {
-                auto elems = anonTupleElems(tup_type);
-                int idx;
-                if (!constExprToInt(*ai->index, enum_values_, idx))
-                    error(std::string("Tuple index must be a constant integer"));
-                if (idx < 0 || idx >= (int)elems.size())
-                    error(std::string("Tuple index " + std::to_string(idx)
-                        + " out of range (size " + std::to_string(elems.size()) + ")"));
-                if (!slid_info_.count(elems[idx]))
-                    error(std::string("Tuple element " + std::to_string(idx)
-                        + " is not a slid type"));
-                slid_name = elems[idx];
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr " << llvmType(tup_type)
-                     << ", ptr " << tup_ptr << ", i32 0, i32 " << idx << "\n";
-                obj_ptr = gep;
-            }
+            // else: receiver isn't a slid — fall through to the unsupported error.
         } else if (auto* de = dynamic_cast<const DerefExpr*>(mcs->object.get())) {
             // walk an arbitrary chain of DerefExpr down to a VarExpr (handles
             // `p^.m()`, `pp^^.m()`, etc.). emit one load per deref level and
