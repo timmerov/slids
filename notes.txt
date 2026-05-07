@@ -1,4 +1,17 @@
 
+inheritance revisited:
+Base : Class() {
+    void greet() = alias;
+    void speak() = delete;
+    virtual void process() = alias;
+}
+
+error messages citing multiple source locations.
+name conlicted. defined here:
+lines 100-105.
+conflicts with definition here:
+lines 10-20 of different file.
+
 test if works as expected:
 x = ^y^;
 

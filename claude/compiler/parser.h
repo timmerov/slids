@@ -575,6 +575,15 @@ private:
     // (e.g. "Inner" → "Outer.Inner") — applied by parseTypeName
     std::map<std::string, std::string> nested_alias_;
 
+    // user-declared type aliases (alias Name = TypeExpr;). innermost frame is
+    // current block; bottom frame is file-scope. resolved type strings are
+    // already in canonical form (e.g. "int^", "Class.Hoisted", "Template__int")
+    // and substituted by parseTypeName when a bare ident matches.
+    std::vector<std::map<std::string, std::string>> alias_stack_{1};
+    void declareAlias(const std::string& name, const std::string& resolved, int name_tok);
+    std::string lookupAlias(const std::string& name) const;
+    void parseAliasDecl();
+
     // when > 0, ':' terminates the current expression — used in contexts like
     // `case <expr>:` to keep the namespace-call lookahead from eating the label colon.
     int colon_terminates_expr_ = 0;

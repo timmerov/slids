@@ -2415,15 +2415,34 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 obj_ptr = gep;
             }
         } else if (auto* de = dynamic_cast<const DerefExpr*>(mcs->object.get())) {
-            if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
+            // walk an arbitrary chain of DerefExpr down to a VarExpr (handles
+            // `p^.m()`, `pp^^.m()`, etc.). emit one load per deref level and
+            // strip one pointer suffix per level off the static type.
+            int deref_count = 1;
+            const Expr* inner = de->operand.get();
+            while (auto* d2 = dynamic_cast<const DerefExpr*>(inner)) {
+                deref_count++;
+                inner = d2->operand.get();
+            }
+            if (auto* ve2 = dynamic_cast<const VarExpr*>(inner)) {
                 auto type_it = locals_.find(ve2->name);
                 if (type_it == locals_.end())
                     error(std::string("unknown type for: " + ve2->name));
                 slid_name = type_it->second.type;
-                if (isRefType(slid_name)) slid_name.pop_back(); else if (isPtrType(slid_name)) slid_name.resize(slid_name.size()-2);
-                std::string loaded = newTmp();
-                out_ << "    " << loaded << " = load ptr, ptr " << locals_[ve2->name].reg << "\n";
-                obj_ptr = loaded;
+                for (int k = 0; k < deref_count; k++) {
+                    if (isRefType(slid_name)) slid_name.pop_back();
+                    else if (isPtrType(slid_name)) slid_name.resize(slid_name.size()-2);
+                    else error(std::string("method call: not enough pointer levels in '"
+                                           + type_it->second.type + "' for "
+                                           + std::to_string(deref_count) + "-deep deref"));
+                }
+                std::string cur = locals_[ve2->name].reg;
+                for (int k = 0; k < deref_count; k++) {
+                    std::string nxt = newTmp();
+                    out_ << "    " << nxt << " = load ptr, ptr " << cur << "\n";
+                    cur = nxt;
+                }
+                obj_ptr = cur;
             }
         }
         if (!slid_name.empty() && mcs->method == "~") {

@@ -243,6 +243,26 @@ Type[] iter = <Type[]> compatible_type_ref;
 ```
 ---
 
+## Type aliases
+
+`alias Name = TypeExpr;` introduces `Name` as another name for `TypeExpr`. Wherever `Name` appears in a type position, the compiler substitutes `TypeExpr`.
+
+```
+alias IntPtr      = int^;
+alias IntHdl      = IntPtr^;            // chains: resolves to int^^
+alias ClassPtr    = MyClass^;
+alias TuplePair   = (char[], int);
+alias TemplateInt = MyTemplate<int>;
+alias HoistedRef  = Outer:Inner;
+```
+
+Scoping:
+- Top-level aliases live for the rest of the file.
+- An alias declared inside any `{ }` block goes out of scope at the end of that block.
+- An inner alias may shadow an outer alias of the same name; outside the inner block the outer alias is back.
+
+---
+
 ## Variables
 
 Variables may be declared with an explicit type or with an inferred type.
@@ -543,7 +563,7 @@ Slot/scalar types must match exactly (no widening; this may be relaxed in the fu
 
 A tuple-literal RHS can only set fields or elements that are accessible at the call site. In a `.slh` consumer, only the slid's **public** fields can be set via a tuple literal. In the `.sl` implementer, all fields are accessible.
 
-### Aliases (named tuples only)
+### Field aliases (named tuples only)
 
 > **TODO:** Not yet implemented.
 

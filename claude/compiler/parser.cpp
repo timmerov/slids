@@ -67,6 +67,34 @@ int Parser::currentLine() {
     return tlocs[pos_].line;
 }
 
+void Parser::declareAlias(const std::string& name, const std::string& resolved, int name_tok) {
+    if (alias_stack_.back().count(name)) {
+        errorAt(name_tok, "alias '" + name + "' already declared in same scope");
+    }
+    alias_stack_.back()[name] = resolved;
+}
+
+std::string Parser::lookupAlias(const std::string& name) const {
+    for (auto it = alias_stack_.rbegin(); it != alias_stack_.rend(); ++it) {
+        auto sit = it->find(name);
+        if (sit != it->end()) return sit->second;
+    }
+    return "";
+}
+
+void Parser::parseAliasDecl() {
+    advance(); // 'alias'
+    int name_tok = pos_;
+    std::string name = expect(TokenType::kIdentifier, "expected alias name after 'alias'").value;
+    if (peek().type == TokenType::kLt) {
+        errorHere("parameterized aliases are not supported; alias name takes no template parameters");
+    }
+    expect(TokenType::kEquals, "expected '=' after alias name");
+    std::string resolved = parseTypeName();
+    expect(TokenType::kSemicolon, "expected ';' after alias declaration");
+    declareAlias(name, resolved, name_tok);
+}
+
 void Parser::declareVar(const std::string& name, int name_tok) {
     // (P2) inside any method, no binding may shadow a field of the enclosing class.
     if (current_slid_fields_.count(name)) {
@@ -572,33 +600,45 @@ std::string Parser::parseTypeName() {
         }
         return base;
     }
+    bool resolved_alias = false;
     if (isTypeName(peek())) base = advance().value;
-    else if (isUserTypeName(peek())) base = advance().value;
-    else errorHere("expected type name, got " + tokenLabel(peek()));
-    // qualified nested-type suffix: Outer:Inner — consume only when the next-next token is
-    // an identifier (the variable name), not a '(' (which would be an external-method def).
-    if (peek().type == TokenType::kColon
-        && pos_ + 1 < (int)tokens_.size()
-        && tokens_[pos_ + 1].type == TokenType::kIdentifier
-        && pos_ + 2 < (int)tokens_.size()
-        && tokens_[pos_ + 2].type != TokenType::kLParen) {
-        advance(); // consume ':'
-        std::string inner = advance().value;
-        base += "." + inner;
-    } else {
-        // unqualified — apply nested-alias map (e.g. "Inner" → "Outer.Inner" inside Outer's body)
-        auto it = nested_alias_.find(base);
-        if (it != nested_alias_.end()) base = it->second;
-    }
-    // template type instantiation in type position: Name<Type> → mangled as Name__Type
-    if (peek().type == TokenType::kLt && isTemplateTypeArgLookahead()) {
-        advance(); // consume '<'
-        while (peek().type != TokenType::kGt && peek().type != TokenType::kEof) {
-            std::string ta = parseTypeName();
-            base += "__" + ta;
-            if (peek().type == TokenType::kComma) advance();
+    else if (isUserTypeName(peek())) {
+        base = advance().value;
+        std::string a = lookupAlias(base);
+        if (!a.empty()) {
+            base = a;
+            resolved_alias = true;
         }
-        expect(TokenType::kGt, "expected '>' after template type args");
+    }
+    else errorHere("expected type name, got " + tokenLabel(peek()));
+    // alias substitution returns a finalized type string — skip qualifier/nested-alias/template-arg
+    // logic; only the trailing ^/[]/^^ loop below still applies.
+    if (!resolved_alias) {
+        // qualified nested-type suffix: Outer:Inner — consume only when the next-next token is
+        // an identifier (the variable name), not a '(' (which would be an external-method def).
+        if (peek().type == TokenType::kColon
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kIdentifier
+            && pos_ + 2 < (int)tokens_.size()
+            && tokens_[pos_ + 2].type != TokenType::kLParen) {
+            advance(); // consume ':'
+            std::string inner = advance().value;
+            base += "." + inner;
+        } else {
+            // unqualified — apply nested-alias map (e.g. "Inner" → "Outer.Inner" inside Outer's body)
+            auto it = nested_alias_.find(base);
+            if (it != nested_alias_.end()) base = it->second;
+        }
+        // template type instantiation in type position: Name<Type> → mangled as Name__Type
+        if (peek().type == TokenType::kLt && isTemplateTypeArgLookahead()) {
+            advance(); // consume '<'
+            while (peek().type != TokenType::kGt && peek().type != TokenType::kEof) {
+                std::string ta = parseTypeName();
+                base += "__" + ta;
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kGt, "expected '>' after template type args");
+        }
     }
     // consume trailing ^ or [] for pointer/reference types — kept distinct:
     //   ^ = reference (no arithmetic allowed)
@@ -1098,11 +1138,14 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     [[maybe_unused]] int t_start = pos_;
     expect(TokenType::kLBrace, "expected '{'");
     scope_stack_.push_back({});
+    alias_stack_.push_back({});
     for (auto& n : predeclare)
         declareVar(n, t_start);
     auto block = make<BlockStmt>(t_start);
-    while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof)
+    while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
+        if (peek().type == TokenType::kAlias) { parseAliasDecl(); continue; }
         block->stmts.push_back(parseStmt());
+    }
     // (P1) nested function uniqueness within this block — same name + signature.
     {
         std::set<std::string> sigs;
@@ -1119,6 +1162,7 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
         }
     }
     scope_stack_.pop_back();
+    alias_stack_.pop_back();
     expect(TokenType::kRBrace, "expected '}'");
     return block;
 }
@@ -2946,6 +2990,10 @@ Program Parser::parse() {
                     }
                 }
             }
+        }
+        // type alias declaration: alias Name = TypeExpr;
+        else if (peek().type == TokenType::kAlias) {
+            parseAliasDecl();
         }
         // enum definition
         else if (peek().type == TokenType::kEnum) {

@@ -7,6 +7,7 @@ BIN_DIR   = ../bin
 BUILD_DIR = ../build/test
 
 SAMPLES = \
+	alias \
 	blocks \
 	cast \
 	class \
