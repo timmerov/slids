@@ -367,6 +367,7 @@ struct FieldDef {
     std::string type;
     std::string name;
     std::unique_ptr<Expr> default_val; // may be null
+    int file_id = 0;                   // for diagnostics that point at the field declaration
     int tok = 0;                       // token index of the field name (for diagnostics)
 };
 
@@ -376,6 +377,8 @@ struct MethodDef {
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params; true if 'mutable' on that param
     std::unique_ptr<BlockStmt> body;
+    int file_id = 0;
+    int tok = 0;               // token index of the method name (for diagnostics)
     bool is_virtual = false;   // `virtual` keyword present on the declaration
     bool is_delete = false;    // `= delete;` — pure virtual when no ancestor match;
                                //               removes inherited method when a same-sig ancestor exists
@@ -384,6 +387,12 @@ struct MethodDef {
 
 struct SlidDef {
     std::string name;
+    int name_file_id = 0;                 // location of the class name token (for diagnostics)
+    int name_tok = 0;
+    int explicit_ctor_file_id = 0;        // location of the first-defined ctor (for "first defined here" notes)
+    int explicit_ctor_tok = 0;
+    int explicit_dtor_file_id = 0;        // location of the first-defined dtor
+    int explicit_dtor_tok = 0;
     std::string base_name;                // non-empty when defined as `Base : Derived(...) { ... }`
     std::vector<std::string> type_params; // non-empty for template slids: Vector<T>
     std::vector<FieldDef> fields;
@@ -432,6 +441,8 @@ struct FunctionDef {
     std::vector<bool> param_mutable;  // parallel to params
     std::vector<bool> param_auto_promoted;  // parallel to params; true when class-T value→ref auto-promoted at template instantiation
     std::unique_ptr<BlockStmt> body;
+    int file_id = 0;
+    int tok = 0;                 // token index of the function name (for diagnostics)
     std::vector<std::string> type_params; // non-empty for template functions: T add<T>(T a, T b)
     bool is_local = true;        // false when body loaded from a separate impl file
     std::string impl_module;     // module name of the impl file (when !is_local)
@@ -446,6 +457,8 @@ struct ExternalMethodDef {
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params
     std::unique_ptr<BlockStmt> body;
+    int file_id = 0;
+    int tok = 0;                       // token index of method_name (for diagnostics)
     bool is_virtual = false;
     bool is_delete = false;
     bool is_default = false;
@@ -512,6 +525,7 @@ private:
     // the map at all) drives decl-vs-assign disambiguation; the optional
     // properties feed shape-aware downstream logic (short-form for, etc).
     struct LocalInfo {
+        int  tok = 0;           // token of the name at its declaration site
         bool is_array = false;
         int  array_count = 0;   // outer dim
         int  array_rank = 0;    // number of dims; >1 rejected by short-form for
@@ -555,10 +569,13 @@ private:
     ProtocolDiag classifyByValue(const ClassInfo& ci, const std::string& class_name) const;
     ProtocolDiag classifyByRef(const ClassInfo& ci, const std::string& class_name) const;
 
-    // field names of the slid currently being parsed (prevents field assignments being inferred as declarations)
-    std::set<std::string> current_slid_fields_;
+    // field names of the slid currently being parsed → declaration site (file_id, tok).
+    // Membership prevents field assignments being inferred as declarations; the location
+    // feeds "field declared here" notes on shadowing diagnostics.
+    struct FieldRef { int file_id = 0; int tok = 0; };
+    std::map<std::string, FieldRef> current_slid_fields_;
     // all parsed slid field names, keyed by slid name (used for external method blocks)
-    std::map<std::string, std::set<std::string>> all_slid_fields_;
+    std::map<std::string, std::map<std::string, FieldRef>> all_slid_fields_;
     // enum type → value count; populated as enums are parsed. Used by the
     // short-form for loop to recognize `for (x : EnumName)` and supply the
     // iteration count for the desugared ForLongStmt.
@@ -572,8 +589,9 @@ private:
     // decls and bare-block reopens.
     std::set<std::string> seen_classes_;
     // class names that have been closed in this TU — further tuple-form
-    // reopens are an error; bare-block reopens are still allowed.
-    std::set<std::string> closed_classes_;
+    // reopens are an error; bare-block reopens are still allowed. Value is
+    // the location of the closing `}` for "completed here" notes.
+    std::map<std::string, FieldRef> closed_classes_;
     // short-name → canonical-name aliases for nested slids in the current outer's body
     // (e.g. "Inner" → "Outer.Inner") — applied by parseTypeName
     std::map<std::string, std::string> nested_alias_;
@@ -582,7 +600,8 @@ private:
     // current block; bottom frame is file-scope. resolved type strings are
     // already in canonical form (e.g. "int^", "Class.Hoisted", "Template__int")
     // and substituted by parseTypeName when a bare ident matches.
-    std::vector<std::map<std::string, std::string>> alias_stack_{1};
+    struct AliasInfo { std::string resolved; int tok = 0; };
+    std::vector<std::map<std::string, AliasInfo>> alias_stack_{1};
     void declareAlias(const std::string& name, const std::string& resolved, int name_tok);
     std::string lookupAlias(const std::string& name) const;
     void parseAliasDecl();

@@ -18,20 +18,31 @@ struct SourceFile {
     int imported_by = -1;             // parent file_id; -1 = root
 };
 
-class SourceMap {
-    std::vector<SourceFile> files_;
-public:
-    int openFile(std::string path, std::string source, int imported_by = -1);
-    SourceFile& at(int file_id);
-    const SourceFile& at(int file_id) const;
-    void render(int file_id, int tok, const std::string& msg, std::ostream& os) const;
+struct Note {
+    int file_id;
+    int tok;
+    std::string msg;
 };
 
 struct CompileError : std::exception {
     int file_id;
     int tok;
     std::string msg;
+    std::vector<Note> notes;
     CompileError(int f, int t, std::string m)
         : file_id(f), tok(t), msg(std::move(m)) {}
+    CompileError& addNote(int f, int t, std::string m) {
+        notes.push_back({f, t, std::move(m)});
+        return *this;
+    }
     const char* what() const noexcept override { return msg.c_str(); }
+};
+
+class SourceMap {
+    std::vector<SourceFile> files_;
+public:
+    int openFile(std::string path, std::string source, int imported_by = -1);
+    SourceFile& at(int file_id);
+    const SourceFile& at(int file_id) const;
+    void render(const CompileError& e, std::ostream& os) const;
 };

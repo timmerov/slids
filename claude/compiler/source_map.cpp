@@ -44,22 +44,22 @@ void printLine(std::ostream& os, int line_num, int digit_w, const std::string& t
     os << buf << text << "\n";
 }
 
-}  // namespace
-
-void SourceMap::render(int file_id, int tok, const std::string& msg, std::ostream& os) const {
-    if (file_id < 0 || file_id >= (int)files_.size()) {
+void renderBlock(const std::vector<SourceFile>& files,
+                 int file_id, int tok, const std::string& msg,
+                 std::ostream& os) {
+    if (file_id < 0 || file_id >= (int)files.size()) {
         os << "slidsc: error: " << msg << "\n";
         return;
     }
     // walk the imported_by chain root -> leaf
     std::vector<int> chain;
-    for (int id = file_id; id != -1; id = files_[id].imported_by)
+    for (int id = file_id; id != -1; id = files[id].imported_by)
         chain.push_back(id);
     for (int i = (int)chain.size() - 1; i >= 1; i--)
-        os << files_[chain[i]].path << ": imported\n";
-    os << files_[chain[0]].path << ":\n";
+        os << files[chain[i]].path << ": imported\n";
+    os << files[chain[0]].path << ":\n";
 
-    const SourceFile& f = files_[file_id];
+    const SourceFile& f = files[file_id];
     if (tok < 0 || tok >= (int)f.tokens.size()) {
         os << msg << "\n";
         return;
@@ -70,11 +70,9 @@ void SourceMap::render(int file_id, int tok, const std::string& msg, std::ostrea
     int last = loc.line + 2;
     int max_line = (int)f.line_starts.size();
     if (last > max_line) last = max_line;
-    // gutter width: enough digits for the largest line shown, minimum 2.
     int digit_w = std::max(2, (int)std::to_string(last).size());
     for (int ln = first; ln <= loc.line; ln++)
         printLine(os, ln, digit_w, getLine(f, ln));
-    // caret line: gutter padding (digit_w digits + ':'), then loc.col-1 spaces, then markers
     for (int i = 0; i < digit_w + 1; i++) os << ' ';
     for (int i = 1; i < loc.col; i++) os << ' ';
     if (loc.length <= 1) {
@@ -90,4 +88,14 @@ void SourceMap::render(int file_id, int tok, const std::string& msg, std::ostrea
     for (int ln = loc.line + 1; ln <= last; ln++)
         printLine(os, ln, digit_w, getLine(f, ln));
     os << msg << "\n";
+}
+
+}  // namespace
+
+void SourceMap::render(const CompileError& e, std::ostream& os) const {
+    renderBlock(files_, e.file_id, e.tok, e.msg, os);
+    for (auto& n : e.notes) {
+        os << "\n";
+        renderBlock(files_, n.file_id, n.tok, n.msg, os);
+    }
 }

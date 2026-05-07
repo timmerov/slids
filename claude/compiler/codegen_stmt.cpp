@@ -92,7 +92,7 @@ void Codegen::emitPrePass(const Expr& root) {
                          << ", ptr " << old_val << ", i32 " << step << "\n";
                     out_ << "    store ptr " << nxt << ", ptr " << lv.addr << "\n";
                 } else if (isRefType(lv.type)) {
-                    error(std::string("'" + u->op + "' on reference: arithmetic on references is not allowed (use a pointer '[]' type)"));
+                    error(std::string("Operator '" + u->op + "' on reference: arithmetic on references is not allowed (use a pointer '[]' type)"));
                 } else {
                     std::string scalar_llvm = llvmType(lv.type);
                     bool is_float = (scalar_llvm == "float" || scalar_llvm == "double");
@@ -221,7 +221,7 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
                 return {gep, info.field_types[fit->second]};
             }
         }
-        errorAtNode(e, "resolveLvalue: undefined variable '" + ve->name + "'");
+        errorAtNode(e, "Undefined variable '" + ve->name + "'.");
     }
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&e)) {
         auto obj = resolveLvalue(*fa->object);
@@ -236,11 +236,11 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
         }
         auto sit = slid_info_.find(stype);
         if (sit == slid_info_.end())
-            errorAtNode(e, "resolveLvalue: '" + stype + "' is not a slid type");
+            errorAtNode(e, "Type '" + stype + "' is not a slid type.");
         auto fit = sit->second.field_index.find(fa->field);
         if (fit == sit->second.field_index.end())
-            errorAtNode(e, "resolveLvalue: unknown field '" + fa->field
-                + "' on '" + stype + "'");
+            errorAtNode(e, "Unknown field '" + fa->field
+                + "' on type '" + stype + "'.");
         std::string gep = newTmp();
         out_ << "    " << gep << " = getelementptr %struct." << stype
              << ", ptr " << addr << ", i32 0, i32 " << fit->second << "\n";
@@ -257,7 +257,7 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
                 std::string pointee;
                 if (isPtrType(base.type))      pointee = base.type.substr(0, base.type.size() - 2);
                 else if (isRefType(base.type)) pointee = base.type.substr(0, base.type.size() - 1);
-                else errorAtNode(e, "resolveLvalue: post-inc/dec deref of non-pointer type '" + base.type + "'");
+                else errorAtNode(e, "Post-increment or post-decrement deref of non-pointer type '" + base.type + "'.");
                 std::string loaded = newTmp();
                 out_ << "    " << loaded << " = load ptr, ptr " << base.addr << "\n";
                 int step = (ue->op == "post++") ? 1 : -1;
@@ -270,7 +270,7 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
         std::string pointee;
         if (isPtrType(base.type))      pointee = base.type.substr(0, base.type.size() - 2);
         else if (isRefType(base.type)) pointee = base.type.substr(0, base.type.size() - 1);
-        else errorAtNode(e, "resolveLvalue: deref of non-pointer type '" + base.type + "'");
+        else errorAtNode(e, "Cannot dereference a value of non-pointer type '" + base.type + "'.");
         std::string loaded = newTmp();
         out_ << "    " << loaded << " = load ptr, ptr " << base.addr << "\n";
         return {loaded, pointee};
@@ -287,7 +287,7 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
             std::string pointee;
             if (isPtrType(base.type))      pointee = base.type.substr(0, base.type.size() - 2);
             else if (isRefType(base.type)) pointee = base.type.substr(0, base.type.size() - 1);
-            else errorAtNode(e, "resolveLvalue: pre-inc/dec of non-pointer type '" + base.type + "'");
+            else errorAtNode(e, "Pre-increment or pre-decrement of non-pointer type '" + base.type + "'.");
             std::string loaded = newTmp();
             out_ << "    " << loaded << " = load ptr, ptr " << base.addr << "\n";
             int step = (ue->op == "pre++") ? 1 : -1;
@@ -307,10 +307,10 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
             auto elems = anonTupleElems(base.type);
             int idx;
             if (!constExprToInt(*ai->index, enum_values_, idx))
-                errorAtNode(e, "resolveLvalue: tuple index must be a constant integer");
+                errorAtNode(e, "Tuple index must be a constant integer.");
             if (idx < 0 || idx >= (int)elems.size())
-                errorAtNode(e, "resolveLvalue: tuple index "
-                    + std::to_string(idx) + " out of range");
+                errorAtNode(e, "Tuple index "
+                    + std::to_string(idx) + " is out of range.");
             std::string gep = emitFieldGep(base.type, base.addr, idx);
             return {gep, elems[idx]};
         }
@@ -341,9 +341,9 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
                  << "], ptr " << base.addr << ", i32 0, " << idx_llvm << " " << idx_val << "\n";
             return {gep, elem_type};
         }
-        errorAtNode(e, "resolveLvalue: unsupported array-index lvalue");
+        errorAtNode(e, "Unsupported array-index lvalue.");
     }
-    errorAtNode(e, "resolveLvalue: unsupported lvalue shape");
+    errorAtNode(e, "Unsupported lvalue shape.");
 }
 
 void Codegen::emitDestructure(
@@ -352,7 +352,7 @@ void Codegen::emitDestructure(
     // tuple literal rhs: desugar (t1 a, t2 b) = (x, y); into t1 a = x; t2 b = y;
     if (auto* te = dynamic_cast<const TupleExpr*>(&init)) {
         if (te->values.size() != targets.size())
-            error(std::string("destructure size mismatch: "
+            error(std::string("Destructure size mismatch: "
                 + std::to_string(targets.size()) + " targets, "
                 + std::to_string(te->values.size()) + " values"));
         for (int i = 0; i < (int)targets.size(); i++) {
@@ -368,7 +368,7 @@ void Codegen::emitDestructure(
             if (reassign) {
                 auto ltit = locals_.find(name);
                 if (ltit == locals_.end() || ltit->second.type != eff_type)
-                    error(std::string("destructure reassign: '" + name
+                    error(std::string("Destructure reassign: '" + name
                         + "' has type '" + (ltit==locals_.end()?"<unknown>":ltit->second.type)
                         + "' but source element is '" + eff_type + "'"));
             }
@@ -378,8 +378,8 @@ void Codegen::emitDestructure(
                 requireCompatibleInit(eff_type, *te->values[i]);
                 std::string src_type = inferSlidType(*te->values[i]);
                 if (src_type != eff_type)
-                    errorAtNode(*te->values[i], "cannot initialize '" + eff_type
-                        + "' from value of type '" + src_type + "'");
+                    errorAtNode(*te->values[i], "Cannot initialize '" + eff_type
+                        + "' from a value of type '" + src_type + "'.");
                 if (!reassign)
                     out_ << "    " << reg << " = alloca " << llvmType(eff_type) << "\n";
                 std::string src_ptr;
@@ -415,8 +415,8 @@ void Codegen::emitDestructure(
                         out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << llvm_t << "\n";
                     val = coerced;
                 } else {
-                    errorAtNode(*te->values[i], "cannot initialize '" + eff_type
-                        + "' from value of type '" + inferSlidType(*te->values[i]) + "'");
+                    errorAtNode(*te->values[i], "Cannot initialize '" + eff_type
+                        + "' from a value of type '" + inferSlidType(*te->values[i]) + "'.");
                 }
             }
             out_ << "    store " << llvm_t << " " << val << ", ptr " << reg << "\n";
@@ -433,7 +433,7 @@ void Codegen::emitDestructure(
         if (tit != locals_.end() && isAnonTupleType(tit->second.type)) {
             auto elems = anonTupleElems(tit->second.type);
             if (elems.size() != targets.size())
-                error(std::string("destructure size mismatch: "
+                error(std::string("Destructure size mismatch: "
                     + std::to_string(targets.size()) + " targets, "
                     + std::to_string(elems.size()) + " elements in '" + ve->name + "'"));
             const std::string& src_type = tit->second.type;
@@ -460,14 +460,14 @@ void Codegen::emitDestructure(
                 if (reassign) {
                     auto ltit = locals_.find(name);
                     if (ltit == locals_.end() || ltit->second.type != eff_type)
-                        error(std::string("destructure reassign: '" + name
+                        error(std::string("Destructure reassign: '" + name
                             + "' has type '" + (ltit==locals_.end()?"<unknown>":ltit->second.type)
                             + "' but source element is '" + eff_type + "'"));
                 }
                 std::string reg = reassign ? locals_[name].reg : uniqueAllocaReg(name);
                 if (slid_info_.count(elem_type) || isAnonTupleType(elem_type)) {
                     if (!type.empty() && type != elem_type)
-                        error(std::string("cannot initialize '" + eff_type
+                        error(std::string("Cannot initialize '" + eff_type
                             + "' from value of type '" + elem_type + "'"));
                     if (!reassign)
                         out_ << "    " << reg << " = alloca " << llvmType(elem_type) << "\n";
@@ -496,7 +496,7 @@ void Codegen::emitDestructure(
                             out_ << "    " << coerced << " = trunc " << elem_llvm << " " << extracted << " to " << dst_llvm << "\n";
                         extracted = coerced;
                     } else {
-                        error(std::string("cannot initialize '" + eff_type
+                        error(std::string("Cannot initialize '" + eff_type
                             + "' from value of type '" + elem_type + "'"));
                     }
                 }
@@ -524,12 +524,12 @@ void Codegen::emitDestructure(
         if (eff_type.empty() && i < (int)src_elems.size())
             eff_type = src_elems[i];
         if (eff_type.empty())
-            error(std::string("destructure type inference from non-tuple-variable source not supported yet"));
+            error(std::string("Destructure type inference from non-tuple-variable source not supported yet"));
         bool reassign = type.empty() && locals_.count(name) > 0;
         if (reassign) {
             auto ltit = locals_.find(name);
             if (ltit == locals_.end() || ltit->second.type != eff_type)
-                error(std::string("destructure reassign: '" + name
+                error(std::string("Destructure reassign: '" + name
                     + "' has type '" + (ltit==locals_.end()?"<unknown>":ltit->second.type)
                     + "' but source element is '" + eff_type + "'"));
         }
@@ -701,14 +701,14 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string elem_type = arr->elem_type;
         if (elem_type.empty()) {
             if (arr->init_values.empty())
-                error(std::string("array '" + arr->name
-                    + "' has no elem type and no initializer to infer from"));
+                error(std::string("Array '" + arr->name
+                    + "' has no element type and no initializer to infer from."));
             elem_type = inferSlidType(*arr->init_values[0]);
             for (int i = 1; i < (int)arr->init_values.size(); i++) {
                 if (inferSlidType(*arr->init_values[i]) != elem_type)
                     errorAtNode(*arr->init_values[i],
-                        "for-tuple: element type does not match element 0 ('"
-                        + elem_type + "')");
+                        "Tuple element type does not match element 0 ('"
+                        + elem_type + "').");
             }
         }
         std::string base = "%arr_" + arr->name;
@@ -772,7 +772,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string inferred;
         if (decl->type.empty()) {
             if (!decl->init)
-                error(std::string("inferred variable declaration requires initializer"));
+                error(std::string("Inferred variable declaration requires initializer"));
             inferred = inferSlidType(*decl->init);
         }
         const std::string& eff_type = decl->type.empty() ? inferred : decl->type;
@@ -782,8 +782,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // caret on the loop var token (the synthesized decl carries it).
         if (decl->is_loop_var && decl->type.empty() && !isPrimitive(eff_type)) {
             errorAtNode(*decl,
-                "for-loop: cannot infer loop type variable: "
-                "use explicit 'Type " + decl->name + "' or 'Type^ " + decl->name + "'");
+                "For-loop cannot infer the loop variable type; "
+                "use an explicit 'Type " + decl->name + "' or 'Type^ " + decl->name + "'.");
         }
 
         // class instantiation
@@ -792,7 +792,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (info.is_virtual_class) {
                 for (auto& slot : info.vtable) {
                     if (slot.is_pure)
-                        error(std::string("cannot instantiate pure virtual class '" + eff_type
+                        error(std::string("Cannot instantiate pure virtual class '" + eff_type
                             + "': method '" + slot.method_name + "' is not defined"));
                 }
             }
@@ -1015,7 +1015,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     if (slid_info_.count(elems[i])) {
                         std::string src_type = inferSlidType(*te->values[i]);
                         if (src_type != elems[i])
-                            error(std::string("slid tuple element type mismatch: expected '"
+                            error(std::string("Slid tuple element type mismatch: expected '"
                                 + elems[i] + "', got '" + src_type + "'"));
                         // Prvalue elision: when the slot value is an inline ctor
                         // call for the same slid type, construct directly at the
@@ -1051,12 +1051,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
             // non-literal initializer — require a same-typed tuple source and field-by-field copy/move
             std::string src_slids = inferSlidType(*decl->init);
             if (src_slids != eff_type)
-                error(std::string("cannot initialize tuple '" + eff_type
+                error(std::string("Cannot initialize tuple '" + eff_type
                     + "' from expression of type '" + src_slids + "'"));
             std::string src_ptr;
             if (auto* ve = dynamic_cast<const VarExpr*>(decl->init.get())) {
                 auto lit = locals_.find(ve->name);
-                if (lit == locals_.end()) error(std::string("undefined tuple source: " + ve->name));
+                if (lit == locals_.end()) error(std::string("Undefined tuple source: " + ve->name));
                 src_ptr = lit->second.reg;
             } else {
                 // non-variable source (e.g. tuple-returning call): emit into a temp alloca
@@ -1084,7 +1084,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             bool is_ptr = (!eff_type.empty() && eff_type.back() == '^')
                        || (eff_type.size() >= 2 && eff_type.substr(eff_type.size()-2) == "[]");
             if (!known_primitives.count(eff_type) && !is_ptr)
-                error(std::string("unknown type '" + eff_type + "'"));
+                error(std::string("Unknown type '" + eff_type + "'"));
         }
         std::string reg = uniqueAllocaReg(decl->name);
         std::string llvm_t = llvmType(eff_type);
@@ -1134,7 +1134,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (assign->name == "self" && !current_slid_.empty()) {
             std::string op_func = resolveSingleArgOverload(current_slid_ + "__op=", *assign->value);
             if (op_func.empty())
-                error(std::string("no matching op= on '" + current_slid_ + "' for 'self = <expr>'"));
+                error(std::string("No matching op= on '" + current_slid_ + "' for 'self = <expr>'"));
             auto& ptypes = func_param_types_[op_func];
             std::string param_type = ptypes.empty() ? "" : ptypes[0];
             std::string arg_val = emitArgForParam(*assign->value, param_type);
@@ -1164,7 +1164,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
         auto it = locals_.find(assign->name);
         if (it == locals_.end())
-            error(std::string("undefined variable: " + assign->name));
+            error(std::string("Undefined variable: " + assign->name));
         auto tit = locals_.find(assign->name);
         // anonymous-tuple local LHS: route per the element-wise rule.
         if (tit != locals_.end() && isAnonTupleType(tit->second.type)) {
@@ -1174,7 +1174,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (auto* te = dynamic_cast<const TupleExpr*>(assign->value.get())) {
                 int nfields = (int)elems.size();
                 if ((int)te->values.size() > nfields)
-                    error(std::string("tuple has " + std::to_string(te->values.size())
+                    error(std::string("Tuple has " + std::to_string(te->values.size())
                         + " values but '" + assign->name + "' has " + std::to_string(nfields)
                         + " elements"));
                 for (int i = 0; i < (int)te->values.size(); i++) {
@@ -1185,7 +1185,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     if (slid_info_.count(ft)) {
                         std::string src_type = inferSlidType(*te->values[i]);
                         if (src_type != ft)
-                            error(std::string("slid tuple element type mismatch: expected '"
+                            error(std::string("Slid tuple element type mismatch: expected '"
                                 + ft + "', got '" + src_type + "'"));
                         std::string src_ptr;
                         if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
@@ -1209,7 +1209,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                 out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << elem_llvm << "\n";
                             val = coerced;
                         } else {
-                            error(std::string("type mismatch: cannot assign '"
+                            error(std::string("Type mismatch: cannot assign '"
                                 + inferSlidType(*te->values[i]) + "' to tuple element "
                                 + std::to_string(i) + " of type '" + ft + "'"));
                         }
@@ -1223,7 +1223,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             // tuple-variable rhs of matching type: route through element-wise walker
             std::string src_slids = inferSlidType(*assign->value);
             if (src_slids != lhs_t)
-                error(std::string("type mismatch: cannot assign '" + src_slids
+                error(std::string("Type mismatch: cannot assign '" + src_slids
                     + "' to tuple variable '" + assign->name + "' of type '" + lhs_t + "'"));
             std::string src_ptr;
             if (auto* ve = dynamic_cast<const VarExpr*>(assign->value.get())) {
@@ -1231,7 +1231,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (lit != locals_.end()) src_ptr = lit->second.reg;
             }
             if (src_ptr.empty())
-                error(std::string("tuple copy from non-variable source not supported"));
+                error(std::string("Tuple copy from non-variable source not supported"));
             emitSlidSlotAssign(lhs_t, it->second.reg, src_ptr, assign->is_move);
             return;
         }
@@ -1380,7 +1380,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 auto& info = slid_info_[slid_name];
                 int nfields = (int)info.field_types.size();
                 if ((int)te->values.size() > nfields)
-                    error(std::string("tuple has " + std::to_string(te->values.size())
+                    error(std::string("Tuple has " + std::to_string(te->values.size())
                         + " values but '" + slid_name + "' has " + std::to_string(nfields)
                         + " accessible fields"));
                 for (int i = 0; i < (int)te->values.size(); i++) {
@@ -1391,7 +1391,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     if (slid_info_.count(ft)) {
                         std::string src_type = inferSlidType(*te->values[i]);
                         if (src_type != ft)
-                            error(std::string("slid field '" + info.field_types[i]
+                            error(std::string("Slid field '" + info.field_types[i]
                                 + "' reassignment: expected '" + ft + "', got '" + src_type + "'"));
                         std::string src_ptr;
                         if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
@@ -1406,14 +1406,14 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     if (isAnonTupleType(ft)) {
                         std::string src_type = inferSlidType(*te->values[i]);
                         if (src_type != ft)
-                            error(std::string("tuple field reassignment: expected '"
+                            error(std::string("Tuple field reassignment: expected '"
                                 + ft + "', got '" + src_type + "'"));
                         std::string src_ptr;
                         if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
                             src_ptr = locals_[ve->name].reg;
                         }
                         if (src_ptr.empty())
-                            error(std::string("tuple-typed field copy from non-variable source not supported"));
+                            error(std::string("Tuple-typed field copy from non-variable source not supported"));
                         emitSlidSlotAssign(ft, gep, src_ptr, assign->is_move);
                         continue;
                     }
@@ -1546,7 +1546,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (isPtrType(rhs_type)) {
                 static const std::set<std::string> bad = {"+","-","*","/","%"};
                 if (bad.count(cas->op))
-                    error(std::string("'" + cas->op + "=' between two pointer operands "
+                    error(std::string("Operator '" + cas->op + "=' between two pointer operands "
                         "is not allowed (result is not a pointer)"));
             }
         }
@@ -1574,11 +1574,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
             const std::string& op = cas->op;
             bool is_logical = (op == "&&" || op == "||" || op == "^^");
             if (isRefType(slids_type)) {
-                error(std::string("'" + op + "=' on reference '" + slids_type
+                error(std::string("Operator '" + op + "=' on reference '" + slids_type
                     + "': arithmetic on references is not allowed (use a pointer '[]' type)"));
             }
             if (is_logical && (isPtrType(slids_type) || isIndirectType(slids_type))) {
-                error(std::string("'" + op + "=' on pointer '" + slids_type
+                error(std::string("Operator '" + op + "=' on pointer '" + slids_type
                     + "': logical compound assign produces bool, cannot assign to pointer"));
             }
             if (is_logical) {
@@ -1646,7 +1646,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (isPtrType(slids_type)) {
                 // pointer iter += int / -= int via GEP
                 if (op != "+" && op != "-")
-                    error(std::string("'" + op + "=' on pointer type '"
+                    error(std::string("Operator '" + op + "=' on pointer type '"
                         + slids_type + "' is not allowed"));
                 std::string rhs_slids;
                 if (auto* ve = dynamic_cast<const VarExpr*>(cas->rhs.get())) {
@@ -1654,7 +1654,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     if (tit != locals_.end()) rhs_slids = tit->second.type;
                 }
                 if (isRefType(rhs_slids))
-                    error(std::string("'" + op + "' between pointer '" + slids_type
+                    error(std::string("Operator '" + op + "' between pointer '" + slids_type
                         + "' and reference '" + rhs_slids + "' is not allowed"));
                 std::string elem = slids_type.substr(0, slids_type.size() - 2);
                 std::string rhs_llt = exprLlvmType(*cas->rhs);
@@ -1699,7 +1699,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 else if (op == ">>") instr = is_unsigned ? "lshr" : "ashr";
             }
             if (instr.empty())
-                error(std::string("'" + op + "=' is not supported for type '"
+                error(std::string("Operator '" + op + "=' is not supported for type '"
                     + slids_type + "'"));
             std::string llt = llvmType(slids_type);
             std::string old_v = newTmp();
@@ -1815,7 +1815,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             emitStmt(synth);
             return;
         }
-        error(std::string("compound assignment: unsupported LHS shape"));
+        error(std::string("Compound assignment: unsupported LHS shape"));
     }
 
     if (auto* da = dynamic_cast<const DerefAssignStmt*>(&stmt)) {
@@ -1827,7 +1827,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (auto* ve = dynamic_cast<const VarExpr*>(da->ptr.get())) {
             auto it = locals_.find(ve->name);
             if (it == locals_.end())
-                error(std::string("DerefAssign: undefined variable '" + ve->name + "'"));
+                error(std::string("Undefined variable '" + ve->name + "'"));
             auto tit = locals_.find(ve->name);
             if (tit != locals_.end() && isIndirectType(tit->second.type)) {
                 std::string loaded_ptr = newTmp();
@@ -1871,22 +1871,22 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // obj.field[index] = value — inline array field on an external object
         if (auto* fa = dynamic_cast<const FieldAccessExpr*>(ia->base.get())) {
             auto* ove = dynamic_cast<const VarExpr*>(fa->object.get());
-            if (!ove) error(std::string("IndexAssign: complex field object not supported"));
+            if (!ove) error(std::string("Complex field object not supported"));
             auto tit = locals_.find(ove->name);
-            if (tit == locals_.end()) error(std::string("IndexAssign: unknown type for '" + ove->name + "'"));
+            if (tit == locals_.end()) error(std::string("Unknown type for '" + ove->name + "'"));
             std::string slid_name = tit->second.type;
             auto& info = slid_info_[slid_name];
             auto fit = info.field_index.find(fa->field);
-            if (fit == info.field_index.end()) error(std::string("IndexAssign: unknown field '" + fa->field + "'"));
+            if (fit == info.field_index.end()) error(std::string("Unknown field '" + fa->field + "'"));
             std::string ft = info.field_types[fit->second];
             // anon-tuple field: GEP into the field and delegate to tuple-element store logic
             if (isAnonTupleType(ft)) {
                 auto elems = anonTupleElems(ft);
                 int idx;
                 if (!constExprToInt(*ia->index, enum_values_, idx))
-                    error(std::string("tuple index must be a constant integer"));
+                    error(std::string("Tuple index must be a constant integer"));
                 if (idx < 0 || idx >= (int)elems.size())
-                    error(std::string("tuple index " + std::to_string(idx)
+                    error(std::string("Tuple index " + std::to_string(idx)
                         + " out of range (size " + std::to_string(elems.size()) + ")"));
                 const std::string& elem_slids = elems[idx];
                 std::string obj_ptr = locals_[ove->name].reg;
@@ -1897,7 +1897,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (slid_info_.count(elem_slids) || isAnonTupleType(elem_slids)) {
                     std::string src_type = inferSlidType(*ia->value);
                     if (src_type != elem_slids)
-                        error(std::string("tuple element write: expected '"
+                        error(std::string("Tuple element write: expected '"
                             + elem_slids + "', got '" + src_type + "'"));
                     std::string src_ptr;
                     if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
@@ -1927,7 +1927,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     emitNullOut(*ia->value);
                 return;
             }
-            if (!isInlineArrayType(ft)) error(std::string("IndexAssign: field '" + fa->field + "' is not an inline array"));
+            if (!isInlineArrayType(ft)) error(std::string("Field '" + fa->field + "' is not an inline array"));
             auto lb = ft.rfind('[');
             std::string elem_type = ft.substr(0, lb);
             std::string sz_str = ft.substr(lb + 1, ft.size() - lb - 2);
@@ -1960,9 +1960,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         auto elems = anonTupleElems(t);
                         int idx;
                         if (!constExprToInt(*ia->index, enum_values_, idx))
-                            error(std::string("tuple index must be a constant integer"));
+                            error(std::string("Tuple index must be a constant integer"));
                         if (idx < 0 || idx >= (int)elems.size())
-                            error(std::string("tuple index " + std::to_string(idx)
+                            error(std::string("Tuple index " + std::to_string(idx)
                                 + " out of range (size " + std::to_string(elems.size()) + ")"));
                         std::string base_ptr = newTmp();
                         out_ << "    " << base_ptr << " = load ptr, ptr "
@@ -2003,7 +2003,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
 
         auto* ve = dynamic_cast<const VarExpr*>(ia->base.get());
-        if (!ve) error(std::string("IndexAssign: complex base not supported"));
+        if (!ve) error(std::string("Complex base not supported"));
 
         // anonymous tuple element write: tuple[N] = val — N must be a compile-time constant
         {
@@ -2012,9 +2012,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 auto elems = anonTupleElems(tit->second.type);
                 int idx;
                 if (!constExprToInt(*ia->index, enum_values_, idx))
-                    error(std::string("tuple index must be a constant integer"));
+                    error(std::string("Tuple index must be a constant integer"));
                 if (idx < 0 || idx >= (int)elems.size())
-                    error(std::string("tuple index " + std::to_string(idx)
+                    error(std::string("Tuple index " + std::to_string(idx)
                         + " out of range (size " + std::to_string(elems.size()) + ")"));
                 std::string elem_slids = elems[idx];
                 std::string elem_llvm = llvmType(elem_slids);
@@ -2023,7 +2023,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (slid_info_.count(elem_slids) || isAnonTupleType(elem_slids)) {
                     std::string src_type = inferSlidType(*ia->value);
                     if (src_type != elem_slids)
-                        error(std::string("tuple element write: expected '"
+                        error(std::string("Tuple element write: expected '"
                             + elem_slids + "', got '" + src_type + "'"));
                     std::string src_ptr;
                     if (auto* rve = dynamic_cast<const VarExpr*>(ia->value.get())) {
@@ -2045,7 +2045,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         }
                     }
                     if (src_ptr.empty())
-                        error(std::string("tuple element write from unsupported source"));
+                        error(std::string("Tuple element write from unsupported source"));
                     emitSlidSlotAssign(elem_slids, gep, src_ptr, ia->is_move);
                     return;
                 }
@@ -2178,7 +2178,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
         }
         if (base_ptr.empty())
-            error(std::string("IndexAssign: '" + ve->name + "' is not a pointer type"));
+            error(std::string("Variable '" + ve->name + "' is not a pointer type."));
 
         std::string idx_llvm = exprLlvmType(*ia->index);
         std::string idx_val = emitExpr(*ia->index);
@@ -2198,7 +2198,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         auto a = resolveLvalue(*sw->lhs);
         auto b = resolveLvalue(*sw->rhs);
         if (a.type != b.type)
-            error(std::string("SwapStmt: type mismatch — '"
+            error(std::string("Type mismatch — '"
                 + a.type + "' vs '" + b.type + "'"));
         const std::string& t = a.type;
         const std::string& a_ptr = a.addr;
@@ -2215,7 +2215,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
         // inline array: deferred
         if (isInlineArrayType(t))
-            error(std::string("SwapStmt: swap of inline-array variables not yet supported"));
+            error(std::string("Swap of inline-array variables not yet supported"));
         // pointer/iterator or primitive: 4-load/store exchange
         std::string llt = llvmType(t);
         std::string av = newTmp();
@@ -2250,7 +2250,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             }
             if (slid_name.empty() || !slid_info_.count(slid_name))
-                error(std::string("DerefFieldAssign: unknown slid type for field '" + fa->field + "'"));
+                error(std::string("Unknown slid type for field '" + fa->field + "'"));
             auto& info = slid_info_[slid_name];
             int idx = info.field_index[fa->field];
             requirePtrInit(info.field_types[idx], *fa->value);
@@ -2304,7 +2304,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     + "' is not a slid type for field '" + fa->field + "'"));
             auto fit = sit->second.field_index.find(fa->field);
             if (fit == sit->second.field_index.end())
-                error(std::string("FieldAssign: unknown field '" + fa->field
+                error(std::string("Unknown field '" + fa->field
                     + "' on '" + stype + "'"));
             const std::string& ft = sit->second.field_types[fit->second];
             requirePtrInit(ft, *fa->value);
@@ -2346,7 +2346,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             } else {
                 auto type_it = locals_.find(ve->name);
                 if (type_it == locals_.end())
-                    error(std::string("unknown type for: " + ve->name));
+                    error(std::string("Unknown type for: " + ve->name));
                 slid_name = type_it->second.type;
                 if (mcs->method == "~") {
                     // Dtor is structural: valid on slids (dispatch), anon-tuples
@@ -2358,15 +2358,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             ? slid_name.substr(0, slid_name.size()-2)
                             : slid_name.substr(0, slid_name.size()-1);
                         if (slid_info_.count(pointee))
-                            error("dtor on '" + ve->name + "' of pointer type '" + slid_name +
+                            error("Dtor on '" + ve->name + "' of pointer type '" + slid_name +
                                   "': use '" + ve->name + "^.~()' to dtor the pointed-to value");
                     }
                 } else {
                     if (isIndirectType(slid_name))
-                        error("method call on '" + ve->name + "' of pointer type '" + slid_name +
+                        error("Method call on '" + ve->name + "' of pointer type '" + slid_name +
                               "': use '" + ve->name + "^." + mcs->method + "()' for explicit dereference");
                     if (!slid_info_.count(slid_name))
-                        error("method call on '" + ve->name + "': '" + slid_name + "' is not a slid type");
+                        error("Method call on '" + ve->name + "': '" + slid_name + "' is not a slid type");
                 }
                 obj_ptr = locals_[ve->name].reg;
             }
@@ -2401,12 +2401,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 auto elems = anonTupleElems(tup_type);
                 int idx;
                 if (!constExprToInt(*ai->index, enum_values_, idx))
-                    error(std::string("tuple index must be a constant integer"));
+                    error(std::string("Tuple index must be a constant integer"));
                 if (idx < 0 || idx >= (int)elems.size())
-                    error(std::string("tuple index " + std::to_string(idx)
+                    error(std::string("Tuple index " + std::to_string(idx)
                         + " out of range (size " + std::to_string(elems.size()) + ")"));
                 if (!slid_info_.count(elems[idx]))
-                    error(std::string("tuple element " + std::to_string(idx)
+                    error(std::string("Tuple element " + std::to_string(idx)
                         + " is not a slid type"));
                 slid_name = elems[idx];
                 std::string gep = newTmp();
@@ -2427,12 +2427,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (auto* ve2 = dynamic_cast<const VarExpr*>(inner)) {
                 auto type_it = locals_.find(ve2->name);
                 if (type_it == locals_.end())
-                    error(std::string("unknown type for: " + ve2->name));
+                    error(std::string("Unknown type for: " + ve2->name));
                 slid_name = type_it->second.type;
                 for (int k = 0; k < deref_count; k++) {
                     if (isRefType(slid_name)) slid_name.pop_back();
                     else if (isPtrType(slid_name)) slid_name.resize(slid_name.size()-2);
-                    else error(std::string("method call: not enough pointer levels in '"
+                    else error(std::string("Method call: not enough pointer levels in '"
                                            + type_it->second.type + "' for "
                                            + std::to_string(deref_count) + "-deep deref"));
                 }
@@ -2462,7 +2462,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         if (mk.method_name != mcs->method) continue;
                         if (mk.param_types.size() != mcs->args.size()) continue;
                         if (mk.is_delete) {
-                            error("class '" + slid_name + "': call to deleted method '"
+                            error("Class '" + slid_name + "': call to deleted method '"
                                   + mcs->method + "()' (deleted in '" + cur->name + "')");
                         }
                         stop = true; break;
@@ -2505,7 +2505,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 mangled = resolveOverloadForCall(base, mcs->args);
                 auto ret_it = func_return_types_.find(mangled);
                 if (ret_it == func_return_types_.end())
-                    error(std::string("unknown method: " + mcs->method));
+                    error(std::string("Unknown method: " + mcs->method));
                 ret_slids = ret_it->second;
                 mptypes = func_param_types_[mangled];
             }
@@ -2559,7 +2559,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
             return;
         }
-        error(std::string("complex method call statement not yet supported"));
+        error(std::string("Complex method call statement not yet supported"));
     }
 
     if (auto* ret = dynamic_cast<const ReturnStmt*>(&stmt)) {
@@ -2572,7 +2572,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (ve) {
                 auto tit = locals_.find(ve->name);
                 if (tit == locals_.end() || !slid_info_.count(tit->second.type))
-                    error(std::string("sret: return value must be a slid type"));
+                    error(std::string("Sret: return value must be a slid type"));
                 slid_name = tit->second.type;
                 src = locals_.at(ve->name).reg;
             } else if (auto* de = dynamic_cast<const DerefExpr*>(ret->value.get())) {
@@ -2597,7 +2597,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (slid_name.empty()) {
                     slid_name = exprSlidType(*ret->value);
                     if (slid_name.empty())
-                        error(std::string("sret: return expression must produce a slid type"));
+                        error(std::string("Sret: return expression must produce a slid type"));
                     src = emitExpr(*ret->value);
                     src_is_fresh_temp = true;
                 }
@@ -2605,7 +2605,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 // expression: emit it (BinaryExpr/CallExpr produce a fresh alloca)
                 slid_name = exprSlidType(*ret->value);
                 if (slid_name.empty())
-                    error(std::string("sret: return expression must produce a slid type"));
+                    error(std::string("Sret: return expression must produce a slid type"));
                 src = emitExpr(*ret->value);
                 src_is_fresh_temp = true;
             }
@@ -2757,7 +2757,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             }
             if (target.empty())
-                error(std::string("break: unknown label '" + brk->label + "'"));
+                error(std::string("Break: unknown label '" + brk->label + "'"));
         } else if (brk->number > 0) {
             // numbered break: count outward N loop frames, skipping switch frames
             int count = 0;
@@ -2772,9 +2772,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             }
             if (target.empty())
-                error(std::string("break " + std::to_string(brk->number) + ": not enough enclosing loops"));
+                error(std::string("Break " + std::to_string(brk->number) + ": not enough enclosing loops"));
         } else {
-            if (break_label_.empty()) error(std::string("break outside of loop"));
+            if (break_label_.empty()) error(std::string("Break outside of loop"));
             target = break_label_;
         }
         emitStackRestore(target_frame);
@@ -2796,7 +2796,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             }
             if (target.empty())
-                error(std::string("continue: unknown label '" + cont->label + "'"));
+                error(std::string("Continue: unknown label '" + cont->label + "'"));
         } else if (cont->number > 0) {
             // numbered continue: count outward N loop frames, skipping switch frames
             int count = 0;
@@ -2811,9 +2811,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             }
             if (target.empty())
-                error(std::string("continue " + std::to_string(cont->number) + ": not enough enclosing loops"));
+                error(std::string("Continue " + std::to_string(cont->number) + ": not enough enclosing loops"));
         } else {
-            if (continue_label_.empty()) error(std::string("continue outside of loop"));
+            if (continue_label_.empty()) error(std::string("Continue outside of loop"));
             target = continue_label_;
         }
         emitStackRestore(target_frame);
@@ -3036,7 +3036,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (!sw->cases[i].value) continue; // skip default
             int val;
             if (!constExprToInt(*sw->cases[i].value, enum_values_, val))
-                error(std::string("switch case value must be a constant integer or enum"));
+                error(std::string("Switch case value must be a constant integer or enum"));
             out_ << "        i32 " << val << ", label %" << case_lbls[i] << "\n";
         }
         out_ << "    ]\n";
@@ -3474,7 +3474,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             return;
         }
 
-        error(std::string("unknown function: " + call->callee));
+        error(std::string("Unknown function: " + call->callee));
     }
 
     if (auto* td = dynamic_cast<const TupleDestructureStmt*>(&stmt)) {
@@ -3489,5 +3489,5 @@ void Codegen::emitStmt(const Stmt& stmt) {
         return;
     }
 
-    error(std::string("unsupported statement type"));
+    error(std::string("Unsupported statement type"));
 }

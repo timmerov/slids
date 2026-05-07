@@ -13,20 +13,30 @@ Codegen::Codegen(const Program& program, std::ostream& out, SourceMap& sm, std::
       str_counter_(0), tmp_counter_(0), label_counter_(0),
       source_file_(std::move(source_file)) {}
 
+// Ensure every diagnostic ends with terminal punctuation. Messages built
+// with concatenations forget periods constantly; folding the rule into the
+// error helpers keeps every site sentence-shaped without per-call upkeep.
+static std::string finalizeErrorMsg(std::string msg) {
+    if (msg.empty()) return msg;
+    char last = msg.back();
+    if (last != '.' && last != '!' && last != '?') msg.push_back('.');
+    return msg;
+}
+
 void Codegen::error(const std::string& msg) {
     if (!emit_stack_.empty()) {
         auto [f, t] = emit_stack_.back();
-        throw CompileError{f, t, msg};
+        throw CompileError{f, t, finalizeErrorMsg(msg)};
     }
-    throw CompileError{-1, 0, msg};
+    throw CompileError{-1, 0, finalizeErrorMsg(msg)};
 }
 
 void Codegen::errorAtNode(const Stmt& s, const std::string& msg) {
-    throw CompileError{s.file_id, s.tok, msg};
+    throw CompileError{s.file_id, s.tok, finalizeErrorMsg(msg)};
 }
 
 void Codegen::errorAtNode(const Expr& e, const std::string& msg) {
-    throw CompileError{e.file_id, e.tok, msg};
+    throw CompileError{e.file_id, e.tok, finalizeErrorMsg(msg)};
 }
 
 std::string Codegen::newTmp() { return "%t" + std::to_string(tmp_counter_++); }
@@ -224,8 +234,8 @@ void Codegen::collectFunctionSignatures() {
             std::string want = slid.name + "^";
             for (auto& e : it->second) {
                 if (e.params.size() != 1 || e.params[0].first != want)
-                    error(std::string("op<-> on slid '" + slid.name
-                        + "' must take exactly one parameter of type '" + want + "'"));
+                    error(std::string("Operator op<-> on class '" + slid.name
+                        + "' must take exactly one parameter of type '" + want + "'."));
             }
         }
         // Arity-0 unary (op+/-/~/!) and comparison ops (op==/!=/</></><=/>=)
@@ -243,8 +253,8 @@ void Codegen::collectFunctionSignatures() {
                 // "void" is the parser's default when no explicit return is given on
                 // an op-method, which means "returns self" — i.e. a class.
                 if (e.ret.empty() || e.ret == "void" || slid_info_.count(e.ret))
-                    error(std::string("operator '" + method_name + "' on slid '"
-                        + slid.name + "' must return a built-in type (bool/int/pointer), not a class"));
+                    error(std::string("Operator '" + method_name + "' on class '"
+                        + slid.name + "' must return a built-in type (bool, int, pointer), not a class."));
             }
         }
         for (auto& [method_name, entries] : by_name) {
@@ -503,10 +513,10 @@ void Codegen::collectSlids() {
         if (!info.is_namespace && info.has_explicit_ctor != info.has_dtor) {
             const char* present = info.has_explicit_ctor ? "_" : "~";
             const char* missing = info.has_explicit_ctor ? "~" : "_";
-            error(std::string("class '" + slid.name
+            error(std::string("Class '" + slid.name
                 + "' declares '" + present + "()' but not '" + missing
-                + "()': constructor and destructor must be declared together"
-                + " or both auto-generated"));
+                + "()'; the constructor and destructor must be declared together,"
+                + " or both auto-generated."));
         }
         slid_info_[slid.name] = std::move(info);
     }
@@ -542,18 +552,18 @@ void Codegen::resolveSlidInheritanceFor(SlidInfo& info) {
     }
     auto bit = slid_info_.find(info.base_name);
     if (bit == slid_info_.end())
-        error(std::string("base class '" + info.base_name
-            + "' of '" + info.name + "' is not defined"));
+        error(std::string("Base class '" + info.base_name
+            + "' of class '" + info.name + "' is not defined."));
     SlidInfo& base = bit->second;
     if (base.is_namespace)
-        error(std::string("cannot inherit from namespace '" + info.base_name + "'"));
+        error(std::string("Cannot inherit from namespace '" + info.base_name + "'."));
     resolveSlidInheritanceFor(base); // ensure base's flat layout is built first
     info.base_info = &base;
     // virtual-base validation: a virtual class must have a virtual base.
     if (info.is_virtual_class && !base.is_virtual_class)
-        error(std::string("class '" + info.name
+        error(std::string("Class '" + info.name
             + "' is virtual but its base '" + base.name
-            + "' is not — all ancestors of a virtual class must have a virtual destructor"));
+            + "' is not; all ancestors of a virtual class must have a virtual destructor."));
 
     // Save own fields (currently sole occupants of field_types/field_index).
     int own_count = info.own_field_count;
@@ -572,9 +582,9 @@ void Codegen::resolveSlidInheritanceFor(SlidInfo& info) {
     info.base_field_count = base_count;
     for (int i = 0; i < own_count; i++) {
         if (info.field_index.count(own_names[i]))
-            error(std::string("field '" + own_names[i]
-                + "' in '" + info.name + "' collides with a field inherited from '"
-                + info.base_name + "'"));
+            error(std::string("Field '" + own_names[i]
+                + "' in class '" + info.name + "' collides with a field inherited from '"
+                + info.base_name + "'."));
         info.field_index[own_names[i]] = base_count + i;
         info.field_types.push_back(own_types[i]);
     }
@@ -683,8 +693,8 @@ void Codegen::buildVtables() {
                     // shadowing-by-name check: same name with different sig
                     int by_name = findSlotByName(m.name);
                     if (by_name >= 0)
-                        error(std::string("class '" + name + "': virtual method '"
-                            + m.name + "' signature does not match the inherited slot"));
+                        error(std::string("Class '" + name + "' virtual method '"
+                            + m.name + "' signature does not match the inherited slot."));
                     // new slot. is_delete + no ancestor + virtual = pure-virtual introduction.
                     // is_default with no ancestor is rejected upstream by validateDefaultDelete.
                     SlidInfo::VtableSlot s;
@@ -700,8 +710,8 @@ void Codegen::buildVtables() {
                 } else {
                     // override: must match return type exactly
                     if (info.vtable[slot].return_type != m.return_type)
-                        error(std::string("class '" + name + "': virtual override '"
-                            + m.name + "' return type does not match base"));
+                        error(std::string("Class '" + name + "' virtual override '"
+                            + m.name + "' return type does not match the base method."));
                     // = default / = delete with ancestor match: keep base's slot intact.
                     // The contract is enforced via method_marks at compile time.
                     if (m.is_default || m.is_delete) {
@@ -718,8 +728,8 @@ void Codegen::buildVtables() {
                 if (m.is_default || m.is_delete) continue;
                 int by_name = findSlotByName(m.name);
                 if (by_name >= 0)
-                    error(std::string("class '" + name + "': method '" + m.name
-                        + "' shadows inherited virtual method — declare it 'virtual' to override"));
+                    error(std::string("Class '" + name + "' method '" + m.name
+                        + "' shadows an inherited virtual method; declare it 'virtual' to override."));
             }
         }
         // Apply external_methods (reopens). May NOT add new virtual slots; may
@@ -737,15 +747,15 @@ void Codegen::buildVtables() {
                     // or attempt to add a new virtual via reopen.
                     int by_name = findSlotByName(em.method_name);
                     if (by_name >= 0)
-                        error(std::string("class '" + name + "': virtual method '"
-                            + em.method_name + "' signature does not match the inherited slot"));
-                    error(std::string("class '" + name
-                        + "': new virtual methods may not be added in a reopen — '"
-                        + em.method_name + "' must be declared in the original class"));
+                        error(std::string("Class '" + name + "' virtual method '"
+                            + em.method_name + "' signature does not match the inherited slot."));
+                    error(std::string("Class '" + name
+                        + "' may not add new virtual methods in a reopen; '"
+                        + em.method_name + "' must be declared in the original class."));
                 }
                 if (info.vtable[slot].return_type != em.return_type)
-                    error(std::string("class '" + name + "': virtual override '"
-                        + em.method_name + "' return type does not match base"));
+                    error(std::string("Class '" + name + "' virtual override '"
+                        + em.method_name + "' return type does not match the base method."));
                 // = default / = delete in a reopen (with ancestor match): keep base's slot.
                 // method_marks enforces the contract; no vtable mutation here.
                 if (em.is_default || em.is_delete) {
@@ -759,8 +769,8 @@ void Codegen::buildVtables() {
                 if (em.is_default || em.is_delete) continue;
                 int by_name = findSlotByName(em.method_name);
                 if (by_name >= 0)
-                    error(std::string("class '" + name + "': method '" + em.method_name
-                        + "' shadows inherited virtual method — declare it 'virtual' to override"));
+                    error(std::string("Class '" + name + "' method '" + em.method_name
+                        + "' shadows an inherited virtual method; declare it 'virtual' to override."));
             }
         }
     };
@@ -827,19 +837,19 @@ void Codegen::validateDefaultDelete() {
         if (sit == slid_info_.end()) return;
         if (isCtorDtor(method_name)) {
             std::string kind = is_default ? "= default" : "= delete";
-            error("class '" + slid_name + "': '" + kind + "' may not be applied to '"
-                  + method_name + "()'");
+            error("In class '" + slid_name + "', '" + kind + "' may not be applied to '"
+                  + method_name + "()'.");
         }
         std::vector<std::string> pts;
         for (auto& [t, n] : params) pts.push_back(t);
         bool ancestor = ancestorHasMethod(slid_name, method_name, pts);
         if (is_default && !ancestor)
-            error("class '" + slid_name + "': '" + method_name
-                  + "() = default' has no matching base method");
+            error("In class '" + slid_name + "', '" + method_name
+                  + "() = default' has no matching base method.");
         if (is_delete && !ancestor && !is_virtual)
-            error("class '" + slid_name + "': '" + method_name
-                  + "() = delete' is non-virtual but has no matching base method "
-                    "(pure-virtual introduction requires 'virtual')");
+            error("In class '" + slid_name + "', '" + method_name
+                  + "() = delete' is non-virtual but has no matching base method;"
+                    " pure-virtual introduction requires 'virtual'.");
         // Pure-virtual introduction (delete + virtual + no ancestor) does NOT
         // bind a removal mark — descendants must be free to provide the impl.
         if (!ancestor) return;
@@ -867,8 +877,8 @@ void Codegen::validateDefaultDelete() {
         const SlidInfo::MethodMark* mk = findMethodMark(slid_name, method_name, pts, origin);
         if (!mk) return;
         std::string kind = mk->is_default ? "= default" : "= delete";
-        error("class '" + slid_name + "': method '" + method_name
-              + "()' is " + kind + " in '" + origin + "' and may not be defined here");
+        error("In class '" + slid_name + "', method '" + method_name
+              + "()' is " + kind + " in '" + origin + "' and may not be defined here.");
     };
     for (auto& slid : program_.slids) {
         for (auto& m : slid.methods) {
@@ -977,8 +987,8 @@ void Codegen::validatePureSlots() {
         if (!any_concrete) continue;
         for (auto& slot : info.vtable) {
             if (!slot.is_pure) continue;
-            error(std::string("class '" + name + "': virtual method '"
-                + slot.method_name + "' is declared pure (= delete) but is never defined"));
+            error(std::string("Class '" + name + "' virtual method '"
+                + slot.method_name + "' is declared pure (= delete) but is never defined."));
         }
     }
 }
@@ -1248,7 +1258,7 @@ void Codegen::emit() {
         // pick the function-template overload that matches req.param_types
         auto it = template_funcs_.find(req.func_name);
         if (it == template_funcs_.end() || it->second.empty())
-            error(std::string("unknown template: " + req.func_name));
+            error(std::string("Unknown template '" + req.func_name + "'."));
         // build subst for matching against req.param_types
         const TemplateFuncEntry* chosen = nullptr;
         for (auto& entry : it->second) {
@@ -1280,8 +1290,8 @@ void Codegen::emit() {
             if (match) { chosen = &entry; break; }
         }
         if (!chosen)
-            error(std::string("instantiate: no overload of '" + req.func_name
-                + "' matches the requested parameter signature"));
+            error(std::string("No overload of '" + req.func_name
+                + "' matches the requested parameter signature for instantiation."));
         instantiateTemplate(*chosen, req.type_args, true);
     }
 
@@ -1303,11 +1313,11 @@ void Codegen::emit() {
                            const std::vector<std::pair<std::string,std::string>>& params) {
         for (auto& [type, name] : params) {
             if (slid_info_.count(type) > 0)
-                error(std::string(ctx + ": parameter '" + name +
-                    "' has class type '" + type + "' — cannot pass by value; use '" + type + "^'"));
+                error(std::string("In " + ctx + ", parameter '" + name +
+                    "' has class type '" + type + "' and cannot be passed by value; use '" + type + "^'."));
             if (isAnonTupleType(type))
-                error(std::string(ctx + ": parameter '" + name +
-                    "' has tuple type '" + type + "' — cannot pass by value; use '" + type + "^'"));
+                error(std::string("In " + ctx + ", parameter '" + name +
+                    "' has tuple type '" + type + "' and cannot be passed by value; use '" + type + "^'."));
         }
     };
     for (auto& fn : program_.functions)
@@ -2188,7 +2198,7 @@ Codegen::TemplateResolution Codegen::resolveTemplateOverload(
     }
     if (matches == 0) return {nullptr, {}};
     if (matches > 1)
-        error(std::string("ambiguous template overload for '" + name + "'"));
+        error(std::string("Ambiguous template overload for '" + name + "'."));
     return {best, std::move(best_targs)};
 }
 
@@ -2279,8 +2289,8 @@ std::string Codegen::resolveOverloadForCall(
         }
         size_t sep = base_mangled.rfind("__");
         std::string method = (sep != std::string::npos) ? base_mangled.substr(sep+2) : base_mangled;
-        error("wrong number of arguments to '" + method + "': passed "
-              + std::to_string(args.size()) + ", expected " + arities);
+        error("Wrong number of arguments to '" + method + "': passed "
+              + std::to_string(args.size()) + ", expected " + arities + ".");
     }
     if (it->second.size() == 1) return it->second[0].first;
     // Pass 1: exact type match
@@ -3229,8 +3239,8 @@ void Codegen::emitSlidSwap(const std::string& struct_type,
         }
         // inline arrays: deferred — array handling will be revisited
         if (isInlineArrayType(fslids)) {
-            error(std::string("swap of inline-array fields not yet supported (field type '"
-                + fslids + "')"));
+            error(std::string("Swap of inline-array fields is not yet supported (field type '"
+                + fslids + "')."));
         }
         // pointer/iterator or primitive field: 4-load/store exchange (no nullification)
         std::string ft = llvmType(fslids);
@@ -3271,8 +3281,8 @@ void Codegen::emitElementwiseAtPtr(const std::string& ttype,
                 }
             }
             if (mangled.empty())
-                error(std::string("slid element type '" + ft
-                    + "' has no op" + op + "(" + ft + "^, " + ft + "^)"));
+                error(std::string("Class element type '" + ft
+                    + "' has no op" + op + "(" + ft + "^, " + ft + "^)."));
             std::string ret_t = func_return_types_.count(mangled)
                 ? func_return_types_[mangled] : "";
             bool is_method = (ret_t == "void");
@@ -3300,7 +3310,7 @@ void Codegen::emitElementwiseAtPtr(const std::string& ttype,
         else if (op == "^")  instr = "xor";
         else if (op == "<<") instr = "shl";
         else if (op == ">>") instr = unsig ? "lshr" : "ashr";
-        else error(std::string("elementwise: unsupported op '" + op + "'"));
+        else error(std::string("Unsupported elementwise op '" + op + "'."));
         std::string lv = newTmp();
         out_ << "    " << lv << " = load " << elem_llvm << ", ptr " << l_gep << "\n";
         std::string rv = newTmp();
@@ -3343,8 +3353,8 @@ void Codegen::emitTupleScalarBroadcastAtPtr(const std::string& ttype,
                 }
             }
             if (mangled.empty())
-                error(std::string("broadcast: slid slot '" + ft + "' has no op"
-                    + op + "(" + ft + "^, " + scalar_slids + ")"));
+                error(std::string("Class slot '" + ft + "' has no op"
+                    + op + "(" + ft + "^, " + scalar_slids + ") for broadcast."));
             std::string ret_t = func_return_types_.count(mangled)
                 ? func_return_types_[mangled] : "";
             bool is_method = (ret_t == "void");
@@ -3357,8 +3367,8 @@ void Codegen::emitTupleScalarBroadcastAtPtr(const std::string& ttype,
         }
         // scalar slot — strict type-match with scalar
         if (ft != scalar_slids)
-            error(std::string("broadcast: tuple slot type '" + ft
-                + "' does not match scalar type '" + scalar_slids + "'"));
+            error(std::string("Tuple slot type '" + ft
+                + "' does not match scalar type '" + scalar_slids + "' in broadcast."));
         std::string elem_llvm = llvmType(ft);
         bool unsig = (ft == "uint" || ft == "uint8" || ft == "uint16"
                    || ft == "uint32" || ft == "uint64"
@@ -3374,7 +3384,7 @@ void Codegen::emitTupleScalarBroadcastAtPtr(const std::string& ttype,
         else if (op == "^")  instr = "xor";
         else if (op == "<<") instr = "shl";
         else if (op == ">>") instr = unsig ? "lshr" : "ashr";
-        else error(std::string("broadcast: unsupported op '" + op + "'"));
+        else error(std::string("Unsupported broadcast op '" + op + "'."));
         std::string slot_val = newTmp();
         out_ << "    " << slot_val << " = load " << elem_llvm << ", ptr " << t_gep << "\n";
         std::string lhs = scalar_on_left ? scalar_val : slot_val;
@@ -3393,8 +3403,8 @@ std::string Codegen::emitSlidAlloca(const std::string& slid_name) {
     if (info.is_virtual_class) {
         for (auto& slot : info.vtable) {
             if (slot.is_pure)
-                error(std::string("cannot instantiate pure virtual class '" + slid_name
-                    + "': method '" + slot.method_name + "' is not defined"));
+                error(std::string("Cannot instantiate pure virtual class '" + slid_name
+                    + "': method '" + slot.method_name + "' is not defined."));
         }
     }
     std::string reg = newTmp();
@@ -3445,11 +3455,11 @@ void Codegen::emitInitFieldsAtPtrs(const std::string& stype, const std::string& 
     auto fields = fieldTypesOf(stype);
     int nfields = (int)fields.size();
     if ((int)args.size() > nfields)
-        error(std::string("too many initializers: '" + stype + "' has "
-            + std::to_string(nfields) + " fields, got " + std::to_string(args.size())));
+        error(std::string("Too many initializers for '" + stype + "': it has "
+            + std::to_string(nfields) + " fields, got " + std::to_string(args.size()) + "."));
     if ((int)overrides.size() > nfields)
-        error(std::string("too many tuple values: '" + stype + "' has "
-            + std::to_string(nfields) + " fields, got " + std::to_string(overrides.size())));
+        error(std::string("Too many tuple values for '" + stype + "': it has "
+            + std::to_string(nfields) + " fields, got " + std::to_string(overrides.size()) + "."));
 
     auto slidDefFor = [&](const std::string& name) -> const SlidDef* {
         for (auto& s : program_.slids) if (s.name == name) return &s;
@@ -3943,7 +3953,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid,
             emitDtors();
             out_ << "    ret void\n";
         } else {
-            error(std::string("method '" + full_mangled + "' is missing a return statement"));
+            error(std::string("Method '" + full_mangled + "' is missing a return statement."));
         }
     }
 
@@ -4034,7 +4044,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
             emitDtors();
             out_ << "    ret void\n";
         } else {
-            error(std::string("function '" + fn.name + "' is missing a return statement"));
+            error(std::string("Function '" + fn.name + "' is missing a return statement."));
         }
     }
 
@@ -4099,7 +4109,7 @@ std::string Codegen::emitFieldPtr(const std::string& obj_name, const std::string
         auto& parent_info = slid_info_[current_slid_];
         auto parent_it = parent_info.field_index.find(obj_name);
         if (parent_it == parent_info.field_index.end())
-            error(std::string("unknown type for variable: " + obj_name));
+            error(std::string("Unknown type for variable '" + obj_name + "'."));
         int parent_idx = parent_it->second;
         slid_name = parent_info.field_types[parent_idx];
         std::string self_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
@@ -4108,13 +4118,13 @@ std::string Codegen::emitFieldPtr(const std::string& obj_name, const std::string
              << ", ptr " << self_ptr << ", i32 0, i32 " << parent_idx << "\n";
         obj_ptr = parent_gep;
     } else {
-        error(std::string("unknown type for variable: " + obj_name));
+        error(std::string("Unknown type for variable: " + obj_name));
     }
 
     auto& info = slid_info_[slid_name];
     auto field_it = info.field_index.find(field);
     if (field_it == info.field_index.end())
-        error(std::string("unknown field: " + field + " in " + slid_name));
+        error(std::string("Unknown field '" + field + "' on type '" + slid_name + "'."));
 
     int idx = field_it->second;
     std::string gep = newTmp();

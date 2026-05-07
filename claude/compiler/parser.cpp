@@ -50,14 +50,24 @@ Parser::Parser(SourceMap& sm, int file_id, std::vector<Token> tokens,
       imported_once_(imported_once ? std::move(imported_once)
                                    : std::make_shared<std::set<std::string>>()) {}
 
+// Ensure every diagnostic ends with terminal punctuation. Messages built
+// with concatenations forget periods constantly; folding the rule into the
+// error helpers keeps every site sentence-shaped without per-call upkeep.
+static std::string finalizeErrorMsg(std::string msg) {
+    if (msg.empty()) return msg;
+    char last = msg.back();
+    if (last != '.' && last != '!' && last != '?') msg.push_back('.');
+    return msg;
+}
+
 void Parser::errorHere(const std::string& msg) {
     [[maybe_unused]] int t_start = pos_;
-    throw CompileError{file_id_, pos_, msg};
+    throw CompileError{file_id_, pos_, finalizeErrorMsg(msg)};
 }
 
 void Parser::errorAt(int t, const std::string& msg) {
     [[maybe_unused]] int t_start = pos_;
-    throw CompileError{file_id_, t, msg};
+    throw CompileError{file_id_, t, finalizeErrorMsg(msg)};
 }
 
 int Parser::currentLine() {
@@ -68,16 +78,20 @@ int Parser::currentLine() {
 }
 
 void Parser::declareAlias(const std::string& name, const std::string& resolved, int name_tok) {
-    if (alias_stack_.back().count(name)) {
-        errorAt(name_tok, "alias '" + name + "' already declared in same scope");
+    auto& frame = alias_stack_.back();
+    auto it = frame.find(name);
+    if (it != frame.end()) {
+        throw CompileError{file_id_, name_tok,
+            "Alias '" + name + "' is already declared in the same scope."}
+            .addNote(file_id_, it->second.tok, "First declared here.");
     }
-    alias_stack_.back()[name] = resolved;
+    frame[name] = AliasInfo{resolved, name_tok};
 }
 
 std::string Parser::lookupAlias(const std::string& name) const {
     for (auto it = alias_stack_.rbegin(); it != alias_stack_.rend(); ++it) {
         auto sit = it->find(name);
-        if (sit != it->end()) return sit->second;
+        if (sit != it->end()) return sit->second.resolved;
     }
     return "";
 }
@@ -85,24 +99,34 @@ std::string Parser::lookupAlias(const std::string& name) const {
 void Parser::parseAliasDecl() {
     advance(); // 'alias'
     int name_tok = pos_;
-    std::string name = expect(TokenType::kIdentifier, "expected alias name after 'alias'").value;
+    std::string name = expect(TokenType::kIdentifier, "Expected alias name after 'alias'").value;
     if (peek().type == TokenType::kLt) {
-        errorHere("parameterized aliases are not supported; alias name takes no template parameters");
+        errorHere("Parameterized aliases are not supported; an alias name takes no template parameters.");
     }
-    expect(TokenType::kEquals, "expected '=' after alias name");
+    expect(TokenType::kEquals, "Expected '=' after alias name");
     std::string resolved = parseTypeName();
-    expect(TokenType::kSemicolon, "expected ';' after alias declaration");
+    expect(TokenType::kSemicolon, "Expected ';' after alias declaration");
     declareAlias(name, resolved, name_tok);
 }
 
 void Parser::declareVar(const std::string& name, int name_tok) {
     // (P2) inside any method, no binding may shadow a field of the enclosing class.
-    if (current_slid_fields_.count(name)) {
-        errorAt(name_tok, "'" + name + "' shadows field of enclosing class");
+    {
+        auto fit = current_slid_fields_.find(name);
+        if (fit != current_slid_fields_.end()) {
+            throw CompileError{file_id_, name_tok,
+                "Local '" + name + "' shadows a field of the enclosing class."}
+                .addNote(fit->second.file_id, fit->second.tok, "Field declared here.");
+        }
     }
     if (!scope_stack_.empty()) {
-        if (!scope_stack_.back().emplace(name, LocalInfo{}).second) {
-            errorAt(name_tok, "local '" + name + "' already declared in same scope");
+        LocalInfo info;
+        info.tok = name_tok;
+        auto [it, inserted] = scope_stack_.back().emplace(name, info);
+        if (!inserted) {
+            throw CompileError{file_id_, name_tok,
+                "Local '" + name + "' is already declared in the same scope."}
+                .addNote(file_id_, it->second.tok, "First declared here.");
         }
     }
 }
@@ -180,22 +204,22 @@ Parser::ProtocolDiag Parser::classifyByValue(const ClassInfo& ci,
     if (!has_op && !has_size) { d.status = ProtocolStatus::Absent; return d; }
     if (!has_op || !has_size) {
         d.status = ProtocolStatus::Bad;
-        d.reason = "type '" + cname + "' defines "
-            + std::string(has_op ? "op[] but not size" : "size but not op[]");
+        d.reason = "Type '" + cname + "' defines "
+            + std::string(has_op ? "op[] but not size." : "size but not op[].");
         return d;
     }
     auto& op_sig = ci.sigs.at("op[]");
     auto& sz_sig = ci.sigs.at("size");
     if (op_sig.param_types.size() != 1) {
         d.status = ProtocolStatus::Bad;
-        d.reason = "type '" + cname + "' op[] must take 1 parameter, got "
-            + std::to_string(op_sig.param_types.size());
+        d.reason = "Method op[] on type '" + cname + "' must take 1 parameter; got "
+            + std::to_string(op_sig.param_types.size()) + ".";
         return d;
     }
     if (!sz_sig.param_types.empty()) {
         d.status = ProtocolStatus::Bad;
-        d.reason = "type '" + cname + "' size must take 0 parameters, got "
-            + std::to_string(sz_sig.param_types.size());
+        d.reason = "Method size on type '" + cname + "' must take 0 parameters; got "
+            + std::to_string(sz_sig.param_types.size()) + ".";
         return d;
     }
     d.status = ProtocolStatus::Good;
@@ -221,8 +245,8 @@ Parser::ProtocolDiag Parser::classifyByRef(const ClassInfo& ci,
         if (!has_e) add("end");
         if (!has_n) add("next");
         d.status = ProtocolStatus::Bad;
-        d.reason = "type '" + cname + "' defines some of begin/end/next but not all (missing: "
-            + missing + ")";
+        d.reason = "Type '" + cname + "' defines some of begin/end/next but not all; missing "
+            + missing + ".";
         return d;
     }
     auto& b_sig = ci.sigs.at("begin");
@@ -231,33 +255,34 @@ Parser::ProtocolDiag Parser::classifyByRef(const ClassInfo& ci,
     if (b_sig.return_type != e_sig.return_type
             || b_sig.return_type != n_sig.return_type) {
         d.status = ProtocolStatus::Bad;
-        d.reason = "type '" + cname + "' begin/end/next return types differ: begin returns '"
+        d.reason = "Methods begin/end/next on type '" + cname + "' return differing types: begin returns '"
             + b_sig.return_type + "', end returns '" + e_sig.return_type
-            + "', next returns '" + n_sig.return_type + "'";
+            + "', next returns '" + n_sig.return_type + "'.";
         return d;
     }
     if (!b_sig.param_types.empty()) {
         d.status = ProtocolStatus::Bad;
-        d.reason = "type '" + cname + "' begin must take 0 parameters, got "
-            + std::to_string(b_sig.param_types.size());
+        d.reason = "Method begin on type '" + cname + "' must take 0 parameters; got "
+            + std::to_string(b_sig.param_types.size()) + ".";
         return d;
     }
     if (!e_sig.param_types.empty()) {
         d.status = ProtocolStatus::Bad;
-        d.reason = "type '" + cname + "' end must take 0 parameters, got "
-            + std::to_string(e_sig.param_types.size());
+        d.reason = "Method end on type '" + cname + "' must take 0 parameters; got "
+            + std::to_string(e_sig.param_types.size()) + ".";
         return d;
     }
     if (n_sig.param_types.size() != 1) {
         d.status = ProtocolStatus::Bad;
-        d.reason = "type '" + cname + "' next must take 1 parameter, got "
-            + std::to_string(n_sig.param_types.size());
+        d.reason = "Method next on type '" + cname + "' must take 1 parameter; got "
+            + std::to_string(n_sig.param_types.size()) + ".";
         return d;
     }
     if (n_sig.param_types[0] != b_sig.return_type) {
         d.status = ProtocolStatus::Bad;
-        d.reason = "type '" + cname + "' next parameter type '" + n_sig.param_types[0]
-            + "' must match begin/end/next return type '" + b_sig.return_type + "'";
+        d.reason = "Parameter type '" + n_sig.param_types[0]
+            + "' of next on type '" + cname
+            + "' must match the begin/end/next return type '" + b_sig.return_type + "'.";
         return d;
     }
     d.status = ProtocolStatus::Good;
@@ -306,7 +331,7 @@ Token& Parser::advance() {
 Token& Parser::expect(TokenType type, const std::string& msg) {
     [[maybe_unused]] int t_start = pos_;
     if (peek().type != type)
-        errorHere(msg + ", got " + tokenLabel(peek()));
+        errorHere(msg + ", got " + tokenLabel(peek()) + ".");
     return advance();
 }
 
@@ -454,9 +479,9 @@ void Parser::checkOpArity(const std::string& op_name, int actual, int op_tok) {
         if (i > 0) list += (i + 1 == allowed.size()) ? " or " : ", ";
         list += std::to_string(allowed[i]);
     }
-    errorAt(op_tok, "operator '" + op_name + "' requires "
+    errorAt(op_tok, "Operator '" + op_name + "' requires "
         + list + " parameter" + (allowed.size() == 1 && allowed[0] == 1 ? "" : "s")
-        + "; got " + std::to_string(actual));
+        + "; got " + std::to_string(actual) + ".");
 }
 
 void Parser::checkOpMutable(const std::string& op_name,
@@ -466,8 +491,8 @@ void Parser::checkOpMutable(const std::string& op_name,
     if (op_name != "op<-" && op_name != "op<->") return;
     for (size_t i = 0; i < params.size(); ++i) {
         if (isParamIndirectType(params[i].first) && !param_mutable[i]) {
-            errorAt(op_tok, op_name + " pointer param '" + params[i].second
-                + "' requires 'mutable'");
+            errorAt(op_tok, "Pointer parameter '" + params[i].second
+                + "' of " + op_name + " requires 'mutable'.");
         }
     }
 }
@@ -584,7 +609,7 @@ std::string Parser::parseTypeName() {
             base += parseTypeName();
             if (peek().type == TokenType::kComma) advance();
         }
-        expect(TokenType::kRParen, "expected ')' in anon-tuple type");
+        expect(TokenType::kRParen, "Expected ')' in anon-tuple type");
         base += ")";
         // fall through to the trailing ^/[] loop below
         while (true) {
@@ -610,7 +635,7 @@ std::string Parser::parseTypeName() {
             resolved_alias = true;
         }
     }
-    else errorHere("expected type name, got " + tokenLabel(peek()));
+    else errorHere("Expected type name, got " + tokenLabel(peek()) + ".");
     // alias substitution returns a finalized type string — skip qualifier/nested-alias/template-arg
     // logic; only the trailing ^/[]/^^ loop below still applies.
     if (!resolved_alias) {
@@ -637,7 +662,7 @@ std::string Parser::parseTypeName() {
                 base += "__" + ta;
                 if (peek().type == TokenType::kComma) advance();
             }
-            expect(TokenType::kGt, "expected '>' after template type args");
+            expect(TokenType::kGt, "Expected '>' after template type args");
         }
     }
     // consume trailing ^ or [] for pointer/reference types — kept distinct:
@@ -690,7 +715,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         std::string type_name = advance().value; // consume type keyword
         advance(); // consume '('
         auto operand = parseExpr();
-        expect(TokenType::kRParen, "expected ')'");
+        expect(TokenType::kRParen, "Expected ')'");
         return make<TypeConvExpr>(t_start, type_name, std::move(operand));
     }
     // chainable type conversion without outer parens: int=expr, float32=expr, etc.
@@ -718,7 +743,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         if (peek().type == TokenType::kLParen) {
             advance();
             auto addr = parseExpr();
-            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kRParen, "Expected ')'");
             std::string elem_type = parseTypeName();
             std::vector<std::unique_ptr<Expr>> args;
             if (peek().type == TokenType::kLParen) {
@@ -727,7 +752,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
                     args.push_back(parseExpr());
                     if (peek().type == TokenType::kComma) advance();
                 }
-                expect(TokenType::kRParen, "expected ')'");
+                expect(TokenType::kRParen, "Expected ')'");
             }
             return make<PlacementNewExpr>(t_start, std::move(addr), elem_type, std::move(args));
         }
@@ -735,7 +760,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         if (peek().type == TokenType::kLBracket) {
             advance();
             auto count = parseExpr();
-            expect(TokenType::kRBracket, "expected ']'");
+            expect(TokenType::kRBracket, "Expected ']'");
             return make<NewExpr>(t_start, elem_type, std::move(count));
         } else if (peek().type == TokenType::kLParen) {
             advance();
@@ -744,7 +769,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
                 args.push_back(parseExpr());
                 if (peek().type == TokenType::kComma) advance();
             }
-            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kRParen, "Expected ')'");
             return make<NewScalarExpr>(t_start, elem_type, std::move(args));
         } else {
             // new Type; — equivalent to new Type()
@@ -753,7 +778,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     }
     if (t.type == TokenType::kSizeof) {
         advance();
-        expect(TokenType::kLParen, "expected '(' after sizeof");
+        expect(TokenType::kLParen, "Expected '(' after sizeof");
         auto se = make<SizeofExpr>(t_start);
         // Built-in type keywords can't be parsed as expressions, so route them
         // through parseTypeName() and carry the result as a VarExpr name.
@@ -764,19 +789,19 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         } else {
             se->operand = parseExpr();
         }
-        expect(TokenType::kRParen, "expected ')'");
+        expect(TokenType::kRParen, "Expected ')'");
         return se;
     }
     if (t.type == TokenType::kColonColon) {
         advance(); // consume '::'
-        std::string fn = expect(TokenType::kIdentifier, "expected name after '::'").value;
-        expect(TokenType::kLParen, "expected '(' after '::name'");
+        std::string fn = expect(TokenType::kIdentifier, "Expected name after '::'").value;
+        expect(TokenType::kLParen, "Expected '(' after '::name'");
         std::vector<std::unique_ptr<Expr>> args;
         while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
             args.push_back(parseExpr());
             if (peek().type == TokenType::kComma) advance();
         }
-        expect(TokenType::kRParen, "expected ')'");
+        expect(TokenType::kRParen, "Expected ')'");
         auto call = make<CallExpr>(t_start, fn, std::move(args));
         call->qualifier = "::";
         return call;
@@ -803,7 +828,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
                 args.push_back(parseExpr());
                 if (peek().type == TokenType::kComma) advance();
             }
-            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kRParen, "Expected ')'");
             auto call = make<CallExpr>(t_start, method, std::move(args));
             call->qualifier = t.value;
             return call;
@@ -816,14 +841,14 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
                 type_args.push_back(parseTypeName());
                 if (peek().type == TokenType::kComma) advance();
             }
-            expect(TokenType::kGt, "expected '>'");
-            expect(TokenType::kLParen, "expected '('");
+            expect(TokenType::kGt, "Expected '>'");
+            expect(TokenType::kLParen, "Expected '('");
             std::vector<std::unique_ptr<Expr>> args;
             while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                 args.push_back(parseExpr());
                 if (peek().type == TokenType::kComma) advance();
             }
-            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kRParen, "Expected ')'");
             auto call = make<CallExpr>(t_start, t.value, std::move(args));
             call->type_args = std::move(type_args);
             return call;
@@ -835,7 +860,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
                 args.push_back(parseExpr());
                 if (peek().type == TokenType::kComma) advance();
             }
-            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kRParen, "Expected ')'");
             return make<CallExpr>(t_start, t.value, std::move(args));
         }
         return make<VarExpr>(t_start, t.value);
@@ -851,7 +876,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         if (peek().type == TokenType::kEquals) {
             advance(); // consume '='
             auto operand = parseExpr();
-            expect(TokenType::kRParen, "expected ')' after type conversion");
+            expect(TokenType::kRParen, "Expected ')' after type conversion");
             return make<TypeConvExpr>(t_start, type_name, std::move(operand));
         }
         pos_ = saved; // not a type conversion — backtrack and fall through
@@ -866,28 +891,28 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
                 advance();
                 tuple->values.push_back(parseExpr());
             }
-            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kRParen, "Expected ')'");
             return tuple;
         }
-        expect(TokenType::kRParen, "expected ')'");
+        expect(TokenType::kRParen, "Expected ')'");
         return first;
     }
     if (t.type == TokenType::kHashHash) {
         int src_tok = pos_;
         advance();
         std::string kw = expect(TokenType::kIdentifier,
-            "expected name, type, line, file, func, date, or time after ##").value;
+            "Expected name, type, line, file, func, date, or time after ##").value;
         if (kw == "name" || kw == "type") {
-            expect(TokenType::kLParen, "expected '(' after ##" + kw);
+            expect(TokenType::kLParen, "Expected '(' after ##" + kw);
             auto operand = parseExpr();
-            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kRParen, "Expected ')'");
             return make<StringifyExpr>(src_tok, kw, std::move(operand));
         }
         if (kw == "line" || kw == "file" || kw == "func" || kw == "date" || kw == "time")
             return make<StringifyExpr>(src_tok, kw, nullptr);
-        errorAt(src_tok, "unknown ## operator '" + kw + "'");
+        errorAt(src_tok, "Unknown ## operator '" + kw + "'.");
     }
-    errorHere("expected expression, got " + tokenLabel(t));
+    errorHere("Expected expression, got " + tokenLabel(t) + ".");
 }
 
 // postfix: handle .field and .method(args) chaining
@@ -900,7 +925,7 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
             std::string member;
             if (peek().type == TokenType::kSizeof)  { advance(); member = "sizeof"; }
             else if (peek().type == TokenType::kBitNot) { advance(); member = "~"; }
-            else member = expect(TokenType::kIdentifier, "expected field or method name").value;
+            else member = expect(TokenType::kIdentifier, "Expected field or method name").value;
             if (peek().type == TokenType::kLParen) {
                 advance();
                 std::vector<std::unique_ptr<Expr>> args;
@@ -908,7 +933,7 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
                     args.push_back(parseExpr());
                     if (peek().type == TokenType::kComma) advance();
                 }
-                expect(TokenType::kRParen, "expected ')'");
+                expect(TokenType::kRParen, "Expected ')'");
                 base = make<MethodCallExpr>(t_start, std::move(base), member, std::move(args));
             } else {
                 base = make<FieldAccessExpr>(t_start, std::move(base), member);
@@ -919,10 +944,10 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
             if (peek().type == TokenType::kDotDot) {
                 advance();
                 auto end_expr = parseExpr();
-                expect(TokenType::kRBracket, "expected ']'");
+                expect(TokenType::kRBracket, "Expected ']'");
                 base = make<SliceExpr>(t_start, std::move(base), std::move(idx), std::move(end_expr));
             } else {
-                expect(TokenType::kRBracket, "expected ']'");
+                expect(TokenType::kRBracket, "Expected ']'");
                 base = make<ArrayIndexExpr>(t_start, std::move(base), std::move(idx));
             }
         } else if (peek().type == TokenType::kBitXor) {
@@ -965,7 +990,7 @@ std::unique_ptr<Expr> Parser::parseUnary() {
         auto operand = parsePostfix(parsePrimary());
         auto* ve = dynamic_cast<VarExpr*>(operand.get());
         if (!ve)
-            errorAt(src_tok, "# requires a simple variable name");
+            errorAt(src_tok, "The '#' operator requires a simple variable name.");
         std::string name = ve->name;
         auto tuple = make<TupleExpr>(src_tok);
         tuple->values.push_back(
@@ -1136,7 +1161,7 @@ std::unique_ptr<Expr> Parser::parseExpr() {
 
 std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclare) {
     [[maybe_unused]] int t_start = pos_;
-    expect(TokenType::kLBrace, "expected '{'");
+    expect(TokenType::kLBrace, "Expected '{'");
     scope_stack_.push_back({});
     alias_stack_.push_back({});
     for (auto& n : predeclare)
@@ -1148,22 +1173,26 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     }
     // (P1) nested function uniqueness within this block — same name + signature.
     {
-        std::set<std::string> sigs;
+        struct Site { int file_id; int tok; };
+        std::map<std::string, Site> sigs;
         for (auto& st : block->stmts) {
             auto* nf = dynamic_cast<NestedFunctionDefStmt*>(st.get());
             if (!nf) continue;
             std::string key = nf->def.name + "(";
             for (auto& p : nf->def.params) key += p.first + ",";
             key += ")";
-            if (!sigs.insert(key).second) {
-                throw CompileError{-1, 0, std::string("nested function '" + nf->def.name
-                    + "' redefined with same signature in same block")};
+            auto [it, inserted] = sigs.emplace(key, Site{nf->file_id, nf->tok});
+            if (!inserted) {
+                throw CompileError{nf->file_id, nf->tok,
+                    "Nested function '" + nf->def.name
+                        + "' is redefined with the same signature in the same block."}
+                    .addNote(it->second.file_id, it->second.tok, "First defined here.");
             }
         }
     }
     scope_stack_.pop_back();
     alias_stack_.pop_back();
-    expect(TokenType::kRBrace, "expected '}'");
+    expect(TokenType::kRBrace, "Expected '}'");
     return block;
 }
 
@@ -1204,7 +1233,7 @@ std::unique_ptr<Stmt> Parser::buildAssignFromLhs(
         return make<IndexAssignStmt>(t_start,
             std::move(ai->base), std::move(ai->index), std::move(rhs), is_move);
     }
-    errorAt(op_tok, "invalid assignment target");
+    errorAt(op_tok, "Invalid assignment target.");
 }
 
 std::unique_ptr<Stmt> Parser::buildSwapFromLhs(
@@ -1220,7 +1249,7 @@ std::unique_ptr<Stmt> Parser::buildCompoundAssignFromLhs(
         && !dynamic_cast<DerefExpr*>(lhs.get())
         && !dynamic_cast<FieldAccessExpr*>(lhs.get())
         && !dynamic_cast<ArrayIndexExpr*>(lhs.get())) {
-        errorAt(op_tok, "compound assignment requires an lvalue");
+        errorAt(op_tok, "Compound assignment requires an lvalue.");
     }
     return make<CompoundAssignStmt>(op_tok,
         std::move(lhs), op, std::move(rhs));
@@ -1248,30 +1277,30 @@ std::unique_ptr<Stmt> Parser::parseLvalueTail(std::unique_ptr<Expr> lhs) {
         int op_tok = pos_;
         advance();
         auto rhs = parseExpr();
-        expect(TokenType::kSemicolon, "expected ';'");
+        expect(TokenType::kSemicolon, "Expected ';'");
         return buildCompoundAssignFromLhs(std::move(lhs), cop->second, std::move(rhs), op_tok);
     }
     if (peek().type == TokenType::kEquals) {
         int op_tok = pos_;
         advance();
         auto rhs = parseExpr();
-        expect(TokenType::kSemicolon, "expected ';'");
+        expect(TokenType::kSemicolon, "Expected ';'");
         return buildAssignFromLhs(std::move(lhs), std::move(rhs), false, op_tok);
     }
     if (peek().type == TokenType::kArrowLeft) {
         int op_tok = pos_;
         advance();
         auto rhs = parseExpr();
-        expect(TokenType::kSemicolon, "expected ';'");
+        expect(TokenType::kSemicolon, "Expected ';'");
         return buildAssignFromLhs(std::move(lhs), std::move(rhs), true, op_tok);
     }
     if (peek().type == TokenType::kArrowBoth) {
         advance();
         auto rhs = parseExpr();
-        expect(TokenType::kSemicolon, "expected ';'");
+        expect(TokenType::kSemicolon, "Expected ';'");
         return buildSwapFromLhs(std::move(lhs), std::move(rhs));
     }
-    expect(TokenType::kSemicolon, "expected ';'");
+    expect(TokenType::kSemicolon, "Expected ';'");
     if (auto* mc = dynamic_cast<MethodCallExpr*>(lhs.get())) {
         return make<MethodCallStmt>(t_start, 
             std::move(mc->object), mc->method, std::move(mc->args));
@@ -1286,14 +1315,14 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     // global-qualified call statement: ::name(args);
     if (t.type == TokenType::kColonColon) {
         auto call = parseExpr();
-        expect(TokenType::kSemicolon, "expected ';'");
+        expect(TokenType::kSemicolon, "Expected ';'");
         return make<ExprStmt>(t_start, std::move(call));
     }
 
     if (t.type == TokenType::kDelete) {
         advance();
         auto operand = parseExpr();
-        expect(TokenType::kSemicolon, "expected ';'");
+        expect(TokenType::kSemicolon, "Expected ';'");
         return make<DeleteStmt>(t_start, std::move(operand));
     }
 
@@ -1304,7 +1333,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             return make<ReturnStmt>(t_start, nullptr);
         }
         auto expr = parseExpr();
-        expect(TokenType::kSemicolon, "expected ';'");
+        expect(TokenType::kSemicolon, "Expected ';'");
         return make<ReturnStmt>(t_start, std::move(expr));
     }
 
@@ -1319,7 +1348,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 || peek().type == TokenType::kSwitch) {
             stmt->label = advance().value;
         }
-        expect(TokenType::kSemicolon, "expected ';'");
+        expect(TokenType::kSemicolon, "Expected ';'");
         return stmt;
     }
 
@@ -1334,7 +1363,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 || peek().type == TokenType::kSwitch) {
             stmt->label = advance().value;
         }
-        expect(TokenType::kSemicolon, "expected ';'");
+        expect(TokenType::kSemicolon, "Expected ';'");
         return stmt;
     }
 
@@ -1342,7 +1371,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     // result is discarded; constructor side-effects still run.
     if (t.type == TokenType::kNew) {
         auto e = parsePostfix(parsePrimary());
-        expect(TokenType::kSemicolon, "expected ';'");
+        expect(TokenType::kSemicolon, "Expected ';'");
         return make<ExprStmt>(t_start, std::move(e));
     }
 
@@ -1351,7 +1380,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         std::string op = (t.type == TokenType::kPlusPlus) ? "pre++" : "pre--";
         advance();
         auto operand = parsePostfix(parsePrimary());
-        expect(TokenType::kSemicolon, "expected ';'");
+        expect(TokenType::kSemicolon, "Expected ';'");
         return make<ExprStmt>(t_start, 
             make<UnaryExpr>(t_start, op, std::move(operand)));
     }
@@ -1364,9 +1393,9 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     if (t.type == TokenType::kIf) {
         advance();
         auto stmt = make<IfStmt>(t_start);
-        expect(TokenType::kLParen, "expected '('");
+        expect(TokenType::kLParen, "Expected '('");
         stmt->cond = parseExpr();
-        expect(TokenType::kRParen, "expected ')'");
+        expect(TokenType::kRParen, "Expected ')'");
         stmt->then_block = parseBlock();
         if (peek().type == TokenType::kElse) {
             advance();
@@ -1390,26 +1419,26 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             stmt->body = parseBlock();
             if (peek().type == TokenType::kColon) {
                 advance();
-                stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
+                stmt->block_label = expect(TokenType::kIdentifier, "Expected label name").value;
             } else {
                 stmt->block_label = "while";
             }
-            expect(TokenType::kLParen, "expected '('");
+            expect(TokenType::kLParen, "Expected '('");
             stmt->cond = parseExpr();
-            expect(TokenType::kRParen, "expected ')'");
-            expect(TokenType::kSemicolon, "expected ';'");
+            expect(TokenType::kRParen, "Expected ')'");
+            expect(TokenType::kSemicolon, "Expected ';'");
         } else {
-            expect(TokenType::kLParen, "expected '('");
+            expect(TokenType::kLParen, "Expected '('");
             if (peek().type == TokenType::kRParen)
                 stmt->cond = make<IntLiteralExpr>(t_start, 1);  // while () == while (true)
             else
                 stmt->cond = parseExpr();
-            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kRParen, "Expected ')'");
             stmt->body = parseBlock();
             if (peek().type == TokenType::kColon) {
                 advance();
-                stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
-                expect(TokenType::kSemicolon, "expected ';'");
+                stmt->block_label = expect(TokenType::kIdentifier, "Expected label name").value;
+                expect(TokenType::kSemicolon, "Expected ';'");
             } else {
                 stmt->block_label = "while";
             }
@@ -1475,7 +1504,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             }
 
             if (short_form) {
-                expect(TokenType::kLParen, "expected '('");
+                expect(TokenType::kLParen, "Expected '('");
 
                 // for-scope: covers the desugared init/cond/update + body.
                 // Loop var, synthesized helpers, and body locals all unwind here.
@@ -1484,24 +1513,24 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 int t_var_tok = pos_;
                 std::string for_var_type, for_var_name;
                 if (peek().type == TokenType::kColon) {
-                    errorHere("expected variable name in for-iterator");
+                    errorHere("Expected a variable name in the for-iterator.");
                 } else if (isTypeName(peek())) {
                     for_var_type = parseTypeName();
                     t_var_tok = pos_;
                     for_var_name = expect(TokenType::kIdentifier,
-                        "expected variable name").value;
+                        "Expected variable name").value;
                 } else if (peek().type == TokenType::kIdentifier
                         && isVarDeclLookahead()) {
                     for_var_type = parseTypeName();
                     t_var_tok = pos_;
                     for_var_name = expect(TokenType::kIdentifier,
-                        "expected variable name").value;
+                        "Expected variable name").value;
                 } else {
                     t_var_tok = pos_;
                     for_var_name = expect(TokenType::kIdentifier,
-                        "expected variable name").value;
+                        "Expected variable name").value;
                 }
-                expect(TokenType::kColon, "expected ':' in for-iterator");
+                expect(TokenType::kColon, "Expected ':' in for-iterator");
                 declareVar(for_var_name, t_var_tok);
 
                 auto first_expr = parseExpr();
@@ -1551,8 +1580,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     if (peek().type == TokenType::kColon) {
                         advance();
                         stmt->block_label = expect(TokenType::kIdentifier,
-                            "expected label name").value;
-                        expect(TokenType::kSemicolon, "expected ';'");
+                            "Expected label name").value;
+                        expect(TokenType::kSemicolon, "Expected ';'");
                     }
                 };
                 auto _popScope = [&] {
@@ -1656,7 +1685,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         advance();
                         step_expr = parseUnary();
                     }
-                    expect(TokenType::kRParen, "expected ')'");
+                    expect(TokenType::kRParen, "Expected ')'");
 
                     std::string end_name = "__$end_" + std::to_string(synthetic_counter_++);
                     std::string step_name;
@@ -1685,7 +1714,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 // then iterate it in place (variable-index on a homogeneous
                 // anon-tuple is permitted at codegen).
                 if (auto* te = dynamic_cast<TupleExpr*>(first_expr.get())) {
-                    expect(TokenType::kRParen, "expected ')'");
+                    expect(TokenType::kRParen, "Expected ')'");
                     int size = (int)te->values.size();
                     std::string src_name =
                         "__$src_" + std::to_string(synthetic_counter_++);
@@ -1704,7 +1733,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     auto eit = enum_sizes_.find(ve->name);
                     if (eit != enum_sizes_.end()) {
                         int size = eit->second;
-                        expect(TokenType::kRParen, "expected ')'");
+                        expect(TokenType::kRParen, "Expected ')'");
                         stmt->init_stmts.push_back(_decl("int", for_var_name, _intLit(0)));
                         stmt->cond = _bin("<", _var(for_var_name), _intLit(size));
                         auto upd = make<BlockStmt>(t_start);
@@ -1721,7 +1750,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 // String literal: bind to a `char[]` local once, then iterate.
                 if (auto* sl = dynamic_cast<StringLiteralExpr*>(first_expr.get())) {
                     int s_len = (int)sl->value.size();
-                    expect(TokenType::kRParen, "expected ')'");
+                    expect(TokenType::kRParen, "Expected ')'");
                     std::string base_name =
                         "__$base_" + std::to_string(synthetic_counter_++);
                     stmt->init_stmts.push_back(
@@ -1743,7 +1772,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     std::string iter_name = ve->name;
                     int tup_size = tupleSizeInScope(iter_name);
                     if (tup_size > 0) {
-                        expect(TokenType::kRParen, "expected ')'");
+                        expect(TokenType::kRParen, "Expected ')'");
                         _finishIter(iter_name, _intLit(tup_size), /*is_iter_class=*/false);
                         _consumeLabel();
                         _popScope();
@@ -1751,11 +1780,11 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     }
                     int arr_count = arrayCountInScope(iter_name);
                     int arr_rank = arrayRankInScope(iter_name);
-                    expect(TokenType::kRParen, "expected ')'");
+                    expect(TokenType::kRParen, "Expected ')'");
 
                     if (arr_count > 0) {
                         if (arr_rank > 1)
-                            errorAt(ve->tok, "short-form for: multi-dimensional fixed-size array iteration not supported");
+                            errorAt(ve->tok, "Short-form for-loops do not support multi-dimensional fixed-size array iteration.");
                         _finishIter(iter_name, _intLit(arr_count), /*is_iter_class=*/false);
                     } else {
                         std::string src_type = typeInScope(iter_name);
@@ -1774,34 +1803,34 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         if (idx_diag.status == ProtocolStatus::Good
                                 && ref_diag.status == ProtocolStatus::Good) {
                             if (for_var_type.empty()) {
-                                errorAt(ve->tok, "for-iterator: type '" + src_type
+                                errorAt(ve->tok, "Type '" + src_type
                                     + "' defines both op[]/size and begin/end/next; "
-                                    "explicit loop var type required");
+                                    "the for-iterator requires an explicit loop variable type.");
                             }
                             if (idx_diag.return_type == ref_diag.return_type) {
-                                errorAt(ve->tok, "for-iterator: type '" + src_type
+                                errorAt(ve->tok, "Type '" + src_type
                                     + "' defines both op[]/size and begin/end/next "
-                                    "with identical return types; cannot disambiguate");
+                                    "with identical return types; the for-iterator cannot disambiguate.");
                             }
                             if (for_var_type == idx_diag.return_type)        pick_by_value = true;
                             else if (for_var_type == ref_diag.return_type)   pick_by_ref = true;
                             else
-                                errorAt(ve->tok, "for-iterator: loop var type '" + for_var_type
-                                    + "' matches neither op[] return ('" + idx_diag.return_type
-                                    + "') nor begin return ('" + ref_diag.return_type + "')");
+                                errorAt(ve->tok, "For-iterator loop variable type '" + for_var_type
+                                    + "' matches neither the op[] return type ('" + idx_diag.return_type
+                                    + "') nor the begin return type ('" + ref_diag.return_type + "').");
                         } else if (idx_diag.status == ProtocolStatus::Good) {
                             pick_by_value = true;
                         } else if (ref_diag.status == ProtocolStatus::Good) {
                             pick_by_ref = true;
                         } else if (idx_diag.status == ProtocolStatus::Absent
                                 && ref_diag.status == ProtocolStatus::Absent) {
-                            errorAt(ve->tok, "for-iterator: type '" + src_type
-                                + "' is not iterable: has neither op[]/size nor begin/end/next");
+                            errorAt(ve->tok, "Type '" + src_type
+                                + "' is not iterable: it defines neither op[]/size nor begin/end/next.");
                         } else {
-                            std::string msg = "for-iterator: ";
+                            std::string msg;
                             if (idx_diag.status == ProtocolStatus::Bad) msg += idx_diag.reason;
                             if (ref_diag.status == ProtocolStatus::Bad) {
-                                if (idx_diag.status == ProtocolStatus::Bad) msg += "; ";
+                                if (idx_diag.status == ProtocolStatus::Bad) msg += " ";
                                 msg += ref_diag.reason;
                             }
                             errorAt(ve->tok, msg);
@@ -1843,7 +1872,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     return stmt;
                 }
 
-                errorHere("for-iterator: unsupported iterable shape");
+                errorHere("Unsupported iterable shape in for-iterator.");
             }
 
             // Long form: for ( init ) ( cond ) { update } { body } [:label;]
@@ -1854,7 +1883,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
             // init tuple: comma-separated slots; each is empty / `type name = expr`
             // / `name = expr` (decl-or-assign disambiguated by current scope).
-            expect(TokenType::kLParen, "expected '('");
+            expect(TokenType::kLParen, "Expected '('");
             if (peek().type != TokenType::kRParen) {
                 while (true) {
                     if (peek().type == TokenType::kComma
@@ -1866,9 +1895,9 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         std::string type = parseTypeName();
                         int name_tok = pos_;
                         std::string name = expect(TokenType::kIdentifier,
-                            "expected variable name").value;
+                            "Expected variable name").value;
                         expect(TokenType::kEquals,
-                            "expected '=' in for-init slot");
+                            "Expected '=' in for-init slot");
                         auto init = parseExpr();
                         declareVar(name, name_tok);
                         stmt->init_stmts.push_back(
@@ -1877,7 +1906,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         int slot_tok = pos_;
                         std::string name = advance().value;
                         expect(TokenType::kEquals,
-                            "expected '=' in for-init slot");
+                            "Expected '=' in for-init slot");
                         auto rhs = parseExpr();
                         // buildAssignFromLhs picks VarDeclStmt (inferred) when
                         // name is not yet in scope, AssignStmt when it is.
@@ -1886,21 +1915,21 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                             buildAssignFromLhs(std::move(lhs), std::move(rhs),
                                                false, slot_tok));
                     } else {
-                        errorHere("expected variable name in for-init tuple");
+                        errorHere("Expected a variable name in the for-init tuple.");
                     }
                     if (peek().type == TokenType::kComma) { advance(); continue; }
                     break;
                 }
             }
-            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kRParen, "Expected ')'");
 
             // condition: empty () means true.
-            expect(TokenType::kLParen, "expected '(' for for-loop condition");
+            expect(TokenType::kLParen, "Expected '(' for for-loop condition");
             if (peek().type == TokenType::kRParen)
                 stmt->cond = nullptr;
             else
                 stmt->cond = parseExpr();
-            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kRParen, "Expected ')'");
 
             // update block, then body block.
             stmt->update_block = parseBlock();
@@ -1910,8 +1939,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             if (peek().type == TokenType::kColon) {
                 advance();
                 stmt->block_label = expect(TokenType::kIdentifier,
-                    "expected label name").value;
-                expect(TokenType::kSemicolon, "expected ';'");
+                    "Expected label name").value;
+                expect(TokenType::kSemicolon, "Expected ';'");
             } else {
                 stmt->block_label = "for";
             }
@@ -1919,7 +1948,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             scope_stack_.pop_back();
             return stmt;
         }
-        errorHere("expected '(' after 'for'");
+        errorHere("Expected '(' after 'for'.");
     }
 
     // tuple return nested function or tuple destructure: starts with '('
@@ -1966,7 +1995,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                             name = advance().value;
                         } else {
                             type = parseTypeName();
-                            name = expect(TokenType::kIdentifier, "expected variable name").value;
+                            name = expect(TokenType::kIdentifier, "Expected variable name").value;
                         }
                         td->fields.emplace_back(type, name);
                     }
@@ -1974,10 +2003,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     break;
                 }
             }
-            expect(TokenType::kRParen, "expected ')'");
-            expect(TokenType::kEquals, "expected '='");
+            expect(TokenType::kRParen, "Expected ')'");
+            expect(TokenType::kEquals, "Expected '='");
             td->init = parseExpr();
-            expect(TokenType::kSemicolon, "expected ';'");
+            expect(TokenType::kSemicolon, "Expected ';'");
             return td;
         } else if (outer_commas > 0
                    && scan < (int)tokens_.size()
@@ -1996,10 +2025,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 type += parseTypeName();
                 if (peek().type == TokenType::kComma) advance();
             }
-            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kRParen, "Expected ')'");
             type += ")";
             int name_tok = pos_;
-            std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
+            std::string name = expect(TokenType::kIdentifier, "Expected variable name").value;
             if (peek().type == TokenType::kSemicolon) {
                 advance();
                 declareVar(name, name_tok);
@@ -2008,14 +2037,14 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             if (peek().type == TokenType::kArrowLeft) {
                 advance();
                 auto init = parseExpr();
-                expect(TokenType::kSemicolon, "expected ';'");
+                expect(TokenType::kSemicolon, "Expected ';'");
                 declareVar(name, name_tok);
                 return make<VarDeclStmt>(t_start, type, name, std::move(init),
                                                       std::vector<std::unique_ptr<Expr>>{}, true);
             }
-            expect(TokenType::kEquals, "expected '='");
+            expect(TokenType::kEquals, "Expected '='");
             auto init = parseExpr();
-            expect(TokenType::kSemicolon, "expected ';'");
+            expect(TokenType::kSemicolon, "Expected ';'");
             declareVar(name, name_tok);
             return make<VarDeclStmt>(t_start, type, name, std::move(init));
         }
@@ -2054,7 +2083,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         // not a nested function — fall through to variable declaration
         std::string type = parseTypeName();
         int vd_tok = pos_;
-        std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
+        std::string name = expect(TokenType::kIdentifier, "Expected variable name").value;
         rejectReserved(file_id_, vd_tok, name, "local variable");
 
         // array declaration: Type name[d0][d1...] = ((..),(..),..);
@@ -2064,8 +2093,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             arr->name = name;
             while (peek().type == TokenType::kLBracket) {
                 advance();
-                int dim = std::stoi(expect(TokenType::kIntLiteral, "expected array dimension").value);
-                expect(TokenType::kRBracket, "expected ']'");
+                int dim = std::stoi(expect(TokenType::kIntLiteral, "Expected array dimension").value);
+                expect(TokenType::kRBracket, "Expected ']'");
                 arr->dims.push_back(dim);
             }
             // parse nested initializer lists: flatten into row-major order
@@ -2076,7 +2105,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         parseInitList();
                         if (peek().type == TokenType::kComma) advance();
                     }
-                    expect(TokenType::kRParen, "expected ')'");
+                    expect(TokenType::kRParen, "Expected ')'");
                 } else {
                     arr->init_values.push_back(parseExpr());
                 }
@@ -2085,7 +2114,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 advance();
                 parseInitList();
             }
-            expect(TokenType::kSemicolon, "expected ';'");
+            expect(TokenType::kSemicolon, "Expected ';'");
             declareVar(arr->name, vd_tok);
             if (!arr->dims.empty()) {
                 if (auto* li = findLocal(arr->name)) {
@@ -2100,7 +2129,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         if (peek().type == TokenType::kArrowLeft) {
             advance();
             auto init = parseExpr();
-            expect(TokenType::kSemicolon, "expected ';'");
+            expect(TokenType::kSemicolon, "Expected ';'");
             declareVar(name, vd_tok);
             return make<VarDeclStmt>(t_start, type, name, std::move(init), std::vector<std::unique_ptr<Expr>>{}, true);
         }
@@ -2109,9 +2138,9 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             declareVar(name, vd_tok);
             return make<VarDeclStmt>(t_start, type, name, nullptr);
         }
-        expect(TokenType::kEquals, "expected '='");
+        expect(TokenType::kEquals, "Expected '='");
         auto init = parseExpr();
-        expect(TokenType::kSemicolon, "expected ';'");
+        expect(TokenType::kSemicolon, "Expected ';'");
         declareVar(name, vd_tok);
         return make<VarDeclStmt>(t_start, type, name, std::move(init));
     }
@@ -2121,13 +2150,13 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         int decl_tok = pos_;
         std::string type = parseTypeName(); // consumes Name plus any trailing ^ or []
         int name_tok = pos_;
-        std::string name = expect(TokenType::kIdentifier, "expected variable name").value;
+        std::string name = expect(TokenType::kIdentifier, "Expected variable name").value;
         // (P1) vexing parse: variable name must not equal the type's bare identifier.
         {
             size_t i = 0;
             while (i < type.size() && (isalnum((unsigned char)type[i]) || type[i] == '_')) i++;
             if (type.substr(0, i) == name) {
-                errorAt(decl_tok, "variable '" + name + "' shadows type '" + type + "' in same declaration");
+                errorAt(decl_tok, "Variable '" + name + "' shadows type '" + type + "' in the same declaration.");
             }
         }
 
@@ -2135,7 +2164,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         if (peek().type == TokenType::kEquals) {
             advance();
             auto init = parseExpr();
-            expect(TokenType::kSemicolon, "expected ';'");
+            expect(TokenType::kSemicolon, "Expected ';'");
             declareVar(name, name_tok);
             if (auto* li = findLocal(name)) li->type = type;
             return make<VarDeclStmt>(t_start, type, name, std::move(init));
@@ -2143,7 +2172,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         if (peek().type == TokenType::kArrowLeft) {
             advance();
             auto init = parseExpr();
-            expect(TokenType::kSemicolon, "expected ';'");
+            expect(TokenType::kSemicolon, "Expected ';'");
             declareVar(name, name_tok);
             if (auto* li = findLocal(name)) li->type = type;
             return make<VarDeclStmt>(t_start, type, name, std::move(init), std::vector<std::unique_ptr<Expr>>{}, true);
@@ -2156,8 +2185,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             arr->name = name;
             while (peek().type == TokenType::kLBracket) {
                 advance();
-                int dim = std::stoi(expect(TokenType::kIntLiteral, "expected array dimension").value);
-                expect(TokenType::kRBracket, "expected ']'");
+                int dim = std::stoi(expect(TokenType::kIntLiteral, "Expected array dimension").value);
+                expect(TokenType::kRBracket, "Expected ']'");
                 arr->dims.push_back(dim);
             }
             std::function<void()> parseInitList = [&]() {
@@ -2167,7 +2196,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         parseInitList();
                         if (peek().type == TokenType::kComma) advance();
                     }
-                    expect(TokenType::kRParen, "expected ')'");
+                    expect(TokenType::kRParen, "Expected ')'");
                 } else {
                     arr->init_values.push_back(parseExpr());
                 }
@@ -2176,7 +2205,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 advance();
                 parseInitList();
             }
-            expect(TokenType::kSemicolon, "expected ';'");
+            expect(TokenType::kSemicolon, "Expected ';'");
             declareVar(arr->name, name_tok);
             if (!arr->dims.empty()) {
                 if (auto* li = findLocal(arr->name)) {
@@ -2195,14 +2224,14 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 ctor_args.push_back(parseExpr());
                 if (peek().type == TokenType::kComma) advance();
             }
-            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kRParen, "Expected ')'");
         }
         std::unique_ptr<Expr> init;
         if (peek().type == TokenType::kEquals) {
             advance();
             init = parseExpr();
         }
-        expect(TokenType::kSemicolon, "expected ';'");
+        expect(TokenType::kSemicolon, "Expected ';'");
         declareVar(name, name_tok);
         if (auto* li = findLocal(name)) li->type = type;
         return make<VarDeclStmt>(t_start, type, name, std::move(init), std::move(ctor_args));
@@ -2229,8 +2258,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 args.push_back(parseExpr());
                 if (peek().type == TokenType::kComma) advance();
             }
-            expect(TokenType::kRParen, "expected ')'");
-            expect(TokenType::kSemicolon, "expected ';'");
+            expect(TokenType::kRParen, "Expected ')'");
+            expect(TokenType::kSemicolon, "Expected ';'");
             auto call = make<CallExpr>(t_start, method, std::move(args));
             call->qualifier = name;
             return make<ExprStmt>(t_start, std::move(call));
@@ -2244,15 +2273,15 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 type_args.push_back(parseTypeName());
                 if (peek().type == TokenType::kComma) advance();
             }
-            expect(TokenType::kGt, "expected '>'");
-            expect(TokenType::kLParen, "expected '('");
+            expect(TokenType::kGt, "Expected '>'");
+            expect(TokenType::kLParen, "Expected '('");
             std::vector<std::unique_ptr<Expr>> args;
             while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                 args.push_back(parseExpr());
                 if (peek().type == TokenType::kComma) advance();
             }
-            expect(TokenType::kRParen, "expected ')'");
-            expect(TokenType::kSemicolon, "expected ';'");
+            expect(TokenType::kRParen, "Expected ')'");
+            expect(TokenType::kSemicolon, "Expected ';'");
             auto stmt = make<CallStmt>(t_start, name, std::move(args));
             stmt->type_args = std::move(type_args);
             return stmt;
@@ -2266,8 +2295,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 args.push_back(parseExpr());
                 if (peek().type == TokenType::kComma) advance();
             }
-            expect(TokenType::kRParen, "expected ')'");
-            expect(TokenType::kSemicolon, "expected ';'");
+            expect(TokenType::kRParen, "Expected ')'");
+            expect(TokenType::kSemicolon, "Expected ';'");
             return make<CallStmt>(t_start, name, std::move(args));
         }
 
@@ -2277,7 +2306,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         return parseLvalueTail(std::move(lhs));
     }
 
-    errorHere("unexpected token '" + t.value + "'");
+    errorHere("Unexpected token '" + t.value + "'.");
 }
 
 // --- Top-level parsing ---
@@ -2289,21 +2318,26 @@ NestedFunctionDef Parser::parseNestedFunctionDef() {
         advance(); // consume '('
         while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
             std::string type = parseTypeName();
-            std::string name = expect(TokenType::kIdentifier, "expected field name").value;
+            std::string name = expect(TokenType::kIdentifier, "Expected field name").value;
             fn.tuple_return_fields.emplace_back(type, name);
             if (peek().type == TokenType::kComma) advance();
         }
-        expect(TokenType::kRParen, "expected ')'");
+        expect(TokenType::kRParen, "Expected ')'");
     } else {
         fn.return_type = parseTypeName();
     }
     int fn_tok = pos_;
-    fn.name = expect(TokenType::kIdentifier, "expected function name").value;
+    fn.name = expect(TokenType::kIdentifier, "Expected function name").value;
     // (P2) nested function name cannot shadow a field of the enclosing class.
-    if (current_slid_fields_.count(fn.name)) {
-        errorAt(fn_tok, "nested function '" + fn.name + "' shadows field of enclosing class");
+    {
+        auto fit = current_slid_fields_.find(fn.name);
+        if (fit != current_slid_fields_.end()) {
+            throw CompileError{file_id_, fn_tok,
+                "Nested function '" + fn.name + "' shadows a field of the enclosing class."}
+                .addNote(fit->second.file_id, fit->second.tok, "Field declared here.");
+        }
     }
-    expect(TokenType::kLParen, "expected '('");
+    expect(TokenType::kLParen, "Expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         bool is_mutable = false;
         int mut_tok = pos_;
@@ -2313,13 +2347,13 @@ NestedFunctionDef Parser::parseNestedFunctionDef() {
         }
         std::string type = parseTypeName();
         if (is_mutable && !isParamIndirectType(type))
-            errorAt(mut_tok, "'mutable' applies only to pointer types '^' and '[]'");
-        std::string name = expect(TokenType::kIdentifier, "expected parameter name").value;
+            errorAt(mut_tok, "The 'mutable' keyword applies only to pointer types '^' and '[]'.");
+        std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
         fn.params.emplace_back(type, name);
         fn.param_mutable.push_back(is_mutable);
         if (peek().type == TokenType::kComma) advance();
     }
-    expect(TokenType::kRParen, "expected ')'");
+    expect(TokenType::kRParen, "Expected ')'");
     std::vector<std::string> param_names;
     for (auto& p : fn.params) param_names.push_back(p.second);
     fn.body = parseBlock(param_names);
@@ -2340,14 +2374,16 @@ MethodDef Parser::parseMethodDef() {
         m.return_type = parseTypeName();
     }
     int op_tok = pos_;
+    m.file_id = file_id_;
+    m.tok = op_tok;
     if (peek().type == TokenType::kOp) {
         advance();
         if (auto sym = consumeOpSymbol()) m.name = "op" + *sym;
-        else errorAt(op_tok, "expected operator symbol after 'op'");
+        else errorAt(op_tok, "Expected an operator symbol after 'op'.");
     } else {
-        m.name = expect(TokenType::kIdentifier, "expected method name").value;
+        m.name = expect(TokenType::kIdentifier, "Expected method name").value;
     }
-    expect(TokenType::kLParen, "expected '('");
+    expect(TokenType::kLParen, "Expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         bool is_mutable = false;
         int mut_tok = pos_;
@@ -2357,13 +2393,13 @@ MethodDef Parser::parseMethodDef() {
         }
         std::string type = parseTypeName();
         if (is_mutable && !isParamIndirectType(type))
-            errorAt(mut_tok, "'mutable' applies only to pointer types '^' and '[]'");
-        std::string name = expect(TokenType::kIdentifier, "expected parameter name").value;
+            errorAt(mut_tok, "The 'mutable' keyword applies only to pointer types '^' and '[]'.");
+        std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
         m.params.emplace_back(type, name);
         m.param_mutable.push_back(is_mutable);
         if (peek().type == TokenType::kComma) advance();
     }
-    expect(TokenType::kRParen, "expected ')'");
+    expect(TokenType::kRParen, "Expected ')'");
     checkOpArity(m.name, (int)m.params.size(), op_tok);
     checkOpMutable(m.name, m.params, m.param_mutable, op_tok);
     if (peek().type == TokenType::kEquals
@@ -2372,14 +2408,14 @@ MethodDef Parser::parseMethodDef() {
         // = delete; — pure virtual when no ancestor match; removes inherited method when match.
         // Sema enforces: non-virtual `= delete` requires an ancestor match.
         advance(); advance();
-        expect(TokenType::kSemicolon, "expected ';' after '= delete'");
+        expect(TokenType::kSemicolon, "Expected ';' after '= delete'");
         m.is_delete = true;
     } else if (peek().type == TokenType::kEquals
         && pos_ + 1 < (int)tokens_.size()
         && tokens_[pos_ + 1].type == TokenType::kDefault) {
         // = default; — inherits base impl with no-shadow contract. Sema enforces ancestor match.
         advance(); advance();
-        expect(TokenType::kSemicolon, "expected ';' after '= default'");
+        expect(TokenType::kSemicolon, "Expected ';' after '= default'");
         m.is_default = true;
     } else if (peek().type == TokenType::kSemicolon) {
         advance(); // forward declaration — no body
@@ -2396,12 +2432,21 @@ SlidDef Parser::parseSlidDef() {
     SlidDef slid;
     int name_tok = pos_;
     slid.name = peek().value;
+    slid.name_file_id = file_id_;
+    slid.name_tok = name_tok;
     advance(); // consume class name
 
     // a closed class accepts no more tuple-form reopens (bare-block reopens are
     // allowed via parseExternalMethodBlock and bypass this check).
-    if (closed_classes_.count(slid.name))
-        errorAt(name_tok, "class '" + slid.name + "' is already complete; further field/declaration reopens are not permitted");
+    {
+        auto cit = closed_classes_.find(slid.name);
+        if (cit != closed_classes_.end()) {
+            throw CompileError{file_id_, name_tok,
+                "Class '" + slid.name
+                    + "' is already complete; further field or declaration reopens are not permitted."}
+                .addNote(cit->second.file_id, cit->second.tok, "Class was completed here.");
+        }
+    }
 
     // save outer's alias map; nested slids in this slid's body register short→canonical here
     auto saved_alias = nested_alias_;
@@ -2412,14 +2457,14 @@ SlidDef Parser::parseSlidDef() {
         advance(); // consume '<'
         while (peek().type != TokenType::kGt && peek().type != TokenType::kEof) {
             slid.type_params.push_back(
-                expect(TokenType::kIdentifier, "expected type parameter name").value);
+                expect(TokenType::kIdentifier, "Expected type parameter name").value);
             if (peek().type == TokenType::kComma) advance();
         }
-        expect(TokenType::kGt, "expected '>' after type parameters");
+        expect(TokenType::kGt, "Expected '>' after type parameters");
     }
 
     // parse tuple: (type field_ = default, ...)
-    expect(TokenType::kLParen, "expected '('");
+    expect(TokenType::kLParen, "Expected '('");
 
     // leading ellipsis?
     if (peek().type == TokenType::kEllipsis) {
@@ -2450,7 +2495,8 @@ SlidDef Parser::parseSlidDef() {
         FieldDef f;
         f.type = parseTypeName();
         int field_tok = pos_;
-        f.name = expect(TokenType::kIdentifier, "expected field name").value;
+        f.name = expect(TokenType::kIdentifier, "Expected field name").value;
+        f.file_id = file_id_;
         f.tok = field_tok;
         rejectReserved(file_id_, field_tok, f.name, "field");
         // inline fixed-size array field: char name_[16]
@@ -2459,7 +2505,7 @@ SlidDef Parser::parseSlidDef() {
             && tokens_[pos_ + 1].type == TokenType::kIntLiteral) {
             advance(); // consume [
             std::string sz = advance().value; // consume N
-            expect(TokenType::kRBracket, "expected ']'");
+            expect(TokenType::kRBracket, "Expected ']'");
             f.type += "[" + sz + "]";
         }
         if (peek().type == TokenType::kEquals) {
@@ -2469,31 +2515,37 @@ SlidDef Parser::parseSlidDef() {
         slid.fields.push_back(std::move(f));
         if (peek().type == TokenType::kComma) advance();
     }
-    expect(TokenType::kRParen, "expected ')'");
+    expect(TokenType::kRParen, "Expected ')'");
 
-    // (P1) class header+body merge — tuple-param name cannot equal class name.
+    // (P1) class header+body merge — class field name cannot equal class name.
     for (auto& f : slid.fields) {
         if (f.name == slid.name) {
-            errorAt(f.tok, "tuple-param '" + f.name + "' shares enclosing class name");
+            throw CompileError{f.file_id, f.tok,
+                "Class field '" + f.name + "' conflicts with the class name."}
+                .addNote(slid.name_file_id, slid.name_tok, "Class declared here.");
         }
     }
-    // (P1) tuple-param names must be unique within the tuple.
+    // (P1) class field names must be unique within the tuple.
     {
-        std::set<std::string> seen;
+        std::map<std::string, FieldRef> first_seen;
         for (auto& f : slid.fields) {
-            if (!seen.insert(f.name).second) {
-                errorAt(f.tok, "duplicate tuple-param '" + f.name + "' in '" + slid.name + "'");
+            auto [it, inserted] = first_seen.emplace(f.name, FieldRef{f.file_id, f.tok});
+            if (!inserted) {
+                throw CompileError{f.file_id, f.tok,
+                    "Duplicate class field '" + f.name + "' in class '" + slid.name + "'."}
+                    .addNote(it->second.file_id, it->second.tok, "First declared here.");
             }
         }
     }
 
     // record field names to prevent method-body field assignments from being mistaken for inferred declarations
     current_slid_fields_.clear();
-    for (auto& f : slid.fields) current_slid_fields_.insert(f.name);
+    for (auto& f : slid.fields)
+        current_slid_fields_.emplace(f.name, FieldRef{f.file_id, f.tok});
     all_slid_fields_[slid.name] = current_slid_fields_;
 
     // parse body: methods and optional constructor code
-    expect(TokenType::kLBrace, "expected '{'");
+    expect(TokenType::kLBrace, "Expected '{'");
 
     auto ctor_body = make<BlockStmt>(t_start);
     bool has_ctor_code = false;
@@ -2505,11 +2557,17 @@ SlidDef Parser::parseSlidDef() {
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
             int ctor_tok = pos_;
             advance(); // consume _
-            expect(TokenType::kLParen, "expected '('");
-            expect(TokenType::kRParen, "expected ')'");
-            if (slid.has_explicit_ctor_decl)
-                errorAt(ctor_tok, "constructor already defined in '" + slid.name + "'");
+            expect(TokenType::kLParen, "Expected '('");
+            expect(TokenType::kRParen, "Expected ')'");
+            if (slid.has_explicit_ctor_decl) {
+                throw CompileError{file_id_, ctor_tok,
+                    "Constructor is already defined in class '" + slid.name + "'."}
+                    .addNote(slid.explicit_ctor_file_id, slid.explicit_ctor_tok,
+                             "First defined here.");
+            }
             slid.has_explicit_ctor_decl = true; // declared — consumer must call ctor
+            slid.explicit_ctor_file_id = file_id_;
+            slid.explicit_ctor_tok = ctor_tok;
             if (peek().type == TokenType::kSemicolon) {
                 advance(); // forward declaration only
             } else {
@@ -2532,11 +2590,17 @@ SlidDef Parser::parseSlidDef() {
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
             advance(); // consume ~
-            expect(TokenType::kLParen, "expected '('");
-            expect(TokenType::kRParen, "expected ')'");
-            if (slid.has_explicit_dtor_decl)
-                errorAt(dtor_tok, "destructor already defined in '" + slid.name + "'");
+            expect(TokenType::kLParen, "Expected '('");
+            expect(TokenType::kRParen, "Expected ')'");
+            if (slid.has_explicit_dtor_decl) {
+                throw CompileError{file_id_, dtor_tok,
+                    "Destructor is already defined in class '" + slid.name + "'."}
+                    .addNote(slid.explicit_dtor_file_id, slid.explicit_dtor_tok,
+                             "First defined here.");
+            }
             slid.has_explicit_dtor_decl = true; // declared — consumer must call dtor
+            slid.explicit_dtor_file_id = file_id_;
+            slid.explicit_dtor_tok = dtor_tok;
             if (dtor_virtual_prefix) slid.dtor_is_virtual = true;
             if (peek().type == TokenType::kSemicolon) {
                 advance(); // forward declaration only
@@ -2635,7 +2699,7 @@ SlidDef Parser::parseSlidDef() {
             auto method = parseMethodDef();
             // (P1) class scope merges name + body — method name cannot equal class name.
             if (method.name == slid.name) {
-                errorAt(method_tok, "method '" + method.name + "' shares enclosing class name");
+                errorAt(method_tok, "Method '" + method.name + "' shares the name of its enclosing class.");
             }
             slid.methods.push_back(std::move(method));
         } else {
@@ -2648,29 +2712,31 @@ SlidDef Parser::parseSlidDef() {
     if (has_ctor_code)
         slid.ctor_body = std::move(ctor_body);
 
-    expect(TokenType::kRBrace, "expected '}'");
+    int close_tok = pos_;
+    expect(TokenType::kRBrace, "Expected '}'");
     current_slid_fields_.clear();
     nested_alias_ = std::move(saved_alias);
 
     // register this class as seen (disambiguates lone `(...)` on next reopen)
     // and mark it closed if this reopen has no trailing `...`.
     seen_classes_.insert(slid.name);
-    if (!slid.has_trailing_ellipsis) closed_classes_.insert(slid.name);
+    if (!slid.has_trailing_ellipsis)
+        closed_classes_[slid.name] = FieldRef{file_id_, close_tok};
 
     return slid;
 }
 
 EnumDef Parser::parseEnumDef() {
     [[maybe_unused]] int t_start = pos_;
-    expect(TokenType::kEnum, "expected 'enum'");
+    expect(TokenType::kEnum, "Expected 'enum'");
     EnumDef e;
-    e.name = expect(TokenType::kIdentifier, "expected enum name").value;
-    expect(TokenType::kLParen, "expected '('");
+    e.name = expect(TokenType::kIdentifier, "Expected enum name").value;
+    expect(TokenType::kLParen, "Expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
-        e.values.push_back(expect(TokenType::kIdentifier, "expected enum value").value);
+        e.values.push_back(expect(TokenType::kIdentifier, "Expected enum value").value);
         if (peek().type == TokenType::kComma) advance();
     }
-    expect(TokenType::kRParen, "expected ')'");
+    expect(TokenType::kRParen, "Expected ')'");
     return e;
 }
 
@@ -2680,22 +2746,24 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
     // optional return type (primitive keyword); absent for ctor/dtor
     if (isTypeName(peek())) em.return_type = parseTypeName();
     // TypeName:
-    em.slid_name = expect(TokenType::kIdentifier, "expected class name").value;
+    em.slid_name = expect(TokenType::kIdentifier, "Expected class name").value;
     // set field names for this slid so assignments to fields aren't mistaken for inferred declarations
     {
         auto fit = all_slid_fields_.find(em.slid_name);
-        current_slid_fields_ = (fit != all_slid_fields_.end()) ? fit->second : std::set<std::string>{};
+        current_slid_fields_ = (fit != all_slid_fields_.end()) ? fit->second : std::map<std::string, FieldRef>{};
     }
-    expect(TokenType::kColon, "expected ':'");
+    expect(TokenType::kColon, "Expected ':'");
     // method name, or _ (ctor), or ~ (dtor)
+    em.file_id = file_id_;
+    em.tok = pos_;
     if (peek().type == TokenType::kIdentifier && peek().value == "_") {
         em.method_name = "_"; advance();
     } else if (peek().type == TokenType::kBitNot) {
         em.method_name = "~"; advance();
     } else {
-        em.method_name = expect(TokenType::kIdentifier, "expected method name").value;
+        em.method_name = expect(TokenType::kIdentifier, "Expected method name").value;
     }
-    expect(TokenType::kLParen, "expected '('");
+    expect(TokenType::kLParen, "Expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         bool is_mutable = false;
         int mut_tok = pos_;
@@ -2705,24 +2773,24 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
         }
         std::string type = parseTypeName();
         if (is_mutable && !isParamIndirectType(type))
-            errorAt(mut_tok, "'mutable' applies only to pointer types '^' and '[]'");
-        std::string name = expect(TokenType::kIdentifier, "expected parameter name").value;
+            errorAt(mut_tok, "The 'mutable' keyword applies only to pointer types '^' and '[]'.");
+        std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
         em.params.emplace_back(type, name);
         em.param_mutable.push_back(is_mutable);
         if (peek().type == TokenType::kComma) advance();
     }
-    expect(TokenType::kRParen, "expected ')'");
+    expect(TokenType::kRParen, "Expected ')'");
     if (peek().type == TokenType::kEquals
         && pos_ + 1 < (int)tokens_.size()
         && tokens_[pos_ + 1].type == TokenType::kDelete) {
         advance(); advance();
-        expect(TokenType::kSemicolon, "expected ';' after '= delete'");
+        expect(TokenType::kSemicolon, "Expected ';' after '= delete'");
         em.is_delete = true;
     } else if (peek().type == TokenType::kEquals
         && pos_ + 1 < (int)tokens_.size()
         && tokens_[pos_ + 1].type == TokenType::kDefault) {
         advance(); advance();
-        expect(TokenType::kSemicolon, "expected ';' after '= default'");
+        expect(TokenType::kSemicolon, "Expected ';' after '= default'");
         em.is_default = true;
     } else if (peek().type == TokenType::kSemicolon) {
         advance(); // forward declaration — no body
@@ -2738,13 +2806,13 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
 void Parser::parseExternalMethodBlock(Program& program) {
     [[maybe_unused]] int t_start = pos_;
     // TypeName { [returnType] methodName(params) { body } ... }
-    std::string slid_name = expect(TokenType::kIdentifier, "expected class name").value;
+    std::string slid_name = expect(TokenType::kIdentifier, "Expected class name").value;
     seen_classes_.insert(slid_name);
     {
         auto fit = all_slid_fields_.find(slid_name);
-        current_slid_fields_ = (fit != all_slid_fields_.end()) ? fit->second : std::set<std::string>{};
+        current_slid_fields_ = (fit != all_slid_fields_.end()) ? fit->second : std::map<std::string, FieldRef>{};
     }
-    expect(TokenType::kLBrace, "expected '{'");
+    expect(TokenType::kLBrace, "Expected '{'");
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
         ExternalMethodDef em;
         em.slid_name = slid_name;
@@ -2758,8 +2826,8 @@ void Parser::parseExternalMethodBlock(Program& program) {
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
             advance(); // consume _
             em.method_name = "_";
-            expect(TokenType::kLParen, "expected '('");
-            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kLParen, "Expected '('");
+            expect(TokenType::kRParen, "Expected ')'");
             em.body = parseBlock();
             program.external_methods.push_back(std::move(em));
             continue;
@@ -2770,8 +2838,8 @@ void Parser::parseExternalMethodBlock(Program& program) {
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
             advance(); // consume ~
             em.method_name = "~";
-            expect(TokenType::kLParen, "expected '('");
-            expect(TokenType::kRParen, "expected ')'");
+            expect(TokenType::kLParen, "Expected '('");
+            expect(TokenType::kRParen, "Expected ')'");
             em.body = parseBlock();
             program.external_methods.push_back(std::move(em));
             continue;
@@ -2786,15 +2854,15 @@ void Parser::parseExternalMethodBlock(Program& program) {
         if (peek().type == TokenType::kOp) {
             advance();
             if (auto sym = consumeOpSymbol()) em.method_name = "op" + *sym;
-            else errorAt(em_tok, "expected operator symbol after 'op'");
+            else errorAt(em_tok, "Expected an operator symbol after 'op'.");
         } else {
-            em.method_name = expect(TokenType::kIdentifier, "expected method name").value;
+            em.method_name = expect(TokenType::kIdentifier, "Expected method name").value;
         }
         // (P1) reopen merges into class scope — method name cannot equal class name.
         if (em.method_name == slid_name) {
-            errorAt(em_tok, "method '" + em.method_name + "' shares enclosing class name");
+            errorAt(em_tok, "Method '" + em.method_name + "' shares the name of its enclosing class.");
         }
-        expect(TokenType::kLParen, "expected '('");
+        expect(TokenType::kLParen, "Expected '('");
         while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
             bool is_mutable = false;
             int mut_tok = pos_;
@@ -2804,26 +2872,26 @@ void Parser::parseExternalMethodBlock(Program& program) {
             }
             std::string type = parseTypeName();
             if (is_mutable && !isParamIndirectType(type))
-                errorAt(mut_tok, "'mutable' applies only to pointer types '^' and '[]'");
-            std::string name = expect(TokenType::kIdentifier, "expected parameter name").value;
+                errorAt(mut_tok, "The 'mutable' keyword applies only to pointer types '^' and '[]'.");
+            std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
             em.params.emplace_back(type, name);
             em.param_mutable.push_back(is_mutable);
             if (peek().type == TokenType::kComma) advance();
         }
-        expect(TokenType::kRParen, "expected ')'");
+        expect(TokenType::kRParen, "Expected ')'");
         checkOpArity(em.method_name, (int)em.params.size(), em_tok);
         checkOpMutable(em.method_name, em.params, em.param_mutable, em_tok);
         if (peek().type == TokenType::kEquals
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kDelete) {
             advance(); advance();
-            expect(TokenType::kSemicolon, "expected ';' after '= delete'");
+            expect(TokenType::kSemicolon, "Expected ';' after '= delete'");
             em.is_delete = true;
         } else if (peek().type == TokenType::kEquals
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kDefault) {
             advance(); advance();
-            expect(TokenType::kSemicolon, "expected ';' after '= default'");
+            expect(TokenType::kSemicolon, "Expected ';' after '= default'");
             em.is_default = true;
         } else if (peek().type == TokenType::kSemicolon) {
             advance(); // forward declaration — no body
@@ -2834,7 +2902,7 @@ void Parser::parseExternalMethodBlock(Program& program) {
         }
         program.external_methods.push_back(std::move(em));
     }
-    expect(TokenType::kRBrace, "expected '}'");
+    expect(TokenType::kRBrace, "Expected '}'");
     current_slid_fields_.clear();
 }
 
@@ -2845,11 +2913,11 @@ FunctionDef Parser::parseFunctionDef() {
         advance(); // consume '('
         while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
             std::string type = parseTypeName();
-            std::string name = expect(TokenType::kIdentifier, "expected field name").value;
+            std::string name = expect(TokenType::kIdentifier, "Expected field name").value;
             fn.tuple_return_fields.emplace_back(type, name);
             if (peek().type == TokenType::kComma) advance();
         }
-        expect(TokenType::kRParen, "expected ')'");
+        expect(TokenType::kRParen, "Expected ')'");
     } else {
         fn.return_type = parseTypeName();
     }
@@ -2858,25 +2926,27 @@ FunctionDef Parser::parseFunctionDef() {
         if (peek().type == TokenType::kOp) {
             auto sym = peekOpSymbolAt(1);
             errorAt(fname_tok, sym
-                ? "operator 'op" + *sym
-                    + "' must be a method of a class; free-function operators are not allowed"
-                : "'op' is reserved; free-function operators are not allowed");
+                ? "Operator 'op" + *sym
+                    + "' must be a method of a class; free-function operators are not allowed."
+                : "The keyword 'op' is reserved; free-function operators are not allowed.");
         }
-        std::string fname = expect(TokenType::kIdentifier, "expected function name").value;
+        std::string fname = expect(TokenType::kIdentifier, "Expected function name").value;
         fn.name = fname;
         fn.user_name = fname;
+        fn.file_id = file_id_;
+        fn.tok = fname_tok;
     }
     // template type params: funcname<T, U, ...>
     if (peek().type == TokenType::kLt && isTemplateCallLookahead()) {
         advance(); // consume '<'
         while (peek().type != TokenType::kGt && peek().type != TokenType::kEof) {
             fn.type_params.push_back(
-                expect(TokenType::kIdentifier, "expected type parameter name").value);
+                expect(TokenType::kIdentifier, "Expected type parameter name").value);
             if (peek().type == TokenType::kComma) advance();
         }
-        expect(TokenType::kGt, "expected '>'");
+        expect(TokenType::kGt, "Expected '>'");
     }
-    expect(TokenType::kLParen, "expected '('");
+    expect(TokenType::kLParen, "Expected '('");
     int params_tok = pos_;
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         bool is_mutable = false;
@@ -2887,19 +2957,19 @@ FunctionDef Parser::parseFunctionDef() {
         }
         std::string type = parseTypeName();
         if (is_mutable && !isParamIndirectType(type))
-            errorAt(mut_tok, "'mutable' applies only to pointer types '^' and '[]'");
+            errorAt(mut_tok, "The 'mutable' keyword applies only to pointer types '^' and '[]'.");
         int p_tok = pos_;
-        std::string name = expect(TokenType::kIdentifier, "expected parameter name").value;
+        std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
         rejectReserved(file_id_, p_tok, name, "parameter");
         fn.params.emplace_back(type, name);
         fn.param_mutable.push_back(is_mutable);
         if (peek().type == TokenType::kComma) advance();
     }
-    expect(TokenType::kRParen, "expected ')'");
+    expect(TokenType::kRParen, "Expected ')'");
     // (P1) function header+body merge — parameter name cannot equal function name.
     for (auto& p : fn.params) {
         if (p.second == fn.user_name) {
-            errorAt(params_tok, "parameter '" + p.second + "' shares enclosing function name");
+            errorAt(params_tok, "Parameter '" + p.second + "' shares the name of its enclosing function.");
         }
     }
     if (peek().type == TokenType::kSemicolon) {
@@ -2930,8 +3000,8 @@ Program Parser::parse() {
         // import declaration: search export_path first, then import_paths, then source_dir
         if (peek().type == TokenType::kImport) {
             advance(); // consume 'import'
-            std::string module = expect(TokenType::kIdentifier, "expected module name after 'import'").value;
-            expect(TokenType::kSemicolon, "expected ';' after import");
+            std::string module = expect(TokenType::kIdentifier, "Expected module name after 'import'").value;
+            expect(TokenType::kSemicolon, "Expected ';' after import");
 
             std::vector<std::string> search;
             for (auto& p : import_paths_) search.push_back(p);
@@ -2940,7 +3010,7 @@ Program Parser::parse() {
 
             std::string header_path = findHeader(module, search);
             if (header_path.empty())
-                throw CompileError{-1, 0, std::string("import: cannot find '" + module + ".slh'")};
+                throw CompileError{-1, 0, std::string("Cannot find '" + module + ".slh' on the import path.")};
 
             // import-once: skip if this header has already been loaded in this compile
             if (!imported_once_->insert(header_path).second) continue;
@@ -3033,15 +3103,15 @@ Program Parser::parse() {
             std::vector<std::string> type_args;
             type_args.push_back(parseTypeName());
             while (peek().type == TokenType::kComma) { advance(); type_args.push_back(parseTypeName()); }
-            expect(TokenType::kGt, "expected '>'");
+            expect(TokenType::kGt, "Expected '>'");
             std::vector<std::string> param_types;
-            expect(TokenType::kLParen, "expected '(' after instantiate type args");
+            expect(TokenType::kLParen, "Expected '(' after instantiate type args");
             while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                 param_types.push_back(parseTypeName());
                 if (peek().type == TokenType::kComma) advance();
             }
-            expect(TokenType::kRParen, "expected ')'");
-            expect(TokenType::kSemicolon, "expected ';'");
+            expect(TokenType::kRParen, "Expected ')'");
+            expect(TokenType::kSemicolon, "Expected ';'");
             program.instantiations.push_back({name, std::move(type_args), std::move(param_types)});
         }
         // slid class definition: bare identifier immediately followed by ( or <
@@ -3134,30 +3204,30 @@ Program Parser::parse() {
             for (auto& v : e.values) {
                 auto ins = enum_values.emplace(v, e.name);
                 if (!ins.second) {
-                    throw CompileError{-1, 0, std::string("enum value '" + v + "' appears in '"
-                        + ins.first->second + "' and '" + e.name + "'")};
+                    throw CompileError{-1, 0, std::string("Enum value '" + v + "' appears in both '"
+                        + ins.first->second + "' and '" + e.name + "'.")};
                 }
             }
         }
         for (auto& fn : program.functions) {
             auto it = enum_values.find(fn.user_name);
             if (it != enum_values.end()) {
-                throw CompileError{-1, 0, std::string("function '" + fn.user_name
-                    + "' collides with enum value from '" + it->second + "'")};
+                throw CompileError{-1, 0, std::string("Function '" + fn.user_name
+                    + "' collides with an enum value from '" + it->second + "'.")};
             }
         }
         for (auto& s : program.slids) {
             auto it = enum_values.find(s.name);
             if (it != enum_values.end()) {
-                throw CompileError{-1, 0, std::string("class/namespace '" + s.name
-                    + "' collides with enum value from '" + it->second + "'")};
+                throw CompileError{-1, 0, std::string("Class or namespace '" + s.name
+                    + "' collides with an enum value from '" + it->second + "'.")};
             }
         }
         for (auto& e : program.enums) {
             auto it = enum_values.find(e.name);
             if (it != enum_values.end() && it->second != e.name) {
-                throw CompileError{-1, 0, std::string("enum type '" + e.name
-                    + "' collides with enum value from '" + it->second + "'")};
+                throw CompileError{-1, 0, std::string("Enum type '" + e.name
+                    + "' collides with an enum value from '" + it->second + "'.")};
             }
         }
     }
@@ -3166,15 +3236,18 @@ Program Parser::parse() {
     // signature. Forward declarations (body == nullptr) are pair-able with a
     // matching definition and don't count as duplicates.
     {
-        std::set<std::string> sigs;
+        struct Site { int file_id; int tok; };
+        std::map<std::string, Site> sigs;
         for (auto& fn : program.functions) {
             if (!fn.body) continue;
             std::string key = fn.user_name + "(";
             for (auto& p : fn.params) key += p.first + ",";
             key += ")";
-            if (!sigs.insert(key).second) {
-                throw CompileError{-1, 0, std::string("function '" + fn.user_name
-                    + "' redefined with same signature")};
+            auto [it, inserted] = sigs.emplace(key, Site{fn.file_id, fn.tok});
+            if (!inserted) {
+                throw CompileError{fn.file_id, fn.tok,
+                    "Function '" + fn.user_name + "' is redefined with the same signature."}
+                    .addNote(it->second.file_id, it->second.tok, "First defined here.");
             }
         }
     }
@@ -3225,7 +3298,16 @@ void Parser::mergeReopens(Program& program) {
             }
             // append fields in source order
             for (auto& f : src.fields) dst.fields.push_back(std::move(f));
-            // OR — "any reopen contributed this"
+            // OR — "any reopen contributed this". Carry the first-set tok forward
+            // so later cross-reopen duplicate detection (if added) can attribute correctly.
+            if (!dst.has_explicit_ctor_decl && src.has_explicit_ctor_decl) {
+                dst.explicit_ctor_file_id = src.explicit_ctor_file_id;
+                dst.explicit_ctor_tok    = src.explicit_ctor_tok;
+            }
+            if (!dst.has_explicit_dtor_decl && src.has_explicit_dtor_decl) {
+                dst.explicit_dtor_file_id = src.explicit_dtor_file_id;
+                dst.explicit_dtor_tok    = src.explicit_dtor_tok;
+            }
             dst.has_explicit_ctor_decl = dst.has_explicit_ctor_decl || src.has_explicit_ctor_decl;
             dst.has_explicit_dtor_decl = dst.has_explicit_dtor_decl || src.has_explicit_dtor_decl;
             dst.is_transport_impl      = dst.is_transport_impl      || src.is_transport_impl;
@@ -3258,27 +3340,31 @@ void Parser::mergeReopens(Program& program) {
     // (class, method, signature). Forward declarations (body == nullptr)
     // pair with a matching definition and don't count as duplicates.
     {
-        std::map<std::string, std::set<std::string>> sigs_by_class;
+        struct Site { int file_id; int tok; };
+        std::map<std::string, std::map<std::string, Site>> sigs_by_class;
         auto check_dup = [&](const std::string& cls, const std::string& mname,
-                              const std::vector<std::pair<std::string, std::string>>& params) {
+                              const std::vector<std::pair<std::string, std::string>>& params,
+                              int file_id, int tok) {
             std::string key = mname + "(";
             for (auto& p : params) key += p.first + ",";
             key += ")";
-            auto& set = sigs_by_class[cls];
-            if (!set.insert(key).second) {
-                throw CompileError{-1, 0, std::string("class '" + cls
-                    + "': duplicate method '" + mname + "' with same signature")};
+            auto& m = sigs_by_class[cls];
+            auto [it, inserted] = m.emplace(key, Site{file_id, tok});
+            if (!inserted) {
+                throw CompileError{file_id, tok,
+                    "Class '" + cls + "' has a duplicate method '" + mname + "' with the same signature."}
+                    .addNote(it->second.file_id, it->second.tok, "First defined here.");
             }
         };
         for (auto& s : program.slids) {
             for (auto& m : s.methods) {
                 if (!m.body) continue;
-                check_dup(s.name, m.name, m.params);
+                check_dup(s.name, m.name, m.params, m.file_id, m.tok);
             }
         }
         for (auto& em : program.external_methods) {
             if (!em.body) continue;
-            check_dup(em.slid_name, em.method_name, em.params);
+            check_dup(em.slid_name, em.method_name, em.params, em.file_id, em.tok);
         }
     }
     // Inheritance shadow checks — derived field vs base method, derived method vs base field.
@@ -3301,14 +3387,14 @@ void Parser::mergeReopens(Program& program) {
             auto& base_fields  = field_names_by_class[s.base_name];
             for (auto& f : s.fields) {
                 if (base_methods.count(f.name)) {
-                    throw CompileError{-1, 0, std::string("derived field '" + f.name
-                        + "' in '" + s.name + "' shadows method inherited from '" + s.base_name + "'")};
+                    throw CompileError{-1, 0, std::string("Derived field '" + f.name
+                        + "' in class '" + s.name + "' shadows a method inherited from '" + s.base_name + "'.")};
                 }
             }
             for (auto& m : s.methods) {
                 if (base_fields.count(m.name)) {
-                    throw CompileError{-1, 0, std::string("derived method '" + m.name
-                        + "' in '" + s.name + "' shadows field inherited from '" + s.base_name + "'")};
+                    throw CompileError{-1, 0, std::string("Derived method '" + m.name
+                        + "' in class '" + s.name + "' shadows a field inherited from '" + s.base_name + "'.")};
                 }
             }
         }
@@ -3317,12 +3403,12 @@ void Parser::mergeReopens(Program& program) {
 
 std::unique_ptr<SwitchStmt> Parser::parseSwitchStmt() {
     [[maybe_unused]] int t_start = pos_;
-    expect(TokenType::kSwitch, "expected 'switch'");
-    expect(TokenType::kLParen, "expected '('");
+    expect(TokenType::kSwitch, "Expected 'switch'");
+    expect(TokenType::kLParen, "Expected '('");
     auto stmt = make<SwitchStmt>(t_start);
     stmt->expr = parseExpr();
-    expect(TokenType::kRParen, "expected ')'");
-    expect(TokenType::kLBrace, "expected '{'");
+    expect(TokenType::kRParen, "Expected ')'");
+    expect(TokenType::kLBrace, "Expected '{'");
 
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
         SwitchCase sc;
@@ -3331,13 +3417,13 @@ std::unique_ptr<SwitchStmt> Parser::parseSwitchStmt() {
             colon_terminates_expr_++;
             sc.value = parseExpr();
             colon_terminates_expr_--;
-            expect(TokenType::kColon, "expected ':'");
+            expect(TokenType::kColon, "Expected ':'");
         } else if (peek().type == TokenType::kDefault) {
             advance();
-            expect(TokenType::kColon, "expected ':'");
+            expect(TokenType::kColon, "Expected ':'");
             sc.value = nullptr; // default
         } else {
-            errorHere("expected 'case' or 'default' in switch");
+            errorHere("Expected 'case' or 'default' in switch.");
         }
         // parse statements until next case/default/}
         while (peek().type != TokenType::kCase
@@ -3348,11 +3434,11 @@ std::unique_ptr<SwitchStmt> Parser::parseSwitchStmt() {
         }
         stmt->cases.push_back(std::move(sc));
     }
-    expect(TokenType::kRBrace, "expected '}'");
+    expect(TokenType::kRBrace, "Expected '}'");
     if (peek().type == TokenType::kColon) {
         advance();
-        stmt->block_label = expect(TokenType::kIdentifier, "expected label name").value;
-        expect(TokenType::kSemicolon, "expected ';'");
+        stmt->block_label = expect(TokenType::kIdentifier, "Expected label name").value;
+        expect(TokenType::kSemicolon, "Expected ';'");
     } else {
         stmt->block_label = "switch";
     }

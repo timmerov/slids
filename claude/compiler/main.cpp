@@ -226,7 +226,7 @@ int main(int argc, char* argv[]) {
         }
 
     } catch (const CompileError& e) {
-        source_map.render(e.file_id, e.tok, e.msg, std::cerr);
+        source_map.render(e, std::cerr);
         std::string err_path = output_path + ".err";
         std::error_code ec;
         std::filesystem::rename(output_path, err_path, ec);

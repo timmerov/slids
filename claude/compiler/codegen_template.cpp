@@ -202,7 +202,7 @@ static std::unique_ptr<Expr> cloneExprImpl(const Expr& expr,
     if (auto* e = dynamic_cast<const StringifyExpr*>(&expr))
         return std::make_unique<StringifyExpr>(e->kind, e->operand ? cloneExpr(*e->operand, subst) : nullptr);
 
-    throw CompileError{expr.file_id, expr.tok, "cloneExpr: unhandled expression type"};
+    throw CompileError{expr.file_id, expr.tok, "Unhandled expression type during template instantiation."};
 }
 
 // --- Statement deep clone with type substitution ---
@@ -379,7 +379,7 @@ static std::unique_ptr<Stmt> cloneStmtImpl(const Stmt& stmt,
         return r;
     }
 
-    throw CompileError{stmt.file_id, stmt.tok, "cloneStmt: unhandled statement type"};
+    throw CompileError{stmt.file_id, stmt.tok, "Unhandled statement type during template instantiation."};
 }
 
 static std::unique_ptr<BlockStmt> cloneBlock(const BlockStmt& block,
@@ -432,7 +432,7 @@ std::vector<std::string> Codegen::inferTypeArgs(
                 {{"int8",1},{"int16",2},{"int",3},{"int32",3},{"int64",4},{"intptr",4},
                  {"uint8",1},{"uint16",2},{"uint32",3},{"uint64",4}};
             if ((isRefType(inferred[p]) || isPtrType(inferred[p])) && a != inferred[p])
-                error(std::string("cannot match type '" + a
+                error(std::string("Cannot match type '" + a
                     + "' to template parameter '" + p
                     + "' (inferred as reference type '" + inferred[p] + "')"));
             auto ait = irank.find(inferred[p]);
@@ -482,7 +482,7 @@ std::vector<std::string> Codegen::inferTypeArgs(
     for (auto& tp : tmpl.type_params) {
         auto it = inferred.find(tp);
         if (it == inferred.end())
-            error(std::string("cannot infer template type '" + tp
+            error(std::string("Cannot infer template type '" + tp
                 + "' for '" + tmpl.name + "': provide explicit type argument"));
         result.push_back(it->second);
     }
@@ -596,7 +596,7 @@ std::string Codegen::instantiateTemplate(const TemplateFuncEntry& entry,
     const std::string& name = tmpl.name;
 
     if (tmpl.type_params.size() != type_args.size())
-        error(std::string("template '" + name + "': expected "
+        error(std::string("Template '" + name + "': expected "
             + std::to_string(tmpl.type_params.size()) + " type argument(s), got "
             + std::to_string(type_args.size())));
 
@@ -673,11 +673,11 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
                                               bool force) {
     auto tit = template_slids_.find(name);
     if (tit == template_slids_.end())
-        error(std::string("unknown template class: " + name));
+        error(std::string("Unknown template class: " + name));
     const SlidDef& tmpl = *tit->second;
 
     if (tmpl.type_params.size() != type_args.size())
-        error(std::string("template class '" + name + "': expected "
+        error(std::string("Template class '" + name + "': expected "
             + std::to_string(tmpl.type_params.size()) + " type argument(s), got "
             + std::to_string(type_args.size())));
 
