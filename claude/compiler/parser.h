@@ -376,8 +376,10 @@ struct MethodDef {
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params; true if 'mutable' on that param
     std::unique_ptr<BlockStmt> body;
-    bool is_virtual = false;  // `virtual` keyword present on the declaration
-    bool is_pure = false;     // body replaced by `= delete;` — slot exists, no impl
+    bool is_virtual = false;   // `virtual` keyword present on the declaration
+    bool is_delete = false;    // `= delete;` — pure virtual when no ancestor match;
+                               //               removes inherited method when a same-sig ancestor exists
+    bool is_default = false;   // `= default;` — derived inherits base impl with no-shadow contract
 };
 
 struct SlidDef {
@@ -445,7 +447,8 @@ struct ExternalMethodDef {
     std::vector<bool> param_mutable;  // parallel to params
     std::unique_ptr<BlockStmt> body;
     bool is_virtual = false;
-    bool is_pure = false;
+    bool is_delete = false;
+    bool is_default = false;
 };
 
 struct Program {

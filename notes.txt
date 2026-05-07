@@ -1,11 +1,4 @@
 
-inheritance revisited:
-Base : Class() {
-    void greet() = alias;
-    void speak() = delete;
-    virtual void process() = alias;
-}
-
 error messages citing multiple source locations.
 name conlicted. defined here:
 lines 100-105.

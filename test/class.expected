@@ -2,4 +2,15 @@ Simple:ctor
 Hello, World!
 foo
 Goodbye, World!
+Base:ctor
+Base:ctor
+Derived:ctor
+Base:greet
+Base:speak
+Base:process
+Base:greet
+Base:process
+Derived:dtor
+Base:dtor
+Base:dtor
 Simple:dtor

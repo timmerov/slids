@@ -54,6 +54,16 @@ struct SlidInfo {
         bool is_pure = true;
     };
     std::vector<VtableSlot> vtable;
+    // Methods declared `= default` or `= delete` in this class (regardless of
+    // virtual). Records the contract; the chain is walked at body-redef sites
+    // and at call sites to enforce no-shadow / no-call across all descendants.
+    struct MethodMark {
+        std::string method_name;
+        std::vector<std::string> param_types;
+        bool is_delete = false;   // remove inherited from this class onward
+        bool is_default = false;  // inherits base impl, no shadow allowed
+    };
+    std::vector<MethodMark> method_marks;
     // After validateAndExportable(), true when the class name appears in a
     // .slh header (cross-TU visible). End-of-TU pure-slot validation skips these.
     bool is_importable = false;
@@ -271,6 +281,27 @@ private:
     // Validates: signature exact match on override; `virtual` keyword required to
     // override; non-virtual cannot shadow base virtual.
     void buildVtables();
+    // For every method tagged `= default` or `= delete`, validate against the
+    // ancestor chain and record a MethodMark on the class. Rejects:
+    //   - `= default` / `= delete` on `_` / `~`.
+    //   - `= default` with no ancestor match.
+    //   - `= delete` non-virtual with no ancestor match.
+    // Pure-virtual introduction (`= delete` virtual, no ancestor) is allowed
+    // and handled by buildVtables. Must run before buildVtables so the latter
+    // can skip vtable updates for marked methods.
+    void validateDefaultDelete();
+    // Returns true if any ancestor of `class_name` (proper ancestor, in any
+    // reopen) declares a method with the given name and parameter types.
+    bool ancestorHasMethod(const std::string& class_name,
+                           const std::string& method_name,
+                           const std::vector<std::string>& pts) const;
+    // Walks the inheritance chain (self + ancestors) and returns the first
+    // MethodMark matching name+params; returns nullptr and leaves originating
+    // class empty if none.
+    const SlidInfo::MethodMark* findMethodMark(const std::string& class_name,
+                                               const std::string& method_name,
+                                               const std::vector<std::string>& pts,
+                                               std::string& originating_class) const;
     // After inheritance is resolved, any class whose own fields include a
     // slid-typed field needs a dtor to destroy those fields at scope/heap exit.
     // Sets info.has_dtor accordingly so emitDtors and emitSlidCtorDtor pick it up.

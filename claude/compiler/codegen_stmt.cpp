@@ -2450,6 +2450,26 @@ void Codegen::emitStmt(const Stmt& stmt) {
             return;
         }
         if (!slid_name.empty()) {
+            {
+                // Method-mark check: walk the static type's chain for a `= delete`
+                // mark. Marks key on exact param-type lists; we use the arity here
+                // because by-name+arity is unambiguous in current slids (no name
+                // overloading by-arity-only ambiguous case; full overloads are
+                // distinguished by param types and the mark records those exactly).
+                for (auto* cur = &slid_info_[slid_name]; cur; cur = cur->base_info) {
+                    bool stop = false;
+                    for (auto& mk : cur->method_marks) {
+                        if (mk.method_name != mcs->method) continue;
+                        if (mk.param_types.size() != mcs->args.size()) continue;
+                        if (mk.is_delete) {
+                            error("class '" + slid_name + "': call to deleted method '"
+                                  + mcs->method + "()' (deleted in '" + cur->name + "')");
+                        }
+                        stop = true; break;
+                    }
+                    if (stop) break;
+                }
+            }
             auto& sinfo = slid_info_[slid_name];
             // virtual dispatch: if the static type is virtual and this method
             // matches a vtable slot, use the slot's resolved impl. Indirect
@@ -2470,7 +2490,18 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 mptypes = sinfo.vtable[vslot].param_types;
                 ret_slids = sinfo.vtable[vslot].return_type;
             } else {
-                std::string base = slid_name + "__" + mcs->method;
+                // Walk the inheritance chain to find the class that registers
+                // the method. Handles plain non-virtual inheritance and the
+                // `= default` redirect (the receiver class has no body, the
+                // ancestor does).
+                std::string dispatch_class = slid_name;
+                for (auto* cur = &slid_info_[slid_name]; cur; cur = cur->base_info) {
+                    if (method_overloads_.count(cur->name + "__" + mcs->method)) {
+                        dispatch_class = cur->name;
+                        break;
+                    }
+                }
+                std::string base = dispatch_class + "__" + mcs->method;
                 mangled = resolveOverloadForCall(base, mcs->args);
                 auto ret_it = func_return_types_.find(mangled);
                 if (ret_it == func_return_types_.end())

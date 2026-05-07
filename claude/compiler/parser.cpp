@@ -2369,12 +2369,18 @@ MethodDef Parser::parseMethodDef() {
     if (peek().type == TokenType::kEquals
         && pos_ + 1 < (int)tokens_.size()
         && tokens_[pos_ + 1].type == TokenType::kDelete) {
-        // = delete; — pure-virtual marker. slot exists in vtable, no body emitted.
-        if (!m.is_virtual)
-            errorHere("'= delete' requires the method to be declared 'virtual'");
+        // = delete; — pure virtual when no ancestor match; removes inherited method when match.
+        // Sema enforces: non-virtual `= delete` requires an ancestor match.
         advance(); advance();
         expect(TokenType::kSemicolon, "expected ';' after '= delete'");
-        m.is_pure = true;
+        m.is_delete = true;
+    } else if (peek().type == TokenType::kEquals
+        && pos_ + 1 < (int)tokens_.size()
+        && tokens_[pos_ + 1].type == TokenType::kDefault) {
+        // = default; — inherits base impl with no-shadow contract. Sema enforces ancestor match.
+        advance(); advance();
+        expect(TokenType::kSemicolon, "expected ';' after '= default'");
+        m.is_default = true;
     } else if (peek().type == TokenType::kSemicolon) {
         advance(); // forward declaration — no body
     } else {
@@ -2706,7 +2712,19 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "expected ')'");
-    if (peek().type == TokenType::kSemicolon) {
+    if (peek().type == TokenType::kEquals
+        && pos_ + 1 < (int)tokens_.size()
+        && tokens_[pos_ + 1].type == TokenType::kDelete) {
+        advance(); advance();
+        expect(TokenType::kSemicolon, "expected ';' after '= delete'");
+        em.is_delete = true;
+    } else if (peek().type == TokenType::kEquals
+        && pos_ + 1 < (int)tokens_.size()
+        && tokens_[pos_ + 1].type == TokenType::kDefault) {
+        advance(); advance();
+        expect(TokenType::kSemicolon, "expected ';' after '= default'");
+        em.is_default = true;
+    } else if (peek().type == TokenType::kSemicolon) {
         advance(); // forward declaration — no body
     } else {
         std::vector<std::string> param_names;
@@ -2798,11 +2816,15 @@ void Parser::parseExternalMethodBlock(Program& program) {
         if (peek().type == TokenType::kEquals
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kDelete) {
-            if (!em.is_virtual)
-                errorHere("'= delete' requires the method to be declared 'virtual'");
             advance(); advance();
             expect(TokenType::kSemicolon, "expected ';' after '= delete'");
-            em.is_pure = true;
+            em.is_delete = true;
+        } else if (peek().type == TokenType::kEquals
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kDefault) {
+            advance(); advance();
+            expect(TokenType::kSemicolon, "expected ';' after '= default'");
+            em.is_default = true;
         } else if (peek().type == TokenType::kSemicolon) {
             advance(); // forward declaration — no body
         } else {

@@ -866,6 +866,14 @@ void Dog:perform2() { ... }           // external method def
 
 **Field-name collision** is a compile error.
 
+### Default and deleted methods
+
+In a derived class:
+- `method() = default;` — inherits base's method; may not be overridden in this class or any descendant.
+- `method() = delete;` — removes the method; calls to this method are a compile error; may not be defined in this class or any descendant.
+
+Signature must match a base method exactly. Exception: `= delete` with no base counterpart introduces a pure virtual (requires `virtual`). Not allowed on `_` / `~`.
+
 > **TODO:** Needs review — it should be possible to add private virtual methods in the implementation file (`.sl`) that are not exposed in the `.slh`. This is similar to the desire to add private fields not exposed in the `.slh`. Both raise ABI and layout questions that need careful thought.
 > A virtual class is one that has at least one virtual method. For virtual classes:
 >- If `_` and `~` are explicitly defined, `~` must be declared `virtual`

@@ -200,6 +200,10 @@ void Codegen::collectFunctionSignatures() {
         for (auto& m : slid.methods) {
             // skip bodyless forward decls when the external method already provides the impl
             if (!m.body && covered_by_external.count(m.name)) continue;
+            // = default / = delete have no own body; the impl lives in an
+            // ancestor (default) or nowhere (delete / pure-virtual). Registering
+            // would emit a `Derived__m` reference that no body satisfies.
+            if (m.is_default || m.is_delete) continue;
             by_name[m.name].push_back({m.return_type, m.params});
         }
         for (auto& em : program_.external_methods) {
@@ -211,6 +215,7 @@ void Codegen::collectFunctionSignatures() {
         for (auto& em : program_.external_methods) {
             if (em.slid_name != slid.name || em.body) continue;
             if (em.method_name == "_" || em.method_name == "~") continue;
+            if (em.is_default || em.is_delete) continue;
             if (!by_name.count(em.method_name))
                 by_name[em.method_name].push_back({em.return_type, em.params});
         }
@@ -680,13 +685,14 @@ void Codegen::buildVtables() {
                     if (by_name >= 0)
                         error(std::string("class '" + name + "': virtual method '"
                             + m.name + "' signature does not match the inherited slot"));
-                    // new slot
+                    // new slot. is_delete + no ancestor + virtual = pure-virtual introduction.
+                    // is_default with no ancestor is rejected upstream by validateDefaultDelete.
                     SlidInfo::VtableSlot s;
                     s.method_name = m.name;
                     s.param_types = pts;
                     s.return_type = m.return_type;
-                    s.is_pure = m.is_pure;
-                    if (!m.is_pure) {
+                    s.is_pure = m.is_delete;
+                    if (!m.is_delete) {
                         s.defining_class = name;
                         s.mangled = mangleMethod(name, m.name, pts);
                     }
@@ -696,10 +702,10 @@ void Codegen::buildVtables() {
                     if (info.vtable[slot].return_type != m.return_type)
                         error(std::string("class '" + name + "': virtual override '"
                             + m.name + "' return type does not match base"));
-                    if (m.is_pure) {
-                        info.vtable[slot].is_pure = true;
-                        info.vtable[slot].defining_class = "";
-                        info.vtable[slot].mangled = "";
+                    // = default / = delete with ancestor match: keep base's slot intact.
+                    // The contract is enforced via method_marks at compile time.
+                    if (m.is_default || m.is_delete) {
+                        // no vtable mutation
                     } else {
                         info.vtable[slot].is_pure = false;
                         info.vtable[slot].defining_class = name;
@@ -707,7 +713,9 @@ void Codegen::buildVtables() {
                     }
                 }
             } else {
-                // non-virtual: must not shadow a base virtual of the same name
+                // non-virtual: must not shadow a base virtual of the same name.
+                // = default / = delete are contracts, not shadows; skip the check.
+                if (m.is_default || m.is_delete) continue;
                 int by_name = findSlotByName(m.name);
                 if (by_name >= 0)
                     error(std::string("class '" + name + "': method '" + m.name
@@ -738,16 +746,17 @@ void Codegen::buildVtables() {
                 if (info.vtable[slot].return_type != em.return_type)
                     error(std::string("class '" + name + "': virtual override '"
                         + em.method_name + "' return type does not match base"));
-                if (em.is_pure) {
-                    info.vtable[slot].is_pure = true;
-                    info.vtable[slot].defining_class = "";
-                    info.vtable[slot].mangled = "";
+                // = default / = delete in a reopen (with ancestor match): keep base's slot.
+                // method_marks enforces the contract; no vtable mutation here.
+                if (em.is_default || em.is_delete) {
+                    // no-op
                 } else if (em.body) {
                     info.vtable[slot].is_pure = false;
                     info.vtable[slot].defining_class = name;
                     info.vtable[slot].mangled = mangleMethod(name, em.method_name, pts);
                 }
             } else {
+                if (em.is_default || em.is_delete) continue;
                 int by_name = findSlotByName(em.method_name);
                 if (by_name >= 0)
                     error(std::string("class '" + name + "': method '" + em.method_name
@@ -756,6 +765,123 @@ void Codegen::buildVtables() {
         }
     };
     for (auto& [name, info] : slid_info_) build(name);
+}
+
+bool Codegen::ancestorHasMethod(const std::string& class_name,
+                                const std::string& method_name,
+                                const std::vector<std::string>& pts) const {
+    auto it = slid_info_.find(class_name);
+    if (it == slid_info_.end()) return false;
+    const SlidInfo* cur = it->second.base_info;
+    while (cur) {
+        for (auto& s : program_.slids) {
+            if (s.name != cur->name) continue;
+            for (auto& m : s.methods) {
+                if (m.name != method_name) continue;
+                std::vector<std::string> mpts;
+                for (auto& [t, n] : m.params) mpts.push_back(t);
+                if (mpts == pts) return true;
+            }
+        }
+        for (auto& em : program_.external_methods) {
+            if (em.slid_name != cur->name) continue;
+            if (em.method_name != method_name) continue;
+            std::vector<std::string> mpts;
+            for (auto& [t, n] : em.params) mpts.push_back(t);
+            if (mpts == pts) return true;
+        }
+        cur = cur->base_info;
+    }
+    return false;
+}
+
+const SlidInfo::MethodMark* Codegen::findMethodMark(const std::string& class_name,
+                                                    const std::string& method_name,
+                                                    const std::vector<std::string>& pts,
+                                                    std::string& originating_class) const {
+    auto it = slid_info_.find(class_name);
+    if (it == slid_info_.end()) return nullptr;
+    const SlidInfo* cur = &it->second;
+    while (cur) {
+        for (auto& mk : cur->method_marks) {
+            if (mk.method_name == method_name && mk.param_types == pts) {
+                originating_class = cur->name;
+                return &mk;
+            }
+        }
+        cur = cur->base_info;
+    }
+    return nullptr;
+}
+
+void Codegen::validateDefaultDelete() {
+    auto isCtorDtor = [](const std::string& mname) {
+        return mname == "_" || mname == "~";
+    };
+    auto checkAndMark = [&](const std::string& slid_name,
+                            const std::string& method_name,
+                            const std::vector<std::pair<std::string,std::string>>& params,
+                            bool is_default, bool is_delete, bool is_virtual) {
+        if (!is_default && !is_delete) return;
+        auto sit = slid_info_.find(slid_name);
+        if (sit == slid_info_.end()) return;
+        if (isCtorDtor(method_name)) {
+            std::string kind = is_default ? "= default" : "= delete";
+            error("class '" + slid_name + "': '" + kind + "' may not be applied to '"
+                  + method_name + "()'");
+        }
+        std::vector<std::string> pts;
+        for (auto& [t, n] : params) pts.push_back(t);
+        bool ancestor = ancestorHasMethod(slid_name, method_name, pts);
+        if (is_default && !ancestor)
+            error("class '" + slid_name + "': '" + method_name
+                  + "() = default' has no matching base method");
+        if (is_delete && !ancestor && !is_virtual)
+            error("class '" + slid_name + "': '" + method_name
+                  + "() = delete' is non-virtual but has no matching base method "
+                    "(pure-virtual introduction requires 'virtual')");
+        // Pure-virtual introduction (delete + virtual + no ancestor) does NOT
+        // bind a removal mark — descendants must be free to provide the impl.
+        if (!ancestor) return;
+        SlidInfo::MethodMark mk;
+        mk.method_name = method_name;
+        mk.param_types = pts;
+        mk.is_default = is_default;
+        mk.is_delete = is_delete;
+        sit->second.method_marks.push_back(std::move(mk));
+    };
+    for (auto& slid : program_.slids) {
+        for (auto& m : slid.methods) {
+            checkAndMark(slid.name, m.name, m.params, m.is_default, m.is_delete, m.is_virtual);
+        }
+    }
+    for (auto& em : program_.external_methods) {
+        checkAndMark(em.slid_name, em.method_name, em.params, em.is_default, em.is_delete, em.is_virtual);
+    }
+    auto checkBody = [&](const std::string& slid_name,
+                         const std::string& method_name,
+                         const std::vector<std::pair<std::string,std::string>>& params) {
+        std::vector<std::string> pts;
+        for (auto& [t, n] : params) pts.push_back(t);
+        std::string origin;
+        const SlidInfo::MethodMark* mk = findMethodMark(slid_name, method_name, pts, origin);
+        if (!mk) return;
+        std::string kind = mk->is_default ? "= default" : "= delete";
+        error("class '" + slid_name + "': method '" + method_name
+              + "()' is " + kind + " in '" + origin + "' and may not be defined here");
+    };
+    for (auto& slid : program_.slids) {
+        for (auto& m : slid.methods) {
+            if (m.is_default || m.is_delete) continue;
+            if (!m.body) continue;
+            checkBody(slid.name, m.name, m.params);
+        }
+    }
+    for (auto& em : program_.external_methods) {
+        if (em.is_default || em.is_delete) continue;
+        if (!em.body) continue;
+        checkBody(em.slid_name, em.method_name, em.params);
+    }
 }
 
 void Codegen::synthesizeFieldDtors() {
@@ -1105,6 +1231,7 @@ void Codegen::emit() {
     resolveSlidInheritance();
     synthesizeFieldDtors();
     synthesizeCtorNeeds();
+    validateDefaultDelete();
     buildVtables();
     markImportableClasses();
     validatePureSlots();

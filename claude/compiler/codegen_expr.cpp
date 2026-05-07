@@ -654,6 +654,19 @@ std::string Codegen::emitExpr(const Expr& expr) {
             return "";
         }
         if (!slid_name.empty()) {
+            for (auto* cur = &slid_info_[slid_name]; cur; cur = cur->base_info) {
+                bool stop = false;
+                for (auto& mk : cur->method_marks) {
+                    if (mk.method_name != mc->method) continue;
+                    if (mk.param_types.size() != mc->args.size()) continue;
+                    if (mk.is_delete) {
+                        error("class '" + slid_name + "': call to deleted method '"
+                              + mc->method + "()' (deleted in '" + cur->name + "')");
+                    }
+                    stop = true; break;
+                }
+                if (stop) break;
+            }
             auto& sinfo = slid_info_[slid_name];
             // virtual dispatch: if the static type is virtual and this method
             // matches a vtable slot, prefer the slot's resolved impl. Indirect
@@ -674,7 +687,14 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 mptypes_vec = sinfo.vtable[vslot].param_types;
                 ret_slids = sinfo.vtable[vslot].return_type;
             } else {
-                std::string base = slid_name + "__" + mc->method;
+                std::string dispatch_class = slid_name;
+                for (auto* cur = &slid_info_[slid_name]; cur; cur = cur->base_info) {
+                    if (method_overloads_.count(cur->name + "__" + mc->method)) {
+                        dispatch_class = cur->name;
+                        break;
+                    }
+                }
+                std::string base = dispatch_class + "__" + mc->method;
                 mangled = resolveOverloadForCall(base, mc->args);
                 auto ret_it = func_return_types_.find(mangled);
                 if (ret_it == func_return_types_.end())
