@@ -170,7 +170,7 @@ int32 main() {
     //ref = ref + 1;
     //-EXPECT-ERROR: arithmetic on references is not allowed
     //ref = ref - 1;
-    //-EXPECT-ERROR-DEFERRED: ref - ref2 currently fires "Cannot initialize 'int^' from value of type 'int^'." instead of an arithmetic-on-references diagnostic; codegen lets the binary subtract through before the assignment-mismatch path catches it.
+    //-EXPECT-ERROR: arithmetic on references is not allowed
     //ref = ref - ref2;
     //-EXPECT-ERROR: references only support '==' and '!='
     //bool rcond = (ref < ref2);
@@ -233,7 +233,7 @@ int32 main() {
     //ptr -= ref;
     //-EXPECT-ERROR: '+' between pointer 'int[]' and reference 'int^'
     //ptr = ptr + ref;
-    //-EXPECT-ERROR-DEFERRED: ptr - ref currently fires "Cannot initialize 'int[]' from value of type 'int[]'." instead of the pointer/reference cross-type diagnostic; same shape as the ref-ref2 case above.
+    //-EXPECT-ERROR: '-' between pointer 'int[]' and reference 'int^'
     //ptr = ptr - ref;
 
     return 0;

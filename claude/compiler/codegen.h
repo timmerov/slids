@@ -564,6 +564,14 @@ private:
     // conversion. Returns early when dst is itself indirect or a slid (those
     // paths are handled by op= dispatch and requirePtrInit).
     void requireCompatibleInit(const std::string& dst_type, const Expr& src);
+    // Pointer ([]) / reference (^) restrictions on a binary op:
+    //   - cross (ptr × ref) — only `==` and `!=` allowed
+    //   - reference-only — arithmetic forbidden, ordered comparison forbidden,
+    //     `==` / `!=` require same base type
+    // Idempotent and side-effect-free when the operand shapes are valid.
+    // Called by both emitExpr(BinaryExpr) (for live emission) and exprLlvmType
+    // / inferSlidType (so static type probes can't outrun the validator).
+    void validateBinaryPtrRefRestrictions(const BinaryExpr& b);
     // Emit init/assign value with nullptr-compatibility check. nullptr → ^/[] returns
     // "null"; nullptr → intptr returns "0" (i64 zero); nullptr → any other
     // primitive errors. Otherwise delegates to emitExpr.

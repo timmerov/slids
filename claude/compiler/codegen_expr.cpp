@@ -1546,63 +1546,10 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string left_llvm  = exprLlvmType(*b->left);
         std::string right_llvm = exprLlvmType(*b->right);
 
-        // pointer ([]) and reference (^) type restrictions.
-        // Order: cross (ptr × ref) is most specific, then ref-only.
-        if (left_llvm == "ptr" || right_llvm == "ptr") {
-            auto getVarSlidsType = [&](const Expr& e) -> std::string {
-                if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
-                    auto tit = locals_.find(ve->name);
-                    if (tit != locals_.end()) return tit->second.type;
-                }
-                return "";
-            };
-            std::string lslids = getVarSlidsType(*b->left);
-            std::string rslids = getVarSlidsType(*b->right);
-            bool left_ref  = isRefType(lslids);
-            bool right_ref = isRefType(rslids);
-            bool left_iter = isPtrType(lslids);
-            bool right_iter = isPtrType(rslids);
-
-            static const std::set<std::string> arith_ops_pr =
-                {"+","-","*","/","%","&","|","^","<<",">>"};
-            static const std::set<std::string> ord_ops_pr = {"<","<=",">",">="};
-
-            // Cross: one pointer ([]) and one reference (^). Allow == / != only.
-            bool cross = (left_iter && right_ref) || (left_ref && right_iter);
-            if (cross) {
-                const std::string& iter_t = left_iter ? lslids : rslids;
-                const std::string& ref_t  = left_ref  ? lslids : rslids;
-                if (b->op != "==" && b->op != "!=") {
-                    if (ord_ops_pr.count(b->op))
-                        error(std::string("Operator '" + b->op + "' between pointer '" + iter_t
-                            + "' and reference '" + ref_t
-                            + "' is not allowed (use '==' or '!=')"));
-                    if (arith_ops_pr.count(b->op))
-                        error(std::string("Operator '" + b->op + "' between pointer '" + iter_t
-                            + "' and reference '" + ref_t + "' is not allowed"));
-                }
-            }
-            // Reference-only: split arithmetic vs ordered-comparison wording.
-            if (left_ref || right_ref) {
-                const std::string& which = left_ref ? lslids : rslids;
-                if (arith_ops_pr.count(b->op))
-                    error(std::string("Operator '" + b->op + "' on reference '" + which
-                        + "': arithmetic on references is not allowed (use a pointer '[]' type)"));
-                if (ord_ops_pr.count(b->op))
-                    error(std::string("Operator '" + b->op + "' is not allowed on reference type '"
-                        + which + "': references only support '==' and '!='"));
-                // == / != require same base type (strip either ^ or [] suffix).
-                auto refBase = [](const std::string& t) -> std::string {
-                    if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return t.substr(0, t.size()-2);
-                    if (!t.empty() && t.back() == '^') return t.substr(0, t.size()-1);
-                    return t;
-                };
-                std::string lb = refBase(lslids), rb = refBase(rslids);
-                if (!lb.empty() && !rb.empty() && lb != "void" && rb != "void" && lb != rb)
-                    error(std::string("Reference comparison requires same type: '"
-                        + lslids + "' vs '" + rslids + "'"));
-            }
-        }
+        // pointer ([]) / reference (^) restrictions — single source of truth
+        // shared with exprLlvmType / inferSlidType so static type probes can't
+        // outrun the validator.
+        validateBinaryPtrRefRestrictions(*b);
 
         // pointer comparisons require same pointee type
         static const std::set<std::string> cmp_ops = {"==","!=","<","<=",">",">="};
@@ -2325,6 +2272,11 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // comparison operators always produce i1 -> zext to i32 in emitExpr
     if (auto* b = dynamic_cast<const BinaryExpr*>(&expr)) {
+        // Run ptr/ref restriction validator first so static probes (here and in
+        // inferSlidType) surface the same diagnostics emitExpr would. Without
+        // this, requirePtrInit's exprLlvmType call lets `ref - ref2` slip
+        // through as i64 and we throw a confusing same-type init error.
+        validateBinaryPtrRefRestrictions(*b);
         // any phase that produces a slid value (direct overload, right-operand
         // coercion, or op<sym>= fuse) lowers to a ptr (alloca temp). Defer to
         // exprSlidType which already checks all three phases.
@@ -2624,6 +2576,63 @@ std::string Codegen::emitCondBool(const Expr& expr) {
 // When dst is a pointer (^) or iterator ([]) type, the source expression must
 // produce an LLVM ptr value. Reject scalar->pointer (e.g. `int[] p = arr[0];`),
 // which would otherwise emit `store ptr %i32val, ptr %dst` — invalid IR.
+void Codegen::validateBinaryPtrRefRestrictions(const BinaryExpr& b) {
+    auto getVarSlidsType = [&](const Expr& e) -> std::string {
+        if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
+            auto tit = locals_.find(ve->name);
+            if (tit != locals_.end()) return tit->second.type;
+        }
+        return "";
+    };
+    std::string lslids = getVarSlidsType(*b.left);
+    std::string rslids = getVarSlidsType(*b.right);
+    bool left_ref  = isRefType(lslids);
+    bool right_ref = isRefType(rslids);
+    bool left_iter = isPtrType(lslids);
+    bool right_iter = isPtrType(rslids);
+    if (!left_ref && !right_ref && !left_iter && !right_iter) return;
+
+    static const std::set<std::string> arith_ops_pr =
+        {"+","-","*","/","%","&","|","^","<<",">>"};
+    static const std::set<std::string> ord_ops_pr = {"<","<=",">",">="};
+
+    // Cross: one pointer ([]) and one reference (^). Allow == / != only.
+    bool cross = (left_iter && right_ref) || (left_ref && right_iter);
+    if (cross) {
+        const std::string& iter_t = left_iter ? lslids : rslids;
+        const std::string& ref_t  = left_ref  ? lslids : rslids;
+        if (b.op != "==" && b.op != "!=") {
+            if (ord_ops_pr.count(b.op))
+                error(std::string("Operator '" + b.op + "' between pointer '" + iter_t
+                    + "' and reference '" + ref_t
+                    + "' is not allowed (use '==' or '!=')"));
+            if (arith_ops_pr.count(b.op))
+                error(std::string("Operator '" + b.op + "' between pointer '" + iter_t
+                    + "' and reference '" + ref_t + "' is not allowed"));
+        }
+    }
+    // Reference-only: split arithmetic vs ordered-comparison wording.
+    if (left_ref || right_ref) {
+        const std::string& which = left_ref ? lslids : rslids;
+        if (arith_ops_pr.count(b.op))
+            error(std::string("Operator '" + b.op + "' on reference '" + which
+                + "': arithmetic on references is not allowed (use a pointer '[]' type)"));
+        if (ord_ops_pr.count(b.op))
+            error(std::string("Operator '" + b.op + "' is not allowed on reference type '"
+                + which + "': references only support '==' and '!='"));
+        // == / != require same base type (strip either ^ or [] suffix).
+        auto refBase = [](const std::string& t) -> std::string {
+            if (t.size() >= 2 && t.substr(t.size()-2) == "[]") return t.substr(0, t.size()-2);
+            if (!t.empty() && t.back() == '^') return t.substr(0, t.size()-1);
+            return t;
+        };
+        std::string lb = refBase(lslids), rb = refBase(rslids);
+        if (!lb.empty() && !rb.empty() && lb != "void" && rb != "void" && lb != rb)
+            error(std::string("Reference comparison requires same type: '"
+                + lslids + "' vs '" + rslids + "'"));
+    }
+}
+
 void Codegen::requireCompatibleInit(const std::string& dst_type, const Expr& src) {
     // Indirect (^/[]) lhs is handled by requirePtrInit's pointer-base check.
     if (isIndirectType(dst_type)) return;
@@ -2928,6 +2937,7 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     }
     // binary expression — use exprSlidType if it produces a slid, else infer from left
     if (auto* be = dynamic_cast<const BinaryExpr*>(&expr)) {
+        validateBinaryPtrRefRestrictions(*be);
         std::string slid = exprSlidType(expr);
         if (!slid.empty()) return slid;
         // comparison and logical operators always produce bool, not the operand type
