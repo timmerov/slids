@@ -660,8 +660,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     if (mk.method_name != mc->method) continue;
                     if (mk.param_types.size() != mc->args.size()) continue;
                     if (mk.is_delete) {
-                        error("Class '" + slid_name + "': call to deleted method '"
-                              + mc->method + "()' (deleted in '" + cur->name + "')");
+                        errorWithNote("Class '" + slid_name + "': call to deleted method '"
+                              + mc->method + "()' (deleted in '" + cur->name + "')",
+                              mk.file_id, mk.tok, "Marked = delete here.");
                     }
                     stop = true; break;
                 }

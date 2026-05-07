@@ -160,7 +160,7 @@ int32 main() {
        ---------------------------------------------------------- */
 
     /* always-error — type mismatch (int vs bool). */
-    //-EXPECT-ERROR: SwapStmt: type mismatch
+    //-EXPECT-ERROR: Type mismatch — 'int' vs 'bool'
     //{
     //    int xv = 1;
     //    bool bv = true;

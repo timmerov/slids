@@ -120,7 +120,7 @@ int32 helperSlid() {  // private — not in .slh
 | `char` | unsigned character-sized integer (8-bit) |
 | `float32` | 32-bit float |
 | `float64` | 64-bit float |
-| `bool` | Boolean (`true` / `false`) |
+| `bool` | Boolean `true`  `false` |
 | `void` | no value |
 
 String literals have type `char[]`. A dedicated `string` type is not a primitive — it may be provided later as a library type.
@@ -176,7 +176,7 @@ Summary table:
 
 Converts a value to a different type. The value is converted — the bits change to represent the same logical value in the target type (or as close as possible). This is distinct from pointer casting, which reinterprets bits without changing them.
 
-The syntax is intentional: `(type=expr)` looks like an assignment because it *is* an assignment — to an anonymous temporary variable of the target type. A named declaration (`int x = expr`) is a statement; an unnamed one (`(int=expr)`) is an expression whose value is the temporary.
+The syntax is intentional: `(type=expr)` looks like an assignment because it *is* an assignment — to an anonymous temporary variable of the target type. A named declaration `int x = expr` is a statement; an unnamed one `(int=expr)` is an expression whose value is the temporary.
 
 The parentheses are required by the parser. This was a deliberate design choice: a type keyword in expression position is otherwise meaningless, and requiring parens keeps the grammar unambiguous and makes the conversion visually distinct from a surrounding assignment. `int x = (int8=a)` clearly shows two separate `=` operations at a glance.
 
@@ -212,7 +212,7 @@ Casting reinterprets a pointer to one type as a pointer to a different type. The
 ```
 Type^ ptr = nullptr;
 ```
-**Implicit casts:** Reinterpretations that strip type information from the pointer are implicit. Explicit cast syntax is optional. Target pointer types of implicit casts are limited to: `void^`, the integer type `intptr`, and base clases in the same hierarchy.
+**Implicit casts:** Reinterpretations that strip type information from the pointer are implicit. Explicit cast syntax is optional. Target pointer types of implicit casts are limited to: `void^`, the integer type `intptr`, and base classes in the same hierarchy.
 ```
 void^ void_ptr = any_ptr;     // strips all type information.
 intptr int_x   = any_ptr;     // convert to integer.
@@ -223,7 +223,7 @@ Base^ base_ptr = derived_ptr; // every derived pointer is a base pointer.
 int8^ int8_ptr   = <int8^> any_ptr;
 uint8^ uint8_ptr = <uint8^> any_ptr;
 ```
-**Explicit casts:** Adding type information to a compatible pointer type requires an explicit cast. Compatible pointer types are: `void^`, `int8^`, `uint8`, and the integer type `intptr`. Pointers related by class hierarchy are compatible.
+**Explicit casts:** Adding type information to a compatible pointer type requires an explicit cast. Compatible pointer types are: `void^`, `int8^`, `uint8^`, and the integer type `intptr`. Pointers related by class hierarchy are compatible.
 ```
 Type^ any_ptr = <Type^> void_ptr;
 Type^ any_ptr = <Type^> int8_ptr;        // from generic buffer type.
@@ -386,7 +386,7 @@ Rules:
 - Leading `+` is valid for any numeric literal
 - Leading `-` is valid for any numeric literal
 
-**Type of integer literals** — when used in an inferred declaration (`x = 42;`), decimal literals infer `int` if the value fits in 32 bits, or `int64` otherwise. Hex and binary literals infer `uint` if the value fits in 32 bits, or `uint64` otherwise. When assigned to a variable with an explicit type, the literal is quietly extended to match.
+**Type of integer literals** — when used in an inferred declaration `x = 42;`, decimal literals infer `int` if the value fits in 32 bits, or `int64` otherwise. Hex and binary literals infer `uint` if the value fits in 32 bits, or `uint64` otherwise. When assigned to a variable with an explicit type, the literal is quietly extended to match.
 
 ---
 
@@ -395,11 +395,11 @@ Rules:
 Like C/C++, Slids has no distinct boolean type for conditionals — any integer or pointer expression can be used as a condition:
 
 - **True** — any non-zero integer value, or any non-null pointer
-- **False** — the integer value `0`, or a null pointer (`nullptr`)
+- **False** — the integer value `0`, or `nullptr`
 
 `true` and `false` are integer literals `1` and `0` respectively.
 
-The result of any comparison operator (`==`, `!=`, `<`, `>`, `<=`, `>=`) is an integer `1` (true) or `0` (false). This result can be used directly in arithmetic or assigned to any integer variable — it is quietly promoted to match the required type.
+The result of any comparison operator `==`, `!=`, `<`, `>`, `<=`, `>=` is an integer `1` (true) or `0` (false). This result can be used directly in arithmetic or assigned to any integer variable — it is quietly promoted to match the required type.
 
 **Promotion in mixed-type expressions** — when the two operands of a binary operator have different integer sizes, the smaller operand is promoted to the size of the larger before the operation is performed. The result has the larger type. Signed and unsigned operands of the same size produce an unsigned result.
 
@@ -434,7 +434,7 @@ From highest to lowest precedence.
 |---|---|---|---|
 | 1 | Primary | identifier, literal, `(...)`, `(type=expr)`, `new T(...)`, `new T[n]`, `sizeof(...)`, `##macro` | — |
 | 2 | Postfix | `.field`, `[idx]`, `^` (deref), `++` `--` (post) | left-to-right |
-| 3 | Prefix unary | `++` `--` (pre), `+` `-` `!` `~`, `^` (addr-of), `<Type>` (pointer cast) | right-to-left |
+| 3 | Prefix unary | `++` `--` (pre), `+` `-` `!` `~`, `^` (addr-of), `<Type^>` (pointer cast) | right-to-left |
 | 4 | Multiplicative | `*` `/` `%` | left-to-right |
 | 5 | Additive | `+` `-` | left-to-right |
 | 6 | Shift | `<<` `>>` | left-to-right |
@@ -460,7 +460,7 @@ These tokens have meaning only in specific syntactic positions, not as general o
 - `..` — range, only inside `for (i : a..b)` headers and slice `[a..b]`
 - `:` — separator (for-header, scope `Slid:method`, switch `case 1:`, inheritance `Base : Derived`, block label `:name`)
 - `,` — list separator (call args, tuple literal, destructure target)
-- `::` — global-qualifier prefix (`::name(args)`)
+- `::` — global-qualifier prefix `::name(args)`
 
 ---
 
@@ -544,7 +544,7 @@ Operations on tuples desugar element-wise, recursing into nested structure. For 
 (x, y, z) = (1, 2, 3) + (4, 5, 6);    // → x=1+4; y=2+5; z=3+6;
 ```
 
-Move (`<-`) and copy (`=`) follow the same rule, dispatching `op<-` / `op=` per slot.
+Move `<-` and copy `=` follow the same rule, dispatching `op<-` / `op=` per slot.
 
 **Element-wise applies *within* a kind, not across kinds.** Anon-tuple + anon-tuple is element-wise. Class + class can dispatch element-wise *if* the user defines an `op+` (the compiler does not auto-fall-back to the field-walk for slid+slid). Class + tuple, tuple + class, range + tuple, etc., all require explicit user ops.
 
@@ -610,8 +610,8 @@ Alias rules:
 
 ### Limitations
 
-- **`new` of an anon-tuple** — `tup_ptr = new (int, int);` is not a supported syntax. Heap allocation is currently only for named types (`new SlidType(args)`, `new T[n]`). Anon-tuples live as locals or on the slid-field/tuple-slot they're embedded in. May be added.
-- **Range expressions** (`a..b`) and tuple/range interaction (`2 * (1..3)`) — not designed.
+- **`new` of an anon-tuple** — `tup_ptr = new (int, int);` is not a supported syntax. Heap allocation is currently only for named types `new SlidType(args)`, `new T[n]`. Anon-tuples live as locals or on the slid-field/tuple-slot they're embedded in. May be added.
+- **Range expressions** `a..b` and tuple/range interaction `2 * (1..3)` — not designed.
 - **Type widening across slots** — slot/element types must match exactly; no implicit promotion (e.g. `(int, int) + 1.5` is a compile error). May relax later.
 - **Method dispatch on a slid slot reached through a tuple-returning call** — `make_tuple()[0]` reads the slot, but `make_tuple()[0].method()` is not yet wired.
 - **`tuple.count()`** — not implemented. Element count is known at compile time but isn't exposed through a method.
@@ -735,7 +735,7 @@ Constructor/destructor rules:
 Every field is always initialized when an instance is created, even without a constructor:
 1. Caller-supplied value (from the constructor call)
 2. Otherwise: the declared default value
-3. Otherwise: zero (`0`, `nullptr`, or `false` as appropriate for the type)
+3. Otherwise: zero `0`, `nullptr`, or `false` as appropriate for the type
 
 `_()` is for additional logic beyond field initialization — heap allocation, registering callbacks, etc. If all you need is sensible defaults, no `_()` is required.
 
@@ -771,7 +771,7 @@ Counter {
 
 A slid may hide additional fields inside its implementation file. The `...` ellipsis marks the split between the public prefix (visible to consumers of the `.slh`) and the private suffix (visible only inside the `.sl`).
 
-**Header (`.slh`)** — tuple **ends** with `...` to signal that hidden fields follow elsewhere:
+**Header `.slh`** — tuple **ends** with `...` to signal that hidden fields follow elsewhere:
 ```
 // counter.slh
 Counter(int value_ = 0, ...) {
@@ -780,7 +780,7 @@ Counter(int value_ = 0, ...) {
 }
 ```
 
-**Implementation (`.sl`)** — tuple **starts** with `...`, standing in for the full public prefix, then adds the private fields:
+**Implementation `.sl`** — tuple **starts** with `...`, standing in for the full public prefix, then adds the private fields:
 ```
 // counter.sl
 Counter(..., int step_ = 1) {
@@ -845,7 +845,7 @@ Animal : Cat(int toys_ = 0) {
 }
 ```
 
-**Caller arguments** — instantiation supplies initialization values base fields first, the derived fields. A required field in the derived class forces any optional fields in the base class to be required.
+**Caller arguments** — instantiation supplies initialization values - base fields first, then derived fields. A required field in the derived class forces any optional fields in the base class to be required.
 
 ```
 Animal a("Snek");                     // legs_ is default
@@ -874,7 +874,7 @@ In a derived class:
 
 Signature must match a base method exactly. Exception: `= delete` with no base counterpart introduces a pure virtual (requires `virtual`). Not allowed on `_` / `~`.
 
-> **TODO:** Needs review — it should be possible to add private virtual methods in the implementation file (`.sl`) that are not exposed in the `.slh`. This is similar to the desire to add private fields not exposed in the `.slh`. Both raise ABI and layout questions that need careful thought.
+> **TODO:** Needs review — it should be possible to add private virtual methods in the implementation file `.sl` that are not exposed in the `.slh`. This is similar to the desire to add private fields not exposed in the `.slh`. Both raise ABI and layout questions that need careful thought.
 > A virtual class is one that has at least one virtual method. For virtual classes:
 >- If `_` and `~` are explicitly defined, `~` must be declared `virtual`
 >- If `~` is not explicitly defined, the compiler generates a default `virtual ~` that does nothing
@@ -941,7 +941,7 @@ Value(int value_ = 0) {
 
 ### `mutable` parameters
 
-`mutable` on a pointer parameter (`^` / `[]`) indicates the function may modify the contents of the pointer. `mutable` is required on the parameters to move `op<-` and swap operators `op<->`. `mutable on a non-pointer or a non-parameter is a compile error. Const-correctness is not currently enforced. `mutable` is a hint to the authors that data is modifiable.
+`mutable` on a pointer parameter `^` `[]` indicates the function may modify the contents of the pointer. `mutable` is required on the parameters to move `op<-` and swap operators `op<->`. `mutable` on a non-pointer or a non-parameter is a compile error. Const-correctness is not currently enforced. `mutable` is a hint to the authors that data is modifiable.
 
 ```
 op<-(mutable String^ rhs);   // move override
@@ -979,7 +979,7 @@ Default synthesized operators handles a base class the same way it handles a fie
 
 ### Block names
 
-`for`, `while`, and `switch` blocks may have a name. The default name is the keyword (`for`, `while`, `switch`). An explicit name overrides the default and is written after the closing brace as `:label;`. Innermost match wins for resolution. Plain `{}`, `if`, and `else` blocks have no name.
+`for`, `while`, and `switch` blocks may have a name. The default name is the keyword - `for`, `while`, `switch`. An explicit name overrides the default and is written after the closing brace as `:label;`. Innermost match wins for resolution. Plain `{}`, `if`, and `else` blocks have no name.
 
 | Block    | naked `break`              | `break name` / `break N`                       | naked `continue`         |
 |----------|----------------------------|------------------------------------------------|--------------------------|
@@ -1155,14 +1155,14 @@ obj^.~();                                    // explicit destructor
 delete where;                                // free the buffer
 ```
 
-**References (`^`) and iterators (`[]`):**
+**References `^` and iterators `[]`:**
 
 Both are pointer-like types. The difference is semantic:
 
 | | `Type^ name` | `Type[] name` |
 |---|---|---|
 | Points to an object | yes | yes |
-| Dereference (`name^`) | yes | yes |
+| Dereference `name^` | yes | yes |
 | Reassign to different object | yes | yes |
 | Increment / decrement | no | yes |
 | Pointer arithmetic | no | yes |
@@ -1212,7 +1212,7 @@ A phrase is:
 | `for (var : phrase)` | short-for container/range |
 | `parent && phrase`, `parent \|\| phrase` | rhs of `&&` and `\|\|` |
 
-In general, there are no sub-phrases. The exceptions to are noted above: function arguments, tuples, and the rhs of logical operations that can be short-circuited - '&&' and '||'. All other sites where `++` can be used are part of the surrounding phrase.
+In general, there are no sub-phrases. The exceptions are noted above: function arguments, tuples, and the rhs of logical operations that can be short-circuited - '&&' and '||'. All other sites where `++` can be used are part of the surrounding phrase.
 
 ```
 x = p++^;             // p is incremented after the assignment of x.
@@ -1228,7 +1228,8 @@ x = foo(a++, ++a);    // foo(1,3) arguments are separate phrases.
 
 ## Move semantics
 
-The move operator `<-` transfers ownership of a resource from one variable to another. The source is left in a valid, empty state (its pointer is set to `nullptr`). This avoids copying and makes ownership transfer explicit in the code. For non-pointer built-in scalars (`int`, `float`, `bool`, …), `<-` is a copy.
+The move operator `<-` transfers ownership of a resource from one variable to another. The source is left in a valid, empty state (its pointer is set to `nullptr`).
+This avoids copying and makes ownership transfer explicit in the code. For non-pointer built-in scalars ( `int`, `float`, `bool`, … ) `<-` is a copy.
 
 ### Pointer and iterator move
 
@@ -1327,7 +1328,7 @@ String {
 ```
 
 Swap rules:
-- For pointer/iterator element swap (`ptr++^ <-> ptr--^`), `<->` is built into the language
+- For pointer/iterator element swap ( `ptr++^ <-> ptr--^` ), `<->` is built into the language
 - For class types, `<->` calls `op<->` if one is defined; otherwise it calls the compiler-synthesized default swap (see Operator overloading)
 - Both sides must be the same element type
 
@@ -1637,7 +1638,7 @@ Desugars to a 3-tuple `(##type(x), ##name(x), ^x)`:
 - `##name(x)` — the variable name as `char[]`
 - `^x` — the address of `x`, typed `T^`
 
-The third element is a pointer rather than a value so a single tuple shape carries primitives (`int`, `float64`, …) and class objects uniformly. The `dump` template dereferences it to read the value.
+The third element is a pointer rather than a value so a single tuple shape carries primitives ( `int`, `float64`, … ) and class objects uniformly. The `dump` template dereferences it to read the value.
 
 ```
 void dump<T>( (char[], char[], T^)^ tuple );

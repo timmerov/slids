@@ -39,6 +39,29 @@ void Codegen::errorAtNode(const Expr& e, const std::string& msg) {
     throw CompileError{e.file_id, e.tok, finalizeErrorMsg(msg)};
 }
 
+void Codegen::errorWithNote(const std::string& msg,
+                            int note_file, int note_tok,
+                            const std::string& note_msg) {
+    int f = -1, t = 0;
+    if (!emit_stack_.empty()) std::tie(f, t) = emit_stack_.back();
+    throw CompileError{f, t, finalizeErrorMsg(msg)}
+        .addNote(note_file, note_tok, finalizeErrorMsg(note_msg));
+}
+
+void Codegen::errorAtNodeWithNote(const Stmt& s, const std::string& msg,
+                                  int note_file, int note_tok,
+                                  const std::string& note_msg) {
+    throw CompileError{s.file_id, s.tok, finalizeErrorMsg(msg)}
+        .addNote(note_file, note_tok, finalizeErrorMsg(note_msg));
+}
+
+void Codegen::errorAtNodeWithNote(const Expr& e, const std::string& msg,
+                                  int note_file, int note_tok,
+                                  const std::string& note_msg) {
+    throw CompileError{e.file_id, e.tok, finalizeErrorMsg(msg)}
+        .addNote(note_file, note_tok, finalizeErrorMsg(note_msg));
+}
+
 std::string Codegen::newTmp() { return "%t" + std::to_string(tmp_counter_++); }
 
 std::string Codegen::registerStringConstant(const std::string& value) {
@@ -481,6 +504,8 @@ void Codegen::collectSlids() {
         }
         SlidInfo info;
         info.name = slid.name;
+        info.name_file_id = slid.name_file_id;
+        info.name_tok = slid.name_tok;
         info.base_name = slid.base_name;
         for (int i = 0; i < (int)slid.fields.size(); i++) {
             info.field_index[slid.fields[i].name] = i;
@@ -831,7 +856,8 @@ void Codegen::validateDefaultDelete() {
     auto checkAndMark = [&](const std::string& slid_name,
                             const std::string& method_name,
                             const std::vector<std::pair<std::string,std::string>>& params,
-                            bool is_default, bool is_delete, bool is_virtual) {
+                            bool is_default, bool is_delete, bool is_virtual,
+                            int decl_file_id, int decl_tok) {
         if (!is_default && !is_delete) return;
         auto sit = slid_info_.find(slid_name);
         if (sit == slid_info_.end()) return;
@@ -858,39 +884,50 @@ void Codegen::validateDefaultDelete() {
         mk.param_types = pts;
         mk.is_default = is_default;
         mk.is_delete = is_delete;
+        mk.file_id = decl_file_id;
+        mk.tok = decl_tok;
         sit->second.method_marks.push_back(std::move(mk));
     };
     for (auto& slid : program_.slids) {
         for (auto& m : slid.methods) {
-            checkAndMark(slid.name, m.name, m.params, m.is_default, m.is_delete, m.is_virtual);
+            checkAndMark(slid.name, m.name, m.params, m.is_default, m.is_delete, m.is_virtual,
+                         m.file_id, m.tok);
         }
     }
     for (auto& em : program_.external_methods) {
-        checkAndMark(em.slid_name, em.method_name, em.params, em.is_default, em.is_delete, em.is_virtual);
+        checkAndMark(em.slid_name, em.method_name, em.params, em.is_default, em.is_delete, em.is_virtual,
+                     em.file_id, em.tok);
     }
     auto checkBody = [&](const std::string& slid_name,
                          const std::string& method_name,
-                         const std::vector<std::pair<std::string,std::string>>& params) {
+                         const std::vector<std::pair<std::string,std::string>>& params,
+                         int body_file_id, int body_tok) {
         std::vector<std::string> pts;
         for (auto& [t, n] : params) pts.push_back(t);
         std::string origin;
         const SlidInfo::MethodMark* mk = findMethodMark(slid_name, method_name, pts, origin);
         if (!mk) return;
         std::string kind = mk->is_default ? "= default" : "= delete";
-        error("In class '" + slid_name + "', method '" + method_name
-              + "()' is " + kind + " in '" + origin + "' and may not be defined here.");
+        std::string msg = "In class '" + slid_name + "', method '" + method_name
+              + "()' is " + kind + " in '" + origin + "' and may not be defined here.";
+        std::string note = "Marked " + kind + " here.";
+        // Prefer pinning the primary at the offending body's tok; fall back to emit_stack_.
+        if (body_tok)
+            throw CompileError{body_file_id, body_tok, finalizeErrorMsg(msg)}
+                .addNote(mk->file_id, mk->tok, finalizeErrorMsg(note));
+        errorWithNote(msg, mk->file_id, mk->tok, note);
     };
     for (auto& slid : program_.slids) {
         for (auto& m : slid.methods) {
             if (m.is_default || m.is_delete) continue;
             if (!m.body) continue;
-            checkBody(slid.name, m.name, m.params);
+            checkBody(slid.name, m.name, m.params, m.file_id, m.tok);
         }
     }
     for (auto& em : program_.external_methods) {
         if (em.is_default || em.is_delete) continue;
         if (!em.body) continue;
-        checkBody(em.slid_name, em.method_name, em.params);
+        checkBody(em.slid_name, em.method_name, em.params, em.file_id, em.tok);
     }
 }
 
@@ -3454,12 +3491,26 @@ void Codegen::emitInitFieldsAtPtrs(const std::string& stype, const std::string& 
 
     auto fields = fieldTypesOf(stype);
     int nfields = (int)fields.size();
-    if ((int)args.size() > nfields)
-        error(std::string("Too many initializers for '" + stype + "': it has "
-            + std::to_string(nfields) + " fields, got " + std::to_string(args.size()) + "."));
-    if ((int)overrides.size() > nfields)
-        error(std::string("Too many tuple values for '" + stype + "': it has "
-            + std::to_string(nfields) + " fields, got " + std::to_string(overrides.size()) + "."));
+    if ((int)args.size() > nfields) {
+        std::string msg = "Too many initializers for '" + stype + "': it has "
+            + std::to_string(nfields) + " fields, got " + std::to_string(args.size()) + ".";
+        if (is_slid) {
+            auto& sinfo = slid_info_[stype];
+            errorWithNote(msg, sinfo.name_file_id, sinfo.name_tok,
+                          "'" + stype + "' declared here.");
+        }
+        error(msg);
+    }
+    if ((int)overrides.size() > nfields) {
+        std::string msg = "Too many tuple values for '" + stype + "': it has "
+            + std::to_string(nfields) + " fields, got " + std::to_string(overrides.size()) + ".";
+        if (is_slid) {
+            auto& sinfo = slid_info_[stype];
+            errorWithNote(msg, sinfo.name_file_id, sinfo.name_tok,
+                          "'" + stype + "' declared here.");
+        }
+        error(msg);
+    }
 
     auto slidDefFor = [&](const std::string& name) -> const SlidDef* {
         for (auto& s : program_.slids) if (s.name == name) return &s;
@@ -4034,7 +4085,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
         std::string reg = uniqueAllocaReg(name);
         out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
         out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
-        locals_[name] = {reg, type};
+        locals_[name] = {reg, type, fn.file_id, fn.tok};
     }
 
     emitBlock(*fn.body);

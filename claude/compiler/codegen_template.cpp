@@ -721,6 +721,8 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
     // register SlidInfo for the concrete type
     SlidInfo info;
     info.name = mangled;
+    info.name_file_id = concrete.name_file_id;
+    info.name_tok = concrete.name_tok;
     for (int i = 0; i < (int)concrete.fields.size(); i++) {
         info.field_index[concrete.fields[i].name] = i;
         info.field_types.push_back(concrete.fields[i].type);

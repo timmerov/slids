@@ -10,6 +10,8 @@
 
 struct SlidInfo {
     std::string name;
+    int name_file_id = 0;          // location of the class name token (copied from SlidDef for diagnostic notes)
+    int name_tok = 0;
     std::map<std::string, int> field_index;
     std::vector<std::string> field_types;
     bool has_explicit_ctor = false;
@@ -62,6 +64,8 @@ struct SlidInfo {
         std::vector<std::string> param_types;
         bool is_delete = false;   // remove inherited from this class onward
         bool is_default = false;  // inherits base impl, no shadow allowed
+        int file_id = 0;          // location of the `= default` / `= delete` declaration (for diagnostic notes)
+        int tok = 0;
     };
     std::vector<MethodMark> method_marks;
     // After validateAndExportable(), true when the class name appears in a
@@ -103,6 +107,8 @@ private:
     struct LocalInfo {
         std::string reg;
         std::string type;
+        int file_id = 0;        // location of the variable's declaration (for diagnostic notes); 0 when unknown
+        int tok = 0;
     };
     std::map<std::string, LocalInfo> locals_;
 
@@ -161,6 +167,17 @@ private:
     [[noreturn]] void error(const std::string& msg);
     [[noreturn]] void errorAtNode(const Stmt& s, const std::string& msg);
     [[noreturn]] void errorAtNode(const Expr& e, const std::string& msg);
+    // Throw with a single attached "see also" note. Match the existing
+    // primary-message conventions (auto-period via finalizeErrorMsg).
+    [[noreturn]] void errorWithNote(const std::string& msg,
+                                    int note_file, int note_tok,
+                                    const std::string& note_msg);
+    [[noreturn]] void errorAtNodeWithNote(const Stmt& s, const std::string& msg,
+                                          int note_file, int note_tok,
+                                          const std::string& note_msg);
+    [[noreturn]] void errorAtNodeWithNote(const Expr& e, const std::string& msg,
+                                          int note_file, int note_tok,
+                                          const std::string& note_msg);
 
     std::string break_label_;
     std::string continue_label_;

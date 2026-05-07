@@ -143,9 +143,9 @@ int32 main() {
     d <- (60, 61, 62);
     d.print("d<-");
 
-    //-EXPECT-ERROR: too many initializers: 'Simple' has 3 fields, got 5
+    //-EXPECT-ERROR: Too many initializers for 'Simple': it has 3 fields, got 5
     //Simple e(1, 2, 3, 4, 5);
-    //-EXPECT-ERROR: tuple has 5 values but 'Simple' has 3 accessible fields
+    //-EXPECT-ERROR: Tuple has 5 values but 'Simple' has 3 accessible fields
     //d = (1, 2, 3, 4, 5);
 
     /* creating accessing. */

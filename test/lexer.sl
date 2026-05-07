@@ -65,16 +65,16 @@ int32 main() {
 
     /* negative cases — uncommented one at a time by run_negatives.sh */
 
-    //-EXPECT-ERROR: expected expression, got '^^'
+    //-EXPECT-ERROR: Expected expression, got '^^'
     //bool yy = ^^x;
 
-    //-EXPECT-ERROR: cannot dereference 'a' of type 'bool'
+    //-EXPECT-ERROR: Cannot dereference 'a' of type 'bool'
     //bool yy = a ^^ ^x;
 
     //-EXPECT-ERROR: arithmetic on references is not allowed
     //ptr ^^= x;
 
-    //-EXPECT-ERROR: cannot dereference value of type 'bool'
+    //-EXPECT-ERROR: Cannot dereference a value of type 'bool'
     //ptr^^^= x;
 
     //-EXPECT-ERROR: arithmetic on references is not allowed

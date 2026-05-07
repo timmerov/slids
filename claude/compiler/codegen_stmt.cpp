@@ -392,7 +392,7 @@ void Codegen::emitDestructure(
                 bool is_move = isFreshSlidTemp(*te->values[i]);
                 emitSlidSlotAssign(eff_type, reg, src_ptr, is_move, /*is_init=*/!reassign);
                 if (!reassign) {
-                    locals_[name] = {reg, eff_type};
+                    locals_[name] = {reg, eff_type, init.file_id, init.tok};
                     if (slid_info_.count(eff_type) && hasDtorInChain(eff_type))
                         dtor_vars_.push_back({name, eff_type});
                 }
@@ -421,7 +421,7 @@ void Codegen::emitDestructure(
             }
             out_ << "    store " << llvm_t << " " << val << ", ptr " << reg << "\n";
             if (!reassign) {
-                locals_[name] = {reg, eff_type};
+                locals_[name] = {reg, eff_type, init.file_id, init.tok};
             }
         }
         return;
@@ -474,7 +474,7 @@ void Codegen::emitDestructure(
                     std::string src_gep = emitFieldGep(src_type, src_ptr, i);
                     emitSlidSlotAssign(elem_type, reg, src_gep, /*is_move=*/true, /*is_init=*/!reassign);
                     if (!reassign) {
-                        locals_[name] = {reg, eff_type};
+                        locals_[name] = {reg, eff_type, init.file_id, init.tok};
                         if (slid_info_.count(elem_type) && hasDtorInChain(elem_type))
                             dtor_vars_.push_back({name, elem_type});
                     }
@@ -504,7 +504,7 @@ void Codegen::emitDestructure(
                     out_ << "    " << reg << " = alloca " << dst_llvm << "\n";
                 out_ << "    store " << dst_llvm << " " << extracted << ", ptr " << reg << "\n";
                 if (!reassign) {
-                    locals_[name] = {reg, eff_type};
+                    locals_[name] = {reg, eff_type, init.file_id, init.tok};
                 }
             }
             return;
@@ -541,7 +541,7 @@ void Codegen::emitDestructure(
         out_ << "    " << extracted << " = extractvalue " << tuple_type << " " << result << ", " << i << "\n";
         out_ << "    store " << llvm_t << " " << extracted << ", ptr " << reg << "\n";
         if (!reassign) {
-            locals_[name] = {reg, eff_type};
+            locals_[name] = {reg, eff_type, init.file_id, init.tok};
         }
     }
 }
@@ -726,7 +726,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         parent_array_info_[arr->name] = ainfo;
         // allow array to be captured by nested functions and expose flat
         // shape (e.g. "int[6]") to consumers (for-array etc.).
-        locals_[arr->name] = {reg, elem_type + "[" + std::to_string(total) + "]"};
+        locals_[arr->name] = {reg, elem_type + "[" + std::to_string(total) + "]", arr->file_id, arr->tok};
         // store initializer values
         for (int i = 0; i < (int)arr->init_values.size(); i++) {
             std::string gep = newTmp();
@@ -823,7 +823,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (!phase1_handles && !is_empty_plus && isFreshSlidTemp(*decl->init)
                         && exprSlidType(*decl->init) == eff_type) {
                     std::string temp_ptr = emitExpr(*decl->init);
-                    locals_[decl->name] = {temp_ptr, eff_type};
+                    locals_[decl->name] = {temp_ptr, eff_type, decl->file_id, decl->tok};
                     // consume-the-temp: ownership transfers from the temp to this decl's
                     // scope-exit dtor. Unregister the pending temp entry to avoid double-dtor.
                     for (auto it = pending_temp_dtors_.begin();
@@ -845,7 +845,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     } else {
                         out_ << "    " << reg << " = alloca %struct." << eff_type << "\n";
                     }
-                    locals_[decl->name] = {reg, eff_type};
+                    locals_[decl->name] = {reg, eff_type, decl->file_id, decl->tok};
                     emitConstructAt(eff_type, reg, decl->ctor_args);
                     // call op+=(rhs)
                     std::string compound_base = eff_type + "__op+=";
@@ -870,7 +870,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             } else {
                 out_ << "    " << reg << " = alloca %struct." << eff_type << "\n";
             }
-            locals_[decl->name] = {reg, eff_type};
+            locals_[decl->name] = {reg, eff_type, decl->file_id, decl->tok};
 
             // Type name = (a, b, c);  or  Type name(a, b) = (c, d);
             // rhs tuple overrides lhs ctor_args per position; missing rhs positions fall back to lhs.
@@ -1001,7 +1001,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string struct_llvm = llvmType(eff_type);
             std::string reg = uniqueAllocaReg(decl->name);
             out_ << "    " << reg << " = alloca " << struct_llvm << "\n";
-            locals_[decl->name] = {reg, eff_type};
+            locals_[decl->name] = {reg, eff_type, decl->file_id, decl->tok};
             if (auto* te = dynamic_cast<const TupleExpr*>(decl->init.get())) {
                 for (int i = 0; i < (int)elems.size() && i < (int)te->values.size(); i++) {
                     // PPID: each tuple-literal slot is its own phrase.
@@ -1089,7 +1089,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string reg = uniqueAllocaReg(decl->name);
         std::string llvm_t = llvmType(eff_type);
         out_ << "    " << reg << " = alloca " << llvm_t << "\n";
-        locals_[decl->name] = {reg, eff_type};
+        locals_[decl->name] = {reg, eff_type, decl->file_id, decl->tok};
         if (!decl->init) return; // uninitialized — alloca only
         requirePtrInit(eff_type, *decl->init);
         std::string val = valOrNullptrCheck(eff_type, *decl->init);
@@ -1174,9 +1174,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
             if (auto* te = dynamic_cast<const TupleExpr*>(assign->value.get())) {
                 int nfields = (int)elems.size();
                 if ((int)te->values.size() > nfields)
-                    error(std::string("Tuple has " + std::to_string(te->values.size())
+                    errorWithNote(std::string("Tuple has " + std::to_string(te->values.size())
                         + " values but '" + assign->name + "' has " + std::to_string(nfields)
-                        + " elements"));
+                        + " elements"),
+                        tit->second.file_id, tit->second.tok,
+                        "'" + assign->name + "' declared here.");
                 for (int i = 0; i < (int)te->values.size(); i++) {
                     const std::string& ft = elems[i];
                     std::string elem_llvm = llvmType(ft);
@@ -1209,9 +1211,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                 out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << elem_llvm << "\n";
                             val = coerced;
                         } else {
-                            error(std::string("Type mismatch: cannot assign '"
+                            errorWithNote(std::string("Type mismatch: cannot assign '"
                                 + inferSlidType(*te->values[i]) + "' to tuple element "
-                                + std::to_string(i) + " of type '" + ft + "'"));
+                                + std::to_string(i) + " of type '" + ft + "'"),
+                                tit->second.file_id, tit->second.tok,
+                                "'" + assign->name + "' declared here.");
                         }
                     }
                     out_ << "    store " << elem_llvm << " " << val << ", ptr " << gep << "\n";
@@ -1223,8 +1227,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
             // tuple-variable rhs of matching type: route through element-wise walker
             std::string src_slids = inferSlidType(*assign->value);
             if (src_slids != lhs_t)
-                error(std::string("Type mismatch: cannot assign '" + src_slids
-                    + "' to tuple variable '" + assign->name + "' of type '" + lhs_t + "'"));
+                errorWithNote(std::string("Type mismatch: cannot assign '" + src_slids
+                    + "' to tuple variable '" + assign->name + "' of type '" + lhs_t + "'"),
+                    tit->second.file_id, tit->second.tok,
+                    "'" + assign->name + "' declared here.");
             std::string src_ptr;
             if (auto* ve = dynamic_cast<const VarExpr*>(assign->value.get())) {
                 auto lit = locals_.find(ve->name);
@@ -1380,9 +1386,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 auto& info = slid_info_[slid_name];
                 int nfields = (int)info.field_types.size();
                 if ((int)te->values.size() > nfields)
-                    error(std::string("Tuple has " + std::to_string(te->values.size())
+                    errorWithNote(std::string("Tuple has " + std::to_string(te->values.size())
                         + " values but '" + slid_name + "' has " + std::to_string(nfields)
-                        + " accessible fields"));
+                        + " accessible fields"),
+                        info.name_file_id, info.name_tok,
+                        "'" + slid_name + "' declared here.");
                 for (int i = 0; i < (int)te->values.size(); i++) {
                     const std::string& ft = info.field_types[i];
                     std::string elem_llvm = llvmType(ft);
@@ -2197,9 +2205,19 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // lhs <-> rhs — swap values at two lvalue locations.
         auto a = resolveLvalue(*sw->lhs);
         auto b = resolveLvalue(*sw->rhs);
-        if (a.type != b.type)
-            error(std::string("Type mismatch — '"
-                + a.type + "' vs '" + b.type + "'"));
+        if (a.type != b.type) {
+            std::string msg = "Type mismatch — '" + a.type + "' vs '" + b.type + "'";
+            // Best-effort note: when the lhs is a VarExpr naming a known local,
+            // point at its declaration. (Field/deref shapes have no LocalInfo.)
+            if (auto* lve = dynamic_cast<const VarExpr*>(sw->lhs.get())) {
+                auto lit = locals_.find(lve->name);
+                if (lit != locals_.end() && lit->second.tok)
+                    errorAtNodeWithNote(*sw, msg,
+                        lit->second.file_id, lit->second.tok,
+                        "'" + lve->name + "' declared here.");
+            }
+            errorAtNode(*sw, msg);
+        }
         const std::string& t = a.type;
         const std::string& a_ptr = a.addr;
         const std::string& b_ptr = b.addr;
@@ -2462,8 +2480,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         if (mk.method_name != mcs->method) continue;
                         if (mk.param_types.size() != mcs->args.size()) continue;
                         if (mk.is_delete) {
-                            error("Class '" + slid_name + "': call to deleted method '"
-                                  + mcs->method + "()' (deleted in '" + cur->name + "')");
+                            errorWithNote("Class '" + slid_name + "': call to deleted method '"
+                                  + mcs->method + "()' (deleted in '" + cur->name + "')",
+                                  mk.file_id, mk.tok, "Marked = delete here.");
                         }
                         stop = true; break;
                     }

@@ -1,6 +1,16 @@
 
-error messages citing multiple source locations.
-work in progress.
+object.field_++ does not compile.
+
+implement complex field access with tuples.
+tuple[1].a_ is not yet supported.
+
+revisit initialization.
+(int, int) pairs[3] = ((1, 2), (3, 4), (5, 6));
+review passing initializers to classes whose fields
+are classes.
+right now can pass one initializer.
+properly would be to nest tuples.
+
 
 test if works as expected:
 x = ^y^;
@@ -19,7 +29,7 @@ for (int x : board) {
     /* what does this do? */
 }
 
-missing tests:
+for loops: missing tests:
 test empty string.
 for int8 enum
 break and continue in loop body.
@@ -32,14 +42,6 @@ type mismatches.
 empty clauses.
 switch break inside for.
 name shadowing.
-
-object.field_++ does not compile.
-
-implement complex field access with tuples.
-tuple[1].a_ is not yet supported.
-
-revisit initialization.
-(int, int) pairs[3] = ((1, 2), (3, 4), (5, 6));
 
 test incomplete templates.
 
@@ -84,10 +86,6 @@ cause char[] matches to AnyTypePtr.
 fill vector with derived classes.
 iterate through the vector using a Base^.
 
-aliases:
-alias int32 i32;
-alias i32 = int32;
-
 using:
 what's the slids equivalent of using?
 using std;
@@ -103,11 +101,6 @@ and has special powers.
 revisit the handle of fixed size arrays.
 const index out of bounds.
 assign, move, copy to/from arrays and tuples.
-
-review passing initializers to classes whose fields
-are classes.
-right now can pass one initializer.
-properly would be to nest tuples.
 
 implement vector api:
 T[] begin()

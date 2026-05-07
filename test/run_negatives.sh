@@ -118,11 +118,17 @@ for src in "$@"; do
         err=$("$SLIDSC" "$case_file" -o "$TMPDIR/case.ll" --import-path . 2>&1)
         rc=$?
 
+        # Strip rendered source-context lines so the marker substring can't
+        # match its own appearance in the listing slidsc prints alongside each
+        # diagnostic. Source rows are numeric-prefixed ("  N:..."); caret rows
+        # are leading-whitespace `^`. Real diagnostic prose has neither shape.
+        diag=$(printf '%s' "$err" | grep -Ev '^[[:space:]]*[0-9]+:|^[[:space:]]*\^')
+
         if [ $rc -eq 0 ]; then
             echo "  FAIL  expected error '$substring' but slidsc succeeded"
             fail=$((fail + 1))
             fail_lines+=("$src:$line_no")
-        elif printf '%s' "$err" | grep -qF -- "$substring"; then
+        elif printf '%s' "$diag" | grep -qF -- "$substring"; then
             echo "  PASS  $substring"
             pass=$((pass + 1))
         else
