@@ -52,7 +52,7 @@ int32 main() {
     //array1[2] = (tuple, tuple);
 
     /* unexpected compile error: */
-    //(Class, Class) array2[2] = (tuple, tuple);
+    (Class, Class) array2[2] = (tuple, tuple);
 
     TupleType array[2] = (tuple, tuple);
     x = array[0][0][0];

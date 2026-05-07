@@ -1972,9 +1972,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             auto stmt = make<NestedFunctionDefStmt>(t_start);
             stmt->def = parseNestedFunctionDef();
             return stmt;
-        } else if (outer_commas > 0
-                   && scan < (int)tokens_.size()
-                   && tokens_[scan].type == TokenType::kEquals) {
+        }
+        if (outer_commas > 0
+                && scan < (int)tokens_.size()
+                && tokens_[scan].type == TokenType::kEquals) {
             // (type name, ...) = expr; — tuple destructure
             // slots may be: empty (skip), bare name (infer type), or type + name (declared).
             advance(); // consume '('
@@ -2008,75 +2009,56 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             td->init = parseExpr();
             expect(TokenType::kSemicolon, "Expected ';'");
             return td;
-        } else if (outer_commas > 0
-                   && scan < (int)tokens_.size()
-                   && tokens_[scan].type == TokenType::kIdentifier
-                   && scan + 1 < (int)tokens_.size()
-                   && (tokens_[scan + 1].type == TokenType::kEquals
-                       || tokens_[scan + 1].type == TokenType::kArrowLeft
-                       || tokens_[scan + 1].type == TokenType::kSemicolon)) {
-            // (t1, t2, ...) name [= expr | <- expr]; — anon-tuple typed var decl
-            advance(); // consume '('
-            std::string type = "(";
-            bool first = true;
-            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
-                if (!first) type += ",";
-                first = false;
-                type += parseTypeName();
-                if (peek().type == TokenType::kComma) advance();
-            }
-            expect(TokenType::kRParen, "Expected ')'");
-            type += ")";
-            int name_tok = pos_;
-            std::string name = expect(TokenType::kIdentifier, "Expected variable name").value;
-            if (peek().type == TokenType::kSemicolon) {
-                advance();
-                declareVar(name, name_tok);
-                return make<VarDeclStmt>(t_start, type, name, nullptr);
-            }
-            if (peek().type == TokenType::kArrowLeft) {
-                advance();
-                auto init = parseExpr();
-                expect(TokenType::kSemicolon, "Expected ';'");
-                declareVar(name, name_tok);
-                return make<VarDeclStmt>(t_start, type, name, std::move(init),
-                                                      std::vector<std::unique_ptr<Expr>>{}, true);
-            }
-            expect(TokenType::kEquals, "Expected '='");
-            auto init = parseExpr();
-            expect(TokenType::kSemicolon, "Expected ';'");
-            declareVar(name, name_tok);
-            return make<VarDeclStmt>(t_start, type, name, std::move(init));
         }
-        // paren-led lvalue statement: (lvalue) <op> rhs;  /  (expr);
-        auto lhs = parsePostfix(parsePrimary());
-        return parseLvalueTail(std::move(lhs));
+        // anon-tuple typed declaration: `(t1, t2, ...) name <decl-tail>` for
+        // any of the four decl-tails (`;`, `=`, `<-`, `[`). Falls through to
+        // the named-type decl path below — parseTypeName already consumes
+        // the LParen anon-tuple form, so anon-tuple types are first-class.
+        bool is_anon_tuple_decl = (outer_commas > 0
+            && scan < (int)tokens_.size()
+            && tokens_[scan].type == TokenType::kIdentifier
+            && scan + 1 < (int)tokens_.size()
+            && (tokens_[scan + 1].type == TokenType::kEquals
+                || tokens_[scan + 1].type == TokenType::kArrowLeft
+                || tokens_[scan + 1].type == TokenType::kSemicolon
+                || tokens_[scan + 1].type == TokenType::kLBracket));
+        if (!is_anon_tuple_decl) {
+            // paren-led lvalue statement: (lvalue) <op> rhs;  /  (expr);
+            auto lhs = parsePostfix(parsePrimary());
+            return parseLvalueTail(std::move(lhs));
+        }
+        // else: fall through to the named-type decl path below.
     }
 
-    // nested function definition: type name(...) { ... }
-    // distinguish from var decl (type name = expr) by lookahead for '(' then '{' after ')'
-    if (isTypeName(t)) {
-        // lookahead: type identifier ( ... ) {
-        int lookahead = pos_ + 1; // pos_ is at type, +1 is identifier
-        if (lookahead < (int)tokens_.size()
-            && tokens_[lookahead].type == TokenType::kIdentifier) {
-            int after_name = lookahead + 1;
-            if (after_name < (int)tokens_.size()
-                && tokens_[after_name].type == TokenType::kLParen) {
-                // scan forward past params to find matching ) then check for {
-                int depth = 1;
-                int scan = after_name + 1;
-                while (scan < (int)tokens_.size() && depth > 0) {
-                    if (tokens_[scan].type == TokenType::kLParen) depth++;
-                    else if (tokens_[scan].type == TokenType::kRParen) depth--;
-                    scan++;
-                }
-                // scan now points past the ')'
-                if (scan < (int)tokens_.size()
-                    && tokens_[scan].type == TokenType::kLBrace) {
-                    auto stmt = make<NestedFunctionDefStmt>(t_start);
-                    stmt->def = parseNestedFunctionDef();
-                    return stmt;
+    // typed declaration: built-in type or anon-tuple type. Anon-tuple decls
+    // arrive here via the LParen-branch fall-through above. The nested-function
+    // lookahead applies only to built-in types — anon-tuple-return nested
+    // functions (`(int, int) foo() { ... }`) are caught earlier in the
+    // LParen branch.
+    if (isTypeName(t) || t.type == TokenType::kLParen) {
+        if (isTypeName(t)) {
+            // lookahead: type identifier ( ... ) {
+            int lookahead = pos_ + 1; // pos_ is at type, +1 is identifier
+            if (lookahead < (int)tokens_.size()
+                && tokens_[lookahead].type == TokenType::kIdentifier) {
+                int after_name = lookahead + 1;
+                if (after_name < (int)tokens_.size()
+                    && tokens_[after_name].type == TokenType::kLParen) {
+                    // scan forward past params to find matching ) then check for {
+                    int depth = 1;
+                    int scan = after_name + 1;
+                    while (scan < (int)tokens_.size() && depth > 0) {
+                        if (tokens_[scan].type == TokenType::kLParen) depth++;
+                        else if (tokens_[scan].type == TokenType::kRParen) depth--;
+                        scan++;
+                    }
+                    // scan now points past the ')'
+                    if (scan < (int)tokens_.size()
+                        && tokens_[scan].type == TokenType::kLBrace) {
+                        auto stmt = make<NestedFunctionDefStmt>(t_start);
+                        stmt->def = parseNestedFunctionDef();
+                        return stmt;
+                    }
                 }
             }
         }

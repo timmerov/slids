@@ -453,5 +453,31 @@ int32 main() {
        by reference (Action^), and the existing `takeAction(Action(99))`
        test above already produces 1 ctor / 1 dtor without elision. */
 
+    /* anon-tuple typed array decl — (t1,...) name[N] = (...). Option B
+       routes the LParen anon-tuple type through the same parseTypeName
+       path as named-type arrays. Init slots use VarExprs because the
+       array-decl parser flattens nested parens (a separate limitation). */
+    ti2_a = (1, 2);
+    ti2_b = (3, 4);
+    (int, int) ti2_arr[2] = (ti2_a, ti2_b);
+    __println("ti2_arr[0]=(" + ti2_arr[0][0] + "," + ti2_arr[0][1] + ")");
+    __println("ti2_arr[1]=(" + ti2_arr[1][0] + "," + ti2_arr[1][1] + ")");
+
+    /* slid-typed anon-tuple array — matches the chain.sl shape. */
+    ts_pair0 = (Simple(1,2,3), Simple(4,5,6));
+    ts_pair1 = (Simple(7,8,9), Simple(10,11,12));
+    (Simple, Simple) ts_arr[2] = (ts_pair0, ts_pair1);
+    ts_v0 = ts_arr[0][0];
+    ts_v0.print("ts_arr[0][0]");
+    ts_v1 = ts_arr[1][1];
+    ts_v1.print("ts_arr[1][1]");
+
+    /* uninitialized anon-tuple-typed array, then per-slot writes. */
+    (int, int) ti2_blank[3];
+    ti2_blank[0] = (10, 20);
+    ti2_blank[2] = (50, 60);
+    __println("ti2_blank[0]=(" + ti2_blank[0][0] + "," + ti2_blank[0][1] + ")");
+    __println("ti2_blank[2]=(" + ti2_blank[2][0] + "," + ti2_blank[2][1] + ")");
+
     return 0;
 }

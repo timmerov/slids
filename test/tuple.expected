@@ -129,3 +129,9 @@ Action:ctor
 Action:ctor
 Action:dtor
 Action:dtor
+ti2_arr[0]=(1,2)
+ti2_arr[1]=(3,4)
+ts_arr[0][0]: (x,y,z)=(1,2,3)
+ts_arr[1][1]: (x,y,z)=(10,11,12)
+ti2_blank[0]=(10,20)
+ti2_blank[2]=(50,60)
