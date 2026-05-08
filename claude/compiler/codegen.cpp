@@ -3543,16 +3543,53 @@ void Codegen::emitInitFieldsAtPtrs(const std::string& stype, const std::string& 
                 emitSlidSlotAssign(ftype, gep, src, /*is_move=*/false,
                                    /*is_init=*/is_tuple);
             } else {
-                // Compound init: route the single arg into the field's
-                // primitives. No __$ctor emit (outer __$ctor_body handles).
-                std::vector<const Expr*> one{ arg_expr };
-                emitInitFieldsAtPtrs(ftype, gep, one, {});
+                // Compound init: route arg into the field's primitives.
+                // Tuple-shape arg → unpack its elements as positional
+                // overrides into the field's slot list; non-tuple arg →
+                // single-value promotion (feed as the first ctor arg, the
+                // rest fall to the field's defaults).
+                if (auto* te = dynamic_cast<const TupleExpr*>(arg_expr)) {
+                    std::vector<const Expr*> ov;
+                    ov.reserve(te->values.size());
+                    for (auto& v : te->values) ov.push_back(v.get());
+                    emitInitFieldsAtPtrs(ftype, gep, {}, ov);
+                } else {
+                    std::vector<const Expr*> one{ arg_expr };
+                    emitInitFieldsAtPtrs(ftype, gep, one, {});
+                }
             }
             return;
         }
         std::string val;
         if (arg_expr) {
             val = emitExpr(*arg_expr);
+            // Leaf type check: reject incompatible source types before the
+            // store. Slids-level type-equality short-circuits (covers anon-
+            // tuples whose LLVM type may format differently). For mismatched
+            // primitives, width-coerce integers; reject everything else.
+            std::string src_slids = inferSlidType(*arg_expr);
+            if (src_slids != ftype) {
+                std::string src_t = exprLlvmType(*arg_expr);
+                std::string dst_t = llvmType(ftype);
+                if (src_t != dst_t) {
+                    static const std::map<std::string,int> rank =
+                        {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+                    auto sit = rank.find(src_t), dit = rank.find(dst_t);
+                    if (sit != rank.end() && dit != rank.end()) {
+                        std::string coerced = newTmp();
+                        if (dit->second > sit->second)
+                            out_ << "    " << coerced << " = sext " << src_t
+                                 << " " << val << " to " << dst_t << "\n";
+                        else
+                            out_ << "    " << coerced << " = trunc " << src_t
+                                 << " " << val << " to " << dst_t << "\n";
+                        val = coerced;
+                    } else {
+                        error(std::string("Type mismatch: cannot assign '"
+                            + src_slids + "' to '" + ftype + "'"));
+                    }
+                }
+            }
         } else {
             val = isInlineArrayType(ftype) ? "zeroinitializer"
                 : isIndirectType(ftype) ? "null"

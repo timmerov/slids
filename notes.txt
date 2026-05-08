@@ -1,4 +1,8 @@
 
+this is a bug:
+chess1 for-loop shadowing. for (row : 0..8) declares a fresh row even when an outer int row = 0; exists,
+chess1.expected is wrong.
+
 claude things:
 "Virtual dispatch through chained AIE/FieldAccess still falls
 to static dispatch — the indirect flag (codegen_stmt.cpp:2535)
@@ -8,6 +12,8 @@ claude things:
 "Method call on a non-lvalue receiver (foo().bar(), (a + b).bar())
 still errors. Out of scope; would require a temp-spill before dispatch,
 similar to the rvalue-base spill in the emitExpr(AIE) wrapper."
+
+virtual classes in tuples probably don't work right.
 
 revisit initialization.
 (int, int) pairs[3] = ((1, 2), (3, 4), (5, 6));

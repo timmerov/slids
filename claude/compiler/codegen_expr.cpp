@@ -386,9 +386,29 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 obj_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
             } else {
                 auto type_it = locals_.find(ve->name);
-                if (type_it == locals_.end())
-                    error(std::string("Unknown type for: " + ve->name));
-                slid_name = type_it->second.type;
+                // self-field shorthand: `field.method()` inside a method body
+                // resolves as `self.field.method()` when the name names a
+                // field of the enclosing class rather than a local.
+                std::string self_field_addr;
+                if (type_it == locals_.end()) {
+                    if (!current_slid_.empty()) {
+                        auto& info = slid_info_[current_slid_];
+                        auto fit = info.field_index.find(ve->name);
+                        if (fit != info.field_index.end()) {
+                            slid_name = info.field_types[fit->second];
+                            std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
+                            self_field_addr = newTmp();
+                            out_ << "    " << self_field_addr
+                                 << " = getelementptr %struct." << current_slid_
+                                 << ", ptr " << self << ", i32 0, i32 "
+                                 << fit->second << "\n";
+                        }
+                    }
+                    if (slid_name.empty())
+                        error(std::string("Unknown type for: " + ve->name));
+                } else {
+                    slid_name = type_it->second.type;
+                }
                 if (mc->method == "~") {
                     if (isIndirectType(slid_name)) {
                         std::string pointee = isPtrType(slid_name)
@@ -405,7 +425,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     if (!slid_info_.count(slid_name))
                         error("Method call on '" + ve->name + "': '" + slid_name + "' is not a slid type");
                 }
-                obj_ptr = locals_[ve->name].reg;
+                obj_ptr = self_field_addr.empty()
+                    ? locals_[ve->name].reg
+                    : self_field_addr;
             }
         } else if (auto* de = dynamic_cast<const DerefExpr*>(mc->object.get())) {
             // ptr^.method() — load the pointer, use as self

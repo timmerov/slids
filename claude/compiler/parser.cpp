@@ -2079,16 +2079,24 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 expect(TokenType::kRBracket, "Expected ']'");
                 arr->dims.push_back(dim);
             }
-            // parse nested initializer lists: flatten into row-major order
-            std::function<void()> parseInitList = [&]() {
+            // Parse the outer initializer list as one expression per declared
+            // slot. Each slot expression may itself be a tuple literal — the
+            // structure is preserved (no flattening) and handed to the codegen
+            // desugar, which recurses per slot. Single non-paren expressions
+            // (e.g. `(10, 20, 30)` for a primitive array) parse the same way:
+            // each comma-separated value becomes its own init_values entry.
+            auto parseInitList = [&]() {
                 if (peek().type == TokenType::kLParen) {
                     advance();
                     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
-                        parseInitList();
+                        arr->init_values.push_back(parseExpr());
                         if (peek().type == TokenType::kComma) advance();
                     }
                     expect(TokenType::kRParen, "Expected ')'");
                 } else {
+                    // Single-expression RHS: covers tuple-variable RHS,
+                    // tuple-returning call, single-value-promoted RHS. The
+                    // codegen desugar interprets the structure.
                     arr->init_values.push_back(parseExpr());
                 }
             };
@@ -2171,15 +2179,20 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 expect(TokenType::kRBracket, "Expected ']'");
                 arr->dims.push_back(dim);
             }
-            std::function<void()> parseInitList = [&]() {
+            // Parse the outer initializer list as one expression per declared
+            // slot — see the built-in array-decl path above for the rationale.
+            auto parseInitList = [&]() {
                 if (peek().type == TokenType::kLParen) {
                     advance();
                     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
-                        parseInitList();
+                        arr->init_values.push_back(parseExpr());
                         if (peek().type == TokenType::kComma) advance();
                     }
                     expect(TokenType::kRParen, "Expected ')'");
                 } else {
+                    // Single-expression RHS: covers tuple-variable RHS,
+                    // tuple-returning call, single-value-promoted RHS. The
+                    // codegen desugar interprets the structure.
                     arr->init_values.push_back(parseExpr());
                 }
             };

@@ -878,41 +878,238 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // allow array to be captured by nested functions and expose flat
         // shape (e.g. "int[6]") to consumers (for-array etc.).
         locals_[arr->name] = {reg, elem_type + "[" + std::to_string(total) + "]", arr->file_id, arr->tok};
-        // store initializer values
+        // Multi-dim primitive array with nested-paren init: flatten to a
+        // single flat list matching `[total x elt]`. Covers shapes like
+        // `int g[2][3] = ((1,2,3),(4,5,6))` and `Piece board[8][8] = ...`.
+        // Compound elem_types (slid, anon-tuple) keep TupleExpr structure
+        // and use per-slot recursion below.
+        if (!slid_info_.count(elem_type) && !isAnonTupleType(elem_type)) {
+            bool any_tuple = false;
+            for (auto& iv : arr->init_values)
+                if (dynamic_cast<const TupleExpr*>(iv.get())) { any_tuple = true; break; }
+            if (any_tuple) {
+                std::vector<const Expr*> flat;
+                std::function<void(const Expr*)> flatten = [&](const Expr* e) {
+                    if (auto* te = dynamic_cast<const TupleExpr*>(e)) {
+                        for (auto& v : te->values) flatten(v.get());
+                    } else {
+                        flat.push_back(e);
+                    }
+                };
+                for (auto& iv : arr->init_values) flatten(iv.get());
+                if ((int)flat.size() > total)
+                    error(std::string("Too many values for array '" + arr->name
+                        + "': has " + std::to_string(total)
+                        + " elements, got " + std::to_string(flat.size()) + "."));
+                for (int i = 0; i < (int)flat.size(); i++) {
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr [" << total
+                         << " x " << elt << "], ptr " << reg
+                         << ", i32 0, i32 " << i << "\n";
+                    std::string val = emitExpr(*flat[i]);
+                    if (inferSlidType(*flat[i]) != elem_type) {
+                        std::string src_t = exprLlvmType(*flat[i]);
+                        if (src_t != elt) {
+                            static const std::map<std::string,int> rank =
+                                {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+                            auto sit = rank.find(src_t), dit = rank.find(elt);
+                            if (sit != rank.end() && dit != rank.end()) {
+                                std::string coerced = newTmp();
+                                if (dit->second > sit->second)
+                                    out_ << "    " << coerced << " = sext "
+                                         << src_t << " " << val << " to " << elt << "\n";
+                                else
+                                    out_ << "    " << coerced << " = trunc "
+                                         << src_t << " " << val << " to " << elt << "\n";
+                                val = coerced;
+                            } else {
+                                error(std::string("Type mismatch: cannot assign '"
+                                    + inferSlidType(*flat[i]) + "' to '" + elem_type + "'"));
+                            }
+                        }
+                    }
+                    out_ << "    store " << elt << " " << val
+                         << ", ptr " << gep << "\n";
+                }
+                for (int i = (int)flat.size(); i < total; i++) {
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr [" << total
+                         << " x " << elt << "], ptr " << reg
+                         << ", i32 0, i32 " << i << "\n";
+                    std::string z = isIndirectType(elem_type) ? "null"
+                        : (elem_type == "float32" || elem_type == "float64") ? "0.0"
+                        : "0";
+                    out_ << "    store " << elt << " " << z
+                         << ", ptr " << gep << "\n";
+                }
+                return;
+            }
+        }
+        // Single tuple-shape source for the whole array: unpack per slot.
+        // Covers `T arr[N] = tuple_var;` and `T arr[N] = make_tuple();`.
+        if (arr->init_values.size() == 1) {
+            const Expr* src_expr = arr->init_values[0].get();
+            std::string src_slids = inferSlidType(*src_expr);
+            if (isAnonTupleType(src_slids)) {
+                auto src_elems = anonTupleElems(src_slids);
+                std::string src_ptr;
+                if (auto* ve = dynamic_cast<const VarExpr*>(src_expr)) {
+                    auto lit = locals_.find(ve->name);
+                    if (lit != locals_.end()) src_ptr = lit->second.reg;
+                }
+                if (src_ptr.empty()) {
+                    std::string val = emitExpr(*src_expr);
+                    src_ptr = newTmp();
+                    out_ << "    " << src_ptr << " = alloca "
+                         << llvmType(src_slids) << "\n";
+                    out_ << "    store " << llvmType(src_slids) << " " << val
+                         << ", ptr " << src_ptr << "\n";
+                }
+                std::string src_llvm = llvmType(src_slids);
+                int n = std::min((int)src_elems.size(), total);
+                for (int i = 0; i < n; i++) {
+                    std::string dst_gep = newTmp();
+                    out_ << "    " << dst_gep << " = getelementptr [" << total
+                         << " x " << elt << "], ptr " << reg
+                         << ", i32 0, i32 " << i << "\n";
+                    std::string src_gep = newTmp();
+                    out_ << "    " << src_gep << " = getelementptr " << src_llvm
+                         << ", ptr " << src_ptr << ", i32 0, i32 " << i << "\n";
+                    if (slid_info_.count(elem_type)) {
+                        emitSlidSlotAssign(elem_type, dst_gep, src_gep,
+                            /*is_move=*/false, /*is_init=*/true);
+                        if (hasDtorInChain(elem_type))
+                            dtor_vars_.push_back({arr->name, elem_type, i});
+                    } else {
+                        std::string v = newTmp();
+                        out_ << "    " << v << " = load " << llvmType(src_elems[i])
+                             << ", ptr " << src_gep << "\n";
+                        out_ << "    store " << llvmType(src_elems[i]) << " " << v
+                             << ", ptr " << dst_gep << "\n";
+                    }
+                }
+                // Tail zero-fill / default-construct (decl-form rule).
+                for (int i = n; i < total; i++) {
+                    std::string dst_gep = newTmp();
+                    out_ << "    " << dst_gep << " = getelementptr [" << total
+                         << " x " << elt << "], ptr " << reg
+                         << ", i32 0, i32 " << i << "\n";
+                    if (slid_info_.count(elem_type)) {
+                        emitConstructAtPtrs(elem_type, dst_gep, {}, {});
+                        if (hasDtorInChain(elem_type))
+                            dtor_vars_.push_back({arr->name, elem_type, i});
+                    } else {
+                        std::string z = isIndirectType(elem_type) ? "null"
+                            : (elem_type == "float32" || elem_type == "float64") ? "0.0"
+                            : "0";
+                        out_ << "    store " << elt << " " << z
+                             << ", ptr " << dst_gep << "\n";
+                    }
+                }
+                return;
+            }
+        }
+        // Init each provided slot per the desugar rule. Slid element:
+        // matching slid value → emitSlidSlotAssign; tuple-shape value →
+        // recurse via emitInitFieldsAtPtrs (compound init); single value
+        // → single-value promotion (feed as first ctor arg).
         for (int i = 0; i < (int)arr->init_values.size(); i++) {
             std::string gep = newTmp();
             out_ << "    " << gep << " = getelementptr [" << total << " x " << elt << "], ptr "
                  << reg << ", i32 0, i32 " << i << "\n";
             if (slid_info_.count(elem_type)) {
-                // Slid element: default-construct in place + dispatch op=/op<-
-                // (or default field-walk) from the source. Pairs each slot
-                // with a dtor at scope exit.
-                std::string src_ptr;
-                if (auto* ve = dynamic_cast<const VarExpr*>(arr->init_values[i].get());
-                        ve && locals_.count(ve->name)) {
-                    src_ptr = locals_[ve->name].reg;
+                std::string src_type = inferSlidType(*arr->init_values[i]);
+                if (src_type == elem_type) {
+                    if (auto* ce = dynamic_cast<const CallExpr*>(arr->init_values[i].get())) {
+                        if (ce->callee == elem_type) {
+                            emitConstructAt(elem_type, gep, ce->args);
+                            if (hasDtorInChain(elem_type))
+                                dtor_vars_.push_back({arr->name, elem_type, i});
+                            continue;
+                        }
+                    }
+                    std::string src_ptr;
+                    if (auto* ve = dynamic_cast<const VarExpr*>(arr->init_values[i].get());
+                            ve && locals_.count(ve->name)) {
+                        src_ptr = locals_[ve->name].reg;
+                    } else {
+                        src_ptr = emitExpr(*arr->init_values[i]);
+                    }
+                    emitSlidSlotAssign(elem_type, gep, src_ptr,
+                        /*is_move=*/false, /*is_init=*/true);
+                } else if (auto* te = dynamic_cast<const TupleExpr*>(arr->init_values[i].get())) {
+                    std::vector<const Expr*> ov;
+                    ov.reserve(te->values.size());
+                    for (auto& v : te->values) ov.push_back(v.get());
+                    emitInitFieldsAtPtrs(elem_type, gep, {}, ov);
+                    emitCtorCall(elem_type, gep);
                 } else {
-                    src_ptr = emitExpr(*arr->init_values[i]);
+                    std::vector<const Expr*> one{ arr->init_values[i].get() };
+                    emitInitFieldsAtPtrs(elem_type, gep, one, {});
+                    emitCtorCall(elem_type, gep);
                 }
-                emitSlidSlotAssign(elem_type, gep, src_ptr,
-                    /*is_move=*/false, /*is_init=*/true);
                 if (hasDtorInChain(elem_type))
                     dtor_vars_.push_back({arr->name, elem_type, i});
+            } else if (isAnonTupleType(elem_type)) {
+                if (auto* te = dynamic_cast<const TupleExpr*>(arr->init_values[i].get())) {
+                    std::vector<const Expr*> ov;
+                    ov.reserve(te->values.size());
+                    for (auto& v : te->values) ov.push_back(v.get());
+                    emitInitFieldsAtPtrs(elem_type, gep, {}, ov);
+                } else {
+                    std::string val = emitExpr(*arr->init_values[i]);
+                    out_ << "    store " << llvmType(elem_type) << " " << val
+                         << ", ptr " << gep << "\n";
+                }
             } else {
                 std::string val = emitExpr(*arr->init_values[i]);
+                if (inferSlidType(*arr->init_values[i]) != elem_type) {
+                    std::string src_t = exprLlvmType(*arr->init_values[i]);
+                    if (src_t != elt) {
+                        static const std::map<std::string,int> rank =
+                            {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+                        auto sit = rank.find(src_t), dit = rank.find(elt);
+                        if (sit != rank.end() && dit != rank.end()) {
+                            std::string coerced = newTmp();
+                            if (dit->second > sit->second)
+                                out_ << "    " << coerced << " = sext "
+                                     << src_t << " " << val << " to " << elt << "\n";
+                            else
+                                out_ << "    " << coerced << " = trunc "
+                                     << src_t << " " << val << " to " << elt << "\n";
+                            val = coerced;
+                        } else {
+                            error(std::string("Type mismatch: cannot assign '"
+                                + inferSlidType(*arr->init_values[i])
+                                + "' to '" + elem_type + "'"));
+                        }
+                    }
+                }
                 out_ << "    store " << elt << " " << val << ", ptr " << gep << "\n";
             }
         }
-        // No initializer: slid elements get default-constructed per slot
-        // (primitives are left uninitialized per spec).
-        if (arr->init_values.empty() && slid_info_.count(elem_type)) {
-            for (int i = 0; i < total; i++) {
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr [" << total << " x " << elt
-                     << "], ptr " << reg << ", i32 0, i32 " << i << "\n";
+        // Decl-form rule: missing tail slots zero-fill (primitives/tuples)
+        // or default-construct (slids). Includes the "no initializer at all"
+        // case (slid arrays get per-slot default-construct).
+        for (int i = (int)arr->init_values.size(); i < total; i++) {
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr [" << total << " x " << elt
+                 << "], ptr " << reg << ", i32 0, i32 " << i << "\n";
+            if (slid_info_.count(elem_type)) {
                 emitConstructAtPtrs(elem_type, gep, {}, {});
                 if (hasDtorInChain(elem_type))
                     dtor_vars_.push_back({arr->name, elem_type, i});
+            } else if (isAnonTupleType(elem_type)) {
+                out_ << "    store " << llvmType(elem_type)
+                     << " zeroinitializer, ptr " << gep << "\n";
+            } else if (!arr->init_values.empty()) {
+                // primitives: only zero-fill when the user provided a partial
+                // tuple init (decl-form rule). Fully-uninit declarations
+                // leave primitive slots alone, matching prior behavior.
+                std::string z = isIndirectType(elem_type) ? "null"
+                    : (elem_type == "float32" || elem_type == "float64") ? "0.0"
+                    : "0";
+                out_ << "    store " << elt << " " << z << ", ptr " << gep << "\n";
             }
         }
         return;
@@ -1032,6 +1229,51 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     tuple_init_handled = true;
                 }
             }
+            // Tuple-shape RHS variable / call: default-construct then unpack
+            // per slot from the source's memory. Decl-step defaults cover
+            // tail slots automatically (the slid's ctor ran).
+            if (!tuple_init_handled && decl->init && !decl->is_move) {
+                std::string src_slids = inferSlidType(*decl->init);
+                if (isAnonTupleType(src_slids)) {
+                    emitConstructAt(eff_type, reg, decl->ctor_args);
+                    auto src_elems = anonTupleElems(src_slids);
+                    std::string src_ptr;
+                    if (auto* ve = dynamic_cast<const VarExpr*>(decl->init.get())) {
+                        auto lit = locals_.find(ve->name);
+                        if (lit != locals_.end()) src_ptr = lit->second.reg;
+                    }
+                    if (src_ptr.empty()) {
+                        std::string val = emitExpr(*decl->init);
+                        src_ptr = newTmp();
+                        out_ << "    " << src_ptr << " = alloca "
+                             << llvmType(src_slids) << "\n";
+                        out_ << "    store " << llvmType(src_slids) << " " << val
+                             << ", ptr " << src_ptr << "\n";
+                    }
+                    std::string src_llvm = llvmType(src_slids);
+                    int n = std::min((int)info.field_types.size(),
+                                     (int)src_elems.size());
+                    for (int i = 0; i < n; i++) {
+                        const std::string& ft = info.field_types[i];
+                        std::string dst_gep = emitFieldGep(eff_type, reg, i);
+                        std::string src_gep = newTmp();
+                        out_ << "    " << src_gep << " = getelementptr "
+                             << src_llvm << ", ptr " << src_ptr
+                             << ", i32 0, i32 " << i << "\n";
+                        if (slid_info_.count(ft) || isAnonTupleType(ft)) {
+                            emitSlidSlotAssign(ft, dst_gep, src_gep,
+                                /*is_move=*/false, /*is_init=*/false);
+                        } else {
+                            std::string val = newTmp();
+                            out_ << "    " << val << " = load " << llvmType(ft)
+                                 << ", ptr " << src_gep << "\n";
+                            out_ << "    store " << llvmType(ft) << " " << val
+                                 << ", ptr " << dst_gep << "\n";
+                        }
+                    }
+                    tuple_init_handled = true;
+                }
+            }
             if (!tuple_init_handled)
                 emitConstructAt(eff_type, reg, decl->ctor_args);
 
@@ -1134,7 +1376,30 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             src_ptr = emitExpr(*init_expr);
                         // dst was already default-constructed by emitConstructAt above —
                         // pass is_init=false so the field-walk doesn't re-construct.
-                        if (!src_ptr.empty()) emitSlidSlotAssign(eff_type, reg, src_ptr, decl->is_move, /*is_init=*/false);
+                        if (!src_ptr.empty()) {
+                            emitSlidSlotAssign(eff_type, reg, src_ptr, decl->is_move, /*is_init=*/false);
+                        } else if (!info.field_types.empty()) {
+                            // Single-value promotion: rhs becomes (rhs,) →
+                            // slot 0 of the slid gets rhs; other slots keep
+                            // their default-constructed values.
+                            const std::string& ft0 = info.field_types[0];
+                            std::string gep = emitFieldGep(eff_type, reg, 0);
+                            if (slid_info_.count(ft0) || isAnonTupleType(ft0)) {
+                                if (auto* te2 = dynamic_cast<const TupleExpr*>(init_expr)) {
+                                    std::vector<const Expr*> ov;
+                                    ov.reserve(te2->values.size());
+                                    for (auto& v : te2->values) ov.push_back(v.get());
+                                    emitInitFieldsAtPtrs(ft0, gep, {}, ov);
+                                } else {
+                                    std::vector<const Expr*> one{ init_expr };
+                                    emitInitFieldsAtPtrs(ft0, gep, one, {});
+                                }
+                            } else {
+                                std::string val = emitExpr(*init_expr);
+                                out_ << "    store " << llvmType(ft0) << " " << val
+                                     << ", ptr " << gep << "\n";
+                            }
+                        }
                     }
                 }
             }
@@ -1154,6 +1419,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
             out_ << "    " << reg << " = alloca " << struct_llvm << "\n";
             locals_[decl->name] = {reg, eff_type, decl->file_id, decl->tok};
             if (auto* te = dynamic_cast<const TupleExpr*>(decl->init.get())) {
+                if ((int)te->values.size() > (int)elems.size())
+                    error(std::string("Too many values for tuple '" + eff_type
+                        + "': has " + std::to_string(elems.size())
+                        + " elements, got " + std::to_string(te->values.size()) + "."));
                 for (int i = 0; i < (int)elems.size() && i < (int)te->values.size(); i++) {
                     // PPID: each tuple-literal slot is its own phrase.
                     pushPostIncQueue();
@@ -1162,31 +1431,38 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     std::string gep = newTmp();
                     out_ << "    " << gep << " = getelementptr " << struct_llvm
                          << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
-                    // slid-typed element: copy fields from a same-typed source (var or ctor call)
+                    // slid-typed element: matching slid → emitSlidSlotAssign;
+                    // tuple-shape value → recurse via emitInitFieldsAtPtrs;
+                    // single value → promote (feed as first ctor arg).
                     if (slid_info_.count(elems[i])) {
                         std::string src_type = inferSlidType(*te->values[i]);
-                        if (src_type != elems[i])
-                            error(std::string("Slid tuple element type mismatch: expected '"
-                                + elems[i] + "', got '" + src_type + "'"));
-                        // Prvalue elision: when the slot value is an inline ctor
-                        // call for the same slid type, construct directly at the
-                        // slot — skipping the materialize-temp + field-by-field copy.
-                        if (auto* ce = dynamic_cast<const CallExpr*>(te->values[i].get())) {
-                            if (ce->callee == elems[i]) {
-                                emitConstructAt(elems[i], gep, ce->args);
-                                if (hasDtorInChain(elems[i]))
-                                    dtor_vars_.push_back({decl->name, elems[i], i});
-                                continue;
+                        if (src_type == elems[i]) {
+                            // Prvalue elision: construct ctor call directly at the slot.
+                            if (auto* ce = dynamic_cast<const CallExpr*>(te->values[i].get())) {
+                                if (ce->callee == elems[i]) {
+                                    emitConstructAt(elems[i], gep, ce->args);
+                                    if (hasDtorInChain(elems[i]))
+                                        dtor_vars_.push_back({decl->name, elems[i], i});
+                                    continue;
+                                }
                             }
-                        }
-                        std::string src_ptr;
-                        if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get());
-                                ve && locals_.count(ve->name)) {
-                            src_ptr = locals_[ve->name].reg;
+                            std::string src_ptr;
+                            if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get());
+                                    ve && locals_.count(ve->name)) {
+                                src_ptr = locals_[ve->name].reg;
+                            } else {
+                                src_ptr = emitExpr(*te->values[i]);
+                            }
+                            emitSlidSlotAssign(elems[i], gep, src_ptr, decl->is_move, /*is_init=*/true);
+                        } else if (auto* te2 = dynamic_cast<const TupleExpr*>(te->values[i].get())) {
+                            std::vector<const Expr*> ov;
+                            ov.reserve(te2->values.size());
+                            for (auto& v : te2->values) ov.push_back(v.get());
+                            emitInitFieldsAtPtrs(elems[i], gep, {}, ov);
                         } else {
-                            src_ptr = emitExpr(*te->values[i]);
+                            std::vector<const Expr*> one{ te->values[i].get() };
+                            emitInitFieldsAtPtrs(elems[i], gep, one, {});
                         }
-                        emitSlidSlotAssign(elems[i], gep, src_ptr, decl->is_move, /*is_init=*/true);
                         if (hasDtorInChain(elems[i]))
                             dtor_vars_.push_back({decl->name, elems[i], i});
                         continue;
@@ -1197,31 +1473,103 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     if (decl->is_move && isIndirectType(elems[i]))
                         emitNullOut(*te->values[i]);
                 }
+                // Decl-form rule: missing tail slots in tuples zero-fill.
+                for (int i = (int)te->values.size(); i < (int)elems.size(); i++) {
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr " << struct_llvm
+                         << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
+                    if (slid_info_.count(elems[i])) {
+                        // slid slot — default-construct (its ctor's defaults apply).
+                        emitConstructAtPtrs(elems[i], gep, {}, {});
+                        if (hasDtorInChain(elems[i]))
+                            dtor_vars_.push_back({decl->name, elems[i], i});
+                    } else if (isAnonTupleType(elems[i])) {
+                        // nested tuple slot — zero-fill recursively (memzero suffices).
+                        out_ << "    store " << llvmType(elems[i])
+                             << " zeroinitializer, ptr " << gep << "\n";
+                    } else {
+                        std::string z = isIndirectType(elems[i]) ? "null"
+                            : (elems[i] == "float32" || elems[i] == "float64") ? "0.0"
+                            : "0";
+                        out_ << "    store " << llvmType(elems[i]) << " " << z
+                             << ", ptr " << gep << "\n";
+                    }
+                }
                 return;
             }
-            // non-literal initializer — require a same-typed tuple source and field-by-field copy/move
+            // non-literal initializer
             std::string src_slids = inferSlidType(*decl->init);
-            if (src_slids != eff_type)
-                error(std::string("Cannot initialize tuple '" + eff_type
-                    + "' from expression of type '" + src_slids + "'"));
-            std::string src_ptr;
-            if (auto* ve = dynamic_cast<const VarExpr*>(decl->init.get())) {
-                auto lit = locals_.find(ve->name);
-                if (lit == locals_.end()) error(std::string("Undefined tuple source: " + ve->name));
-                src_ptr = lit->second.reg;
-            } else {
-                // non-variable source (e.g. tuple-returning call): emit into a temp alloca
-                std::string val = emitExpr(*decl->init);
-                src_ptr = newTmp();
-                out_ << "    " << src_ptr << " = alloca " << struct_llvm << "\n";
-                out_ << "    store " << struct_llvm << " " << val << ", ptr " << src_ptr << "\n";
+            if (src_slids == eff_type) {
+                // matching tuple-shape source: field-by-field copy/move.
+                std::string src_ptr;
+                if (auto* ve = dynamic_cast<const VarExpr*>(decl->init.get())) {
+                    auto lit = locals_.find(ve->name);
+                    if (lit == locals_.end()) error(std::string("Undefined tuple source: " + ve->name));
+                    src_ptr = lit->second.reg;
+                } else {
+                    // non-variable source (e.g. tuple-returning call): spill once
+                    std::string val = emitExpr(*decl->init);
+                    src_ptr = newTmp();
+                    out_ << "    " << src_ptr << " = alloca " << struct_llvm << "\n";
+                    out_ << "    store " << struct_llvm << " " << val << ", ptr " << src_ptr << "\n";
+                }
+                emitSlidSlotAssign(eff_type, reg, src_ptr, decl->is_move, /*is_init=*/true);
+                for (int i = 0; i < (int)elems.size(); i++) {
+                    if (slid_info_.count(elems[i]) && hasDtorInChain(elems[i]))
+                        dtor_vars_.push_back({decl->name, elems[i], i});
+                }
+                return;
             }
-            emitSlidSlotAssign(eff_type, reg, src_ptr, decl->is_move, /*is_init=*/true);
-            for (int i = 0; i < (int)elems.size(); i++) {
-                if (slid_info_.count(elems[i]) && hasDtorInChain(elems[i]))
-                    dtor_vars_.push_back({decl->name, elems[i], i});
+            // single-value promotion: rhs becomes (rhs,) → slot 0 = rhs;
+            // remaining slots zero-fill (decl form).
+            {
+                const std::string& ft = elems[0];
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr " << struct_llvm
+                     << ", ptr " << reg << ", i32 0, i32 0\n";
+                if (slid_info_.count(ft)) {
+                    if (auto* te2 = dynamic_cast<const TupleExpr*>(decl->init.get())) {
+                        std::vector<const Expr*> ov;
+                        ov.reserve(te2->values.size());
+                        for (auto& v : te2->values) ov.push_back(v.get());
+                        emitInitFieldsAtPtrs(ft, gep, {}, ov);
+                    } else {
+                        std::vector<const Expr*> one{ decl->init.get() };
+                        emitInitFieldsAtPtrs(ft, gep, one, {});
+                    }
+                    if (hasDtorInChain(ft))
+                        dtor_vars_.push_back({decl->name, ft, 0});
+                } else if (isAnonTupleType(ft)) {
+                    std::string val = emitExpr(*decl->init);
+                    out_ << "    store " << llvmType(ft) << " " << val
+                         << ", ptr " << gep << "\n";
+                } else {
+                    std::string val = emitExpr(*decl->init);
+                    out_ << "    store " << llvmType(ft) << " " << val
+                         << ", ptr " << gep << "\n";
+                }
+                // Tail zero-fill (decl-form rule).
+                for (int i = 1; i < (int)elems.size(); i++) {
+                    std::string tgep = newTmp();
+                    out_ << "    " << tgep << " = getelementptr " << struct_llvm
+                         << ", ptr " << reg << ", i32 0, i32 " << i << "\n";
+                    if (slid_info_.count(elems[i])) {
+                        emitConstructAtPtrs(elems[i], tgep, {}, {});
+                        if (hasDtorInChain(elems[i]))
+                            dtor_vars_.push_back({decl->name, elems[i], i});
+                    } else if (isAnonTupleType(elems[i])) {
+                        out_ << "    store " << llvmType(elems[i])
+                             << " zeroinitializer, ptr " << tgep << "\n";
+                    } else {
+                        std::string z = isIndirectType(elems[i]) ? "null"
+                            : (elems[i] == "float32" || elems[i] == "float64") ? "0.0"
+                            : "0";
+                        out_ << "    store " << llvmType(elems[i]) << " " << z
+                             << ", ptr " << tgep << "\n";
+                    }
+                }
+                return;
             }
-            return;
         }
 
         // primitive or reference variable declaration
@@ -1377,20 +1725,118 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
             // tuple-variable rhs of matching type: route through element-wise walker
             std::string src_slids = inferSlidType(*assign->value);
-            if (src_slids != lhs_t)
-                errorWithNote(std::string("Type mismatch: cannot assign '" + src_slids
-                    + "' to tuple variable '" + assign->name + "' of type '" + lhs_t + "'"),
-                    tit->second.file_id, tit->second.tok,
-                    "'" + assign->name + "' declared here.");
-            std::string src_ptr;
-            if (auto* ve = dynamic_cast<const VarExpr*>(assign->value.get())) {
-                auto lit = locals_.find(ve->name);
-                if (lit != locals_.end()) src_ptr = lit->second.reg;
+            if (src_slids == lhs_t) {
+                std::string src_ptr;
+                if (auto* ve = dynamic_cast<const VarExpr*>(assign->value.get())) {
+                    auto lit = locals_.find(ve->name);
+                    if (lit != locals_.end()) src_ptr = lit->second.reg;
+                }
+                if (src_ptr.empty())
+                    error(std::string("Tuple copy from non-variable source not supported"));
+                emitSlidSlotAssign(lhs_t, it->second.reg, src_ptr, assign->is_move);
+                return;
             }
-            if (src_ptr.empty())
-                error(std::string("Tuple copy from non-variable source not supported"));
-            emitSlidSlotAssign(lhs_t, it->second.reg, src_ptr, assign->is_move);
-            return;
+            // Tuple-shape rhs of non-matching type: per-slot copy with type
+            // checks. Length must be ≤ LHS (assignment-form rule keeps tail
+            // slots untouched); each slot's type must match exactly.
+            if (isAnonTupleType(src_slids)) {
+                auto src_elems = anonTupleElems(src_slids);
+                if ((int)src_elems.size() > (int)elems.size())
+                    errorWithNote(std::string("Tuple has "
+                        + std::to_string(src_elems.size()) + " values but '"
+                        + assign->name + "' has " + std::to_string(elems.size())
+                        + " elements"),
+                        tit->second.file_id, tit->second.tok,
+                        "'" + assign->name + "' declared here.");
+                std::string src_ptr;
+                if (auto* ve = dynamic_cast<const VarExpr*>(assign->value.get())) {
+                    auto lit = locals_.find(ve->name);
+                    if (lit != locals_.end()) src_ptr = lit->second.reg;
+                }
+                if (src_ptr.empty()) {
+                    std::string val = emitExpr(*assign->value);
+                    src_ptr = newTmp();
+                    out_ << "    " << src_ptr << " = alloca "
+                         << llvmType(src_slids) << "\n";
+                    out_ << "    store " << llvmType(src_slids) << " " << val
+                         << ", ptr " << src_ptr << "\n";
+                }
+                std::string src_llvm = llvmType(src_slids);
+                for (int i = 0; i < (int)src_elems.size(); i++) {
+                    const std::string& dst_ft = elems[i];
+                    const std::string& src_ft = src_elems[i];
+                    if (src_ft != dst_ft)
+                        errorWithNote(std::string("Type mismatch: cannot assign '"
+                            + src_ft + "' to tuple element "
+                            + std::to_string(i) + " of type '" + dst_ft + "'"),
+                            tit->second.file_id, tit->second.tok,
+                            "'" + assign->name + "' declared here.");
+                    std::string dst_gep = emitFieldGep(lhs_t, it->second.reg, i);
+                    std::string src_gep = newTmp();
+                    out_ << "    " << src_gep << " = getelementptr " << src_llvm
+                         << ", ptr " << src_ptr << ", i32 0, i32 " << i << "\n";
+                    if (slid_info_.count(dst_ft) || isAnonTupleType(dst_ft)) {
+                        emitSlidSlotAssign(dst_ft, dst_gep, src_gep, assign->is_move);
+                    } else {
+                        std::string v = newTmp();
+                        out_ << "    " << v << " = load " << llvmType(dst_ft)
+                             << ", ptr " << src_gep << "\n";
+                        out_ << "    store " << llvmType(dst_ft) << " " << v
+                             << ", ptr " << dst_gep << "\n";
+                    }
+                }
+                return;
+            }
+            // single-value promotion: rhs becomes (rhs,) → slot 0 = rhs,
+            // remaining slots untouched (assignment-form rule).
+            {
+                const std::string& ft = elems[0];
+                std::string gep = emitFieldGep(lhs_t, it->second.reg, 0);
+                if (slid_info_.count(ft)) {
+                    std::vector<const Expr*> one{ assign->value.get() };
+                    emitInitFieldsAtPtrs(ft, gep, one, {});
+                    return;
+                }
+                if (isAnonTupleType(ft)) {
+                    if (auto* te2 = dynamic_cast<const TupleExpr*>(assign->value.get())) {
+                        std::vector<const Expr*> ov;
+                        ov.reserve(te2->values.size());
+                        for (auto& v : te2->values) ov.push_back(v.get());
+                        emitInitFieldsAtPtrs(ft, gep, {}, ov);
+                    } else {
+                        std::vector<const Expr*> one{ assign->value.get() };
+                        emitInitFieldsAtPtrs(ft, gep, one, {});
+                    }
+                    return;
+                }
+                // primitive slot
+                std::string val = emitExpr(*assign->value);
+                std::string elem_llvm = llvmType(ft);
+                std::string src_t = exprLlvmType(*assign->value);
+                if (src_t != elem_llvm) {
+                    static const std::map<std::string,int> rank =
+                        {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+                    auto sit = rank.find(src_t), dit = rank.find(elem_llvm);
+                    if (sit != rank.end() && dit != rank.end()) {
+                        std::string coerced = newTmp();
+                        if (dit->second > sit->second)
+                            out_ << "    " << coerced << " = sext " << src_t
+                                 << " " << val << " to " << elem_llvm << "\n";
+                        else
+                            out_ << "    " << coerced << " = trunc " << src_t
+                                 << " " << val << " to " << elem_llvm << "\n";
+                        val = coerced;
+                    } else {
+                        errorWithNote(std::string("Type mismatch: cannot assign '"
+                            + inferSlidType(*assign->value) + "' to '" + ft + "'"),
+                            tit->second.file_id, tit->second.tok,
+                            "'" + assign->name + "' declared here.");
+                    }
+                }
+                out_ << "    store " << elem_llvm << " " << val
+                     << ", ptr " << gep << "\n";
+                return;
+            }
         }
         // compound assignment: x = x op rhs → detect and dispatch to op{op}= directly
         // (parser desugars x += rhs into x = x + rhs; we undo that here for slid types)
@@ -1546,34 +1992,53 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     const std::string& ft = info.field_types[i];
                     std::string elem_llvm = llvmType(ft);
                     std::string gep = emitFieldGep(slid_name, it->second.reg, i);
-                    // slid-typed field: dispatch per the element-wise rule
+                    // slid-typed field: matching slid → dispatch op=/op<-;
+                    // tuple-shape value → recurse via emitInitFieldsAtPtrs
+                    // (same desugar as VarDecl). Single-value promotion falls
+                    // out: the value becomes the field's first ctor arg.
                     if (slid_info_.count(ft)) {
                         std::string src_type = inferSlidType(*te->values[i]);
-                        if (src_type != ft)
-                            error(std::string("Slid field '" + info.field_types[i]
-                                + "' reassignment: expected '" + ft + "', got '" + src_type + "'"));
-                        std::string src_ptr;
-                        if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
-                            src_ptr = locals_[ve->name].reg;
+                        if (src_type == ft) {
+                            std::string src_ptr;
+                            if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
+                                src_ptr = locals_[ve->name].reg;
+                            } else {
+                                src_ptr = emitExpr(*te->values[i]);
+                            }
+                            emitSlidSlotAssign(ft, gep, src_ptr, assign->is_move);
+                        } else if (auto* te2 = dynamic_cast<const TupleExpr*>(te->values[i].get())) {
+                            std::vector<const Expr*> ov;
+                            ov.reserve(te2->values.size());
+                            for (auto& v : te2->values) ov.push_back(v.get());
+                            emitInitFieldsAtPtrs(ft, gep, {}, ov);
                         } else {
-                            src_ptr = emitExpr(*te->values[i]);
+                            // single-value promotion — feed as first ctor arg.
+                            std::vector<const Expr*> one{ te->values[i].get() };
+                            emitInitFieldsAtPtrs(ft, gep, one, {});
                         }
-                        emitSlidSlotAssign(ft, gep, src_ptr, assign->is_move);
                         continue;
                     }
-                    // anon-tuple-typed field: recurse via walker on matching tuple-var source
+                    // anon-tuple-typed field: matching tuple-var → walker;
+                    // tuple-shape value → unpack as overrides.
                     if (isAnonTupleType(ft)) {
                         std::string src_type = inferSlidType(*te->values[i]);
-                        if (src_type != ft)
-                            error(std::string("Tuple field reassignment: expected '"
-                                + ft + "', got '" + src_type + "'"));
-                        std::string src_ptr;
-                        if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
-                            src_ptr = locals_[ve->name].reg;
+                        if (src_type == ft) {
+                            std::string src_ptr;
+                            if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
+                                src_ptr = locals_[ve->name].reg;
+                            }
+                            if (src_ptr.empty())
+                                error(std::string("Tuple-typed field copy from non-variable source not supported"));
+                            emitSlidSlotAssign(ft, gep, src_ptr, assign->is_move);
+                        } else if (auto* te2 = dynamic_cast<const TupleExpr*>(te->values[i].get())) {
+                            std::vector<const Expr*> ov;
+                            ov.reserve(te2->values.size());
+                            for (auto& v : te2->values) ov.push_back(v.get());
+                            emitInitFieldsAtPtrs(ft, gep, {}, ov);
+                        } else {
+                            std::vector<const Expr*> one{ te->values[i].get() };
+                            emitInitFieldsAtPtrs(ft, gep, one, {});
                         }
-                        if (src_ptr.empty())
-                            error(std::string("Tuple-typed field copy from non-variable source not supported"));
-                        emitSlidSlotAssign(ft, gep, src_ptr, assign->is_move);
                         continue;
                     }
                     std::string val = emitExpr(*te->values[i]);
@@ -1636,6 +2101,32 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 if (src_ptr.empty() && inferSlidType(*assign->value) == slid_name)
                     src_ptr = emitExpr(*assign->value);
                 if (!src_ptr.empty()) { emitSlidSlotAssign(slid_name, it->second.reg, src_ptr, assign->is_move); return; }
+            }
+            // single-value promotion: rhs becomes (rhs,) → first field gets
+            // rhs, remaining fields untouched (assignment-form rule).
+            {
+                auto& info = slid_info_[tit->second.type];
+                if (!info.field_types.empty()) {
+                    const std::string& ft = info.field_types[0];
+                    std::string gep = emitFieldGep(tit->second.type, it->second.reg, 0);
+                    if (slid_info_.count(ft) || isAnonTupleType(ft)) {
+                        if (auto* te2 = dynamic_cast<const TupleExpr*>(assign->value.get())) {
+                            std::vector<const Expr*> ov;
+                            ov.reserve(te2->values.size());
+                            for (auto& v : te2->values) ov.push_back(v.get());
+                            emitInitFieldsAtPtrs(ft, gep, {}, ov);
+                        } else {
+                            std::vector<const Expr*> one{ assign->value.get() };
+                            emitInitFieldsAtPtrs(ft, gep, one, {});
+                        }
+                    } else {
+                        // primitive slot — direct store.
+                        std::string val = emitExpr(*assign->value);
+                        out_ << "    store " << llvmType(ft) << " " << val
+                             << ", ptr " << gep << "\n";
+                    }
+                    return;
+                }
             }
         }
         // pointer move: copy source to dest, null source
@@ -2379,9 +2870,29 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 obj_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
             } else {
                 auto type_it = locals_.find(ve->name);
-                if (type_it == locals_.end())
-                    error(std::string("Unknown type for: " + ve->name));
-                slid_name = type_it->second.type;
+                // self-field shorthand: bare `field.method()` inside a method
+                // resolves as `self.field.method()` when the name isn't a local
+                // but matches a field of the enclosing class.
+                std::string self_field_addr;
+                if (type_it == locals_.end()) {
+                    if (!current_slid_.empty()) {
+                        auto& info = slid_info_[current_slid_];
+                        auto fit = info.field_index.find(ve->name);
+                        if (fit != info.field_index.end()) {
+                            slid_name = info.field_types[fit->second];
+                            std::string self = self_ptr_.empty() ? "%self" : self_ptr_;
+                            self_field_addr = newTmp();
+                            out_ << "    " << self_field_addr
+                                 << " = getelementptr %struct." << current_slid_
+                                 << ", ptr " << self << ", i32 0, i32 "
+                                 << fit->second << "\n";
+                        }
+                    }
+                    if (slid_name.empty())
+                        error(std::string("Unknown type for: " + ve->name));
+                } else {
+                    slid_name = type_it->second.type;
+                }
                 if (mcs->method == "~") {
                     // Dtor is structural: valid on slids (dispatch), anon-tuples
                     // (walk slots), and primitive types (no-op). Reject only the
@@ -2402,7 +2913,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     if (!slid_info_.count(slid_name))
                         error("Method call on '" + ve->name + "': '" + slid_name + "' is not a slid type");
                 }
-                obj_ptr = locals_[ve->name].reg;
+                obj_ptr = self_field_addr.empty()
+                    ? locals_[ve->name].reg
+                    : self_field_addr;
             }
         } else if (dynamic_cast<const ArrayIndexExpr*>(mcs->object.get())
                 || dynamic_cast<const FieldAccessExpr*>(mcs->object.get())) {
@@ -2675,11 +3188,33 @@ void Codegen::emitStmt(const Stmt& stmt) {
                              << ", ptr " << ret_tup << ", i32 0, i32 " << i << "\n";
                         const std::string& elem_type = fields[i].first;
                         if (slid_info_.count(elem_type) || isAnonTupleType(elem_type)) {
+                            // Tuple literal slot value → desugar into the slot,
+                            // avoiding a temp alloca. Other shapes need a ptr
+                            // for emitSlidSlotAssign — VarExpr provides it,
+                            // calls/etc. spill to an alloca.
+                            if (auto* te2 = dynamic_cast<const TupleExpr*>(te->values[i].get())) {
+                                std::vector<const Expr*> ov;
+                                ov.reserve(te2->values.size());
+                                for (auto& v : te2->values) ov.push_back(v.get());
+                                emitInitFieldsAtPtrs(elem_type, gep, {}, ov);
+                                continue;
+                            }
                             std::string src_ptr;
                             if (auto* ve = dynamic_cast<const VarExpr*>(te->values[i].get())) {
                                 src_ptr = locals_[ve->name].reg;
-                            } else {
+                            } else if (slid_info_.count(elem_type)) {
+                                // emitExpr returns a slid ptr for slid-typed
+                                // expressions (CallExpr, BinaryExpr, etc.).
                                 src_ptr = emitExpr(*te->values[i]);
+                            } else {
+                                // anon-tuple or other compound: emitExpr
+                                // returns a struct value — spill to alloca.
+                                std::string val = emitExpr(*te->values[i]);
+                                src_ptr = newTmp();
+                                out_ << "    " << src_ptr << " = alloca "
+                                     << llvmType(elem_type) << "\n";
+                                out_ << "    store " << llvmType(elem_type)
+                                     << " " << val << ", ptr " << src_ptr << "\n";
                             }
                             bool is_move = isFreshSlidTemp(*te->values[i]);
                             emitSlidSlotAssign(elem_type, gep, src_ptr, is_move);

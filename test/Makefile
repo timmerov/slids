@@ -19,6 +19,7 @@ SAMPLES = \
 	incomplete \
 	indexop \
 	inheritance \
+	initialization \
 	lexer \
 	logicops \
 	lvalues \
