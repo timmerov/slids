@@ -646,5 +646,72 @@ int32 main() {
         __println();
     }
 
+    /*
+    short-form reuse semantics: an untyped loop-var name reuses an in-scope
+    outer local; spelled type always shadows. value persists after the loop.
+    */
+    {
+        int x = 99;
+        for (x : 0..3) {}
+        __println("reuse range: " + x);
+    }
+
+    {
+        int x = 99;
+        for (int x : 0..3) {}
+        __println("shadow typed: " + x);
+    }
+
+    {
+        int x = 99;
+        for (x : (10, 20, 30)) {}
+        __println("reuse tuple: " + x);
+    }
+
+    {
+        char ch = '?';
+        for (ch : "ABC") {}
+        __println("reuse string: " + ch);
+    }
+
+    {
+        int arr[3] = (10, 20, 30);
+        int x = 99;
+        for (x : arr) {}
+        __println("reuse array: " + x);
+    }
+
+    {
+        int x = 99;
+        for (x : Bases) {}
+        __println("reuse enum: " + x);
+    }
+
+    {
+        IndexSizeInt container;
+        int value = 99;
+        for (value : container) {}
+        __println("reuse class by-value: " + value);
+    }
+
+    {
+        /* find-and-break — chess1 pattern in miniature. */
+        int board[3][3] = (
+            (0, 0, 0),
+            (0, 0, 1),
+            (0, 0, 0)
+        );
+        int row = 99;
+        int col = 99;
+        for (row : 0..3) {
+            for (col : 0..3) {
+                if (board[row][col] == 1) {
+                    break rows;
+                }
+            } :cols;
+        } :rows;
+        __println("reuse find-and-break: row=" + row + " col=" + col);
+    }
+
     return 0;
 }

@@ -230,7 +230,7 @@ int32 main() {
     /* expect: o=0(s=0 s=1) o=1(s=0 s=1) o=2(s=0 s=1) */
     for (x : 0..3) {
         __print("o=" + x + "(");
-        for (x : 0..2) { __print("s=" + x + " "); }
+        for (int x : 0..2) { __print("s=" + x + " "); }
         __print(") ");
     }
     __println();

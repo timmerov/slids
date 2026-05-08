@@ -78,3 +78,11 @@ for container by value: 13 17 19
 for container by reference: 13 17 19
 for good-by-value, bad-by-ref: 100 101 102
 for bad-by-value, good-by-ref: 200 201 202
+reuse range: 3
+shadow typed: 99
+reuse tuple: 30
+reuse string: 67
+reuse array: 30
+reuse enum: 4
+reuse class by-value: 19
+reuse find-and-break: row=1 col=2

@@ -21,8 +21,8 @@ int32 main() {
         (kRook,   kEmpty,  kBishop, kQueen, kKing,  kBishop, kKnight, kRook)
     );
 
-    int row = 0;
-    int col = 0;
+    int row = 99;
+    int col = 99;
     for (row : 0..8) {
         for (col : 0..8) {
             if (board[row][col] == kKnight) {

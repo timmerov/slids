@@ -1531,7 +1531,12 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         "Expected variable name").value;
                 }
                 expect(TokenType::kColon, "Expected ':' in for-iterator");
-                declareVar(for_var_name, t_var_tok);
+                // Untyped short-form reuses an in-scope outer local of the same
+                // name: init becomes an assign rather than a fresh decl, body
+                // references resolve through the outer alloca, value persists
+                // after the loop. Spelled type always shadows.
+                bool reuse_outer = for_var_type.empty() && isInScope(for_var_name);
+                if (!reuse_outer) declareVar(for_var_name, t_var_tok);
 
                 auto first_expr = parseExpr();
 
@@ -1571,6 +1576,12 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         nullptr, std::vector<std::unique_ptr<Expr>>{}, false);
                     d->is_loop_var = true;
                     return d;
+                };
+                auto _loopAssign = [&](std::unique_ptr<Expr> v) -> std::unique_ptr<Stmt> {
+                    return make<AssignStmt>(t_var_tok, for_var_name, std::move(v), false);
+                };
+                auto _loopInit = [&](std::unique_ptr<Expr> v) -> std::unique_ptr<Stmt> {
+                    return reuse_outer ? _loopAssign(std::move(v)) : _loopDecl(std::move(v));
                 };
                 auto _assign = [&](const std::string& name,
                                     std::unique_ptr<Expr> v) -> std::unique_ptr<Stmt> {
@@ -1629,7 +1640,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         loop_var_decl = _loopDecl(_addrOf(_srcAt(_intLit(0))));
                     } else if (for_var_type.empty()) {
                         // Inferred type: codegen reads elem type from src[0].
-                        loop_var_decl = _loopDecl(_srcAt(_intLit(0)));
+                        // Under reuse, this becomes an assign into the outer alloca.
+                        loop_var_decl = _loopInit(_srcAt(_intLit(0)));
                     } else {
                         loop_var_decl = _loopDeclNoInit();
                     }
@@ -1689,7 +1701,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
                     std::string end_name = "__$end_" + std::to_string(synthetic_counter_++);
                     std::string step_name;
-                    stmt->init_stmts.push_back(_loopDecl(std::move(first_expr)));
+                    stmt->init_stmts.push_back(_loopInit(std::move(first_expr)));
                     stmt->init_stmts.push_back(
                         _decl(for_var_type, end_name, std::move(end_expr)));
                     if (step_expr) {
@@ -1734,7 +1746,9 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     if (eit != enum_sizes_.end()) {
                         int size = eit->second;
                         expect(TokenType::kRParen, "Expected ')'");
-                        stmt->init_stmts.push_back(_decl("int", for_var_name, _intLit(0)));
+                        stmt->init_stmts.push_back(reuse_outer
+                            ? _loopAssign(_intLit(0))
+                            : _decl("int", for_var_name, _intLit(0)));
                         stmt->cond = _bin("<", _var(for_var_name), _intLit(size));
                         auto upd = make<BlockStmt>(t_start);
                         upd->stmts.push_back(_assign(for_var_name,
