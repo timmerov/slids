@@ -197,6 +197,22 @@ writes string.const.slh to the transport directory?
 then a packager can combine string.slh and string.const.slh
 into the string.slh released to the public.
 
+const syntax:
+const float pi = 3.14; pi type is rvalue float
+const int^ ptr; ptr type is lvalue pointer to immutable int.
+const int^^ hdl; hdl type is lvalue pointer to immutable pointer to immutable int.
+hdl^ type is rvalue pointer to immutable int.
+maybe change syntax.
+(const int)^ ptr; ptr type is mutable. ptr^ type is const int.
+(const int^)^ hdl; hdl type is mutable. hdl^ type is immutable pointer to int.
+const int^ ptr; read const (int^). ptr type is immutable.
+so...
+const applies to the type.
+type things bind tighter than const.
+const applies to the the thing after it.
+everything accessible from a const pointer or object is also const.
+const method does not modify self.
+
 namespaces:
 somewhat implemented.
     Math(
