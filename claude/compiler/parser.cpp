@@ -109,6 +109,32 @@ void Parser::parseAliasDecl() {
     declareAlias(name, resolved, name_tok);
 }
 
+ConstDef Parser::parseConstDef() {
+    expect(TokenType::kConst, "Expected 'const'");
+    ConstDef cd;
+    // disambiguate `const [type] name = expr;` — type is present unless the
+    // current ident is immediately followed by '='.
+    bool has_type = false;
+    if (isTypeName(peek())) {
+        has_type = true;
+    } else if (peek().type == TokenType::kLParen) {
+        has_type = true; // anon-tuple type
+    } else if (peek().type == TokenType::kIdentifier
+        && pos_ + 1 < (int)tokens_.size()
+        && tokens_[pos_ + 1].type != TokenType::kEquals) {
+        has_type = true;
+    }
+    if (has_type) cd.declared_type = parseTypeName();
+    int name_tok = pos_;
+    cd.name = expect(TokenType::kIdentifier, "Expected const name").value;
+    cd.file_id = file_id_;
+    cd.tok = name_tok;
+    expect(TokenType::kEquals, "Expected '=' after const name");
+    cd.rhs = parseExpr();
+    expect(TokenType::kSemicolon, "Expected ';' after const initializer");
+    return cd;
+}
+
 void Parser::declareVar(const std::string& name, int name_tok) {
     // (P2) inside any method, no binding may shadow a field of the enclosing class.
     {
@@ -1324,6 +1350,13 @@ std::unique_ptr<Stmt> Parser::parseLvalueTail(std::unique_ptr<Expr> lhs) {
 std::unique_ptr<Stmt> Parser::parseStmt() {
     [[maybe_unused]] int t_start = pos_;
     Token t = peek();
+
+    // const declaration: const [type] name = expr;
+    if (t.type == TokenType::kConst) {
+        auto stmt = make<ConstDeclStmt>(t_start);
+        stmt->def = parseConstDef();
+        return stmt;
+    }
 
     // global-qualified call statement: ::name(args);
     if (t.type == TokenType::kColonColon) {
@@ -2575,6 +2608,11 @@ SlidDef Parser::parseSlidDef() {
     bool has_ctor_code = false;
 
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
+        // class-scope const declaration: const [type] name = expr;
+        if (peek().type == TokenType::kConst) {
+            slid.consts.push_back(parseConstDef());
+            continue;
+        }
         // explicit constructor: _() { ... }  or forward decl: _();
         if (peek().type == TokenType::kIdentifier && peek().value == "_"
             && pos_ + 1 < (int)tokens_.size()
@@ -3112,6 +3150,10 @@ Program Parser::parse() {
         // type alias declaration: alias Name = TypeExpr;
         else if (peek().type == TokenType::kAlias) {
             parseAliasDecl();
+        }
+        // const declaration: const [type] name = expr;
+        else if (peek().type == TokenType::kConst) {
+            program.consts.push_back(parseConstDef());
         }
         // enum definition
         else if (peek().type == TokenType::kEnum) {

@@ -20,6 +20,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     + current_slid_ + "' has no self"));
             return self_ptr_.empty() ? "%self" : self_ptr_;
         }
+        // substitution const lookup — block stack → enclosing slid → global.
+        if (auto* ce = lookupConst(v->name)) return emitConstValue(*ce);
         // check if it's a field access via self in a method
         if (!current_slid_.empty()) {
             auto& info = slid_info_[current_slid_];
@@ -295,6 +297,30 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
+        // substitution const lookup: instance.const_name and Type.const_name
+        // resolve the receiver's slid type and check that class's const table.
+        if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
+            std::string recv_slid;
+            auto lit = locals_.find(ve->name);
+            if (lit != locals_.end()) recv_slid = lit->second.type;
+            else if (slid_info_.count(ve->name)) recv_slid = ve->name; // Type.const_name
+            else if (!current_slid_.empty()) {
+                auto& parent_info = slid_info_[current_slid_];
+                auto fi = parent_info.field_index.find(ve->name);
+                if (fi != parent_info.field_index.end())
+                    recv_slid = parent_info.field_types[fi->second];
+            }
+            // strip reference/pointer suffixes
+            while (!recv_slid.empty() && recv_slid.back() == '^')
+                recv_slid.pop_back();
+            if (recv_slid.size() >= 2
+                && recv_slid.substr(recv_slid.size()-2) == "[]")
+                recv_slid.resize(recv_slid.size()-2);
+            if (!recv_slid.empty()) {
+                if (auto* ce = lookupSlidConst(recv_slid, fa->field))
+                    return emitConstValue(*ce);
+            }
+        }
         // handle ptr^.field — object is a DerefExpr
         if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
             std::string ptr_val;
@@ -2008,6 +2034,8 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // variable — look up declared type
     if (auto* v = dynamic_cast<const VarExpr*>(&expr)) {
+        // substitution const — return the const's type
+        if (auto* ce = lookupConst(v->name)) return llvmType(ce->slid_type);
         // field access via self in a method
         if (!current_slid_.empty()) {
             auto& info = slid_info_[current_slid_];
@@ -2048,6 +2076,22 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // field access — look up field type
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
+        // substitution const lookup on instance/Type receiver
+        if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
+            std::string recv_slid;
+            auto lit = locals_.find(ve->name);
+            if (lit != locals_.end()) recv_slid = lit->second.type;
+            else if (slid_info_.count(ve->name)) recv_slid = ve->name;
+            while (!recv_slid.empty() && recv_slid.back() == '^')
+                recv_slid.pop_back();
+            if (recv_slid.size() >= 2
+                && recv_slid.substr(recv_slid.size()-2) == "[]")
+                recv_slid.resize(recv_slid.size()-2);
+            if (!recv_slid.empty()) {
+                if (auto* ce = lookupSlidConst(recv_slid, fa->field))
+                    return llvmType(ce->slid_type);
+            }
+        }
         std::string slid_name;
         if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
             slid_name = derefSlidName(*de);
@@ -2470,6 +2514,7 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     if (auto* pc = dynamic_cast<const PtrCastExpr*>(&expr)) return pc->target_type;
     // variable — look up its declared type, then fall back to current slid's fields
     if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
+        if (auto* ce = lookupConst(ve->name)) return ce->slid_type;
         auto it = locals_.find(ve->name);
         if (it != locals_.end()) return it->second.type;
         if (!current_slid_.empty()) {
@@ -2483,6 +2528,21 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     }
     // field access — resolve object's slid type, return raw field type
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
+        if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
+            std::string recv_slid;
+            auto lit = locals_.find(ve->name);
+            if (lit != locals_.end()) recv_slid = lit->second.type;
+            else if (slid_info_.count(ve->name)) recv_slid = ve->name;
+            while (!recv_slid.empty() && recv_slid.back() == '^')
+                recv_slid.pop_back();
+            if (recv_slid.size() >= 2
+                && recv_slid.substr(recv_slid.size()-2) == "[]")
+                recv_slid.resize(recv_slid.size()-2);
+            if (!recv_slid.empty()) {
+                if (auto* ce = lookupSlidConst(recv_slid, fa->field))
+                    return ce->slid_type;
+            }
+        }
         std::string slid_name;
         if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
             slid_name = derefSlidName(*de);

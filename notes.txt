@@ -1,26 +1,17 @@
 
-this is a bug:
-chess1 for-loop shadowing. for (row : 0..8) declares a fresh row even when an outer int row = 0; exists,
-chess1.expected is wrong.
+infer types of fields.
 
-claude things:
+claude thinks:
 "Virtual dispatch through chained AIE/FieldAccess still falls
 to static dispatch — the indirect flag (codegen_stmt.cpp:2535)
 only triggers on DerefExpr or self."
 
-claude things:
+claude thinks:
 "Method call on a non-lvalue receiver (foo().bar(), (a + b).bar())
 still errors. Out of scope; would require a temp-spill before dispatch,
 similar to the rvalue-base spill in the emitExpr(AIE) wrapper."
 
 virtual classes in tuples probably don't work right.
-
-revisit initialization.
-(int, int) pairs[3] = ((1, 2), (3, 4), (5, 6));
-review passing initializers to classes whose fields
-are classes.
-right now can pass one initializer.
-properly would be to nest tuples.
 
 "fixed arrays require an element type."
 oh really?
@@ -51,6 +42,7 @@ x = ^y^;
 optimize tuple construction:
 a tuple of objects constructs temp objects,
 then copies them into the tuple.
+might be done.
 
 revisit for loops.
 some uncharted territory.
@@ -97,9 +89,8 @@ for Piece piece in Piece {
     }
 }
 
-implement constants.
-const int useful_factor = 1.234;
-cannot be an lvalue.
+revisit enums:
+can we declare enums in all scopes?
 
 expose AnyTypePtr:
 internally, nullptr is type AnyTypePtr.

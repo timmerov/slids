@@ -23,6 +23,12 @@
 
 - **Forbid shadowing type names with variable names**: Using a class name as a variable name should be a compile error. `String String = "..."` is currently not caught and causes ambiguities and vexing parses — the parser cannot tell whether `String` in expression position refers to the type or the variable. Builtin type keywords (`int`, `float32`, etc.) are already safe since they are reserved tokens; user-defined class names are identifiers and need an explicit check.
 
+- **Const-fold: support `sizeof`**: Phase 1 substitution constants reject `sizeof(...)` in the rhs. Allow it once class layout is settled at fold time — the value comes from `slid_info_.sizeof_override` or a layout walk. Worth pairing with any other compile-time-knowable scalars.
+
+- **Const inside templates referencing the template parameter**: Phase 1 supports consts inside template classes/methods only when the rhs is template-independent (folded once, same value across instantiations). When the rhs references `T` (e.g. `const T zero = 0;`, `const int n = sizeof(T);`), fold per instantiation after substitution. Needs the fold pass to run during template instantiation, not just in the program-level pre-pass.
+
+- **Template methods inside a class body**: `Container(...) { T identity<T>(T a) { ... } }` — parser errors at `Expected ';', got '<'`. Adjacent to the const-in-templates story: the const-in-nested-template-method test case from test/const.sl is blocked on this until template methods land at the language level.
+
 - **Templates across translation units — remaining work:**
   - `@impl "other"` annotation in `.slh` to override the same-name convention for the impl file
   - Name conflict detection: if two `.sli` files list `instantiate add<Value>` but `Value` comes from different class headers, `--instantiate` should emit a compile error (same mangled name `add__Value` from two different types)

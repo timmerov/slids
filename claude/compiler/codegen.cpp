@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <set>
 #include <climits>
+#include <cstring>
 #include <algorithm>
 #include "codegen_helpers.h"
 
@@ -1273,6 +1274,7 @@ void Codegen::collectStringConstants() {
 void Codegen::emit() {
     out_ << "target triple = \"x86_64-pc-linux-gnu\"\n\n";
 
+    collectAndFoldConsts();
     collectSlids();
     classifyVirtualClasses();
     resolveSlidInheritance();
@@ -1876,6 +1878,7 @@ void Codegen::emitDtorChainCall(const std::string& slid_type, const std::string&
 
 void Codegen::pushScope() {
     scope_stack_.push_back({dtor_vars_.size(), locals_});
+    block_const_stack_.push_back({});
 }
 
 void Codegen::popScope() {
@@ -1899,6 +1902,7 @@ void Codegen::popScope() {
     dtor_vars_.resize(frame.dtor_mark);
     locals_ = std::move(frame.saved_locals);
     scope_stack_.pop_back();
+    block_const_stack_.pop_back();
 }
 
 void Codegen::emitDtors() {
@@ -4219,4 +4223,441 @@ std::string Codegen::emitFieldPtr(const std::string& obj_name, const std::string
     out_ << "    " << gep << " = getelementptr %struct." << slid_name
          << ", ptr " << obj_ptr << ", i32 0, i32 " << idx << "\n";
     return gep;
+}
+
+// --- substitution constants -------------------------------------------------
+
+namespace {
+static const std::map<std::string, int> kIntSignedBits = {
+    {"int8", 8}, {"int16", 16}, {"int", 32}, {"int32", 32}, {"int64", 64},
+    {"intptr", 64}, {"bool", 32}
+};
+static const std::map<std::string, int> kIntUnsignedBits = {
+    {"uint8", 8}, {"uint16", 16}, {"uint", 32}, {"uint32", 32}, {"uint64", 64},
+    {"char", 8}
+};
+static bool constIsFloatType(const std::string& t) {
+    return t == "float" || t == "float32" || t == "float64";
+}
+static bool constIsIntType(const std::string& t) {
+    return kIntSignedBits.count(t) || kIntUnsignedBits.count(t);
+}
+static bool constIsUnsignedType(const std::string& t) {
+    return kIntUnsignedBits.count(t) != 0;
+}
+static int constIntBits(const std::string& t) {
+    auto it = kIntSignedBits.find(t);
+    if (it != kIntSignedBits.end()) return it->second;
+    auto it2 = kIntUnsignedBits.find(t);
+    if (it2 != kIntUnsignedBits.end()) return it2->second;
+    return 0;
+}
+static bool fitsSigned(int64_t v, int bits) {
+    if (bits >= 64) return true;
+    int64_t lo = -((int64_t)1 << (bits - 1));
+    int64_t hi = ((int64_t)1 << (bits - 1)) - 1;
+    return v >= lo && v <= hi;
+}
+static bool fitsUnsigned(int64_t v, int bits) {
+    if (v < 0) return false;
+    if (bits >= 64) return true;
+    return (uint64_t)v <= (((uint64_t)1 << bits) - 1);
+}
+static std::string formatConstFloat(double v) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%g", v);
+    return buf;
+}
+}
+
+void Codegen::collectAndFoldConsts() {
+    // pre-register all const decls so cross-references see the names even when
+    // unresolved. duplicate-name detection per scope.
+    for (auto& cd : program_.consts) {
+        if (global_consts_.count(cd.name))
+            errorAtNodeWithNote(*cd.rhs,
+                "Global const '" + cd.name + "' is already declared.",
+                global_consts_[cd.name].file_id, global_consts_[cd.name].tok,
+                "First declared here.");
+        ConstEntry e;
+        e.file_id = cd.file_id;
+        e.tok = cd.tok;
+        global_consts_[cd.name] = e;
+    }
+    for (auto& slid : program_.slids) {
+        for (auto& cd : slid.consts) {
+            auto& tbl = slid_consts_[slid.name];
+            if (tbl.count(cd.name))
+                errorAtNodeWithNote(*cd.rhs,
+                    "Class const '" + slid.name + "." + cd.name + "' is already declared.",
+                    tbl[cd.name].file_id, tbl[cd.name].tok,
+                    "First declared here.");
+            ConstEntry e;
+            e.file_id = cd.file_id;
+            e.tok = cd.tok;
+            tbl[cd.name] = e;
+        }
+    }
+
+    std::set<std::string> cycle;
+    for (auto& cd : program_.consts) {
+        if (global_consts_[cd.name].slid_type.empty()) {
+            cycle.clear();
+            foldConstDef(cd, "", cycle);
+        }
+    }
+    for (auto& slid : program_.slids) {
+        for (auto& cd : slid.consts) {
+            if (slid_consts_[slid.name][cd.name].slid_type.empty()) {
+                cycle.clear();
+                foldConstDef(cd, slid.name, cycle);
+            }
+        }
+    }
+}
+
+void Codegen::foldConstDef(const ConstDef& cd,
+                           const std::string& slid_scope,
+                           std::set<std::string>& cycle) {
+    std::string key = slid_scope + "::" + cd.name;
+    cycle.insert(key);
+    ConstEntry folded = foldConstExpr(*cd.rhs, slid_scope, cycle);
+    ConstEntry final_e = applyConstDeclaredType(cd, folded);
+    cycle.erase(key);
+    if (slid_scope.empty()) global_consts_[cd.name] = final_e;
+    else slid_consts_[slid_scope][cd.name] = final_e;
+}
+
+Codegen::ConstEntry Codegen::foldConstExpr(const Expr& e,
+                                            const std::string& slid_scope,
+                                            std::set<std::string>& cycle) {
+    if (auto* il = dynamic_cast<const IntLiteralExpr*>(&e)) {
+        ConstEntry r;
+        r.int_value = il->value;
+        if (il->is_char_literal) r.slid_type = "char";
+        else if (il->is_nondecimal) {
+            uint64_t uv = (uint64_t)il->value;
+            r.slid_type = (uv <= 0xFFFFFFFFull) ? "uint" : "uint64";
+        } else {
+            r.slid_type = (il->value >= INT32_MIN && il->value <= INT32_MAX) ? "int" : "int64";
+        }
+        return r;
+    }
+    if (auto* fl = dynamic_cast<const FloatLiteralExpr*>(&e)) {
+        ConstEntry r;
+        r.is_float = true;
+        r.float_value = fl->value;
+        float fv = (float)fl->value;
+        r.slid_type = ((double)fv == fl->value) ? "float32" : "float64";
+        return r;
+    }
+    if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
+        // class-scope lookup first
+        if (!slid_scope.empty()) {
+            auto sit = slid_consts_.find(slid_scope);
+            if (sit != slid_consts_.end()) {
+                auto cit = sit->second.find(ve->name);
+                if (cit != sit->second.end()) {
+                    if (cit->second.slid_type.empty()) {
+                        std::string key = slid_scope + "::" + ve->name;
+                        if (cycle.count(key))
+                            errorAtNode(e,
+                                "Constant '" + ve->name + "' has a cyclic initializer.");
+                        for (auto& s : program_.slids)
+                            if (s.name == slid_scope)
+                                for (auto& cd : s.consts)
+                                    if (cd.name == ve->name)
+                                        foldConstDef(cd, slid_scope, cycle);
+                    }
+                    return cit->second;
+                }
+            }
+        }
+        // global
+        auto cit = global_consts_.find(ve->name);
+        if (cit != global_consts_.end()) {
+            if (cit->second.slid_type.empty()) {
+                std::string key = std::string("::") + ve->name;
+                if (cycle.count(key))
+                    errorAtNode(e,
+                        "Constant '" + ve->name + "' has a cyclic initializer.");
+                for (auto& cd : program_.consts)
+                    if (cd.name == ve->name)
+                        foldConstDef(cd, "", cycle);
+            }
+            return cit->second;
+        }
+        errorAtNode(e,
+            "Constant initializer references unknown name '" + ve->name + "'.");
+    }
+    if (auto* u = dynamic_cast<const UnaryExpr*>(&e)) {
+        ConstEntry op = foldConstExpr(*u->operand, slid_scope, cycle);
+        if (u->op == "-") {
+            ConstEntry r = op;
+            if (op.is_float) r.float_value = -op.float_value;
+            else r.int_value = -op.int_value;
+            return r;
+        }
+        if (u->op == "+") return op;
+        if (u->op == "!") {
+            ConstEntry r;
+            r.slid_type = "bool";
+            r.int_value = (op.is_float ? (op.float_value == 0.0)
+                                       : (op.int_value == 0)) ? 1 : 0;
+            return r;
+        }
+        if (u->op == "~") {
+            if (op.is_float)
+                errorAtNode(e, "Bitwise '~' is not allowed on a float in a constant initializer.");
+            ConstEntry r = op;
+            r.int_value = ~op.int_value;
+            return r;
+        }
+        errorAtNode(e, "Operator '" + u->op + "' is not supported in a constant initializer.");
+    }
+    if (auto* b = dynamic_cast<const BinaryExpr*>(&e)) {
+        ConstEntry L = foldConstExpr(*b->left, slid_scope, cycle);
+        ConstEntry R = foldConstExpr(*b->right, slid_scope, cycle);
+        bool any_float = L.is_float || R.is_float;
+
+        auto widerInt = [&]() -> std::string {
+            int bits = std::max(constIntBits(L.slid_type), constIntBits(R.slid_type));
+            bool is_unsigned = constIsUnsignedType(L.slid_type) && constIsUnsignedType(R.slid_type);
+            if (bits <= 32) return is_unsigned ? "uint" : "int";
+            return is_unsigned ? "uint64" : "int64";
+        };
+        auto widerFloat = [&]() -> std::string {
+            return (L.slid_type == "float64" || R.slid_type == "float64") ? "float64" : "float32";
+        };
+
+        if (b->op == "+" || b->op == "-" || b->op == "*" || b->op == "/" || b->op == "%") {
+            ConstEntry r;
+            if (any_float) {
+                if (b->op == "%")
+                    errorAtNode(e, "Modulo '%' is not allowed on a float in a constant initializer.");
+                double lv = L.is_float ? L.float_value : (double)L.int_value;
+                double rv = R.is_float ? R.float_value : (double)R.int_value;
+                double res;
+                if (b->op == "+") res = lv + rv;
+                else if (b->op == "-") res = lv - rv;
+                else if (b->op == "*") res = lv * rv;
+                else { if (rv == 0) errorAtNode(e, "Division by zero in a constant initializer."); res = lv / rv; }
+                r.is_float = true;
+                r.float_value = res;
+                r.slid_type = widerFloat();
+            } else {
+                int64_t lv = L.int_value, rv = R.int_value, res;
+                if (b->op == "+") res = lv + rv;
+                else if (b->op == "-") res = lv - rv;
+                else if (b->op == "*") res = lv * rv;
+                else if (b->op == "/") { if (rv == 0) errorAtNode(e, "Division by zero in a constant initializer."); res = lv / rv; }
+                else { if (rv == 0) errorAtNode(e, "Modulo by zero in a constant initializer."); res = lv % rv; }
+                r.int_value = res;
+                r.slid_type = widerInt();
+            }
+            return r;
+        }
+        if (b->op == "&" || b->op == "|" || b->op == "^"
+                || b->op == "<<" || b->op == ">>") {
+            if (any_float)
+                errorAtNode(e, "Bitwise '" + b->op + "' is not allowed on a float in a constant initializer.");
+            ConstEntry r;
+            int64_t lv = L.int_value, rv = R.int_value, res = 0;
+            if (b->op == "&") res = lv & rv;
+            else if (b->op == "|") res = lv | rv;
+            else if (b->op == "^") res = lv ^ rv;
+            else if (b->op == "<<") res = lv << rv;
+            else res = lv >> rv;
+            r.int_value = res;
+            r.slid_type = widerInt();
+            return r;
+        }
+        if (b->op == "==" || b->op == "!=" || b->op == "<"
+                || b->op == ">" || b->op == "<=" || b->op == ">=") {
+            bool res;
+            if (any_float) {
+                double lv = L.is_float ? L.float_value : (double)L.int_value;
+                double rv = R.is_float ? R.float_value : (double)R.int_value;
+                if (b->op == "==") res = lv == rv;
+                else if (b->op == "!=") res = lv != rv;
+                else if (b->op == "<") res = lv < rv;
+                else if (b->op == ">") res = lv > rv;
+                else if (b->op == "<=") res = lv <= rv;
+                else res = lv >= rv;
+            } else {
+                int64_t lv = L.int_value, rv = R.int_value;
+                if (b->op == "==") res = lv == rv;
+                else if (b->op == "!=") res = lv != rv;
+                else if (b->op == "<") res = lv < rv;
+                else if (b->op == ">") res = lv > rv;
+                else if (b->op == "<=") res = lv <= rv;
+                else res = lv >= rv;
+            }
+            ConstEntry r;
+            r.slid_type = "bool";
+            r.int_value = res ? 1 : 0;
+            return r;
+        }
+        if (b->op == "&&" || b->op == "||" || b->op == "^^") {
+            bool lb = L.is_float ? (L.float_value != 0.0) : (L.int_value != 0);
+            bool rb = R.is_float ? (R.float_value != 0.0) : (R.int_value != 0);
+            bool res;
+            if (b->op == "&&") res = lb && rb;
+            else if (b->op == "||") res = lb || rb;
+            else res = lb != rb;
+            ConstEntry r;
+            r.slid_type = "bool";
+            r.int_value = res ? 1 : 0;
+            return r;
+        }
+        errorAtNode(e, "Operator '" + b->op + "' is not supported in a constant initializer.");
+    }
+    if (auto* tc = dynamic_cast<const TypeConvExpr*>(&e)) {
+        ConstEntry inner = foldConstExpr(*tc->operand, slid_scope, cycle);
+        const std::string& dst = tc->target_type;
+        ConstEntry r;
+        r.slid_type = dst;
+        if (constIsFloatType(dst)) {
+            r.is_float = true;
+            r.float_value = inner.is_float ? inner.float_value : (double)inner.int_value;
+            return r;
+        }
+        if (dst == "bool") {
+            r.is_float = false;
+            r.int_value = (inner.is_float ? (inner.float_value != 0.0)
+                                          : (inner.int_value != 0)) ? 1 : 0;
+            return r;
+        }
+        if (constIsIntType(dst)) {
+            int64_t v = inner.is_float ? (int64_t)inner.float_value : inner.int_value;
+            int bits = constIntBits(dst);
+            if (bits > 0 && bits < 64) {
+                uint64_t mask = ((uint64_t)1 << bits) - 1;
+                v = (int64_t)((uint64_t)v & mask);
+                if (!constIsUnsignedType(dst)) {
+                    int64_t sign_bit = (int64_t)1 << (bits - 1);
+                    if (v & sign_bit) v |= (int64_t)~mask;
+                }
+            }
+            r.is_float = false;
+            r.int_value = v;
+            return r;
+        }
+        errorAtNode(e, "Type conversion to '" + dst + "' is not supported in a constant initializer.");
+    }
+    errorAtNode(e, "Expression is not allowed in a constant initializer.");
+}
+
+Codegen::ConstEntry Codegen::applyConstDeclaredType(const ConstDef& cd,
+                                                    const ConstEntry& folded) {
+    ConstEntry r = folded;
+    r.file_id = cd.file_id;
+    r.tok = cd.tok;
+    if (cd.declared_type.empty()) {
+        return r;
+    }
+    const std::string& dst = cd.declared_type;
+    auto narrow = [&](const std::string& msg) {
+        throw CompileError{cd.file_id, cd.tok, finalizeErrorMsg(msg)};
+    };
+    if (constIsFloatType(dst)) {
+        // float → float is treated as the author writing a literal in the
+        // target's precision; no exact round-trip check. Truncation rules
+        // still cover float → int / bool below.
+        double v = folded.is_float ? folded.float_value : (double)folded.int_value;
+        r.is_float = true;
+        r.float_value = v;
+        r.slid_type = dst;
+        return r;
+    }
+    if (dst == "bool") {
+        if (folded.is_float)
+            narrow("Cannot implicitly truncate constant '" + formatConstFloat(folded.float_value)
+                + "' from '" + folded.slid_type + "' to 'bool'.");
+        if (folded.int_value != 0 && folded.int_value != 1)
+            narrow("Constant '" + std::to_string(folded.int_value)
+                + "' overflows declared type 'bool'.");
+        r.is_float = false;
+        r.int_value = folded.int_value;
+        r.slid_type = "bool";
+        return r;
+    }
+    if (constIsIntType(dst)) {
+        if (folded.is_float)
+            narrow("Cannot implicitly truncate constant '" + formatConstFloat(folded.float_value)
+                + "' from '" + folded.slid_type + "' to '" + dst + "'.");
+        int bits = constIntBits(dst);
+        if (constIsUnsignedType(dst)) {
+            if (folded.int_value < 0)
+                narrow("Cannot assign negative constant '" + std::to_string(folded.int_value)
+                    + "' to unsigned type '" + dst + "'.");
+            if (!fitsUnsigned(folded.int_value, bits))
+                narrow("Constant '" + std::to_string(folded.int_value)
+                    + "' overflows declared type '" + dst + "'.");
+        } else {
+            if (!fitsSigned(folded.int_value, bits))
+                narrow("Constant '" + std::to_string(folded.int_value)
+                    + "' overflows declared type '" + dst + "'.");
+        }
+        r.is_float = false;
+        r.int_value = folded.int_value;
+        r.slid_type = dst;
+        return r;
+    }
+    throw CompileError{cd.file_id, cd.tok,
+        finalizeErrorMsg("Unsupported declared type '" + dst + "' for const '" + cd.name + "'.")};
+}
+
+const Codegen::ConstEntry* Codegen::lookupConst(const std::string& name) const {
+    // innermost block frame first
+    for (auto it = block_const_stack_.rbegin(); it != block_const_stack_.rend(); ++it) {
+        auto cit = it->find(name);
+        if (cit != it->end()) return &cit->second;
+    }
+    // enclosing class scope
+    if (!current_slid_.empty()) {
+        auto sit = slid_consts_.find(current_slid_);
+        if (sit != slid_consts_.end()) {
+            auto cit = sit->second.find(name);
+            if (cit != sit->second.end()) return &cit->second;
+        }
+    }
+    // global scope
+    auto cit = global_consts_.find(name);
+    if (cit != global_consts_.end()) return &cit->second;
+    return nullptr;
+}
+
+const Codegen::ConstEntry* Codegen::lookupSlidConst(const std::string& slid_name,
+                                                    const std::string& member) const {
+    auto sit = slid_consts_.find(slid_name);
+    if (sit == slid_consts_.end()) return nullptr;
+    auto cit = sit->second.find(member);
+    if (cit == sit->second.end()) return nullptr;
+    return &cit->second;
+}
+
+std::string Codegen::emitConstValue(const ConstEntry& e) const {
+    if (e.is_float) {
+        // LLVM IR float32 constants must be representable in float32; encode
+        // as a hex double of the value round-tripped through float so the
+        // upcast is lossless. float64 constants emit as decimal.
+        if (e.slid_type == "float" || e.slid_type == "float32") {
+            float fv = (float)e.float_value;
+            double dv = (double)fv;
+            uint64_t bits;
+            std::memcpy(&bits, &dv, sizeof(bits));
+            char buf[32];
+            snprintf(buf, sizeof(buf), "0x%016llX",
+                     static_cast<unsigned long long>(bits));
+            return buf;
+        }
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.17g", e.float_value);
+        std::string s = buf;
+        if (s.find('.') == std::string::npos && s.find('e') == std::string::npos)
+            s += ".0";
+        return s;
+    }
+    return std::to_string(e.int_value);
 }

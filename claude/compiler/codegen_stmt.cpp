@@ -709,6 +709,25 @@ static std::unique_ptr<Expr> cloneExpr(const Expr& e) {
 
 void Codegen::emitStmt(const Stmt& stmt) {
     EmitGuard _g(*this, stmt.file_id, stmt.tok);
+
+    // const decl: fold rhs against the enclosing scope (existing block consts,
+    // current slid consts, globals) and register in the innermost block frame.
+    // Emits no IR — every use site substitutes the literal.
+    if (auto* cds = dynamic_cast<const ConstDeclStmt*>(&stmt)) {
+        std::set<std::string> cycle;
+        ConstEntry folded = foldConstExpr(*cds->def.rhs, current_slid_, cycle);
+        ConstEntry final_e = applyConstDeclaredType(cds->def, folded);
+        if (block_const_stack_.empty()) block_const_stack_.push_back({});
+        auto& frame = block_const_stack_.back();
+        if (frame.count(cds->def.name))
+            errorAtNodeWithNote(stmt,
+                "Constant '" + cds->def.name + "' is already declared in this scope.",
+                frame[cds->def.name].file_id, frame[cds->def.name].tok,
+                "First declared here.");
+        frame[cds->def.name] = final_e;
+        return;
+    }
+
     // null out the storage location of a source expression after a move
     auto emitNullOut = [&](const Expr& src) {
         if (auto* ve = dynamic_cast<const VarExpr*>(&src)) {

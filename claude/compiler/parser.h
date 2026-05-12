@@ -354,6 +354,24 @@ struct SwitchStmt : Stmt {
     std::string block_label;            // optional :label after }
 };
 
+// --- Constants ---
+
+// const [type] name = expr;
+//   declared_type empty when inferred from rhs.
+//   substitution-only: never emits storage or a link-time symbol.
+struct ConstDef {
+    std::string name;
+    std::string declared_type;   // empty when inferred
+    std::unique_ptr<Expr> rhs;
+    int file_id = 0;
+    int tok = 0;                 // token index of the name (for diagnostics)
+};
+
+// const decl as a statement (block / function-body scope)
+struct ConstDeclStmt : Stmt {
+    ConstDef def;
+};
+
 // --- Enums ---
 
 struct EnumDef {
@@ -415,6 +433,7 @@ struct SlidDef {
     std::unique_ptr<BlockStmt> dtor_body;          // ~() { ... }, or null
     std::vector<MethodDef> methods;
     std::vector<SlidDef> nested_slids;             // slid defs declared inside this slid's body
+    std::vector<ConstDef> consts;                  // class-scope const decls (no storage)
 };
 
 // nested function defined inside a parent function body
@@ -469,6 +488,7 @@ struct Program {
     std::vector<SlidDef> slids;
     std::vector<FunctionDef> functions;
     std::vector<ExternalMethodDef> external_methods;
+    std::vector<ConstDef> consts;                   // program-scope const decls (no storage)
 
     std::vector<std::string> imported_headers; // resolved .slh paths, for -MF dep output
     std::map<std::string, std::string> slid_modules; // slid name -> module that provides it
@@ -605,6 +625,11 @@ private:
     void declareAlias(const std::string& name, const std::string& resolved, int name_tok);
     std::string lookupAlias(const std::string& name) const;
     void parseAliasDecl();
+
+    // const decl parser: assumes `const` is the current token. Returns the parsed
+    // ConstDef. The kind of statement-or-decl context (top-level vs class vs block)
+    // decides where the result is stored.
+    ConstDef parseConstDef();
 
     // when > 0, ':' terminates the current expression — used in contexts like
     // `case <expr>:` to keep the namespace-call lookahead from eating the label colon.

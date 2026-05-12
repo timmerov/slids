@@ -189,6 +189,7 @@ Token Lexer::readIdentifierOrKeyword() {
     if (value == "char")     return Token(TokenType::kChar,     value);
     if (value == "intptr")   return Token(TokenType::kIntptr,   value);
     if (value == "float32")  return Token(TokenType::kFloat32,  value);
+    if (value == "float")    return Token(TokenType::kFloat32,  "float32");
     if (value == "float64")  return Token(TokenType::kFloat64,  value);
     if (value == "bool")     return Token(TokenType::kBool,     value);
     if (value == "void")     return Token(TokenType::kVoid,     value);

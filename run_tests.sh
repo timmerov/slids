@@ -12,6 +12,7 @@ SAMPLES=(
     chain
     class
     comments
+    const
     constructor
     for
     function1

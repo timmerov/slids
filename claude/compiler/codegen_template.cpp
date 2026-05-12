@@ -379,6 +379,16 @@ static std::unique_ptr<Stmt> cloneStmtImpl(const Stmt& stmt,
         return r;
     }
 
+    if (auto* s = dynamic_cast<const ConstDeclStmt*>(&stmt)) {
+        auto r = std::make_unique<ConstDeclStmt>();
+        r->def.name = s->def.name;
+        r->def.declared_type = subTypeSuffix(s->def.declared_type, subst);
+        if (s->def.rhs) r->def.rhs = cloneExpr(*s->def.rhs, subst);
+        r->def.file_id = s->def.file_id;
+        r->def.tok = s->def.tok;
+        return r;
+    }
+
     throw CompileError{stmt.file_id, stmt.tok, "Unhandled statement type during template instantiation."};
 }
 
@@ -718,6 +728,19 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
         concrete.methods.push_back(std::move(md));
     }
 
+    // substitution constants: clone rhs with type substitution, fold under
+    // the instantiated class name. Phase 1 supports T-independent rhs; rhs
+    // that references T is deferred (TODO.md).
+    for (auto& c : tmpl.consts) {
+        ConstDef cd;
+        cd.name = c.name;
+        cd.declared_type = subTypeSuffix(c.declared_type, subst);
+        if (c.rhs) cd.rhs = cloneExpr(*c.rhs, subst);
+        cd.file_id = c.file_id;
+        cd.tok = c.tok;
+        concrete.consts.push_back(std::move(cd));
+    }
+
     // register SlidInfo for the concrete type
     SlidInfo info;
     info.name = mangled;
@@ -746,6 +769,25 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
     // store in the stable map
     concrete_slid_template_defs_[mangled] = std::move(concrete);
     SlidDef* concrete_ptr = &concrete_slid_template_defs_[mangled];
+
+    // fold the instantiation's consts under the mangled class name so the
+    // class-scope const lookup at emit time hits.
+    {
+        auto& tbl = slid_consts_[mangled];
+        for (auto& c : concrete_ptr->consts) {
+            ConstEntry e;
+            e.file_id = c.file_id;
+            e.tok = c.tok;
+            tbl[c.name] = e;
+        }
+        std::set<std::string> cycle;
+        for (auto& c : concrete_ptr->consts) {
+            if (tbl[c.name].slid_type.empty()) {
+                cycle.clear();
+                foldConstDef(c, mangled, cycle);
+            }
+        }
+    }
 
     // decide inline vs deferred: inline if forced, local template, or any type arg is a
     // non-importable local slid (can't be reconstructed in __instantiations.sl)

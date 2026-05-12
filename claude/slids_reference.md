@@ -263,6 +263,19 @@ Scoping:
 
 ---
 
+## Constants
+
+Every use of the named constant is substituted with the value. Right-hand-side must be a constant expression.
+
+```
+const float pi       = 3.14;
+const int   capacity = 1024;
+const       two_pi   = 2 * pi;          // type inferred from rhs
+const       byte     = (int8 = 0xFF);   // type conversion sets the inferred type
+```
+
+---
+
 ## Variables
 
 Variables may be declared with an explicit type or with an inferred type.

@@ -137,6 +137,41 @@ private:
     // free function overload table: base_name -> [(mangled_name, param_types)]
     std::map<std::string, std::vector<std::pair<std::string, std::vector<std::string>>>> free_func_overloads_;
     std::map<std::string, SlidInfo>    slid_info_;
+
+    // Folded substitution constant. slid_type is the declared (or inferred)
+    // type; int_value / float_value carry the folded value per is_float.
+    // No storage, no symbol — looked up at every VarExpr / FieldAccessExpr.
+    struct ConstEntry {
+        std::string slid_type;
+        int64_t int_value = 0;
+        double float_value = 0.0;
+        bool is_float = false;
+        int file_id = 0;
+        int tok = 0;
+    };
+    std::map<std::string, ConstEntry> global_consts_;
+    std::map<std::string, std::map<std::string, ConstEntry>> slid_consts_;
+    std::vector<std::map<std::string, ConstEntry>> block_const_stack_;
+
+    void collectAndFoldConsts();
+    // Fold a single const def. `slid_scope` is the enclosing class (empty for
+    // globals). cycle_set tracks decls currently being resolved.
+    void foldConstDef(const ConstDef& cd, const std::string& slid_scope,
+                      std::set<std::string>& cycle_set);
+    // Fold an Expr against the in-scope const tables. Throws on non-foldable
+    // expressions or unresolved references. Returns the folded entry's value
+    // and inferred type.
+    ConstEntry foldConstExpr(const Expr& e, const std::string& slid_scope,
+                             std::set<std::string>& cycle_set);
+    // Apply declared_type check and widening to a folded value. Returns the
+    // final entry stamped with the declared type. Throws on narrowing.
+    ConstEntry applyConstDeclaredType(const ConstDef& cd, const ConstEntry& folded);
+
+    const ConstEntry* lookupConst(const std::string& name) const;
+    const ConstEntry* lookupSlidConst(const std::string& slid_name,
+                                      const std::string& member) const;
+    std::string emitConstValue(const ConstEntry& e) const;
+
     std::vector<std::pair<std::string, std::string>> string_constants_;
     // Register a string constant on-demand from emit-time. Generates a fresh
     // `@.strN` label, records it for end-of-module emission, and returns the
