@@ -147,14 +147,6 @@ vec[2] <-> vec[4];
 import paths.
 
 const correctness:
-objects are passed by const reference.
-the current implementation is mutable.
-but the intention is for the default to be const.
-we will need a way to make a reference mutable.
-void strcpy(mutable char[] dst, char[] src);
-self is always mutable.
-we might want to be able to make self const.
-notes on this are in future directory.
 
 more const correctness:
 alias ConstString = <const> String;

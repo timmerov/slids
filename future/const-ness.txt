@@ -1,0 +1,145 @@
+
+const correctness is a work in progress.
+most of this document describes the future.
+const-ness is currently only partially enforced.
+
+slids has a rule: functions do not change my data.
+but once i pass you a value, it belongs to the function.
+the function can change it.
+objects are passed by reference to const data.
+type is of the form (const T)^.
+the function can change its copy of the pointer.
+but it cannot change the data the pointer points to.
+
+if you want a function to change your data, the function
+must use the mutable keyword.
+void strcpy(mutable char[] dst, char[] src, intptr cnt);
+
+the const keyword goes before the thing being modified.
+it binds loosely to the type.
+use parentheses as needed.
+everything accessible via a const pointer is const.
+
+for the rest of this document, assume these variables
+have these types:
+const int^ p;
+const int^ q;
+(const int)^ ptr;
+(const int)^ qtr;
+int^ r;
+int x;
+int y;
+
+p and q are immutable. p^ and q^ are immutable.
+ptr and qtr are mutable. ptr^ and qtr^ are immutable.
+
+fields:
+currently there are no plans to support const fields.
+
+functions:
+strcpy(mutable char[] dst, char[] src, intptr cnt);
+the type of src inside the function is: (const char)[]
+dst is mutable. dst^ is mutable.
+src is mutable. src^ is not.
+cnt is mutable.
+you may always pass a mutable pointer as a const parameter.
+you may never pass a const pointer as a mutable parameter.
+this is a compile error: p is const. param dst is mutable.
+strcpy(p, q, 1);
+
+methods:
+self is mutable by default.
+self data belongs to the methods, not to the caller.
+
+assignments:
+blanket naive rule:
+any time a const pointer appears on the
+lhs of an assignment, this is a compile error.
+p^ = 47;
+with the exception of...
+
+const pointer reassignment:
+you can't reassigne p,q because they are const.
+you can reassign ptr and qtr because they point to a const type.
+if you want to reassign ptr, go ahead.
+allowed:
+ptr = ^x;
+ptr = nullptr;
+ptr = ^y;
+
+deleting:
+the pointer must be mutable.
+allowed:
+delete r;
+not allowed:
+delete p;
+delete ptr;
+
+swapping:
+any time a const pointers appears on either side
+of a swap, this is a compile error.
+except swapping the actual const pointers is allowed.
+it's weird. but it's allowed.
+allowed:
+ptr <-> qtr;
+not allowed:
+ptr <-> rtr;
+r <-> qtr;
+ptr^ <-> qtr^;
+ptr^ <-> r^;
+
+move pointers:
+you can move any pointer into a const pointer.
+you cannot move a mutable pointer into a const pointer.
+this is a compile error.
+allowed:
+ptr <- qtr;
+qtr <- r;
+not allowed;
+r <- ptr;
+
+pointer declaration:
+if a const pointer appears anywhere on the rhs,
+then the lhs pointer is const.
+const int^ q = expression involving p;
+
+mutable pointer assignment:
+if a const pointer appears anywhere on the rhs,
+then there is a compile error.
+not allowed:
+r = expression involving p;
+
+casting:
+you can add and remove const-ness from pointers by casting.
+explicit cast required:
+mut_ptr = <mutable> const_ptr;
+explicit cast optional:
+const_ptr = mut_ptr;
+const_ptr = <const> mut_ptr;
+compile error:
+mut_ptr = const_ptr;
+
+objects:
+i would love for the compiler to be able to figure
+out if a method is const or not.
+i really don't want to have to do it myself.
+void foo(const String^ s) {
+    /* should be allowed. */
+    len = s^.size();
+    /* should not be allowed. */
+    s^.clear();
+}
+maybe we bring back transport.
+string.sl:
+transport string;
+compiling string.sl annotates and exports string.slh
+to the export directory.
+other source files would search the export directory first.
+annotated:
+String(...) {
+    intptr size() const;
+    void reserve() mutable;
+    void some_func(); /* unknown - compiler could not classify */
+}
+does the compiler classify methods every time?
+what if the header is wrong?
