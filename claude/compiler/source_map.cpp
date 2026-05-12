@@ -1,7 +1,9 @@
 #include "source_map.h"
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <ostream>
+#include <unistd.h>
 
 int SourceMap::openFile(std::string path, std::string source, int imported_by) {
     SourceFile sf;
@@ -27,6 +29,19 @@ const SourceFile& SourceMap::at(int file_id) const {
 
 namespace {
 
+bool colorOn() {
+    static const bool on = []{
+        if (const char* nc = std::getenv("NO_COLOR"); nc && *nc) return false;
+        return isatty(STDERR_FILENO) != 0;
+    }();
+    return on;
+}
+const char* cBold()    { return colorOn() ? "\033[1m"  : ""; }
+const char* cRed()     { return colorOn() ? "\033[38;5;160m" : ""; }
+const char* cYellow()  { return colorOn() ? "\033[38;5;226m" : ""; }
+const char* cBlueish() { return colorOn() ? "\033[38;5;73m"  : ""; }
+const char* cReset()   { return colorOn() ? "\033[0m"  : ""; }
+
 std::string getLine(const SourceFile& f, int line) {
     if (line < 1 || line > (int)f.line_starts.size()) return "";
     int start = f.line_starts[line - 1];
@@ -48,7 +63,7 @@ void renderBlock(const std::vector<SourceFile>& files,
                  int file_id, int tok, const std::string& msg,
                  std::ostream& os) {
     if (file_id < 0 || file_id >= (int)files.size()) {
-        os << "slidsc: error: " << msg << "\n";
+        os << "slidsc: error: " << cYellow() << msg << cReset() << "\n";
         return;
     }
     // walk the imported_by chain root -> leaf
@@ -57,11 +72,11 @@ void renderBlock(const std::vector<SourceFile>& files,
         chain.push_back(id);
     for (int i = (int)chain.size() - 1; i >= 1; i--)
         os << files[chain[i]].path << ": imported\n";
-    os << files[chain[0]].path << ":\n";
+    os << cBold() << files[chain[0]].path << ":" << cReset() << "\n";
 
     const SourceFile& f = files[file_id];
     if (tok < 0 || tok >= (int)f.tokens.size()) {
-        os << msg << "\n";
+        os << cYellow() << msg << cReset() << "\n";
         return;
     }
     const TokenLoc& loc = f.tokens[tok];
@@ -71,10 +86,25 @@ void renderBlock(const std::vector<SourceFile>& files,
     int max_line = (int)f.line_starts.size();
     if (last > max_line) last = max_line;
     int digit_w = std::max(2, (int)std::to_string(last).size());
-    for (int ln = first; ln <= loc.line; ln++)
+    for (int ln = first; ln < loc.line; ln++)
         printLine(os, ln, digit_w, getLine(f, ln));
+    {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%*d:", digit_w, loc.line);
+        std::string text = getLine(f, loc.line);
+        int cstart = std::max(0, loc.col - 1);
+        if (cstart > (int)text.size()) cstart = (int)text.size();
+        int avail = (int)text.size() - cstart;
+        int clen = std::max(0, std::min(loc.length, avail));
+        os << buf
+           << cBlueish() << text.substr(0, cstart)
+           << cRed() << text.substr(cstart, clen)
+           << cBlueish() << text.substr(cstart + clen)
+           << cReset() << "\n";
+    }
     for (int i = 0; i < digit_w + 1; i++) os << ' ';
     for (int i = 1; i < loc.col; i++) os << ' ';
+    os << cRed();
     if (loc.length <= 1) {
         os << '^';
     } else if (loc.length == 2) {
@@ -84,10 +114,10 @@ void renderBlock(const std::vector<SourceFile>& files,
         for (int i = 0; i < loc.length - 2; i++) os << '-';
         os << '^';
     }
-    os << "\n";
+    os << cReset() << "\n";
     for (int ln = loc.line + 1; ln <= last; ln++)
         printLine(os, ln, digit_w, getLine(f, ln));
-    os << msg << "\n";
+    os << cYellow() << msg << cReset() << "\n";
 }
 
 }  // namespace
