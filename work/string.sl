@@ -217,22 +217,22 @@ String (
     }
 
     /* return size of string. */
-    intptr size() {
+    intptr const size() {
         return size_;
     }
 
     /* begin iterator */
-    char^ begin() {
+    char^ const begin() {
         return storage_;
     }
 
     /* end iterator */
-    char^ end() {
+    char^ const end() {
         return storage_ + size_;
     }
 
     /* update iterator */
-    char^ next(char^ prev) {
+    char^ const next(char^ prev) {
         iter = <char[]> prev;
         return iter + 1;
     }
@@ -243,7 +243,7 @@ String (
     }
 
     /* return true if the string is empty. */
-    bool empty() {
+    bool const empty() {
         return (size_ == 0);
     }
 
@@ -284,7 +284,7 @@ String (
          0: self == other
         +1: self >  other
     */
-    int compare(String^ other) {
+    int const compare(String^ other) {
         if (other == ^self) {
             return 0;
         }
@@ -321,7 +321,7 @@ String (
     }
 
     /* return the substring. */
-    String slice(intptr start, intptr count) {
+    String const slice(intptr start, intptr count) {
         String s;
         s.reserve(count);
         s.append(storage_ + start, count);

@@ -3012,6 +3012,8 @@ void Parser::parseExternalMethodBlock(Program& program) {
             advance();
         }
         int em_tok = pos_;
+        em.file_id = file_id_;
+        em.tok = em_tok;
         if (peek().type == TokenType::kOp) {
             advance();
             if (auto sym = consumeOpSymbol()) em.method_name = "op" + *sym;
@@ -3533,6 +3535,49 @@ void Parser::mergeReopens(Program& program) {
             if (!em.body) continue;
             check_dup(em.slid_name, em.method_name, em.params, em.file_id, em.tok);
         }
+    }
+    // const-method mismatch between forward declaration and definition.
+    // Covers all four shapes (decl/def in slid.methods or external_methods).
+    {
+        struct Decl { bool is_const; int file_id; int tok; };
+        auto make_key = [](const std::string& mname,
+                            const std::vector<std::pair<std::string, std::string>>& params) {
+            std::string key = mname + "(";
+            for (auto& p : params) key += p.first + ",";
+            key += ")";
+            return key;
+        };
+        std::map<std::string, std::map<std::string, Decl>> decls_by_class;
+        for (auto& s : program.slids)
+            for (auto& m : s.methods)
+                if (!m.body)
+                    decls_by_class[s.name].emplace(make_key(m.name, m.params),
+                        Decl{m.is_const_method, m.file_id, m.tok});
+        for (auto& em : program.external_methods)
+            if (!em.body)
+                decls_by_class[em.slid_name].emplace(make_key(em.method_name, em.params),
+                    Decl{em.is_const_method, em.file_id, em.tok});
+        auto check_const = [&](const std::string& cls, const std::string& mname,
+                                const std::vector<std::pair<std::string, std::string>>& params,
+                                bool is_const, int file_id, int tok) {
+            auto cit = decls_by_class.find(cls);
+            if (cit == decls_by_class.end()) return;
+            auto dit = cit->second.find(make_key(mname, params));
+            if (dit == cit->second.end()) return;
+            if (dit->second.is_const == is_const) return;
+            std::string msg = "Method '" + mname + "' definition is "
+                + (is_const ? "const but its declaration is not."
+                            : "not const but its declaration is.");
+            throw CompileError{file_id, tok, msg}
+                .addNote(dit->second.file_id, dit->second.tok, "Declared here.");
+        };
+        for (auto& s : program.slids)
+            for (auto& m : s.methods)
+                if (m.body)
+                    check_const(s.name, m.name, m.params, m.is_const_method, m.file_id, m.tok);
+        for (auto& em : program.external_methods)
+            if (em.body)
+                check_const(em.slid_name, em.method_name, em.params, em.is_const_method, em.file_id, em.tok);
     }
     // Inheritance shadow checks — derived field vs base method, derived method vs base field.
     {
