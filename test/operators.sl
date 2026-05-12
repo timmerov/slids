@@ -5,8 +5,8 @@ Catalog of operators:
 
 Assignment / move / swap
     = — copy assign (synthesized by default if not defined)
-    <- — move (synthesized by default if not defined)
-    <-> — swap (synthesized by default if not defined; signature must be SameType^)
+    <-- — move (synthesized by default if not defined)
+    <--> — swap (synthesized by default if not defined; signature must be SameType^)
 
 Arithmetic
     +, -, *, /, %
@@ -51,19 +51,19 @@ copy, and compound assignment — lower as follows:
 
 Move requires rhs to be an lvalue:
 
-    Class lhs <- Type rhs
-        -> lhs.op<-(rhs)
+    Class lhs <-- Type rhs
+        -> lhs.op<--(rhs)
 
 Moving from a pointer type also sets the rhs to nullptr:
 
-    Class lhs <- Type^ rhs
-        -> lhs.op<-(rhs); rhs = nullptr
+    Class lhs <-- Type^ rhs
+        -> lhs.op<--(rhs); rhs = nullptr
 
 Swap requires lhs and rhs to be the same type and both
 lvalues:
 
-    Class lhs <-> SameClass rhs
-        -> lhs.op<->(rhs)
+    Class lhs <--> SameClass rhs
+        -> lhs.op<-->(rhs)
 
 Binary operations on temps are fused in place when
 possible — covers everything compoundable (arithmetic,
@@ -125,11 +125,11 @@ Overload(int y_ = 0) {
     op=(Overload^ a) {
         __println("Overload:op=(Overload^)");
     }
-    op<-(mutable Overload^ a) {
-        __println("Overload:op<-(Overload^)");
+    op<--(mutable Overload^ a) {
+        __println("Overload:op<--(Overload^)");
     }
-    op<->(mutable Overload^ a) {
-        __println("Overload:op<->(Overload^)");
+    op<-->(mutable Overload^ a) {
+        __println("Overload:op<-->(Overload^)");
     }
     op+(Overload^ a, Overload^ b) {
         __println("Overload:op+(Overload^,Overload^)");
@@ -275,10 +275,10 @@ Overload(int y_ = 0) {
     op=(int a) {
         __println("Overload:op=(int)");
     }
-    op<-(int a) {
-        __println("Overload:op<-(int)");
+    op<--(int a) {
+        __println("Overload:op<--(int)");
     }
-    /*op<->(int a) { }*/
+    /*op<-->(int a) { }*/
     op+(int a, int b) {
         __println("Overload:op+(int,int)");
     }
@@ -406,10 +406,10 @@ Overload(int y_ = 0) {
     op=(Simple^ a) {
         __println("Overload:op=(Simple^)");
     }
-    op<-(mutable Simple^ a) {
-        __println("Overload:op<-(Simple^)");
+    op<--(mutable Simple^ a) {
+        __println("Overload:op<--(Simple^)");
     }
-    /*op<->(Simple^ a) { }*/
+    /*op<-->(Simple^ a) { }*/
     op+(Simple^ a, Simple^ b) {
         __println("Overload:op+(Simple^,Simple^)");
     }
@@ -534,13 +534,13 @@ Overload(int y_ = 0) {
     }
 
     /* compile error: swap special case */
-    // op<->(int a) { }
-    // op<->(Simple^ a) { }
+    // op<-->(int a) { }
+    // op<-->(Simple^ a) { }
 
     /* compile error: not enough parameters. */
     // op=() { }
-    // op<-() { }
-    // op<->() { }
+    // op<--() { }
+    // op<-->() { }
     // op*(Overload^ a) { }
     // op/(Overload^ a) { }
     // op%(Overload^ a) { }
@@ -576,8 +576,8 @@ Overload(int y_ = 0) {
 
     /* compile error: too many parameters. */
     // op=(Overload^ a, Overload^ b) { }
-    // op<-(Overload^ a, Overload^ b) { }
-    // op<->(Overload^ a, Overload^ b) { }
+    // op<--(Overload^ a, Overload^ b) { }
+    // op<-->(Overload^ a, Overload^ b) { }
     // op+(Overload^ a, Overload^ b, Overload^ c) { }
     // op-(Overload^ a, Overload^ b, Overload^ c) { }
     // op*(Overload^ a, Overload^ b, Overload^ c) { }
@@ -638,10 +638,10 @@ BadReturn(int dummy_ = 0) {
    negative line stands alone when uncommented. */
 BadMutable(int dummy_ = 0) {
     /* move/swap with pointer param require 'mutable'. */
-    // op<-(Overload^ a) { }
-    // op<->(Overload^ a) { }
+    // op<--(Overload^ a) { }
+    // op<-->(Overload^ a) { }
     /* 'mutable' applies only to pointer types '^' and '[]'. */
-    // op<-(mutable int a) { }
+    // op<--(mutable int a) { }
 }
 
 Comparison(int z_ = 0) {
@@ -673,8 +673,8 @@ Comparison(int z_ = 0) {
 }
 
 MovePtr(int w_ = 0) {
-    op<-(mutable void^ ptr) {
-        __println("MovePtr:op<-(void^)");
+    op<--(mutable void^ ptr) {
+        __println("MovePtr:op<--(void^)");
     }
 }
 
@@ -692,10 +692,10 @@ int32 main()
 
     /* correct syntax. */
     a = b;
-    a <- b;
-    a <-> b;
+    a <-- b;
+    a <--> b;
     Overload decl_copy_b = b;
-    Overload decl_move_b <- b;
+    Overload decl_move_b <-- b;
     a = b + c;
     a = b - c;
     a = b * c;
@@ -745,9 +745,9 @@ int32 main()
 
     /* correct syntax. */
     a = x;
-    a <- x;
+    a <-- x;
     Overload decl_copy_x = x;
-    Overload decl_move_x <- x;
+    Overload decl_move_x <-- x;
     a = b + x;
     a = b - x;
     a = b * x;
@@ -791,9 +791,9 @@ int32 main()
 
     /* correct syntax. */
     a = d;
-    a <- d;
+    a <-- d;
     Overload decl_copy_d = d;
-    Overload decl_move_d <- d;
+    Overload decl_move_d <-- d;
     a = b + d;
     a = b - d;
     a = b * d;
@@ -848,16 +848,16 @@ int32 main()
     /* clear moved pointer test. */
     MovePtr mover;
     void^ ptr = ^mover;
-    mover <- ptr;
+    mover <-- ptr;
     result = (ptr == nullptr);
     __println("MoveTest[1]: (ptr==nullptr)=" + result);
 
     /* compile-error catalog (verified one-by-one). */
-    __println("1: Not allowed: op<->(int a)");
-    __println("2: Not allowed: op<->(Simple^ a)");
+    __println("1: Not allowed: op<-->(int a)");
+    __println("2: Not allowed: op<-->(Simple^ a)");
     __println("3: Not allowed: op=()");
-    __println("4: Not allowed: op<-()");
-    __println("5: Not allowed: op<->()");
+    __println("4: Not allowed: op<--()");
+    __println("5: Not allowed: op<-->()");
     __println("6: Not allowed: op*(Overload^ a)");
     __println("7: Not allowed: op/(Overload^ a)");
     __println("8: Not allowed: op%(Overload^ a)");
@@ -891,8 +891,8 @@ int32 main()
     __println("36: Not allowed: Overload op[]()");
     __println("37: Not allowed: op[]=(Overload^ a)");
     __println("38: Not allowed: op=(Overload^ a, Overload^ b)");
-    __println("39: Not allowed: op<-(Overload^ a, Overload^ b)");
-    __println("40: Not allowed: op<->(Overload^ a, Overload^ b)");
+    __println("39: Not allowed: op<--(Overload^ a, Overload^ b)");
+    __println("40: Not allowed: op<-->(Overload^ a, Overload^ b)");
     __println("41: Not allowed: op+(Overload^ a, Overload^ b, Overload^ c)");
     __println("42: Not allowed: op-(Overload^ a, Overload^ b, Overload^ c)");
     __println("43: Not allowed: op*(Overload^ a, Overload^ b, Overload^ c)");
@@ -939,9 +939,9 @@ int32 main()
     __println("84: Not allowed: Overload op>(Simple^ a) (comparison returns class)");
     __println("85: Not allowed: Overload op<=(Simple^ a) (comparison returns class)");
     __println("86: Not allowed: Overload op>=(Simple^ a) (comparison returns class)");
-    __println("87: Not allowed: op<-(Overload^ a) (move pointer param missing 'mutable')");
-    __println("88: Not allowed: op<->(Overload^ a) (swap pointer param missing 'mutable')");
-    __println("89: Not allowed: op<-(mutable int a) ('mutable' only on '^' or '[]')");
+    __println("87: Not allowed: op<--(Overload^ a) (move pointer param missing 'mutable')");
+    __println("88: Not allowed: op<-->(Overload^ a) (swap pointer param missing 'mutable')");
+    __println("89: Not allowed: op<--(mutable int a) ('mutable' only on '^' or '[]')");
 
     return 0;
 }

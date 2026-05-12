@@ -41,7 +41,7 @@ pa[0] nulled=1
 o.i_.x_=99
 -- slid array element field --
 sa[1].x_=77
--- slid array op= / op<- --
+-- slid array op= / op<-- --
 aa[0].x_=77
 ab[0].x_=88
 sm.x_ after move=0

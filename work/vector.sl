@@ -45,7 +45,7 @@ Vector<T>(
         ) (i < size_) {
             ++i; ++src; ++dst;
         } {
-            dst^ <- src^;
+            dst^ <-- src^;
         }
 
         /* free old storage. */

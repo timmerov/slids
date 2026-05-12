@@ -10,9 +10,9 @@ NoMove(
 Move(
     int x_
 ) {
-    op<-(mutable Move^ rhs) {
+    op<--(mutable Move^ rhs) {
         x_ = rhs^.x_;
-        __println("Move:<-=" + x_);
+        __println("Move:<--=" + x_);
     }
 }
 
@@ -33,7 +33,7 @@ NestedMove(
 int32 main() {
     /* move pointers */
     char[] p1 = new char[100];
-    char[] p2 <- p1;
+    char[] p2 <-- p1;
     if (p1 == nullptr) {
         __println("p1 == nullptr");
     } else {
@@ -62,7 +62,7 @@ int32 main() {
         NoMove from(42);
         NoMove to;
         __println("NoMove before: from=" + from.x_ + " to=" + to.x_);
-        to <- from;
+        to <-- from;
         __println("NoMove after : from=" + from.x_ + " to=" + to.x_);
     }
 
@@ -71,7 +71,7 @@ int32 main() {
         Move from(42);
         Move to;
         __println("Move before: from=" + from.x_ + " to=" + to.x_);
-        to <- from;
+        to <-- from;
         __println("Move after : from=" + from.x_ + " to=" + to.x_);
     }
 
@@ -81,7 +81,7 @@ int32 main() {
         NestedMove to;
         from.print("before from");
         to.print("before to  ");
-        to <- from;
+        to <-- from;
         from.print("after  from");
         to.print("after  to  ");
     }

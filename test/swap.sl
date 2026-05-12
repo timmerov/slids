@@ -4,10 +4,10 @@ unit tests for swap operator.
 
 /* class with swap operator. */
 Swap(int a_ = 0, int b_ = 0, int^ p_ = nullptr) {
-    op<->(mutable Swap^ s) {
-        __println("Swap[op<->]=op<->");
-        a_ <-> s^.a_;
-        p_ <-> s^.p_;
+    op<-->(mutable Swap^ s) {
+        __println("Swap[op<-->]=op<-->");
+        a_ <--> s^.a_;
+        p_ <--> s^.p_;
     }
 }
 
@@ -18,7 +18,7 @@ NoSwap(int a_ = 0, int b_ = 0, int^ p_ = nullptr) {
 /* class with wrong swap operator. */
 Wrong() {
     /* commented out compiler test:
-    op<->(mutable NoSwap^ ns) {
+    op<-->(mutable NoSwap^ ns) {
     }
     */
 }
@@ -27,7 +27,7 @@ int32 main() {
     /* swap ints */
     int x1 = 1;
     int y1 = 2;
-    x1 <-> y1;
+    x1 <--> y1;
     __println("x1[2]=" + x1);
     __println("y1[1]=" + y1);
 
@@ -36,7 +36,7 @@ int32 main() {
     int yp1 = 20;
     int^ pa = ^xp1;
     int^ pb = ^yp1;
-    pa <-> pb;
+    pa <--> pb;
     bool pok_a = (pa == ^yp1);
     bool pok_b = (pb == ^xp1);
     __println("pok_a[1]=" + pok_a);
@@ -49,7 +49,7 @@ int32 main() {
     int yt1 = 200;
     (int, int^) t1 = (1, ^xt1);
     (int, int^) t2 = (2, ^yt1);
-    t1 <-> t2;
+    t1 <--> t2;
     __println("t1[0][2]=" + t1[0]);
     __println("t2[0][1]=" + t2[0]);
     bool tok_a = (t1[1] == ^yt1);
@@ -62,7 +62,7 @@ int32 main() {
     int ys1 = 2000;
     Swap sw1(10, 11, ^xs1);
     Swap sw2(20, 21, ^ys1);
-    sw1 <-> sw2;
+    sw1 <--> sw2;
     __println("sw1.a_[20]=" + sw1.a_);
     __println("sw1.b_[11]=" + sw1.b_);
     __println("sw2.a_[10]=" + sw2.a_);
@@ -77,7 +77,7 @@ int32 main() {
     int yn1 = 20000;
     NoSwap n1(30, 31, ^xn1);
     NoSwap n2(40, 41, ^yn1);
-    n1 <-> n2;
+    n1 <--> n2;
     __println("n1.a_[40]=" + n1.a_);
     __println("n1.b_[41]=" + n1.b_);
     __println("n2.a_[30]=" + n2.a_);
@@ -91,7 +91,7 @@ int32 main() {
     int arr[4] = (100, 200, 300, 400);
     int[] p1 = ^arr[0];
     int[] p2 = ^arr[3];
-    p1++^ <-> p2--^;
+    p1++^ <--> p2--^;
     bool b1 = (p1 == ^arr[1]);
     bool b2 = (p2 == ^arr[2]);
     __println("arr[400,200,300,100]=(" + arr[0] + "," + arr[1] + "," + arr[2] + "," + arr[3] + ")");
@@ -101,7 +101,7 @@ int32 main() {
     /* side effects — pre-inc/dec deref */
     p1 = ^arr[3];
     p2 = ^arr[0];
-    (--p1)^ <-> (++p2)^;
+    (--p1)^ <--> (++p2)^;
     bool b1b = (p1 == ^arr[2]);
     bool b2b = (p2 == ^arr[1]);
     __println("arr[400,300,200,100]=(" + arr[0] + "," + arr[1] + "," + arr[2] + "," + arr[3] + ")");
@@ -112,13 +112,13 @@ int32 main() {
        SwapStmt lvalue shapes — bare deref, mixed post-inc, field.
        ---------------------------------------------------------- */
 
-    /* bare ptr^ <-> ptr^ — value swap through two int^ references. */
+    /* bare ptr^ <--> ptr^ — value swap through two int^ references. */
     {
         int xa = 1;
         int xb = 2;
         int^ ra = ^xa;
         int^ rb = ^xb;
-        ra^ <-> rb^;
+        ra^ <--> rb^;
         __println("xa[2]=" + xa);
         __println("xb[1]=" + xb);
     }
@@ -128,7 +128,7 @@ int32 main() {
         char buf[4] = ('a', 'b', 'c', 'd');
         char[] lo = ^buf[0];
         char[] hi = ^buf[3];
-        lo^ <-> hi^;
+        lo^ <--> hi^;
         __println("buf[dbca]=(" + buf[0] + "," + buf[1] + "," + buf[2] + "," + buf[3] + ")");
     }
 
@@ -137,7 +137,7 @@ int32 main() {
         int arr2[2] = (1, 2);
         int[] ia = ^arr2[0];
         int[] ib = ^arr2[1];
-        ia++^ <-> ib^;
+        ia++^ <--> ib^;
         __println("arr2[2,1]=(" + arr2[0] + "," + arr2[1] + ")");
         bool ma = (ia == ^arr2[1]);
         bool mb = (ib == ^arr2[1]);
@@ -145,11 +145,11 @@ int32 main() {
         __println("mb[1]=" + mb);
     }
 
-    /* obj.x <-> obj.y on a value local — direct FieldAccessExpr.
+    /* obj.x <--> obj.y on a value local — direct FieldAccessExpr.
        falls out of the recursive resolver. */
     {
         Swap sw(7, 9, nullptr);
-        sw.a_ <-> sw.b_;
+        sw.a_ <--> sw.b_;
         __println("sw.a_[9]=" + sw.a_);
         __println("sw.b_[7]=" + sw.b_);
     }
@@ -164,7 +164,7 @@ int32 main() {
     //{
     //    int xv = 1;
     //    bool bv = true;
-    //    xv <-> bv;
+    //    xv <--> bv;
     //}
 
     return 0;

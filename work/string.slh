@@ -25,7 +25,7 @@ String(...)
     move operator.
     rhs may be self.
     */
-    op<-(mutable String^ s);
+    op<--(mutable String^ s);
 
     /*
     assignment and type conversion from

@@ -3,7 +3,7 @@ b: (x,y,z)=(10,11,12)
 c: (x,y,z)=(20,21,22)
 d: (x,y,z)=(40,41,42)
 d*: (x,y,z)=(50,51,52)
-d<-: (x,y,z)=(60,61,62)
+d<--: (x,y,z)=(60,61,62)
 tuple = (1,2,10)
 tuple2 = (1,2,10)
 tuple3 = (1,2,10)
@@ -67,7 +67,7 @@ diff = (9,18,27)
 prod = (10,21,36)
 ss[0]: (x,y,z)=(11,22,33)
 ss[1]: (x,y,z)=(44,55,66)
--- tuple[N] <- move test: expect 3 ctor, 1 move, 3 dtor --
+-- tuple[N] <-- move test: expect 3 ctor, 1 move, 3 dtor --
 Action:ctor
 Action:ctor
 Action:ctor

@@ -1,7 +1,7 @@
 /*
 test lvalue parsing and assignment dispatch.
 shapes: variable | field | index | deref | parens
-operators: = | <- | <-> | += -= *= /=
+operators: = | <-- | <--> | += -= *= /=
 */
 
 Counter(int v_ = 0) {
@@ -32,7 +32,7 @@ void mutate_param(int p) {
 S(int x_ = 0) {
     op=(int v) { x_ = v; }
     op=(S^ rhs) { x_ = rhs^.x_; }
-    op<-(mutable S^ rhs) {
+    op<--(mutable S^ rhs) {
         x_ = rhs^.x_;
         rhs^.x_ = 0;
     }
@@ -136,14 +136,14 @@ int32 main() {
         __println("paren-inc-deref: arrP=" + arrP[0] + "," + arrP[1] + "," + arrP[2] + "," + arrP[3]);
     }
 
-    /* swap <-> — inline-array element. var swap and slid swap are
+    /* swap <--> — inline-array element. var swap and slid swap are
        in swap.sl; iterator-with-paren swap is the post-inc-deref form
        covered there too. */
     {
         __println("-- swap --");
 
         int arrS[4] = (1, 2, 3, 4);
-        arrS[0] <-> arrS[3];
+        arrS[0] <--> arrS[3];
         __println("inline-arr: arrS=" + arrS[0] + "," + arrS[1] + "," + arrS[2] + "," + arrS[3]);
     }
 
@@ -232,9 +232,9 @@ int32 main() {
         __println("sa[1].x_=" + sa[1].x_);
     }
 
-    /* IndexAssign — slid array op= / op<- dispatch */
+    /* IndexAssign — slid array op= / op<-- dispatch */
     {
-        __println("-- slid array op= / op<- --");
+        __println("-- slid array op= / op<-- --");
 
         S aa[2];
         S sc(77);
@@ -243,7 +243,7 @@ int32 main() {
 
         S ab[2];
         S sm(88);
-        ab[0] <- sm;
+        ab[0] <-- sm;
         __println("ab[0].x_=" + ab[0].x_);
         __println("sm.x_ after move=" + sm.x_);
     }
@@ -389,7 +389,7 @@ int32 main() {
         int b[4] = (100, 200, 300, 400);
         int[] pa = ^a[0];
         int[] pb = ^b[0];
-        pa++^ <-> pb++^;
+        pa++^ <--> pb++^;
         /* Expected: a[0] gets b's value (100), b[0] gets a's (10);
            pa advances to ^a[1], pb advances to ^b[1]. */
         __println("a[0]=" + a[0]);

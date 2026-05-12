@@ -96,8 +96,8 @@ enum class TokenType {
     kXorXorEq,
 
     // move and swap operators
-    kArrowLeft,   // <-
-    kArrowBoth,   // <->
+    kArrowLeft,   // <--
+    kArrowBoth,   // <-->
 
     // sizeof
     kSizeof,

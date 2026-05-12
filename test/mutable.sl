@@ -29,26 +29,26 @@ void copy4(mutable Class^ dst, Class^ src) { }
 /* check template methods. */
 Box<T>(T value_ = 0) {
     /* correct syntax */
-    op<-(mutable Box<T>^ other) {
-        __println("Box<T>:op<-(mutable Box<T>^)");
+    op<--(mutable Box<T>^ other) {
+        __println("Box<T>:op<--(mutable Box<T>^)");
     }
 }
 
 BadBox<T>(T value_ = 0) {
-    /* compile error: missing 'mutable' on op<- pointer param in template. */
-    // op<-(BadBox<T>^ other) { }
+    /* compile error: missing 'mutable' on op<-- pointer param in template. */
+    // op<--(BadBox<T>^ other) { }
 }
 
 int32 main() {
     /* exercise positive template instantiation. */
     Box<int> bx;
     Box<int> by;
-    bx <- by;
+    bx <-- by;
 
     /* compile error verification messages. */
     __println("01: Not allowed: void wrong1(mutable int x) (member, non-pointer)");
     __println("02: Not allowed: void wrong2(mutable int x) (free fn, non-pointer)");
-    __println("03: Not allowed: op<-(BadBox<T>^ other) (template missing 'mutable')");
+    __println("03: Not allowed: op<--(BadBox<T>^ other) (template missing 'mutable')");
 
     return 0;
 }

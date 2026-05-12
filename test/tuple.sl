@@ -47,7 +47,7 @@ Action(
         __println("Action:dtor");
     }
 
-    op<-(mutable Action^ rhs) {
+    op<--(mutable Action^ rhs) {
         __println("Action:move");
     }
 }
@@ -71,7 +71,7 @@ void modify_tuple((int, int)^ p) {
 }
 
 void move_tuple_slot((int, int)^ p, int v) {
-    p^[0] <- v;
+    p^[0] <-- v;
 }
 
 void take_simples((Simple, Simple)^ sp) {
@@ -140,8 +140,8 @@ int32 main() {
     d = (50, 51, 52);
     d.print("d*");
 
-    d <- (60, 61, 62);
-    d.print("d<-");
+    d <-- (60, 61, 62);
+    d.print("d<--");
 
     //-EXPECT-ERROR: Too many initializers for 'Simple': it has 3 fields, got 5
     //Simple e(1, 2, 3, 4, 5);
@@ -157,9 +157,9 @@ int32 main() {
     __println("tuple = (" + one + "," + two + "," + ten + ")");
     tuple2 = tuple;
     __println("tuple2 = (" + tuple2[0] + "," + tuple2[1] + "," + tuple2[2] + ")");
-    tuple3 <- tuple;
+    tuple3 <-- tuple;
     __println("tuple3 = (" + tuple3[0] + "," + tuple3[1] + "," + tuple3[2] + ")");
-    (int, int, int) tuple4 <- tuple;
+    (int, int, int) tuple4 <-- tuple;
     __println("tuple4 = (" + tuple4[0] + "," + tuple4[1] + "," + tuple4[2] + ")");
 
     /* overwriting */
@@ -208,7 +208,7 @@ int32 main() {
         xtor_tuple = (Action(0), Action(2));
         xtor1_tuple = xtor_tuple;
         xtor_tuple = xtor1_tuple;
-        xtor1_tuple <- xtor_tuple;
+        xtor1_tuple <-- xtor_tuple;
     }
 
     /* functions */
@@ -220,7 +220,7 @@ int32 main() {
     /* tuple return from function. */
     ret_tuple = make_tuple();
     __println("ret_tuple = (" + ret_tuple[0] + "," + ret_tuple[1] + "," + ret_tuple[2] + ")");
-    ret_tuple2 <- make_tuple();
+    ret_tuple2 <-- make_tuple();
     __println("ret_tuple2 = (" + ret_tuple2[0] + "," + ret_tuple2[1] + "," + ret_tuple2[2] + ")");
 
     slid_ret = make_simples();
@@ -263,11 +263,11 @@ int32 main() {
     ss[0].print("ss[0]");
     ss[1].print("ss[1]");
 
-    /* tuple[N] <- val move: dispatches op<- on the slot's slid type. */
+    /* tuple[N] <-- val move: dispatches op<-- on the slot's slid type. */
     {
-        __println("-- tuple[N] <- move test: expect 3 ctor, 1 move, 3 dtor --");
+        __println("-- tuple[N] <-- move test: expect 3 ctor, 1 move, 3 dtor --");
         at = (Action(0), Action(1));
-        at[0] <- Action(2);
+        at[0] <-- Action(2);
     }
 
     /* single-slid Simple::op+ dispatch (bare, not inside a tuple). */
@@ -289,13 +289,13 @@ int32 main() {
         ct = (cA, cB);
     }
 
-    /* #17: raw-pointer base[idx] <- val null-outs the source when elt is indirect.
+    /* #17: raw-pointer base[idx] <-- val null-outs the source when elt is indirect.
        Also exercises string-literal inside new Type(args) (collectStringConstants fix). */
     {
         __println("-- raw-pointer move test --");
         arr = new NameValue^[2];
         src = new NameValue("hello", 42);
-        arr[0] <- src;  /* null-outs src */
+        arr[0] <-- src;  /* null-outs src */
         if (src == nullptr) {
             __println("src is null after move");
         }
@@ -313,7 +313,7 @@ int32 main() {
         __println("-- chained indexed field move test --");
         buf = new int[3];
         ib_tup = (IntBuf(), IntBuf());
-        ib_tup[0].data_ <- buf;
+        ib_tup[0].data_ <-- buf;
         if (buf == nullptr) {
             __println("buf is null after move into ib_tup[0].data_");
         }
@@ -380,7 +380,7 @@ int32 main() {
     __println("after modify_tuple: tp=(" + tp[0] + "," + tp[1] + ")");
 
     /* #1 follow-ups */
-    /* (a) p^[N] <- v move form through a ref */
+    /* (a) p^[N] <-- v move form through a ref */
     move_tuple_slot(^tp, 42);
     __println("after move_slot: tp=(" + tp[0] + "," + tp[1] + ")");
 

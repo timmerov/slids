@@ -50,7 +50,7 @@ String (
     move operator.
     rhs may be self.
     */
-    op<-(mutable String^ s) {
+    op<--(mutable String^ s) {
         /* don't steal our own resources. */
         if (s == ^self) {
             return;
@@ -59,7 +59,7 @@ String (
         delete storage_;
         size_ = s^.size_;
         capacity_ = s^.capacity_;
-        storage_ <- s^.storage_;
+        storage_ <-- s^.storage_;
         /* leave them in a valid state. */
         s^.size_ = 0;
         s^.capacity_ = 0;
@@ -263,7 +263,7 @@ String (
         strcpy(new_storage, storage_, size_);
 
         capacity_ = cap;
-        storage_ <- new_storage;
+        storage_ <-- new_storage;
     }
 
     /* reverse the order of the characters. */
@@ -274,7 +274,7 @@ String (
         ) (lo < hi) {
             ++lo; --hi;
         } {
-            lo^ <-> hi^;
+            lo^ <--> hi^;
         }
     }
 

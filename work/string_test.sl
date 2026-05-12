@@ -37,7 +37,7 @@ int32 main() {
     println(s4);
 
     /* move operator. */
-    String s5 <- s4;
+    String s5 <-- s4;
     println(s4);
     println(s5);
 

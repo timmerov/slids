@@ -290,10 +290,10 @@ std::vector<Token> Lexer::tokenize() {
                         if (peek() == '=') { advance(); emit(TokenType::kLShiftEq, "<<="); }
                         else               {            emit(TokenType::kLShift,   "<<");  }
                     } else if (peek() == '=') { advance(); emit(TokenType::kLtEq, "<="); }
-                    else if (peek() == '-') {
-                        advance();
-                        if (peek() == '>') { advance(); emit(TokenType::kArrowBoth, "<->"); }
-                        else               {            emit(TokenType::kArrowLeft, "<-");  }
+                    else if (peek() == '-' && peek2() == '-') {
+                        advance(); advance();
+                        if (peek() == '>') { advance(); emit(TokenType::kArrowBoth, "<-->"); }
+                        else               {            emit(TokenType::kArrowLeft, "<--");  }
                     }
                     else                   {            emit(TokenType::kLt, "<"); }
                     break;
