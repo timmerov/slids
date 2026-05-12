@@ -167,10 +167,21 @@ private:
     // final entry stamped with the declared type. Throws on narrowing.
     ConstEntry applyConstDeclaredType(const ConstDef& cd, const ConstEntry& folded);
 
+    // Pre-check the shape of a const initializer expression. Returns true
+    // iff every leaf is a literal, a prior const reference, or one of the
+    // foldable operator forms. Used at block scope to decide between
+    // substitution (true) and runtime alloca (false) without try/catch.
+    bool isFoldableConstShape(const Expr& e, const std::string& slid_scope) const;
+
     const ConstEntry* lookupConst(const std::string& name) const;
     const ConstEntry* lookupSlidConst(const std::string& slid_name,
                                       const std::string& member) const;
     std::string emitConstValue(const ConstEntry& e) const;
+
+    // Strip leading `const `/`mutable ` qualifiers and unwrap paren-qualified
+    // forms like `(const T)X` to `TX`. Used at every type-string consumer that
+    // doesn't care about the qualifier (LLVM mapping, slid_info_ lookup, ...).
+    std::string canonType(std::string t) const;
 
     std::vector<std::pair<std::string, std::string>> string_constants_;
     // Register a string constant on-demand from emit-time. Generates a fresh

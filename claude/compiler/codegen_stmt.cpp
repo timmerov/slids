@@ -710,21 +710,42 @@ static std::unique_ptr<Expr> cloneExpr(const Expr& e) {
 void Codegen::emitStmt(const Stmt& stmt) {
     EmitGuard _g(*this, stmt.file_id, stmt.tok);
 
-    // const decl: fold rhs against the enclosing scope (existing block consts,
-    // current slid consts, globals) and register in the innermost block frame.
-    // Emits no IR — every use site substitutes the literal.
+    // const decl: foldable rhs → substitute via the block-const stack; emit no IR.
+    // non-foldable rhs → emit as a regular alloca'd local with the qualified
+    // type (immutability not enforced this scope).
     if (auto* cds = dynamic_cast<const ConstDeclStmt*>(&stmt)) {
-        std::set<std::string> cycle;
-        ConstEntry folded = foldConstExpr(*cds->def.rhs, current_slid_, cycle);
-        ConstEntry final_e = applyConstDeclaredType(cds->def, folded);
-        if (block_const_stack_.empty()) block_const_stack_.push_back({});
-        auto& frame = block_const_stack_.back();
-        if (frame.count(cds->def.name))
-            errorAtNodeWithNote(stmt,
-                "Constant '" + cds->def.name + "' is already declared in this scope.",
-                frame[cds->def.name].file_id, frame[cds->def.name].tok,
-                "First declared here.");
-        frame[cds->def.name] = final_e;
+        if (isFoldableConstShape(*cds->def.rhs, current_slid_)) {
+            std::set<std::string> cycle;
+            ConstEntry folded = foldConstExpr(*cds->def.rhs, current_slid_, cycle);
+            ConstEntry final_e = applyConstDeclaredType(cds->def, folded);
+            if (block_const_stack_.empty()) block_const_stack_.push_back({});
+            auto& frame = block_const_stack_.back();
+            if (frame.count(cds->def.name))
+                errorAtNodeWithNote(stmt,
+                    "Constant '" + cds->def.name + "' is already declared in this scope.",
+                    frame[cds->def.name].file_id, frame[cds->def.name].tok,
+                    "First declared here.");
+            frame[cds->def.name] = final_e;
+            return;
+        }
+        // soft-fail: runtime alloca path.
+        std::string slid_type = cds->def.declared_type;
+        if (slid_type.empty()) slid_type = inferSlidType(*cds->def.rhs);
+        // decl-keyword `const` qualifies the variable's reported type.
+        if (slid_type.rfind("const ", 0) != 0
+            && slid_type.rfind("mutable ", 0) != 0) {
+            slid_type = "const " + slid_type;
+        }
+        std::string canon = canonType(slid_type);
+        if (slid_info_.count(canon) || isAnonTupleType(canon))
+            errorAtNode(stmt,
+                "Const variable of non-primitive type requires a foldable initializer.");
+        std::string ll = llvmType(slid_type);
+        std::string val = emitExpr(*cds->def.rhs);
+        std::string reg = uniqueAllocaReg(cds->def.name);
+        out_ << "    " << reg << " = alloca " << ll << "\n";
+        out_ << "    store " << ll << " " << val << ", ptr " << reg << "\n";
+        locals_[cds->def.name] = {reg, slid_type, cds->def.file_id, cds->def.tok};
         return;
     }
 
@@ -1599,9 +1620,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 "uint","uint8","uint16","uint32","uint64",
                 "char","bool","float32","float64","void","intptr"
             };
-            bool is_ptr = (!eff_type.empty() && eff_type.back() == '^')
-                       || (eff_type.size() >= 2 && eff_type.substr(eff_type.size()-2) == "[]");
-            if (!known_primitives.count(eff_type) && !is_ptr)
+            std::string canon = canonType(eff_type);
+            bool is_ptr = (!canon.empty() && canon.back() == '^')
+                       || (canon.size() >= 2 && canon.substr(canon.size()-2) == "[]");
+            if (!known_primitives.count(canon) && !is_ptr)
                 error(std::string("Unknown type '" + eff_type + "'"));
         }
         std::string reg = uniqueAllocaReg(decl->name);

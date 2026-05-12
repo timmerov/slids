@@ -129,6 +129,16 @@ struct PtrCastExpr : Expr {
         : target_type(std::move(t)), operand(std::move(op)) {}
 };
 
+// qualifier-only cast: <const> expr  or  <mutable> expr — applies to any value.
+// codegen lowers to the operand value verbatim; inferSlidType applies the
+// qualifier to the operand's reported type (no semantic enforcement).
+struct QualifierCastExpr : Expr {
+    std::string qualifier;             // "const" or "mutable"
+    std::unique_ptr<Expr> operand;
+    QualifierCastExpr(std::string q, std::unique_ptr<Expr> op)
+        : qualifier(std::move(q)), operand(std::move(op)) {}
+};
+
 // tuple literal: (expr, expr, ...) — used in return statements
 struct TupleExpr : Expr {
     std::vector<std::unique_ptr<Expr>> values;
@@ -401,6 +411,7 @@ struct MethodDef {
     bool is_delete = false;    // `= delete;` — pure virtual when no ancestor match;
                                //               removes inherited method when a same-sig ancestor exists
     bool is_default = false;   // `= default;` — derived inherits base impl with no-shadow contract
+    bool is_const_method = false; // `T const Class:method()` — marker only this scope, no enforcement
 };
 
 struct SlidDef {
@@ -481,6 +492,7 @@ struct ExternalMethodDef {
     bool is_virtual = false;
     bool is_delete = false;
     bool is_default = false;
+    bool is_const_method = false; // `T const Class:method()` — marker only this scope, no enforcement
 };
 
 struct Program {

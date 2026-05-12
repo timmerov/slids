@@ -1963,6 +1963,13 @@ std::string Codegen::emitExpr(const Expr& expr) {
         return tmp;
     }
 
+    // qualifier-only cast: <const> expr  or  <mutable> expr — pass operand
+    // value through verbatim; the cast's slid type carries the new qualifier
+    // (inferSlidType handles the type-string projection).
+    if (auto* qc = dynamic_cast<const QualifierCastExpr*>(&expr)) {
+        return emitExpr(*qc->operand);
+    }
+
     // pointer reinterpret cast: <Type^> expr
     if (auto* pc = dynamic_cast<const PtrCastExpr*>(&expr)) {
         auto ptrBase = [](const std::string& t) -> std::string {
@@ -2304,6 +2311,11 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
     if (auto* pc = dynamic_cast<const PtrCastExpr*>(&expr))
         return llvmType(pc->target_type);
 
+    // qualifier-only cast — result LLVM type matches the operand (qualifier
+    // strips through canonType in llvmType).
+    if (auto* qc = dynamic_cast<const QualifierCastExpr*>(&expr))
+        return exprLlvmType(*qc->operand);
+
     // sizeof always returns intptr (i64 on 64-bit)
     if (dynamic_cast<const SizeofExpr*>(&expr)) return "i64";
 
@@ -2512,6 +2524,19 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr)) return nc->target_type;
     // pointer reinterpret cast — use the target type
     if (auto* pc = dynamic_cast<const PtrCastExpr*>(&expr)) return pc->target_type;
+    // qualifier-only cast — apply the qualifier on the operand's slid type.
+    // <const> wraps the operand's type with a leading `const `; <mutable>
+    // strips a leading `const ` if present (otherwise no-op).
+    if (auto* qc = dynamic_cast<const QualifierCastExpr*>(&expr)) {
+        std::string inner = inferSlidType(*qc->operand);
+        if (qc->qualifier == "const") {
+            if (inner.rfind("const ", 0) == 0) return inner;
+            return "const " + inner;
+        }
+        // mutable: strip a single leading `const ` if present
+        if (inner.rfind("const ", 0) == 0) return inner.substr(6);
+        return inner;
+    }
     // variable — look up its declared type, then fall back to current slid's fields
     if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
         if (auto* ce = lookupConst(ve->name)) return ce->slid_type;

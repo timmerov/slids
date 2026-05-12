@@ -110,6 +110,21 @@ T doubler<T>(T a) {
     return a * factor;
 }
 
+/* class with a method bearing the const-marker. parse-only this scope —
+   no enforcement that the body doesn't modify self. */
+ConstMethodHolder(int n_ = 0) {
+    int const probe(int x) {
+        return x + n_;
+    }
+}
+
+/* runtime const variable: rhs is not foldable, so it lowers to a regular
+   alloca with the const-qualified type carried in the local's type string. */
+int runtimeConstFn(int a, int b) {
+    const int abc = a * b;
+    return abc;
+}
+
 /* template class: class-scope const with rhs independent of T. */
 Container<T>(int n = 0) {
     const int magic = 42;
@@ -222,6 +237,22 @@ int32 main() {
     /* template function with body-scope const. */
     __println("doubler<int>(7)=" + doubler<int>(7));
 
+    /* method-const marker parses; no enforcement. */
+    ConstMethodHolder cmh;
+    __println("cmh.probe(5)=" + cmh.probe(5));
+
+    /* runtime const var (rhs not foldable): lowers to alloca. */
+    __println("runtimeConstFn(3,4)=" + runtimeConstFn(3, 4));
+
+    /* qualifier-only cast on a value. ##type carries the qualifier. */
+    ck = <const> (int=3);
+    __println("ck=" + ck);
+    __println("##type(ck)=" + ##type(ck));
+
+    /* ##type fidelity on a const-typed local. */
+    const int abc = 10;
+    __println("##type(abc)=" + ##type(abc));
+
 
     /* compile error: cannot truncate constants. */
     //-EXPECT-ERROR: truncate constant
@@ -230,14 +261,6 @@ int32 main() {
     // const int32 overflow = 10_000_000_000;
     //-EXPECT-ERROR: negative constant
     // const uint sign_err = -1;
-
-    /* compile error: rhs references a name that doesn't resolve. */
-    //-EXPECT-ERROR: unknown name
-    // const int unk = unknown_name;
-
-    /* compile error: rhs is not a constant expression. */
-    //-EXPECT-ERROR: not allowed in a constant initializer
-    // const int nf = foo();
 
     /* compile error: bitwise operation on a float. */
     //-EXPECT-ERROR: Bitwise
@@ -249,6 +272,15 @@ int32 main() {
 
     return 0;
 }
+
+/* compile error: rhs references a name that doesn't resolve (file scope —
+   block-scope non-foldable rhs becomes a runtime alloca). */
+//-EXPECT-ERROR: unknown name
+// const int unk = unknown_name;
+
+/* compile error: rhs is not a constant expression at file scope. */
+//-EXPECT-ERROR: not allowed in a constant initializer
+// const int nf = pi + foo();
 
 /* compile error: cycle in const initializers (file scope). */
 //-EXPECT-ERROR: cyclic initializer

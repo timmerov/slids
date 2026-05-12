@@ -637,8 +637,40 @@ bool Parser::isTemplateTypeArgLookahead() const {
 std::string Parser::parseTypeName() {
     [[maybe_unused]] int t_start = pos_;
     std::string base;
+    // leading qualifier: const T  or  mutable T. carried as a prefix on the
+    // returned type string; binds to the entire trailing type form.
+    if (peek().type == TokenType::kConst || peek().type == TokenType::kMutable) {
+        std::string q = (peek().type == TokenType::kConst) ? "const " : "mutable ";
+        advance();
+        std::string inner = parseTypeName();
+        return q + inner;
+    }
     // anon-tuple type: (t1, t2, ...) — may carry trailing ^ or []
+    // also paren-qualified type: (const T) or (mutable T) — the qualifier
+    // binds tightly to the inner type, then the trailing ^/[] applies to
+    // the qualified type. distinguished from anon-tuple by the leading
+    // const/mutable token after the open paren.
     if (peek().type == TokenType::kLParen) {
+        if (pos_ + 1 < (int)tokens_.size()
+            && (tokens_[pos_ + 1].type == TokenType::kConst
+                || tokens_[pos_ + 1].type == TokenType::kMutable)) {
+            advance(); // consume '('
+            std::string inner = parseTypeName();
+            expect(TokenType::kRParen, "Expected ')' after qualified type");
+            base = "(" + inner + ")";
+            while (true) {
+                if (peek().type == TokenType::kBitXor) { advance(); base += "^"; }
+                else if (peek().type == TokenType::kXorXor) { advance(); base += "^^"; }
+                else if (peek().type == TokenType::kLBracket
+                           && pos_ + 1 < (int)tokens_.size()
+                           && tokens_[pos_ + 1].type == TokenType::kRBracket) {
+                    advance(); advance();
+                    base += "[]";
+                }
+                else break;
+            }
+            return base;
+        }
         advance(); // consume '('
         base = "(";
         bool first = true;
@@ -1038,6 +1070,19 @@ std::unique_ptr<Expr> Parser::parseUnary() {
             make<StringifyExpr>(src_tok, "name", make<VarExpr>(src_tok, name)));
         tuple->values.push_back(make<AddrOfExpr>(src_tok, std::move(operand)));
         return tuple;
+    }
+    // qualifier-only cast: <const> expr  or  <mutable> expr — any value.
+    if (peek().type == TokenType::kLt
+        && pos_ + 2 < (int)tokens_.size()
+        && (tokens_[pos_ + 1].type == TokenType::kConst
+            || tokens_[pos_ + 1].type == TokenType::kMutable)
+        && tokens_[pos_ + 2].type == TokenType::kGt) {
+        advance(); // consume <
+        std::string q = (peek().type == TokenType::kConst) ? "const" : "mutable";
+        advance(); // consume const/mutable
+        advance(); // consume >
+        auto operand = parseUnary();
+        return make<QualifierCastExpr>(t_start, q, std::move(operand));
     }
     // pointer reinterpret cast: <Type^> expr  or  <Type[]> expr  or  <intptr> expr
     if (peek().type == TokenType::kLt) {
@@ -2428,6 +2473,12 @@ MethodDef Parser::parseMethodDef() {
     } else {
         m.return_type = parseTypeName();
     }
+    // optional `const` between return type and method name marks the method
+    // as not modifying self. parsed for syntax; not enforced this scope.
+    if (peek().type == TokenType::kConst) {
+        m.is_const_method = true;
+        advance();
+    }
     int op_tok = pos_;
     m.file_id = file_id_;
     m.tok = op_tok;
@@ -2678,18 +2729,46 @@ SlidDef Parser::parseSlidDef() {
         int virt_off = (peek().type == TokenType::kVirtual) ? 1 : 0;
         auto isMethodDecl = [&]() {
             int base = pos_ + virt_off;
+            // skip a leading const/mutable qualifier on the return type
+            while (base < (int)tokens_.size()
+                   && (tokens_[base].type == TokenType::kConst
+                       || tokens_[base].type == TokenType::kMutable)) {
+                base++;
+            }
+            // skip a paren-qualified return type like (const T)^
+            if (base < (int)tokens_.size() && tokens_[base].type == TokenType::kLParen) {
+                int depth = 1, scan = base + 1;
+                while (scan < (int)tokens_.size() && depth > 0) {
+                    if (tokens_[scan].type == TokenType::kLParen) depth++;
+                    else if (tokens_[scan].type == TokenType::kRParen) depth--;
+                    if (depth == 0) break;
+                    scan++;
+                }
+                if (scan < (int)tokens_.size()) base = scan + 1;
+            }
+            if (base >= (int)tokens_.size()) return false;
             const Token& t0 = tokens_[base];
             // op<symbol>( without explicit return type
             if (t0.type == TokenType::kOp) {
-                auto sym = peekOpSymbolAt(virt_off + 1);
+                auto sym = peekOpSymbolAt(base - pos_ + 1);
                 if (!sym) return false;
                 int op_end = base + 1 + (*sym == "[]" ? 2 : 1);
                 return op_end < (int)tokens_.size() && tokens_[op_end].type == TokenType::kLParen;
             }
             // regular method: return-type name(
             // return type may include pointer/iterator suffixes: ^ or []
-            if (!(isTypeName(t0) || isUserTypeName(t0))) return false;
-            int name_pos = base + 1;
+            // (paren-qualified types already advanced `base` past the closing paren)
+            int name_pos;
+            if (tokens_[base].type == TokenType::kBitXor
+                || tokens_[base].type == TokenType::kXorXor
+                || (tokens_[base].type == TokenType::kLBracket
+                    && base + 1 < (int)tokens_.size()
+                    && tokens_[base + 1].type == TokenType::kRBracket)) {
+                name_pos = base; // paren-qualified — skip suffixes from current pos
+            } else {
+                if (!(isTypeName(t0) || isUserTypeName(t0))) return false;
+                name_pos = base + 1;
+            }
             while (name_pos < (int)tokens_.size()) {
                 if (tokens_[name_pos].type == TokenType::kBitXor
                     || tokens_[name_pos].type == TokenType::kXorXor) {
@@ -2701,6 +2780,11 @@ SlidDef Parser::parseSlidDef() {
                 } else {
                     break;
                 }
+            }
+            // optional `const` (method-const marker) between return type and name
+            if (name_pos < (int)tokens_.size()
+                && tokens_[name_pos].type == TokenType::kConst) {
+                name_pos++;
             }
             if (name_pos + 1 >= (int)tokens_.size()) return false;
             if (tokens_[name_pos].type != TokenType::kIdentifier
@@ -2806,7 +2890,17 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
     [[maybe_unused]] int t_start = pos_;
     ExternalMethodDef em;
     // optional return type (primitive keyword); absent for ctor/dtor
-    if (isTypeName(peek())) em.return_type = parseTypeName();
+    if (isTypeName(peek())
+        || peek().type == TokenType::kConst
+        || peek().type == TokenType::kMutable
+        || peek().type == TokenType::kLParen) {
+        em.return_type = parseTypeName();
+    }
+    // optional `const` method marker between return type and class name
+    if (peek().type == TokenType::kConst) {
+        em.is_const_method = true;
+        advance();
+    }
     // TypeName:
     em.slid_name = expect(TokenType::kIdentifier, "Expected class name").value;
     // set field names for this slid so assignments to fields aren't mistaken for inferred declarations
@@ -2911,6 +3005,11 @@ void Parser::parseExternalMethodBlock(Program& program) {
             em.return_type = "void";
         } else {
             em.return_type = parseTypeName();
+        }
+        // optional `const` method marker between return type and method name
+        if (peek().type == TokenType::kConst) {
+            em.is_const_method = true;
+            advance();
         }
         int em_tok = pos_;
         if (peek().type == TokenType::kOp) {

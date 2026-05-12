@@ -83,7 +83,34 @@ std::string Codegen::uniqueAllocaReg(const std::string& var_name) {
 }
 
 
-std::string Codegen::llvmType(const std::string& t) {
+std::string Codegen::canonType(std::string t) const {
+    while (true) {
+        if (t.rfind("const ", 0) == 0) t = t.substr(6);
+        else if (t.rfind("mutable ", 0) == 0) t = t.substr(8);
+        else break;
+    }
+    if (t.size() >= 2 && t.front() == '(') {
+        int depth = 1, i = 1;
+        while (i < (int)t.size() && depth > 0) {
+            if (t[i] == '(') depth++;
+            else if (t[i] == ')') depth--;
+            if (depth == 0) break;
+            i++;
+        }
+        if (i < (int)t.size() && t[i] == ')') {
+            std::string inner = t.substr(1, i - 1);
+            std::string suffix = t.substr(i + 1);
+            if (inner.rfind("const ", 0) == 0
+                || inner.rfind("mutable ", 0) == 0) {
+                return canonType(canonType(inner) + suffix);
+            }
+        }
+    }
+    return t;
+}
+
+std::string Codegen::llvmType(const std::string& raw_t) {
+    std::string t = canonType(raw_t);
     if (!t.empty() && t[0] == '{') return t; // pass through LLVM struct types (tuple returns)
     // anonymous tuple type: "(t1,t2,...)" → "{ llvm(t1), llvm(t2), ... }"
     if (t.size() >= 2 && t.front() == '(' && t.back() == ')') {
@@ -4553,21 +4580,27 @@ Codegen::ConstEntry Codegen::applyConstDeclaredType(const ConstDef& cd,
     ConstEntry r = folded;
     r.file_id = cd.file_id;
     r.tok = cd.tok;
+    // Decl-keyword `const` always qualifies the declared name. The slid type
+    // we store carries the user-visible "const " prefix; type-fit checks
+    // operate on the canonical (qualifier-stripped) form.
+    auto qualify = [&](const std::string& base) -> std::string {
+        if (base.rfind("const ", 0) == 0 || base.rfind("mutable ", 0) == 0) return base;
+        return "const " + base;
+    };
     if (cd.declared_type.empty()) {
+        r.slid_type = qualify(folded.slid_type);
         return r;
     }
-    const std::string& dst = cd.declared_type;
+    std::string dst = canonType(cd.declared_type);
+    std::string final_qualified = qualify(cd.declared_type);
     auto narrow = [&](const std::string& msg) {
         throw CompileError{cd.file_id, cd.tok, finalizeErrorMsg(msg)};
     };
     if (constIsFloatType(dst)) {
-        // float → float is treated as the author writing a literal in the
-        // target's precision; no exact round-trip check. Truncation rules
-        // still cover float → int / bool below.
         double v = folded.is_float ? folded.float_value : (double)folded.int_value;
         r.is_float = true;
         r.float_value = v;
-        r.slid_type = dst;
+        r.slid_type = final_qualified;
         return r;
     }
     if (dst == "bool") {
@@ -4579,7 +4612,7 @@ Codegen::ConstEntry Codegen::applyConstDeclaredType(const ConstDef& cd,
                 + "' overflows declared type 'bool'.");
         r.is_float = false;
         r.int_value = folded.int_value;
-        r.slid_type = "bool";
+        r.slid_type = final_qualified;
         return r;
     }
     if (constIsIntType(dst)) {
@@ -4601,11 +4634,12 @@ Codegen::ConstEntry Codegen::applyConstDeclaredType(const ConstDef& cd,
         }
         r.is_float = false;
         r.int_value = folded.int_value;
-        r.slid_type = dst;
+        r.slid_type = final_qualified;
         return r;
     }
     throw CompileError{cd.file_id, cd.tok,
-        finalizeErrorMsg("Unsupported declared type '" + dst + "' for const '" + cd.name + "'.")};
+        finalizeErrorMsg("Unsupported declared type '" + cd.declared_type
+            + "' for const '" + cd.name + "'.")};
 }
 
 const Codegen::ConstEntry* Codegen::lookupConst(const std::string& name) const {
@@ -4637,12 +4671,45 @@ const Codegen::ConstEntry* Codegen::lookupSlidConst(const std::string& slid_name
     return &cit->second;
 }
 
+bool Codegen::isFoldableConstShape(const Expr& e, const std::string& slid_scope) const {
+    if (dynamic_cast<const IntLiteralExpr*>(&e)) return true;
+    if (dynamic_cast<const FloatLiteralExpr*>(&e)) return true;
+    if (auto* u = dynamic_cast<const UnaryExpr*>(&e))
+        return isFoldableConstShape(*u->operand, slid_scope);
+    if (auto* b = dynamic_cast<const BinaryExpr*>(&e))
+        return isFoldableConstShape(*b->left, slid_scope)
+            && isFoldableConstShape(*b->right, slid_scope);
+    if (auto* tc = dynamic_cast<const TypeConvExpr*>(&e))
+        return isFoldableConstShape(*tc->operand, slid_scope);
+    if (auto* qc = dynamic_cast<const QualifierCastExpr*>(&e))
+        return isFoldableConstShape(*qc->operand, slid_scope);
+    if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
+        if (!slid_scope.empty()) {
+            auto sit = slid_consts_.find(slid_scope);
+            if (sit != slid_consts_.end() && sit->second.count(ve->name)) return true;
+        }
+        for (auto it = block_const_stack_.rbegin(); it != block_const_stack_.rend(); ++it)
+            if (it->count(ve->name)) return true;
+        if (global_consts_.count(ve->name)) return true;
+        return false;
+    }
+    if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&e)) {
+        if (auto* veo = dynamic_cast<const VarExpr*>(fa->object.get())) {
+            auto sit = slid_consts_.find(veo->name);
+            if (sit != slid_consts_.end() && sit->second.count(fa->field)) return true;
+        }
+        return false;
+    }
+    return false;
+}
+
 std::string Codegen::emitConstValue(const ConstEntry& e) const {
     if (e.is_float) {
         // LLVM IR float32 constants must be representable in float32; encode
         // as a hex double of the value round-tripped through float so the
         // upcast is lossless. float64 constants emit as decimal.
-        if (e.slid_type == "float" || e.slid_type == "float32") {
+        std::string canon_t = canonType(e.slid_type);
+        if (canon_t == "float" || canon_t == "float32") {
             float fv = (float)e.float_value;
             double dv = (double)fv;
             uint64_t bits;
