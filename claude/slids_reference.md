@@ -450,7 +450,7 @@ From highest to lowest precedence.
 
 Not part of the expression precedence ladder — these introduce statements, not expressions.
 
-- assign / move / swap: `=`, `<-`, `<->`
+- assign / move / swap: `=`, `<--`, `<-->`
 - compound assign: `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` `&&=` `\|\|=` `^^=`
 
 ### Context-restricted syntax
@@ -507,7 +507,7 @@ Rules:
 - Slid-typed elements behave like embedded fields: their destructors run (in reverse declaration order) when the tuple variable goes out of scope.
 - **Anon-tuples have a minimum size of 2.** `(x)` is a parenthesized expression, not a 1-tuple; a 1-tuple would equal a scalar, so it's excluded to keep the kinds disjoint. Size 0 is meaningless.
 - **Chained indexing** walks nested anon-tuples: `nested[1][0]` reads two levels. Slid or scalar slots terminate the chain.
-- **Tuples pass by reference**, like classes: `(t1, t2, ...)^` on params; pass-by-value is a compile error. Inside the callee, `p^[N]` reads, `p^[N] = val` writes, `p^[N] <- val` moves.
+- **Tuples pass by reference**, like classes: `(t1, t2, ...)^` on params; pass-by-value is a compile error. Inside the callee, `p^[N]` reads, `p^[N] = val` writes, `p^[N] <-- val` moves.
 - **Tuples can be slid fields**: `Holder((int, int) pair_) {}`. Use `obj.pair_[N]` for chained read/write; inside the slid's methods, implicit-self `pair_[N]` works too. Default values allowed: `Holder((int, int) pair_ = (0, 0)) {}`.
 
 ### 3. Destructure target — a list of variable slots
@@ -544,7 +544,7 @@ Operations on tuples desugar element-wise, recursing into nested structure. For 
 (x, y, z) = (1, 2, 3) + (4, 5, 6);    // → x=1+4; y=2+5; z=3+6;
 ```
 
-Move `<-` and copy `=` follow the same rule, dispatching `op<-` / `op=` per slot.
+Move `<--` and copy `=` follow the same rule, dispatching `op<--` / `op=` per slot.
 
 **Element-wise applies *within* a kind, not across kinds.** Anon-tuple + anon-tuple is element-wise. Class + class can dispatch element-wise *if* the user defines an `op+` (the compiler does not auto-fall-back to the field-walk for slid+slid). Class + tuple, tuple + class, range + tuple, etc., all require explicit user ops.
 
@@ -908,7 +908,7 @@ Value(int value_ = 0) {
 
 | Group | Operators | Signature shape |
 |---|---|---|
-| Assignment / move / swap | `=` `<-` `<->` | `op<sym>(Type^ rhs)` |
+| Assignment / move / swap | `=` `<--` `<-->` | `op<sym>(Type^ rhs)` |
 | Arithmetic | `+` `-` `*` `/` `%` | `op<sym>(Type^ a, Type^ b)` |
 | Bitwise | `&` `\|` `^` `<<` `>>` | `op<sym>(Type^ a, Type^ b)` |
 | Logical | `&&` `\|\|` `^^` | `op<sym>(Type^ a, Type^ b)` |
@@ -928,24 +928,24 @@ Value(int value_ = 0) {
 - **Assignment is a statement.** `x = y = 0;` and `if (x = 0)` are compile errors.
 - **Multiple overloads.** A class may define multiple overloads of the same operator. The compiler picks the best match.
 - **Implicit conversion.** When no overload matches, the compiler tries harder using one round of type conversion `op=`.
-- **Swap `op<->` requires `SameType^`.** Other signatures are a compile error.
+- **Swap `op<-->` requires `SameType^`.** Other signatures are a compile error.
 
 ### `mutable` parameters
 
-`mutable` on a pointer parameter `^` `[]` indicates the function may modify the contents of the pointer. `mutable` is required on the parameters to move `op<-` and swap operators `op<->`. `mutable` on a non-pointer or a non-parameter is a compile error. Const-correctness is not currently enforced. `mutable` is a hint to the authors that data is modifiable.
+`mutable` on a pointer parameter `^` `[]` indicates the function may modify the contents of the pointer. `mutable` is required on the parameters to move `op<--` and swap operators `op<-->`. `mutable` on a non-pointer or a non-parameter is a compile error. Const-correctness is not currently enforced. `mutable` is a hint to the authors that data is modifiable.
 
 ```
-op<-(mutable String^ rhs);   // move override
-op<->(mutable String^ rhs);  // swap override
+op<--(mutable String^ rhs);   // move override
+op<-->(mutable String^ rhs);  // swap override
 ```
 
 ### Default synthesis
 
-If a class does not define assignment operator`op=`, move operator `op<-`, or swap operator `op<->` with `SameType^` parameter, the compiler synthesizes one that applies the operation to every field.
+If a class does not define assignment operator`op=`, move operator `op<--`, or swap operator `op<-->` with `SameType^` parameter, the compiler synthesizes one that applies the operation to every field.
 
 - **Assignment `op=(SameType^)`** — Fields with an assignment operator defined use it. All other fields are copied.
-- **Move `op<-(SameType^)`** — Fields with a move operator defined use it. Integer types are copied. Pointer types are copied, then the moved-from pointer (the rhs) is set to `nullptr`.
-- **`op<->(SameType^)`** — Fields with a swap operator defined use it. All other fields are swapped.
+- **Move `op<--(SameType^)`** — Fields with a move operator defined use it. Integer types are copied. Pointer types are copied, then the moved-from pointer (the rhs) is set to `nullptr`.
+- **`op<-->(SameType^)`** — Fields with a swap operator defined use it. All other fields are swapped.
 
 ### Forward declarations
 
@@ -955,7 +955,7 @@ Inside the class body, omit the body to declare without defining:
 String(int size_ = 0, int capacity_ = 0, char[] storage_ = nullptr) {
     op=(char[] s);
     op=(String^ s);
-    op<-(String^ s);
+    op<--(String^ s);
 }
 ```
 
@@ -1219,24 +1219,24 @@ x = foo(a++, ++a);    // foo(1,3) arguments are separate phrases.
 
 ## Move semantics
 
-The move operator `<-` transfers ownership of a resource from one variable to another. The source is left in a valid, empty state (its pointer is set to `nullptr`).
-This avoids copying and makes ownership transfer explicit in the code. For non-pointer built-in scalars ( `int`, `float`, `bool`, … ) `<-` is a copy.
+The move operator `<--` transfers ownership of a resource from one variable to another. The source is left in a valid, empty state (its pointer is set to `nullptr`).
+This avoids copying and makes ownership transfer explicit in the code. For non-pointer built-in scalars ( `int`, `float`, `bool`, … ) `<--` is a copy.
 
 ### Pointer and iterator move
 
-`p1 <- p2` — move a pointer or iterator:
+`p1 <-- p2` — move a pointer or iterator:
 
 1. Assign `p2`'s value to `p1`
 2. Set `p2` to `nullptr`
 
-`<-` does **not** free `p1`'s current allocation. If `p1` already owns memory, free it explicitly with `delete` first.
+`<--` does **not** free `p1`'s current allocation. If `p1` already owns memory, free it explicitly with `delete` first.
 
 ```
 char[] p1 = new char[100];
-char[] p2 <- p1;     // p2 = p1; p1 = nullptr — p2 now owns the allocation
+char[] p2 <-- p1;     // p2 = p1; p1 = nullptr — p2 now owns the allocation
 
 // declaration move — p2 is a new variable, so no existing allocation to worry about
-char[] p3 <- p2;     // p3 = p2; p2 = nullptr
+char[] p3 <-- p2;     // p3 = p2; p2 = nullptr
 
 delete p3;           // free — p3 is set to nullptr automatically
 ```
@@ -1246,81 +1246,81 @@ Transferring into an existing pointer that owns memory:
 char[] buf = new char[64];
 char[] tmp = new char[32];
 delete buf;    // free buf's allocation first
-buf <- tmp;    // buf = tmp; tmp = nullptr — buf now owns the 32-byte block
+buf <-- tmp;    // buf = tmp; tmp = nullptr — buf now owns the 32-byte block
 ```
 
-### Class move — `op<-`
+### Class move — `op<--`
 
-For class types, `<-` calls a user-defined `op<-` method. The method is responsible for freeing the destination's existing resources, taking ownership of the source's resources, and leaving the source in a valid empty state.
+For class types, `<--` calls a user-defined `op<--` method. The method is responsible for freeing the destination's existing resources, taking ownership of the source's resources, and leaving the source in a valid empty state.
 
-**Declaring `op<-` in the class:**
+**Declaring `op<--` in the class:**
 ```
 String(int size_ = 0, int capacity_ = 0, char[] storage_ = nullptr) {
-    op<-(String^ s);
+    op<--(String^ s);
     // ...
 }
 ```
 
-**Implementing `op<-`:**
+**Implementing `op<--`:**
 ```
 String {
-    op<-(String^ s) {
-        delete storage_;            // free existing storage (delete, not <-)
+    op<--(String^ s) {
+        delete storage_;            // free existing storage (delete, not <--)
         size_     = s^.size_;
         capacity_ = s^.capacity_;
-        storage_ <- s^.storage_;    // steal pointer; s^.storage_ set to nullptr automatically
+        storage_ <-- s^.storage_;    // steal pointer; s^.storage_ set to nullptr automatically
         s^.size_     = 0;           // leave rhs in a valid empty state
         s^.capacity_ = 0;
     }
 }
 ```
 
-**Using `op<-`:**
+**Using `op<--`:**
 ```
 String s1 = "Hello, World!";
 
-String s2 <- s1;     // s2 owns the string data; s1 is now empty
+String s2 <-- s1;     // s2 owns the string data; s1 is now empty
 
 // or as an assignment into an existing variable
 String s3;
-s3 <- s1;            // calls s3.op<-(^s1)
+s3 <-- s1;            // calls s3.op<--(^s1)
 ```
 
 Move rules:
-- For pointer/iterator types, `<-` is built into the language — no method needed
-- For class types, `<-` calls `op<-` if one is defined; otherwise it calls the compiler-synthesized default move (see Operator overloading)
+- For pointer/iterator types, `<--` is built into the language — no method needed
+- For class types, `<--` calls `op<--` if one is defined; otherwise it calls the compiler-synthesized default move (see Operator overloading)
 - After a move, the source is left in a valid state — it can be reassigned or destroyed safely
-- `delete` frees and nullifies; `<-` transfers ownership without freeing — use `delete` first if the destination already owns memory
+- `delete` frees and nullifies; `<--` transfers ownership without freeing — use `delete` first if the destination already owns memory
 
-### Swap — `<->`
+### Swap — `<-->`
 
-`a <-> b` exchanges the values at two lvalue locations without a named temporary.
+`a <--> b` exchanges the values at two lvalue locations without a named temporary.
 
 **Primitive pointer/iterator swap:**
 ```
 char[] lo = storage_;
 char[] hi = storage_ + size_ - 1;
 while (lo < hi) {
-    lo++^ <-> hi--^;   // swap chars at lo and hi, advance both
+    lo++^ <--> hi--^;   // swap chars at lo and hi, advance both
 }
 ```
 
 `lo++^` reads the address at `lo` and advances `lo` forward; `hi--^` reads the address at `hi` and advances `hi` backward. The two values are exchanged in place.
 
-**Class swap — `op<->`:**
+**Class swap — `op<-->`:**
 
-For class types, `<->` calls a user-defined `op<->` method:
+For class types, `<-->` calls a user-defined `op<-->` method:
 ```
 String {
-    op<->(String^ s) {
+    op<-->(String^ s) {
         // swap size_, capacity_, storage_ with s^.*
     }
 }
 ```
 
 Swap rules:
-- For pointer/iterator element swap ( `ptr++^ <-> ptr--^` ), `<->` is built into the language
-- For class types, `<->` calls `op<->` if one is defined; otherwise it calls the compiler-synthesized default swap (see Operator overloading)
+- For pointer/iterator element swap ( `ptr++^ <--> ptr--^` ), `<-->` is built into the language
+- For class types, `<-->` calls `op<-->` if one is defined; otherwise it calls the compiler-synthesized default swap (see Operator overloading)
 - Both sides must be the same element type
 
 ---
