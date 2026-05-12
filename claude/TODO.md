@@ -87,6 +87,8 @@
 
 - **For-loop shadowing of outer-scope locals.** `int row = 0; for (row : 0..8) { ... }` declares a fresh loop-scope `row` rather than reassigning the outer one. After the loop, the outer `row` still reads as 0. Surfaced by `sample/chess1.sl`, whose `Knight found at row X, col Y` print reports the un-updated outer values. May be by-design (loop scope hygiene + standard for-init semantics) or a bug — needs a design decision. If intentional, chess1 should declare loop-local vars instead; if the loop is supposed to reassign when a same-named local is in scope, the for-init parser/codegen should look up the existing local rather than allocating a new one.
 
+- **Reject const-arg → mutable-param at overload sites.** A pointer type with `const` anywhere in it must not bind to a `mutable T^` parameter slot. The const-overload matcher landed (`canonicalType` stripping in `mergeReopens` dup-check, `resolveSingleArgOverload`, `resolveOverloadForCall`, `resolveMethodMangledName`, the binary-op `argMatchesParam` lambda, `inferTypeArgs`, `resolveTemplateOverload`), but no resolution site consults `param_mutable` against `typeHasConst(arg_type)`. Practical effect: a const pointer can bind to a `mutable T^` slot silently. The helper `typeHasConst` already exists; wire the rejection arm into each match site so binding fails when `arg_has_const && param_is_mutable`. Diagnostic should call out which side is which (caret on the offending arg, note pointing at the mutable param).
+
 ## Virtual methods (design, not yet implemented)
 
 Single-inheritance virtuals through a per-class vtable. Compatible with incomplete-class reopens (impl can have hidden virtuals invisible to consumers).
