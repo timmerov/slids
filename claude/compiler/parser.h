@@ -7,6 +7,28 @@
 #include <optional>
 #include <set>
 
+// Strip every leading "const " qualifier substring from a type string.
+// "const int" -> "int"; "const (const T)^" -> "(T)^"; non-pointer and pointer
+// types are handled uniformly. The canonical form is used for overload-match
+// and dedup-key comparisons where const distinctions on by-value slots and
+// pointee-const on pointer slots collapse together.
+inline std::string canonicalType(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    size_t i = 0;
+    while (i < s.size()) {
+        if (s.compare(i, 6, "const ") == 0) { i += 6; continue; }
+        out.push_back(s[i++]);
+    }
+    return out;
+}
+
+// Returns true if the type string carries `const ` anywhere (pointee-const or
+// by-value const). Used to reject const-arg → mutable-param bindings.
+inline bool typeHasConst(const std::string& s) {
+    return s.find("const ") != std::string::npos;
+}
+
 // --- Expressions ---
 
 struct Expr {
@@ -412,6 +434,7 @@ struct MethodDef {
                                //               removes inherited method when a same-sig ancestor exists
     bool is_default = false;   // `= default;` — derived inherits base impl with no-shadow contract
     bool is_const_method = false; // `T const Class:method()` — marker only this scope, no enforcement
+    bool has_explicit_return = false; // true when the return type came from a parsed type, not an elision
 };
 
 struct SlidDef {
@@ -433,6 +456,8 @@ struct SlidDef {
     bool has_trailing_ellipsis = false;
     bool has_explicit_ctor_decl = false; // _() was declared (with or without body)
     bool has_explicit_dtor_decl = false; // ~() was declared (with or without body)
+    bool is_const_ctor = false;          // `const _()` — marker only, no enforcement yet
+    bool is_const_dtor = false;          // `const ~()` — marker only, no enforcement yet
     bool dtor_is_virtual = false;        // `virtual ~()` — required when class is virtual
     bool is_transport_impl = false;      // this slid emits __$pinit for the consumer
     int public_field_count = 0;          // number of public fields before private ones (for __$pinit)
@@ -493,6 +518,7 @@ struct ExternalMethodDef {
     bool is_delete = false;
     bool is_default = false;
     bool is_const_method = false; // `T const Class:method()` — marker only this scope, no enforcement
+    bool has_explicit_return = false; // true when the return type came from a parsed type, not an elision
 };
 
 struct Program {

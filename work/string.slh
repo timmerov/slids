@@ -72,18 +72,18 @@ String(...)
     op+(String^ sa, String^ sb);
 
     /* binary comparisons */
-    bool op==(String^ s);
-    bool op!=(String^ s);
-    bool op<=(String^ s);
-    bool op>=(String^ s);
-    bool op<(String^ s);
-    bool op>(String^ s);
+    bool const op==(String^ s);
+    bool const op!=(String^ s);
+    bool const op<=(String^ s);
+    bool const op>=(String^ s);
+    bool const op<(String^ s);
+    bool const op>(String^ s);
 
     /*
     overload index operation to fetch the indexed character.
     char ch = str[3];
     */
-    char op[](intptr index);
+    char const op[](intptr index);
 
     /*
     overload index assignment operation to set the indexed character.

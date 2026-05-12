@@ -485,7 +485,9 @@ std::vector<std::string> Codegen::inferTypeArgs(
         }
         if (arg_slids.empty()) continue;
 
-        unify(ptype, arg_slids);
+        // deduce against the canonical (qualifier-stripped) arg type so T binds
+        // to the unqualified form regardless of caller's const-on-rvalue.
+        unify(canonicalType(ptype), canonicalType(arg_slids));
     }
 
     std::vector<std::string> result;

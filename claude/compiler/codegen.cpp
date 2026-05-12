@@ -2252,10 +2252,12 @@ Codegen::TemplateResolution Codegen::resolveTemplateOverload(
             if (slid_info_.count(substituted)) substituted += "^";
             std::string actual = exprType(*args[i]);
             if (actual.empty()) continue; // can't resolve actual; skip strict check
-            if (actual != substituted) {
+            std::string actual_canon = canonicalType(actual);
+            std::string substituted_canon = canonicalType(substituted);
+            if (actual_canon != substituted_canon) {
                 // tolerate auto-promote (value to ref) for slid types
-                std::string s = substituted;
-                if (!s.empty() && s.back() == '^' && s.substr(0, s.size()-1) == actual) continue;
+                if (!substituted_canon.empty() && substituted_canon.back() == '^'
+                    && substituted_canon.substr(0, substituted_canon.size()-1) == actual_canon) continue;
                 match = false; break;
             }
         }
@@ -2328,11 +2330,16 @@ std::string Codegen::resolveMethodMangledName(
         if (it->second[0].second.size() != params.size()) return base;
         return it->second[0].first;
     }
-    // multiple overloads: match by exact param types
+    // multiple overloads: match by canonical param types (const-stripping)
     std::vector<std::string> ptypes;
-    for (auto& [t, n] : params) ptypes.push_back(t);
+    for (auto& [t, n] : params) ptypes.push_back(canonicalType(t));
     for (auto& [mangled, mp] : it->second) {
-        if (mp == ptypes) return mangled;
+        if (mp.size() != ptypes.size()) continue;
+        bool match = true;
+        for (size_t i = 0; i < mp.size(); i++) {
+            if (canonicalType(mp[i]) != ptypes[i]) { match = false; break; }
+        }
+        if (match) return mangled;
     }
     return base;
 }
@@ -2361,12 +2368,12 @@ std::string Codegen::resolveOverloadForCall(
               + std::to_string(args.size()) + ", expected " + arities + ".");
     }
     if (it->second.size() == 1) return it->second[0].first;
-    // Pass 1: exact type match
+    // Pass 1: canonical type match (const-stripping)
     for (auto& [mangled, ptypes] : it->second) {
         if (ptypes.size() != args.size()) continue;
         bool match = true;
         for (int i = 0; i < (int)args.size(); i++) {
-            if (exprType(*args[i]) != ptypes[i]) { match = false; break; }
+            if (canonicalType(exprType(*args[i])) != canonicalType(ptypes[i])) { match = false; break; }
         }
         if (match) return mangled;
     }
@@ -2823,7 +2830,8 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
     };
 
     // helper: does the right operand match param type p1?
-    auto argMatchesParam = [&](const Expr& arg, const std::string& p1) -> bool {
+    auto argMatchesParam = [&](const Expr& arg, const std::string& p1_raw) -> bool {
+        std::string p1 = canonicalType(p1_raw);
         bool p1_is_slid_ref = isRefType(p1) && slid_info_.count(p1.substr(0, p1.size()-1));
         bool p1_is_ptr = isIndirectType(p1); // ^ or [] — any pointer/reference type
         std::string p1_slid = p1_is_slid_ref ? p1.substr(0, p1.size()-1) : "";
@@ -2835,7 +2843,7 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
         if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
             auto tit = locals_.find(ve->name);
             if (tit != locals_.end()) {
-                std::string t = tit->second.type;
+                std::string t = canonicalType(tit->second.type);
                 std::string r_slid;
                 if (slid_info_.count(t)) r_slid = t;
                 else if (!t.empty() && t.back() == '^' && slid_info_.count(t.substr(0, t.size()-1)))
@@ -2852,7 +2860,7 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
                 if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
                     auto tit = locals_.find(ve->name);
                     if (tit != locals_.end()) {
-                        std::string t = tit->second.type;
+                        std::string t = canonicalType(tit->second.type);
                         if (!t.empty() && t.back() == '^') t.pop_back();
                         if (slid_info_.count(t)) return t == p1_slid;
                     }
@@ -3024,13 +3032,14 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
     } else if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
         auto tit = locals_.find(ve->name);
         if (tit != locals_.end()) {
-            std::string t = tit->second.type;
+            std::string raw_t = tit->second.type;
+            std::string t = canonicalType(raw_t);
             if (!t.empty() && t.back() == '^') t.pop_back();
             else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
             arg_is_slid = slid_info_.count(t) > 0;
             if (arg_is_slid) arg_slid_name = t;
-            if (!arg_is_slid && !isIndirectType(tit->second.type))
-                classify_int(tit->second.type);
+            if (!arg_is_slid && !isIndirectType(canonicalType(raw_t)))
+                classify_int(canonicalType(raw_t));
         }
     } else if (auto* ao = dynamic_cast<const AddrOfExpr*>(&arg)) {
         // ^x: addr-of x

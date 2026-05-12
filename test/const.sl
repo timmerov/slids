@@ -157,6 +157,17 @@ WithTors(int x_ = 0) {
     }
 }
 
+/* const method mismatch */
+//-EXPECT-ERROR: not const but its declaration is
+// Mismatch(int x_ = 0) {
+//     void const print();
+// }
+// Mismatch {
+//     void print() {
+//         __println("compile error: const declaration mutable definition.");
+//     }
+// }
+
 int32 main() {
     NoTors nt;
     WithTors wt;
@@ -291,3 +302,17 @@ int32 main() {
 //-EXPECT-ERROR: already declared
 // const int dup = 1;
 // const int dup = 2;
+
+ConstOps(int x_ = 0) {
+    /* valid syntax. */
+    const _() { }
+    const ~() { }
+
+    /* compile error: no-return op cannot be const. */
+    //-EXPECT-ERROR: cannot be const
+    // const op=(ConstOps^ rhs) { }
+
+    /* compile error: no-return op cannot have an explicit return type. */
+    //-EXPECT-ERROR: cannot have an explicit return type
+    // void const op=(ConstOps^ rhs) { }
+}

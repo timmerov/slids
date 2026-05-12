@@ -147,7 +147,7 @@ vec[2] <-> vec[4];
 import paths.
 
 const correctness:
-objects are passed by reference.
+objects are passed by const reference.
 the current implementation is mutable.
 but the intention is for the default to be const.
 we will need a way to make a reference mutable.

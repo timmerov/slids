@@ -165,37 +165,37 @@ String (
     }
 
     /* binary equals */
-    bool op==(String^ s) {
+    bool const op==(String^ s) {
         cmp = compare(s);
         return (cmp == 0);
     }
 
     /* binary not equals */
-    bool op!=(String^ s) {
+    bool const op!=(String^ s) {
         cmp = compare(s);
         return (cmp != 0);
     }
 
     /* binary less than or equals */
-    bool op<=(String^ s) {
+    bool const op<=(String^ s) {
         cmp = compare(s);
         return (cmp <= 0);
     }
 
     /* binary greater than or equals. */
-    bool op>=(String^ s) {
+    bool const op>=(String^ s) {
         cmp = compare(s);
         return (cmp >= 0);
     }
 
     /* binary less than. */
-    bool op<(String^ s) {
+    bool const op<(String^ s) {
         cmp = compare(s);
         return (cmp < 0);
     }
 
     /* binary greater than */
-    bool op>(String^ s) {
+    bool const op>(String^ s) {
         cmp = compare(s);
         return (cmp > 0);
     }
@@ -204,7 +204,7 @@ String (
     overload index operation to fetch the indexed character.
     char ch = str[3];
     */
-    char op[](intptr index) {
+    char const op[](intptr index) {
         return storage_[index];
     }
 

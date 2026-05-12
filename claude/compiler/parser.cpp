@@ -16,6 +16,75 @@
 // compete with postfix-^ (+, -) are intentionally excluded: postfix wins, and
 // authors parenthesize for the prefix reading. kBitXor is also excluded so
 // runs of `^` (lexer rule 1) all consume as postfix derefs.
+namespace {
+
+enum class OpReturnKind { NoReturn, ReturnType };
+
+// Classify an op symbol + arity into "no return value" vs "returns a value."
+// Dual-form ops (+ - ~ !) are query-form (return-type) at arity 0, otherwise no-return.
+OpReturnKind classifyOpSymbol(const std::string& sym, int arity) {
+    if (sym == "==" || sym == "!=" || sym == "<" || sym == ">"
+        || sym == "<=" || sym == ">=") return OpReturnKind::ReturnType;
+    if (sym == "[]") return OpReturnKind::ReturnType;
+    if ((sym == "+" || sym == "-" || sym == "~" || sym == "!") && arity == 0)
+        return OpReturnKind::ReturnType;
+    return OpReturnKind::NoReturn;
+}
+
+// Enforce the method-head shape rules. Throws CompileError on violation.
+// return_type_tok / const_tok may be -1 when the token isn't present.
+void checkMethodHeadRules(
+    int file_id,
+    const std::string& name,
+    int arity,
+    bool has_explicit_return,
+    bool is_const_method,
+    int name_tok,
+    int return_type_tok,
+    int const_tok)
+{
+    if (name == "_") {
+        if (has_explicit_return) {
+            throw CompileError{file_id, return_type_tok,
+                "Constructor cannot have an explicit return type."};
+        }
+        return;
+    }
+    if (name == "~") {
+        if (has_explicit_return) {
+            throw CompileError{file_id, return_type_tok,
+                "Destructor cannot have an explicit return type."};
+        }
+        return;
+    }
+    if (name.size() >= 3 && name.substr(0, 2) == "op") {
+        std::string sym = name.substr(2);
+        OpReturnKind kind = classifyOpSymbol(sym, arity);
+        if (kind == OpReturnKind::NoReturn) {
+            if (has_explicit_return) {
+                throw CompileError{file_id, return_type_tok,
+                    "Operator '" + sym + "' has no return value and cannot have an explicit return type."};
+            }
+            if (is_const_method) {
+                throw CompileError{file_id, const_tok,
+                    "Operator '" + sym + "' has no return value and cannot be const."};
+            }
+        } else {
+            if (!has_explicit_return) {
+                throw CompileError{file_id, name_tok,
+                    "Operator '" + sym + "' returns a value and must declare its return type."};
+            }
+        }
+        return;
+    }
+    if (!has_explicit_return) {
+        throw CompileError{file_id, name_tok,
+            "Method '" + name + "' is missing its return type."};
+    }
+}
+
+}  // namespace
+
 static bool isOperandStartingToken(TokenType t) {
     switch (t) {
         case TokenType::kIdentifier:
@@ -2467,17 +2536,43 @@ MethodDef Parser::parseMethodDef() {
         m.is_virtual = true;
         advance();
     }
-    // new syntax: op overloads have no explicit return type (implied void / self)
-    if (peek().type == TokenType::kOp) {
-        m.return_type = "void";
-    } else {
-        m.return_type = parseTypeName();
+    int return_type_tok = -1;
+    int const_tok = -1;
+    // Leading `const` immediately before an elided-return method-name
+    // (`op<sym>`, `_`, `~`) is the method-const marker; no return type to parse.
+    bool leading_const_elision = false;
+    if (peek().type == TokenType::kConst && pos_ + 1 < (int)tokens_.size()) {
+        const Token& after = tokens_[pos_ + 1];
+        if (after.type == TokenType::kOp
+            || after.type == TokenType::kBitNot
+            || (after.type == TokenType::kIdentifier && after.value == "_")) {
+            const_tok = pos_;
+            advance();
+            m.is_const_method = true;
+            leading_const_elision = true;
+        }
     }
-    // optional `const` between return type and method name marks the method
-    // as not modifying self. parsed for syntax; not enforced this scope.
-    if (peek().type == TokenType::kConst) {
-        m.is_const_method = true;
-        advance();
+    if (leading_const_elision) {
+        m.return_type = "void";
+        m.has_explicit_return = false;
+    } else if (peek().type == TokenType::kOp
+        || peek().type == TokenType::kBitNot
+        || (peek().type == TokenType::kIdentifier && peek().value == "_"
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kLParen)) {
+        // elided-return method-name with no leading const.
+        m.return_type = "void";
+        m.has_explicit_return = false;
+    } else {
+        return_type_tok = pos_;
+        m.return_type = parseTypeName();
+        m.has_explicit_return = true;
+        // optional `const` between return type and method name
+        if (peek().type == TokenType::kConst) {
+            const_tok = pos_;
+            m.is_const_method = true;
+            advance();
+        }
     }
     int op_tok = pos_;
     m.file_id = file_id_;
@@ -2486,6 +2581,9 @@ MethodDef Parser::parseMethodDef() {
         advance();
         if (auto sym = consumeOpSymbol()) m.name = "op" + *sym;
         else errorAt(op_tok, "Expected an operator symbol after 'op'.");
+    } else if (peek().type == TokenType::kBitNot) {
+        advance();
+        m.name = "~";
     } else {
         m.name = expect(TokenType::kIdentifier, "Expected method name").value;
     }
@@ -2510,6 +2608,9 @@ MethodDef Parser::parseMethodDef() {
     expect(TokenType::kRParen, "Expected ')'");
     checkOpArity(m.name, (int)m.params.size(), op_tok);
     checkOpMutable(m.name, m.params, m.param_mutable, param_mut_toks, op_tok);
+    checkMethodHeadRules(file_id_, m.name, (int)m.params.size(),
+        m.has_explicit_return, m.is_const_method,
+        m.tok, return_type_tok, const_tok);
     if (peek().type == TokenType::kEquals
         && pos_ + 1 < (int)tokens_.size()
         && tokens_[pos_ + 1].type == TokenType::kDelete) {
@@ -2660,67 +2761,107 @@ SlidDef Parser::parseSlidDef() {
 
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
         // class-scope const declaration: const [type] name = expr;
+        // BUT: a leading `const` followed by an elided-return method shape
+        // (`_(`, `~(`, `op<sym>(`) is the method-const marker, not a const decl.
         if (peek().type == TokenType::kConst) {
-            slid.consts.push_back(parseConstDef());
-            continue;
+            bool const_is_method_marker = false;
+            if (pos_ + 1 < (int)tokens_.size()) {
+                const Token& after = tokens_[pos_ + 1];
+                if (after.type == TokenType::kBitNot
+                    && pos_ + 2 < (int)tokens_.size()
+                    && tokens_[pos_ + 2].type == TokenType::kLParen) {
+                    const_is_method_marker = true; // const ~()
+                } else if (after.type == TokenType::kIdentifier && after.value == "_"
+                    && pos_ + 2 < (int)tokens_.size()
+                    && tokens_[pos_ + 2].type == TokenType::kLParen) {
+                    const_is_method_marker = true; // const _()
+                } else if (after.type == TokenType::kOp) {
+                    const_is_method_marker = true; // const op<sym>(...)
+                }
+            }
+            if (!const_is_method_marker) {
+                slid.consts.push_back(parseConstDef());
+                continue;
+            }
+            // fall through — ctor/dtor branches and isMethodDecl peek past const.
         }
         // explicit constructor: _() { ... }  or forward decl: _();
-        if (peek().type == TokenType::kIdentifier && peek().value == "_"
-            && pos_ + 1 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kLParen) {
-            int ctor_tok = pos_;
-            advance(); // consume _
-            expect(TokenType::kLParen, "Expected '('");
-            expect(TokenType::kRParen, "Expected ')'");
-            if (slid.has_explicit_ctor_decl) {
-                throw CompileError{file_id_, ctor_tok,
-                    "Constructor is already defined in class '" + slid.name + "'."}
-                    .addNote(slid.explicit_ctor_file_id, slid.explicit_ctor_tok,
-                             "First defined here.");
+        // optional leading `const` marker (non-binding for now).
+        {
+            int probe = pos_;
+            int probe_const_tok = -1;
+            if (probe < (int)tokens_.size() && tokens_[probe].type == TokenType::kConst) {
+                probe_const_tok = probe;
+                probe++;
             }
-            slid.has_explicit_ctor_decl = true; // declared — consumer must call ctor
-            slid.explicit_ctor_file_id = file_id_;
-            slid.explicit_ctor_tok = ctor_tok;
-            if (peek().type == TokenType::kSemicolon) {
-                advance(); // forward declaration only
-            } else {
-                slid.explicit_ctor_body = parseBlock();
+            if (probe + 1 < (int)tokens_.size()
+                && tokens_[probe].type == TokenType::kIdentifier
+                && tokens_[probe].value == "_"
+                && tokens_[probe + 1].type == TokenType::kLParen) {
+                if (probe_const_tok >= 0) advance(); // consume const
+                int ctor_tok = pos_;
+                advance(); // consume _
+                expect(TokenType::kLParen, "Expected '('");
+                expect(TokenType::kRParen, "Expected ')'");
+                if (slid.has_explicit_ctor_decl) {
+                    throw CompileError{file_id_, ctor_tok,
+                        "Constructor is already defined in class '" + slid.name + "'."}
+                        .addNote(slid.explicit_ctor_file_id, slid.explicit_ctor_tok,
+                                 "First defined here.");
+                }
+                slid.has_explicit_ctor_decl = true; // declared — consumer must call ctor
+                slid.explicit_ctor_file_id = file_id_;
+                slid.explicit_ctor_tok = ctor_tok;
+                if (probe_const_tok >= 0) slid.is_const_ctor = true;
+                if (peek().type == TokenType::kSemicolon) {
+                    advance(); // forward declaration only
+                } else {
+                    slid.explicit_ctor_body = parseBlock();
+                }
+                continue;
             }
-            continue;
         }
         // explicit destructor: ~() { ... }  or forward decl: ~();  or virtual ~() { ... }
-        int dtor_tok = pos_;
-        bool dtor_virtual_prefix = false;
-        if (peek().type == TokenType::kVirtual
-            && pos_ + 1 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kBitNot
-            && pos_ + 2 < (int)tokens_.size()
-            && tokens_[pos_ + 2].type == TokenType::kLParen) {
-            dtor_virtual_prefix = true;
-            advance(); // consume virtual
-        }
-        if (peek().type == TokenType::kBitNot
-            && pos_ + 1 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kLParen) {
-            advance(); // consume ~
-            expect(TokenType::kLParen, "Expected '('");
-            expect(TokenType::kRParen, "Expected ')'");
-            if (slid.has_explicit_dtor_decl) {
-                throw CompileError{file_id_, dtor_tok,
-                    "Destructor is already defined in class '" + slid.name + "'."}
-                    .addNote(slid.explicit_dtor_file_id, slid.explicit_dtor_tok,
-                             "First defined here.");
+        // optional leading `const` marker (non-binding for now).
+        {
+            int probe = pos_;
+            int probe_const_tok = -1;
+            bool probe_virtual = false;
+            if (probe < (int)tokens_.size() && tokens_[probe].type == TokenType::kConst) {
+                probe_const_tok = probe;
+                probe++;
             }
-            slid.has_explicit_dtor_decl = true; // declared — consumer must call dtor
-            slid.explicit_dtor_file_id = file_id_;
-            slid.explicit_dtor_tok = dtor_tok;
-            if (dtor_virtual_prefix) slid.dtor_is_virtual = true;
-            if (peek().type == TokenType::kSemicolon) {
-                advance(); // forward declaration only
-            } else {
-                slid.dtor_body = parseBlock();
+            if (probe < (int)tokens_.size() && tokens_[probe].type == TokenType::kVirtual) {
+                probe_virtual = true;
+                probe++;
             }
-            continue;
+            if (probe + 1 < (int)tokens_.size()
+                && tokens_[probe].type == TokenType::kBitNot
+                && tokens_[probe + 1].type == TokenType::kLParen) {
+                if (probe_const_tok >= 0) advance(); // consume const
+                if (probe_virtual) advance(); // consume virtual
+                int dtor_tok = pos_;
+                advance(); // consume ~
+                expect(TokenType::kLParen, "Expected '('");
+                expect(TokenType::kRParen, "Expected ')'");
+                if (slid.has_explicit_dtor_decl) {
+                    throw CompileError{file_id_, dtor_tok,
+                        "Destructor is already defined in class '" + slid.name + "'."}
+                        .addNote(slid.explicit_dtor_file_id, slid.explicit_dtor_tok,
+                                 "First defined here.");
+                }
+                slid.has_explicit_dtor_decl = true; // declared — consumer must call dtor
+                slid.explicit_dtor_file_id = file_id_;
+                slid.explicit_dtor_tok = dtor_tok;
+                if (probe_virtual) slid.dtor_is_virtual = true;
+                if (probe_const_tok >= 0) slid.is_const_dtor = true;
+                if (peek().type == TokenType::kSemicolon) {
+                    advance(); // forward declaration only
+                } else {
+                    slid.dtor_body = parseBlock();
+                }
+                continue;
+            }
         }
         // method definition: starts with a type name followed by identifier followed by (
         // also handles operator methods: op=(...)  op<-(...)  op+(...)  etc.
@@ -2889,15 +3030,20 @@ EnumDef Parser::parseEnumDef() {
 ExternalMethodDef Parser::parseExternalMethodDef() {
     [[maybe_unused]] int t_start = pos_;
     ExternalMethodDef em;
+    int return_type_tok = -1;
+    int em_const_tok = -1;
     // optional return type (primitive keyword); absent for ctor/dtor
     if (isTypeName(peek())
         || peek().type == TokenType::kConst
         || peek().type == TokenType::kMutable
         || peek().type == TokenType::kLParen) {
+        return_type_tok = pos_;
         em.return_type = parseTypeName();
+        em.has_explicit_return = true;
     }
     // optional `const` method marker between return type and class name
     if (peek().type == TokenType::kConst) {
+        em_const_tok = pos_;
         em.is_const_method = true;
         advance();
     }
@@ -2936,6 +3082,9 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "Expected ')'");
+    checkMethodHeadRules(file_id_, em.method_name, (int)em.params.size(),
+        em.has_explicit_return, em.is_const_method,
+        em.tok, return_type_tok, em_const_tok);
     if (peek().type == TokenType::kEquals
         && pos_ + 1 < (int)tokens_.size()
         && tokens_[pos_ + 1].type == TokenType::kDelete) {
@@ -2976,10 +3125,27 @@ void Parser::parseExternalMethodBlock(Program& program) {
             em.is_virtual = true;
             advance();
         }
+        // optional leading `const` marker — only valid as a method marker
+        // when followed by an elided-return method-name (`_`, `~`, `op<sym>`).
+        int leading_const_tok = -1;
+        bool leading_const_consumed = false;
+        if (peek().type == TokenType::kConst && pos_ + 1 < (int)tokens_.size()) {
+            const Token& after = tokens_[pos_ + 1];
+            if (after.type == TokenType::kOp
+                || after.type == TokenType::kBitNot
+                || (after.type == TokenType::kIdentifier && after.value == "_")) {
+                leading_const_tok = pos_;
+                advance();
+                em.is_const_method = true;
+                leading_const_consumed = true;
+            }
+        }
         // ctor: _() { ... }
         if (peek().type == TokenType::kIdentifier && peek().value == "_"
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
+            em.tok = pos_;
+            em.file_id = file_id_;
             advance(); // consume _
             em.method_name = "_";
             expect(TokenType::kLParen, "Expected '('");
@@ -2992,6 +3158,8 @@ void Parser::parseExternalMethodBlock(Program& program) {
         if (peek().type == TokenType::kBitNot
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
+            em.tok = pos_;
+            em.file_id = file_id_;
             advance(); // consume ~
             em.method_name = "~";
             expect(TokenType::kLParen, "Expected '('");
@@ -3000,16 +3168,25 @@ void Parser::parseExternalMethodBlock(Program& program) {
             program.external_methods.push_back(std::move(em));
             continue;
         }
-        // new syntax: op overloads have no explicit return type
-        if (peek().type == TokenType::kOp) {
+        int return_type_tok = -1;
+        int em_const_tok = leading_const_tok;
+        if (leading_const_consumed) {
+            // leading const + elided-return name; return type stays elided.
             em.return_type = "void";
+            em.has_explicit_return = false;
+        } else if (peek().type == TokenType::kOp) {
+            em.return_type = "void";
+            em.has_explicit_return = false;
         } else {
+            return_type_tok = pos_;
             em.return_type = parseTypeName();
-        }
-        // optional `const` method marker between return type and method name
-        if (peek().type == TokenType::kConst) {
-            em.is_const_method = true;
-            advance();
+            em.has_explicit_return = true;
+            // optional `const` method marker between return type and method name
+            if (peek().type == TokenType::kConst) {
+                em_const_tok = pos_;
+                em.is_const_method = true;
+                advance();
+            }
         }
         int em_tok = pos_;
         em.file_id = file_id_;
@@ -3018,6 +3195,9 @@ void Parser::parseExternalMethodBlock(Program& program) {
             advance();
             if (auto sym = consumeOpSymbol()) em.method_name = "op" + *sym;
             else errorAt(em_tok, "Expected an operator symbol after 'op'.");
+        } else if (peek().type == TokenType::kBitNot) {
+            advance();
+            em.method_name = "~";
         } else {
             em.method_name = expect(TokenType::kIdentifier, "Expected method name").value;
         }
@@ -3046,6 +3226,9 @@ void Parser::parseExternalMethodBlock(Program& program) {
         expect(TokenType::kRParen, "Expected ')'");
         checkOpArity(em.method_name, (int)em.params.size(), em_tok);
         checkOpMutable(em.method_name, em.params, em.param_mutable, param_mut_toks, em_tok);
+        checkMethodHeadRules(file_id_, em.method_name, (int)em.params.size(),
+            em.has_explicit_return, em.is_const_method,
+            em.tok, return_type_tok, em_const_tok);
         if (peek().type == TokenType::kEquals
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kDelete) {
@@ -3405,17 +3588,26 @@ Program Parser::parse() {
     // signature. Forward declarations (body == nullptr) are pair-able with a
     // matching definition and don't count as duplicates.
     {
-        struct Site { int file_id; int tok; };
+        struct Site { std::string raw_key; int file_id; int tok; };
         std::map<std::string, Site> sigs;
         for (auto& fn : program.functions) {
             if (!fn.body) continue;
-            std::string key = fn.user_name + "(";
-            for (auto& p : fn.params) key += p.first + ",";
-            key += ")";
-            auto [it, inserted] = sigs.emplace(key, Site{fn.file_id, fn.tok});
+            std::string raw = fn.user_name + "(";
+            for (size_t i = 0; i < fn.params.size(); i++) {
+                raw += fn.params[i].first;
+                if (i < fn.param_mutable.size() && fn.param_mutable[i]) raw += "!mut";
+                raw += ",";
+            }
+            raw += ")";
+            std::string canon = fn.user_name + "(";
+            for (auto& p : fn.params) canon += canonicalType(p.first) + ",";
+            canon += ")";
+            auto [it, inserted] = sigs.emplace(canon, Site{raw, fn.file_id, fn.tok});
             if (!inserted) {
-                throw CompileError{fn.file_id, fn.tok,
-                    "Function '" + fn.user_name + "' is redefined with the same signature."}
+                std::string msg = (it->second.raw_key == raw)
+                    ? "Function '" + fn.user_name + "' is redefined with the same signature."
+                    : "Function '" + fn.user_name + "' is redefined with the same signature without qualifiers.";
+                throw CompileError{fn.file_id, fn.tok, msg}
                     .addNote(it->second.file_id, it->second.tok, "First defined here.");
             }
         }
@@ -3479,6 +3671,8 @@ void Parser::mergeReopens(Program& program) {
             }
             dst.has_explicit_ctor_decl = dst.has_explicit_ctor_decl || src.has_explicit_ctor_decl;
             dst.has_explicit_dtor_decl = dst.has_explicit_dtor_decl || src.has_explicit_dtor_decl;
+            dst.is_const_ctor          = dst.is_const_ctor          || src.is_const_ctor;
+            dst.is_const_dtor          = dst.is_const_dtor          || src.is_const_dtor;
             dst.is_transport_impl      = dst.is_transport_impl      || src.is_transport_impl;
             dst.has_leading_ellipsis   = dst.has_leading_ellipsis   || src.has_leading_ellipsis;
             // AND — "still open" only if every reopen left it open
@@ -3509,31 +3703,52 @@ void Parser::mergeReopens(Program& program) {
     // (class, method, signature). Forward declarations (body == nullptr)
     // pair with a matching definition and don't count as duplicates.
     {
-        struct Site { int file_id; int tok; };
+        struct Site { std::string raw_key; int file_id; int tok; };
         std::map<std::string, std::map<std::string, Site>> sigs_by_class;
+        auto raw_key_for = [](const std::string& mname,
+                               const std::vector<std::pair<std::string, std::string>>& params,
+                               const std::vector<bool>& param_mutable) {
+            std::string key = mname + "(";
+            for (size_t i = 0; i < params.size(); i++) {
+                key += params[i].first;
+                if (i < param_mutable.size() && param_mutable[i]) key += "!mut";
+                key += ",";
+            }
+            key += ")";
+            return key;
+        };
+        auto canonical_key_for = [](const std::string& mname,
+                                     const std::vector<std::pair<std::string, std::string>>& params) {
+            std::string key = mname + "(";
+            for (auto& p : params) key += canonicalType(p.first) + ",";
+            key += ")";
+            return key;
+        };
         auto check_dup = [&](const std::string& cls, const std::string& mname,
                               const std::vector<std::pair<std::string, std::string>>& params,
+                              const std::vector<bool>& param_mutable,
                               int file_id, int tok) {
-            std::string key = mname + "(";
-            for (auto& p : params) key += p.first + ",";
-            key += ")";
+            std::string raw = raw_key_for(mname, params, param_mutable);
+            std::string canon = canonical_key_for(mname, params);
             auto& m = sigs_by_class[cls];
-            auto [it, inserted] = m.emplace(key, Site{file_id, tok});
+            auto [it, inserted] = m.emplace(canon, Site{raw, file_id, tok});
             if (!inserted) {
-                throw CompileError{file_id, tok,
-                    "Class '" + cls + "' has a duplicate method '" + mname + "' with the same signature."}
+                std::string msg = (it->second.raw_key == raw)
+                    ? "Class '" + cls + "' has a duplicate method '" + mname + "' with the same signature."
+                    : "Class '" + cls + "' has a duplicate method '" + mname + "' with the same signature without qualifiers.";
+                throw CompileError{file_id, tok, msg}
                     .addNote(it->second.file_id, it->second.tok, "First defined here.");
             }
         };
         for (auto& s : program.slids) {
             for (auto& m : s.methods) {
                 if (!m.body) continue;
-                check_dup(s.name, m.name, m.params, m.file_id, m.tok);
+                check_dup(s.name, m.name, m.params, m.param_mutable, m.file_id, m.tok);
             }
         }
         for (auto& em : program.external_methods) {
             if (!em.body) continue;
-            check_dup(em.slid_name, em.method_name, em.params, em.file_id, em.tok);
+            check_dup(em.slid_name, em.method_name, em.params, em.param_mutable, em.file_id, em.tok);
         }
     }
     // const-method mismatch between forward declaration and definition.
@@ -3543,7 +3758,7 @@ void Parser::mergeReopens(Program& program) {
         auto make_key = [](const std::string& mname,
                             const std::vector<std::pair<std::string, std::string>>& params) {
             std::string key = mname + "(";
-            for (auto& p : params) key += p.first + ",";
+            for (auto& p : params) key += canonicalType(p.first) + ",";
             key += ")";
             return key;
         };
