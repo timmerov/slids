@@ -487,12 +487,25 @@ void Parser::checkOpArity(const std::string& op_name, int actual, int op_tok) {
 void Parser::checkOpMutable(const std::string& op_name,
                             const std::vector<std::pair<std::string,std::string>>& params,
                             const std::vector<bool>& param_mutable,
+                            const std::vector<int>& param_mut_toks,
                             int op_tok) {
-    if (op_name != "op<-" && op_name != "op<->") return;
+    // op overloads always have the shape "op" + a non-identifier punctuation symbol.
+    // Regular methods (parsed as identifiers) cannot have such a third character.
+    if (op_name.size() < 3 || op_name.compare(0, 2, "op") != 0) return;
+    char c = op_name[2];
+    if (isalnum((unsigned char)c) || c == '_') return;
+    bool is_exempt = (op_name == "op<-" || op_name == "op<->");
     for (size_t i = 0; i < params.size(); ++i) {
-        if (isParamIndirectType(params[i].first) && !param_mutable[i]) {
-            errorAt(op_tok, "Pointer parameter '" + params[i].second
-                + "' of " + op_name + " requires 'mutable'.");
+        if (is_exempt) {
+            if (isParamIndirectType(params[i].first) && !param_mutable[i]) {
+                errorAt(op_tok, "Pointer parameter '" + params[i].second
+                    + "' of " + op_name + " requires 'mutable'.");
+            }
+        } else {
+            if (param_mutable[i]) {
+                errorAt(param_mut_toks[i],
+                    "Overloaded operator parameter cannot be declared 'mutable'.");
+            }
         }
     }
 }
@@ -2393,6 +2406,7 @@ MethodDef Parser::parseMethodDef() {
         m.name = expect(TokenType::kIdentifier, "Expected method name").value;
     }
     expect(TokenType::kLParen, "Expected '('");
+    std::vector<int> param_mut_toks;
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         bool is_mutable = false;
         int mut_tok = pos_;
@@ -2406,11 +2420,12 @@ MethodDef Parser::parseMethodDef() {
         std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
         m.params.emplace_back(type, name);
         m.param_mutable.push_back(is_mutable);
+        param_mut_toks.push_back(mut_tok);
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "Expected ')'");
     checkOpArity(m.name, (int)m.params.size(), op_tok);
-    checkOpMutable(m.name, m.params, m.param_mutable, op_tok);
+    checkOpMutable(m.name, m.params, m.param_mutable, param_mut_toks, op_tok);
     if (peek().type == TokenType::kEquals
         && pos_ + 1 < (int)tokens_.size()
         && tokens_[pos_ + 1].type == TokenType::kDelete) {
@@ -2872,6 +2887,7 @@ void Parser::parseExternalMethodBlock(Program& program) {
             errorAt(em_tok, "Method '" + em.method_name + "' shares the name of its enclosing class.");
         }
         expect(TokenType::kLParen, "Expected '('");
+        std::vector<int> param_mut_toks;
         while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
             bool is_mutable = false;
             int mut_tok = pos_;
@@ -2885,11 +2901,12 @@ void Parser::parseExternalMethodBlock(Program& program) {
             std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
             em.params.emplace_back(type, name);
             em.param_mutable.push_back(is_mutable);
+            param_mut_toks.push_back(mut_tok);
             if (peek().type == TokenType::kComma) advance();
         }
         expect(TokenType::kRParen, "Expected ')'");
         checkOpArity(em.method_name, (int)em.params.size(), em_tok);
-        checkOpMutable(em.method_name, em.params, em.param_mutable, em_tok);
+        checkOpMutable(em.method_name, em.params, em.param_mutable, param_mut_toks, em_tok);
         if (peek().type == TokenType::kEquals
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kDelete) {

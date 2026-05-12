@@ -642,6 +642,21 @@ BadMutable(int dummy_ = 0) {
     // op<-->(Overload^ a) { }
     /* 'mutable' applies only to pointer types '^' and '[]'. */
     // op<--(mutable int a) { }
+    /* non-move/swap overloads cannot have 'mutable' parameters. */
+    //-EXPECT-ERROR: Overloaded operator parameter cannot be declared 'mutable'.
+    // op=(mutable Overload^ a) { }
+    //-EXPECT-ERROR: Overloaded operator parameter cannot be declared 'mutable'.
+    // op+(mutable Overload^ a, Overload^ b) { }
+    //-EXPECT-ERROR: Overloaded operator parameter cannot be declared 'mutable'.
+    // op+=(mutable Overload^ a) { }
+    //-EXPECT-ERROR: Overloaded operator parameter cannot be declared 'mutable'.
+    // bool op==(mutable Overload^ a) { return false; }
+    //-EXPECT-ERROR: Overloaded operator parameter cannot be declared 'mutable'.
+    // int op[](mutable Overload^ a) { return 0; }
+    //-EXPECT-ERROR: Overloaded operator parameter cannot be declared 'mutable'.
+    // op[]=(mutable Overload^ a, int b) { }
+    //-EXPECT-ERROR: Overloaded operator parameter cannot be declared 'mutable'.
+    // op-(mutable Overload^ a) { }
 }
 
 Comparison(int z_ = 0) {

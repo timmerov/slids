@@ -630,6 +630,7 @@ private:
     void checkOpMutable(const std::string& op_name,
                         const std::vector<std::pair<std::string,std::string>>& params,
                         const std::vector<bool>& param_mutable,
+                        const std::vector<int>& param_mut_toks,
                         int op_tok);
 
     SlidDef parseSlidDef();
