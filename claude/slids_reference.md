@@ -897,7 +897,8 @@ Signature must match a base method exactly. Exception: `= delete` with no base c
 
 ## Operator overloading
 
-Operator overloads are defined inside the class body using the `op` keyword followed immediately by the operator symbol. Most operators have no return type, like the constructor `_` and destructor `~`. Comparison operators return `bool`. Indexing read of a container class returns the contained type.
+Operator overloads are defined inside the class body using the `op` keyword followed immediately by the operator symbol. Most operators have no return type, like the
+constructor `_` and destructor `~`. Comparison operators generally return `bool`. Index returns a reference to the contained type.
 
 ```
 Value(int value_ = 0) {
@@ -935,7 +936,8 @@ Value(int value_ = 0) {
 | Logical | `&&` `\|\|` `^^` | `op<sym>(Type^ a, Type^ b)` |
 | Compound assignment | `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` `&&=` `\|\|=` `^^=` | `op<sym>(Type^ rhs)` |
 | Comparison | `==` `!=` `<` `>` `<=` `>=` | `bool op<sym>(Type^ rhs)` |
-| Indexing read | `[]` | `T op[](Idx idx)` |
+| Indexing read | `[]` | `T^ op[](Idx idx)` |
+| Dereference | `^` | `T^ op^()` |
 | Unary, construction | `+` `-` `~` `!` | `op<sym>(Type^ a)` |
 | Unary, query | `+` `-` `~` `!` | `bool op<sym>()` |
 
@@ -944,7 +946,7 @@ Value(int value_ = 0) {
 ### Rules
 
 - **Operators are methods.** Every operator is a method of a class. There are no free-function operators.
-- **Most operators have no return value.** The product is `self`. The exceptions are comparison (returns `bool`) and indexing read (returns the contained type).
+- **Most operators have no return value.** The product is `self`. The exceptions are comparison (returns `bool`), indexing read (returns a reference to the contained type), and dereference (returns a reference to the contained type).
 - **Wrong arity is a compile error.** Each operator has a fixed parameter count; other counts are rejected.
 - **Assignment is a statement.** `x = y = 0;` and `if (x = 0)` are compile errors.
 - **Multiple overloads.** A class may define multiple overloads of the same operator. The compiler picks the best match.
@@ -1087,8 +1089,7 @@ for (e : my_container)  { ... }    // class — see below
 
 For tuple, array, and string shapes with non-primitive elements (slid, anon-tuple, fixed-array), the loop var type must be declared.
 
-**Class iteration** — If the class defines `op[]` and `size()`, iteration is **value**. If it defines `begin()`, `end()`, and `next(prev)`, iteration is by **reference**.
-If both are defined, the loop var must be explicitly declared.
+**Class iteration** — The class defines `op[]` and `size()`, or `begin()`, `end()`, and `next(prev)`, or both. With both defined, a non-reference loop variable (`T x`) picks `op[]/size`; a reference loop variable (`T^ x`) picks `begin/end/next`; an inferred loop-variable type is a compile error.
 
 ### For — long form
 
