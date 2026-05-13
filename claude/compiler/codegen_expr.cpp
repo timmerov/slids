@@ -230,8 +230,15 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 }
             }
             auto ait = array_info_.find(ve->name);
-            if (ait == array_info_.end())
-                error(std::string("Undefined array '" + ve->name + "'"));
+            if (ait == array_info_.end()) {
+                // Fall through to the unified lvalue walker for shapes the
+                // custom AIE-base arms above don't recognize — e.g., a
+                // field-of-self whose type is a pointer/iterator (char[]),
+                // a deref'd pointer base, a method-returning-class chain,
+                // etc. resolveLvalue + drillIndexChain handle all of these.
+                auto lv = resolveLvalue(*ao->operand);
+                return lv.addr;
+            }
             auto& ainfo = ait->second;
             std::string flat = emitExpr(*indices[0]);
             for (int k = 1; k < (int)indices.size(); k++) {

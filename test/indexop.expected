@@ -1,11 +1,11 @@
 rgb=(100,200,300)
-setting rgb_[0]=10
-setting rgb_[1]=20
-setting rgb_[2]=30
+indexing rgb_[0]=100
+indexing rgb_[1]=200
+indexing rgb_[2]=300
 rgb=(10,20,30)
-getting rgb_[0]=10
-getting rgb_[1]=20
-getting rgb_[2]=30
+indexing rgb_[0]=10
+indexing rgb_[1]=20
+indexing rgb_[2]=30
 r=10
 g=20
 b=30

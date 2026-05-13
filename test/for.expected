@@ -76,7 +76,7 @@ for container by reference: 17 18 19 20 21
 for container by value: 13 17 19
 for container by value: 13 17 19
 for container by reference: 13 17 19
-for good-by-value, bad-by-ref: 100 101 102
+for good-by-value, bad-by-ref: 0 0 0
 for bad-by-value, good-by-ref: 200 201 202
 reuse range: 3
 shadow typed: 99

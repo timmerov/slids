@@ -206,7 +206,7 @@ String (
     str[3] = '!';
     */
     char^ const op[](intptr index) {
-        return storage_ + index;
+        return ^storage_[index];
     }
 
     /* return size of string. */
