@@ -522,3 +522,50 @@ int readConst() {
 //     p = 0;
 //     return p;
 // }
+
+/* ----------------------------------------------------------------------
+   Phase 3: const-method `self` enforcement.
+
+   `is_const_method` sets self's type to `const SlidName` at method entry.
+   Field writes (`self.field = ...`, `field_ = ...`), self-rebinding
+   (`self = ...`), and any other write through self are rejected.
+   ---------------------------------------------------------------------- */
+
+/* positive: const method that only reads is fine. */
+ConstSelfReader(int n_ = 0, int m_ = 0) {
+    int const total() {
+        return n_ + m_;             /* read-only: allowed */
+    }
+}
+
+/* compile error: const method writes to a field. */
+//-EXPECT-ERROR: const method
+// ConstSelfWriter(int n_ = 0) {
+//     void const setN(int v) {
+//         n_ = v;
+//     }
+// }
+
+/* compile error: const method pre-increments a field. */
+//-EXPECT-ERROR: const
+// ConstSelfIncer(int n_ = 0) {
+//     void const bump() {
+//         ++n_;
+//     }
+// }
+
+/* compile error: const method compound-assigns a field. */
+//-EXPECT-ERROR: const
+// ConstSelfCompoundEr(int n_ = 0) {
+//     void const addN(int v) {
+//         n_ += v;
+//     }
+// }
+
+/* compile error: const method assigns self. */
+//-EXPECT-ERROR: const
+// ConstSelfReplacer(int n_ = 0) {
+//     void const replace(ConstSelfReplacer^ other) {
+//         self = other^;
+//     }
+// }

@@ -2597,11 +2597,21 @@ std::string Codegen::inferSlidType(const Expr& expr) {
                 }
             }
         }
-        if (!slid_name.empty() && slid_info_.count(slid_name)) {
-            auto& info = slid_info_[slid_name];
-            auto fit = info.field_index.find(fa->field);
-            if (fit != info.field_index.end())
-                return info.field_types[fit->second];
+        if (!slid_name.empty()) {
+            // const propagates through field access. See codegen.cpp::exprType
+            // FieldAccessExpr arm for the canonical form.
+            bool obj_is_const = typeStartsWithConst(slid_name);
+            std::string lookup = obj_is_const ? slid_name.substr(6) : slid_name;
+            if (slid_info_.count(lookup)) {
+                auto& info = slid_info_[lookup];
+                auto fit = info.field_index.find(fa->field);
+                if (fit != info.field_index.end()) {
+                    std::string ftype = info.field_types[fit->second];
+                    if (obj_is_const && !typeStartsWithConst(ftype))
+                        ftype = "const " + ftype;
+                    return ftype;
+                }
+            }
         }
     }
     // free function call — look up return type

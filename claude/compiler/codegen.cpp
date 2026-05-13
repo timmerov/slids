@@ -2781,11 +2781,22 @@ std::string Codegen::exprType(const Expr& expr) {
         } else {
             obj_slid = exprSlidType(*fa->object);
         }
-        if (!obj_slid.empty() && slid_info_.count(obj_slid)) {
-            auto& info = slid_info_[obj_slid];
-            auto fit = info.field_index.find(fa->field);
-            if (fit != info.field_index.end())
-                return info.field_types[fit->second];
+        if (!obj_slid.empty()) {
+            // const propagates through field access: (const Obj).field has
+            // type "const FieldType". Strip the qualifier for slid_info_ lookup,
+            // then re-apply to the returned field type.
+            bool obj_is_const = typeStartsWithConst(obj_slid);
+            std::string lookup = obj_is_const ? obj_slid.substr(6) : obj_slid;
+            if (slid_info_.count(lookup)) {
+                auto& info = slid_info_[lookup];
+                auto fit = info.field_index.find(fa->field);
+                if (fit != info.field_index.end()) {
+                    std::string ftype = info.field_types[fit->second];
+                    if (obj_is_const && !typeStartsWithConst(ftype))
+                        ftype = "const " + ftype;
+                    return ftype;
+                }
+            }
         }
         return "";
     }
@@ -4122,7 +4133,8 @@ void Codegen::emitSlidMethod(const SlidDef& slid,
                               const std::string& full_mangled,
                               const std::string& return_type,
                               const std::vector<std::pair<std::string,std::string>>& params,
-                              const BlockStmt& body) {
+                              const BlockStmt& body,
+                              bool is_const_method) {
     locals_.clear();
     emitted_alloca_regs_.clear();
     dtor_vars_.clear();
@@ -4134,7 +4146,10 @@ void Codegen::emitSlidMethod(const SlidDef& slid,
     current_slid_ = slid.name;
     block_terminated_ = false;
     current_func_name_ = method_user_name;
-    locals_["self"].type = slid.name;
+    // Phase 3: a `const` method sees `self` as const. Writes through self
+    // (rebind, field writes, deref-writes) are rejected by the existing
+    // body-level enforcement once self's type carries the qualifier.
+    locals_["self"].type = is_const_method ? ("const " + slid.name) : slid.name;
     locals_["self"].reg = "%self";
 
     bool uses_sret = !return_type.empty() && slid_info_.count(return_type) > 0;
@@ -4188,7 +4203,7 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
         if (!m.body) continue;
         std::string mangled = resolveMethodMangledName(slid.name, m.name, m.params);
         current_func_tuple_fields_.clear();
-        emitSlidMethod(slid, m.name, mangled, m.return_type, m.params, *m.body);
+        emitSlidMethod(slid, m.name, mangled, m.return_type, m.params, *m.body, m.is_const_method);
     }
     // emit external method definitions for this slid
     for (auto& em : program_.external_methods) {
@@ -4196,7 +4211,7 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
         if (em.method_name == "_" || em.method_name == "~") continue;
         std::string mangled = resolveMethodMangledName(slid.name, em.method_name, em.params);
         current_func_tuple_fields_.clear();
-        emitSlidMethod(slid, em.method_name, mangled, em.return_type, em.params, *em.body);
+        emitSlidMethod(slid, em.method_name, mangled, em.return_type, em.params, *em.body, em.is_const_method);
     }
     current_slid_ = "";
 }

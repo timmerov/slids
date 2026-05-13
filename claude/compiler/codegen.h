@@ -470,7 +470,8 @@ private:
                         const std::string& full_mangled,
                         const std::string& return_type,
                         const std::vector<std::pair<std::string,std::string>>& params,
-                        const BlockStmt& body);
+                        const BlockStmt& body,
+                        bool is_const_method);
     void emitSlidMethods(const SlidDef& slid);
     std::string resolveMethodMangledName(const std::string& slid_name,
                                          const std::string& method_name,

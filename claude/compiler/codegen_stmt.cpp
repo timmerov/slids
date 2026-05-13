@@ -221,7 +221,13 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
                 std::string gep = newTmp();
                 out_ << "    " << gep << " = getelementptr %struct." << current_slid_
                      << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
-                return {gep, info.field_types[fit->second]};
+                std::string ftype = info.field_types[fit->second];
+                // Const propagation: if self is const, the field is const too.
+                auto sit = locals_.find("self");
+                if (sit != locals_.end() && typeStartsWithConst(sit->second.type)
+                        && !typeStartsWithConst(ftype))
+                    ftype = "const " + ftype;
+                return {gep, ftype};
             }
         }
         errorAtNode(e, "Undefined variable '" + ve->name + "'.");
@@ -230,12 +236,22 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
         auto obj = resolveLvalue(*fa->object);
         std::string stype = obj.type;
         std::string addr = obj.addr;
+        // Strip top-level const for the slid_info_ lookup; remember it to
+        // re-apply to the returned field type.
+        bool obj_is_const = typeStartsWithConst(stype);
+        if (obj_is_const) stype = stype.substr(6);
         if (isPtrType(stype) || isRefType(stype)) {
             std::string loaded = newTmp();
             out_ << "    " << loaded << " = load ptr, ptr " << addr << "\n";
             addr = loaded;
             stype = isPtrType(stype) ? stype.substr(0, stype.size() - 2)
                                      : stype.substr(0, stype.size() - 1);
+            // The deref of `(const T)^` yields a const pointee — re-apply.
+            stype = stripRedundantConstParens(stype);
+            if (typeStartsWithConst(stype)) {
+                obj_is_const = true;
+                stype = stype.substr(6);
+            }
         }
         auto sit = slid_info_.find(stype);
         if (sit == slid_info_.end())
@@ -247,7 +263,10 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
         std::string gep = newTmp();
         out_ << "    " << gep << " = getelementptr %struct." << stype
              << ", ptr " << addr << ", i32 0, i32 " << fit->second << "\n";
-        return {gep, sit->second.field_types[fit->second]};
+        std::string ftype = sit->second.field_types[fit->second];
+        if (obj_is_const && !typeStartsWithConst(ftype))
+            ftype = "const " + ftype;
+        return {gep, ftype};
     }
     if (auto* de = dynamic_cast<const DerefExpr*>(&e)) {
         // post-inc/dec deref under PPID: load OLD pointer (return as deref'd
@@ -1690,6 +1709,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // this dispatches op= dispatch on the current_slid_ class with self_ptr_
         // as the receiver (handles inline-ctor-body remap).
         if (assign->name == "self" && !current_slid_.empty()) {
+            // Phase 3: writing to self in a const method is forbidden.
+            auto sit = locals_.find("self");
+            if (sit != locals_.end() && typeStartsWithConst(sit->second.type))
+                errorAtNode(stmt, "Cannot assign to 'self' in a const method.");
             std::string op_func = resolveSingleArgOverload(current_slid_ + "__op=", *assign->value);
             if (op_func.empty())
                 error(std::string("No matching op= on '" + current_slid_ + "' for 'self = <expr>'"));
@@ -1706,6 +1729,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (!current_slid_.empty()) {
             auto& info = slid_info_[current_slid_];
             if (info.field_index.count(assign->name)) {
+                // Phase 3: writing to self.field in a const method is forbidden.
+                auto sit = locals_.find("self");
+                if (sit != locals_.end() && typeStartsWithConst(sit->second.type))
+                    errorAtNode(stmt,
+                        "Cannot write to field '" + assign->name + "' in a const method.");
                 int idx = info.field_index[assign->name];
                 requirePtrInit(info.field_types[idx], *assign->value);
                 std::string field_type = llvmType(info.field_types[idx]);
