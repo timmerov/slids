@@ -107,6 +107,21 @@ void Codegen::checkResolvedFreeFunction(
     }
 }
 
+void Codegen::checkConstReceiver(
+    const Expr& object,
+    const std::string& method_name,
+    const std::string& mangled)
+{
+    // Destructor is the destruction window — always callable on const objects.
+    if (method_name == "~") return;
+    // Method is explicitly const-marked: callable on const receivers.
+    if (const_methods_.count(mangled)) return;
+    // Receiver's effective slids type carries `const`? If not, no enforcement.
+    if (!typeHasConst(exprType(object))) return;
+    errorAtNode(object,
+        "Cannot call non-const method '" + method_name + "' on a const target.");
+}
+
 std::string Codegen::newTmp() { return "%t" + std::to_string(tmp_counter_++); }
 
 std::string Codegen::registerStringConstant(const std::string& value) {
@@ -244,8 +259,10 @@ void Codegen::collectFunctionSignatures() {
             template_funcs_[fn.name].push_back({&fn, fn.impl_module, fn.is_local});
             continue;
         }
-        std::vector<std::string> ptypes;
-        for (auto& [t, n] : fn.params) ptypes.push_back(t);
+        // Caller view of the signature matches the body's view: default-const
+        // applied per slot, so overload identity is preserved (canonicalType
+        // collapses both forms to the same).
+        std::vector<std::string> ptypes = buildParamTypes(fn.params, fn.param_mutable);
 
         std::string mangled = mangleFreeFunction(fn.name, ptypes);
         free_func_overloads_[fn.name].push_back({mangled, ptypes, fn.param_mutable, fn.param_mut_toks, fn.file_id});
@@ -273,9 +290,8 @@ void Codegen::collectFunctionSignatures() {
                         ret = nfs->def.return_type;
                     }
                     func_return_types_[mangled] = ret;
-                    std::vector<std::string> nptypes;
-                    for (auto& [t, n] : nfs->def.params) nptypes.push_back(t);
-                    func_param_types_[mangled] = nptypes;
+                    func_param_types_[mangled] =
+                        buildParamTypes(nfs->def.params, nfs->def.param_mutable);
                 } else if (auto* fl = dynamic_cast<const ForLongStmt*>(stmt.get())) {
                     findNested(*fl->update_block);
                     findNested(*fl->body);
@@ -297,6 +313,7 @@ void Codegen::collectFunctionSignatures() {
             std::vector<bool> param_mutable;
             std::vector<int> param_mut_toks;
             int file_id = 0;
+            bool is_const = false;
         };
         // build set of method names covered by external implementations
         // so forward decls from an imported header don't get double-counted as overloads
@@ -315,12 +332,12 @@ void Codegen::collectFunctionSignatures() {
             // ancestor (default) or nowhere (delete / pure-virtual). Registering
             // would emit a `Derived__m` reference that no body satisfies.
             if (m.is_default || m.is_delete) continue;
-            by_name[m.name].push_back({m.return_type, m.params, m.param_mutable, m.param_mut_toks, m.file_id});
+            by_name[m.name].push_back({m.return_type, m.params, m.param_mutable, m.param_mut_toks, m.file_id, m.is_const_method});
         }
         for (auto& em : program_.external_methods) {
             if (em.slid_name != slid.name || !em.body) continue;
             if (em.method_name == "_" || em.method_name == "~") continue;
-            by_name[em.method_name].push_back({em.return_type, em.params, em.param_mutable, em.param_mut_toks, em.file_id});
+            by_name[em.method_name].push_back({em.return_type, em.params, em.param_mutable, em.param_mut_toks, em.file_id, em.is_const_method});
         }
         // external forward decls: register signature for methods not defined in this TU
         for (auto& em : program_.external_methods) {
@@ -328,7 +345,7 @@ void Codegen::collectFunctionSignatures() {
             if (em.method_name == "_" || em.method_name == "~") continue;
             if (em.is_default || em.is_delete) continue;
             if (!by_name.count(em.method_name))
-                by_name[em.method_name].push_back({em.return_type, em.params, em.param_mutable, em.param_mut_toks, em.file_id});
+                by_name[em.method_name].push_back({em.return_type, em.params, em.param_mutable, em.param_mut_toks, em.file_id, em.is_const_method});
         }
         // op<-> may only take a single SameType^ parameter — reject anything else.
         if (auto it = by_name.find("op<->"); it != by_name.end()) {
@@ -361,11 +378,11 @@ void Codegen::collectFunctionSignatures() {
         for (auto& [method_name, entries] : by_name) {
             std::string base = slid.name + "__" + method_name;
             for (auto& e : entries) {
-                std::vector<std::string> ptypes;
-                for (auto& [t, n] : e.params) ptypes.push_back(t);
+                std::vector<std::string> ptypes = buildParamTypes(e.params, e.param_mutable);
                 std::string mangled = mangleMethod(slid.name, method_name, ptypes);
                 func_return_types_[mangled] = e.ret;
                 func_param_types_[mangled] = ptypes;
+                if (e.is_const) const_methods_.insert(mangled);
                 // avoid duplicate overload entries (transport slid + impl slid both contribute)
                 auto& overloads = method_overloads_[base];
                 if (std::none_of(overloads.begin(), overloads.end(),
@@ -378,8 +395,7 @@ void Codegen::collectFunctionSignatures() {
         for (auto& m : slid.methods) {
             if (m.body || m.name == "_" || m.name == "~") continue;
             std::string base = slid.name + "__" + m.name;
-            std::vector<std::string> mptypes;
-            for (auto& [t, n] : m.params) mptypes.push_back(t);
+            std::vector<std::string> mptypes = buildParamTypes(m.params, m.param_mutable);
             auto it = method_overloads_.find(base);
             if (it != method_overloads_.end()) {
                 for (auto& [mangled, ptypes, _pm, _pmt, _fid] : it->second)
@@ -1407,6 +1423,8 @@ void Codegen::emit() {
             for (int i = 0; i < (int)tmpl.params.size(); i++) {
                 std::string substituted = sub(tmpl.params[i].first);
                 if (slid_info_.count(substituted)) substituted += "^";
+                bool is_mut = (i < (int)tmpl.param_mutable.size()) && tmpl.param_mutable[i];
+                substituted = applyParamConstDefault(substituted, is_mut);
                 if (substituted != req.param_types[i]) { match = false; break; }
             }
             if (match) { chosen = &entry; break; }
@@ -1899,11 +1917,13 @@ void Codegen::emitNestedFunction(
     }
 
     // alloca/store explicit params
-    for (auto& [type, name] : fn.params) {
+    for (int i = 0; i < (int)fn.params.size(); i++) {
+        const auto& [type, name] = fn.params[i];
+        bool is_mut = (i < (int)fn.param_mutable.size()) && fn.param_mutable[i];
         std::string reg = uniqueAllocaReg(name);
         out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
         out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
-        locals_[name] = {reg, type};
+        locals_[name] = {reg, applyParamConstDefault(type, is_mut)};
     }
 
     pushScope();
@@ -2692,9 +2712,7 @@ std::string Codegen::exprSlidType(const Expr& expr) {
             // fallback: infer from first param type (for overloads with unknown return type)
             auto pit = func_param_types_.find(mangled);
             if (pit != func_param_types_.end() && !pit->second.empty()) {
-                std::string t = pit->second[0];
-                if (!t.empty() && t.back() == '^') t.pop_back();
-                else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
+                std::string t = pointeeForLookup(pit->second[0]);
                 if (slid_info_.count(t)) return t;
             }
         }
@@ -2764,14 +2782,18 @@ std::string Codegen::exprType(const Expr& expr) {
     if (auto* se = dynamic_cast<const SliceExpr*>(&expr)) return exprType(*se->base);
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
         std::string obj_slid;
+        bool obj_is_const = false;
         if (auto* ve2 = dynamic_cast<const VarExpr*>(fa->object.get())) {
             if (!current_slid_.empty()) {
                 auto& info = slid_info_[current_slid_];
                 auto fit = info.field_index.find(ve2->name);
                 if (fit != info.field_index.end()) {
                     obj_slid = info.field_types[fit->second];
-                    if (isRefType(obj_slid)) obj_slid.pop_back();
-                    else if (isPtrType(obj_slid)) obj_slid.resize(obj_slid.size()-2);
+                    if (isRefType(obj_slid) || isPtrType(obj_slid)) {
+                        auto pi = pointeeInfo(obj_slid);
+                        obj_slid = pi.name;
+                        obj_is_const = pi.is_const;
+                    }
                     if (!slid_info_.count(obj_slid)) obj_slid.clear();
                 }
             }
@@ -2783,27 +2805,27 @@ std::string Codegen::exprType(const Expr& expr) {
             if (auto* ve2 = dynamic_cast<const VarExpr*>(de2->operand.get())) {
                 auto tit = locals_.find(ve2->name);
                 if (tit != locals_.end()) {
-                    obj_slid = tit->second.type;
-                    if (isRefType(obj_slid)) obj_slid.pop_back();
-                    else if (isPtrType(obj_slid)) obj_slid.resize(obj_slid.size()-2);
+                    auto pi = pointeeInfo(tit->second.type);
+                    obj_slid = pi.name;
+                    obj_is_const = pi.is_const;
                 }
             }
         } else {
             obj_slid = exprSlidType(*fa->object);
         }
         if (!obj_slid.empty()) {
-            // const propagates through field access: (const Obj).field has
-            // type "const FieldType". Strip the qualifier for slid_info_ lookup,
-            // then re-apply to the returned field type.
-            bool obj_is_const = typeStartsWithConst(obj_slid);
-            std::string lookup = obj_is_const ? obj_slid.substr(6) : obj_slid;
-            if (slid_info_.count(lookup)) {
-                auto& info = slid_info_[lookup];
+            // The non-indirect paths above may leave a leading-const obj_slid
+            // (e.g. a const local). Strip + remember the const for propagation.
+            if (typeStartsWithConst(obj_slid)) {
+                obj_is_const = true;
+                obj_slid = baseSlidType(obj_slid);
+            }
+            if (slid_info_.count(obj_slid)) {
+                auto& info = slid_info_[obj_slid];
                 auto fit = info.field_index.find(fa->field);
                 if (fit != info.field_index.end()) {
                     std::string ftype = info.field_types[fit->second];
-                    if (obj_is_const && !typeStartsWithConst(ftype))
-                        ftype = "const " + ftype;
+                    if (obj_is_const) ftype = propagateConst(ftype);
                     return ftype;
                 }
             }
@@ -3087,18 +3109,14 @@ std::string Codegen::derefSlidName(const DerefExpr& de) {
     if (auto* ve = dynamic_cast<const VarExpr*>(de.operand.get())) {
         auto tit = locals_.find(ve->name);
         if (tit == locals_.end()) return "";
-        std::string t = tit->second.type;
-        if (isPtrType(t)) t.resize(t.size() - 2);
-        else if (!t.empty() && t.back() == '^') t.pop_back();
-        else return "";
+        std::string t = pointeeForLookup(tit->second.type);
+        if (t.empty()) return "";
         if (slid_info_.count(t)) return t;
         return "";
     }
     std::string ot = inferSlidType(*de.operand);
     if (isPtrType(ot) || isIndirectType(ot)) {
-        std::string pointee = isPtrType(ot)
-            ? ot.substr(0, ot.size() - 2)
-            : ot.substr(0, ot.size() - 1);
+        std::string pointee = pointeeForLookup(ot);
         if (slid_info_.count(pointee)) return pointee;
     }
     return "";
@@ -3190,11 +3208,13 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
         return !isIndirectType(pt) && pt != "char" && !unsigned_types.count(pt);
     };
 
-    // pass 1: slid ref exact match — same slid type
+    // pass 1: slid ref exact match — same slid type. Compare canonical
+    // (strip const, unwrap "(const T)" parens) so the default-const-on-param
+    // form "(const T)^" matches an arg of slid type "T".
     for (auto& [m, ptypes, _pm, _pmt, _fid] : oit->second) {
         if (ptypes.size() != 1 || !isRefType(ptypes[0])) continue;
-        std::string param_slid = ptypes[0].substr(0, ptypes[0].size()-1);
-        if (arg_is_slid && param_slid == arg_slid_name) return m;
+        std::string param_slid = baseSlidType(ptypes[0].substr(0, ptypes[0].size()-1));
+        if (arg_is_slid && param_slid == baseSlidType(arg_slid_name)) return m;
     }
 
     // pass 2: exact type name match for char/int/uint
@@ -3308,10 +3328,10 @@ void Codegen::emitSlidSlotAssign(const std::string& elem_type,
         std::string op_base = elem_type + "__" + (is_move ? "op<-" : "op=");
         auto oit = method_overloads_.find(op_base);
         if (oit != method_overloads_.end()) {
-            std::string want = elem_type + "^";
+            std::string want = canonicalType(elem_type + "^");
             bool empty = slid_info_[elem_type].is_empty;
             for (auto& [m, pt, _pm, _pmt, _fid] : oit->second) {
-                if (pt.size() == 1 && pt[0] == want) {
+                if (pt.size() == 1 && canonicalType(pt[0]) == want) {
                     out_ << "    call void @" << llvmGlobalName(m)
                          << "(" << (empty ? "" : "ptr " + dst_ptr + ", ") << "ptr " << src_ptr << ")\n";
                     return;
@@ -3400,10 +3420,10 @@ void Codegen::emitSlidSlotSwap(const std::string& elem_type,
         std::string op_base = elem_type + "__op<->";
         auto oit = method_overloads_.find(op_base);
         if (oit != method_overloads_.end()) {
-            std::string want = elem_type + "^";
+            std::string want = canonicalType(elem_type + "^");
             bool empty = slid_info_[elem_type].is_empty;
             for (auto& [m, pt, _pm, _pmt, _fid] : oit->second) {
-                if (pt.size() == 1 && pt[0] == want) {
+                if (pt.size() == 1 && canonicalType(pt[0]) == want) {
                     out_ << "    call void @" << llvmGlobalName(m)
                          << "(" << (empty ? "" : "ptr " + a_ptr + ", ") << "ptr " << b_ptr << ")\n";
                     return;
@@ -3457,15 +3477,19 @@ void Codegen::emitElementwiseAtPtr(const std::string& ttype,
             emitElementwiseAtPtr(ft, l_gep, r_gep, res_gep, op);
             continue;
         }
-        // slid slot: dispatch user op<op>(Elem^, Elem^)
+        // slid slot: dispatch user op<op>(Elem^, Elem^).
+        // Compare canonically (canonicalType strips const + default-const
+        // paren wrap) so a `(const Elem)^` param matches the want of `Elem^`.
         if (slid_info_.count(ft)) {
             std::string op_base = ft + "__op" + op;
             auto oit = method_overloads_.find(op_base);
             std::string mangled;
-            std::string want = ft + "^";
+            std::string want = canonicalType(ft + "^");
             if (oit != method_overloads_.end()) {
                 for (auto& [m, pt, _pm, _pmt, _fid] : oit->second) {
-                    if (pt.size() == 2 && pt[0] == want && pt[1] == want) {
+                    if (pt.size() == 2
+                        && canonicalType(pt[0]) == want
+                        && canonicalType(pt[1]) == want) {
                         mangled = m; break;
                     }
                 }
@@ -3534,10 +3558,13 @@ void Codegen::emitTupleScalarBroadcastAtPtr(const std::string& ttype,
             std::string op_base = ft + "__op" + op;
             auto oit = method_overloads_.find(op_base);
             std::string mangled;
-            std::string want_left = ft + "^";
+            std::string want_left = canonicalType(ft + "^");
+            std::string want_right = canonicalType(scalar_slids);
             if (oit != method_overloads_.end()) {
                 for (auto& [m, pt, _pm, _pmt, _fid] : oit->second) {
-                    if (pt.size() == 2 && pt[0] == want_left && pt[1] == scalar_slids) {
+                    if (pt.size() == 2
+                        && canonicalType(pt[0]) == want_left
+                        && canonicalType(pt[1]) == want_right) {
                         mangled = m; break;
                     }
                 }
@@ -4036,21 +4063,24 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
     // the common cases; this catches the rest where resolveLvalue returns
     // an address whose type matches the callee's expected pointee.
     if (want_ptr) {
-        std::string inner = param_type.substr(0, param_type.size() - 1);
+        // Canonicalize the pointee for slid_info_ lookup and lv.type compare
+        // — param_type may carry default-const wrap "(const T)^" → pointee is
+        // "(const T)" which slid_info_ doesn't know.
+        std::string inner = baseSlidType(param_type.substr(0, param_type.size() - 1));
         if (slid_info_.count(inner) || isAnonTupleType(inner)) {
             bool addressable = dynamic_cast<const FieldAccessExpr*>(&arg)
                 || dynamic_cast<const ArrayIndexExpr*>(&arg)
                 || dynamic_cast<const DerefExpr*>(&arg);
             if (addressable) {
                 auto lv = resolveLvalue(arg);
-                if (lv.type == inner) return lv.addr;
+                if (baseSlidType(lv.type) == inner) return lv.addr;
             }
         }
     }
 
     // implicit construction: non-slid value passed to SlidType^ param — find matching op=
     if (want_ptr) {
-        std::string slid_name = param_type.substr(0, param_type.size() - 1);
+        std::string slid_name = baseSlidType(param_type.substr(0, param_type.size() - 1));
         if (slid_info_.count(slid_name)) {
             std::string arg_llvm = exprLlvmType(arg);
             static const std::map<std::string,int> irank = {{"i8",1},{"i16",2},{"i32",3},{"i64",4}};
@@ -4070,9 +4100,12 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                     if (arg_slids.empty()) arg_slids = exprSlidType(arg);
                     if (arg_slids.empty() && dynamic_cast<const StringLiteralExpr*>(&arg)) arg_slids = "char[]";
                     if (arg_slids.empty()) arg_slids = inferSlidType(arg);
-                    // scalars: exact llvm type; pointers: exact Slids type (char[] != String^)
+                    // scalars: exact llvm type; pointers: exact Slids type (char[] != String^).
+                    // Canonical compare on the pointer side handles the default-const wrap
+                    // ((const char)[] ≡ char[] for matching).
                     bool exact  = (p_llvm == arg_llvm && p_llvm != "ptr")
-                               || (arg_llvm == "ptr" && ptypes2[0] == arg_slids);
+                               || (arg_llvm == "ptr"
+                                   && canonicalType(ptypes2[0]) == canonicalType(arg_slids));
                     bool widen  = (ait != irank.end() && pit != irank.end()
                                    && pit->second >= ait->second)
                                && (arg_slids != "bool" || ptypes2[0] == "bool");
@@ -4100,8 +4133,8 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
     // The earlier VarExpr-only auto-promote misses these forms; emitExpr already
     // produces a ptr for them, so return it directly before requirePtrInit runs.
     if (!param_type.empty() && param_type.back() == '^') {
-        std::string slid_name = param_type.substr(0, param_type.size() - 1);
-        if (slid_info_.count(slid_name) && inferSlidType(arg) == slid_name)
+        std::string slid_name = baseSlidType(param_type.substr(0, param_type.size() - 1));
+        if (slid_info_.count(slid_name) && baseSlidType(inferSlidType(arg)) == slid_name)
             return emitExpr(arg);
     }
     requirePtrInit(param_type, arg);
@@ -4143,6 +4176,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid,
                               const std::string& full_mangled,
                               const std::string& return_type,
                               const std::vector<std::pair<std::string,std::string>>& params,
+                              const std::vector<bool>& param_mutable,
                               const BlockStmt& body,
                               bool is_const_method) {
     locals_.clear();
@@ -4184,11 +4218,13 @@ void Codegen::emitSlidMethod(const SlidDef& slid,
          << "(" << param_str << ") {\n";
     out_ << "entry:\n";
 
-    for (auto& [type, name] : params) {
+    for (int i = 0; i < (int)params.size(); i++) {
+        const auto& [type, name] = params[i];
+        bool is_mut = (i < (int)param_mutable.size()) && param_mutable[i];
         std::string reg = uniqueAllocaReg(name);
         out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
         out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
-        locals_[name] = {reg, type};
+        locals_[name] = {reg, applyParamConstDefault(type, is_mut)};
     }
 
     pushScope();
@@ -4213,7 +4249,7 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
         if (!m.body) continue;
         std::string mangled = resolveMethodMangledName(slid.name, m.name, m.params);
         current_func_tuple_fields_.clear();
-        emitSlidMethod(slid, m.name, mangled, m.return_type, m.params, *m.body, m.is_const_method);
+        emitSlidMethod(slid, m.name, mangled, m.return_type, m.params, m.param_mutable, *m.body, m.is_const_method);
     }
     // emit external method definitions for this slid
     for (auto& em : program_.external_methods) {
@@ -4221,7 +4257,7 @@ void Codegen::emitSlidMethods(const SlidDef& slid) {
         if (em.method_name == "_" || em.method_name == "~") continue;
         std::string mangled = resolveMethodMangledName(slid.name, em.method_name, em.params);
         current_func_tuple_fields_.clear();
-        emitSlidMethod(slid, em.method_name, mangled, em.return_type, em.params, *em.body, em.is_const_method);
+        emitSlidMethod(slid, em.method_name, mangled, em.return_type, em.params, em.param_mutable, *em.body, em.is_const_method);
     }
     current_slid_ = "";
 }
@@ -4252,9 +4288,10 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     std::string emit_name = fn.name;
     auto foit = free_func_overloads_.find(fn.name);
     if (foit != free_func_overloads_.end()) {
-        // match by param types
-        std::vector<std::string> ptypes;
-        for (auto& [t, n] : fn.params) ptypes.push_back(t);
+        // Match by param types in the registry's canonical form (default-const
+        // applied per slot). Raw fn.params types must run through the same
+        // transform before comparison.
+        std::vector<std::string> ptypes = buildParamTypes(fn.params, fn.param_mutable);
         for (auto& [mangled, mptypes, _pm, _pmt, _fid] : foit->second) {
             if (mptypes == ptypes) { emit_name = mangled; break; }
         }
@@ -4277,11 +4314,16 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     out_ << "define " << (isExported(emit_name) ? "" : "internal ") << ret_type << " @" << llvmGlobalName(emit_name) << "(" << param_str << ") {\n";
     out_ << "entry:\n";
 
-    for (auto& [type, name] : fn.params) {
+    for (int i = 0; i < (int)fn.params.size(); i++) {
+        const auto& [type, name] = fn.params[i];
+        bool is_mut = (i < (int)fn.param_mutable.size()) && fn.param_mutable[i];
         std::string reg = uniqueAllocaReg(name);
         out_ << "    " << reg << " = alloca " << llvmType(type) << "\n";
         out_ << "    store " << llvmType(type) << " %arg_" << name << ", ptr " << reg << "\n";
-        locals_[name] = {reg, type, fn.file_id, fn.tok};
+        // Const-by-default: unmarked indirect params are reference-to-const
+        // inside the body. From the caller's view the canonical type is
+        // unchanged; the const only affects write-rejection here.
+        locals_[name] = {reg, applyParamConstDefault(type, is_mut), fn.file_id, fn.tok};
     }
 
     pushScope();

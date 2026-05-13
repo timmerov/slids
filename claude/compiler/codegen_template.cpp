@@ -626,10 +626,16 @@ std::string Codegen::instantiateTemplate(const TemplateFuncEntry& entry,
     // codegen to enable auto-deref on uses inside the instantiated body.
     std::vector<std::string> ptypes;
     std::vector<bool> promoted;
-    for (auto& [ptype, pname] : tmpl.params) {
-        std::string pt = subTypeSuffix(ptype, subst);
+    for (int i = 0; i < (int)tmpl.params.size(); i++) {
+        std::string pt = subTypeSuffix(tmpl.params[i].first, subst);
         bool p = false;
         if (slid_info_.count(pt)) { pt += "^"; p = true; }
+        // Apply default-const per the registration-uniformity rule: unmarked
+        // indirect params (^/[]) bind as `(const T)^` / `(const T)[]` inside
+        // the body. Auto-promoted slid params (`T` → `T^`) without `mutable`
+        // also become reference-to-const.
+        bool is_mut = (i < (int)tmpl.param_mutable.size()) && tmpl.param_mutable[i];
+        pt = applyParamConstDefault(pt, is_mut);
         ptypes.push_back(pt);
         promoted.push_back(p);
     }
@@ -766,8 +772,7 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
     // register method signatures so call sites resolve correctly
     for (auto& m : concrete.methods) {
         std::string base = mangled + "__" + m.name;
-        std::vector<std::string> ptypes;
-        for (auto& [pt, _] : m.params) ptypes.push_back(pt);
+        std::vector<std::string> ptypes = buildParamTypes(m.params, m.param_mutable);
         func_return_types_[base] = m.return_type;
         func_param_types_[base]  = ptypes;
         method_overloads_[base].push_back({base, ptypes, m.param_mutable, m.param_mut_toks, m.file_id});

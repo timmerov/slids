@@ -2,11 +2,11 @@ int32 add(int32 a, int32 b) {
     return a + b;
 }
 
-void increment(int^ p) {
+void increment(mutable int^ p) {
     p^ = p^ + 1;
 }
 
-void swap(int^ a, int^ b) {
+void swap(mutable int^ a, mutable int^ b) {
     int tmp = a^;
     a^ = b^;
     b^ = tmp;

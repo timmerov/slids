@@ -261,7 +261,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 std::string loaded_ptr = newTmp();
                 out_ << "    " << loaded_ptr << " = load ptr, ptr " << it->second.reg << "\n";
                 ptr_reg = loaded_ptr;
-                std::string pointee_type = ( isPtrType(tit->second.type) ? tit->second.type.substr(0, tit->second.type.size()-2) : tit->second.type.substr(0, tit->second.type.size()-1) );
+                std::string pointee_type = pointeeForLookup(tit->second.type);
                 pointee_llvm = llvmType(pointee_type);
             } else {
                 std::string type_name = (tit != locals_.end()) ? tit->second.type : "unknown";
@@ -332,7 +332,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     std::string loaded = newTmp();
                     out_ << "    " << loaded << " = load ptr, ptr " << it->second.reg << "\n";
                     ptr_val = loaded;
-                    slid_name = ( isPtrType(tit->second.type) ? tit->second.type.substr(0, tit->second.type.size()-2) : tit->second.type.substr(0, tit->second.type.size()-1) );
+                    slid_name = pointeeForLookup(tit->second.type);
                 } else {
                     ptr_val = it->second.reg;
                     if (tit != locals_.end()) slid_name = tit->second.type;
@@ -463,6 +463,10 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     error(std::string("Unknown type for: " + ve2->name));
                 slid_name = type_it->second.type;
                 if (isRefType(slid_name)) slid_name.pop_back(); else if (isPtrType(slid_name)) slid_name.resize(slid_name.size()-2);
+                // Strip const qualifier for slid_info_ lookup. The receiver's
+                // const-ness is consulted separately by checkConstReceiver.
+                slid_name = stripRedundantConstParens(slid_name);
+                if (typeStartsWithConst(slid_name)) slid_name = slid_name.substr(6);
                 // load the pointer value from the alloca
                 std::string loaded = newTmp();
                 out_ << "    " << loaded << " = load ptr, ptr " << locals_[ve2->name].reg << "\n";
@@ -535,6 +539,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 ret_slids = ret_it->second;
                 mptypes_vec = func_param_types_[mangled];
             }
+            checkConstReceiver(*mc->object, mc->method, mangled);
             bool empty = sinfo.is_empty;
             std::string method_args;
             for (int i = 0; i < (int)mc->args.size(); i++) {
@@ -1295,7 +1300,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                         for (auto& [m, ptypes, _pm, _pmt, _fid] : moit->second) {
                             if (ptypes.size() >= 2
                                 && isRefType(ptypes[1])
-                                && ptypes[1].substr(0, ptypes[1].size()-1) == left_slid) {
+                                && baseSlidType(ptypes[1].substr(0, ptypes[1].size()-1)) == left_slid) {
                                 op_func = m; break;
                             }
                         }
@@ -2459,14 +2464,24 @@ void Codegen::requirePtrInit(const std::string& dst_type, const Expr& src) {
         if (!t.empty() && t.back() == '^') return t.substr(0, t.size()-1);
         return "";
     };
-    std::string dst_base = ptrBase(dst_type);
-    std::string src_base = ptrBase(src_slids);
-    if (dst_base.empty() || src_base.empty()) return;
+    std::string dst_base_raw = ptrBase(dst_type);
+    std::string src_base_raw = ptrBase(src_slids);
+    if (dst_base_raw.empty() || src_base_raw.empty()) return;
+    // Compare bases canonically (strip qualifiers) for type-shape matching;
+    // const-direction is enforced separately below so `const T^ ← T^` (adding
+    // const) is fine but `T^ ← const T^` (stripping const) is rejected.
+    std::string dst_base = baseSlidType(dst_base_raw);
+    std::string src_base = baseSlidType(src_base_raw);
     if (dst_base != "void"
         && dst_base != src_base
         && !isAncestor(dst_base, src_base))
         error(std::string("Cannot initialize '" + dst_type
             + "' from value of type '" + src_slids + "'"));
+    // Const-strip rejection: src pointee carries const, dst pointee doesn't.
+    if (typeHasConst(src_base_raw) && !typeHasConst(dst_base_raw))
+        error(std::string("Cannot initialize '" + dst_type
+            + "' from value of type '" + src_slids
+            + "' — stripping const is not allowed."));
     // reference cannot promote to iterator
     if (isPtrType(dst_type) && isRefType(src_slids)
         && dst_base != "void" && src_base != "void")
@@ -2580,8 +2595,18 @@ std::string Codegen::inferSlidType(const Expr& expr) {
             }
         }
         std::string slid_name;
+        bool obj_is_const = false;
         if (auto* de = dynamic_cast<const DerefExpr*>(fa->object.get())) {
+            // derefSlidName canonicalizes but drops the const bit. Recover the
+            // const-ness from the pointer's type so field access propagates it.
             slid_name = derefSlidName(*de);
+            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto tit = locals_.find(ve->name);
+                if (tit != locals_.end()) {
+                    auto pi = pointeeInfo(tit->second.type);
+                    if (pi.is_const) obj_is_const = true;
+                }
+            }
         } else if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
             auto tit = locals_.find(ve->name);
             if (tit != locals_.end()) slid_name = tit->second.type;
@@ -2598,19 +2623,18 @@ std::string Codegen::inferSlidType(const Expr& expr) {
             }
         }
         if (!slid_name.empty()) {
-            // const propagates through field access. See codegen.cpp::exprType
-            // FieldAccessExpr arm for the canonical form.
-            bool obj_is_const = typeStartsWithConst(slid_name);
-            std::string lookup = obj_is_const ? slid_name.substr(6) : slid_name;
-            if (slid_info_.count(lookup)) {
-                auto& info = slid_info_[lookup];
+            // Field-read in rvalue context: const on the object qualifies the
+            // lvalue (write-rejection lives in exprType / write checks). The
+            // read produces a plain value of the field type — copying out of
+            // a const lvalue yields a mutable rvalue.
+            (void)obj_is_const;
+            if (typeStartsWithConst(slid_name))
+                slid_name = baseSlidType(slid_name);
+            if (slid_info_.count(slid_name)) {
+                auto& info = slid_info_[slid_name];
                 auto fit = info.field_index.find(fa->field);
-                if (fit != info.field_index.end()) {
-                    std::string ftype = info.field_types[fit->second];
-                    if (obj_is_const && !typeStartsWithConst(ftype))
-                        ftype = "const " + ftype;
-                    return ftype;
-                }
+                if (fit != info.field_index.end())
+                    return info.field_types[fit->second];
             }
         }
     }

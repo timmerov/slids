@@ -3618,6 +3618,35 @@ Program Parser::parse() {
         }
     }
 
+    // (P1.5) decl-def `mutable` agreement for free functions. A forward
+    // declaration's `mutable` annotations must match the definition exactly
+    // (per-slot). Same canonical signature but differing mutable bits means
+    // the publisher and the implementor disagree on which params accept
+    // writes — never silent.
+    {
+        struct Site { std::string raw_key; int file_id; int tok; };
+        std::map<std::string, Site> first;
+        for (auto& fn : program.functions) {
+            std::string canon = fn.user_name + "(";
+            for (auto& p : fn.params) canon += canonicalType(p.first) + ",";
+            canon += ")";
+            std::string raw = fn.user_name + "(";
+            for (size_t i = 0; i < fn.params.size(); i++) {
+                raw += fn.params[i].first;
+                if (i < fn.param_mutable.size() && fn.param_mutable[i]) raw += "!mut";
+                raw += ",";
+            }
+            raw += ")";
+            auto [it, inserted] = first.emplace(canon, Site{raw, fn.file_id, fn.tok});
+            if (!inserted && it->second.raw_key != raw) {
+                throw CompileError{fn.file_id, fn.tok,
+                    "Function '" + fn.user_name +
+                    "' declaration and definition disagree on 'mutable' annotation."}
+                    .addNote(it->second.file_id, it->second.tok, "First declared here.");
+            }
+        }
+    }
+
     // synthesize SlidDef entries for namespaces — slid names that appear only
     // in external_methods (block reopens or `void Name:fn()` defs) with no `Name(...)` data block.
     {
@@ -3798,6 +3827,50 @@ void Parser::mergeReopens(Program& program) {
         for (auto& em : program.external_methods)
             if (em.body)
                 check_const(em.slid_name, em.method_name, em.params, em.is_const_method, em.file_id, em.tok);
+    }
+    // Method decl/def `mutable` agreement. Same canonical signature but
+    // differing per-slot mutable bits means decl and def disagree.
+    {
+        struct Site { std::string raw_key; int file_id; int tok; };
+        auto raw_key = [](const std::string& mname,
+                          const std::vector<std::pair<std::string, std::string>>& params,
+                          const std::vector<bool>& pm) {
+            std::string key = mname + "(";
+            for (size_t i = 0; i < params.size(); i++) {
+                key += params[i].first;
+                if (i < pm.size() && pm[i]) key += "!mut";
+                key += ",";
+            }
+            key += ")";
+            return key;
+        };
+        auto canon_key = [](const std::string& mname,
+                            const std::vector<std::pair<std::string, std::string>>& params) {
+            std::string key = mname + "(";
+            for (auto& p : params) key += canonicalType(p.first) + ",";
+            key += ")";
+            return key;
+        };
+        std::map<std::string, std::map<std::string, Site>> sigs_by_class;
+        auto check = [&](const std::string& cls, const std::string& mname,
+                         const std::vector<std::pair<std::string, std::string>>& params,
+                         const std::vector<bool>& pm, int file_id, int tok) {
+            std::string raw = raw_key(mname, params, pm);
+            std::string canon = canon_key(mname, params);
+            auto& m = sigs_by_class[cls];
+            auto [it, inserted] = m.emplace(canon, Site{raw, file_id, tok});
+            if (!inserted && it->second.raw_key != raw) {
+                throw CompileError{file_id, tok,
+                    "Method '" + cls + ":" + mname +
+                    "' declaration and definition disagree on 'mutable' annotation."}
+                    .addNote(it->second.file_id, it->second.tok, "First declared here.");
+            }
+        };
+        for (auto& s : program.slids)
+            for (auto& m : s.methods)
+                check(s.name, m.name, m.params, m.param_mutable, m.file_id, m.tok);
+        for (auto& em : program.external_methods)
+            check(em.slid_name, em.method_name, em.params, em.param_mutable, em.file_id, em.tok);
     }
     // Inheritance shadow checks — derived field vs base method, derived method vs base field.
     {

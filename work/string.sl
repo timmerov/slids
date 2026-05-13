@@ -392,7 +392,7 @@ intptr strlen(char[] s) {
 
 /* copy null terminated string from src to dst. */
 void strcpy(
-    char[] dst,
+    mutable char[] dst,
     char[] src
 ) {
     for (ch = 'A') (ch) { ++src; ++dst; } {
@@ -403,7 +403,7 @@ void strcpy(
 
 /* copy count characters from src to dst. */
 void strcpy(
-    char[] dst,
+    mutable char[] dst,
     char[] src,
     intptr count
 ) {

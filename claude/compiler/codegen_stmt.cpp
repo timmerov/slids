@@ -223,10 +223,11 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
                      << ", ptr " << self << ", i32 0, i32 " << fit->second << "\n";
                 std::string ftype = info.field_types[fit->second];
                 // Const propagation: if self is const, the field is const too.
+                // propagateConst preserves the iterator-handle-mutable form
+                // for indirect fields (so a local copy can advance).
                 auto sit = locals_.find("self");
-                if (sit != locals_.end() && typeStartsWithConst(sit->second.type)
-                        && !typeStartsWithConst(ftype))
-                    ftype = "const " + ftype;
+                if (sit != locals_.end() && typeStartsWithConst(sit->second.type))
+                    ftype = propagateConst(ftype);
                 return {gep, ftype};
             }
         }
@@ -236,22 +237,21 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
         auto obj = resolveLvalue(*fa->object);
         std::string stype = obj.type;
         std::string addr = obj.addr;
+        bool obj_is_const = false;
         // Strip top-level const for the slid_info_ lookup; remember it to
-        // re-apply to the returned field type.
-        bool obj_is_const = typeStartsWithConst(stype);
-        if (obj_is_const) stype = stype.substr(6);
+        // re-apply to the returned field type via propagateConst.
+        if (typeStartsWithConst(stype)) {
+            obj_is_const = true;
+            stype = stype.substr(6);
+        }
         if (isPtrType(stype) || isRefType(stype)) {
             std::string loaded = newTmp();
             out_ << "    " << loaded << " = load ptr, ptr " << addr << "\n";
             addr = loaded;
-            stype = isPtrType(stype) ? stype.substr(0, stype.size() - 2)
-                                     : stype.substr(0, stype.size() - 1);
-            // The deref of `(const T)^` yields a const pointee — re-apply.
-            stype = stripRedundantConstParens(stype);
-            if (typeStartsWithConst(stype)) {
-                obj_is_const = true;
-                stype = stype.substr(6);
-            }
+            // pointeeInfo handles both `T^` and `(const T)^` forms uniformly.
+            auto pi = pointeeInfo(stype);
+            stype = pi.name;
+            if (pi.is_const) obj_is_const = true;
         }
         auto sit = slid_info_.find(stype);
         if (sit == slid_info_.end())
@@ -264,8 +264,7 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
         out_ << "    " << gep << " = getelementptr %struct." << stype
              << ", ptr " << addr << ", i32 0, i32 " << fit->second << "\n";
         std::string ftype = sit->second.field_types[fit->second];
-        if (obj_is_const && !typeStartsWithConst(ftype))
-            ftype = "const " + ftype;
+        if (obj_is_const) ftype = propagateConst(ftype);
         return {gep, ftype};
     }
     if (auto* de = dynamic_cast<const DerefExpr*>(&e)) {
@@ -280,6 +279,7 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
                 if (isPtrType(base.type))      pointee = base.type.substr(0, base.type.size() - 2);
                 else if (isRefType(base.type)) pointee = base.type.substr(0, base.type.size() - 1);
                 else errorAtNode(e, "Post-increment or post-decrement deref of non-pointer type '" + base.type + "'.");
+                pointee = stripRedundantConstParens(pointee);
                 std::string loaded = newTmp();
                 out_ << "    " << loaded << " = load ptr, ptr " << base.addr << "\n";
                 int step = (ue->op == "post++") ? 1 : -1;
@@ -293,6 +293,7 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
         if (isPtrType(base.type))      pointee = base.type.substr(0, base.type.size() - 2);
         else if (isRefType(base.type)) pointee = base.type.substr(0, base.type.size() - 1);
         else errorAtNode(e, "Cannot dereference a value of non-pointer type '" + base.type + "'.");
+        pointee = stripRedundantConstParens(pointee);
         std::string loaded = newTmp();
         out_ << "    " << loaded << " = load ptr, ptr " << base.addr << "\n";
         return {loaded, pointee};
@@ -380,6 +381,12 @@ Codegen::Lvalue Codegen::drillIndexChain(std::string addr, std::string type,
         const std::vector<const Expr*>& indices, int from, const Expr& err_site) {
     for (int i = from; i < (int)indices.size(); i++) {
         const Expr& idx = *indices[i];
+        // Strip leading const for the dispatch (the type-shape check needs the
+        // canonical kind), remembering to re-apply to the element type so
+        // const propagates through the read.
+        bool was_const = typeStartsWithConst(type);
+        if (was_const) type = type.substr(6);
+        do {
         // anon-tuple slot
         if (isAnonTupleType(type)) {
             auto elems = anonTupleElems(type);
@@ -390,7 +397,7 @@ Codegen::Lvalue Codegen::drillIndexChain(std::string addr, std::string type,
                         + std::to_string(k) + " is out of range.");
                 addr = emitFieldGep(type, addr, k);
                 type = elems[k];
-                continue;
+                break;
             }
             // variable index: only allowed on a homogeneous tuple.
             bool homog = !elems.empty();
@@ -407,7 +414,7 @@ Codegen::Lvalue Codegen::drillIndexChain(std::string addr, std::string type,
                  << "], ptr " << addr << ", i32 0, i32 " << iv << "\n";
             addr = gep;
             type = elem_t;
-            continue;
+            break;
         }
         // slid with op[] dispatch
         if (slid_info_.count(type)) {
@@ -447,7 +454,7 @@ Codegen::Lvalue Codegen::drillIndexChain(std::string addr, std::string type,
                 addr = slot;
                 type = ret_t.empty() ? "int" : ret_t;
             }
-            continue;
+            break;
         }
         // inline array (e.g. obj.arr_[i] reached through a chain)
         if (isInlineArrayType(type)) {
@@ -463,7 +470,7 @@ Codegen::Lvalue Codegen::drillIndexChain(std::string addr, std::string type,
                  << ", i32 0, " << idx_llvm << " " << iv << "\n";
             addr = gep;
             type = elem_type;
-            continue;
+            break;
         }
         // pointer / iterator base
         if (isPtrType(type) || isRefType(type)) {
@@ -479,9 +486,11 @@ Codegen::Lvalue Codegen::drillIndexChain(std::string addr, std::string type,
                  << ", ptr " << base_ptr << ", " << idx_llvm << " " << iv << "\n";
             addr = gep;
             type = elem_type;
-            continue;
+            break;
         }
         errorAtNode(err_site, "Type '" + type + "' is not indexable.");
+        } while (0);
+        if (was_const) type = propagateConst(type);
     }
     return {addr, type};
 }
@@ -489,6 +498,9 @@ Codegen::Lvalue Codegen::drillIndexChain(std::string addr, std::string type,
 std::string Codegen::drillIndexedType(std::string type,
         const std::vector<const Expr*>& indices, int from) {
     for (int i = from; i < (int)indices.size(); i++) {
+        // const propagates through indexing — strip for dispatch, re-apply.
+        bool was_const = typeStartsWithConst(type);
+        if (was_const) type = type.substr(6);
         if (isAnonTupleType(type)) {
             auto elems = anonTupleElems(type);
             int k;
@@ -515,6 +527,7 @@ std::string Codegen::drillIndexedType(std::string type,
         } else {
             return "int";
         }
+        if (was_const) type = propagateConst(type);
     }
     return type;
 }
@@ -2491,9 +2504,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string op_func;
             std::string second_ptype;
             if (moit != method_overloads_.end()) {
-                std::string want_first = slids_type + "^";
+                std::string want_first = canonicalType(slids_type + "^");
                 for (auto& [m, ptypes, _pm, _pmt, _fid] : moit->second) {
-                    if (ptypes.size() == 2 && ptypes[0] == want_first) {
+                    if (ptypes.size() == 2 && canonicalType(ptypes[0]) == want_first) {
                         op_func = m;
                         second_ptype = ptypes[1];
                         break;
@@ -2587,7 +2600,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 std::string loaded_ptr = newTmp();
                 out_ << "    " << loaded_ptr << " = load ptr, ptr " << it->second.reg << "\n";
                 ptr_reg = loaded_ptr;
-                pointee_type = ( isPtrType(tit->second.type) ? tit->second.type.substr(0, tit->second.type.size()-2) : tit->second.type.substr(0, tit->second.type.size()-1) );
+                pointee_type = pointeeForLookup(tit->second.type);
                 pointee_llvm = llvmType(pointee_type);
             } else {
                 ptr_reg = it->second.reg;
@@ -2891,7 +2904,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     std::string loaded = newTmp();
                     out_ << "    " << loaded << " = load ptr, ptr " << it->second.reg << "\n";
                     ptr_val = loaded;
-                    slid_name = ( isPtrType(tit->second.type) ? tit->second.type.substr(0, tit->second.type.size()-2) : tit->second.type.substr(0, tit->second.type.size()-1) );
+                    slid_name = pointeeForLookup(tit->second.type);
                 } else {
                     ptr_val = it->second.reg;
                     if (tit != locals_.end()) slid_name = tit->second.type;
@@ -3074,6 +3087,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                            + type_it->second.type + "' for "
                                            + std::to_string(deref_count) + "-deep deref"));
                 }
+                // Strip const for slid_info_ lookup; checkConstReceiver
+                // consults receiver const-ness via exprType separately.
+                slid_name = stripRedundantConstParens(slid_name);
+                if (typeStartsWithConst(slid_name)) slid_name = slid_name.substr(6);
                 std::string cur = locals_[ve2->name].reg;
                 for (int k = 0; k < deref_count; k++) {
                     std::string nxt = newTmp();
@@ -3148,6 +3165,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 ret_slids = ret_it->second;
                 mptypes = func_param_types_[mangled];
             }
+            checkConstReceiver(*mcs->object, mcs->method, mangled);
             std::string ret_type = llvmType(ret_slids);
             bool empty = sinfo.is_empty;
             std::string arg_str = empty ? "" : "ptr " + obj_ptr;

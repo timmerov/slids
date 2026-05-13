@@ -66,15 +66,15 @@ void take_tuple((int, int)^ p) {
     __println("take_tuple: p^[0]=" + p^[0] + " p^[1]=" + p^[1]);
 }
 
-void modify_tuple((int, int)^ p) {
+void modify_tuple(mutable (int, int)^ p) {
     p^[0] = 999;
 }
 
-void move_tuple_slot((int, int)^ p, int v) {
+void move_tuple_slot(mutable (int, int)^ p, int v) {
     p^[0] <-- v;
 }
 
-void take_simples((Simple, Simple)^ sp) {
+void take_simples(mutable (Simple, Simple)^ sp) {
     sp^[0].print("via-ref-sp[0]");
     sp^[1].print("via-ref-sp[1]");
 }

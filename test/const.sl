@@ -344,9 +344,11 @@ Bag(int n_ = 0) {
 
 /* overloaded methods — mutable bit picks the slot at the call site.
    per the matcher, `foo(int^)` and `foo(mutable int^)` collide on
-   canonical key, so distinct overloads must differ in some other slot. */
+   canonical key, so distinct overloads must differ in some other slot.
+   Both write through q → both need mutable; the overloads differ in
+   the second-arg type. */
 Pair(int a_ = 0, int b_ = 0) {
-    void store(int^ q, int idx)         { q^ = a_ + idx; }
+    void store(mutable int^ q, int idx)  { q^ = a_ + idx; }
     void store(mutable int^ q, char[] s) { q^ = b_; }
 }
 
@@ -609,4 +611,40 @@ ConstCtorOnly(int n_ = 0) {
 //     n_ = 99;
 //     const _() { }
 //     ~() { }
+// }
+
+/* ----------------------------------------------------------------------
+   Receiver-side check: non-const method on a const target is rejected.
+
+   The dual of Phase 3. When the receiver carries `const` anywhere in its
+   chain (`const T`, `const T^`, `(const T)^`), only const-marked methods
+   may be called on it. Destructor `~` is exempt — destruction window.
+   ---------------------------------------------------------------------- */
+
+/* class with both const and non-const methods. */
+ReadWrite(int n_ = 0) {
+    int const get()         { return n_; }
+    void     set(int v)     { n_ = v; }
+}
+
+/* positive: const method callable through a default-const reference. */
+int readGet(ReadWrite^ p) {
+    return p^.get();
+}
+
+/* positive: non-const method callable through a mutable reference. */
+void writeMutRef(mutable ReadWrite^ p) {
+    p^.set(99);
+}
+
+/* compile error: non-const method called on default-const reference. */
+//-EXPECT-ERROR: const
+// void callOnPlainRef(ReadWrite^ p) {
+//     p^.set(99);
+// }
+
+/* compile error: non-const method called through an explicit const reference. */
+//-EXPECT-ERROR: const
+// void callOnConstRef(const ReadWrite^ p) {
+//     p^.set(99);
 // }

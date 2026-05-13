@@ -146,6 +146,9 @@ private:
     std::map<std::string, std::vector<OverloadEntry>> method_overloads_;
     // free function overload table: base_name -> [OverloadEntry]
     std::map<std::string, std::vector<OverloadEntry>> free_func_overloads_;
+    // mangled names of const-marked methods — looked up at MethodCallExpr/Stmt
+    // emit to reject non-const method calls on const receivers.
+    std::set<std::string> const_methods_;
     std::map<std::string, SlidInfo>    slid_info_;
 
     // Folded substitution constant. slid_type is the declared (or inferred)
@@ -254,6 +257,13 @@ private:
         const std::string& callee,
         const std::string& mangled,
         const std::vector<std::unique_ptr<Expr>>& args);
+    // Reject a non-const method call on a const receiver. dtor `~` is exempt
+    // (it's a destruction window). Method is const iff its mangled name is
+    // in const_methods_. Receiver is const iff exprType(object) carries const.
+    void checkConstReceiver(
+        const Expr& object,
+        const std::string& method_name,
+        const std::string& mangled);
     [[noreturn]] void errorAtNodeWithNote(const Stmt& s, const std::string& msg,
                                           int note_file, int note_tok,
                                           const std::string& note_msg);
@@ -470,6 +480,7 @@ private:
                         const std::string& full_mangled,
                         const std::string& return_type,
                         const std::vector<std::pair<std::string,std::string>>& params,
+                        const std::vector<bool>& param_mutable,
                         const BlockStmt& body,
                         bool is_const_method);
     void emitSlidMethods(const SlidDef& slid);

@@ -12,7 +12,7 @@ Pair(int x_ = 0, int y_ = 0) {}
 
 /* Buffer: exercises slid op<op>= direct dispatch and the chain-build
    optimization (Buffer + a + b + ... emits one alloca + repeated op+=). */
-Buffer(int count_ = 0, int last_int_ = 0, char[] last_str_ = nullptr) {
+Buffer(int count_ = 0, int last_int_ = 0, const char[] last_str_ = nullptr) {
     op+=(char[] s) {
         count_ = count_ + 1;
         last_str_ = s;

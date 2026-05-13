@@ -8,19 +8,36 @@
 #include <set>
 
 // Strip every leading "const " qualifier substring from a type string.
-// "const int" -> "int"; "const (const T)^" -> "(T)^"; non-pointer and pointer
-// types are handled uniformly. The canonical form is used for overload-match
-// and dedup-key comparisons where const distinctions on by-value slots and
-// pointee-const on pointer slots collapse together.
+// "const int" -> "int"; "const (const T)^" -> "T^"; non-pointer and pointer
+// types are handled uniformly. The canonical form is used for overload-match,
+// mangling, and dedup-key comparisons where const distinctions on by-value
+// slots and pointee-const on pointer slots collapse together. Also strips
+// redundant single-element paren wrappers — the "(const T)^" form produced
+// by default-const-on-indirect-params collapses to "T^" after const-strip.
+// Real anon-tuple types ("(t1,t2,...)") keep their parens.
 inline std::string canonicalType(const std::string& s) {
-    std::string out;
-    out.reserve(s.size());
+    std::string t;
+    t.reserve(s.size());
     size_t i = 0;
     while (i < s.size()) {
         if (s.compare(i, 6, "const ") == 0) { i += 6; continue; }
-        out.push_back(s[i++]);
+        t.push_back(s[i++]);
     }
-    return out;
+    // Strip single-element paren wrappers ("(X)..." where X has no top-level
+    // comma — i.e. X is not itself a tuple). Repeats for nested wraps.
+    while (t.size() >= 2 && t.front() == '(') {
+        int depth = 0;
+        size_t close = 0;
+        bool has_top_comma = false;
+        for (size_t k = 0; k < t.size(); k++) {
+            if (t[k] == '(') depth++;
+            else if (t[k] == ')') { depth--; if (depth == 0) { close = k; break; } }
+            else if (t[k] == ',' && depth == 1) has_top_comma = true;
+        }
+        if (close == 0 || has_top_comma) break;
+        t = t.substr(1, close - 1) + t.substr(close + 1);
+    }
+    return t;
 }
 
 // Returns true if the type string carries `const ` anywhere (pointee-const or
@@ -37,6 +54,120 @@ inline bool typeHasConst(const std::string& s) {
 // destructure-slot) where rebinding the storage itself is forbidden.
 inline bool typeStartsWithConst(const std::string& s) {
     return s.rfind("const ", 0) == 0;
+}
+
+// Strip leading "const " and any wrapping "(const T)" parens from a slids
+// type string, returning the bare slid type suitable for `slid_info_` lookup.
+// Does NOT strip trailing ^/[] — use pointeeForLookup for that.
+inline std::string baseSlidType(std::string t) {
+    // Unwrap "(const X)" → "const X" first; downstream then strips "const ".
+    if (t.size() >= 2 && t.front() == '(' && t.back() == ')') {
+        int depth = 0; bool top_comma = false;
+        for (size_t i = 1; i + 1 < t.size(); i++) {
+            if (t[i] == '(') depth++;
+            else if (t[i] == ')') depth--;
+            else if (t[i] == ',' && depth == 0) { top_comma = true; break; }
+        }
+        if (!top_comma) {
+            std::string inner = t.substr(1, t.size() - 2);
+            if (inner.rfind("const ", 0) == 0) t = inner;
+        }
+    }
+    if (t.rfind("const ", 0) == 0) t = t.substr(6);
+    return t;
+}
+
+// Strip one pointer suffix (^ or []) from a type string AND canonicalize the
+// result for `slid_info_` lookup (drop leading const, unwrap "(const T)").
+// Used wherever a pointer/iterator-typed local's pointee is consulted as a
+// slid type — common pattern across method dispatch, deref-write, field
+// access, etc.
+inline std::string pointeeForLookup(const std::string& ptr_type) {
+    std::string t = ptr_type;
+    if (t.size() >= 2 && t.substr(t.size() - 2) == "[]") t = t.substr(0, t.size() - 2);
+    else if (!t.empty() && t.back() == '^') t.pop_back();
+    return baseSlidType(t);
+}
+
+// Extract pointee info from a pointer/iterator type: the canonical slid name
+// for `slid_info_` lookup, and whether the pointee was const. Centralizes the
+// "strip ^/[], unwrap (const T) paren, check const" trio that comes up at
+// every site doing FieldAccess / method-dispatch through an indirect local.
+// `is_const` is set when the pointee carries `const` anywhere (top-level or
+// paren-wrapped) — used to propagate const through `obj.field` / `obj.method`.
+struct PointeeInfo {
+    std::string name;        // canonical slid type, suitable for slid_info_ lookup
+    bool is_const = false;   // whether the pointee carries const
+};
+inline PointeeInfo pointeeInfo(const std::string& ptr_type) {
+    std::string t = ptr_type;
+    if (t.size() >= 2 && t.substr(t.size() - 2) == "[]") t = t.substr(0, t.size() - 2);
+    else if (!t.empty() && t.back() == '^') t.pop_back();
+    PointeeInfo r;
+    r.is_const = typeHasConst(t);
+    r.name = baseSlidType(t);
+    return r;
+}
+
+// Propagate const through field access / index access. For an indirect type
+// (`T^` / `T[]`) the result is the "reference to const" form `(const T)^` /
+// `(const T)[]` — handle stays mutable (so a local that copies the field can
+// be advanced/rebound), pointee carries const. For non-indirect types the
+// value itself becomes const (`T` → `const T`). Already-const types are
+// returned unchanged.
+inline std::string propagateConst(const std::string& t) {
+    if (t.empty() || t.find("const ") != std::string::npos) return t;
+    if (t.size() >= 2 && t.substr(t.size() - 2) == "[]")
+        return "(const " + t.substr(0, t.size() - 2) + ")[]";
+    if (t.back() == '^')
+        return "(const " + t.substr(0, t.size() - 1) + ")^";
+    return "const " + t;
+}
+
+// Slids passes by value or reference-to-const. A pointer/iterator param
+// without `mutable` is treated as `(const T)^` / `(const T)[]` inside the
+// body — the HANDLE stays mutable (rebind / advance permitted), the POINTEE
+// carries const (deref-write / delete-through rejected). `mutable` opts in
+// to writes-through. By-value params (no ^/[]) are unaffected; their
+// const-ness is opt-in via the declaration form `const T x`. From outside
+// the function the qualifier collapses to canonical (overload identity
+// unchanged).
+inline std::string applyParamConstDefault(const std::string& type, bool is_mutable) {
+    if (is_mutable || type.empty()) return type;
+    // Already carries const? Don't double-qualify — preserves explicit
+    // `const T^` (full-const) and `(const T)^` (already reference-to-const)
+    // declarations as written.
+    if (type.find("const ") != std::string::npos) return type;
+    std::string suffix;
+    std::string base = type;
+    if (base.size() >= 2 && base.substr(base.size() - 2) == "[]") {
+        suffix = "[]";
+        base = base.substr(0, base.size() - 2);
+    } else if (!base.empty() && base.back() == '^') {
+        suffix = "^";
+        base.pop_back();
+    } else {
+        return type;
+    }
+    return "(const " + base + ")" + suffix;
+}
+
+// Build the canonical param-type vector from a (params, param_mutable) pair,
+// applying default-const-on-unmarked-indirect-params. Used at every signature
+// registration site (free fn, nested fn, method, external method, template
+// instantiation) so the caller view, the body view, and the mangling layer
+// all agree on the type string per slot.
+inline std::vector<std::string> buildParamTypes(
+    const std::vector<std::pair<std::string, std::string>>& params,
+    const std::vector<bool>& param_mutable)
+{
+    std::vector<std::string> out;
+    out.reserve(params.size());
+    for (int i = 0; i < (int)params.size(); i++) {
+        bool is_mut = (i < (int)param_mutable.size()) && param_mutable[i];
+        out.push_back(applyParamConstDefault(params[i].first, is_mut));
+    }
+    return out;
 }
 
 // After unwrapping a deref/iter-index from "(const T)^" or "(const T)[]",

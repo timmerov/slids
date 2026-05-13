@@ -108,7 +108,11 @@ inline std::vector<std::string> anonTupleElems(const std::string& t) {
 // Anon-tuple "(t1,t2,...)" -> "t_<token(t1)>_<token(t2)>_..._e", recursively.
 // Single source of truth — every call/decl/define site that builds a mangled
 // symbol must use this so consumer and instantiator TUs agree byte-for-byte.
-inline std::string paramTokenForType(const std::string& t) {
+// Canonicalizes first (strip const, strip single-element paren wraps) so
+// "(const T)^" and "T^" mangle to the same token — required since the two
+// forms are the same overload identity.
+inline std::string paramTokenForType(const std::string& raw_t) {
+    std::string t = canonicalType(raw_t);
     if (t.size() >= 2 && t.substr(t.size() - 2) == "[]")
         return paramTokenForType(t.substr(0, t.size() - 2)) + "s";
     if (!t.empty() && t.back() == '^')

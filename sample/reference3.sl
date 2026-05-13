@@ -8,7 +8,7 @@ Counter(int32 value_ = 0) {
     }
 }
 
-void incrementTwice(Counter^ c) {
+void incrementTwice(mutable Counter^ c) {
     c^.increment();
     c^.increment();
 }
