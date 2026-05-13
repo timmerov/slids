@@ -472,6 +472,9 @@ std::vector<std::string> Codegen::inferTypeArgs(
         if (auto* ve = dynamic_cast<const VarExpr*>(args[i].get())) {
             auto tit = locals_.find(ve->name);
             if (tit != locals_.end()) arg_slids = tit->second.type;
+            // Foldable consts live in block_const_stack_, not locals_; fall
+            // through to lookupConst so template deduction sees them.
+            else if (auto* ce = lookupConst(ve->name)) arg_slids = ce->slid_type;
         } else if (auto* ao = dynamic_cast<const AddrOfExpr*>(args[i].get())) {
             if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
                 auto tit = locals_.find(ve->name);

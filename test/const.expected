@@ -29,3 +29,4 @@ callMut()=2
 ck=3
 ##type(ck)=const int
 ##type(abc)=const int
+doubler(abc)=20

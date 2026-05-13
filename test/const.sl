@@ -267,6 +267,10 @@ int32 main() {
     const int abc = 10;
     __println("##type(abc)=" + ##type(abc));
 
+    /* template T deduction from a foldable const (block_const_stack_).
+       T binds to the canonical (unqualified) form — `int`, not `const int`. */
+    __println("doubler(abc)=" + doubler(abc));
+
 
     /* compile error: cannot truncate constants. */
     //-EXPECT-ERROR: truncate constant
