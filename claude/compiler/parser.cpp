@@ -1469,6 +1469,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     if (t.type == TokenType::kConst) {
         auto stmt = make<ConstDeclStmt>(t_start);
         stmt->def = parseConstDef();
+        // Register the name in the parser's scope so subsequent `name = expr`
+        // parses as AssignStmt (rebind), not as a redeclaration with shadowing.
+        // The const-write rejection then fires at the AssignStmt handler.
+        declareVar(stmt->def.name, stmt->def.tok);
         return stmt;
     }
 

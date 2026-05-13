@@ -414,3 +414,111 @@ int callMut() {
 //     tmplMut<int>(cp);
 //     return 0;
 // }
+
+/* ----------------------------------------------------------------------
+   body-level const enforcement.
+
+   const T x       — rvalue-categorized; no writes through x.
+   const T^ p      — const reference: both p (rebind) and p^ (deref-write) rejected.
+   (const T)^ p    — reference to const: p rebindable; p^ rejected.
+
+   `mutable` is unaffected — already rejected at call sites by rejectConstToMutable.
+   ---------------------------------------------------------------------- */
+
+/* positive: reads of const locals + rebind-allowed reference-to-const.
+   `(const T)^` is not a directly-spelled declaration shape today — obtain
+   one via address-of of a const local (^xc produces (const int)^). */
+int readConst() {
+    int a = 7;
+    int b = 8;
+    const int rt_c = a * b;       /* runtime-const local */
+    int sum = rt_c + 1;
+    const int xc = a + b;         /* another runtime-const local */
+    rtc = ^xc;                    /* inferred type: (const int)^ */
+    int via = rtc^;               /* read through reference-to-const */
+    const int yc = a - b;
+    rtc = ^yc;                    /* rebind the (mutable) handle */
+    via = via + rtc^;
+    return sum + via;
+}
+
+/* compile error: write to const local. */
+//-EXPECT-ERROR: const
+// int writeConstLocal() {
+//     int a = 7; int b = 8;
+//     const int rt_c = a * b;
+//     rt_c = 99;
+//     return rt_c;
+// }
+
+/* compile error: compound-assign to const local. */
+//-EXPECT-ERROR: const
+// int compoundConstLocal() {
+//     int a = 7; int b = 8;
+//     const int rt_c = a * b;
+//     rt_c += 1;
+//     return rt_c;
+// }
+
+/* compile error: pre-increment on const local. */
+//-EXPECT-ERROR: const
+// int preIncConstLocal() {
+//     int a = 7; int b = 8;
+//     const int rt_c = a * b;
+//     ++rt_c;
+//     return rt_c;
+// }
+
+/* compile error: rebind of const reference. */
+//-EXPECT-ERROR: const
+// int rebindConstRef() {
+//     int a = 0; int b = 0;
+//     const int^ p = ^a;
+//     p = ^b;
+//     return 0;
+// }
+
+/* compile error: deref-write through const reference. */
+//-EXPECT-ERROR: const
+// int writeThroughConstRef() {
+//     int a = 0;
+//     const int^ p = ^a;
+//     p^ = 5;
+//     return 0;
+// }
+
+/* compile error: deref-write through reference-to-const. */
+//-EXPECT-ERROR: const
+// int writeThroughRefToConst() {
+//     int a = 1; int b = 2;
+//     const int xc = a + b;
+//     rtc = ^xc;
+//     rtc^ = 5;
+//     return 0;
+// }
+
+/* compile error: delete of const reference. */
+//-EXPECT-ERROR: const
+// int deleteConstRef() {
+//     int a = 0;
+//     const int^ p = ^a;
+//     delete p;
+//     return 0;
+// }
+
+/* compile error: delete through reference-to-const. */
+//-EXPECT-ERROR: const
+// int deleteRefToConst() {
+//     int a = 0; int b = 1;
+//     const int xc = a + b;
+//     rp = ^xc;
+//     delete rp;
+//     return 0;
+// }
+
+/* compile error: write to const by-value param. */
+//-EXPECT-ERROR: const
+// int writeConstParam(const int p) {
+//     p = 0;
+//     return p;
+// }

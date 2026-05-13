@@ -29,6 +29,33 @@ inline bool typeHasConst(const std::string& s) {
     return s.find("const ") != std::string::npos;
 }
 
+// Returns true if the type string is top-level const — i.e. the qualifier
+// applies to the whole encoded type, not just an inner pointee. By the
+// left-to-right binding rule: "const T^" is fully const (handle+pointee),
+// "(const T)^" is reference-to-const (mutable handle, const pointee). Only
+// the first form has top-level const. Used to reject rebinds (assign, delete,
+// destructure-slot) where rebinding the storage itself is forbidden.
+inline bool typeStartsWithConst(const std::string& s) {
+    return s.rfind("const ", 0) == 0;
+}
+
+// After unwrapping a deref/iter-index from "(const T)^" or "(const T)[]",
+// the leaf string is "(const T)" — wrap parens around a non-tuple. Strip
+// them so downstream code (isAnonTupleType, scalar matching) sees "const T".
+// Leaves real anon-tuple types like "(int,int)" alone.
+inline std::string stripRedundantConstParens(const std::string& s) {
+    if (s.size() < 2 || s.front() != '(' || s.back() != ')') return s;
+    int depth = 0;
+    for (size_t i = 1; i + 1 < s.size(); i++) {
+        if (s[i] == '(') depth++;
+        else if (s[i] == ')') depth--;
+        else if (s[i] == ',' && depth == 0) return s; // real tuple
+    }
+    std::string inner = s.substr(1, s.size() - 2);
+    if (inner.rfind("const ", 0) == 0) return inner;
+    return s;
+}
+
 // --- Expressions ---
 
 struct Expr {

@@ -80,6 +80,9 @@ void Codegen::emitPrePass(const Expr& root) {
                 // Resolve operand lvalue (note: if operand has its own side
                 // effects like arr[i++], they fire here at phrase entry).
                 auto lv = resolveLvalue(*u->operand);
+                // Body-level const enforcement: pre-inc/dec writes the lvalue.
+                if (typeStartsWithConst(lv.type))
+                    errorAtNode(e, "Cannot '" + u->op + "' a const lvalue.");
                 bool is_inc = (u->op == "pre++");
                 int step = is_inc ? 1 : -1;
                 std::string old_val = newTmp();
@@ -522,6 +525,10 @@ void Codegen::emitDestructure(
                     error(std::string("Destructure reassign: '" + name
                         + "' has type '" + (ltit==locals_.end()?"<unknown>":ltit->second.type)
                         + "' but source element is '" + eff_type + "'"));
+                // Body-level const enforcement: reassign of a const local is rebind.
+                if (typeStartsWithConst(ltit->second.type))
+                    errorAtNode(init,
+                        "Cannot reassign const variable '" + name + "' in destructure.");
             }
             std::string reg = reassign ? locals_[name].reg : uniqueAllocaReg(name);
             // slid or anon-tuple target: init path (alloca + ctor) unless reassigning.
@@ -614,6 +621,9 @@ void Codegen::emitDestructure(
                         error(std::string("Destructure reassign: '" + name
                             + "' has type '" + (ltit==locals_.end()?"<unknown>":ltit->second.type)
                             + "' but source element is '" + eff_type + "'"));
+                    if (typeStartsWithConst(ltit->second.type))
+                        errorAtNode(init,
+                            "Cannot reassign const variable '" + name + "' in destructure.");
                 }
                 std::string reg = reassign ? locals_[name].reg : uniqueAllocaReg(name);
                 if (slid_info_.count(elem_type) || isAnonTupleType(elem_type)) {
@@ -683,6 +693,9 @@ void Codegen::emitDestructure(
                 error(std::string("Destructure reassign: '" + name
                     + "' has type '" + (ltit==locals_.end()?"<unknown>":ltit->second.type)
                     + "' but source element is '" + eff_type + "'"));
+            if (typeStartsWithConst(ltit->second.type))
+                errorAtNode(init,
+                    "Cannot reassign const variable '" + name + "' in destructure.");
         }
         std::string llvm_t = llvmType(eff_type);
         std::string reg = reassign ? locals_[name].reg : uniqueAllocaReg(name);
@@ -793,6 +806,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
 
     if (auto* ds = dynamic_cast<const DeleteStmt*>(&stmt)) {
+        // Body-level const enforcement: `delete p` runs the pointee's dtor
+        // and frees its storage — destructive even when the handle is mutable.
+        // Reject if `const` appears anywhere in p's chain: `const T^` blocks
+        // (handle is const) and `(const T)^` blocks (pointee is const).
+        if (typeHasConst(exprType(*ds->operand)))
+            errorAtNode(stmt, "Cannot delete through a const pointer.");
         std::string ptr_val = emitExpr(*ds->operand);
 
         // determine element type of the pointer
@@ -1704,6 +1723,14 @@ void Codegen::emitStmt(const Stmt& stmt) {
         auto it = locals_.find(assign->name);
         if (it == locals_.end())
             error(std::string("Undefined variable: " + assign->name));
+        // Body-level const enforcement: rebinding a `const T` local (declared
+        // const, or const by-value param) is forbidden. Top-level `const`
+        // blocks rebind; the leaf-const form `(const T)^` is mutable handle
+        // and falls through. Phase: const-method `self` (Phase 3) and
+        // const-method field-via-self (Phase 3) are NOT yet enforced here.
+        if (typeStartsWithConst(it->second.type))
+            errorAtNode(stmt,
+                "Cannot assign to const variable '" + assign->name + "'.");
         auto tit = locals_.find(assign->name);
         // anonymous-tuple local LHS: route per the element-wise rule.
         if (tit != locals_.end() && isAnonTupleType(tit->second.type)) {
@@ -2221,6 +2248,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
         auto lv = resolveLvalue(*lhs);
         std::string addr = lv.addr;
         std::string slids_type = lv.type;
+        // Body-level const enforcement: the resolved lvalue's effective type
+        // is the target of the write. Top-level const blocks the write.
+        if (typeStartsWithConst(slids_type))
+            errorAtNode(stmt, "Cannot modify const target of '" + cas->op + "='.");
 
         // Pointer LHS with pointer RHS: arithmetic compound-assigns are not
         // a pointer-producing operation. Catch all five (+ - * / %) here so
@@ -2511,6 +2542,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
     if (auto* da = dynamic_cast<const DerefAssignStmt*>(&stmt)) {
         // ptr^ = val / ptr^ <- val — store-through-pointer, with op=/op<- dispatch
         // for slid pointees.
+        // Body-level const enforcement: a deref-write is forbidden if `const`
+        // appears anywhere in the pointer's chain — both `const T^` (full)
+        // and `(const T)^` (reference-to-const) have const at the pointee.
+        if (typeHasConst(exprType(*da->ptr)))
+            errorAtNode(stmt, "Cannot write through const pointer.");
         std::string ptr_reg;
         std::string pointee_llvm = "i32";
         std::string pointee_type;
@@ -2560,6 +2596,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // ia->base, drills all-but-last indices to a (slot-parent, type), then
         // dispatches the final write step on type. Symmetric to the read-side
         // resolveLvalue AIE arm; multi-dim native array prefix is identical.
+        // Body-level const enforcement: writing through an iterator-to-const
+        // or const-iterator is forbidden — any `const` in the base's chain.
+        if (typeHasConst(exprType(*ia->base)))
+            errorAtNode(stmt, "Cannot write through const iterator or pointer.");
 
         // Final-step writer: stores rhs into a resolved (slot_addr, slot_type).
         // Slid / anon-tuple slots dispatch through emitSlidSlotAssign so user
@@ -2752,6 +2792,12 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // lhs <-> rhs — swap values at two lvalue locations.
         auto a = resolveLvalue(*sw->lhs);
         auto b = resolveLvalue(*sw->rhs);
+        // Body-level const enforcement: swap writes BOTH sides. Reject if
+        // either resolved type carries top-level const.
+        if (typeStartsWithConst(a.type))
+            errorAtNode(*sw->lhs, "Cannot swap into const lvalue.");
+        if (typeStartsWithConst(b.type))
+            errorAtNode(*sw->rhs, "Cannot swap into const lvalue.");
         if (a.type != b.type) {
             std::string msg = "Type mismatch — '" + a.type + "' vs '" + b.type + "'";
             // Best-effort note: when the lhs is a VarExpr naming a known local,
@@ -2793,6 +2839,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* fa = dynamic_cast<const FieldAssignStmt*>(&stmt)) {
+        // Body-level const enforcement: writing to a field of a const object
+        // is forbidden — const propagates to every accessor. The object can
+        // be reached as `obj.field` (obj's type starts with const) or as
+        // `ptr^.field` (ptr's chain carries const → after deref, obj is const).
+        {
+            std::string obj_t = exprType(*fa->object);
+            if (typeStartsWithConst(obj_t) || typeHasConst(obj_t))
+                errorAtNode(stmt, "Cannot write to field of const object.");
+        }
         // handle ptr^.field = val — object is a DerefExpr with VarExpr operand.
         // Non-VarExpr operands (e.g., DerefExpr(UnaryExpr(post++, ...)) — the
         // natural form of p++^.field) fall through to the generic fallback below.

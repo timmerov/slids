@@ -2731,17 +2731,22 @@ std::string Codegen::exprType(const Expr& expr) {
     }
     if (auto* ao = dynamic_cast<const AddrOfExpr*>(&expr)) {
         std::string t = exprType(*ao->operand);
-        return t.empty() ? "" : t + "^";
+        if (t.empty()) return "";
+        // ^x where x: const T  →  (const T)^ (reference-to-const). The leaf
+        // const must be paren-wrapped so future readers see "mutable handle,
+        // const pointee" — not full-const "const T^".
+        if (typeStartsWithConst(t)) return "(" + t + ")^";
+        return t + "^";
     }
     if (auto* de = dynamic_cast<const DerefExpr*>(&expr)) {
         std::string t = exprType(*de->operand);
-        if (isRefType(t)) return t.substr(0, t.size() - 1);
-        if (isPtrType(t)) return t.substr(0, t.size() - 2);
+        if (isRefType(t)) return stripRedundantConstParens(t.substr(0, t.size() - 1));
+        if (isPtrType(t)) return stripRedundantConstParens(t.substr(0, t.size() - 2));
         return "";
     }
     if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&expr)) {
         std::string t = exprType(*ai->base);
-        if (isPtrType(t)) return t.substr(0, t.size() - 2);
+        if (isPtrType(t)) return stripRedundantConstParens(t.substr(0, t.size() - 2));
         auto lb = t.rfind('[');
         if (lb != std::string::npos && lb > 0) return t.substr(0, lb);
         return "";

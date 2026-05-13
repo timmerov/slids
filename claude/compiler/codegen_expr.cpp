@@ -895,6 +895,10 @@ std::string Codegen::emitExpr(const Expr& expr) {
 
             // dereference: ++(ref^) or ref^++ — increment the value pointed to
             if (auto* de = dynamic_cast<const DerefExpr*>(u->operand.get())) {
+                // Body-level const enforcement: writing through a const pointer
+                // (either `const T^` or `(const T)^`) is forbidden.
+                if (typeHasConst(exprType(*de->operand)))
+                    errorAtNode(*u, "Cannot '" + u->op + "' through a const pointer.");
                 // derive pointee LLVM width from the pointer variable's declared type
                 std::string pointee_llvm = "i32";
                 if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
@@ -921,6 +925,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string operand_type;
             {
                 auto lv = resolveLvalue(*u->operand);
+                // Body-level const enforcement: inc/dec writes the lvalue.
+                if (typeStartsWithConst(lv.type))
+                    errorAtNode(*u, "Cannot '" + u->op + "' a const lvalue.");
                 ptr = lv.addr;
                 operand_type = lv.type;
             }
@@ -2520,6 +2527,8 @@ std::string Codegen::inferSlidType(const Expr& expr) {
             }
         }
         std::string inner = inferSlidType(*ae->operand);
+        if (inner.empty()) return "^";
+        if (typeStartsWithConst(inner)) return "(" + inner + ")^";
         return inner + "^";
     }
     // type conversion — use the target type
@@ -2645,8 +2654,10 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     // dereference ptr^ → element type (strip trailing ^ or [])
     if (auto* de = dynamic_cast<const DerefExpr*>(&expr)) {
         std::string pt = inferSlidType(*de->operand);
-        if (pt.size() >= 2 && pt.substr(pt.size()-2) == "[]") return pt.substr(0, pt.size()-2);
-        if (!pt.empty() && pt.back() == '^') return pt.substr(0, pt.size()-1);
+        if (pt.size() >= 2 && pt.substr(pt.size()-2) == "[]")
+            return stripRedundantConstParens(pt.substr(0, pt.size()-2));
+        if (!pt.empty() && pt.back() == '^')
+            return stripRedundantConstParens(pt.substr(0, pt.size()-1));
         return pt;
     }
     // array index — drill the chain layer by layer, mirroring the runtime
