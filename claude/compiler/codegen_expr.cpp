@@ -694,6 +694,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string mangled = resolveFreeFunctionMangledName(call->callee, call->args.size());
             if (mangled.empty())
                 error(std::string("Undefined global function: " + call->callee));
+            checkResolvedFreeFunction(call->callee, mangled, call->args);
             auto it = func_return_types_.find(mangled);
             auto& ptypes = func_param_types_[mangled];
             std::string arg_str;
@@ -842,6 +843,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string mangled = resolveFreeFunctionMangledName(call->callee, call->args.size());
         if (mangled.empty())
             error(std::string("Undefined function: " + call->callee));
+        checkResolvedFreeFunction(call->callee, mangled, call->args);
         auto it = func_return_types_.find(mangled);
         auto& ptypes = func_param_types_[mangled];
         std::string arg_str;
@@ -987,7 +989,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 auto moit = method_overloads_.find(base);
                 std::string mangled, ret_type;
                 if (moit != method_overloads_.end()) {
-                    for (auto& [m, ptypes] : moit->second) {
+                    for (auto& [m, ptypes, _pm, _pmt, _fid] : moit->second) {
                         if (ptypes.empty()) {
                             mangled = m;
                             auto rit = func_return_types_.find(m);
@@ -1283,7 +1285,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     std::string op_func;
                     auto moit = method_overloads_.find(left_slid + "__op" + b->op);
                     if (moit != method_overloads_.end()) {
-                        for (auto& [m, ptypes] : moit->second) {
+                        for (auto& [m, ptypes, _pm, _pmt, _fid] : moit->second) {
                             if (ptypes.size() >= 2
                                 && isRefType(ptypes[1])
                                 && ptypes[1].substr(0, ptypes[1].size()-1) == left_slid) {
@@ -2179,7 +2181,7 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             if (!operand_slid.empty() && slid_info_.count(operand_slid)) {
                 auto moit = method_overloads_.find(operand_slid + "__op" + u->op);
                 if (moit != method_overloads_.end())
-                    for (auto& [m, ptypes] : moit->second)
+                    for (auto& [m, ptypes, _pm, _pmt, _fid] : moit->second)
                         if (ptypes.empty()) {
                             auto rit = func_return_types_.find(m);
                             return rit != func_return_types_.end() ? llvmType(rit->second) : "i32";
@@ -2696,7 +2698,7 @@ std::string Codegen::inferSlidType(const Expr& expr) {
             if (!operand_slid.empty() && slid_info_.count(operand_slid)) {
                 auto moit = method_overloads_.find(operand_slid + "__op" + ue->op);
                 if (moit != method_overloads_.end())
-                    for (auto& [m, ptypes] : moit->second)
+                    for (auto& [m, ptypes, _pm, _pmt, _fid] : moit->second)
                         if (ptypes.empty()) {
                             auto rit = func_return_types_.find(m);
                             return rit != func_return_types_.end() ? rit->second : "";

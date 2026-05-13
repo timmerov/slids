@@ -25,6 +25,7 @@ c.getMagic()=42
 doubler<int>(7)=14
 cmh.probe(5)=5
 runtimeConstFn(3,4)=12
+callMut()=2
 ck=3
 ##type(ck)=const int
 ##type(abc)=const int

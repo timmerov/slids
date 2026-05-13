@@ -255,6 +255,9 @@ int32 main() {
     /* runtime const var (rhs not foldable): lowers to alloca. */
     __println("runtimeConstFn(3,4)=" + runtimeConstFn(3, 4));
 
+    /* const-arg / mutable-param positive cases. */
+    __println("callMut()=" + callMut());
+
     /* qualifier-only cast on a value. ##type carries the qualifier. */
     ck = <const> (int=3);
     __println("ck=" + ck);
@@ -316,3 +319,94 @@ ConstOps(int x_ = 0) {
     //-EXPECT-ERROR: cannot have an explicit return type
     // void const op=(ConstOps^ rhs) { }
 }
+
+/* ----------------------------------------------------------------------
+   const-arg → mutable-param rejection (call-site overload match).
+
+   `mutable T^` is the only place const/mutable affects matching today;
+   every other matcher canonicalizes (`const T^` and `T^` collapse). The
+   check fires at: free-fn call, method call (single & overloaded),
+   template-fn call. Diagnostic carets the offending arg with a note
+   pointing at the `mutable` keyword on the param.
+   ---------------------------------------------------------------------- */
+
+/* free function with a mutable pointer param. */
+void freeMut(mutable int^ p) { p^ = 99; }
+
+/* method with a mutable pointer param. */
+Bag(int n_ = 0) {
+    void setVia(mutable int^ p) { p^ = n_; }
+}
+
+/* overloaded methods — mutable bit picks the slot at the call site.
+   per the matcher, `foo(int^)` and `foo(mutable int^)` collide on
+   canonical key, so distinct overloads must differ in some other slot. */
+Pair(int a_ = 0, int b_ = 0) {
+    void store(int^ q, int idx)         { q^ = a_ + idx; }
+    void store(mutable int^ q, char[] s) { q^ = b_; }
+}
+
+/* template function with a mutable pointer param. */
+void tmplMut<T>(mutable T^ p) { p^ = p^; }
+
+int callMut() {
+    int x = 0;
+    int^ mp = ^x;
+
+    /* positive: mutable T^ caller binds to mutable T^ param. */
+    freeMut(mp);
+
+    /* positive: T^ (canonically mutable) caller binds to mutable T^. */
+    freeMut(^x);
+
+    /* positive: method dispatch, mutable caller. */
+    Bag b(7);
+    b.setVia(mp);
+
+    /* positive: overload pick — mutable slot, two-arg overload. */
+    Pair pr(1, 2);
+    pr.store(mp, "tag");
+
+    /* positive: template instantiation with mutable caller. */
+    tmplMut<int>(mp);
+
+    return x;
+}
+
+/* compile error: const arg → mutable free-fn param. */
+//-EXPECT-ERROR: const argument
+// int callConst_free() {
+//     int x = 0;
+//     const int^ cp = ^x;
+//     freeMut(cp);
+//     return 0;
+// }
+
+/* compile error: const arg → mutable method param. */
+//-EXPECT-ERROR: const argument
+// int callConst_method() {
+//     int x = 0;
+//     const int^ cp = ^x;
+//     Bag b(3);
+//     b.setVia(cp);
+//     return 0;
+// }
+
+/* compile error: const arg → mutable overloaded method param. */
+//-EXPECT-ERROR: const argument
+// int callConst_overload() {
+//     int x = 0;
+//     const int^ cp = ^x;
+//     Pair pr(1, 2);
+//     pr.store(cp, "tag");
+//     return 0;
+// }
+
+/* compile error: const arg → mutable template-fn param. */
+//-EXPECT-ERROR: const argument
+// int callConst_template() {
+//     int x = 0;
+//     const int^ cp = ^x;
+//     tmplMut<int>(cp);
+//     return 0;
+// }

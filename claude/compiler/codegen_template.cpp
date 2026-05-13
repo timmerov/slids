@@ -375,6 +375,7 @@ static std::unique_ptr<Stmt> cloneStmtImpl(const Stmt& stmt,
         for (auto& [t, n] : s->def.params)
             r->def.params.emplace_back(subTypeSuffix(t, subst), n);
         r->def.param_mutable = s->def.param_mutable;
+        r->def.param_mut_toks = s->def.param_mut_toks;
         r->def.body = cloneBlock(*s->def.body, subst);
         return r;
     }
@@ -647,6 +648,7 @@ std::string Codegen::instantiateTemplate(const TemplateFuncEntry& entry,
     for (int i = 0; i < (int)tmpl.params.size(); i++)
         concrete.params.emplace_back(ptypes[i], tmpl.params[i].second);
     concrete.param_mutable = tmpl.param_mutable;
+    concrete.param_mut_toks = tmpl.param_mut_toks;
     concrete.param_auto_promoted = promoted;
 
     // Seed the cloner's promote stack with the auto-promoted param names.
@@ -765,7 +767,7 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
         for (auto& [pt, _] : m.params) ptypes.push_back(pt);
         func_return_types_[base] = m.return_type;
         func_param_types_[base]  = ptypes;
-        method_overloads_[base].push_back({base, ptypes});
+        method_overloads_[base].push_back({base, ptypes, m.param_mutable, m.param_mut_toks, m.file_id});
     }
 
     // store in the stable map

@@ -63,6 +63,50 @@ void Codegen::errorAtNodeWithNote(const Expr& e, const std::string& msg,
         .addNote(note_file, note_tok, finalizeErrorMsg(note_msg));
 }
 
+void Codegen::rejectConstToMutable(
+    const std::string& display_name,
+    const std::vector<std::unique_ptr<Expr>>& args,
+    const std::vector<bool>& param_mutable,
+    const std::vector<int>& param_mut_toks,
+    int param_file_id)
+{
+    size_t n = std::min(args.size(), param_mutable.size());
+    for (size_t i = 0; i < n; i++) {
+        if (!param_mutable[i]) continue;
+        std::string at = exprType(*args[i]);
+        if (!typeHasConst(at)) continue;
+        int note_tok = (i < param_mut_toks.size()) ? param_mut_toks[i] : 0;
+        errorWithNote(
+            "Cannot pass const argument to mutable parameter of '"
+                + display_name + "'.",
+            param_file_id, note_tok,
+            "Parameter declared 'mutable' here.");
+    }
+}
+
+void Codegen::rejectConstToMutable(
+    const std::string& display_name,
+    const std::vector<std::unique_ptr<Expr>>& args,
+    const OverloadEntry& entry)
+{
+    rejectConstToMutable(display_name, args,
+        std::get<2>(entry), std::get<3>(entry), std::get<4>(entry));
+}
+
+void Codegen::checkResolvedFreeFunction(
+    const std::string& callee,
+    const std::string& mangled,
+    const std::vector<std::unique_ptr<Expr>>& args)
+{
+    auto foit = free_func_overloads_.find(callee);
+    if (foit == free_func_overloads_.end()) return;
+    for (auto& entry : foit->second) {
+        if (std::get<0>(entry) != mangled) continue;
+        rejectConstToMutable(callee, args, entry);
+        return;
+    }
+}
+
 std::string Codegen::newTmp() { return "%t" + std::to_string(tmp_counter_++); }
 
 std::string Codegen::registerStringConstant(const std::string& value) {
@@ -204,7 +248,7 @@ void Codegen::collectFunctionSignatures() {
         for (auto& [t, n] : fn.params) ptypes.push_back(t);
 
         std::string mangled = mangleFreeFunction(fn.name, ptypes);
-        free_func_overloads_[fn.name].push_back({mangled, ptypes});
+        free_func_overloads_[fn.name].push_back({mangled, ptypes, fn.param_mutable, fn.param_mut_toks, fn.file_id});
 
         if (!fn.tuple_return_fields.empty()) {
             func_return_types_[mangled] = buildTupleType(fn.tuple_return_fields);
@@ -247,7 +291,13 @@ void Codegen::collectFunctionSignatures() {
     }
     for (auto& slid : program_.slids) {
         // collect all method implementations (inline bodies + external defs), grouped by name
-        struct Entry { std::string ret; std::vector<std::pair<std::string,std::string>> params; };
+        struct Entry {
+            std::string ret;
+            std::vector<std::pair<std::string,std::string>> params;
+            std::vector<bool> param_mutable;
+            std::vector<int> param_mut_toks;
+            int file_id = 0;
+        };
         // build set of method names covered by external implementations
         // so forward decls from an imported header don't get double-counted as overloads
         std::set<std::string> covered_by_external;
@@ -265,12 +315,12 @@ void Codegen::collectFunctionSignatures() {
             // ancestor (default) or nowhere (delete / pure-virtual). Registering
             // would emit a `Derived__m` reference that no body satisfies.
             if (m.is_default || m.is_delete) continue;
-            by_name[m.name].push_back({m.return_type, m.params});
+            by_name[m.name].push_back({m.return_type, m.params, m.param_mutable, m.param_mut_toks, m.file_id});
         }
         for (auto& em : program_.external_methods) {
             if (em.slid_name != slid.name || !em.body) continue;
             if (em.method_name == "_" || em.method_name == "~") continue;
-            by_name[em.method_name].push_back({em.return_type, em.params});
+            by_name[em.method_name].push_back({em.return_type, em.params, em.param_mutable, em.param_mut_toks, em.file_id});
         }
         // external forward decls: register signature for methods not defined in this TU
         for (auto& em : program_.external_methods) {
@@ -278,7 +328,7 @@ void Codegen::collectFunctionSignatures() {
             if (em.method_name == "_" || em.method_name == "~") continue;
             if (em.is_default || em.is_delete) continue;
             if (!by_name.count(em.method_name))
-                by_name[em.method_name].push_back({em.return_type, em.params});
+                by_name[em.method_name].push_back({em.return_type, em.params, em.param_mutable, em.param_mut_toks, em.file_id});
         }
         // op<-> may only take a single SameType^ parameter — reject anything else.
         if (auto it = by_name.find("op<->"); it != by_name.end()) {
@@ -319,8 +369,8 @@ void Codegen::collectFunctionSignatures() {
                 // avoid duplicate overload entries (transport slid + impl slid both contribute)
                 auto& overloads = method_overloads_[base];
                 if (std::none_of(overloads.begin(), overloads.end(),
-                        [&](const auto& p){ return p.second == ptypes; }))
-                    overloads.push_back({mangled, ptypes});
+                        [&](const auto& p){ return std::get<1>(p) == ptypes; }))
+                    overloads.push_back({mangled, ptypes, e.param_mutable, e.param_mut_toks, e.file_id});
             }
         }
 
@@ -332,7 +382,7 @@ void Codegen::collectFunctionSignatures() {
             for (auto& [t, n] : m.params) mptypes.push_back(t);
             auto it = method_overloads_.find(base);
             if (it != method_overloads_.end()) {
-                for (auto& [mangled, ptypes] : it->second)
+                for (auto& [mangled, ptypes, _pm, _pmt, _fid] : it->second)
                     if (ptypes == mptypes) exported_symbols_.insert(mangled);
             }
         }
@@ -1301,6 +1351,12 @@ void Codegen::collectStringConstants() {
 void Codegen::emit() {
     out_ << "target triple = \"x86_64-pc-linux-gnu\"\n\n";
 
+    // Establish the bottom frame of block_const_stack_ — the file/global scope.
+    // File-scope const decls land here via collectAndFoldConsts. Each function
+    // body emit pushes its own frame on top (via pushScope) and pops it on exit,
+    // so block-scope consts never leak across function boundaries.
+    block_const_stack_.push_back({});
+
     collectAndFoldConsts();
     collectSlids();
     classifyVirtualClasses();
@@ -1369,7 +1425,7 @@ void Codegen::emit() {
         std::string prefix = slid->name + "__";
         for (auto& [base, overloads] : method_overloads_) {
             if (base.substr(0, prefix.size()) != prefix) continue;
-            for (auto& [mangled, ptypes] : overloads)
+            for (auto& [mangled, ptypes, _pm, _pmt, _fid] : overloads)
                 exported_symbols_.insert(mangled);
         }
     }
@@ -1499,7 +1555,7 @@ void Codegen::emit() {
         // use the mangled name from free_func_overloads_ for correct quoting and overload suffix
         auto foit = free_func_overloads_.find(fn.name);
         if (foit == free_func_overloads_.end()) continue;
-        for (auto& [mangled, ptypes] : foit->second) {
+        for (auto& [mangled, ptypes, _pm, _pmt, _fid] : foit->second) {
             if (!declared_fns.insert(mangled).second) continue; // already emitted
             std::string ret_type_str = func_return_types_[mangled];
             bool is_sret = !ret_type_str.empty() && slid_info_.count(ret_type_str);
@@ -1557,7 +1613,7 @@ void Codegen::emit() {
             std::string base = slid.name + "__" + m.name;
             auto oit = method_overloads_.find(base);
             if (oit != method_overloads_.end())
-                for (auto& [mn, _] : oit->second) local_methods.insert(mn);
+                for (auto& [mn, _pt, _pm, _pmt, _fid] : oit->second) local_methods.insert(mn);
         }
     }
     // template instantiations are always locally defined
@@ -1568,7 +1624,7 @@ void Codegen::emit() {
             std::string base = slid->name + "__" + m.name;
             auto oit = method_overloads_.find(base);
             if (oit != method_overloads_.end())
-                for (auto& [mn, _] : oit->second) local_methods.insert(mn);
+                for (auto& [mn, _pt, _pm, _pmt, _fid] : oit->second) local_methods.insert(mn);
         }
     }
     // imported template instantiations: emit declares for ctor/dtor/sizeof/methods
@@ -1583,7 +1639,7 @@ void Codegen::emit() {
         for (auto& [base, overloads] : method_overloads_) {
             std::string prefix = slid->name + "__";
             if (base.substr(0, prefix.size()) != prefix) continue;
-            for (auto& [mangled, ptypes] : overloads) {
+            for (auto& [mangled, ptypes, _pm, _pmt, _fid] : overloads) {
                 if (!declared_fns.insert(mangled).second) continue;
                 std::string ret_type_str = func_return_types_[mangled];
                 std::string ret = ret_type_str.empty() ? "void" : llvmType(ret_type_str);
@@ -1600,7 +1656,7 @@ void Codegen::emit() {
         std::string base = em.slid_name + "__" + em.method_name;
         auto oit = method_overloads_.find(base);
         if (oit != method_overloads_.end())
-            for (auto& [mn, _] : oit->second) local_methods.insert(mn);
+            for (auto& [mn, _pt, _pm, _pmt, _fid] : oit->second) local_methods.insert(mn);
         // also include ctor/dtor
         if (em.method_name == "_") local_methods.insert(em.slid_name + "__$ctor");
         if (em.method_name == "~") local_methods.insert(em.slid_name + "__$dtor");
@@ -1622,7 +1678,7 @@ void Codegen::emit() {
         // regular methods: first arg is ptr (self) unless slid is empty
         for (auto& [base, overloads] : method_overloads_) {
             if (base.substr(0, slid.name.size() + 2) != slid.name + "__") continue;
-            for (auto& [mangled, ptypes] : overloads) {
+            for (auto& [mangled, ptypes, _pm, _pmt, _fid] : overloads) {
                 if (local_methods.count(mangled)) continue;
                 if (!declared_fns.insert(mangled).second) continue;
                 std::string ret_type_str = func_return_types_[mangled];
@@ -1850,12 +1906,14 @@ void Codegen::emitNestedFunction(
         locals_[name] = {reg, type};
     }
 
+    pushScope();
     emitBlock(*fn.body);
 
     if (fn.return_type == "void" && !block_terminated_) {
         emitDtors();
         out_ << "    ret void\n";
     }
+    popScope();
 
     out_ << "}\n\n";
 }
@@ -2009,6 +2067,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
              << "void @" << slid.name << "__$ctor(ptr %self) {\n";
         out_ << "entry:\n";
 
+        pushScope();
         // Private-suffix init: only the closing TU sees the private fields, so
         // only it emits this prefix. Consumers' __$ctor declares are external;
         // the closing TU's definition fills them.
@@ -2036,6 +2095,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
 
         out_ << "    musttail call void @" << slid.name << "__$ctor_body(ptr %self)\n";
         out_ << "    ret void\n";
+        popScope();
         out_ << "}\n\n";
     }
 
@@ -2059,6 +2119,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         out_ << "define internal void @" << slid.name << "__$ctor_body(ptr %self) {\n";
         out_ << "entry:\n";
 
+        pushScope();
         // 1. base call first (Itanium ABI — base ctor runs before our work,
         //    so our vptr write below overwrites whatever the base wrote)
         if (info.base_info) {
@@ -2109,6 +2170,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         if (!block_terminated_ && explicit_ctor_body) emitBlock(*explicit_ctor_body);
 
         if (!block_terminated_) out_ << "    ret void\n";
+        popScope();
         out_ << "}\n\n";
     }
 
@@ -2137,6 +2199,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
              << "void @" << slid.name << "__$dtor(ptr %self) {\n";
         out_ << "entry:\n";
 
+        pushScope();
         // 1. user body
         if (dtor_body) emitBlock(*dtor_body);
 
@@ -2179,6 +2242,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         }
 
         if (!block_terminated_) out_ << "    ret void\n";
+        popScope();
         out_ << "}\n\n";
     }
 
@@ -2211,6 +2275,8 @@ Codegen::TemplateResolution Codegen::resolveTemplateOverload(
         const TemplateFuncEntry& entry = it->second[0];
         std::vector<std::string> targs = explicit_type_args.empty()
             ? inferTypeArgs(*entry.def, args) : explicit_type_args;
+        rejectConstToMutable(entry.def->user_name.empty() ? name : entry.def->user_name,
+            args, entry.def->param_mutable, entry.def->param_mut_toks, entry.def->file_id);
         return {&entry, std::move(targs)};
     }
 
@@ -2269,6 +2335,8 @@ Codegen::TemplateResolution Codegen::resolveTemplateOverload(
     if (matches == 0) return {nullptr, {}};
     if (matches > 1)
         error(std::string("Ambiguous template overload for '" + name + "'."));
+    rejectConstToMutable(best->def->user_name.empty() ? name : best->def->user_name,
+        args, best->def->param_mutable, best->def->param_mut_toks, best->def->file_id);
     return {best, std::move(best_targs)};
 }
 
@@ -2292,7 +2360,7 @@ std::string Codegen::resolveFreeFunctionMangledName(
     }
     auto foit = free_func_overloads_.find(name);
     if (foit == free_func_overloads_.end()) return "";
-    for (auto& [mn, ptypes] : foit->second) {
+    for (auto& [mn, ptypes, _pm, _pmt, _fid] : foit->second) {
         if (ptypes.size() == arg_count) return mn;
     }
     return "";
@@ -2327,13 +2395,13 @@ std::string Codegen::resolveMethodMangledName(
     auto it = method_overloads_.find(base);
     if (it == method_overloads_.end() || it->second.empty()) return base;
     if (it->second.size() == 1) {
-        if (it->second[0].second.size() != params.size()) return base;
-        return it->second[0].first;
+        if (std::get<1>(it->second[0]).size() != params.size()) return base;
+        return std::get<0>(it->second[0]);
     }
     // multiple overloads: match by canonical param types (const-stripping)
     std::vector<std::string> ptypes;
     for (auto& [t, n] : params) ptypes.push_back(canonicalType(t));
-    for (auto& [mangled, mp] : it->second) {
+    for (auto& [mangled, mp, _pm, _pmt, _fid] : it->second) {
         if (mp.size() != ptypes.size()) continue;
         bool match = true;
         for (size_t i = 0; i < mp.size(); i++) {
@@ -2354,31 +2422,43 @@ std::string Codegen::resolveOverloadForCall(
     // through to the single-overload fast path or pass 1/2 (which all skip
     // arity for size-1 or silently fail for size-N).
     bool any_arity = false;
-    for (auto& [mangled, ptypes] : it->second)
+    for (auto& [mangled, ptypes, _pm, _pmt, _fid] : it->second)
         if (ptypes.size() == args.size()) { any_arity = true; break; }
     if (!any_arity) {
         std::string arities;
         for (size_t i = 0; i < it->second.size(); i++) {
             if (i > 0) arities += "/";
-            arities += std::to_string(it->second[i].second.size());
+            arities += std::to_string(std::get<1>(it->second[i]).size());
         }
         size_t sep = base_mangled.rfind("__");
         std::string method = (sep != std::string::npos) ? base_mangled.substr(sep+2) : base_mangled;
         error("Wrong number of arguments to '" + method + "': passed "
               + std::to_string(args.size()) + ", expected " + arities + ".");
     }
-    if (it->second.size() == 1) return it->second[0].first;
+    auto display = [&] {
+        size_t sep = base_mangled.rfind("__");
+        return (sep != std::string::npos) ? base_mangled.substr(sep+2) : base_mangled;
+    };
+    if (it->second.size() == 1) {
+        rejectConstToMutable(display(), args, it->second[0]);
+        return std::get<0>(it->second[0]);
+    }
     // Pass 1: canonical type match (const-stripping)
-    for (auto& [mangled, ptypes] : it->second) {
+    for (auto& entry : it->second) {
+        auto& ptypes = std::get<1>(entry);
         if (ptypes.size() != args.size()) continue;
         bool match = true;
         for (int i = 0; i < (int)args.size(); i++) {
             if (canonicalType(exprType(*args[i])) != canonicalType(ptypes[i])) { match = false; break; }
         }
-        if (match) return mangled;
+        if (match) {
+            rejectConstToMutable(display(), args, entry);
+            return std::get<0>(entry);
+        }
     }
     // Pass 2: indirect-type match (pointer vs scalar)
-    for (auto& [mangled, ptypes] : it->second) {
+    for (auto& entry : it->second) {
+        auto& ptypes = std::get<1>(entry);
         if (ptypes.size() != args.size()) continue;
         bool match = true;
         for (int i = 0; i < (int)args.size(); i++) {
@@ -2389,7 +2469,10 @@ std::string Codegen::resolveOverloadForCall(
                                              : isPointerExpr(*args[i]));
             if (param_ptr != arg_ptr) { match = false; break; }
         }
-        if (match) return mangled;
+        if (match) {
+            rejectConstToMutable(display(), args, entry);
+            return std::get<0>(entry);
+        }
     }
     return base_mangled;
 }
@@ -2795,7 +2878,7 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
             for (auto& [slid, info] : slid_info_) {
                 auto oit = method_overloads_.find(slid + "__op=");
                 if (oit == method_overloads_.end()) continue;
-                for (auto& [m, ptypes] : oit->second)
+                for (auto& [m, ptypes, _pm, _pmt, _fid] : oit->second)
                     if (!ptypes.empty() && isPtrType(ptypes[0])) return slid;
             }
         }
@@ -2822,7 +2905,7 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
         if (dynamic_cast<const StringLiteralExpr*>(&left)) {
             auto oit = method_overloads_.find(slid_name + "__op=");
             if (oit != method_overloads_.end()) {
-                for (auto& [m, ptypes] : oit->second)
+                for (auto& [m, ptypes, _pm, _pmt, _fid] : oit->second)
                     if (!ptypes.empty() && isPtrType(ptypes[0])) return true;
             }
         }
@@ -2881,7 +2964,7 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
                 static const std::set<std::string> cmp_ops = {"==", "!=", "<", ">", "<=", ">="};
                 bool is_cmp = cmp_ops.count(op) > 0;
                 std::string best;
-                for (auto& [mangled, ptypes] : moit->second) {
+                for (auto& [mangled, ptypes, _pm, _pmt, _fid] : moit->second) {
                     if (ptypes.empty()) continue;
                     // 2-arg method (binary op produces self): both ptypes are operand types.
                     // 1-arg method: comparison style only (ptypes[0] is rhs; self is lhs).
@@ -2907,7 +2990,7 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
     if (foit == free_func_overloads_.end() || foit->second.empty()) return "";
 
     std::string best;
-    for (auto& [mangled, ptypes] : foit->second) {
+    for (auto& [mangled, ptypes, _pm, _pmt, _fid] : foit->second) {
         if (ptypes.empty()) continue;
         // check first param is a slid pointer and left matches
         std::string p0 = ptypes[0];
@@ -2938,7 +3021,7 @@ std::string Codegen::resolveCompoundFuse(const std::string& op,
 
 bool Codegen::isMethodMangled(const std::string& mangled) const {
     for (auto& [base, overloads] : method_overloads_)
-        for (auto& [m, ptypes] : overloads)
+        for (auto& [m, ptypes, _pm, _pmt, _fid] : overloads)
             if (m == mangled) return true;
     return false;
 }
@@ -2948,7 +3031,7 @@ std::string Codegen::resolveSlidIndex(const std::string& slid_name, const Expr& 
     auto oit = method_overloads_.find(base);
     if (oit == method_overloads_.end() || oit->second.empty()) return "";
     std::string mangled = resolveSingleArgOverload(base, index);
-    if (mangled.empty()) mangled = oit->second[0].first;
+    if (mangled.empty()) mangled = std::get<0>(oit->second[0]);
     return mangled;
 }
 
@@ -2962,11 +3045,15 @@ std::string Codegen::resolveSlidIndexAssign(const std::string& slid_name, const 
     // original mangled name. Restore method_overloads_ after.
     std::string synth = base + "__$idx_only$";
     auto& bucket = method_overloads_[synth];
-    for (auto& [m, ptypes] : oit->second)
-        if (!ptypes.empty()) bucket.push_back({m, {ptypes[0]}});
+    for (auto& [m, ptypes, pm, pmt, fid] : oit->second) {
+        if (ptypes.empty()) continue;
+        std::vector<bool> pm1; if (!pm.empty()) pm1.push_back(pm[0]);
+        std::vector<int>  pmt1; if (!pmt.empty()) pmt1.push_back(pmt[0]);
+        bucket.push_back({m, {ptypes[0]}, std::move(pm1), std::move(pmt1), fid});
+    }
     std::string mangled = resolveSingleArgOverload(synth, index);
     method_overloads_.erase(synth);
-    if (mangled.empty()) mangled = oit->second[0].first;
+    if (mangled.empty()) mangled = std::get<0>(oit->second[0]);
     return mangled;
 }
 
@@ -3078,7 +3165,7 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
     };
 
     // pass 1: slid ref exact match — same slid type
-    for (auto& [m, ptypes] : oit->second) {
+    for (auto& [m, ptypes, _pm, _pmt, _fid] : oit->second) {
         if (ptypes.size() != 1 || !isRefType(ptypes[0])) continue;
         std::string param_slid = ptypes[0].substr(0, ptypes[0].size()-1);
         if (arg_is_slid && param_slid == arg_slid_name) return m;
@@ -3086,7 +3173,7 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
 
     // pass 2: exact type name match for char/int/uint
     if (!arg_int_type.empty()) {
-        for (auto& [m, ptypes] : oit->second) {
+        for (auto& [m, ptypes, _pm, _pmt, _fid] : oit->second) {
             if (ptypes.size() == 1 && ptypes[0] == arg_int_type) return m;
         }
     }
@@ -3098,7 +3185,7 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
             int arg_r = rit->second;
             std::string best_m;
             int best_r = INT_MAX;
-            for (auto& [m, ptypes] : oit->second) {
+            for (auto& [m, ptypes, _pm, _pmt, _fid] : oit->second) {
                 if (ptypes.size() != 1) continue;
                 bool sign_ok = arg_is_unsigned ? (ptypes[0] != "char" && unsigned_types.count(ptypes[0]) > 0)
                                                : is_signed_int_param(ptypes[0]);
@@ -3116,22 +3203,22 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
 
     // pass 4: untyped scalar int literal — any signed int overload, or any unsigned overload
     if (arg_is_scalar_int && arg_int_type.empty()) {
-        for (auto& [m, ptypes] : oit->second) {
+        for (auto& [m, ptypes, _pm, _pmt, _fid] : oit->second) {
             if (ptypes.size() == 1 && is_signed_int_param(ptypes[0])) return m;
         }
     }
     if (arg_is_unsigned && arg_int_type.empty()) {
-        for (auto& [m, ptypes] : oit->second) {
+        for (auto& [m, ptypes, _pm, _pmt, _fid] : oit->second) {
             if (ptypes.size() == 1 && ptypes[0] != "char" && unsigned_types.count(ptypes[0])) return m;
         }
     }
 
     // pass 5: non-slid, non-int arg — ptr/indirect param (e.g. string literal / char[])
     if (!arg_is_slid && !arg_is_char && !arg_is_scalar_int && !arg_is_unsigned) {
-        for (auto& [m, ptypes] : oit->second) {
+        for (auto& [m, ptypes, _pm, _pmt, _fid] : oit->second) {
             if (ptypes.size() == 1 && isPtrType(ptypes[0])) return m;
         }
-        for (auto& [m, ptypes] : oit->second) {
+        for (auto& [m, ptypes, _pm, _pmt, _fid] : oit->second) {
             if (ptypes.size() == 1 && isIndirectType(ptypes[0])) return m;
         }
     }
@@ -3141,7 +3228,7 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
     // scalar int/unsigned with no matching overload: return "" so caller can coerce via temp
     if (arg_is_scalar_int || arg_is_unsigned) return "";
     // non-slid arg: fall back to first available overload
-    return oit->second[0].first;
+    return std::get<0>(oit->second[0]);
 }
 
 // Copy all fields of slid_name from src_ptr into dst_ptr (synthesized default copy).
@@ -3197,7 +3284,7 @@ void Codegen::emitSlidSlotAssign(const std::string& elem_type,
         if (oit != method_overloads_.end()) {
             std::string want = elem_type + "^";
             bool empty = slid_info_[elem_type].is_empty;
-            for (auto& [m, pt] : oit->second) {
+            for (auto& [m, pt, _pm, _pmt, _fid] : oit->second) {
                 if (pt.size() == 1 && pt[0] == want) {
                     out_ << "    call void @" << llvmGlobalName(m)
                          << "(" << (empty ? "" : "ptr " + dst_ptr + ", ") << "ptr " << src_ptr << ")\n";
@@ -3289,7 +3376,7 @@ void Codegen::emitSlidSlotSwap(const std::string& elem_type,
         if (oit != method_overloads_.end()) {
             std::string want = elem_type + "^";
             bool empty = slid_info_[elem_type].is_empty;
-            for (auto& [m, pt] : oit->second) {
+            for (auto& [m, pt, _pm, _pmt, _fid] : oit->second) {
                 if (pt.size() == 1 && pt[0] == want) {
                     out_ << "    call void @" << llvmGlobalName(m)
                          << "(" << (empty ? "" : "ptr " + a_ptr + ", ") << "ptr " << b_ptr << ")\n";
@@ -3351,7 +3438,7 @@ void Codegen::emitElementwiseAtPtr(const std::string& ttype,
             std::string mangled;
             std::string want = ft + "^";
             if (oit != method_overloads_.end()) {
-                for (auto& [m, pt] : oit->second) {
+                for (auto& [m, pt, _pm, _pmt, _fid] : oit->second) {
                     if (pt.size() == 2 && pt[0] == want && pt[1] == want) {
                         mangled = m; break;
                     }
@@ -3423,7 +3510,7 @@ void Codegen::emitTupleScalarBroadcastAtPtr(const std::string& ttype,
             std::string mangled;
             std::string want_left = ft + "^";
             if (oit != method_overloads_.end()) {
-                for (auto& [m, pt] : oit->second) {
+                for (auto& [m, pt, _pm, _pmt, _fid] : oit->second) {
                     if (pt.size() == 2 && pt[0] == want_left && pt[1] == scalar_slids) {
                         mangled = m; break;
                     }
@@ -3831,7 +3918,7 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
             // call op=(char[]) to initialize from the literal
             auto oit = method_overloads_.find(slid_name + "__op=");
             if (oit != method_overloads_.end()) {
-                for (auto& [m, ptypes] : oit->second) {
+                for (auto& [m, ptypes, _pm, _pmt, _fid] : oit->second) {
                     if (!ptypes.empty() && isPtrType(ptypes[0])) {
                         std::string str_val = emitExpr(arg);
                         out_ << "    call void @" << llvmGlobalName(m)
@@ -3944,7 +4031,7 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
             auto ait = irank.find(arg_llvm);
             auto oit = method_overloads_.find(slid_name + "__op=");
             if (oit != method_overloads_.end()) {
-                for (auto& [m, ptypes2] : oit->second) {
+                for (auto& [m, ptypes2, _pm, _pmt, _fid] : oit->second) {
                     if (ptypes2.empty()) continue;
                     std::string p_llvm = llvmType(ptypes2[0]);
                     auto pit = irank.find(p_llvm);
@@ -4074,6 +4161,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid,
         locals_[name] = {reg, type};
     }
 
+    pushScope();
     emitBlock(body);
 
     if (!block_terminated_) {
@@ -4084,6 +4172,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid,
             error(std::string("Method '" + full_mangled + "' is missing a return statement."));
         }
     }
+    popScope();
 
     out_ << "}\n\n";
 }
@@ -4136,7 +4225,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
         // match by param types
         std::vector<std::string> ptypes;
         for (auto& [t, n] : fn.params) ptypes.push_back(t);
-        for (auto& [mangled, mptypes] : foit->second) {
+        for (auto& [mangled, mptypes, _pm, _pmt, _fid] : foit->second) {
             if (mptypes == ptypes) { emit_name = mangled; break; }
         }
     }
@@ -4165,6 +4254,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
         locals_[name] = {reg, type, fn.file_id, fn.tok};
     }
 
+    pushScope();
     emitBlock(*fn.body);
 
     if (!block_terminated_) {
@@ -4175,6 +4265,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
             error(std::string("Function '" + fn.name + "' is missing a return statement."));
         }
     }
+    popScope();
 
     out_ << "}\n\n";
 
@@ -4309,16 +4400,17 @@ static std::string formatConstFloat(double v) {
 void Codegen::collectAndFoldConsts() {
     // pre-register all const decls so cross-references see the names even when
     // unresolved. duplicate-name detection per scope.
+    auto& global_frame = block_const_stack_.front();
     for (auto& cd : program_.consts) {
-        if (global_consts_.count(cd.name))
+        if (global_frame.count(cd.name))
             errorAtNodeWithNote(*cd.rhs,
                 "Global const '" + cd.name + "' is already declared.",
-                global_consts_[cd.name].file_id, global_consts_[cd.name].tok,
+                global_frame[cd.name].file_id, global_frame[cd.name].tok,
                 "First declared here.");
         ConstEntry e;
         e.file_id = cd.file_id;
         e.tok = cd.tok;
-        global_consts_[cd.name] = e;
+        global_frame[cd.name] = e;
     }
     for (auto& slid : program_.slids) {
         for (auto& cd : slid.consts) {
@@ -4337,7 +4429,7 @@ void Codegen::collectAndFoldConsts() {
 
     std::set<std::string> cycle;
     for (auto& cd : program_.consts) {
-        if (global_consts_[cd.name].slid_type.empty()) {
+        if (global_frame[cd.name].slid_type.empty()) {
             cycle.clear();
             foldConstDef(cd, "", cycle);
         }
@@ -4360,7 +4452,7 @@ void Codegen::foldConstDef(const ConstDef& cd,
     ConstEntry folded = foldConstExpr(*cd.rhs, slid_scope, cycle);
     ConstEntry final_e = applyConstDeclaredType(cd, folded);
     cycle.erase(key);
-    if (slid_scope.empty()) global_consts_[cd.name] = final_e;
+    if (slid_scope.empty()) block_const_stack_.front()[cd.name] = final_e;
     else slid_consts_[slid_scope][cd.name] = final_e;
 }
 
@@ -4409,9 +4501,10 @@ Codegen::ConstEntry Codegen::foldConstExpr(const Expr& e,
                 }
             }
         }
-        // global
-        auto cit = global_consts_.find(ve->name);
-        if (cit != global_consts_.end()) {
+        // global (bottom of block_const_stack_)
+        auto& global_frame = block_const_stack_.front();
+        auto cit = global_frame.find(ve->name);
+        if (cit != global_frame.end()) {
             if (cit->second.slid_type.empty()) {
                 std::string key = std::string("::") + ve->name;
                 if (cycle.count(key))
@@ -4652,10 +4745,13 @@ Codegen::ConstEntry Codegen::applyConstDeclaredType(const ConstDef& cd,
 }
 
 const Codegen::ConstEntry* Codegen::lookupConst(const std::string& name) const {
-    // innermost block frame first
-    for (auto it = block_const_stack_.rbegin(); it != block_const_stack_.rend(); ++it) {
-        auto cit = it->find(name);
-        if (cit != it->end()) return &cit->second;
+    // Walk block frames top-down EXCEPT the bottom (global) frame so that
+    // the enclosing class scope is consulted between function-block frames
+    // and the global frame — preserves the old global_consts_ ordering.
+    for (size_t i = block_const_stack_.size(); i > 1; i--) {
+        auto& frame = block_const_stack_[i - 1];
+        auto cit = frame.find(name);
+        if (cit != frame.end()) return &cit->second;
     }
     // enclosing class scope
     if (!current_slid_.empty()) {
@@ -4665,9 +4761,12 @@ const Codegen::ConstEntry* Codegen::lookupConst(const std::string& name) const {
             if (cit != sit->second.end()) return &cit->second;
         }
     }
-    // global scope
-    auto cit = global_consts_.find(name);
-    if (cit != global_consts_.end()) return &cit->second;
+    // global scope = block_const_stack_.front()
+    if (!block_const_stack_.empty()) {
+        auto& global_frame = block_const_stack_.front();
+        auto cit = global_frame.find(name);
+        if (cit != global_frame.end()) return &cit->second;
+    }
     return nullptr;
 }
 
@@ -4699,7 +4798,6 @@ bool Codegen::isFoldableConstShape(const Expr& e, const std::string& slid_scope)
         }
         for (auto it = block_const_stack_.rbegin(); it != block_const_stack_.rend(); ++it)
             if (it->count(ve->name)) return true;
-        if (global_consts_.count(ve->name)) return true;
         return false;
     }
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&e)) {

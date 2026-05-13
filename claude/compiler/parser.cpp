@@ -2520,6 +2520,7 @@ NestedFunctionDef Parser::parseNestedFunctionDef() {
         std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
         fn.params.emplace_back(type, name);
         fn.param_mutable.push_back(is_mutable);
+        fn.param_mut_toks.push_back(mut_tok);
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "Expected ')'");
@@ -2588,7 +2589,6 @@ MethodDef Parser::parseMethodDef() {
         m.name = expect(TokenType::kIdentifier, "Expected method name").value;
     }
     expect(TokenType::kLParen, "Expected '('");
-    std::vector<int> param_mut_toks;
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         bool is_mutable = false;
         int mut_tok = pos_;
@@ -2602,12 +2602,12 @@ MethodDef Parser::parseMethodDef() {
         std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
         m.params.emplace_back(type, name);
         m.param_mutable.push_back(is_mutable);
-        param_mut_toks.push_back(mut_tok);
+        m.param_mut_toks.push_back(mut_tok);
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "Expected ')'");
     checkOpArity(m.name, (int)m.params.size(), op_tok);
-    checkOpMutable(m.name, m.params, m.param_mutable, param_mut_toks, op_tok);
+    checkOpMutable(m.name, m.params, m.param_mutable, m.param_mut_toks, op_tok);
     checkMethodHeadRules(file_id_, m.name, (int)m.params.size(),
         m.has_explicit_return, m.is_const_method,
         m.tok, return_type_tok, const_tok);
@@ -3079,6 +3079,7 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
         std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
         em.params.emplace_back(type, name);
         em.param_mutable.push_back(is_mutable);
+        em.param_mut_toks.push_back(mut_tok);
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "Expected ')'");
@@ -3206,7 +3207,6 @@ void Parser::parseExternalMethodBlock(Program& program) {
             errorAt(em_tok, "Method '" + em.method_name + "' shares the name of its enclosing class.");
         }
         expect(TokenType::kLParen, "Expected '('");
-        std::vector<int> param_mut_toks;
         while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
             bool is_mutable = false;
             int mut_tok = pos_;
@@ -3220,12 +3220,12 @@ void Parser::parseExternalMethodBlock(Program& program) {
             std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
             em.params.emplace_back(type, name);
             em.param_mutable.push_back(is_mutable);
-            param_mut_toks.push_back(mut_tok);
+            em.param_mut_toks.push_back(mut_tok);
             if (peek().type == TokenType::kComma) advance();
         }
         expect(TokenType::kRParen, "Expected ')'");
         checkOpArity(em.method_name, (int)em.params.size(), em_tok);
-        checkOpMutable(em.method_name, em.params, em.param_mutable, param_mut_toks, em_tok);
+        checkOpMutable(em.method_name, em.params, em.param_mutable, em.param_mut_toks, em_tok);
         checkMethodHeadRules(file_id_, em.method_name, (int)em.params.size(),
             em.has_explicit_return, em.is_const_method,
             em.tok, return_type_tok, em_const_tok);
@@ -3311,6 +3311,7 @@ FunctionDef Parser::parseFunctionDef() {
         rejectReserved(file_id_, p_tok, name, "parameter");
         fn.params.emplace_back(type, name);
         fn.param_mutable.push_back(is_mutable);
+        fn.param_mut_toks.push_back(mut_tok);
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "Expected ')'");

@@ -426,6 +426,7 @@ struct MethodDef {
     std::string name;
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params; true if 'mutable' on that param
+    std::vector<int> param_mut_toks;  // parallel to params; tok of the 'mutable' keyword for diagnostic notes
     std::unique_ptr<BlockStmt> body;
     int file_id = 0;
     int tok = 0;               // token index of the method name (for diagnostics)
@@ -479,6 +480,7 @@ struct NestedFunctionDef {
     std::string name;
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params
+    std::vector<int> param_mut_toks;  // parallel to params; tok of the 'mutable' keyword for diagnostic notes
     std::unique_ptr<BlockStmt> body;
 };
 
@@ -494,6 +496,7 @@ struct FunctionDef {
     std::string user_name;   // unmangled, source-level name (used for ##func, diagnostics)
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params
+    std::vector<int> param_mut_toks;  // parallel to params; tok of the 'mutable' keyword for diagnostic notes
     std::vector<bool> param_auto_promoted;  // parallel to params; true when class-T value→ref auto-promoted at template instantiation
     std::unique_ptr<BlockStmt> body;
     int file_id = 0;
@@ -511,6 +514,7 @@ struct ExternalMethodDef {
     std::string method_name;
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params
+    std::vector<int> param_mut_toks;  // parallel to params; tok of the 'mutable' keyword for diagnostic notes
     std::unique_ptr<BlockStmt> body;
     int file_id = 0;
     int tok = 0;                       // token index of method_name (for diagnostics)

@@ -718,7 +718,6 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::set<std::string> cycle;
             ConstEntry folded = foldConstExpr(*cds->def.rhs, current_slid_, cycle);
             ConstEntry final_e = applyConstDeclaredType(cds->def, folded);
-            if (block_const_stack_.empty()) block_const_stack_.push_back({});
             auto& frame = block_const_stack_.back();
             if (frame.count(cds->def.name))
                 errorAtNodeWithNote(stmt,
@@ -1913,7 +1912,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             std::string via_ref;
                             auto opit = method_overloads_.find(compound_base);
                             if (opit != method_overloads_.end())
-                                for (auto& [m, ptypes] : opit->second)
+                                for (auto& [m, ptypes, _pm, _pmt, _fid] : opit->second)
                                     if (ptypes.size() == 1 && isRefType(ptypes[0])) { via_ref = m; break; }
                             if (!via_ref.empty()) {
                                 out_ << "    call void @" << llvmGlobalName(via_ref)
@@ -1923,7 +1922,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                                 std::string op_base = slid_name + "__op" + be->op;
                                 auto oppit = method_overloads_.find(op_base);
                                 if (oppit != method_overloads_.end())
-                                    for (auto& [m, ptypes] : oppit->second)
+                                    for (auto& [m, ptypes, _pm, _pmt, _fid] : oppit->second)
                                         if (ptypes.size() == 2 && isRefType(ptypes[0]) && isRefType(ptypes[1])) {
                                             out_ << "    call void @" << llvmGlobalName(m)
                                                  << "(ptr " << it->second.reg << ", ptr " << it->second.reg
@@ -2434,7 +2433,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string second_ptype;
             if (moit != method_overloads_.end()) {
                 std::string want_first = slids_type + "^";
-                for (auto& [m, ptypes] : moit->second) {
+                for (auto& [m, ptypes, _pm, _pmt, _fid] : moit->second) {
                     if (ptypes.size() == 2 && ptypes[0] == want_first) {
                         op_func = m;
                         second_ptype = ptypes[1];
@@ -3194,7 +3193,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 std::string move_func;
                 auto mit = method_overloads_.find(slid_name + "__op<-");
                 if (mit != method_overloads_.end())
-                    for (auto& [m, ptypes] : mit->second)
+                    for (auto& [m, ptypes, _pm, _pmt, _fid] : mit->second)
                         if (ptypes.size() == 1 && isRefType(ptypes[0])) { move_func = m; break; }
                 if (!move_func.empty()) {
                     out_ << "    call void @" << llvmGlobalName(move_func)
@@ -4034,6 +4033,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             ? func_return_types_.end()
             : func_return_types_.find(resolved_callee);
         if (fit != func_return_types_.end()) {
+            checkResolvedFreeFunction(call->callee, resolved_callee, call->args);
             std::string ret_type = llvmType(fit->second);
             auto& rptypes = func_param_types_[resolved_callee];
             std::string arg_str;

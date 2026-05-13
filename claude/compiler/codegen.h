@@ -132,10 +132,20 @@ private:
     std::string current_func_return_type_; // LLVM return type of the function being emitted
     std::string current_func_slids_return_type_; // Slids-form return type of the function being emitted
     std::vector<std::pair<std::string,std::string>> current_func_tuple_fields_; // Slids-form tuple return fields (type,name) for element-wise dispatch; empty if not a tuple return
-    // overload table: base_mangled -> [(full_mangled, param_types)]
-    std::map<std::string, std::vector<std::pair<std::string, std::vector<std::string>>>> method_overloads_;
-    // free function overload table: base_name -> [(mangled_name, param_types)]
-    std::map<std::string, std::vector<std::pair<std::string, std::vector<std::string>>>> free_func_overloads_;
+    // overload-table entry: <mangled, param_types, param_mutable, param_mut_toks, file_id>.
+    // param_mutable / param_mut_toks are parallel to param_types; the only matcher
+    // distinction const/mutable makes is const-arg → mutable-param rejection at
+    // call sites. file_id pairs with the corresponding mut-tok for diagnostic notes.
+    using OverloadEntry = std::tuple<
+        std::string,                 // 0: mangled
+        std::vector<std::string>,    // 1: param_types
+        std::vector<bool>,           // 2: param_mutable
+        std::vector<int>,            // 3: param_mut_toks
+        int>;                        // 4: file_id of the declaration
+    // overload table: base_mangled -> [OverloadEntry]
+    std::map<std::string, std::vector<OverloadEntry>> method_overloads_;
+    // free function overload table: base_name -> [OverloadEntry]
+    std::map<std::string, std::vector<OverloadEntry>> free_func_overloads_;
     std::map<std::string, SlidInfo>    slid_info_;
 
     // Folded substitution constant. slid_type is the declared (or inferred)
@@ -149,8 +159,10 @@ private:
         int file_id = 0;
         int tok = 0;
     };
-    std::map<std::string, ConstEntry> global_consts_;
     std::map<std::string, std::map<std::string, ConstEntry>> slid_consts_;
+    // block_const_stack_[0] is the file/global scope (pushed once at emit() entry).
+    // Each function-body emit pushes a frame on top via pushScope; pops on exit.
+    // Block stmts (if/while/for/switch/etc.) push/pop their own frames.
     std::vector<std::map<std::string, ConstEntry>> block_const_stack_;
 
     void collectAndFoldConsts();
@@ -218,6 +230,30 @@ private:
     [[noreturn]] void errorWithNote(const std::string& msg,
                                     int note_file, int note_tok,
                                     const std::string& note_msg);
+
+    // Reject const-argument → mutable-param at a resolved call site. Walks
+    // args parallel to the param_mutable vector; for any i where
+    // param_mutable[i] && the arg type carries `const`, throws "Cannot pass
+    // const argument to mutable parameter of '<name>'." with a note pointing
+    // at the `mutable` keyword on the param declaration. Caller has already
+    // matched the overload; this fires on a successful selection.
+    void rejectConstToMutable(
+        const std::string& display_name,
+        const std::vector<std::unique_ptr<Expr>>& args,
+        const std::vector<bool>& param_mutable,
+        const std::vector<int>& param_mut_toks,
+        int param_file_id);
+    // Convenience overload reading mutable/toks/file_id from the OverloadEntry.
+    void rejectConstToMutable(
+        const std::string& display_name,
+        const std::vector<std::unique_ptr<Expr>>& args,
+        const OverloadEntry& entry);
+    // Post-resolve check for a free-function call. Looks up the chosen overload
+    // by mangled name in free_func_overloads_ and fires the rejection.
+    void checkResolvedFreeFunction(
+        const std::string& callee,
+        const std::string& mangled,
+        const std::vector<std::unique_ptr<Expr>>& args);
     [[noreturn]] void errorAtNodeWithNote(const Stmt& s, const std::string& msg,
                                           int note_file, int note_tok,
                                           const std::string& note_msg);
