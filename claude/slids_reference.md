@@ -640,7 +640,9 @@ int add(int a, int b) {
 
 **Passing class objects and tuples to functions:**
 
-Class objects and anon-tuples must be passed by reference using `^`. Passing by value is a compile error. Both follow the same convention.
+> Summary: parameters are passed by value for primitive types or by reference to const objects, anon-tuples or by iterator to const array.
+
+By default: calling a function or method is not permission to modify the caller's data. Primitive types are passed by value. The function gets a copy of the caller's data. Objects are passed by address - either reference `^` or iterator `[]`. The function may modify its copies of the caller's data, but it may not modify the caller's data.
 
 ```
 void print(String^ s);            // class ref
@@ -649,25 +651,31 @@ void print(String s);             // compile error: cannot pass class object by 
 void take_pair((int, int) p);     // compile error: cannot pass tuple by value
 ```
 
-At the call site, use `^v` (explicit address-of) or just `v` (auto-promotes); a literal of the matching type is materialized to a temp and passed:
+Qualifiers: some functions by design modify the caller's data. In this case, pointer parameters are tagged with the `mutable` qualifier. This is the only place the `mutable` keyword is used.
 
 ```
-String s = "hello";
-print(^s);                  // explicit
-print(s);                   // auto-promote
-print((String="world"));     // fresh temp materialized + passed
-
-tp = (10, 20);
-take_pair(^tp);             // explicit
-take_pair(tp);              // auto-promote
-take_pair((100, 200));      // tuple-literal materialized + passed
+void strcpy(mutable char[] dst, char[] src, int count);  // declaration.
+strcpy(message, "Hello, World!", sizeof(message));       // usage.
 ```
 
-Both forms are equivalent. `^s` is preferred when you want to make the pass-by-reference explicit.
+Convention of convenience: strictly speaking, the caller must pass the address of an object to a function. This is messy when the object is the result of a computation stored in a temporary. For convenience, syntactically passing the object is allowed. The compiler translates to the correct semantics.
 
-> **TODO:** `^` is intended to pass by **immutable** reference — the function has read-only access to the object. The intent of the `mutable` keyword bon pointer type parameters is to grant write access to the object. Const-correctness and mutability are not currently enforced.
->
-> `self` inside a method body is **mutable by default** — methods may read and write the object's fields freely. A way to mark a method as const (so `self` cannot be modified) is TBD.
+```
+String s; int x = 42;       // variables.
+void print(String^ str);    // function declaration must use reference.
+print(^s);                  // pedantic syntax.
+print(s);                   // compiler promotes String s to ^s.
+print(String + "x=" + 42);  // compiler promotes temporary String result to ^String.
+```
+
+Parameter type: in order, to honor the default contract, the proper type of a reference parameter is `(const Type)^`. This syntax is awkward. The compiler invisibly translates pointer parameters to the proper type.
+
+```
+void strcpy(mutable char[] dst, char[] src, int count) {
+    print(##type(dst));  // prints "char[]"
+    print(##type(src));  // prints "(const char)[]"
+}
+```
 
 **Returning a tuple:**
 ```
