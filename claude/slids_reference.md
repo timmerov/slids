@@ -953,7 +953,7 @@ Value(int value_ = 0) {
 
 ### `mutable` parameters
 
-`mutable` on a pointer parameter `^` `[]` indicates the function may modify the contents of the pointer. `mutable` is required on the parameters to move `op<--` and swap operators `op<-->`. `mutable` on a non-pointer or a non-parameter is a compile error. Const-correctness is not currently enforced. `mutable` is a hint to the authors that data is modifiable.
+`mutable` on a pointer parameter `^` `[]` indicates the function may modify the contents of the pointer. `mutable` is required on the parameters to move `op<--` and swap operators `op<-->`. `mutable` on a non-pointer or a non-parameter is a compile error.
 
 ```
 op<--(mutable String^ rhs);   // move override
