@@ -2060,7 +2060,10 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         // op-method dispatch) find it like any other local. The .reg field
         // is set to the entry value; runtime remap (during inline-ctor-body
         // emission for new T[n]) lives in self_ptr_, not here.
-        locals_["self"].type = slid.name;
+        // Phase 4: const ctor — self is const inside the user body. Synth
+        // field-init walks are direct LLVM emits (no AssignStmt) so const
+        // is invisible to them; only the user body sees the rejection.
+        locals_["self"].type = slid.is_const_ctor ? ("const " + slid.name) : slid.name;
         locals_["self"].reg = "%self";
 
         out_ << "define " << (isExported(slid.name + "__$ctor") ? "" : "internal ")
@@ -2113,7 +2116,11 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         block_terminated_ = false;
         current_slid_ = slid.name;
         self_ptr_ = "%self";
-        locals_["self"].type = slid.name;
+        // Phase 4: const ctor — see __$ctor above for the rationale. The
+        // synth field-init walk (base ctor, vptr, own field ctors) emits
+        // direct LLVM, so const-self is invisible to it; only the user body
+        // sees the rejection.
+        locals_["self"].type = slid.is_const_ctor ? ("const " + slid.name) : slid.name;
         locals_["self"].reg = "%self";
 
         out_ << "define internal void @" << slid.name << "__$ctor_body(ptr %self) {\n";
@@ -2192,7 +2199,10 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         block_terminated_ = false;
         current_slid_ = slid.name;
         self_ptr_ = "%self";
-        locals_["self"].type = slid.name;
+        // Phase 4: const dtor — see __$ctor above. The synth field-dtor walk
+        // is direct LLVM (no AssignStmt) so const is invisible to it; only
+        // the user body sees the rejection.
+        locals_["self"].type = slid.is_const_dtor ? ("const " + slid.name) : slid.name;
         locals_["self"].reg = "%self";
 
         out_ << "define " << (isExported(slid.name + "__$dtor") ? "" : "internal ")

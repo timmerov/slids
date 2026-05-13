@@ -569,3 +569,44 @@ ConstSelfReader(int n_ = 0, int m_ = 0) {
 //         self = other^;
 //     }
 // }
+
+/* ----------------------------------------------------------------------
+   Phase 4: const ctor/dtor.
+
+   Ctors/dtors normally mutate self even on const objects (the construction/
+   destruction window). A `const _()` / `const ~()` opts out — the user body
+   may not write through self. Synth field-init / field-dtor walks emit
+   direct LLVM (no AssignStmt) so they remain exempt.
+   ---------------------------------------------------------------------- */
+
+/* positive: const ctor/dtor that only synth-initializes (field defaults). */
+ConstCtorOnly(int n_ = 0) {
+    const _() { }
+    const ~() { }
+}
+
+/* compile error: const ctor body writes to a field. */
+//-EXPECT-ERROR: const
+// ConstCtorWriter(int n_ = 0) {
+//     const _() {
+//         n_ = 42;
+//     }
+//     ~() { }
+// }
+
+/* compile error: const dtor body writes to a field. */
+//-EXPECT-ERROR: const
+// ConstDtorWriter(int n_ = 0) {
+//     _() { }
+//     const ~() {
+//         n_ = 0;
+//     }
+// }
+
+/* compile error: const ctor with implicit ctor-body (loose code) that writes. */
+//-EXPECT-ERROR: const
+// ConstImplicitCtorWriter(int n_ = 0) {
+//     n_ = 99;
+//     const _() { }
+//     ~() { }
+// }

@@ -1,4 +1,11 @@
 
+what does const virtual dtor mean?
+Class() {
+    virtual const _() {}
+}
+can derived classes have non-const dtors?
+hrm...
+
 infer types of fields.
 
 claude thinks:
