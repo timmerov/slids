@@ -1,4 +1,29 @@
 
+alias function that differ by qualifiers on return type.
+given this function:
+    char^ begin();
+this function:
+    const char^ begin() = alias;
+maps to the defined function.
+the reinterpret cast is a no-op.
+
+transport imports .slt file.
+determines signature and const-ness of methods.
+String(default) {
+    begin = default;
+}
+at end of file, transport exports .slh file.
+String(...) {
+    char^ const begin();
+}
+
+probably need a dereference operator for iterator types.
+x = iter^;  -->  x = iter.op^();
+iter^ = x;  -->  iter.op^=(x);
+or maybe we just use the index operators.
+x = iter^;  -->  x = iter.op[](0);
+iter^ = x;  -->  iter.op[]=(0, x);
+
 what does const virtual dtor mean?
 Class() {
     virtual const _() {}

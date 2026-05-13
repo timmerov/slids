@@ -87,6 +87,8 @@
 
 - **For-loop shadowing of outer-scope locals.** `int row = 0; for (row : 0..8) { ... }` declares a fresh loop-scope `row` rather than reassigning the outer one. After the loop, the outer `row` still reads as 0. Surfaced by `sample/chess1.sl`, whose `Knight found at row X, col Y` print reports the un-updated outer values. May be by-design (loop scope hygiene + standard for-init semantics) or a bug — needs a design decision. If intentional, chess1 should declare loop-local vars instead; if the loop is supposed to reassign when a same-named local is in scope, the for-init parser/codegen should look up the existing local rather than allocating a new one.
 
+- **Unify index and deref through reference-returning ops.** Remove `op[]=`. Change `op[](idx)` to return a reference to the indexed object (the reference is invisible to the user — `c[i]` reads as a value, `c[i] = x` writes through). Add `op^()` to do the same for iterator-style classes — `iter^` desugars to a call returning a reference, which the lvalue/rvalue context dereferences or writes through. Disambiguate from binary XOR `op^(rhs)` by arity (0 = deref, 1 = XOR). No `op^=` overload for slids — XOR-compound stays a built-in scalar operation. Constraint: classes must back the indexed/dereffed element with stable storage; synthesized-on-demand views (generators, bit-vectors, type-converting iterators) cannot implement the new shape and would need a different mechanism.
+
 ## Virtual methods (design, not yet implemented)
 
 Single-inheritance virtuals through a per-class vtable. Compatible with incomplete-class reopens (impl can have hidden virtuals invisible to consumers).
