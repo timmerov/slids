@@ -897,7 +897,7 @@ Signature must match a base method exactly. Exception: `= delete` with no base c
 
 ## Operator overloading
 
-Operator overloads are defined inside the class body using the `op` keyword followed immediately by the operator symbol. Most operators have no return type, like the constructor `_` and destructor `~`. Comparison operators return `bool`. Indexing of a container class reads and writes the contained type.
+Operator overloads are defined inside the class body using the `op` keyword followed immediately by the operator symbol. Most operators have no return type, like the constructor `_` and destructor `~`. Comparison operators return `bool`. Indexing read of a container class returns the contained type.
 
 ```
 Value(int value_ = 0) {
@@ -936,7 +936,6 @@ Value(int value_ = 0) {
 | Compound assignment | `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` `&&=` `\|\|=` `^^=` | `op<sym>(Type^ rhs)` |
 | Comparison | `==` `!=` `<` `>` `<=` `>=` | `bool op<sym>(Type^ rhs)` |
 | Indexing read | `[]` | `T op[](Idx idx)` |
-| Indexing write | `[]=` | `op[]=(Idx idx, T rhs)` |
 | Unary, construction | `+` `-` `~` `!` | `op<sym>(Type^ a)` |
 | Unary, query | `+` `-` `~` `!` | `bool op<sym>()` |
 
@@ -946,6 +945,7 @@ Value(int value_ = 0) {
 
 - **Operators are methods.** Every operator is a method of a class. There are no free-function operators.
 - **Most operators have no return value.** The product is `self`. The exceptions are comparison (returns `bool`) and indexing read (returns the contained type).
+- **Wrong arity is a compile error.** Each operator has a fixed parameter count; other counts are rejected.
 - **Assignment is a statement.** `x = y = 0;` and `if (x = 0)` are compile errors.
 - **Multiple overloads.** A class may define multiple overloads of the same operator. The compiler picks the best match.
 - **Implicit conversion.** When no overload matches, the compiler tries harder using one round of type conversion `op=`.

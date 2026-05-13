@@ -22,11 +22,13 @@ enum class OpReturnKind { NoReturn, ReturnType };
 
 // Classify an op symbol + arity into "no return value" vs "returns a value."
 // Dual-form ops (+ - ~ !) are query-form (return-type) at arity 0, otherwise no-return.
+// Op ^ at arity 0 is the dereference form (returns a reference to a contained
+// object); arity 2 is binary xor (no-return self-producing).
 OpReturnKind classifyOpSymbol(const std::string& sym, int arity) {
     if (sym == "==" || sym == "!=" || sym == "<" || sym == ">"
         || sym == "<=" || sym == ">=") return OpReturnKind::ReturnType;
     if (sym == "[]") return OpReturnKind::ReturnType;
-    if ((sym == "+" || sym == "-" || sym == "~" || sym == "!") && arity == 0)
+    if ((sym == "+" || sym == "-" || sym == "~" || sym == "!" || sym == "^") && arity == 0)
         return OpReturnKind::ReturnType;
     return OpReturnKind::NoReturn;
 }
@@ -537,7 +539,6 @@ std::optional<std::string> Parser::peekOpSymbolAt(int offset) {
     if (i >= (int)tokens_.size()) return std::nullopt;
     TokenType t = tokens_[i].type;
     // multi-token forms
-    if (t == TokenType::kBracketAssign) return std::string("[]=");
     if (t == TokenType::kLBracket
         && i + 1 < (int)tokens_.size()
         && tokens_[i + 1].type == TokenType::kRBracket) {
@@ -556,14 +557,14 @@ void Parser::checkOpArity(const std::string& op_name, int actual, int op_tok) {
         {"op=", {1}}, {"op<-", {1}}, {"op<->", {1}},
         {"op+", {0, 1, 2}}, {"op-", {0, 1, 2}},
         {"op*", {2}}, {"op/", {2}}, {"op%", {2}},
-        {"op&", {2}}, {"op|", {2}}, {"op^", {2}}, {"op<<", {2}}, {"op>>", {2}},
+        {"op&", {2}}, {"op|", {2}}, {"op^", {0, 2}}, {"op<<", {2}}, {"op>>", {2}},
         {"op&&", {2}}, {"op||", {2}}, {"op^^", {2}},
         {"op~", {0, 1}}, {"op!", {0, 1}},
         {"op+=", {1}}, {"op-=", {1}}, {"op*=", {1}}, {"op/=", {1}}, {"op%=", {1}},
         {"op&=", {1}}, {"op|=", {1}}, {"op^=", {1}}, {"op<<=", {1}}, {"op>>=", {1}},
         {"op&&=", {1}}, {"op||=", {1}}, {"op^^=", {1}},
         {"op==", {1}}, {"op!=", {1}}, {"op<", {1}}, {"op>", {1}}, {"op<=", {1}}, {"op>=", {1}},
-        {"op[]", {1}}, {"op[]=", {2}},
+        {"op[]", {1}},
     };
     auto it = arity.find(op_name);
     if (it == arity.end()) return;
@@ -608,10 +609,6 @@ void Parser::checkOpMutable(const std::string& op_name,
 std::optional<std::string> Parser::consumeOpSymbol() {
     if (pos_ >= (int)tokens_.size()) return std::nullopt;
     TokenType t = tokens_[pos_].type;
-    if (t == TokenType::kBracketAssign) {
-        advance();
-        return std::string("[]=");
-    }
     if (t == TokenType::kLBracket
         && pos_ + 1 < (int)tokens_.size()
         && tokens_[pos_ + 1].type == TokenType::kRBracket) {
@@ -1971,47 +1968,84 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         const ClassInfo& ci = (mit != class_info_.end()) ? mit->second : empty_ci;
                         ProtocolDiag idx_diag = classifyByValue(ci, src_type);
                         ProtocolDiag ref_diag = classifyByRef(ci, src_type);
-                        // Pick protocol. With both Good, explicit loop var
-                        // type breaks the tie by matching one return; bare
-                        // form requires explicit, identical returns are
-                        // unbreakable. Per spec lines 25-27, a Bad protocol
-                        // alongside a Good one is silently overlooked.
+                        // Pick protocol per option D + compat-as-availability.
+                        // A protocol is "available" iff Good AND its return is
+                        // compatible with the loop variable:
+                        //   op[]/size  — by-ref loop var: exact match on op[]
+                        //                return; by-value: pointee widens to it.
+                        //   begin/end  — loop var matches begin's return exactly
+                        //                (the loop var IS the iterator).
+                        // Selection:
+                        //   inferred loop var + both Good: error (cannot pick).
+                        //   both available: trailing-^ picks begin/end, else op[].
+                        //   exactly one available: use it.
+                        //   neither available: report Bad reason or incompat.
                         bool pick_by_value = false;
                         bool pick_by_ref = false;
-                        if (idx_diag.status == ProtocolStatus::Good
+                        bool inferred = for_var_type.empty();
+                        bool loop_var_is_ref = !inferred &&
+                            (for_var_type.back() == '^'
+                             || (for_var_type.size() >= 2
+                                 && for_var_type.substr(for_var_type.size()-2) == "[]"));
+                        auto pointeeOf = [](const std::string& t) -> std::string {
+                            if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
+                                return t.substr(0, t.size()-2);
+                            if (!t.empty() && t.back() == '^')
+                                return t.substr(0, t.size()-1);
+                            return "";
+                        };
+                        bool idx_avail = false;
+                        if (idx_diag.status == ProtocolStatus::Good) {
+                            if (inferred) idx_avail = true;
+                            else if (loop_var_is_ref)
+                                idx_avail = (for_var_type == idx_diag.return_type);
+                            else {
+                                std::string p = pointeeOf(idx_diag.return_type);
+                                idx_avail = !p.empty() && widensTo(p, for_var_type);
+                            }
+                        }
+                        bool ref_avail = false;
+                        if (ref_diag.status == ProtocolStatus::Good) {
+                            if (inferred) ref_avail = true;
+                            else ref_avail = (for_var_type == ref_diag.return_type);
+                        }
+
+                        if (inferred
+                                && idx_diag.status == ProtocolStatus::Good
                                 && ref_diag.status == ProtocolStatus::Good) {
-                            if (for_var_type.empty()) {
-                                errorAt(ve->tok, "Type '" + src_type
-                                    + "' defines both op[]/size and begin/end/next; "
-                                    "the for-iterator requires an explicit loop variable type.");
-                            }
-                            if (idx_diag.return_type == ref_diag.return_type) {
-                                errorAt(ve->tok, "Type '" + src_type
-                                    + "' defines both op[]/size and begin/end/next "
-                                    "with identical return types; the for-iterator cannot disambiguate.");
-                            }
-                            if (for_var_type == idx_diag.return_type)        pick_by_value = true;
-                            else if (for_var_type == ref_diag.return_type)   pick_by_ref = true;
-                            else
-                                errorAt(ve->tok, "For-iterator loop variable type '" + for_var_type
-                                    + "' matches neither the op[] return type ('" + idx_diag.return_type
-                                    + "') nor the begin return type ('" + ref_diag.return_type + "').");
-                        } else if (idx_diag.status == ProtocolStatus::Good) {
+                            errorAt(ve->tok, "Type '" + src_type
+                                + "' defines both op[]/size and begin/end/next;"
+                                  " the for-iterator loop variable type must be"
+                                  " written explicitly to select a protocol.");
+                        }
+
+                        if (idx_avail && ref_avail) {
+                            if (loop_var_is_ref) pick_by_ref = true;
+                            else                 pick_by_value = true;
+                        } else if (idx_avail) {
                             pick_by_value = true;
-                        } else if (ref_diag.status == ProtocolStatus::Good) {
+                        } else if (ref_avail) {
                             pick_by_ref = true;
                         } else if (idx_diag.status == ProtocolStatus::Absent
                                 && ref_diag.status == ProtocolStatus::Absent) {
                             errorAt(ve->tok, "Type '" + src_type
                                 + "' is not iterable: it defines neither op[]/size nor begin/end/next.");
-                        } else {
+                        } else if (idx_diag.status == ProtocolStatus::Bad
+                                || ref_diag.status == ProtocolStatus::Bad) {
                             std::string msg;
                             if (idx_diag.status == ProtocolStatus::Bad) msg += idx_diag.reason;
                             if (ref_diag.status == ProtocolStatus::Bad) {
-                                if (idx_diag.status == ProtocolStatus::Bad) msg += " ";
+                                if (!msg.empty()) msg += " ";
                                 msg += ref_diag.reason;
                             }
                             errorAt(ve->tok, msg);
+                        } else {
+                            // Both Good but neither compatible with the loop var.
+                            errorAt(ve->tok, "For-iterator loop variable type '"
+                                + for_var_type + "' is not compatible with the"
+                                  " iteration types of '" + src_type
+                                + "' (op[] returns '" + idx_diag.return_type
+                                + "', begin returns '" + ref_diag.return_type + "').");
                         }
                         if (pick_by_value) {
                             // Lower to the same index/end-driven shape as

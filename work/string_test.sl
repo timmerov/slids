@@ -78,15 +78,21 @@ int32 main() {
     s1[1] = 'E';
     println(String + "s1<HEllo, World!>" + s1);
 
-    /* iterators */
+    /* for by reference */
     String s6 = "ABC";
     for (char^ it : s6) {
         println(String + "it^<ABC>=" + it^);
     }
 
+    /* for by value */
+    String s7 = "XYZ";
+    for (char ch : s7) {
+        println(String + "ch<XYZ>=" + ch);
+    }
+
     /* slicing */
-    String s7 = s2.slice(7, 5);
-    println(String + "s7<World>=" + s7);
+    String s8 = s2.slice(7, 5);
+    println(String + "s8<World>=" + s8);
 
     return 0;
 }

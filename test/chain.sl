@@ -9,7 +9,7 @@ claim lacks failure case:
 tuple[0].field_;
 
 this doesn't work when indexed thing changes:
-array, tuple, op[], op[]=
+array, tuple, op[]
 thing[0][0][0];
 
 there are probably lots more.
@@ -17,17 +17,14 @@ need an audit.
 */
 
 Class(int x_ = 0) {
-    int op[](int index) {
-        return x_;
+    int^ op[](int index) {
+        return ^x_;
     }
 }
 
 Box(int v_ = 0) {
-    int op[](int index) {
-        return v_ + index;
-    }
-    op[]=(int index, int rhs) {
-        v_ = rhs * 10 + index;
+    int^ op[](int index) {
+        return ^v_;
     }
 }
 
@@ -64,11 +61,11 @@ int32 main() {
     __println("grid[0][0]=" + grid[0][0]);
     __println("grid[1][2]=" + grid[1][2]);
 
-    /* op[]= overload: direct write through obj[idx] = val. */
+    /* op[] returns a reference; `box[i] = v` writes through it. */
     Box box;
-    box[3] = 7;        /* sets v_ = 7*10 + 3 = 73 */
-    __println("box[0]=" + box[0]);   /* op[](0) = 73 + 0 = 73 */
-    __println("box[5]=" + box[5]);   /* op[](5) = 73 + 5 = 78 */
+    box[3] = 7;                      /* writes 7 into v_ via the returned ref */
+    __println("box[0]=" + box[0]);   /* op[](0)^ reads v_ = 7 */
+    __println("box[5]=" + box[5]);   /* op[](5)^ reads v_ = 7 */
 
     /* multi-dim native array write: indices fold into one flat GEP. */
     grid[0][0] = 100;
@@ -76,12 +73,12 @@ int32 main() {
     __println("grid[0][0]=" + grid[0][0]);
     __println("grid[1][2]=" + grid[1][2]);
 
-    /* chain write ending in op[]=: array[0] drills tuple → Box,
-       then op[]=(2, 4) sets v_ = 4*10 + 2 = 42. */
+    /* chain write ending in op[]^=: array[0] drills to Box,
+       then op[](2)^ = 4 writes 4 into boxes[0].v_. */
     Box boxes[2];
     boxes[0][2] = 4;
-    __println("boxes[0][0]=" + boxes[0][0]);   /* 42 + 0 = 42 */
-    __println("boxes[0][7]=" + boxes[0][7]);   /* 42 + 7 = 49 */
+    __println("boxes[0][0]=" + boxes[0][0]);   /* reads v_ = 4 */
+    __println("boxes[0][7]=" + boxes[0][7]);   /* reads v_ = 4 */
 
     return 0;
 }

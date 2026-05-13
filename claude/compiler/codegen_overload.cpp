@@ -488,6 +488,20 @@ std::string Codegen::exprType(const Expr& expr) {
         std::string t = exprType(*de->operand);
         if (isRefType(t)) return stripRedundantConstParens(t.substr(0, t.size() - 1));
         if (isPtrType(t)) return stripRedundantConstParens(t.substr(0, t.size() - 2));
+        // Class instance with op^() defined — desugar `x^` to `x.op^()^` and
+        // report the pointee of op^()'s return type as the result.
+        std::string base = canonType(t);
+        if (slid_info_.count(base)) {
+            std::string mangled = resolveDerefOverload(base);
+            if (!mangled.empty()) {
+                auto rit = func_return_types_.find(mangled);
+                if (rit != func_return_types_.end()) {
+                    const std::string& rt = rit->second;
+                    if (isRefType(rt)) return stripRedundantConstParens(rt.substr(0, rt.size() - 1));
+                    if (isPtrType(rt)) return stripRedundantConstParens(rt.substr(0, rt.size() - 2));
+                }
+            }
+        }
         return "";
     }
     if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&expr)) {
@@ -801,35 +815,38 @@ std::string Codegen::resolveSlidIndex(const std::string& slid_name, const Expr& 
     return mangled;
 }
 
-std::string Codegen::resolveSlidIndexAssign(const std::string& slid_name, const Expr& index) {
-    std::string base = slid_name + "__op[]=";
-    auto oit = method_overloads_.find(base);
-    if (oit == method_overloads_.end() || oit->second.empty()) return "";
-    // Reuse resolveSingleArgOverload by synthesizing a single-arg view of each
-    // op[]= overload — keeping the full mangled name, dropping all but the
-    // index (first) param. The dispatcher matches on the index, returns the
-    // original mangled name. Restore method_overloads_ after.
-    std::string synth = base + "__$idx_only$";
-    auto& bucket = method_overloads_[synth];
-    for (auto& [m, ptypes, pm, pmt, fid] : oit->second) {
-        if (ptypes.empty()) continue;
-        std::vector<bool> pm1; if (!pm.empty()) pm1.push_back(pm[0]);
-        std::vector<int>  pmt1; if (!pmt.empty()) pmt1.push_back(pmt[0]);
-        bucket.push_back({m, {ptypes[0]}, std::move(pm1), std::move(pmt1), fid});
+std::string Codegen::resolveDerefOverload(const std::string& slid_name) {
+    auto it = method_overloads_.find(slid_name + "__op^");
+    if (it == method_overloads_.end()) return "";
+    for (auto& [m, ptypes, _pm, _pmt, _fid] : it->second) {
+        if (ptypes.empty()) return m;
     }
-    std::string mangled = resolveSingleArgOverload(synth, index);
-    method_overloads_.erase(synth);
-    if (mangled.empty()) mangled = std::get<0>(oit->second[0]);
-    return mangled;
+    return "";
 }
 
 std::string Codegen::derefSlidName(const DerefExpr& de) {
     if (auto* ve = dynamic_cast<const VarExpr*>(de.operand.get())) {
         auto tit = locals_.find(ve->name);
         if (tit == locals_.end()) return "";
-        std::string t = pointeeForLookup(tit->second.type);
-        if (t.empty()) return "";
-        if (slid_info_.count(t)) return t;
+        // Pointer/iterator local: strip the indirection, check if pointee is a slid.
+        if (isIndirectType(tit->second.type)) {
+            std::string t = pointeeForLookup(tit->second.type);
+            if (!t.empty() && slid_info_.count(t)) return t;
+            return "";
+        }
+        // Class local with op^() defined: the deref result type is the pointee
+        // of op^()'s return type. Only report a slid name if that pointee is a slid.
+        std::string base = canonType(tit->second.type);
+        if (slid_info_.count(base)) {
+            std::string mangled = resolveDerefOverload(base);
+            if (!mangled.empty()) {
+                auto rit = func_return_types_.find(mangled);
+                if (rit != func_return_types_.end()) {
+                    std::string pointee = pointeeForLookup(rit->second);
+                    if (!pointee.empty() && slid_info_.count(pointee)) return pointee;
+                }
+            }
+        }
         return "";
     }
     std::string ot = inferSlidType(*de.operand);

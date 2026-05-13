@@ -25,7 +25,9 @@ Comparison
 
 Indexing
     [] — read
-    []= — write
+
+Dereference
+    ^ — read/write through reference to contained object
 
 Unary
     +, -, ~, !
@@ -99,15 +101,23 @@ from the operand:
 Of the unary operators, + and - also accept a binary form
 (covered above); ~ and ! do not.
 
-Indexing is a special case. Read may return any type:
+Indexing returns a reference. Both read and write desugar
+through deref:
 
-    Class lhs = Class rhs[Type index]
-        -> lhs = rhs.op[](index)
+    Class lhs = Container rhs[Type index]
+        -> lhs = rhs.op[](index)^
 
-Write returns an lvalue:
+    Container lhs[Type index] = Class rhs
+        -> lhs.op[](index)^ = rhs
 
-    Class lhs[Type index] = Class rhs
-        -> lhs.op[]=(index, rhs)
+Dereference returns a reference. Both read and write
+desugar through deref:
+
+    Class lhs = Iterator rhs^
+        -> lhs = rhs.op^()^
+
+    Iterator lhs^ = Class rhs
+        -> lhs.op^()^ = rhs
 
 When no overload matches exactly, types are converted
 by calling the target type's op=. Integer types may be
@@ -233,12 +243,9 @@ Overload(int y_ = 0) {
         __println("Overload:op>=(Overload^)");
         return false;
     }
-    int op[](Overload^ a) {
+    int^ op[](Overload^ a) {
         __println("Overload:op[](Overload^)");
-        return 0;
-    }
-    op[]=(Overload^ a, int b) {
-        __println("Overload:op[]=(Overload^,int)");
+        return ^y_;
     }
     /* unary arity 0: self only, no operand. Built-in return like comparison. */
     bool op+() {
@@ -256,6 +263,11 @@ Overload(int y_ = 0) {
     bool op!() {
         __println("Overload:op!()");
         return false;
+    }
+    /* arity 0: returns reference to contained object. */
+    int^ op^() {
+        __println("Overload:op^()");
+        return ^y_;
     }
     /* unary arity 1: returns self. */
     op+(Overload^ a) {
@@ -381,12 +393,9 @@ Overload(int y_ = 0) {
         __println("Overload:op>=(int)");
         return false;
     }
-    int op[](int a) {
+    int^ op[](int a) {
         __println("Overload:op[](int)");
-        return 0;
-    }
-    op[]=(int a, int b) {
-        __println("Overload:op[]=(int,int)");
+        return ^y_;
     }
     /* unary arity 1: int operand. */
     op+(int a) {
@@ -512,12 +521,9 @@ Overload(int y_ = 0) {
         __println("Overload:op>=(Simple^)");
         return false;
     }
-    Simple op[](Simple^ a) {
+    int^ op[](Simple^ a) {
         __println("Overload:op[](Simple^)");
-        return Simple();
-    }
-    op[]=(Simple^ a, Simple^ b) {
-        __println("Overload:op[]=(Simple^,Simple^)");
+        return ^y_;
     }
     /* unary arity 1: Simple^ operand. */
     op+(Simple^ a) {
@@ -571,8 +577,7 @@ Overload(int y_ = 0) {
     // bool op>() { }
     // bool op<=() { }
     // bool op>=() { }
-    // Overload op[]() { }
-    // op[]=(Overload^ a) { }
+    // int^ op[]() { return ^y_; }
 
     /* compile error: too many parameters. */
     // op=(Overload^ a, Overload^ b) { }
@@ -610,8 +615,10 @@ Overload(int y_ = 0) {
     // bool op>(Overload^ a, Overload^ b) { }
     // bool op<=(Overload^ a, Overload^ b) { }
     // bool op>=(Overload^ a, Overload^ b) { }
-    // Overload op[](Overload^ a, Overload^ b) { }
-    // op[]=(Overload^ a, Overload^ b, Overload^ c) { }
+    // int^ op[](Overload^ a, Overload^ b) { return ^y_; }
+
+    /* compile error: arity 1 is unused for op^. */
+    // int^ op^(int x) { return ^y_; }
 
     /* compile error: too many parameters; ~ and ! have no binary form. */
     // op~(Overload^ a, Overload^ b) { }
@@ -653,8 +660,6 @@ BadMutable(int dummy_ = 0) {
     // bool op==(mutable Overload^ a) { return false; }
     //-EXPECT-ERROR: Overloaded operator parameter cannot be declared 'mutable'.
     // int op[](mutable Overload^ a) { return 0; }
-    //-EXPECT-ERROR: Overloaded operator parameter cannot be declared 'mutable'.
-    // op[]=(mutable Overload^ a, int b) { }
     //-EXPECT-ERROR: Overloaded operator parameter cannot be declared 'mutable'.
     // op-(mutable Overload^ a) { }
 }
@@ -746,6 +751,9 @@ int32 main()
     if (a == b) { }
     value = a[b];
     a[b] = value;
+    /* dereference desugar: a^ → a.op^()^. */
+    value = a^;
+    a^ = value;
     /* unary arity 1: a = -b lowers to a.op-(b). */
     a = -b;
     a = +b;
@@ -842,8 +850,8 @@ int32 main()
     result = (a <= d);
     result = (a >= d);
     if (a == d) { }
-    e = a[d];
-    a[d] = e;
+    value = a[d];
+    a[d] = value;
     /* unary arity 1: Simple^ operand. */
     a = -d;
     a = +d;
@@ -903,8 +911,7 @@ int32 main()
     __println("33: Not allowed: bool op>()");
     __println("34: Not allowed: bool op<=()");
     __println("35: Not allowed: bool op>=()");
-    __println("36: Not allowed: Overload op[]()");
-    __println("37: Not allowed: op[]=(Overload^ a)");
+    __println("36: Not allowed: int^ op[]()");
     __println("38: Not allowed: op=(Overload^ a, Overload^ b)");
     __println("39: Not allowed: op<--(Overload^ a, Overload^ b)");
     __println("40: Not allowed: op<-->(Overload^ a, Overload^ b)");
@@ -940,8 +947,7 @@ int32 main()
     __println("70: Not allowed: bool op>(Overload^ a, Overload^ b)");
     __println("71: Not allowed: bool op<=(Overload^ a, Overload^ b)");
     __println("72: Not allowed: bool op>=(Overload^ a, Overload^ b)");
-    __println("73: Not allowed: Overload op[](Overload^ a, Overload^ b)");
-    __println("74: Not allowed: op[]=(Overload^ a, Overload^ b, Overload^ c)");
+    __println("73: Not allowed: int^ op[](Overload^ a, Overload^ b)");
     __println("75: Not allowed: op~(Overload^ a, Overload^ b)");
     __println("76: Not allowed: op!(Overload^ a, Overload^ b)");
     __println("77: Not allowed: Overload op+() (arity-0 unary returns class)");
@@ -957,6 +963,7 @@ int32 main()
     __println("87: Not allowed: op<--(Overload^ a) (move pointer param missing 'mutable')");
     __println("88: Not allowed: op<-->(Overload^ a) (swap pointer param missing 'mutable')");
     __println("89: Not allowed: op<--(mutable int a) ('mutable' only on '^' or '[]')");
+    __println("90: Not allowed: int^ op^(int x) (arity 1 is unused for op^)");
 
     return 0;
 }

@@ -360,12 +360,7 @@ std::vector<Token> Lexer::tokenize() {
                     }
                     break;
                 case '[':
-                    if (peek() == ']' && peek2() == '=') {
-                        advance(); advance();
-                        emit(TokenType::kBracketAssign, "[]=");
-                    } else {
-                        emit(TokenType::kLBracket, "[");
-                    }
+                    emit(TokenType::kLBracket, "[");
                     break;
                 case ']':
                     emit(TokenType::kRBracket, "]");

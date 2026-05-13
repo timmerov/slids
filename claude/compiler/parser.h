@@ -77,6 +77,32 @@ inline std::string baseSlidType(std::string t) {
     return t;
 }
 
+// True iff a value of slids type `src` widens to slids type `dst` without
+// information loss. Integer ranks: bool=0, int8/uint8/char=1, int16/uint16=2,
+// int32/uint32/int/uint=3, int64/uint64/intptr=4. Float ranks: float32=1,
+// float64=2. Pointer types require exact equality. Exact `src == dst` is
+// always true. Drift from the LLVM-level widen helper in codegen.cpp is
+// possible — that one runs on LLVM types (i8/i16/...) at emit time; this
+// runs on slids type names at parse/classify time. Reconcile if discovered.
+inline bool widensTo(const std::string& src, const std::string& dst) {
+    if (src == dst) return true;
+    static const std::map<std::string,int> int_rank = {
+        {"bool",0},
+        {"int8",1},{"uint8",1},{"char",1},
+        {"int16",2},{"uint16",2},
+        {"int32",3},{"uint32",3},{"int",3},{"uint",3},
+        {"int64",4},{"uint64",4},{"intptr",4}
+    };
+    static const std::map<std::string,int> float_rank = {
+        {"float32",1},{"float64",2}
+    };
+    auto si = int_rank.find(src), di = int_rank.find(dst);
+    if (si != int_rank.end() && di != int_rank.end()) return di->second >= si->second;
+    auto sf = float_rank.find(src), df = float_rank.find(dst);
+    if (sf != float_rank.end() && df != float_rank.end()) return df->second >= sf->second;
+    return false;
+}
+
 // Strip one pointer suffix (^ or []) from a type string AND canonicalize the
 // result for `slid_info_` lookup (drop leading const, unwrap "(const T)").
 // Used wherever a pointer/iterator-typed local's pointee is consulted as a
@@ -844,7 +870,7 @@ private:
     // lookahead: pos_ is at identifier used as a type name; returns true if a var-name identifier follows
     bool isVarDeclLookahead() const;
 
-    // op-symbol recognition: returns canonical "<sym>" (e.g. "+=", "<-", "[]=", "[]") if
+    // op-symbol recognition: returns canonical "<sym>" (e.g. "+=", "<-", "[]") if
     // the token(s) at pos_+offset (peek) or pos_ (consume) form an overloadable op symbol.
     std::optional<std::string> peekOpSymbolAt(int offset);
     std::optional<std::string> consumeOpSymbol();

@@ -524,10 +524,12 @@ private:
     // match (preserves legacy first-overload behavior). Empty iff `slid_name`
     // has no op[] defined.
     std::string resolveSlidIndex(const std::string& slid_name, const Expr& index);
-    // Best-fit op[]= overload for `slid_name` indexed by `index`. Matches on
-    // the index (first) param only — value coercion is handled separately.
-    // Same fallback policy as resolveSlidIndex.
-    std::string resolveSlidIndexAssign(const std::string& slid_name, const Expr& index);
+    // Mangled name of the arity-0 op^ overload on `slid_name`, or "" if none.
+    // Used by DerefExpr emit/resolveLvalue/exprType arms to dispatch `x^`
+    // when x is a class instance with `op^()` defined (returns a reference
+    // to a contained object). Filtering by empty param list distinguishes
+    // it from the arity-2 binary-xor overload sharing the same name bucket.
+    std::string resolveDerefOverload(const std::string& slid_name);
     std::string emitArgForParam(const Expr& arg, const std::string& param_type);
     // PPID per-`,` flush: wraps emitArgForParam with push/flush so that the
     // arg's post-inc/dec side effects fire at the comma boundary before the

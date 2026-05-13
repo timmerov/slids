@@ -10,11 +10,20 @@ it's literally cast to an array.
 we iterate over a class by value or reference.
 by value if op[] and size() are defined
 by reference if begin(), end(), next() are defined.
-if one of those sets are defined then we can
-infer the loop var type.
-if both are defined then the loop var declaration
-must be explicit.
-compile error if both sets return the same type.
+op[] returns a reference to the element; the loop
+binding reads (T) or writes (T^) through it.
+if neither set is defined, compile error.
+if exactly one set is defined, it handles both
+T and T^ loop-var shapes.
+if both sets are defined:
+- inferred loop var: compile error.
+- explicit T loop var: pick op[]/size.
+- explicit T^ loop var: pick begin/end/next.
+loop var type must be compatible with the picked
+set's element type. integer and float widening is
+allowed; truncation is a compile error. an
+implementation that is incompatible with the loop
+var is treated as if it weren't there.
 
 compile errors:
 if short-for by reference is used, then...
@@ -79,8 +88,8 @@ IndexSizeInt(
         return 3;
     }
 
-    int op[](int index) {
-        return table_[index];
+    int^ op[](int index) {
+        return ^table_[index];
     }
 }
 
@@ -99,8 +108,8 @@ Flexible(
         return 3;
     }
 
-    int op[](int index) {
-        return table_[index];
+    int^ op[](int index) {
+        return ^table_[index];
     }
 
     int^ begin() {
@@ -183,8 +192,8 @@ TypeMismatch4(
 
 /* Incomplete by-value: op[] without size. */
 IncompleteByValue(int x_) {
-    int op[](int index) {
-        return 0;
+    int^ op[](int index) {
+        return ^x_;
     }
 }
 
@@ -203,8 +212,8 @@ MalformedSize(int x_) {
     int size(int extra) {
         return 0;
     }
-    int op[](int index) {
-        return 0;
+    int^ op[](int index) {
+        return ^x_;
     }
 }
 
@@ -224,13 +233,13 @@ MalformedNext(int x_) {
 /* Not iterable: no protocol methods. */
 NotIterable(int x_) {}
 
-/* Both Good with identical return types — cannot disambiguate. */
+/* Both Good — inferred loop var cannot disambiguate. */
 BothSame(int x_) {
     int size() {
         return 0;
     }
-    int op[](int index) {
-        return 0;
+    int^ op[](int index) {
+        return ^x_;
     }
     int begin() {
         return 0;
@@ -248,8 +257,8 @@ GoodValueBadRef(int x_) {
     int size() {
         return 3;
     }
-    int op[](int index) {
-        return 100 + index;
+    int^ op[](int index) {
+        return ^x_;
     }
     int begin() {
         return 0;
@@ -267,8 +276,8 @@ BadValueGoodRef(int x_) {
     int size(int extra) {
         return 0;
     }
-    int op[](int index) {
-        return 0;
+    int^ op[](int index) {
+        return ^x_;
     }
     int begin() {
         return 200;
@@ -543,7 +552,7 @@ int32 main() {
         /* iterate over a container class with both index and size. */
         Flexible container;
 
-        //-EXPECT-ERROR: defines both op[]/size and begin/end/next; the for-iterator requires an explicit loop variable type
+        //-EXPECT-ERROR: defines both op[]/size and begin/end/next; the for-iterator loop variable type must be written explicitly
         //for (x : container) {
         //    __print("compile error: cannot infer type.");
         //}
@@ -617,14 +626,14 @@ int32 main() {
         //    __print("compile error: not iterable.");
         //}
 
-        //-EXPECT-ERROR: 'BothSame' defines both op[]/size and begin/end/next with identical return types
-        //for (int x : bs) {
-        //    __print("compile error: both protocols return identical type.");
+        //-EXPECT-ERROR: 'BothSame' defines both op[]/size and begin/end/next; the for-iterator loop variable type must be written explicitly
+        //for (x : bs) {
+        //    __print("compile error: inferred loop var when both protocols defined.");
         //}
 
-        //-EXPECT-ERROR: For-iterator loop variable type 'bool' matches neither the op[] return type
+        //-EXPECT-ERROR: For-iterator loop variable type 'bool' is not compatible
         //for (bool x : fx) {
-        //    __print("compile error: explicit type matches neither protocol return.");
+        //    __print("compile error: explicit type incompatible with both protocols.");
         //}
     }
 

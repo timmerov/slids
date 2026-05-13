@@ -5,14 +5,9 @@ class overloads the index operators.
 Index(
     int rgb_[3]
 ) {
-    int op[](intptr idx) {
-        __println("getting rgb_[" + idx + "]=" + rgb_[idx]);
-        return rgb_[idx];
-    }
-
-    op[]=(intptr idx, int rhs) {
-        __println("setting rgb_[" + idx + "]=" + rhs);
-        rgb_[idx] = rhs;
+    int^ op[](intptr idx) {
+        __println("indexing rgb_[" + idx + "]=" + rgb_[idx]);
+        return ^rgb_[idx];
     }
 
     void print() {

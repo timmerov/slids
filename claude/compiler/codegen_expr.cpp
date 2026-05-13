@@ -137,9 +137,22 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 return self_ptr_.empty() ? "%self" : self_ptr_;
             }
             auto it = locals_.find(ve->name);
-            if (it == locals_.end())
-                error(std::string("Undefined variable '" + ve->name + "'"));
-            return it->second.reg;
+            if (it != locals_.end()) return it->second.reg;
+            // Field of self in a method context — `^field_` is the address of
+            // self.field_. Mirrors the read-side VarExpr handler which already
+            // resolves bare field names through self.
+            if (!current_slid_.empty()) {
+                auto& info = slid_info_[current_slid_];
+                auto fit = info.field_index.find(ve->name);
+                if (fit != info.field_index.end()) {
+                    std::string self_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
+                    std::string gep = newTmp();
+                    out_ << "    " << gep << " = getelementptr %struct." << current_slid_
+                         << ", ptr " << self_ptr << ", i32 0, i32 " << fit->second << "\n";
+                    return gep;
+                }
+            }
+            error(std::string("Undefined variable '" + ve->name + "'"));
         }
         // ^arr[i][j] — compute GEP but skip the final load, returning the element ptr
         if (dynamic_cast<const ArrayIndexExpr*>(ao->operand.get())) {
@@ -247,6 +260,35 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* de = dynamic_cast<const DerefExpr*>(&expr)) {
+        // Class instance with op^() defined — desugar `x^` to `x.op^()^`:
+        // emit the method call (returns a reference), then load through it.
+        {
+            std::string operand_slid;
+            std::string self_reg;
+            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto it = locals_.find(ve->name);
+                if (it != locals_.end()) {
+                    operand_slid = canonType(it->second.type);
+                    if (slid_info_.count(operand_slid)) self_reg = it->second.reg;
+                    else operand_slid.clear();
+                }
+            }
+            if (!operand_slid.empty()) {
+                std::string mangled = resolveDerefOverload(operand_slid);
+                if (!mangled.empty()) {
+                    std::string ret_t = func_return_types_[mangled];
+                    std::string pointee = pointeeForLookup(ret_t);
+                    std::string call_ret = newTmp();
+                    out_ << "    " << call_ret << " = call ptr @"
+                         << llvmGlobalName(mangled) << "(ptr " << self_reg << ")\n";
+                    std::string loaded = newTmp();
+                    out_ << "    " << loaded << " = load " << llvmType(pointee)
+                         << ", ptr " << call_ret << "\n";
+                    return loaded;
+                }
+            }
+        }
+
         // ptr^ — first load the pointer from its alloca, then load through it
         std::string pointee_llvm = "i32"; // default pointee type
         std::string ptr_reg;

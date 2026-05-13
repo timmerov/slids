@@ -129,7 +129,6 @@ enum class TokenType {
     kColonColon,
     kLBracket,
     kRBracket,
-    kBracketAssign,  // []=
 
     kEof,
     kUnknown,

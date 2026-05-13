@@ -268,6 +268,33 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
         return {gep, ftype};
     }
     if (auto* de = dynamic_cast<const DerefExpr*>(&e)) {
+        // Class instance with op^() defined — `x^` is an lvalue at the
+        // address returned by op^(). Emit the call; the result ptr is the
+        // lvalue address, op^()'s return-type pointee is the lvalue type.
+        {
+            std::string operand_slid;
+            std::string self_reg;
+            if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
+                auto it = locals_.find(ve->name);
+                if (it != locals_.end()) {
+                    operand_slid = canonType(it->second.type);
+                    if (slid_info_.count(operand_slid)) self_reg = it->second.reg;
+                    else operand_slid.clear();
+                }
+            }
+            if (!operand_slid.empty()) {
+                std::string mangled = resolveDerefOverload(operand_slid);
+                if (!mangled.empty()) {
+                    std::string ret_t = func_return_types_[mangled];
+                    std::string pointee = pointeeForLookup(ret_t);
+                    std::string call_ret = newTmp();
+                    out_ << "    " << call_ret << " = call ptr @"
+                         << llvmGlobalName(mangled) << "(ptr " << self_reg << ")\n";
+                    return {call_ret, pointee};
+                }
+            }
+        }
+
         // post-inc/dec deref under PPID: load OLD pointer (return as deref'd
         // address), schedule the advance for the next terminator. Pre-form
         // (UnaryExpr pre++/pre--) is handled in the UnaryExpr arm below and
@@ -416,7 +443,9 @@ Codegen::Lvalue Codegen::drillIndexChain(std::string addr, std::string type,
             type = elem_t;
             break;
         }
-        // slid with op[] dispatch
+        // slid with op[] dispatch. op[] returns T^ (reference to contained
+        // object); the call result IS the lvalue address. Read sites load
+        // through it via emitExpr's trailing load; write sites store directly.
         if (slid_info_.count(type)) {
             std::string mangled = resolveSlidIndex(type, idx);
             if (mangled.empty())
@@ -429,31 +458,12 @@ Codegen::Lvalue Codegen::drillIndexChain(std::string addr, std::string type,
                 : emitArgForParam(idx, mptypes[0]);
             auto rit = func_return_types_.find(mangled);
             std::string ret_t = (rit != func_return_types_.end()) ? rit->second : "";
-            if (!ret_t.empty() && slid_info_.count(ret_t)) {
-                // sret return: caller-allocated destination.
-                std::string slot = emitSlidAlloca(ret_t);
-                out_ << "    call void @" << llvmGlobalName(mangled)
-                     << "(ptr " << addr
-                     << ", ptr sret(%struct." << ret_t << ") " << slot
-                     << ", " << idx_llvm << " " << idx_val << ")\n";
-                addr = slot;
-                type = ret_t;
-            } else {
-                std::string ret_llvm = ret_t.empty() ? "i32" : llvmType(ret_t);
-                std::string tmp = newTmp();
-                out_ << "    " << tmp << " = call " << ret_llvm
-                     << " @" << llvmGlobalName(mangled)
-                     << "(ptr " << addr << ", " << idx_llvm
-                     << " " << idx_val << ")\n";
-                // Spill the primitive result so the chain can keep operating
-                // on an addr. A trailing emitExpr load folds into LLVM SROA.
-                std::string slot = newTmp();
-                out_ << "    " << slot << " = alloca " << ret_llvm << "\n";
-                out_ << "    store " << ret_llvm << " " << tmp
-                     << ", ptr " << slot << "\n";
-                addr = slot;
-                type = ret_t.empty() ? "int" : ret_t;
-            }
+            std::string call_res = newTmp();
+            out_ << "    " << call_res << " = call ptr @" << llvmGlobalName(mangled)
+                 << "(ptr " << addr << ", " << idx_llvm
+                 << " " << idx_val << ")\n";
+            addr = call_res;
+            type = pointeeForLookup(ret_t);
             break;
         }
         // inline array (e.g. obj.arr_[i] reached through a chain)
@@ -516,7 +526,9 @@ std::string Codegen::drillIndexedType(std::string type,
             std::string mangled = resolveSlidIndex(type, *indices[i]);
             if (mangled.empty()) return "int";
             auto rit = func_return_types_.find(mangled);
-            type = (rit != func_return_types_.end()) ? rit->second : "int";
+            // op[] returns T^; the indexed-element type is the pointee.
+            type = (rit != func_return_types_.end())
+                ? pointeeForLookup(rit->second) : "int";
         } else if (isInlineArrayType(type)) {
             auto lb = type.rfind('[');
             type = type.substr(0, lb);
@@ -2779,25 +2791,6 @@ void Codegen::emitStmt(const Stmt& stmt) {
             emitSlotWrite(slot, elems[idx]);
             return;
         }
-        if (slid_info_.count(type)) {
-            std::string mangled = resolveSlidIndexAssign(type, last);
-            if (mangled.empty())
-                errorAtNode(*ia, "Type '" + type
-                    + "' has no op[]= for the given index.");
-            auto& mptypes = func_param_types_[mangled];
-            std::string idx_llvm = mptypes.empty() ? "i32" : llvmType(mptypes[0]);
-            std::string rhs_llvm = (mptypes.size() < 2) ? "i32" : llvmType(mptypes[1]);
-            std::string idx_val = mptypes.empty()
-                ? emitExpr(last)
-                : emitArgForParam(last, mptypes[0]);
-            std::string rhs_val = (mptypes.size() < 2)
-                ? emitExpr(*ia->value)
-                : emitArgForParam(*ia->value, mptypes[1]);
-            out_ << "    call void @" << llvmGlobalName(mangled)
-                 << "(ptr " << addr << ", " << idx_llvm << " " << idx_val
-                 << ", " << rhs_llvm << " " << rhs_val << ")\n";
-            return;
-        }
         if (isInlineArrayType(type)) {
             auto lb = type.rfind('[');
             std::string elem_type = type.substr(0, lb);
@@ -2824,6 +2817,27 @@ void Codegen::emitStmt(const Stmt& stmt) {
             out_ << "    " << gep << " = getelementptr " << llvmType(elem_type)
                  << ", ptr " << base_ptr << ", " << idx_llvm << " " << iv << "\n";
             emitSlotWrite(gep, elem_type);
+            return;
+        }
+        // slid with op[] dispatch — op[] returns T^; the call result is the
+        // write slot. Same shape as the read-side drillIndexChain arm.
+        if (slid_info_.count(type)) {
+            std::string mangled = resolveSlidIndex(type, last);
+            if (mangled.empty())
+                errorAtNode(*ia, "Type '" + type
+                    + "' has no op[] for the given index.");
+            auto& mptypes = func_param_types_[mangled];
+            std::string idx_llvm = mptypes.empty() ? "i32" : llvmType(mptypes[0]);
+            std::string idx_val = mptypes.empty()
+                ? emitExpr(last)
+                : emitArgForParam(last, mptypes[0]);
+            std::string call_res = newTmp();
+            out_ << "    " << call_res << " = call ptr @" << llvmGlobalName(mangled)
+                 << "(ptr " << addr << ", " << idx_llvm
+                 << " " << idx_val << ")\n";
+            auto rit = func_return_types_.find(mangled);
+            std::string ret_t = (rit != func_return_types_.end()) ? rit->second : "";
+            emitSlotWrite(call_res, pointeeForLookup(ret_t));
             return;
         }
         errorAtNode(*ia, "Type '" + type + "' is not indexable for write.");
