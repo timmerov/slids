@@ -1502,7 +1502,7 @@ Multiple type parameters: `Pair<K, V>(K key_, V value_)`.
 
 **One instantiation per project build.** Declare a template signature in a `.slh` and put the body in the matching `.sl`. Each concrete instance (e.g. `Vec<float64>`) is emitted exactly once for the whole project, regardless of how many translation units use it.
 
-**Explicit instantiation.** `instantiate Foo<int>;` forces a particular instance to be emitted.
+**Explicit instantiation.** Foo<int>;` forces a particular instance to be emitted.
 
 ---
 
