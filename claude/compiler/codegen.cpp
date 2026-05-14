@@ -767,6 +767,7 @@ void Codegen::emit() {
     block_const_stack_.push_back({});
 
     collectAndFoldConsts();
+    inferFieldTypes();
     collectSlids();
     classifyVirtualClasses();
     resolveSlidInheritance();

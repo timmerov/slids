@@ -375,6 +375,16 @@ private:
 
     void collectStringConstants();
     void collectFunctionSignatures();
+    // For each class field declared in the shape `name = expr` (no type),
+    // fold the default expression and derive the field's type from the
+    // folded value. Runs after `collectAndFoldConsts` (which populates
+    // const tables that the fold may reference) and before `collectSlids`
+    // (which mirrors `SlidDef.fields[i].type` into `info.field_types`).
+    // Integer values map to `int` (or `int64` when out of int32 range);
+    // float values map to `float32` (or `float64` when the magnitude exceeds
+    // float32's range). The float rule is range-based, not lossless —
+    // distinct from `foldConstExpr`'s round-trip rule for top-level consts.
+    void inferFieldTypes();
     void collectSlids();
     // Resolve `Base : Derived(...)` chains: link base_info pointers, build flat
     // field_index/field_types as base prefix + own suffix, validate F2 collisions.

@@ -141,6 +141,16 @@ Base: Derived() {
 //     __println("Derived:dwim()");
 // }
 
+InferFieldTypes(
+    x_ = 42,
+    pi_ = 3.14
+) {
+    void print() {
+        __println("typeof(x)=" + ##type(x_));
+        __println("typeof(pi)=" + ##type(pi_));
+    }
+}
+
 /*
 */
 int32 main() {
@@ -160,6 +170,9 @@ int32 main() {
         //-EXPECT-ERROR: call to deleted method 'speak()'
         // derived.speak();
     }
+
+    InferFieldTypes ift;
+    ift.print();
 
     return 0;
 }

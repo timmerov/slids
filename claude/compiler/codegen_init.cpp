@@ -800,6 +800,16 @@ void Codegen::emitInitFieldsAtPtrs(const std::string& stype, const std::string& 
                             out_ << "    " << coerced << " = trunc " << src_t
                                  << " " << val << " to " << dst_t << "\n";
                         val = coerced;
+                    } else if (src_t == "double" && dst_t == "float") {
+                        std::string coerced = newTmp();
+                        out_ << "    " << coerced << " = fptrunc double "
+                             << val << " to float\n";
+                        val = coerced;
+                    } else if (src_t == "float" && dst_t == "double") {
+                        std::string coerced = newTmp();
+                        out_ << "    " << coerced << " = fpext float "
+                             << val << " to double\n";
+                        val = coerced;
                     } else {
                         error(std::string("Type mismatch: cannot assign '"
                             + src_slids + "' to '" + ftype + "'"));

@@ -1,4 +1,8 @@
 
+claude added float half-assedly.
+the token gets replaced with float32.
+it should be treated the same way as int.
+
 alias function that differ by qualifiers on return type.
 given this function:
     char^ begin();

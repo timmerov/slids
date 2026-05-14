@@ -2740,6 +2740,25 @@ SlidDef Parser::parseSlidDef() {
             break; // ... must be last
         }
         FieldDef f;
+        // Inferred-type field: IDENT '=' expr — no type token. Type is
+        // derived from the const-folded default by `inferFieldTypes` later.
+        // Structural pivot only — never on naming convention; first IDENT
+        // followed immediately by `=` is the discriminator.
+        if (peek().type == TokenType::kIdentifier
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kEquals) {
+            int field_tok = pos_;
+            f.name = advance().value;
+            f.file_id = file_id_;
+            f.tok = field_tok;
+            rejectReserved(file_id_, field_tok, f.name, "field");
+            advance(); // consume '='
+            f.default_val = parseExpr();
+            f.type = "";  // sentinel — filled by inferFieldTypes
+            slid.fields.push_back(std::move(f));
+            if (peek().type == TokenType::kComma) advance();
+            continue;
+        }
         f.type = parseTypeName();
         int field_tok = pos_;
         f.name = expect(TokenType::kIdentifier, "Expected field name").value;

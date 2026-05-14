@@ -13,4 +13,6 @@ Base:process
 Derived:dtor
 Base:dtor
 Base:dtor
+typeof(x)=int
+typeof(pi)=float32
 Simple:dtor

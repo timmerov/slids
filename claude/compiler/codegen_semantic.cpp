@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <set>
 #include <climits>
+#include <cfloat>
+#include <cmath>
 #include <cstring>
 #include <algorithm>
 #include "codegen_helpers.h"
@@ -17,6 +19,51 @@ static std::string finalizeErrorMsg(std::string msg) {
     char last = msg.back();
     if (last != '.' && last != '!' && last != '?') msg.push_back('.');
     return msg;
+}
+
+void Codegen::inferFieldTypes() {
+    // Fills in `SlidDef.fields[i].type` for fields parsed as `name = expr`
+    // (no type token). The Program is reachable as `const Program&` on
+    // Codegen, but this pass is semantic analysis that completes the AST —
+    // analogous to const folding, which mutates Codegen-side const tables.
+    // const_cast the SlidDef locally to write back the inferred type.
+    std::set<std::string> cycle;
+    for (auto& slid_const : program_.slids) {
+        if (!slid_const.type_params.empty()) continue; // skip template classes
+        auto& slid = const_cast<SlidDef&>(slid_const);
+        for (auto& f : slid.fields) {
+            if (!f.type.empty()) continue;
+            if (!f.default_val) {
+                throw CompileError{f.file_id, f.tok,
+                    finalizeErrorMsg("Field '" + f.name
+                        + "' has no type and no initializer; an inferred field"
+                          " must have a const-expression default")};
+            }
+            ConstEntry folded;
+            try {
+                cycle.clear();
+                folded = foldConstExpr(*f.default_val, slid.name, cycle);
+            } catch (CompileError&) {
+                throw CompileError{f.file_id, f.tok,
+                    finalizeErrorMsg("Default for inferred field '" + f.name
+                        + "' must be a const expression")};
+            }
+            // Inferred field-type rule.
+            //   integer: keep foldConstExpr's slid_type (int / int64 by
+            //            range, plus the char-literal / nondecimal carve-outs).
+            //   float:   range-based — float32 unless magnitude exceeds
+            //            FLT_MAX. Distinct from foldConstExpr's lossless
+            //            round-trip rule, which would pick float64 for
+            //            values like 3.14 that can't be exactly represented
+            //            in float32. Field inference accepts precision loss.
+            if (folded.is_float) {
+                double v = std::fabs(folded.float_value);
+                f.type = (v <= (double)FLT_MAX) ? "float32" : "float64";
+            } else {
+                f.type = folded.slid_type;
+            }
+        }
+    }
 }
 
 void Codegen::collectSlids() {
