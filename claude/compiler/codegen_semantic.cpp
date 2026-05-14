@@ -43,10 +43,14 @@ void Codegen::inferFieldTypes() {
             try {
                 cycle.clear();
                 folded = foldConstExpr(*f.default_val, slid.name, cycle);
-            } catch (CompileError&) {
-                throw CompileError{f.file_id, f.tok,
-                    finalizeErrorMsg("Default for inferred field '" + f.name
-                        + "' must be a const expression")};
+            } catch (CompileError& e) {
+                // Preserve foldConstExpr's specific message (and its caret on
+                // the offending sub-expression); attach a note pointing at the
+                // field declaration so the author sees the inferred-field
+                // context that drove the fold.
+                e.addNote(f.file_id, f.tok, finalizeErrorMsg(
+                    "While inferring the type of field '" + f.name + "'"));
+                throw;
             }
             // Inferred field-type rule.
             //   integer: keep foldConstExpr's slid_type (int / int64 by

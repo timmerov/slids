@@ -151,6 +151,21 @@ InferFieldTypes(
     }
 }
 
+//-EXPECT-ERROR: Field 'x_' has no type and no initializer
+// NoInit(x_) { }
+
+//-EXPECT-ERROR: Expression is not allowed in a constant initializer
+// NonConstFn(x_ = foo()) { }
+
+//-EXPECT-ERROR: Expression is not allowed in a constant initializer
+// NonConstClass(x_ = Simple()) { }
+
+//-EXPECT-ERROR: references unknown name 'unknown_name'
+// UnknownName(x_ = unknown_name) { }
+
+//-EXPECT-ERROR: Expression is not allowed in a constant initializer
+// NullDefault(x_ = nullptr) { }
+
 /*
 */
 int32 main() {
