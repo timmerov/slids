@@ -623,6 +623,29 @@ Alias rules:
 
 ---
 
+## Arrays
+
+Arrays are homogeneous (all elements are the same type), anonymous (unnamed), iterable tuples. Taking the address of an array element is an iterator, not a reference.
+
+```
+char buffer[256];           // 256 contiguous chars in memory.
+char[] ptr = ^buffer[0];    // address of element is iterator type.
+for (ch : buffer) { .. }    // for loop by array value or reference.
+
+int grid[ncolumns][nrows];       // grid[x][y] and grid[x+1][y] are adjacent in memory.
+for (y : 0..nrows) {             // for each row...
+    for (x : 0..ncolumns) {      // for each column
+        grid[x][y] = x + 100*y;  // access each element in order in memory.
+    }
+}
+
+int matrix[2][3] = (    // initialization by tuple.
+    (1, 2),             // outer tuple has 3 elements, rightmost dimension.
+    (3, 4),             // inner tuples have 2 elements, leftmost dimension.
+    (5, 6)
+)
+```
+
 ## Slids
 
 A slid is the single universal construct of the language. It has:
