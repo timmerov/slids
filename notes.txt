@@ -1,6 +1,87 @@
 
 globals.
 still waiting for the good idea fairy.
+slid-like.
+name is optional.
+global name(
+    field1 = 0,
+    field2 = 0,
+    field3 = 0
+) {
+    no ctor/dtor.
+    no sentinel.
+    field initialized to const expression.
+    nothing fancy.
+    just basic global.
+}
+global name(field = 0) {
+    lazy construction.
+    whenever these fields are accessed,
+    the sentinel is tested,
+    and maybe the ctor is called.
+
+    _() { first field is sentinel set by ctor.
+        must be initialized to 0, nullptr, or
+        the class must define op!.
+        true means not ready, call ctor.
+        false means ready, ctor already called.
+    }
+    ~() { called at end of scope. }
+}
+main() {
+    /* optional. the compiler will inject it. */
+    global;
+    global.self;
+    return 0;
+}
+main() {
+    foo();
+    {
+        /* in case you want to do this weirdness. */
+        global;
+        global.self;
+        bar();
+    }
+    oof();
+    return 0;
+}
+incomplete globals is a bad idea.
+global name(...) {
+    methods();
+}
+not needed.
+do this instead:
+global name() {
+    methods;
+}
+no actual stored globals.
+just methods.
+that presumably can access globals defined elsewhere.
+can we have default globals?
+at global scope:
+    Class^ singleton = nullptr;
+desugars to:
+    global(Class^ singleton = nullptr);
+primitives and pointer types only.
+global classes must use the long form for globals.
+
+threads:
+global self name(blah) { blah. }
+global<self> name() {}
+global.self name() {}  <-- lean
+global:self name() {}
+
+allocates memory from the thread's heap.
+no locking needed.
+is the default.
+    ptr = new.self buffer[100];
+    ptr = new buffer[100];
+allocates memory from the main thread heap.
+locking required.
+    ptr = new.global buffer[100];
+
+can we configure new?
+new.set_heap_size(1G);
 
 claude added float half-assedly.
 the token gets replaced with float32.
