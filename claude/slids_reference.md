@@ -628,9 +628,10 @@ Alias rules:
 Arrays are homogeneous (all elements are the same type), anonymous (unnamed), iterable tuples. Taking the address of an array element is an iterator, not a reference.
 
 ```
-char buffer[256];           // 256 contiguous chars in memory.
-char[] ptr = ^buffer[0];    // address of element is iterator type.
-for (ch : buffer) { .. }    // for loop by array value or reference.
+char buffer[256];              // 256 contiguous chars in memory.
+char[] ptr = ^buffer[0];       // address of element is iterator type.
+for (ch : buffer) { }          // for loop by value of element.
+for (char^ it : buffer) { }    // for loop by reference to element.
 
 int grid[ncolumns][nrows];       // grid[x][y] and grid[x+1][y] are adjacent in memory.
 for (y : 0..nrows) {             // for each row...
