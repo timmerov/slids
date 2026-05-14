@@ -73,6 +73,15 @@ void Codegen::emitDtors() {
         }
         emitDtorChainCall(e.slid_type, target);
     }
+    // Fire scope-exit hooks (e.g. `__$global_dtor_all()` from `global;`) in
+    // reverse, walking from the innermost frame outward. Hooks remain in the
+    // frames so popScope's symmetric path skips them — block_terminated_ is
+    // set right after this by the caller's `ret`/`br`.
+    for (int i = (int)scope_stack_.size() - 1; i >= 0; i--) {
+        auto& frame = scope_stack_[i];
+        for (int j = (int)frame.exit_emits.size() - 1; j >= 0; j--)
+            out_ << frame.exit_emits[j];
+    }
 }
 
 void Codegen::emitSlidCtorDtor(const SlidDef& slid) {

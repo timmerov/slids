@@ -217,6 +217,7 @@ Token Lexer::readIdentifierOrKeyword() {
     if (value == "mutable")  return Token(TokenType::kMutable,  value);
     if (value == "const")    return Token(TokenType::kConst,    value);  // reserved for future use
     if (value == "alias")    return Token(TokenType::kAlias,    value);
+    if (value == "global")   return Token(TokenType::kGlobal,   value);
 
     return Token(TokenType::kIdentifier, value);
 }

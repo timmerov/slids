@@ -50,6 +50,7 @@ enum class TokenType {
     kMutable,
     kConst,
     kAlias,
+    kGlobal,
     kEllipsis,
 
     // comparison operators

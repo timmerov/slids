@@ -1,0 +1,29 @@
+garage: 0
+garage: 1
+doors: 2
+color: 7
+lazy: lazy:ctor
+100
+box count: 5
+box lid open: 0
+local x_: 37
+global x_: 42
+foo fcount: 1
+foo fcount: 2
+[cargo ctor]
+cargo weight: 7
+[taggify ctor]
+tag #1
+tag #2
+[Logger ctor]
+logger seen: 3
+logger seen: 8
+[pool ctor]
+[buffer ctor]
+buffer slots: 16
+[Logger dtor]
+[buffer dtor]
+[pool dtor]
+[taggify dtor]
+[cargo dtor]
+lazy:dtor

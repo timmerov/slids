@@ -38,6 +38,20 @@ std::string Codegen::emitExpr(const Expr& expr) {
         }
         auto it = locals_.find(v->name);
         if (it == locals_.end()) {
+            // global slid field — namespace-qualified (`Ns:f`, `::f`) or a
+            // bare name that resolves via the function-internal /
+            // unnamed-namespace fallback chain.
+            if (auto* ge = lookupGlobal(v->name)) {
+                if (current_func_name_ == "main" && global_lifetime_depth_ == 0)
+                    error(std::string("Cannot access global '" + v->name
+                        + "' outside the `global;` scope in `main`."));
+                emitLazySentinelGate(*ge);
+                std::string llvm_ty = llvmType(ge->slids_type);
+                std::string tmp = newTmp();
+                out_ << "    " << tmp << " = load " << llvm_ty
+                     << ", ptr " << ge->llvm_symbol << "\n";
+                return tmp;
+            }
             // check if it's an enum value
             auto eit = enum_values_.find(v->name);
             if (eit != enum_values_.end())
@@ -56,6 +70,23 @@ std::string Codegen::emitExpr(const Expr& expr) {
             // Phase 1: type name used as anonymous temporary — alloca, init, ctor
             if (slid_info_.count(v->name))
                 return emitSlidAlloca(v->name);
+            // Namespace-qualified names failed every preceding check — produce
+            // a targeted diagnostic before the generic undefined-variable error.
+            if (v->name.size() >= 2 && v->name[0] == ':' && v->name[1] == ':') {
+                std::string field = v->name.substr(2);
+                error(std::string("Identifier '" + field
+                    + "' is not declared in the unnamed namespace."));
+            }
+            if (v->name.find(':') != std::string::npos) {
+                auto git = globals_.find(v->name);
+                if (git != globals_.end()
+                    && !git->second.visible_in_function.empty()
+                    && git->second.visible_in_function != current_func_name_) {
+                    error(std::string("Global '" + v->name
+                        + "' is not visible outside function '"
+                        + git->second.visible_in_function + "'."));
+                }
+            }
             error(std::string("Undefined variable: " + v->name));
         }
         std::string tmp = newTmp();
@@ -2116,6 +2147,8 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
         }
         auto tit = locals_.find(v->name);
         if (tit != locals_.end()) return llvmType(tit->second.type);
+        // global slid field — namespace-qualified or function-internal/unnamed
+        if (auto* ge = lookupGlobal(v->name)) return llvmType(ge->slids_type);
         // enum value — i32
         if (enum_values_.count(v->name)) return "i32";
         // array name used as pointer — ptr
@@ -2625,6 +2658,8 @@ std::string Codegen::inferSlidType(const Expr& expr) {
             if (fit != info.field_index.end())
                 return info.field_types[fit->second];
         }
+        // global slid field — fall through after locals/self-fields fail
+        if (auto* ge = lookupGlobal(ve->name)) return ge->slids_type;
         // type name used as anonymous temporary (e.g. ValueBoth in ValueBoth + 10)
         if (slid_info_.count(ve->name)) return ve->name;
     }

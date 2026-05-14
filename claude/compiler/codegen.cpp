@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <set>
 #include <climits>
+#include <cfloat>
+#include <cmath>
 #include <cstring>
 #include <algorithm>
 #include "codegen_helpers.h"
@@ -609,6 +611,295 @@ void Codegen::ensureSlidInstantiated(const std::string& type) {
     }
 }
 
+// Build the registry of global slid fields. Folds inferred-type field
+// initializers, infers slids types where missing, and assigns each field a
+// stable LLVM symbol name. Co-named global slids (stacked under the same
+// namespace) each contribute their own fields to the same key prefix; the
+// collision check in the parser already guarantees no key collisions here.
+void Codegen::collectGlobals() {
+    std::set<std::string> cycle;
+    for (auto& g_const : program_.globals) {
+        auto& g = const_cast<GlobalDef&>(g_const);
+        if (g.is_lazy() && !lazy_global_index_.count(&g_const))
+            lazy_global_index_[&g_const] = lazy_global_count_++;
+        for (auto& f : g.fields) {
+            // Infer type from the foldable default when not annotated.
+            if (f.type.empty()) {
+                if (!f.default_val)
+                    error(std::string("Global field '" + f.name
+                        + "' has no type and no initializer."));
+                cycle.clear();
+                ConstEntry folded;
+                try {
+                    folded = foldConstExpr(*f.default_val, "", cycle);
+                } catch (CompileError&) {
+                    throw CompileError{f.file_id, f.tok,
+                        finalizeErrorMsg("Global field '" + f.name
+                            + "' initializer is not a foldable constant")};
+                }
+                if (folded.is_float) {
+                    double v = std::fabs(folded.float_value);
+                    f.type = (v <= (double)FLT_MAX) ? "float32" : "float64";
+                } else {
+                    f.type = folded.slid_type;
+                }
+            }
+            GlobalEntry entry;
+            entry.namespace_name = g.namespace_name;
+            entry.field_name = f.name;
+            entry.slids_type = f.type;
+            entry.file_id = f.file_id;
+            entry.tok = f.tok;
+            entry.is_lazy = g.is_lazy();
+            entry.visible_in_function = g.visible_in_function;
+            entry.def = &g_const;
+            // Canonical key: "<ns>:<field>" with empty ns dropping its prefix.
+            std::string key = g.namespace_name.empty()
+                ? f.name
+                : g.namespace_name + ":" + f.name;
+            // Mangled LLVM symbol: replace ':' separators with '.'.
+            std::string mangled = "@__$g.";
+            for (char c : key) mangled += (c == ':') ? '.' : c;
+            entry.llvm_symbol = mangled;
+            globals_[key] = std::move(entry);
+        }
+    }
+}
+
+// Emit module-level LLVM globals for static-allocated entries (those with
+// no ctor and no dtor on their owning GlobalDef). Lazy entries get module-
+// level storage too (the sentinel + storage), but their initializer is the
+// type's zero value and the user-supplied ctor body runs at first access —
+// that arm lands in phase 3; for now lazy emits storage only and skips the
+// init computation.
+void Codegen::emitStaticGlobals() {
+    if (globals_.empty()) return;
+    out_ << "\n";
+    std::set<std::string> emitted;
+    std::set<std::string> cycle;
+    for (auto& g : program_.globals) {
+        for (auto& f : g.fields) {
+            std::string key = g.namespace_name.empty()
+                ? f.name
+                : g.namespace_name + ":" + f.name;
+            auto it = globals_.find(key);
+            if (it == globals_.end()) continue;
+            if (!emitted.insert(it->second.llvm_symbol).second) continue;
+
+            std::string llvm_ty = llvmType(f.type);
+            std::string init_value;
+            if (g.is_lazy()) {
+                // Phase 2 stub: storage only, zero-initialized. Phase 3 will
+                // emit a sentinel and route first-access through the glue.
+                if (llvm_ty == "ptr") init_value = "null";
+                else if (llvm_ty == "float" || llvm_ty == "double") init_value = "0.0";
+                else init_value = "0";
+            } else if (f.default_val) {
+                cycle.clear();
+                ConstEntry folded;
+                try {
+                    folded = foldConstExpr(*f.default_val, "", cycle);
+                } catch (CompileError&) {
+                    throw CompileError{f.file_id, f.tok,
+                        finalizeErrorMsg("Global field '" + f.name
+                            + "' initializer is not a foldable constant")};
+                }
+                init_value = emitConstValue(folded);
+            } else {
+                if (llvm_ty == "ptr") init_value = "null";
+                else if (llvm_ty == "float" || llvm_ty == "double") init_value = "0.0";
+                else init_value = "0";
+            }
+            // Function-internal globals are scoped to their owning function;
+            // mark them `internal` so the LLVM symbol doesn't cross TUs.
+            // File/class-scope globals stay default-linkage so the pre-link
+            // collision check is the load-bearing diagnostic.
+            const char* linkage = !it->second.visible_in_function.empty()
+                                ? "internal " : "";
+            out_ << it->second.llvm_symbol << " = " << linkage << "global "
+                 << llvm_ty << " " << init_value << "\n";
+        }
+    }
+}
+
+// Emit one ctor function, one dtor function, the per-slid sentinel, and the
+// ensure widget for every lazy GlobalDef in this TU. Bodies are emitted with
+// `current_global_namespace_` set to the slid's namespace so bare field
+// references resolve through lookupGlobal's namespace arm.
+void Codegen::emitLazyGlobalHelpers() {
+    if (lazy_global_index_.empty()) return;
+    out_ << "\n";
+    // Per-slid runtime storage: a sentinel (gate state) and a dtor-list node.
+    // Both are internal — each TU has its own copy. The node's `next` slot
+    // is filled at runtime by the ensure widget when it prepends the node
+    // to the shared `@__$global_dtor_head`; the `dtor_fn` slot is set at
+    // compile time to the TU's own `__$g_dtor.N` function.
+    for (auto& [def, idx] : lazy_global_index_) {
+        (void)def;
+        out_ << "@__$g_sentinel." << idx << " = internal global i1 0\n";
+        out_ << "@__$g_dtor_node." << idx
+             << " = internal global { ptr, ptr } { ptr null, ptr @__$g_dtor." << idx << " }\n";
+    }
+    out_ << "\n";
+    // ctor / dtor / ensure per lazy GlobalDef.
+    for (auto& [def, idx] : lazy_global_index_) {
+        // === ctor ===
+        out_ << "define internal void @__$g_ctor." << idx << "() {\n";
+        out_ << "entry:\n";
+        locals_.clear();
+        emitted_alloca_regs_.clear();
+        tmp_counter_ = 0;
+        label_counter_ = 0;
+        block_terminated_ = false;
+        current_slid_.clear();
+        self_ptr_.clear();
+        current_global_namespace_ = def->namespace_name;
+        pushScope();
+        if (def->ctor_body) emitBlock(*def->ctor_body);
+        popScope();
+        if (!block_terminated_) out_ << "    ret void\n";
+        out_ << "}\n\n";
+
+        // === dtor ===
+        out_ << "define internal void @__$g_dtor." << idx << "() {\n";
+        out_ << "entry:\n";
+        locals_.clear();
+        emitted_alloca_regs_.clear();
+        tmp_counter_ = 0;
+        label_counter_ = 0;
+        block_terminated_ = false;
+        current_slid_.clear();
+        self_ptr_.clear();
+        current_global_namespace_ = def->namespace_name;
+        pushScope();
+        if (def->dtor_body) emitBlock(*def->dtor_body);
+        popScope();
+        if (!block_terminated_) out_ << "    ret void\n";
+        out_ << "}\n\n";
+        current_global_namespace_.clear();
+
+        // === ensure widget ===
+        // Fast-path gate is inlined at every access site; this widget is the
+        // cold path. Sets the sentinel, prepends this slid's dtor node onto
+        // the shared list (so reverse-construction-order falls out naturally),
+        // then tail-calls the user ctor.
+        out_ << "define internal void @__$g_ensure." << idx << "() {\n";
+        out_ << "entry:\n";
+        out_ << "    store i1 1, ptr @__$g_sentinel." << idx << "\n";
+        out_ << "    %old_head = load ptr, ptr @__$global_dtor_head\n";
+        out_ << "    %next_slot = getelementptr { ptr, ptr }, "
+             << "ptr @__$g_dtor_node." << idx << ", i32 0, i32 0\n";
+        out_ << "    store ptr %old_head, ptr %next_slot\n";
+        out_ << "    store ptr @__$g_dtor_node." << idx
+             << ", ptr @__$global_dtor_head\n";
+        out_ << "    tail call void @__$g_ctor." << idx << "()\n";
+        out_ << "    ret void\n";
+        out_ << "}\n\n";
+    }
+}
+
+// Emit the shared runtime: one head pointer for a singly-linked list of dtor
+// nodes, and the walker `__$global_dtor_all`. Both have `linkonce_odr`
+// linkage so multiple TUs can each emit the symbol and the linker dedups.
+// Per-lazy nodes are statically allocated in each defining TU (see
+// emitLazyGlobalHelpers) and prepended to the shared list at first-access.
+// Walking-then-clearing the head means reverse construction order falls out
+// naturally and `global;` is re-entrant (a second `global;` block sees an
+// empty list — matching the spec's lazy-instantiation invariant).
+void Codegen::emitGlobalDtorRuntime() {
+    out_ << "\n";
+    out_ << "@__$global_dtor_head = linkonce_odr global ptr null\n\n";
+
+    out_ << "define linkonce_odr void @__$global_dtor_all() {\n";
+    out_ << "entry:\n";
+    out_ << "    %head = load ptr, ptr @__$global_dtor_head\n";
+    out_ << "    store ptr null, ptr @__$global_dtor_head\n";
+    out_ << "    br label %loop\n";
+    out_ << "loop:\n";
+    out_ << "    %n = phi ptr [ %head, %entry ], [ %next, %body ]\n";
+    out_ << "    %done = icmp eq ptr %n, null\n";
+    out_ << "    br i1 %done, label %end, label %body\n";
+    out_ << "body:\n";
+    out_ << "    %fn_slot = getelementptr { ptr, ptr }, ptr %n, i32 0, i32 1\n";
+    out_ << "    %fn = load ptr, ptr %fn_slot\n";
+    out_ << "    call void %fn()\n";
+    out_ << "    %next_slot = getelementptr { ptr, ptr }, ptr %n, i32 0, i32 0\n";
+    out_ << "    %next = load ptr, ptr %next_slot\n";
+    out_ << "    br label %loop\n";
+    out_ << "end:\n";
+    out_ << "    ret void\n";
+    out_ << "}\n\n";
+}
+
+void Codegen::emitLazySentinelGate(const GlobalEntry& ge) {
+    if (!ge.is_lazy) return;
+    auto it = lazy_global_index_.find(ge.def);
+    if (it == lazy_global_index_.end()) return;
+    int idx = it->second;
+    std::string s_tmp = newTmp();
+    std::string ensure_lbl = newLabel("g_ens");
+    std::string access_lbl = newLabel("g_acc");
+    out_ << "    " << s_tmp << " = load i1, ptr @__$g_sentinel." << idx << "\n";
+    out_ << "    br i1 " << s_tmp << ", label %" << access_lbl
+         << ", label %" << ensure_lbl << "\n";
+    out_ << ensure_lbl << ":\n";
+    out_ << "    call void @__$g_ensure." << idx << "()\n";
+    out_ << "    br label %" << access_lbl << "\n";
+    out_ << access_lbl << ":\n";
+}
+
+const Codegen::GlobalEntry* Codegen::lookupGlobal(const std::string& name) const {
+    // The function-internal visibility scope. For a free function this is the
+    // function name; for a method it's the qualified "Class:method" — which
+    // matches the namespace_name the parser registers when seeing `global`
+    // inside the method body.
+    std::string fn_scope = current_func_name_;
+    if (!current_slid_.empty() && !current_func_name_.empty())
+        fn_scope = current_slid_ + ":" + current_func_name_;
+
+    // `::name` is an explicit unnamed-namespace lookup. Strip the prefix.
+    if (name.size() >= 2 && name[0] == ':' && name[1] == ':') {
+        auto it = globals_.find(name.substr(2));
+        if (it == globals_.end()) return nullptr;
+        // `::` form only reaches unnamed-namespace entries (no function-internal).
+        if (!it->second.namespace_name.empty()
+            || !it->second.visible_in_function.empty()) return nullptr;
+        return &it->second;
+    }
+    // Namespace-qualified: direct lookup. Function-internal entries are only
+    // reachable from inside their owning function, so reject explicit
+    // qualified-from-outside.
+    if (name.find(':') != std::string::npos) {
+        auto it = globals_.find(name);
+        if (it == globals_.end()) return nullptr;
+        if (!it->second.visible_in_function.empty()
+            && it->second.visible_in_function != fn_scope) return nullptr;
+        return &it->second;
+    }
+    // Bare name. Try in order:
+    //   1. current lazy ctor/dtor body's owning namespace
+    //   2. function-internal (current function's namespace — qualified for
+    //      methods, bare for free functions)
+    //   3. unnamed-namespace
+    if (!current_global_namespace_.empty()) {
+        auto it = globals_.find(current_global_namespace_ + ":" + name);
+        if (it != globals_.end()
+            && it->second.namespace_name == current_global_namespace_)
+            return &it->second;
+    }
+    if (!fn_scope.empty()) {
+        auto it = globals_.find(fn_scope + ":" + name);
+        if (it != globals_.end()
+            && it->second.visible_in_function == fn_scope)
+            return &it->second;
+    }
+    auto it = globals_.find(name);
+    if (it == globals_.end()) return nullptr;
+    if (!it->second.namespace_name.empty()) return nullptr;
+    if (!it->second.visible_in_function.empty()) return nullptr;
+    return &it->second;
+}
+
 void Codegen::collectStringConstants() {
     // Flatten a "+" concat chain and collect all StringLiteralExpr leaves
     std::function<void(const Expr*, bool)> collectExpr = [&](const Expr* e, bool newline_on_last) {
@@ -768,6 +1059,7 @@ void Codegen::emit() {
 
     collectAndFoldConsts();
     inferFieldTypes();
+    collectGlobals();
     collectSlids();
     classifyVirtualClasses();
     resolveSlidInheritance();
@@ -948,6 +1240,10 @@ void Codegen::emit() {
         if (fn.body && fn.type_params.empty()) emitFrameStruct(fn);
 
     if (!program_.slids.empty() || !program_.functions.empty()) out_ << "\n";
+
+    // Module-level globals: static-allocated storage + zero-initialized
+    // storage for lazy entries (phase 3 fills in the sentinel + ctor glue).
+    emitStaticGlobals();
 
     out_ << "declare i32 @printf(ptr noundef, ...)\n";
     out_ << "declare ptr @malloc(i64)\n";
@@ -1156,6 +1452,12 @@ void Codegen::emit() {
 
     str_counter_ = 0;
 
+    // Lazy globals: runtime dtor list, register helper, dtor_all, per-slid
+    // sentinel / ctor / dtor / ensure widget. The dtor runtime is always
+    // emitted so `global;` has a target even when there are no lazies.
+    emitGlobalDtorRuntime();
+    emitLazyGlobalHelpers();
+
     for (auto& slid : program_.slids) {
         if (!slid.type_params.empty()) continue;
         emitSlidCtorDtor(slid);
@@ -1333,12 +1635,14 @@ void Codegen::emitNestedFunction(
 }
 
 void Codegen::pushScope() {
-    scope_stack_.push_back({dtor_vars_.size(), locals_});
+    scope_stack_.push_back({dtor_vars_.size(), locals_, {}});
     block_const_stack_.push_back({});
 }
 
 void Codegen::popScope() {
     auto& frame = scope_stack_.back();
+    if (frame.opens_global_lifetime && global_lifetime_depth_ > 0)
+        global_lifetime_depth_--;
     if (!block_terminated_) {
         for (int i = (int)dtor_vars_.size() - 1; i >= (int)frame.dtor_mark; i--) {
             auto& e = dtor_vars_[i];
@@ -1354,6 +1658,11 @@ void Codegen::popScope() {
             }
             emitDtorChainCall(e.slid_type, target);
         }
+        // Drain scope-exit hooks in reverse registration order. Used for the
+        // `global;` lifetime statement to fire `__$global_dtor_all()` at the
+        // close of the enclosing block.
+        for (int i = (int)frame.exit_emits.size() - 1; i >= 0; i--)
+            out_ << frame.exit_emits[i];
     }
     dtor_vars_.resize(frame.dtor_mark);
     locals_ = std::move(frame.saved_locals);

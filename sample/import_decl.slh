@@ -5,3 +5,4 @@ no code.
 */
 
 void printHelloWorld();
+void printGoodbye();

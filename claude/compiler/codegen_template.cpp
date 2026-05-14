@@ -575,7 +575,8 @@ void Codegen::recordSliEntry(const std::string& func_name,
 // --- Codegen::writeSliFile ---
 
 void Codegen::writeSliFile(std::ostream& out) const {
-    if (sli_imports_.empty() && sli_instantiations_.empty()) return;
+    if (sli_imports_.empty() && sli_instantiations_.empty()
+        && program_.globals.empty()) return;
 
     out << "/* class declarations. */\n";
     for (auto& [module, is_tmpl] : sli_imports_)
@@ -600,6 +601,29 @@ void Codegen::writeSliFile(std::ostream& out) const {
             out << param_types[i];
         }
         out << ");\n";
+    }
+
+    // Globals section. Pre-link aggregation reads these to detect cross-TU
+    // field collisions in the same namespace, count the program-wide lazy-
+    // global total (for dtor-list sizing in phase 4b), and learn each lazy
+    // slid's dtor symbol. One line per field; lazy entries also carry the
+    // dtor symbol name. Function-internal globals are visible only inside
+    // their owning function, so they don't participate in cross-TU collision
+    // checks — emit them with a `fn=<name>` tag so the aggregator can skip.
+    if (!program_.globals.empty()) {
+        out << "\n/* globals. */\n";
+        for (auto& g : program_.globals) {
+            std::string ns_label = g.namespace_name.empty() ? "<unnamed>"
+                                                            : g.namespace_name;
+            for (auto& f : g.fields) {
+                out << "global " << ns_label << " " << f.name
+                    << " " << (f.type.empty() ? "?" : f.type)
+                    << " " << (g.is_lazy() ? "lazy" : "static");
+                if (!g.visible_in_function.empty())
+                    out << " fn=" << g.visible_in_function;
+                out << ";\n";
+            }
+        }
     }
 }
 

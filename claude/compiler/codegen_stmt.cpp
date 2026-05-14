@@ -773,6 +773,20 @@ static std::unique_ptr<Expr> cloneExpr(const Expr& e) {
 void Codegen::emitStmt(const Stmt& stmt) {
     EmitGuard _g(*this, stmt.file_id, stmt.tok);
 
+    // `global;` lifetime statement. The dtor pass at scope-close fires
+    // `__$global_dtor_all()`, which walks the runtime registration list in
+    // reverse and invokes each lazy dtor. Static-allocated globals contribute
+    // nothing here (their dtor list entries are never registered).
+    if (dynamic_cast<const GlobalLifetimeStmt*>(&stmt)) {
+        if (scope_stack_.empty())
+            error(std::string("Internal: `global;` outside any scope frame."));
+        scope_stack_.back().exit_emits.push_back(
+            std::string("    call void @__$global_dtor_all()\n"));
+        scope_stack_.back().opens_global_lifetime = true;
+        global_lifetime_depth_++;
+        return;
+    }
+
     // const decl: foldable rhs → substitute via the block-const stack; emit no IR.
     // non-foldable rhs → emit as a regular alloca'd local with the qualified
     // type (immutability not enforced this scope).
@@ -1866,8 +1880,39 @@ void Codegen::emitStmt(const Stmt& stmt) {
             }
         }
         auto it = locals_.find(assign->name);
-        if (it == locals_.end())
+        if (it == locals_.end()) {
+            // global slid field — store through the registered LLVM symbol.
+            if (auto* ge = lookupGlobal(assign->name)) {
+                if (current_func_name_ == "main" && global_lifetime_depth_ == 0)
+                    error(std::string("Cannot access global '" + assign->name
+                        + "' outside the `global;` scope in `main`."));
+                // Evaluate the RHS first; sentinel gate fires on the write
+                // itself, after the value is computed (mirrors the read path).
+                std::string llvm_ty = llvmType(ge->slids_type);
+                std::string val = emitExpr(*assign->value);
+                emitLazySentinelGate(*ge);
+                out_ << "    store " << llvm_ty << " " << val
+                     << ", ptr " << ge->llvm_symbol << "\n";
+                return;
+            }
+            if (assign->name.size() >= 2
+                && assign->name[0] == ':' && assign->name[1] == ':') {
+                std::string field = assign->name.substr(2);
+                error(std::string("Identifier '" + field
+                    + "' is not declared in the unnamed namespace."));
+            }
+            if (assign->name.find(':') != std::string::npos) {
+                auto git = globals_.find(assign->name);
+                if (git != globals_.end()
+                    && !git->second.visible_in_function.empty()
+                    && git->second.visible_in_function != current_func_name_) {
+                    error(std::string("Global '" + assign->name
+                        + "' is not visible outside function '"
+                        + git->second.visible_in_function + "'."));
+                }
+            }
             error(std::string("Undefined variable: " + assign->name));
+        }
         // Body-level const enforcement: rebinding a `const T` local (declared
         // const, or const by-value param) is forbidden. Top-level `const`
         // blocks rebind; the leaf-const form `(const T)^` is mutable handle

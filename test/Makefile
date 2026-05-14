@@ -18,6 +18,8 @@ SAMPLES = \
 	constructor \
 	for \
 	function1 \
+	global1 \
+	global2 \
 	incomplete \
 	indexop \
 	inheritance \

@@ -931,17 +931,21 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     }
     if (t.type == TokenType::kColonColon) {
         advance(); // consume '::'
-        std::string fn = expect(TokenType::kIdentifier, "Expected name after '::'").value;
-        expect(TokenType::kLParen, "Expected '(' after '::name'");
-        std::vector<std::unique_ptr<Expr>> args;
-        while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
-            args.push_back(parseExpr());
-            if (peek().type == TokenType::kComma) advance();
+        std::string name = expect(TokenType::kIdentifier, "Expected name after '::'").value;
+        if (peek().type == TokenType::kLParen) {
+            advance();
+            std::vector<std::unique_ptr<Expr>> args;
+            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                args.push_back(parseExpr());
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kRParen, "Expected ')'");
+            auto call = make<CallExpr>(t_start, name, std::move(args));
+            call->qualifier = "::";
+            return call;
         }
-        expect(TokenType::kRParen, "Expected ')'");
-        auto call = make<CallExpr>(t_start, fn, std::move(args));
-        call->qualifier = "::";
-        return call;
+        // `::name` as a value: reference the field in the unnamed namespace.
+        return make<VarExpr>(t_start, "::" + name);
     }
     if (t.type == TokenType::kSelf) {
         advance();
@@ -949,26 +953,39 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     }
     if (t.type == TokenType::kIdentifier) {
         advance();
-        // qualified call: Name:method(args) — namespace function call.
+        // namespace-qualified access: Name : Name [: Name]* — covers
+        // `Slid:method(args)`, `parts:doors_`, and chains like `Box:lid:open_`.
         // Suppressed in contexts where ':' terminates the expression (e.g. case labels).
         if (colon_terminates_expr_ == 0
             && peek().type == TokenType::kColon
             && pos_ + 1 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kIdentifier
-            && pos_ + 2 < (int)tokens_.size()
-            && tokens_[pos_ + 2].type == TokenType::kLParen) {
-            advance(); // consume ':'
-            std::string method = advance().value; // consume method identifier
-            advance(); // consume '('
-            std::vector<std::unique_ptr<Expr>> args;
-            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
-                args.push_back(parseExpr());
-                if (peek().type == TokenType::kComma) advance();
+            && tokens_[pos_ + 1].type == TokenType::kIdentifier) {
+            std::string path = t.value;
+            while (peek().type == TokenType::kColon
+                   && pos_ + 1 < (int)tokens_.size()
+                   && tokens_[pos_ + 1].type == TokenType::kIdentifier) {
+                advance(); // consume ':'
+                path += ":" + advance().value;
             }
-            expect(TokenType::kRParen, "Expected ')'");
-            auto call = make<CallExpr>(t_start, method, std::move(args));
-            call->qualifier = t.value;
-            return call;
+            if (peek().type == TokenType::kLParen) {
+                // call form. qualifier carries the namespace prefix; callee is
+                // the final segment. matches the 2-segment `Slid:method(` shape.
+                size_t cut = path.rfind(':');
+                std::string qualifier = path.substr(0, cut);
+                std::string method = path.substr(cut + 1);
+                advance(); // consume '('
+                std::vector<std::unique_ptr<Expr>> args;
+                while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                    args.push_back(parseExpr());
+                    if (peek().type == TokenType::kComma) advance();
+                }
+                expect(TokenType::kRParen, "Expected ')'");
+                auto call = make<CallExpr>(t_start, method, std::move(args));
+                call->qualifier = qualifier;
+                return call;
+            }
+            // namespace var access: path is the full colon-joined name.
+            return make<VarExpr>(t_start, path);
         }
         // template call: name<TypeArg,...>(args)
         if (peek().type == TokenType::kLt && isTemplateCallLookahead()) {
@@ -1352,12 +1369,16 @@ std::unique_ptr<Stmt> Parser::buildAssignFromLhs(
 
     if (auto* ve = dynamic_cast<VarExpr*>(lhs.get())) {
         std::string name = ve->name;
+        // namespace-qualified names (`Ns:field`, `Ns:Sub:field`, `::field`)
+        // resolve through the global registry, never to a new local.
+        bool is_namespace_name = name.find(':') != std::string::npos;
         // `name != "self"` carve-out: `self = expr;` parses as
         // VarExpr(name="self") on the LHS (kSelf primary arm produces a
         // VarExpr). Without this clause, the path below would treat self as
         // an inferred-type new local declaration. self is implicit, never a
         // declared local — fall through to AssignStmt instead.
-        if (!isInScope(name) && !current_slid_fields_.count(name) && name != "self") {
+        if (!is_namespace_name
+            && !isInScope(name) && !current_slid_fields_.count(name) && name != "self") {
             declareVar(name, ve->tok);
             // Track tuple-typed locals so the short-form for-loop can iterate
             // them by synthesizing per-slot ArrayIndexExpr accesses.
@@ -1515,6 +1536,30 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         auto call = parseExpr();
         expect(TokenType::kSemicolon, "Expected ';'");
         return make<ExprStmt>(t_start, std::move(call));
+    }
+
+    // `global;` lifetime statement, or function-internal short-form global decl.
+    if (t.type == TokenType::kGlobal) {
+        if (pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kSemicolon) {
+            if (current_function_name_ != "main")
+                errorAt(t_start, "Global lifetime statement is only allowed in `main`.");
+            advance(); // consume 'global'
+            advance(); // consume ';'
+            return make<GlobalLifetimeStmt>(t_start);
+        }
+        if (current_function_name_.empty())
+            errorAt(t_start, "Global declarations inside function bodies require an enclosing function.");
+        GlobalDef g = parseGlobalDef(current_function_name_, current_function_name_);
+        // Register each field name in the local scope so subsequent bare reads
+        // and writes inside the function body don't try to redeclare it. The
+        // codegen resolves bare names to function-internal globals after the
+        // locals lookup fails.
+        for (auto& f : g.fields) declareVar(f.name, f.tok);
+        pending_globals_.push_back(std::move(g));
+        // No statement is emitted into the function body — the global lives in
+        // the program-level registry.
+        return make<BlockStmt>(t_start);
     }
 
     if (t.type == TokenType::kDelete) {
@@ -2488,25 +2533,39 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         std::string name = t.value;
         advance();
 
-        // namespace-qualified call statement: Name:method(args);
+        // namespace-qualified lead: Name : Name [: Name]* — covers
+        // `Slid:method(...);`, `parts:doors_ = 4;`, and chains like
+        // `Box:lid:open_ = true;`. Greedily consume the colon chain.
         if (peek().type == TokenType::kColon
             && pos_ + 1 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kIdentifier
-            && pos_ + 2 < (int)tokens_.size()
-            && tokens_[pos_ + 2].type == TokenType::kLParen) {
-            advance(); // consume ':'
-            std::string method = advance().value;
-            advance(); // consume '('
-            std::vector<std::unique_ptr<Expr>> args;
-            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
-                args.push_back(parseExpr());
-                if (peek().type == TokenType::kComma) advance();
+            && tokens_[pos_ + 1].type == TokenType::kIdentifier) {
+            std::string path = name;
+            while (peek().type == TokenType::kColon
+                   && pos_ + 1 < (int)tokens_.size()
+                   && tokens_[pos_ + 1].type == TokenType::kIdentifier) {
+                advance(); // consume ':'
+                path += ":" + advance().value;
             }
-            expect(TokenType::kRParen, "Expected ')'");
-            expect(TokenType::kSemicolon, "Expected ';'");
-            auto call = make<CallExpr>(t_start, method, std::move(args));
-            call->qualifier = name;
-            return make<ExprStmt>(t_start, std::move(call));
+            // Namespace call statement: <ns-path>:method(args);
+            if (peek().type == TokenType::kLParen) {
+                size_t cut = path.rfind(':');
+                std::string qualifier = path.substr(0, cut);
+                std::string method = path.substr(cut + 1);
+                advance(); // consume '('
+                std::vector<std::unique_ptr<Expr>> args;
+                while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                    args.push_back(parseExpr());
+                    if (peek().type == TokenType::kComma) advance();
+                }
+                expect(TokenType::kRParen, "Expected ')'");
+                expect(TokenType::kSemicolon, "Expected ';'");
+                auto call = make<CallExpr>(t_start, method, std::move(args));
+                call->qualifier = qualifier;
+                return make<ExprStmt>(t_start, std::move(call));
+            }
+            // Namespace lvalue/rvalue: hand off to the lvalue tail.
+            auto lhs = parsePostfix(make<VarExpr>(t_start, path));
+            return parseLvalueTail(std::move(lhs));
         }
 
         // template call statement: name<Type,...>(args);
@@ -2601,11 +2660,18 @@ NestedFunctionDef Parser::parseNestedFunctionDef() {
     expect(TokenType::kRParen, "Expected ')'");
     std::vector<std::string> param_names;
     for (auto& p : fn.params) param_names.push_back(p.second);
+    // Nested function body: scope `global` declarations to the nested name.
+    // Outer-function globals are already in `current_function_name_`; nest
+    // by colon-qualifying so the two namespaces don't collide.
+    std::string saved_fn = current_function_name_;
+    current_function_name_ = current_function_name_.empty()
+        ? fn.name : (current_function_name_ + ":" + fn.name);
     fn.body = parseBlock(param_names);
+    current_function_name_ = saved_fn;
     return fn;
 }
 
-MethodDef Parser::parseMethodDef() {
+MethodDef Parser::parseMethodDef(const std::string& class_name) {
     [[maybe_unused]] int t_start = pos_;
     MethodDef m;
     if (peek().type == TokenType::kVirtual) {
@@ -2706,7 +2772,11 @@ MethodDef Parser::parseMethodDef() {
     } else {
         std::vector<std::string> param_names;
         for (auto& p : m.params) param_names.push_back(p.second);
+        std::string saved_fn = current_function_name_;
+        current_function_name_ = class_name.empty()
+            ? m.name : (class_name + ":" + m.name);
         m.body = parseBlock(param_names);
+        current_function_name_ = saved_fn;
     }
     return m;
 }
@@ -2858,6 +2928,17 @@ SlidDef Parser::parseSlidDef() {
     bool has_ctor_code = false;
 
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
+        // class-internal global declaration. Long form `global [Name] (...) {...}`
+        // attaches under the class's namespace; short form `global TYPE NAME = EXPR;`
+        // is not used inside class bodies per the spec.
+        if (peek().type == TokenType::kGlobal) {
+            int global_tok = pos_;
+            if (pos_ + 1 < (int)tokens_.size()
+                && tokens_[pos_ + 1].type == TokenType::kSemicolon)
+                errorAt(global_tok, "Global lifetime statement is only allowed in `main`.");
+            pending_globals_.push_back(parseGlobalDef(slid.name, ""));
+            continue;
+        }
         // class-scope const declaration: const [type] name = expr;
         // BUT: a leading `const` followed by an elided-return method shape
         // (`_(`, `~(`, `op<sym>(`) is the method-const marker, not a const decl.
@@ -3081,7 +3162,7 @@ SlidDef Parser::parseSlidDef() {
         }
         if (isMethodDecl()) {
             int method_tok = pos_;
-            auto method = parseMethodDef();
+            auto method = parseMethodDef(slid.name);
             // (P1) class scope merges name + body — method name cannot equal class name.
             if (method.name == slid.name) {
                 errorAt(method_tok, "Method '" + method.name + "' shares the name of its enclosing class.");
@@ -3109,6 +3190,157 @@ SlidDef Parser::parseSlidDef() {
         closed_classes_[slid.name] = FieldRef{file_id_, close_tok};
 
     return slid;
+}
+
+GlobalDef Parser::parseGlobalDef(const std::string& namespace_prefix,
+                                 const std::string& visible_in_function) {
+    GlobalDef g;
+    int global_tok = pos_;
+    g.file_id = file_id_;
+    g.tok = global_tok;
+    g.visible_in_function = visible_in_function;
+    advance(); // consume 'global'
+
+    // Distinguish long form (anonymous `(...)` or `Name (...)`) from short form
+    // (`TYPE NAME = EXPR;`). Long form has `(` either immediately after `global`
+    // or after a single identifier; short form has a type token followed by a
+    // name identifier.
+    bool is_short_form = false;
+    std::string optional_name;
+    if (peek().type == TokenType::kLParen) {
+        // anonymous long form; namespace = prefix
+    } else if (peek().type == TokenType::kIdentifier
+               && pos_ + 1 < (int)tokens_.size()
+               && tokens_[pos_ + 1].type == TokenType::kLParen) {
+        optional_name = advance().value;
+    } else {
+        is_short_form = true;
+    }
+
+    // build the namespace name from the prefix and optional name
+    if (!namespace_prefix.empty() && !optional_name.empty())
+        g.namespace_name = namespace_prefix + ":" + optional_name;
+    else if (!namespace_prefix.empty())
+        g.namespace_name = namespace_prefix;
+    else
+        g.namespace_name = optional_name; // "" for anonymous file-scope
+
+    if (is_short_form) {
+        // global TYPE NAME = EXPR;
+        FieldDef f;
+        f.type = parseTypeName();
+        int name_tok = pos_;
+        f.name = expect(TokenType::kIdentifier, "Expected variable name after 'global'").value;
+        f.file_id = file_id_;
+        f.tok = name_tok;
+        expect(TokenType::kEquals, "Global short-form requires an initializer.");
+        f.default_val = parseExpr();
+        expect(TokenType::kSemicolon, "Expected ';' after global short-form declaration.");
+        g.fields.push_back(std::move(f));
+        return g;
+    }
+
+    // long form: (field_list)
+    expect(TokenType::kLParen, "Expected '('");
+    while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+        FieldDef f;
+        // inferred-type field: bare IDENT followed by '=', ',', or ')'
+        if (peek().type == TokenType::kIdentifier
+            && pos_ + 1 < (int)tokens_.size()
+            && (tokens_[pos_ + 1].type == TokenType::kEquals
+                || tokens_[pos_ + 1].type == TokenType::kComma
+                || tokens_[pos_ + 1].type == TokenType::kRParen)) {
+            int field_tok = pos_;
+            f.name = advance().value;
+            f.file_id = file_id_;
+            f.tok = field_tok;
+            f.type = "";
+            if (peek().type == TokenType::kEquals) {
+                advance();
+                f.default_val = parseExpr();
+            }
+        } else {
+            f.type = parseTypeName();
+            int field_tok = pos_;
+            f.name = expect(TokenType::kIdentifier, "Expected field name in global declaration.").value;
+            f.file_id = file_id_;
+            f.tok = field_tok;
+            if (peek().type == TokenType::kEquals) {
+                advance();
+                f.default_val = parseExpr();
+            }
+        }
+        g.fields.push_back(std::move(f));
+        if (peek().type == TokenType::kComma) advance();
+    }
+    expect(TokenType::kRParen, "Expected ')'");
+
+    // Pre-collect field names; ctor and dtor bodies see them as in-scope so
+    // bare `field = expr;` is an assignment to the global slid's field, not
+    // an inferred-type new local.
+    std::vector<std::string> field_names;
+    for (auto& f : g.fields) field_names.push_back(f.name);
+
+    // body: '{' optional _() { ... } and ~() { ... } '}'
+    expect(TokenType::kLBrace, "Expected '{'");
+    while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
+        // _() { ... }
+        if (peek().type == TokenType::kIdentifier && peek().value == "_"
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kLParen) {
+            int ctor_tok = pos_;
+            advance(); // _
+            expect(TokenType::kLParen, "Expected '('");
+            expect(TokenType::kRParen, "Expected ')'");
+            if (g.ctor_body)
+                errorAt(ctor_tok, "Constructor is already defined for this global slid.");
+            g.ctor_body = parseBlock(field_names);
+            continue;
+        }
+        // ~() { ... }
+        if (peek().type == TokenType::kBitNot
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kLParen) {
+            int dtor_tok = pos_;
+            advance(); // ~
+            expect(TokenType::kLParen, "Expected '('");
+            expect(TokenType::kRParen, "Expected ')'");
+            if (g.dtor_body)
+                errorAt(dtor_tok, "Destructor is already defined for this global slid.");
+            g.dtor_body = parseBlock(field_names);
+            continue;
+        }
+        errorHere("Expected '_()', '~()', or '}' in global body.");
+    }
+    expect(TokenType::kRBrace, "Expected '}'");
+
+    // pair rule
+    if (g.ctor_body && !g.dtor_body)
+        errorAt(global_tok, "Global slid has ctor but no dtor.");
+    if (g.dtor_body && !g.ctor_body)
+        errorAt(global_tok, "Global slid has dtor but no ctor.");
+
+    return g;
+}
+
+GlobalDef Parser::parseBareGlobalShortForm() {
+    GlobalDef g;
+    int decl_tok = pos_;
+    g.file_id = file_id_;
+    g.tok = decl_tok;
+    g.namespace_name = "";
+
+    FieldDef f;
+    f.type = parseTypeName();
+    int name_tok = pos_;
+    f.name = expect(TokenType::kIdentifier, "Expected variable name.").value;
+    f.file_id = file_id_;
+    f.tok = name_tok;
+    expect(TokenType::kEquals, "Bare file-scope global requires an initializer.");
+    f.default_val = parseExpr();
+    expect(TokenType::kSemicolon, "Expected ';' after global declaration.");
+    g.fields.push_back(std::move(f));
+    return g;
 }
 
 EnumDef Parser::parseEnumDef() {
@@ -3201,7 +3433,10 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
     } else {
         std::vector<std::string> param_names;
         for (auto& p : em.params) param_names.push_back(p.second);
+        std::string saved_fn = current_function_name_;
+        current_function_name_ = em.slid_name + ":" + em.method_name;
         em.body = parseBlock(param_names);
+        current_function_name_ = saved_fn;
     }
     current_slid_fields_.clear();
     return em;
@@ -3344,7 +3579,10 @@ void Parser::parseExternalMethodBlock(Program& program) {
         } else {
             std::vector<std::string> param_names;
             for (auto& p : em.params) param_names.push_back(p.second);
+            std::string saved_fn = current_function_name_;
+            current_function_name_ = em.slid_name + ":" + em.method_name;
             em.body = parseBlock(param_names);
+            current_function_name_ = saved_fn;
         }
         program.external_methods.push_back(std::move(em));
     }
@@ -3424,7 +3662,10 @@ FunctionDef Parser::parseFunctionDef() {
     } else {
         std::vector<std::string> param_names;
         for (auto& p : fn.params) param_names.push_back(p.second);
+        std::string saved_fn = current_function_name_;
+        current_function_name_ = fn.user_name;
         fn.body = parseBlock(param_names);
+        current_function_name_ = saved_fn;
     }
     return fn;
 }
@@ -3534,6 +3775,16 @@ Program Parser::parse() {
         else if (peek().type == TokenType::kAlias) {
             parseAliasDecl();
         }
+        // global slid declaration at file scope. `global;` is a lifetime
+        // statement and only allowed in main — reject here.
+        else if (peek().type == TokenType::kGlobal) {
+            int global_tok = pos_;
+            if (pos_ + 1 < (int)tokens_.size()
+                && tokens_[pos_ + 1].type == TokenType::kSemicolon) {
+                errorAt(global_tok, "Global lifetime statement is only allowed in `main`.");
+            }
+            program.globals.push_back(parseGlobalDef("", ""));
+        }
         // const declaration: const [type] name = expr;
         else if (peek().type == TokenType::kConst) {
             program.consts.push_back(parseConstDef());
@@ -3603,6 +3854,16 @@ Program Parser::parse() {
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLBrace) {
             parseExternalMethodBlock(program);
+        }
+        // bare file-scope short-form global: TYPE NAME = EXPR;
+        // shape requires a type token then identifier then '='. The kIdentifier
+        // case can only land here once the slid-def / derived-class / external
+        // method / external method block paths above have already declined.
+        else if ((isTypeName(peek()) || peek().type == TokenType::kIdentifier)
+                 && pos_ + 2 < (int)tokens_.size()
+                 && tokens_[pos_ + 1].type == TokenType::kIdentifier
+                 && tokens_[pos_ + 2].type == TokenType::kEquals) {
+            program.globals.push_back(parseBareGlobalShortForm());
         } else if (peek().type == TokenType::kLParen) {
             program.functions.push_back(parseFunctionDef());
         } else {
@@ -3620,6 +3881,9 @@ Program Parser::parse() {
                 program.functions.push_back(parseFunctionDef());
             }
         }
+        // Drain any globals collected by the just-parsed top-level decl.
+        for (auto& g : pending_globals_) program.globals.push_back(std::move(g));
+        pending_globals_.clear();
     }
 
     // hoist nested slid defs to top level. each nested slid is renamed
@@ -3645,6 +3909,110 @@ Program Parser::parse() {
 
     // collapse multiple reopens of the same class into one merged SlidDef.
     mergeReopens(program);
+
+    // (P1) global slids: field-name collision within a namespace. Co-named
+    // global slids stack in the same namespace; their field names must all
+    // be distinct. Detection is intra-TU; cross-TU collisions are caught by
+    // the link-time aggregator.
+    {
+        struct Site { std::string ns; int file_id; int tok; };
+        // key: "<namespace>:<field>"; value: first-seen site.
+        std::map<std::string, Site> seen;
+        for (auto& g : program.globals) {
+            for (auto& f : g.fields) {
+                std::string key = g.namespace_name + "\x01" + f.name;
+                auto [it, inserted] = seen.emplace(key, Site{g.namespace_name, f.file_id, f.tok});
+                if (!inserted) {
+                    std::string ns_label = g.namespace_name.empty() ? "<unnamed>" : g.namespace_name;
+                    throw CompileError{f.file_id, f.tok,
+                        "Global namespace '" + ns_label + "' redeclares field '" + f.name + "'."}
+                        .addNote(it->second.file_id, it->second.tok, "First declared here.");
+                }
+            }
+        }
+    }
+
+    // (P1) auto-insert `global;` at the top of main's body when absent. Walks
+    // every nested block in main looking for an existing GlobalLifetimeStmt
+    // — the user-supplied form may be in a nested scope (the customized usage
+    // pattern). When none is found, prepend a synthetic one.
+    {
+        FunctionDef* main_fn = nullptr;
+        for (auto& fn : program.functions) {
+            if (fn.user_name == "main" && fn.body) { main_fn = &fn; break; }
+        }
+        if (main_fn) {
+            std::function<bool(BlockStmt&)> contains_lifetime =
+                [&](BlockStmt& block) {
+                    for (auto& s : block.stmts) {
+                        if (dynamic_cast<GlobalLifetimeStmt*>(s.get())) return true;
+                        if (auto* b = dynamic_cast<BlockStmt*>(s.get()))
+                            if (contains_lifetime(*b)) return true;
+                        if (auto* iff = dynamic_cast<IfStmt*>(s.get())) {
+                            if (iff->then_block && contains_lifetime(*iff->then_block)) return true;
+                            if (iff->else_block && contains_lifetime(*iff->else_block)) return true;
+                        }
+                        if (auto* w = dynamic_cast<WhileStmt*>(s.get())) {
+                            if (w->body && contains_lifetime(*w->body)) return true;
+                        }
+                        if (auto* fl = dynamic_cast<ForLongStmt*>(s.get())) {
+                            if (fl->body && contains_lifetime(*fl->body)) return true;
+                        }
+                    }
+                    return false;
+                };
+            if (!contains_lifetime(*main_fn->body)) {
+                auto synth = std::make_unique<GlobalLifetimeStmt>();
+                synth->file_id = main_fn->file_id;
+                synth->tok = main_fn->tok;
+                main_fn->body->stmts.insert(main_fn->body->stmts.begin(),
+                                            std::move(synth));
+            }
+
+            // (P6) at most one `global;` per program. Walk main's body
+            // recursively counting user-written GlobalLifetimeStmt; auto-
+            // insert is suppressed when a user wrote any, so the count is
+            // purely user count. >1 means the user wrote a second instance.
+            struct Found { int file_id; int tok; };
+            std::vector<Found> sites;
+            std::function<void(BlockStmt&)> collect =
+                [&](BlockStmt& block) {
+                    for (auto& s : block.stmts) {
+                        if (auto* gls = dynamic_cast<GlobalLifetimeStmt*>(s.get()))
+                            sites.push_back({gls->file_id, gls->tok});
+                        if (auto* b = dynamic_cast<BlockStmt*>(s.get()))
+                            collect(*b);
+                        if (auto* iff = dynamic_cast<IfStmt*>(s.get())) {
+                            if (iff->then_block) collect(*iff->then_block);
+                            if (iff->else_block) collect(*iff->else_block);
+                        }
+                        if (auto* w = dynamic_cast<WhileStmt*>(s.get())) {
+                            if (w->body) collect(*w->body);
+                        }
+                        if (auto* fl = dynamic_cast<ForLongStmt*>(s.get())) {
+                            if (fl->body) collect(*fl->body);
+                            if (fl->update_block) collect(*fl->update_block);
+                        }
+                        if (auto* sw = dynamic_cast<SwitchStmt*>(s.get())) {
+                            for (auto& c : sw->cases)
+                                for (auto& cst : c.stmts) {
+                                    if (auto* b = dynamic_cast<BlockStmt*>(cst.get()))
+                                        collect(*b);
+                                    else if (auto* gls = dynamic_cast<GlobalLifetimeStmt*>(cst.get()))
+                                        sites.push_back({gls->file_id, gls->tok});
+                                }
+                        }
+                    }
+                };
+            collect(*main_fn->body);
+            if ((int)sites.size() > 1) {
+                throw CompileError{sites[1].file_id, sites[1].tok,
+                    "Global lifetime statement `global;` cannot appear more than once in `main`."}
+                    .addNote(sites[0].file_id, sites[0].tok,
+                             "First declared here.");
+            }
+        }
+    }
 
     // (P1) bare-enum values inject into the enclosing (file) scope. Any
     // file-scope identifier (function name, slid name, enum type, or sibling

@@ -121,6 +121,14 @@ private:
     struct ScopeFrame {
         size_t dtor_mark;
         std::map<std::string, LocalInfo> saved_locals;
+        // Raw LLVM IR lines to emit on popScope (in reverse). Used by
+        // GlobalLifetimeStmt to register the `__$global_dtor_all()` call at
+        // the end of the `global;` scope.
+        std::vector<std::string> exit_emits;
+        // True when this scope opened the global; lifetime (only set when the
+        // surrounding stmt was a GlobalLifetimeStmt). popScope decrements
+        // `global_lifetime_depth_` when popping such a frame.
+        bool opens_global_lifetime = false;
     };
     std::vector<ScopeFrame> scope_stack_;
     void pushScope();
@@ -150,6 +158,57 @@ private:
     // emit to reject non-const method calls on const receivers.
     std::set<std::string> const_methods_;
     std::map<std::string, SlidInfo>    slid_info_;
+
+    // Global slid registry. Keyed by the canonical name path: empty namespace
+    // → bare field name ("x_"); named namespace → "<ns>:<field>"; function-
+    // internal → "<fn>:<field>". Populated by collectGlobals() at the start
+    // of emit(). Static-allocated entries get a module-level LLVM global;
+    // lazy entries also carry their ctor/dtor refs for phase 3.
+    struct GlobalEntry {
+        std::string llvm_symbol;            // "@__$g.simple.garage_" etc.
+        std::string slids_type;             // "bool", "int", ... (canonical slids type)
+        std::string namespace_name;
+        std::string field_name;
+        int file_id = 0;
+        int tok = 0;
+        bool is_lazy = false;
+        std::string visible_in_function;    // non-empty: function-local visibility scope
+        const GlobalDef* def = nullptr;     // back-pointer for ctor/dtor body (phase 3)
+    };
+    std::map<std::string, GlobalEntry> globals_;
+    // Stable per-TU id assigned to each lazy GlobalDef. Drives the LLVM symbol
+    // names for sentinel / ctor / dtor / ensure widget.
+    std::map<const GlobalDef*, int> lazy_global_index_;
+    int lazy_global_count_ = 0;
+    // While emitting a lazy global's ctor or dtor body, set to the owning
+    // GlobalDef's namespace_name. Bare field-name resolution checks this scope
+    // first (`<namespace>:<field>` in globals_) so the body's bare references
+    // bind to the slid's own fields.
+    std::string current_global_namespace_;
+    // Lexical nesting depth of the active `global;` scope inside main. Each
+    // GlobalLifetimeStmt increments on emit and the matching popScope
+    // decrements. Only consulted inside main: reading or writing a global
+    // when depth == 0 in main is a reach-goal error.
+    int global_lifetime_depth_ = 0;
+    void collectGlobals();
+    void emitStaticGlobals();
+    // Phase 3: emit per-lazy sentinel, ctor function, dtor function, and the
+    // ensure widget that wires first-access sentinel-set + dtor-register +
+    // tail-call into the ctor.
+    void emitLazyGlobalHelpers();
+    // Emit the runtime dtor-list, __$global_register_dtor, and
+    // __$global_dtor_all (reverse walk). Size of the list is `lazy_global_count_`.
+    void emitGlobalDtorRuntime();
+    // Inline the sentinel test for a lazy GlobalEntry at the current emit
+    // point: if the sentinel is clear, call the ensure widget (which sets
+    // the sentinel, registers the dtor, and tail-calls the ctor). Falls
+    // through to the next emission. No-op for non-lazy entries.
+    void emitLazySentinelGate(const GlobalEntry& ge);
+    // Resolve a name string (from a VarExpr / AssignStmt) to a registered
+    // GlobalEntry. Handles `::name`, `Ns:field` (and chains), and bare names
+    // (locals already exhausted) with the function-internal → unnamed-namespace
+    // fallback chain. Returns nullptr when no match.
+    const GlobalEntry* lookupGlobal(const std::string& name) const;
 
     // Folded substitution constant. slid_type is the declared (or inferred)
     // type; int_value / float_value carry the folded value per is_float.

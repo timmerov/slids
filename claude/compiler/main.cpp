@@ -18,13 +18,24 @@ static int runInstantiate(const std::string& dir, const std::string& out_path) {
     std::vector<std::string> insts;
     std::set<std::string> inst_set;
 
+    // Cross-TU globals. Each entry is one `<ns>:<field>` registration from a
+    // sidecar; first-seen TU path wins, subsequent registrations of the same
+    // (ns, field) are collisions. Function-internal globals (carrying `fn=`)
+    // are visible only inside their function and never cross TU boundaries;
+    // they're skipped for collision purposes. The lazy count over all TUs
+    // tells phase-4b how to size the program-wide dtor list.
+    struct GlobalSite { std::string tu_path; bool is_lazy; };
+    std::map<std::string, GlobalSite> global_sites;
+    int lazy_total = 0;
+
     std::error_code ec;
     for (auto& entry : std::filesystem::recursive_directory_iterator(dir, ec)) {
         if (!entry.is_regular_file()) continue;
         if (entry.path().extension() != ".sli") continue;
         std::ifstream f(entry.path());
         std::string line;
-        enum class Section { None, Class, Template, Instantiations } section = Section::None;
+        enum class Section { None, Class, Template, Instantiations, Globals } section = Section::None;
+        std::string tu_path = entry.path().string();
         while (std::getline(f, line)) {
             auto s = line.find_first_not_of(" \t");
             if (s == std::string::npos) continue;
@@ -32,6 +43,42 @@ static int runInstantiate(const std::string& dir, const std::string& out_path) {
             if (line == "/* class declarations. */")            { section = Section::Class; continue; }
             if (line == "/* template declarations. */")         { section = Section::Template; continue; }
             if (line == "/* explicit template instantiations. */") { section = Section::Instantiations; continue; }
+            if (line == "/* globals. */")                       { section = Section::Globals; continue; }
+            if (section == Section::Globals
+                && line.rfind("global ", 0) == 0) {
+                // Format: `global <ns> <field> <type> <static|lazy>[ fn=<fn>];`
+                auto semi = line.find(';');
+                std::string body = (semi != std::string::npos) ? line.substr(7, semi - 7)
+                                                               : line.substr(7);
+                // tokenize by whitespace
+                std::vector<std::string> toks;
+                size_t p = 0;
+                while (p < body.size()) {
+                    while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) p++;
+                    size_t q = p;
+                    while (q < body.size() && body[q] != ' ' && body[q] != '\t') q++;
+                    if (q > p) toks.push_back(body.substr(p, q - p));
+                    p = q;
+                }
+                if (toks.size() < 4) continue;
+                std::string ns_label = toks[0];
+                std::string field = toks[1];
+                bool is_lazy = (toks[3] == "lazy");
+                bool fn_local = false;
+                for (size_t i = 4; i < toks.size(); i++)
+                    if (toks[i].rfind("fn=", 0) == 0) { fn_local = true; break; }
+                if (is_lazy) lazy_total++;
+                if (fn_local) continue;  // function-internal: not cross-TU
+                std::string key = ns_label + ":" + field;
+                auto [it, inserted] = global_sites.emplace(key, GlobalSite{tu_path, is_lazy});
+                if (!inserted) {
+                    std::cerr << "slidsc: --instantiate: cross-TU global collision on '"
+                              << key << "': first seen in " << it->second.tu_path
+                              << ", redeclared in " << tu_path << "\n";
+                    return 1;
+                }
+                continue;
+            }
             if (line.rfind("import ", 0) == 0) {
                 auto semi = line.find(';');
                 if (semi == std::string::npos) continue;
@@ -43,7 +90,8 @@ static int runInstantiate(const std::string& dir, const std::string& out_path) {
                 bool is_tmpl = (section == Section::Template);
                 if (import_set.insert(mod).second)
                     imports.push_back({mod, is_tmpl});
-            } else if (line.find('<') != std::string::npos) {
+            } else if (section == Section::Instantiations
+                       && line.find('<') != std::string::npos) {
                 // instantiation line: Name<Types>(ParamTypes);
                 auto semi = line.find(';');
                 if (semi == std::string::npos) continue;
@@ -60,8 +108,8 @@ static int runInstantiate(const std::string& dir, const std::string& out_path) {
         std::cerr << "slidsc: --instantiate: cannot read directory '" << dir << "'\n";
         return 1;
     }
-    if (insts.empty()) {
-        std::cout << "slidsc: --instantiate: no instantiations found\n";
+    if (insts.empty() && global_sites.empty() && lazy_total == 0) {
+        std::cout << "slidsc: --instantiate: no instantiations or globals found\n";
         return 0;
     }
 
@@ -86,6 +134,21 @@ static int runInstantiate(const std::string& dir, const std::string& out_path) {
     out << "/* explicit template instantiations. */\n";
     for (auto& inst : insts)
         out << inst << ";\n";
+
+    // Globals summary (informational for now). Cross-TU collisions were
+    // already checked during the read phase above. Phase 4b will replace
+    // this comment block with an emitted runtime: a dtor-list array sized
+    // to `lazy_total` and definitions of the program-wide
+    // __$global_register_dtor / __$global_dtor_all symbols. Until then,
+    // each TU emits its own copy of the runtime locally.
+    if (!global_sites.empty() || lazy_total > 0) {
+        out << "\n/* globals summary. */\n";
+        out << "/* lazy_total = " << lazy_total << " */\n";
+        for (auto& [key, site] : global_sites) {
+            out << "/* " << key << " from " << site.tu_path
+                << " (" << (site.is_lazy ? "lazy" : "static") << ") */\n";
+        }
+    }
 
     std::cout << "slidsc: wrote " << out_path << "\n";
     return 0;

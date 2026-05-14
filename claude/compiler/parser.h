@@ -550,6 +550,12 @@ struct ForLongStmt : Stmt {
     std::string block_label;
 };
 
+// `global;` — lifetime statement that opens the global-instantiation scope.
+// Marker node with no payload; codegen materializes the synthetic `global` slid
+// whose dtor calls `__$global_dtor_all`. Must appear inside main's body; the
+// parser auto-inserts one at the top of main when absent.
+struct GlobalLifetimeStmt : Stmt {};
+
 struct BreakStmt : Stmt {
     std::string label;  // empty = naked break
     int number = 0;     // 0 = not numbered
@@ -709,12 +715,33 @@ struct ExternalMethodDef {
     bool has_explicit_return = false; // true when the return type came from a parsed type, not an elision
 };
 
+// global slid declaration: `global [Name] (field_list) { _() {} ~() {} }`.
+// Each declaration produces an independent unit. Co-named declarations stack
+// in the same `namespace_name` but never merge — they share only access lookup.
+// `is_lazy()` ⇔ ctor_body || dtor_body (pair rule enforced by parser).
+// Static-allocated globals (no ctor/dtor) emit module-level LLVM globals;
+// lazy globals get a per-slid `i1` sentinel and `__$ensure_<id>()` glue.
+struct GlobalDef {
+    std::string namespace_name;            // "" for unnamed namespace; "simple", "Box:lid", "foo" otherwise
+    std::vector<FieldDef> fields;
+    std::unique_ptr<BlockStmt> ctor_body;  // null when no _() declared
+    std::unique_ptr<BlockStmt> dtor_body;  // null when no ~() declared
+    int file_id = 0;
+    int tok = 0;                           // location of the `global` keyword
+    // when non-empty, this global is only visible inside the named function
+    // (function/method-internal short form). Bare-name access from that
+    // function's body falls through to this global after locals fail.
+    std::string visible_in_function;
+    bool is_lazy() const { return ctor_body || dtor_body; }
+};
+
 struct Program {
     std::vector<EnumDef> enums;
     std::vector<SlidDef> slids;
     std::vector<FunctionDef> functions;
     std::vector<ExternalMethodDef> external_methods;
     std::vector<ConstDef> consts;                   // program-scope const decls (no storage)
+    std::vector<GlobalDef> globals;                 // global slid declarations (file/class/function-internal)
 
     std::vector<std::string> imported_headers; // resolved .slh paths, for -MF dep output
     std::map<std::string, std::string> slid_modules; // slid name -> module that provides it
@@ -842,6 +869,17 @@ private:
     // (e.g. "Inner" → "Outer.Inner") — applied by parseTypeName
     std::map<std::string, std::string> nested_alias_;
 
+    // Name of the function/method whose body is currently being parsed.
+    // Empty at file scope, set by parseFunctionDef / parseMethodDef /
+    // parseExternalMethodDef before parsing the body, restored after.
+    // Drives the namespace_prefix used for function-internal `global` decls.
+    std::string current_function_name_;
+
+    // Globals collected during the current top-level declaration (file-scope
+    // long form, class-internal, function-internal). Drained into
+    // `program.globals` at the end of each loop iteration in `parse()`.
+    std::vector<GlobalDef> pending_globals_;
+
     // user-declared type aliases (alias Name = TypeExpr;). innermost frame is
     // current block; bottom frame is file-scope. resolved type strings are
     // already in canonical form (e.g. "int^", "Class.Hoisted", "Template__int")
@@ -885,6 +923,18 @@ private:
                         int op_tok);
 
     SlidDef parseSlidDef();
+    // Parses a single global slid declaration. Caller has already verified that
+    // `pos_` points at the `global` keyword and ruled out the `global;` lifetime
+    // statement shape. `namespace_prefix` is "" at file scope, the enclosing
+    // class name for class-internal globals, or the enclosing function name for
+    // function-internal globals. `visible_in_function` mirrors the function-name
+    // prefix and is empty for file/class-scope globals.
+    GlobalDef parseGlobalDef(const std::string& namespace_prefix,
+                             const std::string& visible_in_function);
+    // Parses the bare file-scope short form `TYPE NAME = EXPR;` (no leading
+    // `global` keyword) into the unnamed namespace. Caller has confirmed the
+    // shape via lookahead.
+    GlobalDef parseBareGlobalShortForm();
     // collapse multiple SlidDef entries with the same class name into a single
     // merged entry. multiple entries arise from reopens; codegen expects one
     // logical class per name. fields, methods, and ctor/dtor bodies are
@@ -892,7 +942,11 @@ private:
     // are OR'd.
     void mergeReopens(Program& program);
     EnumDef parseEnumDef();
-    MethodDef parseMethodDef();
+    // `class_name` is the enclosing class. When non-empty the method body
+    // parses with `current_function_name_ = "Class:method"`, so any
+    // function-internal `global` declared in the body lands in the method's
+    // qualified namespace (and stays invisible outside that method).
+    MethodDef parseMethodDef(const std::string& class_name = "");
     ExternalMethodDef parseExternalMethodDef();
     void parseExternalMethodBlock(Program& program); // TypeName { method() {...} ... }
     NestedFunctionDef parseNestedFunctionDef();

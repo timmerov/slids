@@ -1,4 +1,6 @@
 
+main should be a keyword.
+
 globals.
 still waiting for the good idea fairy.
 slid-like.
