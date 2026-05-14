@@ -37,7 +37,7 @@ main() {
 main() {
     foo();
     {
-        /* in case you want to do this weirdness. */
+        /* in case you want to micromanage globals. */
         global;
         global.self;
         bar();
@@ -64,13 +64,11 @@ desugars to:
     global(Class^ singleton = nullptr);
 primitives and pointer types only.
 global classes must use the long form for globals.
+global names may not collide.
+global and global.self names collide.
 
 threads:
-global self name(blah) { blah. }
-global<self> name() {}
-global.self name() {}  <-- lean
-global:self name() {}
-
+global.self name(field list) { ctor dtor methods }
 allocates memory from the thread's heap.
 no locking needed.
 is the default.
