@@ -7,6 +7,7 @@ TEST_DIR="$SCRIPT_DIR/test"
 
 SAMPLES=(
     alias
+    array
     blocks
     cast
     chain

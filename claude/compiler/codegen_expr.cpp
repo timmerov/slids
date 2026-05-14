@@ -240,8 +240,10 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 return lv.addr;
             }
             auto& ainfo = ait->second;
-            std::string flat = emitExpr(*indices[0]);
-            for (int k = 1; k < (int)indices.size(); k++) {
+            // Slids reading — see read-side fold in resolveLvalue for derivation.
+            int n = (int)indices.size();
+            std::string flat = emitExpr(*indices[n - 1]);
+            for (int k = n - 2; k >= 0; k--) {
                 int stride = ainfo.dims[k];
                 std::string mul = newTmp();
                 out_ << "    " << mul << " = mul i32 " << flat << ", " << stride << "\n";

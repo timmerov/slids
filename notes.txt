@@ -1,4 +1,7 @@
 
+"fixed arrays require an element type."
+oh really?
+
 claude added float half-assedly.
 the token gets replaced with float32.
 it should be treated the same way as int.
@@ -22,6 +25,7 @@ String(...) {
 }
 
 probably need a dereference operator for iterator types.
+implemented but unverified.
 x = iter^;  -->  x = iter.op^();
 iter^ = x;  -->  iter.op^=(x);
 or maybe we just use the index operators.
@@ -35,8 +39,6 @@ Class() {
 can derived classes have non-const dtors?
 hrm...
 
-infer types of fields.
-
 claude thinks:
 "Virtual dispatch through chained AIE/FieldAccess still falls
 to static dispatch — the indirect flag (codegen_stmt.cpp:2535)
@@ -48,9 +50,6 @@ still errors. Out of scope; would require a temp-spill before dispatch,
 similar to the rvalue-base spill in the emitExpr(AIE) wrapper."
 
 virtual classes in tuples probably don't work right.
-
-"fixed arrays require an element type."
-oh really?
 
 unhelpful caret:
 alisa TupleType =

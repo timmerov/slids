@@ -8,6 +8,7 @@ BUILD_DIR = ../build/test
 
 SAMPLES = \
 	alias \
+	array \
 	blocks \
 	cast \
 	chain \

@@ -1380,6 +1380,43 @@ std::unique_ptr<Stmt> Parser::buildAssignFromLhs(
             std::move(fa->object), fa->field, std::move(rhs), is_move);
     }
     if (auto* ai = dynamic_cast<ArrayIndexExpr*>(lhs.get())) {
+        // Inferred-elem fixed-size array decl: `name[A][B]... = expr;` where
+        // `name` is not yet in scope and every index is an integer literal.
+        // Treat as ArrayDeclStmt with empty elem_type; codegen infers from
+        // init_values[0] and enforces homogeneity.
+        if (!is_move) {
+            const Expr* cur = ai;
+            std::vector<int> dims_outer_first;
+            bool all_intlit = true;
+            while (auto* a = dynamic_cast<const ArrayIndexExpr*>(cur)) {
+                auto* lit = dynamic_cast<const IntLiteralExpr*>(a->index.get());
+                if (!lit) { all_intlit = false; break; }
+                dims_outer_first.push_back((int)lit->value);
+                cur = a->base.get();
+            }
+            auto* ve = dynamic_cast<const VarExpr*>(cur);
+            if (all_intlit && ve && !isInScope(ve->name)
+                    && !current_slid_fields_.count(ve->name)) {
+                auto arr = make<ArrayDeclStmt>(t_start);
+                arr->elem_type = "";
+                arr->name = ve->name;
+                arr->dims.assign(dims_outer_first.rbegin(),
+                                 dims_outer_first.rend());
+                if (auto* te = dynamic_cast<TupleExpr*>(rhs.get())) {
+                    for (auto& v : te->values)
+                        arr->init_values.push_back(std::move(v));
+                } else {
+                    arr->init_values.push_back(std::move(rhs));
+                }
+                declareVar(arr->name, ve->tok);
+                if (auto* li = findLocal(arr->name)) {
+                    li->is_array = true;
+                    li->array_count = arr->dims[0];
+                    li->array_rank = (int)arr->dims.size();
+                }
+                return arr;
+            }
+        }
         return make<IndexAssignStmt>(t_start,
             std::move(ai->base), std::move(ai->index), std::move(rhs), is_move);
     }

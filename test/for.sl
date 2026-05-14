@@ -492,7 +492,7 @@ int32 main() {
         //    __println("compile error: tuple-literal of anon-tuple needs explicit type.");
         //}
 
-        //-EXPECT-ERROR-DEFERRED: parser does not yet accept anon-tuple-element fixed-array decls
+        //-EXPECT-ERROR: For-loop cannot infer the loop variable type
         //(int, int) pairs[3] = ((1, 2), (3, 4), (5, 6));
         //for (x : pairs) {
         //    __println("compile error: fixed-array of anon-tuple needs explicit type.");

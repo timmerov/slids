@@ -370,8 +370,14 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
             if (ait != array_info_.end()) {
                 auto& ainfo = ait->second;
                 int n = std::min((int)indices.size(), (int)ainfo.dims.size());
-                std::string flat = emitExpr(*indices[0]);
-                for (int k = 1; k < n; k++) {
+                // Slids reading: leftmost type-bracket is innermost; rightmost
+                // is outermost. dims is stored in source order, so dims[0] is
+                // the innermost size and dims[n-1] is the outermost. Indices
+                // mirror the type-brackets: indices[0] is the innermost index,
+                // indices[n-1] is the outermost. Right-to-left Horner builds
+                // flat = (((i_{n-1})*dims[n-2] + i_{n-2})*dims[n-3] + ...) *dims[0] + i_0.
+                std::string flat = emitExpr(*indices[n - 1]);
+                for (int k = n - 2; k >= 0; k--) {
                     int stride = ainfo.dims[k];
                     std::string mul = newTmp();
                     out_ << "    " << mul << " = mul i32 " << flat
@@ -949,19 +955,45 @@ void Codegen::emitStmt(const Stmt& stmt) {
         int total = 1;
         for (int d : arr->dims) total *= d;
         // Empty elem_type means "infer from init_values[0] and require homogeneity".
-        // Used by the for-tuple desugar, which synthesizes an ArrayDeclStmt without
-        // a known elem type. Also enforces the "tuple must be homogeneous" rule.
+        // For dims.size() > 1, peel dims.size()-1 levels of tuple nesting from
+        // init_values[0] to find the leaf element type. The structural walk
+        // below enforces shape homogeneity.
         std::string elem_type = arr->elem_type;
         if (elem_type.empty()) {
             if (arr->init_values.empty())
                 error(std::string("Array '" + arr->name
                     + "' has no element type and no initializer to infer from."));
-            elem_type = inferSlidType(*arr->init_values[0]);
-            for (int i = 1; i < (int)arr->init_values.size(); i++) {
-                if (inferSlidType(*arr->init_values[i]) != elem_type)
-                    errorAtNode(*arr->init_values[i],
-                        "Tuple element type does not match element 0 ('"
-                        + elem_type + "').");
+            const Expr* probe = arr->init_values[0].get();
+            for (int level = 0; level < (int)arr->dims.size() - 1; level++) {
+                auto* te = dynamic_cast<const TupleExpr*>(probe);
+                if (!te || te->values.empty())
+                    errorAtNode(*probe,
+                        "Init nesting does not match array dimensions.");
+                probe = te->values[0].get();
+            }
+            elem_type = inferSlidType(*probe);
+            if (arr->dims.size() == 1) {
+                // Single-source anon-tuple RHS (variable / call return): the
+                // tuple unpacks slot-by-slot into the array, so elem_type is
+                // the tuple's homogeneous element type, not the tuple type.
+                if (arr->init_values.size() == 1 && isAnonTupleType(elem_type)) {
+                    auto elems = anonTupleElems(elem_type);
+                    if (elems.empty())
+                        errorAtNode(*probe,
+                            "Cannot infer array element type from empty tuple.");
+                    for (auto& t : elems)
+                        if (t != elems[0])
+                            errorAtNode(*probe,
+                                "Cannot infer array element type: tuple '"
+                                + elem_type + "' is not homogeneous.");
+                    elem_type = elems[0];
+                }
+                for (int i = 1; i < (int)arr->init_values.size(); i++) {
+                    if (inferSlidType(*arr->init_values[i]) != elem_type)
+                        errorAtNode(*arr->init_values[i],
+                            "Tuple element type does not match element 0 ('"
+                            + elem_type + "').");
+                }
             }
         }
         std::string base = "%arr_" + arr->name;
@@ -980,72 +1012,132 @@ void Codegen::emitStmt(const Stmt& stmt) {
         // allow array to be captured by nested functions and expose flat
         // shape (e.g. "int[6]") to consumers (for-array etc.).
         locals_[arr->name] = {reg, elem_type + "[" + std::to_string(total) + "]", arr->file_id, arr->tok};
-        // Multi-dim primitive array with nested-paren init: flatten to a
-        // single flat list matching `[total x elt]`. Covers shapes like
-        // `int g[2][3] = ((1,2,3),(4,5,6))` and `Piece board[8][8] = ...`.
-        // Compound elem_types (slid, anon-tuple) keep TupleExpr structure
-        // and use per-slot recursion below.
-        if (!slid_info_.count(elem_type) && !isAnonTupleType(elem_type)) {
-            bool any_tuple = false;
-            for (auto& iv : arr->init_values)
-                if (dynamic_cast<const TupleExpr*>(iv.get())) { any_tuple = true; break; }
-            if (any_tuple) {
-                std::vector<const Expr*> flat;
-                std::function<void(const Expr*)> flatten = [&](const Expr* e) {
-                    if (auto* te = dynamic_cast<const TupleExpr*>(e)) {
-                        for (auto& v : te->values) flatten(v.get());
+        // Multi-dim slid arrays fall through to the 1D per-slot path and
+        // produce wrong storage / malformed IR. Fail loud until proper
+        // multi-dim slid init lands.
+        if (arr->dims.size() > 1 && slid_info_.count(elem_type)) {
+            error(std::string("Multi-dimensional fixed-size array of slid type '"
+                + elem_type + "' is not yet supported."));
+        }
+        // Scalar single-value RHS to a fixed-size array of size > 1 is a
+        // compile error — fixed-size arrays demand a tuple-shape initializer.
+        // Single-value-promotion is allowed only when total == 1.
+        // Tuple-typed single-source (variable / call return) routes to the
+        // tuple-variable path below.
+        if (arr->init_values.size() == 1 && total > 1) {
+            auto src_t = inferSlidType(*arr->init_values[0]);
+            if (!isAnonTupleType(src_t)) {
+                errorAtNode(*arr->init_values[0],
+                    "Fixed-size array '" + arr->name
+                    + "' requires a tuple-shape initializer.");
+            }
+        }
+        // Multi-dim primitive / anon-tuple array: structural matching against
+        // dims under slids reading (leftmost type-bracket = innermost,
+        // rightmost = outermost). The outer init slot count must match
+        // dims[n-1]; each inner slot must be a TupleExpr matching the next
+        // inner dim (or a single value when that inner dim is 1).
+        // Tail-short at the outermost dim → zero-fill (decl-form rule).
+        if (arr->dims.size() > 1
+                && !slid_info_.count(elem_type)) {
+            std::vector<const Expr*> flat(total, nullptr);
+            int n_dims = (int)arr->dims.size();
+            std::function<void(const std::vector<const Expr*>&, int, int, const Expr*)> walk
+                = [&](const std::vector<const Expr*>& vals,
+                      int from_dim, int base, const Expr* err_at) {
+                int level_size = arr->dims[from_dim];
+                int inner_stride = 1;
+                for (int k = 0; k < from_dim; k++) inner_stride *= arr->dims[k];
+                if ((int)vals.size() > level_size)
+                    errorAtNode(*err_at, "Too many values for array level (got "
+                        + std::to_string(vals.size()) + ", expected "
+                        + std::to_string(level_size) + ").");
+                if (from_dim == 0) {
+                    for (int i = 0; i < (int)vals.size(); i++)
+                        flat[base + i] = vals[i];
+                    return;
+                }
+                for (int i = 0; i < (int)vals.size(); i++) {
+                    if (auto* te = dynamic_cast<const TupleExpr*>(vals[i])) {
+                        std::vector<const Expr*> sub;
+                        sub.reserve(te->values.size());
+                        for (auto& v : te->values) sub.push_back(v.get());
+                        walk(sub, from_dim - 1, base + i * inner_stride, vals[i]);
+                    } else if (arr->dims[from_dim - 1] == 1) {
+                        std::vector<const Expr*> one{ vals[i] };
+                        walk(one, from_dim - 1, base + i * inner_stride, vals[i]);
                     } else {
-                        flat.push_back(e);
+                        errorAtNode(*vals[i], "Init slot must be a tuple of "
+                            + std::to_string(arr->dims[from_dim - 1])
+                            + " values.");
                     }
-                };
-                for (auto& iv : arr->init_values) flatten(iv.get());
-                if ((int)flat.size() > total)
-                    error(std::string("Too many values for array '" + arr->name
-                        + "': has " + std::to_string(total)
-                        + " elements, got " + std::to_string(flat.size()) + "."));
-                for (int i = 0; i < (int)flat.size(); i++) {
-                    std::string gep = newTmp();
-                    out_ << "    " << gep << " = getelementptr [" << total
-                         << " x " << elt << "], ptr " << reg
-                         << ", i32 0, i32 " << i << "\n";
-                    std::string val = emitExpr(*flat[i]);
-                    if (inferSlidType(*flat[i]) != elem_type) {
-                        std::string src_t = exprLlvmType(*flat[i]);
-                        if (src_t != elt) {
-                            static const std::map<std::string,int> rank =
-                                {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
-                            auto sit = rank.find(src_t), dit = rank.find(elt);
-                            if (sit != rank.end() && dit != rank.end()) {
-                                std::string coerced = newTmp();
-                                if (dit->second > sit->second)
-                                    out_ << "    " << coerced << " = sext "
-                                         << src_t << " " << val << " to " << elt << "\n";
-                                else
-                                    out_ << "    " << coerced << " = trunc "
-                                         << src_t << " " << val << " to " << elt << "\n";
-                                val = coerced;
-                            } else {
-                                error(std::string("Type mismatch: cannot assign '"
-                                    + inferSlidType(*flat[i]) + "' to '" + elem_type + "'"));
-                            }
+                }
+            };
+            std::vector<const Expr*> top;
+            top.reserve(arr->init_values.size());
+            for (auto& iv : arr->init_values) top.push_back(iv.get());
+            const Expr* err_anchor = top.empty()
+                ? static_cast<const Expr*>(nullptr) : top[0];
+            if (err_anchor != nullptr)
+                walk(top, n_dims - 1, 0, err_anchor);
+
+            for (int i = 0; i < total; i++) {
+                std::string gep = newTmp();
+                out_ << "    " << gep << " = getelementptr [" << total
+                     << " x " << elt << "], ptr " << reg
+                     << ", i32 0, i32 " << i << "\n";
+                if (flat[i] == nullptr) {
+                    if (isAnonTupleType(elem_type)) {
+                        out_ << "    store " << elt
+                             << " zeroinitializer, ptr " << gep << "\n";
+                    } else {
+                        std::string z = isIndirectType(elem_type) ? "null"
+                            : (elem_type == "float32" || elem_type == "float64") ? "0.0"
+                            : "0";
+                        out_ << "    store " << elt << " " << z
+                             << ", ptr " << gep << "\n";
+                    }
+                    continue;
+                }
+                if (isAnonTupleType(elem_type)) {
+                    if (auto* te = dynamic_cast<const TupleExpr*>(flat[i])) {
+                        std::vector<const Expr*> ov;
+                        ov.reserve(te->values.size());
+                        for (auto& v : te->values) ov.push_back(v.get());
+                        emitInitFieldsAtPtrs(elem_type, gep, {}, ov);
+                    } else {
+                        std::string val = emitExpr(*flat[i]);
+                        out_ << "    store " << elt << " " << val
+                             << ", ptr " << gep << "\n";
+                    }
+                    continue;
+                }
+                std::string val = emitExpr(*flat[i]);
+                if (inferSlidType(*flat[i]) != elem_type) {
+                    std::string src_t = exprLlvmType(*flat[i]);
+                    if (src_t != elt) {
+                        static const std::map<std::string,int> rank =
+                            {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+                        auto sit = rank.find(src_t), dit = rank.find(elt);
+                        if (sit != rank.end() && dit != rank.end()) {
+                            std::string coerced = newTmp();
+                            if (dit->second > sit->second)
+                                out_ << "    " << coerced << " = sext "
+                                     << src_t << " " << val << " to " << elt << "\n";
+                            else
+                                out_ << "    " << coerced << " = trunc "
+                                     << src_t << " " << val << " to " << elt << "\n";
+                            val = coerced;
+                        } else {
+                            error(std::string("Type mismatch: cannot assign '"
+                                + inferSlidType(*flat[i]) + "' to '" + elem_type + "'"));
                         }
                     }
-                    out_ << "    store " << elt << " " << val
-                         << ", ptr " << gep << "\n";
                 }
-                for (int i = (int)flat.size(); i < total; i++) {
-                    std::string gep = newTmp();
-                    out_ << "    " << gep << " = getelementptr [" << total
-                         << " x " << elt << "], ptr " << reg
-                         << ", i32 0, i32 " << i << "\n";
-                    std::string z = isIndirectType(elem_type) ? "null"
-                        : (elem_type == "float32" || elem_type == "float64") ? "0.0"
-                        : "0";
-                    out_ << "    store " << elt << " " << z
-                         << ", ptr " << gep << "\n";
-                }
-                return;
+                out_ << "    store " << elt << " " << val
+                     << ", ptr " << gep << "\n";
             }
+            return;
         }
         // Single tuple-shape source for the whole array: unpack per slot.
         // Covers `T arr[N] = tuple_var;` and `T arr[N] = make_tuple();`.
@@ -2730,8 +2822,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     && (int)indices.size() >= (int)ait->second.dims.size()) {
                 auto& ainfo = ait->second;
                 int n = (int)ainfo.dims.size();
-                std::string flat = emitExpr(*indices[0]);
-                for (int k = 1; k < n; k++) {
+                // Slids reading — see read-side fold above for derivation.
+                std::string flat = emitExpr(*indices[n - 1]);
+                for (int k = n - 2; k >= 0; k--) {
                     int stride = ainfo.dims[k];
                     std::string mul = newTmp();
                     out_ << "    " << mul << " = mul i32 " << flat

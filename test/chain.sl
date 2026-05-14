@@ -45,21 +45,42 @@ int32 main() {
     x = tuple[1].x_;
     __println("tuple[1].x_=" + x);
 
-    /* unexpected compile error: */
-    //array1[2] = (tuple, tuple);
+    /* inferred-elem array decl: name[N] = ... with no leading type.
+       elem type comes from init_values[0]; homogeneity is required. */
+    array1[2] = (tuple, tuple);
+    __println("array1[0][0].x_=" + array1[0][0].x_);
 
-    /* unexpected compile error: */
     (Class, Class) array2[2] = (tuple, tuple);
 
     TupleType array[2] = (tuple, tuple);
     x = array[0][0][0];
     __println("array[0][0][0]=" + x);
 
-    /* multi-dim native array: row-major flat alloca, dims=[2,3].
-       chain read via grid[i][j] folds both indices into one flat GEP. */
-    int grid[2][3] = (10, 20, 30, 40, 50, 60);
+    /* multi-dim native array. Slids reading: leftmost type-bracket is
+       innermost; rightmost is outermost. grid[2][3] is 3 outer of 2 inner.
+       Init must structurally match: outer 3-tuple, each inner 2-tuple. */
+
+    //-EXPECT-ERROR: Too many values for array level
+    //int grid_flat[2][3] = (10, 20, 30, 40, 50, 60);
+
+    int grid[2][3] = ((10, 11), (12, 13), (14, 15));
     __println("grid[0][0]=" + grid[0][0]);
     __println("grid[1][2]=" + grid[1][2]);
+
+    /* Verify the access formula by writing through an iterator into the
+       flat alloca and reading back via grid[i][j]. ^grid[0][0] is already
+       typed int[] because the deepest base is a fixed-size array.
+       Slids row-major: outer (j) slowest, inner (i) fastest. flat = j*2+i.
+       Loop prints in (j, i) order so the output reads 0..5. */
+    int[] iter = ^grid[0][0];
+    for (k : 0..6) {
+        iter[k] = k;
+    }
+    for (j : 0..3) {
+        for (i : 0..2) {
+            __println("grid[" + i + "][" + j + "]=" + grid[i][j]);
+        }
+    }
 
     /* op[] returns a reference; `box[i] = v` writes through it. */
     Box box;
