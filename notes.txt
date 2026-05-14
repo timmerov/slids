@@ -1,6 +1,6 @@
 
-"fixed arrays require an element type."
-oh really?
+globals.
+still waiting for the good idea fairy.
 
 claude added float half-assedly.
 the token gets replaced with float32.

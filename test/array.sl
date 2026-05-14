@@ -25,6 +25,12 @@ int32 main() {
     }
     __println();
 
+    __print("a_ray[1,2,3]=");
+    for (int^ it : a_ray) {
+        __print(" " + it^);
+    }
+    __println();
+
     b_ray[2][3] = (
         (10, 11),
         (12, 13),
