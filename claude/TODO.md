@@ -2,15 +2,27 @@
 
 ## Globals
 
-Phases 1-6 plus reverse-construction-order test landed: keyword, long/short forms, namespace access (`Ns:field`, `::field`), class- and function- and method-internal scopes, lazy ctor/dtor with sentinel + ensure widget, single-shot `global;` lifetime auto-inserted at top of `main`, cross-TU shared dtor list (linkonce_odr head + per-TU prepend nodes), reach-goal errors for double-`global;` and out-of-scope access. The negative-test catalog enforces every spec rule with active markers.
+Globals are fully landed at the language level. Phases 1-6 plus reverse-construction-order, cross-TU static access via `.slh`, and cross-TU lazy access via stable namespace-path mangling on sentinel + ensure widget. The phase-3 runtime is a per-TU dtor node + ctor + dtor (internal), sentinel + ensure widget at default linkage so consumers can gate cross-TU, and a `linkonce_odr` shared head + walker. Header-side decls support inferred-type short form (`global what_ = 2;`), bare typed (`int where_;`), and forward-decl ctor/dtor (`_(); ~();`).
 
-Remaining:
+Remaining genuine technical gaps (not coverage artifacts):
 
-- **Cross-TU static-global access via `.slh` header (option A)**. `.slh` carries `global Ns(field=value) {}` decls; consumer parser folds into `program.globals` with a new `impl_module` field set; codegen emits `external global` for those instead of `<sym> = global <ty> <init>`. Reject ctor/dtor bodies in headers ("must live in the defining TU") so we don't stumble into cross-TU lazy. Skip imported entries when writing the `.sli` sidecar so the aggregator's collision check stays meaningful. Footprint: ~10 lines parser, 3-line branch in `emitStaticGlobals`, 3-line skip in `writeSliFile`, one new field on `GlobalDef`, a couple of negatives.
+- **Threads — `global.self` / `global.default` paired with `new.self` / `new.default`.** Explicit future-work in the spec. Per-thread (TLS) variant for the default; cross-thread default uses a lock-protected heap on the `new` side. Out of scope until a thread story exists at the language level.
 
-- **Cross-TU lazy-global access (deferred until option A demands it)**. Today the sentinel / ensure / ctor / dtor / node symbols are mangled per-TU index (`@__$g_sentinel.N` etc.) and never cross TUs. For a consumer TU to access a lazy global defined in another TU, those symbols need to be (a) renamed by namespace path so they're stable across TUs, and (b) weakened linkage (or moved to `linkonce_odr`) so the consumer's import-side declares resolve to the defining TU's definitions. Sketch: replace the index `N` with a sanitized namespace key in `emitLazyGlobalHelpers`, flip sentinel + node + ensure linkage from `internal` to weak/linkonce_odr at the defining site, emit `declare`s on the consumer side. Touches the same files as option A plus `codegen.cpp`'s emission routines.
+- **Header/def initializer-match check.** Spec says the header's initializer (when present) must match the defining TU's value. Today the consumer silently accepts whatever the def says and ignores the header's value. Add a comparison in `parser.cpp`'s post-parse dedup before the local entry wins out.
 
-- **Threads — `global.self` / `global.default` and the `new.self` / `new.default` pair.** Explicit future-work in the spec. Per-thread (TLS) variant for the default; cross-thread default uses a lock-protected heap on the `new` side. Out of scope until a thread story exists at the language level.
+- **Header/def *partial* mismatch — sharpen the error.** The dedup pass in `parser.cpp` already throws when a header namespace's fields are partially redefined locally, but the message is generic. A note pointing at the specific missing/extra fields would be clearer.
+
+- **Missing def at link time.** Header declares a lazy global, no TU provides ctor/dtor or storage. Today this surfaces as a generic linker "undefined symbol" error against the mangled symbol. A slidsc-side diagnostic at the aggregator step (`runInstantiate`) would tie it back to source.
+
+- **Three-or-more TU programs.** The cross-TU runtime should compose for N > 2 TUs (sentinels are still unique per slid; the shared head is still one list), but it's not been exercised. A two-consumer-plus-one-definer sample would pin this.
+
+- **Aggregator (`--instantiate`) in the build pipeline.** The aggregator's collision check and globals summary work, but no `make` target invokes `--instantiate` today, so the path can regress silently. Wire it into the multi-TU sample build, then exercise the cross-TU collision negative.
+
+- **Lazy ctor that touches a *cross-TU* lazy.** The intra-TU pattern (one ctor touches another lazy) works and pins reverse-construction order. Cross-TU equivalent — ctor in TU1 touches a lazy in TU2 — should fire the second ensure widget and end up with the right LIFO order across TUs. Plumbing is in place; not exercised.
+
+- **Lazy diagnostics.** Forward-decl pair-rule (`_();` without `~();`), header carrying a ctor/dtor body (should the header reject those, or accept-and-prefer-def?), bodyless-ctor-only-in-def — these are policy questions plus error-path tests, not core feature gaps.
+
+- **Slid-typed global fields with implicit construction.** Globals require foldable-constant initializers, and a slid instance isn't foldable — so `global Class instance;` and `global wrap(Class c_) { }` (no foldable `=` on `c_`) zero-init the slid storage and never call `Class:_()`. Two paths: (a) reject the shape at parse time with a clear message pointing the author at the explicit-wrapping workaround (`global wrap(Class^ c_ = nullptr) { _() { c_ = new Class(); } ~() { delete c_; } }`); or (b) extend the model so a slid-typed field with no foldable default implicitly turns the wrapping global lazy, with a compiler-generated `_()` calling the field type's ctor and a matching dtor registered on the shared list. Sibling of the deferred slid-field-default codegen bug — fix that first, then pick a path.
 
 ## Compiler
 

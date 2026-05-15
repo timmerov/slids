@@ -1,6 +1,13 @@
 
 main should be a keyword.
 
+global class objects.
+is it legal syntax?
+when is it constructed?
+i expect yes.
+and when lazy touched.
+better check.
+
 globals have mostly landed.
 globals spanning multiple source files is
 insufficiently tested.
