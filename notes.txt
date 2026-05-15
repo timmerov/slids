@@ -1,9 +1,9 @@
 
 main should be a keyword.
 
-global arrays of class objects.
+global 2d arrays of class objects.
 not yet supported.
-global Class arr[3];
+global Class arr[2][3];
 
 globals have mostly landed.
 globals spanning multiple source files is
@@ -22,10 +22,6 @@ locking required.
 
 can we configure new?
 new.set_heap_size(1G);
-
-claude added float half-assedly.
-the token gets replaced with float32.
-it should be treated the same way as int.
 
 alias functions that differ by qualifiers on return type.
 given this function:

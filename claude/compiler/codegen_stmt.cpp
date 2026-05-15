@@ -1117,7 +1117,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                              << " zeroinitializer, ptr " << gep << "\n";
                     } else {
                         std::string z = isIndirectType(elem_type) ? "null"
-                            : (elem_type == "float32" || elem_type == "float64") ? "0.0"
+                            : (elem_type == "float" || elem_type == "float32" || elem_type == "float64") ? "0.0"
                             : "0";
                         out_ << "    store " << elt << " " << z
                              << ", ptr " << gep << "\n";
@@ -1219,7 +1219,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             dtor_vars_.push_back({arr->name, elem_type, i});
                     } else {
                         std::string z = isIndirectType(elem_type) ? "null"
-                            : (elem_type == "float32" || elem_type == "float64") ? "0.0"
+                            : (elem_type == "float" || elem_type == "float32" || elem_type == "float64") ? "0.0"
                             : "0";
                         out_ << "    store " << elt << " " << z
                              << ", ptr " << dst_gep << "\n";
@@ -1326,7 +1326,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 // tuple init (decl-form rule). Fully-uninit declarations
                 // leave primitive slots alone, matching prior behavior.
                 std::string z = isIndirectType(elem_type) ? "null"
-                    : (elem_type == "float32" || elem_type == "float64") ? "0.0"
+                    : (elem_type == "float" || elem_type == "float32" || elem_type == "float64") ? "0.0"
                     : "0";
                 out_ << "    store " << elt << " " << z << ", ptr " << gep << "\n";
             }
@@ -1708,7 +1708,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                              << " zeroinitializer, ptr " << gep << "\n";
                     } else {
                         std::string z = isIndirectType(elems[i]) ? "null"
-                            : (elems[i] == "float32" || elems[i] == "float64") ? "0.0"
+                            : (elems[i] == "float" || elems[i] == "float32" || elems[i] == "float64") ? "0.0"
                             : "0";
                         out_ << "    store " << llvmType(elems[i]) << " " << z
                              << ", ptr " << gep << "\n";
@@ -1781,7 +1781,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                              << " zeroinitializer, ptr " << tgep << "\n";
                     } else {
                         std::string z = isIndirectType(elems[i]) ? "null"
-                            : (elems[i] == "float32" || elems[i] == "float64") ? "0.0"
+                            : (elems[i] == "float" || elems[i] == "float32" || elems[i] == "float64") ? "0.0"
                             : "0";
                         out_ << "    store " << llvmType(elems[i]) << " " << z
                              << ", ptr " << tgep << "\n";
@@ -1797,7 +1797,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             static const std::set<std::string> known_primitives = {
                 "int","int8","int16","int32","int64",
                 "uint","uint8","uint16","uint32","uint64",
-                "char","bool","float32","float64","void","intptr"
+                "char","bool","float","float32","float64","void","intptr"
             };
             std::string canon = canonType(eff_type);
             bool is_ptr = (!canon.empty() && canon.back() == '^')
@@ -2601,7 +2601,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 "uint","uint8","uint16","uint32","uint64","char"
             };
             bool is_unsigned = unsigned_types.count(slids_type) > 0;
-            bool is_float = (slids_type == "float32" || slids_type == "float64");
+            bool is_float = (slids_type == "float" || slids_type == "float32" || slids_type == "float64");
             std::string instr;
             if (is_float) {
                 if (op == "+") instr = "fadd";

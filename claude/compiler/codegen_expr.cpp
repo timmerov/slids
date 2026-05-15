@@ -1648,7 +1648,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         auto sizeofTypeName = [&](const std::string& tn) -> std::string {
             if (tn == "char" || tn == "int8" || tn == "uint8" || tn == "bool") return "1";
             if (tn == "int16" || tn == "uint16") return "2";
-            if (tn == "int" || tn == "int32" || tn == "uint" || tn == "uint32" || tn == "float32") return "4";
+            if (tn == "int" || tn == "int32" || tn == "uint" || tn == "uint32" || tn == "float" || tn == "float32") return "4";
             if (tn == "int64" || tn == "uint64" || tn == "float64" || tn == "intptr") return "8";
             // pointer/iterator types — size of a pointer
             if (tn.size() >= 1 && tn.back() == '^') return "8";
@@ -1702,7 +1702,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 n == "char" || n == "bool" ||
                 n == "int" || n == "int8" || n == "int16" || n == "int32" || n == "int64" ||
                 n == "uint" || n == "uint8" || n == "uint16" || n == "uint32" || n == "uint64" ||
-                n == "intptr" || n == "float32" || n == "float64" ||
+                n == "intptr" || n == "float" || n == "float32" || n == "float64" ||
                 (!n.empty() && n.back() == '^') ||
                 (n.size() >= 2 && n.substr(n.size()-2) == "[]") ||
                 slid_info_.count(n);

@@ -23,6 +23,7 @@ enum class TokenType {
     kUint64,
     kChar,
     kIntptr,
+    kFloat,
     kFloat32,
     kFloat64,
     kBool,

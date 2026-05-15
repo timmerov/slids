@@ -207,7 +207,7 @@ std::string Codegen::llvmType(const std::string& raw_t) {
     if (t == "intptr") return "i64";
     if (t == "anyptr") return "ptr";
     if (t == "$vptr")  return "ptr"; // synthetic vtable pointer slot for virtual classes
-    if (t == "float32") return "float";
+    if (t == "float" || t == "float32") return "float";
     if (t == "float64") return "double";
     if (t == "void")  return "void";
     // slid type name → named struct

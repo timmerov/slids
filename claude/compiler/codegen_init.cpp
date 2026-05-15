@@ -154,7 +154,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
                     val = emitExpr(*slid.fields[i].default_val);
                 } else if (i < (int)info.field_types.size()) {
                     const std::string& ft = info.field_types[i];
-                    val = (ft == "float32" || ft == "float64") ? "0.0"
+                    val = (ft == "float" || ft == "float32" || ft == "float64") ? "0.0"
                         : isIndirectType(ft) ? "null" : "0";
                 } else {
                     val = "0";
@@ -828,7 +828,7 @@ void Codegen::emitInitFieldsAtPtrs(const std::string& stype, const std::string& 
         } else {
             val = isInlineArrayType(ftype) ? "zeroinitializer"
                 : isIndirectType(ftype) ? "null"
-                : (ftype == "float32" || ftype == "float64") ? "0.0"
+                : (ftype == "float" || ftype == "float32" || ftype == "float64") ? "0.0"
                 : "0";
         }
         out_ << "    store " << llvmType(ftype) << " " << val << ", ptr " << gep << "\n";

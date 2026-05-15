@@ -50,7 +50,7 @@ inline bool isPrimitive(const std::string& t) {
         "uint", "uint8", "uint16", "uint32", "uint64",
         "intptr", "anyptr",
         "bool", "char",
-        "float32", "float64",
+        "float", "float32", "float64",
     };
     return ok.count(t) > 0;
 }

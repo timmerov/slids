@@ -395,7 +395,7 @@ static bool isKeyword(TokenType t) {
         case TokenType::kInt32: case TokenType::kInt64: case TokenType::kIntptr:
         case TokenType::kUint: case TokenType::kUint8: case TokenType::kUint16:
         case TokenType::kUint32: case TokenType::kUint64: case TokenType::kChar:
-        case TokenType::kFloat32: case TokenType::kFloat64:
+        case TokenType::kFloat: case TokenType::kFloat32: case TokenType::kFloat64:
         case TokenType::kBool: case TokenType::kVoid:
         case TokenType::kReturn: case TokenType::kTrue: case TokenType::kFalse:
         case TokenType::kIf: case TokenType::kElse:
@@ -440,7 +440,7 @@ bool Parser::isTypeName(const Token& t) const {
         case TokenType::kUint: case TokenType::kUint8: case TokenType::kUint16:
         case TokenType::kUint32: case TokenType::kUint64: case TokenType::kChar:
         case TokenType::kIntptr:
-        case TokenType::kFloat32: case TokenType::kFloat64:
+        case TokenType::kFloat: case TokenType::kFloat32: case TokenType::kFloat64:
         case TokenType::kBool: case TokenType::kVoid:
             return true;
         default: return false;
