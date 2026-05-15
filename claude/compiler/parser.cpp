@@ -3247,6 +3247,14 @@ GlobalDef Parser::parseGlobalDef(const std::string& namespace_prefix,
             f.name = expect(TokenType::kIdentifier, "Expected variable name after 'global'").value;
             f.file_id = file_id_;
             f.tok = name_tok;
+            if (peek().type == TokenType::kLBracket
+                && pos_ + 1 < (int)tokens_.size()
+                && tokens_[pos_ + 1].type == TokenType::kIntLiteral) {
+                advance();
+                std::string sz = advance().value;
+                expect(TokenType::kRBracket, "Expected ']'");
+                f.type += "[" + sz + "]";
+            }
             if (peek().type == TokenType::kEquals) {
                 advance();
                 f.default_val = parseExpr();
@@ -3282,6 +3290,14 @@ GlobalDef Parser::parseGlobalDef(const std::string& namespace_prefix,
             f.name = expect(TokenType::kIdentifier, "Expected field name in global declaration.").value;
             f.file_id = file_id_;
             f.tok = field_tok;
+            if (peek().type == TokenType::kLBracket
+                && pos_ + 1 < (int)tokens_.size()
+                && tokens_[pos_ + 1].type == TokenType::kIntLiteral) {
+                advance();
+                std::string sz = advance().value;
+                expect(TokenType::kRBracket, "Expected ']'");
+                f.type += "[" + sz + "]";
+            }
             if (peek().type == TokenType::kEquals) {
                 advance();
                 f.default_val = parseExpr();
@@ -3366,6 +3382,14 @@ GlobalDef Parser::parseBareGlobalShortForm() {
     f.name = expect(TokenType::kIdentifier, "Expected variable name.").value;
     f.file_id = file_id_;
     f.tok = name_tok;
+    if (peek().type == TokenType::kLBracket
+        && pos_ + 1 < (int)tokens_.size()
+        && tokens_[pos_ + 1].type == TokenType::kIntLiteral) {
+        advance();
+        std::string sz = advance().value;
+        expect(TokenType::kRBracket, "Expected ']'");
+        f.type += "[" + sz + "]";
+    }
     // Initializer optional: header-style decls (`int where_;`) omit it; the
     // defining TU's matching decl carries the value.
     if (peek().type == TokenType::kEquals) {
@@ -3906,7 +3930,8 @@ Program Parser::parse() {
                  && pos_ + 2 < (int)tokens_.size()
                  && tokens_[pos_ + 1].type == TokenType::kIdentifier
                  && (tokens_[pos_ + 2].type == TokenType::kEquals
-                     || tokens_[pos_ + 2].type == TokenType::kSemicolon)) {
+                     || tokens_[pos_ + 2].type == TokenType::kSemicolon
+                     || tokens_[pos_ + 2].type == TokenType::kLBracket)) {
             program.globals.push_back(parseBareGlobalShortForm());
         } else if (peek().type == TokenType::kLParen) {
             program.functions.push_back(parseFunctionDef());

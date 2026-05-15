@@ -2,7 +2,7 @@
 
 ## Globals
 
-Globals are fully landed at the language level. Phases 1-6 plus reverse-construction-order, cross-TU static access via `.slh`, and cross-TU lazy access via stable namespace-path mangling on sentinel + ensure widget. The phase-3 runtime is a per-TU dtor node + ctor + dtor (internal), sentinel + ensure widget at default linkage so consumers can gate cross-TU, and a `linkonce_odr` shared head + walker. Header-side decls support inferred-type short form (`global what_ = 2;`), bare typed (`int where_;`), and forward-decl ctor/dtor (`_(); ~();`).
+Globals are fully landed at the language level. Phases 1-6 plus reverse-construction-order, cross-TU static access via `.slh`, and cross-TU lazy access via stable namespace-path mangling on sentinel + ensure widget. The phase-3 runtime is a per-TU dtor node + ctor + dtor (internal), sentinel + ensure widget at default linkage so consumers can gate cross-TU, and a `linkonce_odr` shared head + walker. Header-side decls support inferred-type short form (`global what_ = 2;`), bare typed (`int where_;`), and forward-decl ctor/dtor (`_(); ~();`). Inline-array-of-slid global fields (`Green apples_[3];`, long-form `global stash(Green house_[3]) { _() {} ~() {} }`) ride the same auto-lazy + field-ctor/dtor pass — the pass peels `T[N]` and calls `emitConstructAt` / `emitDtorChainCall` per element, matching the site-walks-elements rule the regular inline-ctor walker uses.
 
 Remaining genuine technical gaps (not coverage artifacts):
 
@@ -21,8 +21,6 @@ Remaining genuine technical gaps (not coverage artifacts):
 - **Lazy ctor that touches a *cross-TU* lazy.** The intra-TU pattern (one ctor touches another lazy) works and pins reverse-construction order. Cross-TU equivalent — ctor in TU1 touches a lazy in TU2 — should fire the second ensure widget and end up with the right LIFO order across TUs. Plumbing is in place; not exercised.
 
 - **Lazy diagnostics.** Forward-decl pair-rule (`_();` without `~();`), header carrying a ctor/dtor body (should the header reject those, or accept-and-prefer-def?), bodyless-ctor-only-in-def — these are policy questions plus error-path tests, not core feature gaps.
-
-- **Global arrays of class objects.** Inline slid-array fields in globals — `global stash(Action arr_[3]) { }`, file-scope `Action arr[5];`, and the matching long-form. Today's field-ctor/dtor pass in `emitLazyGlobalHelpers` walks one slid per field (`emitConstructAt(field_type, @__$g.<ns>.<field>, {}, {})`); an inline array of slids needs per-element construction at element offsets, with the same default-population that single fields get. Sibling to the multi-dim-slid-arrays gap in the Compiler section — class fields holding slid arrays surface the same problem inside globals. Sketch: in the field-ctor pass, when the field's slids_type is an inline-array form, walk element offsets and call `emitConstructAt` per slot; symmetric reverse walk in the field-dtor pass. Storage init stays `zeroinitializer` for the aggregate. Parser-side: confirm `Action arr_[3]` parses as a field type today; extend if not.
 
 ## Compiler
 

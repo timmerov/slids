@@ -30,7 +30,16 @@ warming:house.effect_ = 10
 thumb_ = 10
 beret_.effect_ = 10
 after global warming green house effect.
+Green:ctor
+Green:ctor
+Green:ctor
+apples_[0] = 100
+apples_[1] = 101
+apples_[2] = 102
 [Logger dtor]
+Green:dtor
+Green:dtor
+Green:dtor
 Green:dtor
 Green:dtor
 warming:dtor

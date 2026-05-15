@@ -357,6 +357,9 @@ global warming(Green house_) {
 global Green thumb_;
 Green beret_;
 
+/* array of class objects. */
+Green apples_[3];
+
 int32 main() {
     global;
 
@@ -412,6 +415,16 @@ int32 main() {
     __println("thumb_ = " + te);
     __println("beret_.effect_ = " + be);
     __println("after global warming green house effect.");
+
+    apples_[0].effect_ = 100;
+    apples_[1].effect_ = 101;
+    apples_[2].effect_ = 102;
+    a0 = apples_[0].effect_;
+    a1 = apples_[1].effect_;
+    a2 = apples_[2].effect_;
+    __println("apples_[0] = " + a0);
+    __println("apples_[1] = " + a1);
+    __println("apples_[2] = " + a2);
 
     return 0;
 }

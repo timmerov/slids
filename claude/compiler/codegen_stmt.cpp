@@ -231,6 +231,17 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
                 return {gep, ftype};
             }
         }
+        // Global field as lvalue base — fires sentinel gate (if lazy) and
+        // returns storage symbol + declared type. Mirrors the rvalue path in
+        // emitExpr(VarExpr) so writes and chained reads (apples_[i].field_)
+        // resolve to global storage through the canonical lvalue walker.
+        if (auto* ge = lookupGlobal(ve->name)) {
+            if (current_func_name_ == "main" && global_lifetime_depth_ == 0)
+                errorAtNode(e, "Cannot access global '" + ve->name
+                    + "' outside the `global;` scope in `main`.");
+            emitLazySentinelGate(*ge);
+            return {ge->llvm_symbol, ge->slids_type};
+        }
         errorAtNode(e, "Undefined variable '" + ve->name + "'.");
     }
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&e)) {

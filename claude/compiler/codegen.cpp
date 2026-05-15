@@ -724,9 +724,11 @@ void Codegen::emitStaticGlobals() {
                 else if (llvm_ty == "float" || llvm_ty == "double") init_value = "0.0";
                 // Slid-typed field storage: zero the aggregate at module
                 // load. The wrapping global's lazy ctor populates fields
-                // through emitConstructAt on first access.
-                else if (llvm_ty.size() >= 8
+                // through emitConstructAt on first access. Inline-array slid
+                // fields (`[N x %struct.X]`) ride the same path.
+                else if ((llvm_ty.size() >= 8
                         && llvm_ty.compare(0, 8, "%struct.") == 0)
+                        || (!llvm_ty.empty() && llvm_ty[0] == '['))
                     init_value = "zeroinitializer";
                 else init_value = "0";
             }
@@ -807,12 +809,30 @@ void Codegen::emitLazyGlobalHelpers() {
         pushScope();
         // Field-ctor pass: each slid-typed field gets default-construction
         // on its static-allocated storage before the user body runs.
+        // Inline-array slid fields (T[N]) are walked element-wise — the site
+        // peels the array shape and calls the canonical helper per slot,
+        // matching emitInlineCtorWalk's deferred-to-site rule for inline arrays.
         for (auto& f : def->fields) {
-            if (slid_info_.count(f.type) == 0) continue;
             std::string field_sym = "@__$g.";
             for (char c : def->namespace_name) field_sym += (c == ':') ? '.' : c;
             if (!def->namespace_name.empty()) field_sym += '.';
             field_sym += f.name;
+            if (isInlineArrayType(f.type)) {
+                auto lb = f.type.rfind('[');
+                std::string elem_type = f.type.substr(0, lb);
+                if (slid_info_.count(elem_type) == 0) continue;
+                std::string sz_str = f.type.substr(lb + 1, f.type.size() - lb - 2);
+                int n = std::stoi(sz_str);
+                for (int k = 0; k < n; k++) {
+                    std::string slot = newTmp();
+                    out_ << "    " << slot << " = getelementptr [" << n
+                         << " x %struct." << elem_type << "], ptr " << field_sym
+                         << ", i32 0, i32 " << k << "\n";
+                    emitConstructAt(elem_type, slot, {}, {});
+                }
+                continue;
+            }
+            if (slid_info_.count(f.type) == 0) continue;
             emitConstructAt(f.type, field_sym, {}, {});
         }
         if (def->ctor_body) emitBlock(*def->ctor_body);
@@ -834,14 +854,30 @@ void Codegen::emitLazyGlobalHelpers() {
         pushScope();
         if (def->dtor_body) emitBlock(*def->dtor_body);
         // Field-dtor pass: each slid-typed field's dtor fires in reverse
-        // declaration order after the user body.
+        // declaration order after the user body. Inline-array slid fields
+        // reverse-walk elements (last index first).
         for (int i = (int)def->fields.size() - 1; i >= 0; i--) {
             auto& f = def->fields[i];
-            if (slid_info_.count(f.type) == 0) continue;
             std::string field_sym = "@__$g.";
             for (char c : def->namespace_name) field_sym += (c == ':') ? '.' : c;
             if (!def->namespace_name.empty()) field_sym += '.';
             field_sym += f.name;
+            if (isInlineArrayType(f.type)) {
+                auto lb = f.type.rfind('[');
+                std::string elem_type = f.type.substr(0, lb);
+                if (slid_info_.count(elem_type) == 0) continue;
+                std::string sz_str = f.type.substr(lb + 1, f.type.size() - lb - 2);
+                int n = std::stoi(sz_str);
+                for (int k = n - 1; k >= 0; k--) {
+                    std::string slot = newTmp();
+                    out_ << "    " << slot << " = getelementptr [" << n
+                         << " x %struct." << elem_type << "], ptr " << field_sym
+                         << ", i32 0, i32 " << k << "\n";
+                    emitDtorChainCall(elem_type, slot);
+                }
+                continue;
+            }
+            if (slid_info_.count(f.type) == 0) continue;
             emitDtorChainCall(f.type, field_sym);
         }
         popScope();
@@ -1145,8 +1181,11 @@ void Codegen::emit() {
         if (!g.impl_module.empty()) continue;
         if (g.has_ctor_decl || g.has_dtor_decl) continue;
         bool has_slid_field = false;
-        for (auto& f : g.fields)
-            if (slid_info_.count(f.type)) { has_slid_field = true; break; }
+        for (auto& f : g.fields) {
+            std::string elem = isInlineArrayType(f.type)
+                ? f.type.substr(0, f.type.rfind('[')) : f.type;
+            if (slid_info_.count(elem)) { has_slid_field = true; break; }
+        }
         if (has_slid_field) {
             g.has_ctor_decl = true;
             g.has_dtor_decl = true;
