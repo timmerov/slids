@@ -2,8 +2,8 @@ garage: 0
 garage: 1
 doors: 2
 color: 7
-lazy: lazy:ctor
-100
+lazy:ctor
+lazy: 100
 box count: 5
 box lid open: 0
 local x_: 37

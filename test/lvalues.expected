@@ -86,8 +86,8 @@ x=6
 w=10
 z=7
 -- ppid: float scalar post-inc --
-g=1.500000
-f=2.500000
+g=1.5
+f=2.5
 -- ppid: per-comma flush in call args --
 s=30
 p at arr[1]=1

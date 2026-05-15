@@ -7,17 +7,17 @@
 ##line=75
 ##file=macros.sl
 ##func=main
-##date=Apr 26 2026
-##time=09:08:42
+##date=May 14 2026
+##time=21:14:54
 #some_int  : int some_int = 42
-#some_float: float64 some_float = 3.140000
+#some_float: float64 some_float = 3.14
 #some_bool : bool some_bool = 1
 freefn  ##func=freefn ##name=x ##type=int
 freefn  #x: int x = 7
 freetpl ##func=freetpl ##name=v ##type=int
 freetpl #v: int v = 3
 freetpl ##func=freetpl ##name=v ##type=float64
-freetpl #v: float64 v = 2.500000
+freetpl #v: float64 v = 2.5
 Klass.method ##func=method ##name=y ##type=int
 Klass.method #y: int y = 99
 KlassTpl.tmethod ##func=tmethod ##name=q ##type=uint16

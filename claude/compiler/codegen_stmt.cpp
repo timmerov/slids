@@ -3928,44 +3928,14 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 return;
             }
 
-            // helper: emit a slice expr via printf("%.*s", len, ptr)
-            auto emitSlice = [&](const SliceExpr* sl, bool nl) {
-                std::string base_ptr = emitExpr(*sl->base);
-                std::string start_val = emitExpr(*sl->start);
-                std::string end_val   = emitExpr(*sl->end);
-                std::string start_type = exprLlvmType(*sl->start);
-                std::string end_type   = exprLlvmType(*sl->end);
-                // use the wider of start/end types for the subtraction
-                bool is64 = (start_type == "i64" || end_type == "i64");
-                std::string idx_type = is64 ? "i64" : "i32";
-                // widen start/end if needed
-                auto widen = [&](const std::string& val, const std::string& from) -> std::string {
-                    if (!is64 || from == "i64") return val;
-                    std::string w = newTmp();
-                    out_ << "    " << w << " = sext " << from << " " << val << " to i64\n";
-                    return w;
-                };
-                std::string sv = widen(start_val, start_type);
-                std::string ev = widen(end_val, end_type);
-                std::string sliced = newTmp();
-                out_ << "    " << sliced << " = getelementptr i8, ptr " << base_ptr << ", " << idx_type << " " << sv << "\n";
-                std::string len = newTmp();
-                out_ << "    " << len << " = sub " << idx_type << " " << ev << ", " << sv << "\n";
-                // printf("%.*s", ...) needs i32 length
-                std::string len32 = len;
-                if (is64) {
-                    len32 = newTmp();
-                    out_ << "    " << len32 << " = trunc i64 " << len << " to i32\n";
-                }
-                std::string fmt = newTmp();
-                std::string fmt_name = nl ? "@.fmt_slice" : "@.fmt_slice_nonl";
-                int fmt_size = nl ? 6 : 5;
-                out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
-                out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", i32 " << len32 << ", ptr " << sliced << ")\n";
-            };
-
-            // Flatten a left-leaning "+" chain into segments.
-            // Each segment is either a StringLiteralExpr or an integer expr.
+            // Flatten a left-leaning "+" chain into segments. Then walk
+            // segments in source order: pre-evaluate every non-literal segment
+            // (firing side effects up front, before any output), build a single
+            // composite printf format string by appending each segment's piece,
+            // and end with one `printf(fmt, varargs...)`. The whole line is
+            // staged in printf's internal buffer and emitted at once — the
+            // earlier one-printf-per-segment shape let function-call segments
+            // interleave their output between halves of the formatted line.
             std::vector<const Expr*> segments;
             std::function<void(const Expr*)> flatten = [&](const Expr* e) {
                 if (auto* b = dynamic_cast<const BinaryExpr*>(e)) {
@@ -3979,178 +3949,147 @@ void Codegen::emitStmt(const Stmt& stmt) {
             };
             flatten(call->args[0].get());
 
-            // char array variable: println(dest) where dest is char[N] — print as string
-            if (segments.size() == 1) {
-                if (auto* ve = dynamic_cast<const VarExpr*>(segments[0])) {
+            // Literal-segment text is baked into the composite fmt, so any '%'
+            // must be escaped to '%%'.
+            auto escapePct = [](const std::string& s) {
+                std::string out;
+                out.reserve(s.size());
+                for (char c : s) {
+                    out += c;
+                    if (c == '%') out += '%';
+                }
+                return out;
+            };
+
+            std::string fmt;
+            struct Arg { std::string type; std::string val; };
+            std::vector<Arg> args;
+
+            for (auto* seg : segments) {
+                if (auto* s = dynamic_cast<const StringLiteralExpr*>(seg)) {
+                    fmt += escapePct(s->value);
+                    continue;
+                }
+                if (auto* sl = dynamic_cast<const SliceExpr*>(seg)) {
+                    // s[a..b] → %.*s with (i32 len, ptr) varargs.
+                    std::string base_ptr = emitExpr(*sl->base);
+                    std::string start_val = emitExpr(*sl->start);
+                    std::string end_val   = emitExpr(*sl->end);
+                    std::string start_type = exprLlvmType(*sl->start);
+                    std::string end_type   = exprLlvmType(*sl->end);
+                    bool is64 = (start_type == "i64" || end_type == "i64");
+                    std::string idx_type = is64 ? "i64" : "i32";
+                    auto widen = [&](const std::string& v, const std::string& from) {
+                        if (!is64 || from == "i64") return v;
+                        std::string w = newTmp();
+                        out_ << "    " << w << " = sext " << from << " " << v << " to i64\n";
+                        return w;
+                    };
+                    std::string sv = widen(start_val, start_type);
+                    std::string ev = widen(end_val, end_type);
+                    std::string sliced = newTmp();
+                    out_ << "    " << sliced << " = getelementptr i8, ptr "
+                         << base_ptr << ", " << idx_type << " " << sv << "\n";
+                    std::string len = newTmp();
+                    out_ << "    " << len << " = sub " << idx_type << " "
+                         << ev << ", " << sv << "\n";
+                    std::string len32 = len;
+                    if (is64) {
+                        len32 = newTmp();
+                        out_ << "    " << len32 << " = trunc i64 " << len
+                             << " to i32\n";
+                    }
+                    fmt += "%.*s";
+                    args.push_back({"i32", len32});
+                    args.push_back({"ptr", sliced});
+                    continue;
+                }
+                // VarExpr referring to a fixed-size char array or char[] local
+                // — print as %s with the storage address.
+                if (auto* ve = dynamic_cast<const VarExpr*>(seg)) {
                     auto ait = array_info_.find(ve->name);
                     if (ait != array_info_.end() && ait->second.elem_type == "char") {
                         int total = 1;
                         for (int d : ait->second.dims) total *= d;
                         std::string gep = newTmp();
-                        out_ << "    " << gep << " = getelementptr [" << total << " x i8], ptr "
-                             << ait->second.alloca_reg << ", i32 0, i32 0\n";
-                        std::string fmt = newTmp();
-                        std::string fmt_name = newline ? "@.fmt_str" : "@.fmt_str_nonl";
-                        int fmt_size = newline ? 4 : 3;
-                        out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
-                        out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", ptr " << gep << ")\n";
-                        return;
+                        out_ << "    " << gep << " = getelementptr [" << total
+                             << " x i8], ptr " << ait->second.alloca_reg
+                             << ", i32 0, i32 0\n";
+                        fmt += "%s";
+                        args.push_back({"ptr", gep});
+                        continue;
                     }
-                    // char[] pointer variable (initialized from string literal): print as string
                     auto tit = locals_.find(ve->name);
                     if (tit != locals_.end() && tit->second.type == "char[]") {
-                        auto lit = locals_.find(ve->name);
                         std::string ptr_val = newTmp();
-                        out_ << "    " << ptr_val << " = load ptr, ptr " << lit->second.reg << "\n";
-                        std::string fmt = newTmp();
-                        std::string fmt_name = newline ? "@.fmt_str" : "@.fmt_str_nonl";
-                        int fmt_size = newline ? 4 : 3;
-                        out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
-                        out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", ptr " << ptr_val << ")\n";
-                        return;
+                        out_ << "    " << ptr_val << " = load ptr, ptr "
+                             << tit->second.reg << "\n";
+                        fmt += "%s";
+                        args.push_back({"ptr", ptr_val});
+                        continue;
                     }
                 }
-                // slice expr: println(s[0..len])
-                if (auto* sl = dynamic_cast<const SliceExpr*>(segments[0])) {
-                    emitSlice(sl, newline);
-                    return;
-                }
-            }
-
-            bool is_concat = segments.size() > 1 ||
-                (segments.size() == 1 && !dynamic_cast<const StringLiteralExpr*>(segments[0]));
-
-            if (!is_concat && segments.size() == 1) {
-                // single float/double expr
-                {
-                    std::string val_type_check = exprLlvmType(*segments[0]);
-                    if (val_type_check == "float" || val_type_check == "double") {
-                        std::string val = emitExpr(*segments[0]);
-                        // printf varargs promote float to double
-                        if (val_type_check == "float") {
-                            std::string ext = newTmp();
-                            out_ << "    " << ext << " = fpext float " << val << " to double\n";
-                            val = ext;
-                        }
-                        std::string fmt = newTmp();
-                        std::string fmt_name = newline ? "@.fmt_double" : "@.fmt_double_nonl";
-                        int fmt_size = newline ? 5 : 4;
-                        out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr "
-                             << fmt_name << ", i32 0, i32 0\n";
-                        out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", double " << val << ")\n";
-                        return;
+                // General expression segment.
+                std::string val = emitExpr(*seg);
+                std::string val_type = exprLlvmType(*seg);
+                std::string s_type = exprType(*seg);
+                if (val_type == "float" || val_type == "double") {
+                    if (val_type == "float") {
+                        std::string ext = newTmp();
+                        out_ << "    " << ext << " = fpext float " << val
+                             << " to double\n";
+                        val = ext;
                     }
+                    fmt += "%g";
+                    args.push_back({"double", val});
+                    continue;
                 }
-                // single string literal
-                if (auto* s = dynamic_cast<const StringLiteralExpr*>(segments[0])) {
-                    std::string full = newline ? s->value + "\n" : s->value;
-                    std::string label = registerStringConstant(full);
-                    int len; llvmEscape(full, len);
-                    std::string tmp = newTmp();
-                    out_ << "    " << tmp << " = getelementptr [" << len << " x i8], ptr "
-                         << label << ", i32 0, i32 0\n";
-                    out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
-                    return;
+                if (val_type == "ptr") {
+                    fmt += "%s";
+                    args.push_back({"ptr", val});
+                    continue;
                 }
-                // single integer expr
-                // printf is variadic; sub-i32 values must be extended to i32 first.
-                std::string val = emitExpr(*segments[0]);
-                std::string val_type = exprLlvmType(*segments[0]);
+                // Integer family. Sub-i32 zext to i32; i64 stays i64.
                 if (val_type != "i32" && val_type != "i64") {
                     std::string ext = newTmp();
-                    out_ << "    " << ext << " = zext " << val_type << " " << val << " to i32\n";
+                    out_ << "    " << ext << " = zext " << val_type << " "
+                         << val << " to i32\n";
                     val = ext;
+                    val_type = "i32";
                 }
                 bool is_uint = false;
-                if (auto* ve = dynamic_cast<const VarExpr*>(segments[0])) {
+                if (auto* ve = dynamic_cast<const VarExpr*>(seg)) {
                     auto tit = locals_.find(ve->name);
                     if (tit != locals_.end() && tit->second.type == "uint") is_uint = true;
                     if (!is_uint && !current_slid_.empty()) {
                         auto& info = slid_info_[current_slid_];
                         auto fit = info.field_index.find(ve->name);
-                        if (fit != info.field_index.end() && info.field_types[fit->second] == "uint")
+                        if (fit != info.field_index.end()
+                                && info.field_types[fit->second] == "uint")
                             is_uint = true;
                     }
                 }
-                std::string fmt = newTmp();
-                bool is_i64 = (val_type == "i64");
-                std::string fmt_name = is_i64   ? (newline ? "@.fmt_long" : "@.fmt_long_nonl")
-                                     : is_uint  ? (newline ? "@.fmt_uint" : "@.fmt_uint_nonl")
-                                                : (newline ? "@.fmt_int"  : "@.fmt_int_nonl");
-                std::string fmt_size = is_i64 ? (newline ? "5" : "4") : "4";
-                std::string arg_type = is_i64 ? "i64" : "i32";
-                out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
-                out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", " << arg_type << " " << val << ")\n";
-                return;
+                // char segments format as %c (the i8 value extends to int for
+                // varargs; printf prints the character). Previously printed
+                // as %d, surfacing as `(d,b,c,a)` → `(100,98,99,97)`.
+                if (s_type == "char")            fmt += "%c";
+                else if (val_type == "i64")      fmt += "%lld";
+                else if (is_uint)                fmt += "%u";
+                else                             fmt += "%d";
+                args.push_back({val_type, val});
             }
 
-            // multi-segment: emit one printf per segment, newline only on last
-            for (int si = 0; si < (int)segments.size(); si++) {
-                bool last = (si == (int)segments.size() - 1);
-                if (auto* s = dynamic_cast<const StringLiteralExpr*>(segments[si])) {
-                    std::string full = (last && newline) ? s->value + "\n" : s->value;
-                    std::string label = registerStringConstant(full);
-                    int len; llvmEscape(full, len);
-                    std::string tmp = newTmp();
-                    out_ << "    " << tmp << " = getelementptr [" << len << " x i8], ptr "
-                         << label << ", i32 0, i32 0\n";
-                    out_ << "    call i32 (ptr, ...) @printf(ptr " << tmp << ")\n";
-                } else if (auto* sl = dynamic_cast<const SliceExpr*>(segments[si])) {
-                    emitSlice(sl, last && newline);
-                } else {
-                    std::string val = emitExpr(*segments[si]);
-                    std::string val_type = exprLlvmType(*segments[si]);
-                    // float/double segment — printf varargs promote float to double
-                    if (val_type == "float" || val_type == "double") {
-                        if (val_type == "float") {
-                            std::string ext = newTmp();
-                            out_ << "    " << ext << " = fpext float " << val << " to double\n";
-                            val = ext;
-                        }
-                        std::string fmt = newTmp();
-                        int fmt_size = (last && newline) ? 5 : 4;
-                        std::string fmt_name = (last && newline) ? "@.fmt_double" : "@.fmt_double_nonl";
-                        out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr "
-                             << fmt_name << ", i32 0, i32 0\n";
-                        out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", double " << val << ")\n";
-                        continue;
-                    }
-                    if (val_type == "ptr") {
-                        std::string fmt = newTmp();
-                        int fmt_size = (last && newline) ? 4 : 3;
-                        std::string fmt_name = (last && newline) ? "@.fmt_str" : "@.fmt_str_nonl";
-                        out_ << "    " << fmt << " = getelementptr [" << fmt_size << " x i8], ptr "
-                             << fmt_name << ", i32 0, i32 0\n";
-                        out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", ptr " << val << ")\n";
-                        continue;
-                    }
-                    if (val_type != "i32" && val_type != "i64") {
-                        std::string ext = newTmp();
-                        out_ << "    " << ext << " = zext " << val_type << " " << val << " to i32\n";
-                        val = ext;
-                    }
-                    bool seg_is_uint = false;
-                    if (auto* ve = dynamic_cast<const VarExpr*>(segments[si])) {
-                        auto tit = locals_.find(ve->name);
-                        if (tit != locals_.end() && tit->second.type == "uint") seg_is_uint = true;
-                        if (!seg_is_uint && !current_slid_.empty()) {
-                            auto& info = slid_info_[current_slid_];
-                            auto fit = info.field_index.find(ve->name);
-                            if (fit != info.field_index.end() && info.field_types[fit->second] == "uint")
-                                seg_is_uint = true;
-                        }
-                    }
-                    bool seg_is_i64 = (val_type == "i64");
-                    std::string fmt = newTmp();
-                    std::string fmt_name = seg_is_i64  ? ((last && newline) ? "@.fmt_long" : "@.fmt_long_nonl")
-                                        : seg_is_uint  ? ((last && newline) ? "@.fmt_uint" : "@.fmt_uint_nonl")
-                                                       : ((last && newline) ? "@.fmt_int"  : "@.fmt_int_nonl");
-                    std::string seg_fmt_size = seg_is_i64 ? ((last && newline) ? "5" : "4") : "4";
-                    std::string seg_arg_type = seg_is_i64 ? "i64" : "i32";
-                    out_ << "    " << fmt << " = getelementptr [" << seg_fmt_size << " x i8], ptr " << fmt_name << ", i32 0, i32 0\n";
-                    out_ << "    call i32 (ptr, ...) @printf(ptr " << fmt << ", " << seg_arg_type << " " << val << ")\n";
-                }
-            }
+            if (newline) fmt += "\n";
+
+            std::string label = registerStringConstant(fmt);
+            int fmt_len; llvmEscape(fmt, fmt_len);
+            std::string fmt_ptr = newTmp();
+            out_ << "    " << fmt_ptr << " = getelementptr [" << fmt_len
+                 << " x i8], ptr " << label << ", i32 0, i32 0\n";
+            std::string line = "    call i32 (ptr, ...) @printf(ptr " + fmt_ptr;
+            for (auto& a : args) line += ", " + a.type + " " + a.val;
+            line += ")";
+            out_ << line << "\n";
             return;
         }
 

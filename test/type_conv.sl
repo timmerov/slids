@@ -75,7 +75,7 @@ int32 main() {
 
     // chained: float64 → int → float32 (3.14 truncated to 3, then back to float)
     float32 chained = (float32=int=3.14);
-    __println("float32(int(3.14)):   expected 3.000000, got " + chained);
+    __println("float32(int(3.14)):   expected 3, got " + chained);
 
     // -------------------------------------------------------
     // Class type conversion
