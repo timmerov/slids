@@ -722,6 +722,12 @@ void Codegen::emitStaticGlobals() {
             } else {
                 if (llvm_ty == "ptr") init_value = "null";
                 else if (llvm_ty == "float" || llvm_ty == "double") init_value = "0.0";
+                // Slid-typed field storage: zero the aggregate at module
+                // load. The wrapping global's lazy ctor populates fields
+                // through emitConstructAt on first access.
+                else if (llvm_ty.size() >= 8
+                        && llvm_ty.compare(0, 8, "%struct.") == 0)
+                    init_value = "zeroinitializer";
                 else init_value = "0";
             }
             // Function-internal globals are scoped to their owning function;
@@ -799,6 +805,16 @@ void Codegen::emitLazyGlobalHelpers() {
         self_ptr_.clear();
         current_global_namespace_ = def->namespace_name;
         pushScope();
+        // Field-ctor pass: each slid-typed field gets default-construction
+        // on its static-allocated storage before the user body runs.
+        for (auto& f : def->fields) {
+            if (slid_info_.count(f.type) == 0) continue;
+            std::string field_sym = "@__$g.";
+            for (char c : def->namespace_name) field_sym += (c == ':') ? '.' : c;
+            if (!def->namespace_name.empty()) field_sym += '.';
+            field_sym += f.name;
+            emitConstructAt(f.type, field_sym, {}, {});
+        }
         if (def->ctor_body) emitBlock(*def->ctor_body);
         popScope();
         if (!block_terminated_) out_ << "    ret void\n";
@@ -817,6 +833,17 @@ void Codegen::emitLazyGlobalHelpers() {
         current_global_namespace_ = def->namespace_name;
         pushScope();
         if (def->dtor_body) emitBlock(*def->dtor_body);
+        // Field-dtor pass: each slid-typed field's dtor fires in reverse
+        // declaration order after the user body.
+        for (int i = (int)def->fields.size() - 1; i >= 0; i--) {
+            auto& f = def->fields[i];
+            if (slid_info_.count(f.type) == 0) continue;
+            std::string field_sym = "@__$g.";
+            for (char c : def->namespace_name) field_sym += (c == ':') ? '.' : c;
+            if (!def->namespace_name.empty()) field_sym += '.';
+            field_sym += f.name;
+            emitDtorChainCall(f.type, field_sym);
+        }
         popScope();
         if (!block_terminated_) out_ << "    ret void\n";
         out_ << "}\n\n";
@@ -1107,6 +1134,34 @@ void Codegen::emit() {
     resolveSlidInheritance();
     synthesizeFieldDtors();
     synthesizeCtorNeeds();
+    // Auto-lazy promotion: a global with no user `_()`/`~()` whose fields
+    // include at least one slid-typed entry needs the lazy machinery so the
+    // field's own ctor/dtor can run. Synthesize empty user bodies (leave
+    // ctor_body / dtor_body null; the field-ctor/dtor pass in
+    // emitLazyGlobalHelpers does the work). Imported globals are skipped —
+    // their defining TU owns the construction.
+    for (auto& g_const : program_.globals) {
+        auto& g = const_cast<GlobalDef&>(g_const);
+        if (!g.impl_module.empty()) continue;
+        if (g.has_ctor_decl || g.has_dtor_decl) continue;
+        bool has_slid_field = false;
+        for (auto& f : g.fields)
+            if (slid_info_.count(f.type)) { has_slid_field = true; break; }
+        if (has_slid_field) {
+            g.has_ctor_decl = true;
+            g.has_dtor_decl = true;
+            // Refresh the corresponding GlobalEntry cache so the gate fires
+            // at access sites (collectGlobals stamped is_lazy from the
+            // pre-promotion view).
+            for (auto& f : g.fields) {
+                std::string key = g.namespace_name.empty()
+                    ? f.name
+                    : g.namespace_name + ":" + f.name;
+                auto it = globals_.find(key);
+                if (it != globals_.end()) it->second.is_lazy = true;
+            }
+        }
+    }
     validateDefaultDelete();
     buildVtables();
     markImportableClasses();
@@ -2166,19 +2221,25 @@ std::string Codegen::emitFieldPtr(const std::string& obj_name, const std::string
     if (type_it != locals_.end()) {
         slid_name = type_it->second.type;
         obj_ptr = type_it->second.reg;
-    } else if (!current_slid_.empty()) {
+    } else if (!current_slid_.empty()
+               && slid_info_[current_slid_].field_index.count(obj_name)) {
         // obj_name may be a field of the current slid, accessed via %self
         auto& parent_info = slid_info_[current_slid_];
-        auto parent_it = parent_info.field_index.find(obj_name);
-        if (parent_it == parent_info.field_index.end())
-            error(std::string("Unknown type for variable '" + obj_name + "'."));
-        int parent_idx = parent_it->second;
+        int parent_idx = parent_info.field_index[obj_name];
         slid_name = parent_info.field_types[parent_idx];
         std::string self_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
         std::string parent_gep = newTmp();
         out_ << "    " << parent_gep << " = getelementptr %struct." << current_slid_
              << ", ptr " << self_ptr << ", i32 0, i32 " << parent_idx << "\n";
         obj_ptr = parent_gep;
+    } else if (auto* ge = lookupGlobal(obj_name);
+               ge && slid_info_.count(ge->slids_type)) {
+        // Global slid: fire the lazy gate (if any) and use the field's
+        // statically-allocated storage as the struct base. Subsequent GEPs
+        // climb into the slid's own fields from there.
+        emitLazySentinelGate(*ge);
+        slid_name = ge->slids_type;
+        obj_ptr = ge->llvm_symbol;
     } else {
         error(std::string("Unknown type for variable: " + obj_name));
     }

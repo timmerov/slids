@@ -444,9 +444,13 @@ std::string Codegen::emitExpr(const Expr& expr) {
             auto type_it = locals_.find(ve->name);
             if (type_it != locals_.end()) {
                 slid_name = type_it->second.type;
-            } else if (!current_slid_.empty()) {
+            } else if (!current_slid_.empty()
+                       && slid_info_[current_slid_].field_index.count(ve->name)) {
                 auto& parent_info = slid_info_[current_slid_];
                 slid_name = parent_info.field_types[parent_info.field_index.at(ve->name)];
+            } else if (auto* ge = lookupGlobal(ve->name);
+                       ge && slid_info_.count(ge->slids_type)) {
+                slid_name = ge->slids_type;
             }
             auto& info = slid_info_[slid_name];
             int idx = info.field_index[fa->field];

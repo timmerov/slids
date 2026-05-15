@@ -335,10 +335,27 @@ global buffer(
     ~() { __println("[buffer dtor]"); }
 }
 
-/*
-remaining positive tests:
-global type inferenece
-*/
+/* global class with constructor. */
+Green(int effect_ = 10) {
+    _() {
+        __println("Green:ctor");
+    }
+    ~() {
+        __println("Green:dtor");
+    }
+}
+/* long form. */
+global warming(Green house_) {
+    _() {
+        __println("warming:ctor");
+    }
+    ~() {
+        __println("warming:dtor");
+    }
+}
+/* short/shorter form. */
+global Green thumb_;
+Green beret_;
 
 int32 main() {
     global;
@@ -386,6 +403,15 @@ int32 main() {
     /* buffer dtor first, then pool dtor. */
     pool:items_ = 1;
     __println("buffer slots: " + buffer:slots_);
+
+    __println("before global warming green house effect.");
+    whe = warming:house_.effect_;
+    te = thumb_.effect_;
+    be = beret_.effect_;
+    __println("warming:house.effect_ = " + whe);
+    __println("thumb_ = " + te);
+    __println("beret_.effect_ = " + be);
+    __println("after global warming green house effect.");
 
     return 0;
 }

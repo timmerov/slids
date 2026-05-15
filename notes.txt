@@ -1,12 +1,9 @@
 
 main should be a keyword.
 
-global class objects.
-is it legal syntax?
-when is it constructed?
-i expect yes.
-and when lazy touched.
-better check.
+global arrays of class objects.
+not yet supported.
+global Class arr[3];
 
 globals have mostly landed.
 globals spanning multiple source files is

@@ -21,7 +21,20 @@ logger seen: 8
 [pool ctor]
 [buffer ctor]
 buffer slots: 16
+before global warming green house effect.
+Green:ctor
+warming:ctor
+Green:ctor
+Green:ctor
+warming:house.effect_ = 10
+thumb_ = 10
+beret_.effect_ = 10
+after global warming green house effect.
 [Logger dtor]
+Green:dtor
+Green:dtor
+warming:dtor
+Green:dtor
 [buffer dtor]
 [pool dtor]
 [taggify dtor]
