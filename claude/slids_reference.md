@@ -375,7 +375,7 @@ intptr n = 0;       // explicit: intptr, not int
 
 ## Global variables
 
-`global` declares storage that lives for the program's lifetime.
+`global` declares storage that lives for the program's lifetime. Global variables are initialized at program start before `main` is entered. They are constructed the first time they are accessed. They are destructed in reverse order.
 
 ```
 global garage(door_ = false) { }    // static — no ctor/dtor
@@ -388,15 +388,15 @@ global enabled_ = true;             // inferred type
 int debug_ = 0;                     // file-scope sugar
 ```
 
-`_()` and `~()` come together or not at all. Field initializers must be compile-time constants and apply at program start; a lazy ctor may then overwrite. Co-named `global Name(...)` declarations stack in one namespace, but field names must be distinct.
+`_()` and `~()` come together or not at all. Field initializers must be compile-time constants. Co-named `global Name(...)` declarations stack in one namespace, but field names must be distinct.
 
 **Access** is colon-qualified: `garage:door_`, `Box:contents:weight_`, or `::count_` for the unnamed namespace. An unqualified name like `count_` looks in locals, then the enclosing function's globals, then the unnamed namespace.
 
-**Scope.** File scope and class body expose the namespace (unnamed or class name). Function and method bodies host globals visible only inside that scope.
+**Scope.** Globals declared at gile scope and inside a class are visible everywhere. Globals declared within a function or method are visible only inside the function.
 
-**Lifetime.** `global;` in `main` opens the global lifetime — lazy ctors fire on first access, lazy dtors at this scope's exit in reverse construction order. At most one `global;` per program; auto-inserted at the top of `main` when absent.
+**Lifetime.** An advanced feature is to declare `global;` in `main`. This controls exactly when the global scope begins and end.
 
-**Headers.** A `.slh` may declare globals; one source file provides bodies and storage, importers reach the symbols by name. Use `_();` `~();` forward decls in the header; field initializers may be omitted.
+**Headers.** Source files have access to globals declared in a `.slh` header. Those globals must be defined in a source file. Field initializers may be omitted from the header declaration.
 
 ---
 
