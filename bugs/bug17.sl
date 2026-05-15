@@ -8,6 +8,11 @@ int fortytwo() {
 }
 
 int32 main() {
+    Class(x_=0) {
+    }
+    Class cls;
+    __println(##name(cls.x_));
+
     __println("fortytwo = " + fortytwo());
     return 0;
 }

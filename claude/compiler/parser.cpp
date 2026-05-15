@@ -458,8 +458,9 @@ bool Parser::isVarDeclLookahead() const {
     // scan past it (plus optional :Qualifier, template args and pointer/iterator suffix)
     // and check that an identifier (the variable name) follows.
     int i = pos_ + 1; // skip base type name
-    // optional qualified-type suffix: : Identifier (e.g. Outer:Inner)
-    if (i + 1 < (int)tokens_.size()
+    // optional qualified-type suffix: : Identifier (e.g. Outer:Inner), any
+    // depth (Outer:Inner:Deeper:...) for arbitrarily-hoisted nested slids.
+    while (i + 1 < (int)tokens_.size()
         && tokens_[i].type == TokenType::kColon
         && tokens_[i + 1].type == TokenType::kIdentifier) {
         i += 2;
@@ -776,9 +777,12 @@ std::string Parser::parseTypeName() {
     // alias substitution returns a finalized type string — skip qualifier/nested-alias/template-arg
     // logic; only the trailing ^/[]/^^ loop below still applies.
     if (!resolved_alias) {
-        // qualified nested-type suffix: Outer:Inner — consume only when the next-next token is
-        // an identifier (the variable name), not a '(' (which would be an external-method def).
-        if (peek().type == TokenType::kColon
+        // qualified nested-type suffix: Outer:Inner:Deeper... — consume each
+        // level only when the token after the inner name isn't '(' (which
+        // would be an external-method def, e.g. `Outer:method()`). Loops so
+        // arbitrarily-hoisted nested slids resolve to their full dotted name.
+        bool qualified = false;
+        while (peek().type == TokenType::kColon
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kIdentifier
             && pos_ + 2 < (int)tokens_.size()
@@ -786,7 +790,9 @@ std::string Parser::parseTypeName() {
             advance(); // consume ':'
             std::string inner = advance().value;
             base += "." + inner;
-        } else {
+            qualified = true;
+        }
+        if (!qualified) {
             // unqualified — apply nested-alias map (e.g. "Inner" → "Outer.Inner" inside Outer's body)
             auto it = nested_alias_.find(base);
             if (it != nested_alias_.end()) base = it->second;

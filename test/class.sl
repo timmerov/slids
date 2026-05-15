@@ -14,6 +14,8 @@ derived class.
 long ancestries.
 deleted and default methods may not be defined
 for any descendant class.
+
+
 */
 
 Simple(
@@ -166,6 +168,31 @@ InferFieldTypes(
 //-EXPECT-ERROR: Expression is not allowed in a constant initializer
 // NullDefault(x_ = nullptr) { }
 
+
+/* hoisted classes. */
+BaseHoist(int x_ = 1) {
+    LowHoist(int y_ = 2) {
+        MidHoist(int z_ = 4) {
+            HighHoist(int w_ = 8) {
+                TopHoist(int v_ = 16) {
+                }
+            }
+        }
+    }
+}
+
+/* class in function */
+void classInFunction() {
+    /*
+    InFunc(int x_ = 88) {
+        Hoisted(int y_ = 66) {
+        }
+    }
+    InFunc:Hoisted cls;
+    __println("foo:cls.y_ + " + cls.y_);
+    */
+}
+
 /*
 */
 int32 main() {
@@ -188,6 +215,11 @@ int32 main() {
 
     InferFieldTypes ift;
     ift.print();
+
+    BaseHoist:LowHoist:MidHoist:HighHoist:TopHoist hoist;
+    __println("TopHoist: hoist.v_ = " + hoist.v_);
+
+    classInFunction();
 
     return 0;
 }

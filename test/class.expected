@@ -15,4 +15,5 @@ Base:dtor
 Base:dtor
 typeof(x)=int
 typeof(pi)=float32
+TopHoist: hoist.v_ = 16
 Simple:dtor
