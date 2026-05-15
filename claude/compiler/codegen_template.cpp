@@ -610,9 +610,16 @@ void Codegen::writeSliFile(std::ostream& out) const {
     // dtor symbol name. Function-internal globals are visible only inside
     // their owning function, so they don't participate in cross-TU collision
     // checks — emit them with a `fn=<name>` tag so the aggregator can skip.
+    // Imported globals (impl_module non-empty) belong to another TU and are
+    // not this TU's contribution to the registry — skip them here.
     if (!program_.globals.empty()) {
-        out << "\n/* globals. */\n";
+        bool wrote_header = false;
         for (auto& g : program_.globals) {
+            if (!g.impl_module.empty()) continue;
+            if (!wrote_header) {
+                out << "\n/* globals. */\n";
+                wrote_header = true;
+            }
             std::string ns_label = g.namespace_name.empty() ? "<unnamed>"
                                                             : g.namespace_name;
             for (auto& f : g.fields) {

@@ -14,6 +14,12 @@ import import_decl;
 int32 main() {
     printHelloWorld();
     printHelloWorld();
+
+    __println("who   = " + query:who_);
+    __println("what  = " + ::what_);
+    __println("where = " + where_);
+    __println("when  = " + query:when_);
+
     printGoodbye();
     return 0;
 }

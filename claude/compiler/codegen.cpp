@@ -616,12 +616,20 @@ void Codegen::ensureSlidInstantiated(const std::string& type) {
 // stable LLVM symbol name. Co-named global slids (stacked under the same
 // namespace) each contribute their own fields to the same key prefix; the
 // collision check in the parser already guarantees no key collisions here.
+std::string Codegen::lazyMangleSuffix(const GlobalDef& g) const {
+    std::string out;
+    for (char c : g.namespace_name) out += (c == ':') ? '.' : c;
+    if (!g.fields.empty()) {
+        if (!out.empty()) out += '.';
+        out += g.fields[0].name;
+    }
+    return out;
+}
+
 void Codegen::collectGlobals() {
     std::set<std::string> cycle;
     for (auto& g_const : program_.globals) {
         auto& g = const_cast<GlobalDef&>(g_const);
-        if (g.is_lazy() && !lazy_global_index_.count(&g_const))
-            lazy_global_index_[&g_const] = lazy_global_count_++;
         for (auto& f : g.fields) {
             // Infer type from the foldable default when not annotated.
             if (f.type.empty()) {
@@ -687,14 +695,20 @@ void Codegen::emitStaticGlobals() {
             if (!emitted.insert(it->second.llvm_symbol).second) continue;
 
             std::string llvm_ty = llvmType(f.type);
+            // Imported globals (declared in this TU's `.slh` import, defined
+            // elsewhere) emit as `external global` — no storage, no init.
+            // The linker resolves to the defining TU's `<sym> = global …`.
+            if (!g.impl_module.empty()) {
+                out_ << it->second.llvm_symbol << " = external global "
+                     << llvm_ty << "\n";
+                continue;
+            }
             std::string init_value;
-            if (g.is_lazy()) {
-                // Phase 2 stub: storage only, zero-initialized. Phase 3 will
-                // emit a sentinel and route first-access through the glue.
-                if (llvm_ty == "ptr") init_value = "null";
-                else if (llvm_ty == "float" || llvm_ty == "double") init_value = "0.0";
-                else init_value = "0";
-            } else if (f.default_val) {
+            if (f.default_val) {
+                // Every global field — static or lazy — has its declared
+                // value at module-load. A lazy ctor may overwrite fields
+                // when it runs at first access; until then, reads see this
+                // static initializer.
                 cycle.clear();
                 ConstEntry folded;
                 try {
@@ -727,24 +741,54 @@ void Codegen::emitStaticGlobals() {
 // `current_global_namespace_` set to the slid's namespace so bare field
 // references resolve through lookupGlobal's namespace arm.
 void Codegen::emitLazyGlobalHelpers() {
-    if (lazy_global_index_.empty()) return;
-    out_ << "\n";
-    // Per-slid runtime storage: a sentinel (gate state) and a dtor-list node.
-    // Both are internal — each TU has its own copy. The node's `next` slot
-    // is filled at runtime by the ensure widget when it prepends the node
-    // to the shared `@__$global_dtor_head`; the `dtor_fn` slot is set at
-    // compile time to the TU's own `__$g_dtor.N` function.
-    for (auto& [def, idx] : lazy_global_index_) {
-        (void)def;
-        out_ << "@__$g_sentinel." << idx << " = internal global i1 0\n";
-        out_ << "@__$g_dtor_node." << idx
-             << " = internal global { ptr, ptr } { ptr null, ptr @__$g_dtor." << idx << " }\n";
+    // Two passes over program.globals:
+    //   - imported lazy entries: emit external declares for sentinel + ensure
+    //     widget so the consumer's gate links to the defining TU's symbols.
+    //   - local lazy entries: emit the full set (sentinel, node, ctor, dtor,
+    //     ensure) keyed by `lazyMangleSuffix` so the names are stable across
+    //     TUs and the consumer-side declares resolve.
+    // Function-internal lazies (visible_in_function non-empty) stay strictly
+    // local — keep `internal` linkage on every symbol. Namespace-scope
+    // lazies expose the sentinel and ensure widget for cross-TU access.
+    bool wrote_any = false;
+    auto ensure_blank = [&](){ if (!wrote_any) { out_ << "\n"; wrote_any = true; } };
+
+    // imported declares
+    for (auto& g : program_.globals) {
+        if (!g.is_lazy() || g.impl_module.empty()) continue;
+        ensure_blank();
+        std::string suffix = lazyMangleSuffix(g);
+        out_ << "@__$g_sentinel." << suffix << " = external global i1\n";
+        out_ << "declare void @__$g_ensure." << suffix << "()\n";
     }
-    out_ << "\n";
-    // ctor / dtor / ensure per lazy GlobalDef.
-    for (auto& [def, idx] : lazy_global_index_) {
+    if (wrote_any) out_ << "\n";
+
+    // local definitions
+    for (auto& g : program_.globals) {
+        if (!g.is_lazy() || !g.impl_module.empty()) continue;
+        std::string suffix = lazyMangleSuffix(g);
+        bool fn_internal = !g.visible_in_function.empty();
+        // Sentinel and ensure widget go default-linkage so consumer TUs can
+        // reach them; function-internal lazies stay private to this TU.
+        const char* gate_link = fn_internal ? "internal " : "";
+        out_ << "@__$g_sentinel." << suffix << " = " << gate_link << "global i1 0\n";
+        // dtor_node is only ever referenced from this TU's ensure widget;
+        // internal is always safe.
+        out_ << "@__$g_dtor_node." << suffix
+             << " = internal global { ptr, ptr } "
+             << "{ ptr null, ptr @__$g_dtor." << suffix << " }\n";
+    }
+
+    // ctor / dtor / ensure per local lazy GlobalDef.
+    for (auto& g : program_.globals) {
+        if (!g.is_lazy() || !g.impl_module.empty()) continue;
+        std::string suffix = lazyMangleSuffix(g);
+        const GlobalDef* def = &g;
+        bool fn_internal = !g.visible_in_function.empty();
+        const char* gate_link = fn_internal ? "internal " : "";
+
         // === ctor ===
-        out_ << "define internal void @__$g_ctor." << idx << "() {\n";
+        out_ << "define internal void @__$g_ctor." << suffix << "() {\n";
         out_ << "entry:\n";
         locals_.clear();
         emitted_alloca_regs_.clear();
@@ -761,7 +805,7 @@ void Codegen::emitLazyGlobalHelpers() {
         out_ << "}\n\n";
 
         // === dtor ===
-        out_ << "define internal void @__$g_dtor." << idx << "() {\n";
+        out_ << "define internal void @__$g_dtor." << suffix << "() {\n";
         out_ << "entry:\n";
         locals_.clear();
         emitted_alloca_regs_.clear();
@@ -783,16 +827,16 @@ void Codegen::emitLazyGlobalHelpers() {
         // cold path. Sets the sentinel, prepends this slid's dtor node onto
         // the shared list (so reverse-construction-order falls out naturally),
         // then tail-calls the user ctor.
-        out_ << "define internal void @__$g_ensure." << idx << "() {\n";
+        out_ << "define " << gate_link << "void @__$g_ensure." << suffix << "() {\n";
         out_ << "entry:\n";
-        out_ << "    store i1 1, ptr @__$g_sentinel." << idx << "\n";
+        out_ << "    store i1 1, ptr @__$g_sentinel." << suffix << "\n";
         out_ << "    %old_head = load ptr, ptr @__$global_dtor_head\n";
         out_ << "    %next_slot = getelementptr { ptr, ptr }, "
-             << "ptr @__$g_dtor_node." << idx << ", i32 0, i32 0\n";
+             << "ptr @__$g_dtor_node." << suffix << ", i32 0, i32 0\n";
         out_ << "    store ptr %old_head, ptr %next_slot\n";
-        out_ << "    store ptr @__$g_dtor_node." << idx
+        out_ << "    store ptr @__$g_dtor_node." << suffix
              << ", ptr @__$global_dtor_head\n";
-        out_ << "    tail call void @__$g_ctor." << idx << "()\n";
+        out_ << "    tail call void @__$g_ctor." << suffix << "()\n";
         out_ << "    ret void\n";
         out_ << "}\n\n";
     }
@@ -832,18 +876,16 @@ void Codegen::emitGlobalDtorRuntime() {
 }
 
 void Codegen::emitLazySentinelGate(const GlobalEntry& ge) {
-    if (!ge.is_lazy) return;
-    auto it = lazy_global_index_.find(ge.def);
-    if (it == lazy_global_index_.end()) return;
-    int idx = it->second;
+    if (!ge.is_lazy || !ge.def) return;
+    std::string suffix = lazyMangleSuffix(*ge.def);
     std::string s_tmp = newTmp();
     std::string ensure_lbl = newLabel("g_ens");
     std::string access_lbl = newLabel("g_acc");
-    out_ << "    " << s_tmp << " = load i1, ptr @__$g_sentinel." << idx << "\n";
+    out_ << "    " << s_tmp << " = load i1, ptr @__$g_sentinel." << suffix << "\n";
     out_ << "    br i1 " << s_tmp << ", label %" << access_lbl
          << ", label %" << ensure_lbl << "\n";
     out_ << ensure_lbl << ":\n";
-    out_ << "    call void @__$g_ensure." << idx << "()\n";
+    out_ << "    call void @__$g_ensure." << suffix << "()\n";
     out_ << "    br label %" << access_lbl << "\n";
     out_ << access_lbl << ":\n";
 }

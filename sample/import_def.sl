@@ -7,6 +7,21 @@ other TU.
 
 import import_decl;
 
+/*
+define the globals declared in the header.
+*/
+global query(who_ = 1) { }
+global what_ = 2;
+int where_ = 3;
+global query(when_ = 4) {
+    _() {
+        __println("query:ctor");
+    }
+    ~() {
+        __println("query:dtor");
+    }
+}
+
 global state(
     hellos_ = 0,
     goodbyes_ = 0

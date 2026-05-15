@@ -1,5 +1,17 @@
 # TODO
 
+## Globals
+
+Phases 1-6 plus reverse-construction-order test landed: keyword, long/short forms, namespace access (`Ns:field`, `::field`), class- and function- and method-internal scopes, lazy ctor/dtor with sentinel + ensure widget, single-shot `global;` lifetime auto-inserted at top of `main`, cross-TU shared dtor list (linkonce_odr head + per-TU prepend nodes), reach-goal errors for double-`global;` and out-of-scope access. The negative-test catalog enforces every spec rule with active markers.
+
+Remaining:
+
+- **Cross-TU static-global access via `.slh` header (option A)**. `.slh` carries `global Ns(field=value) {}` decls; consumer parser folds into `program.globals` with a new `impl_module` field set; codegen emits `external global` for those instead of `<sym> = global <ty> <init>`. Reject ctor/dtor bodies in headers ("must live in the defining TU") so we don't stumble into cross-TU lazy. Skip imported entries when writing the `.sli` sidecar so the aggregator's collision check stays meaningful. Footprint: ~10 lines parser, 3-line branch in `emitStaticGlobals`, 3-line skip in `writeSliFile`, one new field on `GlobalDef`, a couple of negatives.
+
+- **Cross-TU lazy-global access (deferred until option A demands it)**. Today the sentinel / ensure / ctor / dtor / node symbols are mangled per-TU index (`@__$g_sentinel.N` etc.) and never cross TUs. For a consumer TU to access a lazy global defined in another TU, those symbols need to be (a) renamed by namespace path so they're stable across TUs, and (b) weakened linkage (or moved to `linkonce_odr`) so the consumer's import-side declares resolve to the defining TU's definitions. Sketch: replace the index `N` with a sanitized namespace key in `emitLazyGlobalHelpers`, flip sentinel + node + ensure linkage from `internal` to weak/linkonce_odr at the defining site, emit `declare`s on the consumer side. Touches the same files as option A plus `codegen.cpp`'s emission routines.
+
+- **Threads — `global.self` / `global.default` and the `new.self` / `new.default` pair.** Explicit future-work in the spec. Per-thread (TLS) variant for the default; cross-thread default uses a lock-protected heap on the `new` side. Out of scope until a thread story exists at the language level.
+
 ## Compiler
 
 - **Expand ##name scope**: Currently `##name(expr)` only accepts a bare variable reference (`VarExpr`). Consider extending to field access (`obj.field` → `"field"` or `"obj.field"`), array index (`arr[i]` → `"arr"`), and other lvalue forms.

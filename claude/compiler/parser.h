@@ -724,15 +724,27 @@ struct ExternalMethodDef {
 struct GlobalDef {
     std::string namespace_name;            // "" for unnamed namespace; "simple", "Box:lid", "foo" otherwise
     std::vector<FieldDef> fields;
-    std::unique_ptr<BlockStmt> ctor_body;  // null when no _() declared
-    std::unique_ptr<BlockStmt> dtor_body;  // null when no ~() declared
+    std::unique_ptr<BlockStmt> ctor_body;  // null when no body in this TU (may still be declared)
+    std::unique_ptr<BlockStmt> dtor_body;  // null when no body in this TU (may still be declared)
+    // True when `_()` / `~()` were declared in this TU's body — with or
+    // without a body. Forward declarations (`_();`) set these but leave the
+    // body pointers null; the defining TU provides the body. The pair rule
+    // is enforced on these flags so a forward-only declaration still has to
+    // declare both halves.
+    bool has_ctor_decl = false;
+    bool has_dtor_decl = false;
     int file_id = 0;
     int tok = 0;                           // location of the `global` keyword
     // when non-empty, this global is only visible inside the named function
     // (function/method-internal short form). Bare-name access from that
     // function's body falls through to this global after locals fail.
     std::string visible_in_function;
-    bool is_lazy() const { return ctor_body || dtor_body; }
+    // Non-empty when this entry came from an imported `.slh`. The TU declares
+    // the symbol; storage and bodies live in <impl_module>. Codegen emits
+    // `external global` for the field, skips lazy helpers, and the sidecar
+    // pass leaves the entry out of the program-wide globals registry.
+    std::string impl_module;
+    bool is_lazy() const { return has_ctor_decl || has_dtor_decl; }
 };
 
 struct Program {

@@ -176,10 +176,12 @@ private:
         const GlobalDef* def = nullptr;     // back-pointer for ctor/dtor body (phase 3)
     };
     std::map<std::string, GlobalEntry> globals_;
-    // Stable per-TU id assigned to each lazy GlobalDef. Drives the LLVM symbol
-    // names for sentinel / ctor / dtor / ensure widget.
-    std::map<const GlobalDef*, int> lazy_global_index_;
-    int lazy_global_count_ = 0;
+    // Stable cross-TU symbol suffix for a lazy GlobalDef: namespace path
+    // (colons → dots) plus the first field name as the slid discriminator.
+    // Examples: `query.when_`, `state.hellos_`, `lazy.counter_`. Matches the
+    // existing field mangling `@__$g.<ns>.<field>` so all helpers cluster
+    // around the same name.
+    std::string lazyMangleSuffix(const GlobalDef& g) const;
     // While emitting a lazy global's ctor or dtor body, set to the owning
     // GlobalDef's namespace_name. Bare field-name resolution checks this scope
     // first (`<namespace>:<field>` in globals_) so the body's bare references

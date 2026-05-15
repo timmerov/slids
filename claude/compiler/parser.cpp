@@ -3226,15 +3226,32 @@ GlobalDef Parser::parseGlobalDef(const std::string& namespace_prefix,
         g.namespace_name = optional_name; // "" for anonymous file-scope
 
     if (is_short_form) {
-        // global TYPE NAME = EXPR;
+        // `global NAME = EXPR;` (inferred type) or
+        // `global TYPE NAME [= EXPR];` (typed; initializer optional for
+        // header-style forward decls).
         FieldDef f;
-        f.type = parseTypeName();
-        int name_tok = pos_;
-        f.name = expect(TokenType::kIdentifier, "Expected variable name after 'global'").value;
-        f.file_id = file_id_;
-        f.tok = name_tok;
-        expect(TokenType::kEquals, "Global short-form requires an initializer.");
-        f.default_val = parseExpr();
+        bool inferred = peek().type == TokenType::kIdentifier
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kEquals;
+        if (inferred) {
+            int name_tok = pos_;
+            f.name = advance().value;
+            f.file_id = file_id_;
+            f.tok = name_tok;
+            f.type = "";  // inferred from const-folded default
+            expect(TokenType::kEquals, "Inferred global short form requires an initializer.");
+            f.default_val = parseExpr();
+        } else {
+            f.type = parseTypeName();
+            int name_tok = pos_;
+            f.name = expect(TokenType::kIdentifier, "Expected variable name after 'global'").value;
+            f.file_id = file_id_;
+            f.tok = name_tok;
+            if (peek().type == TokenType::kEquals) {
+                advance();
+                f.default_val = parseExpr();
+            }
+        }
         expect(TokenType::kSemicolon, "Expected ';' after global short-form declaration.");
         g.fields.push_back(std::move(f));
         return g;
@@ -3281,10 +3298,12 @@ GlobalDef Parser::parseGlobalDef(const std::string& namespace_prefix,
     std::vector<std::string> field_names;
     for (auto& f : g.fields) field_names.push_back(f.name);
 
-    // body: '{' optional _() { ... } and ~() { ... } '}'
+    // body: '{' optional _() and ~() — each either `;` (forward decl) or
+    // `{ ... }` (body). Forward decls record `has_*_decl` but leave the
+    // body pointers null; the defining TU supplies the body.
     expect(TokenType::kLBrace, "Expected '{'");
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
-        // _() { ... }
+        // _() { ... }  or  _();
         if (peek().type == TokenType::kIdentifier && peek().value == "_"
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
@@ -3292,12 +3311,17 @@ GlobalDef Parser::parseGlobalDef(const std::string& namespace_prefix,
             advance(); // _
             expect(TokenType::kLParen, "Expected '('");
             expect(TokenType::kRParen, "Expected ')'");
-            if (g.ctor_body)
+            if (g.has_ctor_decl)
                 errorAt(ctor_tok, "Constructor is already defined for this global slid.");
-            g.ctor_body = parseBlock(field_names);
+            g.has_ctor_decl = true;
+            if (peek().type == TokenType::kSemicolon) {
+                advance(); // forward declaration — body lives elsewhere
+            } else {
+                g.ctor_body = parseBlock(field_names);
+            }
             continue;
         }
-        // ~() { ... }
+        // ~() { ... }  or  ~();
         if (peek().type == TokenType::kBitNot
             && pos_ + 1 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kLParen) {
@@ -3305,19 +3329,25 @@ GlobalDef Parser::parseGlobalDef(const std::string& namespace_prefix,
             advance(); // ~
             expect(TokenType::kLParen, "Expected '('");
             expect(TokenType::kRParen, "Expected ')'");
-            if (g.dtor_body)
+            if (g.has_dtor_decl)
                 errorAt(dtor_tok, "Destructor is already defined for this global slid.");
-            g.dtor_body = parseBlock(field_names);
+            g.has_dtor_decl = true;
+            if (peek().type == TokenType::kSemicolon) {
+                advance(); // forward declaration — body lives elsewhere
+            } else {
+                g.dtor_body = parseBlock(field_names);
+            }
             continue;
         }
         errorHere("Expected '_()', '~()', or '}' in global body.");
     }
     expect(TokenType::kRBrace, "Expected '}'");
 
-    // pair rule
-    if (g.ctor_body && !g.dtor_body)
+    // pair rule — checked against declarations, not bodies. A header-style
+    // forward decl that names only one of `_()` / `~()` still trips this.
+    if (g.has_ctor_decl && !g.has_dtor_decl)
         errorAt(global_tok, "Global slid has ctor but no dtor.");
-    if (g.dtor_body && !g.ctor_body)
+    if (g.has_dtor_decl && !g.has_ctor_decl)
         errorAt(global_tok, "Global slid has dtor but no ctor.");
 
     return g;
@@ -3336,8 +3366,12 @@ GlobalDef Parser::parseBareGlobalShortForm() {
     f.name = expect(TokenType::kIdentifier, "Expected variable name.").value;
     f.file_id = file_id_;
     f.tok = name_tok;
-    expect(TokenType::kEquals, "Bare file-scope global requires an initializer.");
-    f.default_val = parseExpr();
+    // Initializer optional: header-style decls (`int where_;`) omit it; the
+    // defining TU's matching decl carries the value.
+    if (peek().type == TokenType::kEquals) {
+        advance();
+        f.default_val = parseExpr();
+    }
     expect(TokenType::kSemicolon, "Expected ';' after global declaration.");
     g.fields.push_back(std::move(f));
     return g;
@@ -3726,6 +3760,13 @@ Program Parser::parse() {
                 recordSlidMethods(slid);
                 program.slids.push_back(std::move(slid));
             }
+            // Imported globals: stamp the source module and fold into the
+            // consumer's registry. Post-parse dedup drops any imported entry
+            // that the consuming TU also defines locally.
+            for (auto& g : hdr.globals) {
+                g.impl_module = module;
+                program.globals.push_back(std::move(g));
+            }
 
             // load template bodies from impl file: foo.slh -> foo.sl
             if (has_templates) {
@@ -3855,14 +3896,17 @@ Program Parser::parse() {
             && tokens_[pos_ + 1].type == TokenType::kLBrace) {
             parseExternalMethodBlock(program);
         }
-        // bare file-scope short-form global: TYPE NAME = EXPR;
-        // shape requires a type token then identifier then '='. The kIdentifier
-        // case can only land here once the slid-def / derived-class / external
-        // method / external method block paths above have already declined.
+        // bare file-scope short-form global: TYPE NAME [= EXPR];
+        // shape requires a type token then identifier then `=` or `;`.
+        // Header-style decls omit the initializer; the defining TU's matching
+        // decl carries the value. The kIdentifier case can only land here
+        // once the slid-def / derived-class / external method / external
+        // method block paths above have already declined.
         else if ((isTypeName(peek()) || peek().type == TokenType::kIdentifier)
                  && pos_ + 2 < (int)tokens_.size()
                  && tokens_[pos_ + 1].type == TokenType::kIdentifier
-                 && tokens_[pos_ + 2].type == TokenType::kEquals) {
+                 && (tokens_[pos_ + 2].type == TokenType::kEquals
+                     || tokens_[pos_ + 2].type == TokenType::kSemicolon)) {
             program.globals.push_back(parseBareGlobalShortForm());
         } else if (peek().type == TokenType::kLParen) {
             program.functions.push_back(parseFunctionDef());
@@ -3909,6 +3953,40 @@ Program Parser::parse() {
 
     // collapse multiple reopens of the same class into one merged SlidDef.
     mergeReopens(program);
+
+    // (P2) header/def dedup. When this TU imports a header that re-declares
+    // a global the TU itself defines, the header's GlobalDef is redundant —
+    // the defining TU's bodies / initializers / lazy helpers are canonical.
+    // Drop wholly-covered imported entries; flag partial overlap (some fields
+    // local, others imported under the same namespace) as a header/def
+    // mismatch.
+    {
+        std::set<std::pair<std::string,std::string>> local_pairs;
+        for (auto& g : program.globals)
+            if (g.impl_module.empty())
+                for (auto& f : g.fields)
+                    local_pairs.emplace(g.namespace_name, f.name);
+        std::vector<GlobalDef> filtered;
+        filtered.reserve(program.globals.size());
+        for (auto& g : program.globals) {
+            if (!g.impl_module.empty()) {
+                int covered = 0;
+                for (auto& f : g.fields)
+                    if (local_pairs.count({g.namespace_name, f.name}))
+                        covered++;
+                int total = (int)g.fields.size();
+                if (covered == total) continue; // fully redefined locally — drop
+                if (covered > 0) {
+                    std::string ns = g.namespace_name.empty() ? "<unnamed>" : g.namespace_name;
+                    throw CompileError{g.file_id, g.tok,
+                        "Imported global namespace '" + ns
+                            + "' has fields partially redefined in this TU; the local and the header must agree on the full field set."};
+                }
+            }
+            filtered.push_back(std::move(g));
+        }
+        program.globals = std::move(filtered);
+    }
 
     // (P1) global slids: field-name collision within a namespace. Co-named
     // global slids stack in the same namespace; their field names must all
