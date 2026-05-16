@@ -183,7 +183,7 @@ Vector<T>(
             self[i] <-- self[i-1];
         }
 
-        return self[index];
+        return ^self[index];
     }
 
 /* private interface. */

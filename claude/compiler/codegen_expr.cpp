@@ -825,10 +825,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
             return tmp;
         }
         // check nested function first
-        auto nit = nested_info_.find(call->callee);
-        if (nit != nested_info_.end()) {
-            auto& info = nit->second;
-            std::string mangled = info.parent_name + "__" + call->callee;
+        if (std::string mangled = nestedCallMangled(call->callee, call->args);
+                !mangled.empty()) {
+            auto& info = nested_info_[mangled];
             std::string ret_type = llvmType(func_return_types_[mangled]);
 
             std::string arg_str;
@@ -837,11 +836,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 arg_str = "ptr " + locals_[cap].reg;
             } else if (info.captures.size() >= 2) {
                 std::string frame = newTmp() + "_frame";
-                out_ << "    " << frame << " = alloca %frame." << info.parent_name << "\n";
+                out_ << "    " << frame << " = alloca %frame." << info.mangled_name << "\n";
                 std::vector<std::string> ordered_caps(info.captures.begin(), info.captures.end());
                 for (int i = 0; i < (int)ordered_caps.size(); i++) {
                     std::string gep = newTmp();
-                    out_ << "    " << gep << " = getelementptr %frame." << info.parent_name
+                    out_ << "    " << gep << " = getelementptr %frame." << info.mangled_name
                          << ", ptr " << frame << ", i32 0, i32 " << i << "\n";
                     out_ << "    store ptr " << locals_[ordered_caps[i]].reg << ", ptr " << gep << "\n";
                 }
@@ -2387,6 +2386,10 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // function call — look up return type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        if (std::string nm = nestedCallMangled(ce->callee, ce->args); !nm.empty()) {
+            const std::string& rt = func_return_types_[nm];
+            return slid_info_.count(rt) ? "ptr" : llvmType(rt);
+        }
         auto resolved = resolveTemplateOverload(ce->callee, ce->type_args, ce->args);
         if (resolved.entry) {
             const FunctionDef& tmpl = *resolved.entry->def;
@@ -2743,6 +2746,8 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
         // slid ctor call: SlidName(args) → type is SlidName
         if (slid_info_.count(ce->callee)) return ce->callee;
+        if (std::string nm = nestedCallMangled(ce->callee, ce->args); !nm.empty())
+            return func_return_types_[nm];
         auto resolved = resolveTemplateOverload(ce->callee, ce->type_args, ce->args);
         if (resolved.entry) {
             const FunctionDef& tmpl = *resolved.entry->def;

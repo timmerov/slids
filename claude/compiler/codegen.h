@@ -396,7 +396,9 @@ private:
     std::vector<std::pair<std::string,std::string>> pending_temp_dtors_; // (alloca_reg, type_name)
 
     // nested function support
-    std::map<std::string, NestedFuncInfo> nested_info_; // mangled -> info
+    std::map<std::string, NestedFuncInfo> nested_info_; // per-overload mangled name -> info
+    // nested-function overload table: bare nested name -> [OverloadEntry].
+    std::map<std::string, std::vector<OverloadEntry>> nested_func_overloads_;
     std::string current_parent_;   // mangled name of current parent function
     std::string frame_ptr_reg_;    // %frame ptr inside a nested function
 
@@ -611,6 +613,19 @@ private:
         const std::vector<int>& param_mut_toks,
         const std::string& return_type,
         bool is_const, int file_id);
+    // Register one nested-function overload: signature maps under the
+    // per-overload mangled name, plus a nested_func_overloads_ bucket entry.
+    void registerNestedOverload(const std::string& parent_name,
+                                const NestedFunctionDef& def);
+    // Resolve a nested-function call to its overload-mangled name, or "" when
+    // callee names no nested function.
+    std::string nestedCallMangled(const std::string& callee,
+                                  const std::vector<std::unique_ptr<Expr>>& args);
+    // Core overload picker over an explicit bucket — shared by method calls
+    // (method_overloads_) and nested-function calls (nested_func_overloads_).
+    std::string resolveOverloadIn(const std::string& base_mangled,
+                                  const std::vector<std::unique_ptr<Expr>>& args,
+                                  const std::vector<OverloadEntry>& overloads);
     bool isPointerExpr(const Expr& expr);
     bool isUnsignedExpr(const Expr& expr);
     std::string resolveOperatorOverload(const std::string& op,

@@ -99,13 +99,12 @@ std::string Codegen::resolveFreeFunctionMangledName(
         if (pit == func_param_types_.end() || pit->second.size() == arg_count)
             return name;
     }
-    // nested function: signatures are registered under <parent>__<nested>.
-    // Nested-fn names are unique within their parent so no arity match is needed.
-    auto nit = nested_info_.find(name);
-    if (nit != nested_info_.end()) {
-        std::string mangled = nit->second.parent_name + "__" + name;
-        if (func_return_types_.count(mangled)) return mangled;
-    }
+    // nested function: match an overload by arity. Full arg-type resolution is
+    // done by nestedCallMangled at sites that have the argument expressions.
+    auto nit = nested_func_overloads_.find(name);
+    if (nit != nested_func_overloads_.end())
+        for (auto& [mn, ptypes, _pm, _pmt, _fid] : nit->second)
+            if (ptypes.size() == arg_count) return mn;
     auto foit = free_func_overloads_.find(name);
     if (foit == free_func_overloads_.end()) return "";
     for (auto& [mn, ptypes, _pm, _pmt, _fid] : foit->second) {
@@ -185,23 +184,74 @@ void Codegen::registerMethodOverload(
     overloads.push_back({mangled, ptypes, param_mutable, param_mut_toks, file_id});
 }
 
+// Register one nested-function overload: writes the signature maps under the
+// per-overload mangled name and appends a deduped nested_func_overloads_
+// bucket entry (keyed by the bare nested name).
+void Codegen::registerNestedOverload(const std::string& parent_name,
+                                     const NestedFunctionDef& def)
+{
+    std::vector<std::string> ptypes = buildParamTypes(def.params, def.param_mutable);
+    std::string mangled = mangleMethod(parent_name, def.name, ptypes);
+    std::string ret;
+    if (!def.tuple_return_fields.empty()) {
+        ret = "{ ";
+        for (int i = 0; i < (int)def.tuple_return_fields.size(); i++) {
+            if (i > 0) ret += ", ";
+            ret += llvmType(def.tuple_return_fields[i].first);
+        }
+        ret += " }";
+        func_tuple_fields_[mangled] = def.tuple_return_fields;
+    } else {
+        ret = def.return_type;
+    }
+    func_return_types_[mangled] = ret;
+    func_param_types_[mangled]  = ptypes;
+    auto& bucket = nested_func_overloads_[def.name];
+    for (auto& e : bucket)
+        if (std::get<1>(e) == ptypes) return;   // already registered
+    bucket.push_back({mangled, ptypes, def.param_mutable, def.param_mut_toks, 0});
+}
+
+// Resolve a nested-function call to its overload-mangled name. "" when callee
+// names no nested function (or resolution produced no concrete overload).
+std::string Codegen::nestedCallMangled(
+    const std::string& callee,
+    const std::vector<std::unique_ptr<Expr>>& args)
+{
+    auto it = nested_func_overloads_.find(callee);
+    if (it == nested_func_overloads_.end()) return "";
+    std::string m = resolveOverloadIn(callee, args, it->second);
+    return nested_info_.count(m) ? m : "";
+}
+
 std::string Codegen::resolveOverloadForCall(
     const std::string& base_mangled,
     const std::vector<std::unique_ptr<Expr>>& args)
 {
     auto it = method_overloads_.find(base_mangled);
-    if (it == method_overloads_.end() || it->second.empty()) return base_mangled;
+    if (it == method_overloads_.end()) return base_mangled;
+    return resolveOverloadIn(base_mangled, args, it->second);
+}
+
+// Core overload picker over an explicit bucket — shared by method calls
+// (method_overloads_) and nested-function calls (nested_func_overloads_).
+std::string Codegen::resolveOverloadIn(
+    const std::string& base_mangled,
+    const std::vector<std::unique_ptr<Expr>>& args,
+    const std::vector<OverloadEntry>& overloads)
+{
+    if (overloads.empty()) return base_mangled;
     // No overload's arity matches the call: explicit error so we don't fall
     // through to the single-overload fast path or pass 1/2 (which all skip
     // arity for size-1 or silently fail for size-N).
     bool any_arity = false;
-    for (auto& [mangled, ptypes, _pm, _pmt, _fid] : it->second)
+    for (auto& [mangled, ptypes, _pm, _pmt, _fid] : overloads)
         if (ptypes.size() == args.size()) { any_arity = true; break; }
     if (!any_arity) {
         std::string arities;
-        for (size_t i = 0; i < it->second.size(); i++) {
+        for (size_t i = 0; i < overloads.size(); i++) {
             if (i > 0) arities += "/";
-            arities += std::to_string(std::get<1>(it->second[i]).size());
+            arities += std::to_string(std::get<1>(overloads[i]).size());
         }
         size_t sep = base_mangled.rfind("__");
         std::string method = (sep != std::string::npos) ? base_mangled.substr(sep+2) : base_mangled;
@@ -212,12 +262,12 @@ std::string Codegen::resolveOverloadForCall(
         size_t sep = base_mangled.rfind("__");
         return (sep != std::string::npos) ? base_mangled.substr(sep+2) : base_mangled;
     };
-    if (it->second.size() == 1) {
-        rejectConstToMutable(display(), args, it->second[0]);
-        return std::get<0>(it->second[0]);
+    if (overloads.size() == 1) {
+        rejectConstToMutable(display(), args, overloads[0]);
+        return std::get<0>(overloads[0]);
     }
     // Pass 1: canonical type match (const-stripping)
-    for (auto& entry : it->second) {
+    for (auto& entry : overloads) {
         auto& ptypes = std::get<1>(entry);
         if (ptypes.size() != args.size()) continue;
         bool match = true;
@@ -230,7 +280,7 @@ std::string Codegen::resolveOverloadForCall(
         }
     }
     // Pass 2: indirect-type match (pointer vs scalar)
-    for (auto& entry : it->second) {
+    for (auto& entry : overloads) {
         auto& ptypes = std::get<1>(entry);
         if (ptypes.size() != args.size()) continue;
         bool match = true;
@@ -421,6 +471,10 @@ std::string Codegen::exprSlidType(const Expr& expr) {
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
         // slid ctor call: SlidName(args) → fresh SlidName temp
         if (slid_info_.count(ce->callee)) return ce->callee;
+        if (std::string nm = nestedCallMangled(ce->callee, ce->args); !nm.empty()) {
+            const std::string& rt = func_return_types_[nm];
+            if (slid_info_.count(rt)) return rt;
+        }
         auto resolved = resolveTemplateOverload(ce->callee, ce->type_args, ce->args);
         if (resolved.entry) {
             const FunctionDef& tmpl = *resolved.entry->def;
@@ -619,12 +673,8 @@ std::string Codegen::exprType(const Expr& expr) {
         return "";
     }
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
-        auto nit = nested_info_.find(ce->callee);
-        if (nit != nested_info_.end()) {
-            std::string mangled = nit->second.parent_name + "__" + ce->callee;
-            auto rit = func_return_types_.find(mangled);
-            if (rit != func_return_types_.end()) return rit->second;
-        }
+        if (std::string nm = nestedCallMangled(ce->callee, ce->args); !nm.empty())
+            return func_return_types_[nm];
         // implicit-self method call — resolved the same way emitExpr does.
         if (std::string sm = selfMethodMangled(ce->callee, ce->args); !sm.empty())
             return func_return_types_[sm];

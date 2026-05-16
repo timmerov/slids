@@ -297,17 +297,7 @@ void Codegen::collectFunctionSignatures() {
         std::function<void(const BlockStmt&)> findNested = [&](const BlockStmt& block) {
             for (auto& stmt : block.stmts) {
                 if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
-                    std::string mangled = fn.name + "__" + nfs->def.name;
-                    std::string ret;
-                    if (!nfs->def.tuple_return_fields.empty()) {
-                        ret = buildTupleType(nfs->def.tuple_return_fields);
-                        func_tuple_fields_[mangled] = nfs->def.tuple_return_fields;
-                    } else {
-                        ret = nfs->def.return_type;
-                    }
-                    func_return_types_[mangled] = ret;
-                    func_param_types_[mangled] =
-                        buildParamTypes(nfs->def.params, nfs->def.param_mutable);
+                    registerNestedOverload(fn.name, nfs->def);
                 } else if (auto* fl = dynamic_cast<const ForLongStmt*>(stmt.get())) {
                     findNested(*fl->update_block);
                     findNested(*fl->body);
@@ -568,12 +558,12 @@ void Codegen::analyzeNestedFunctions(const FunctionDef& fn) {
 
                 auto captures = collectCaptures(*nfs->def.body, parent_locals, own_params);
 
-                std::string mangled = fn.name + "__" + nfs->def.name;
+                std::string mangled = mangleMethod(fn.name, nfs->def.name,
+                    buildParamTypes(nfs->def.params, nfs->def.param_mutable));
                 NestedFuncInfo info;
                 info.mangled_name = mangled;
                 info.captures = captures;
                 info.parent_name = fn.name;
-                nested_info_[nfs->def.name] = info;
                 nested_info_[mangled] = info;
             } else if (auto* fl = dynamic_cast<const ForLongStmt*>(stmt.get())) {
                 findNested(*fl->update_block);
@@ -1679,17 +1669,20 @@ bool Codegen::isExported(const std::string& mangled) const {
 }
 
 void Codegen::emitFrameStruct(const FunctionDef& fn) {
-    bool has_frame = false;
-    std::set<std::string> all_captures;
-
+    // One frame struct per nested-function overload with 2+ captures, named
+    // by that overload's mangled name so overloads with differing capture
+    // sets get independent layouts.
     std::function<void(const BlockStmt&)> scan = [&](const BlockStmt& block) {
         for (auto& stmt : block.stmts) {
             if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
-                auto it = nested_info_.find(nfs->def.name);
+                std::string mangled = mangleMethod(fn.name, nfs->def.name,
+                    buildParamTypes(nfs->def.params, nfs->def.param_mutable));
+                auto it = nested_info_.find(mangled);
                 if (it != nested_info_.end() && it->second.captures.size() >= 2) {
-                    has_frame = true;
-                    for (auto& c : it->second.captures)
-                        all_captures.insert(c);
+                    out_ << "%frame." << mangled << " = type { ";
+                    for (size_t i = 0; i < it->second.captures.size(); i++)
+                        out_ << (i ? ", ptr" : "ptr");
+                    out_ << " }\n";
                 }
             } else if (auto* fl = dynamic_cast<const ForLongStmt*>(stmt.get())) {
                 scan(*fl->update_block);
@@ -1703,17 +1696,6 @@ void Codegen::emitFrameStruct(const FunctionDef& fn) {
         }
     };
     scan(*fn.body);
-
-    if (!has_frame) return;
-
-    out_ << "%frame." << fn.name << " = type { ";
-    bool first = true;
-    for (size_t i = 0; i < all_captures.size(); i++) {
-        if (!first) out_ << ", ";
-        out_ << "ptr";
-        first = false;
-    }
-    out_ << " }\n";
 }
 
 void Codegen::emitNestedFunction(
@@ -1734,7 +1716,8 @@ void Codegen::emitNestedFunction(
     frame_ptr_reg_ = "";
     block_terminated_ = false;
 
-    std::string mangled = parent_name + "__" + fn.name;
+    std::string mangled = mangleMethod(parent_name, fn.name,
+        buildParamTypes(fn.params, fn.param_mutable));
     std::string ret_type = llvmType(func_return_types_[mangled]);
     current_func_return_type_ = ret_type;
     current_func_slids_return_type_ = func_return_types_[mangled];
@@ -1785,7 +1768,7 @@ void Codegen::emitNestedFunction(
         std::vector<std::string> ordered_caps(info.captures.begin(), info.captures.end());
         for (int i = 0; i < (int)ordered_caps.size(); i++) {
             std::string gep = newTmp();
-            out_ << "    " << gep << " = getelementptr %frame." << parent_name
+            out_ << "    " << gep << " = getelementptr %frame." << mangled
                  << ", ptr %frame, i32 0, i32 " << i << "\n";
             std::string ptr = newTmp();
             out_ << "    " << ptr << " = load ptr, ptr " << gep << "\n";
@@ -2255,7 +2238,9 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     std::function<void(const BlockStmt&)> emitNested = [&](const BlockStmt& block) {
         for (auto& stmt : block.stmts) {
             if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
-                auto it = nested_info_.find(nfs->def.name);
+                std::string nm = mangleMethod(fn.name, nfs->def.name,
+                    buildParamTypes(nfs->def.params, nfs->def.param_mutable));
+                auto it = nested_info_.find(nm);
                 if (it != nested_info_.end())
                     emitNestedFunction(nfs->def, fn.name, it->second);
             } else if (auto* fl = dynamic_cast<const ForLongStmt*>(stmt.get())) {

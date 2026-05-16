@@ -4119,10 +4119,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
         }
 
         // check if it's a nested function call
-        auto nit = nested_info_.find(call->callee);
-        if (nit != nested_info_.end()) {
-            auto& info = nit->second;
-            std::string mangled = info.parent_name + "__" + call->callee;
+        if (std::string mangled = nestedCallMangled(call->callee, call->args);
+                !mangled.empty()) {
+            auto& info = nested_info_[mangled];
             std::string ret_type = llvmType(func_return_types_[mangled]);
 
             std::string arg_str;
@@ -4132,11 +4131,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
             } else if (info.captures.size() >= 2) {
                 // build frame struct on stack and fill in ptrs
                 std::string frame = newTmp() + "_frame";
-                out_ << "    " << frame << " = alloca %frame." << info.parent_name << "\n";
+                out_ << "    " << frame << " = alloca %frame." << info.mangled_name << "\n";
                 std::vector<std::string> ordered_caps(info.captures.begin(), info.captures.end());
                 for (int i = 0; i < (int)ordered_caps.size(); i++) {
                     std::string gep = newTmp();
-                    out_ << "    " << gep << " = getelementptr %frame." << info.parent_name
+                    out_ << "    " << gep << " = getelementptr %frame." << info.mangled_name
                          << ", ptr " << frame << ", i32 0, i32 " << i << "\n";
                     out_ << "    store ptr " << locals_[ordered_caps[i]].reg << ", ptr " << gep << "\n";
                 }
