@@ -6,6 +6,19 @@ Vector<T>(...) {
     _();
     ~();
 
+    /*
+    assignment from Vector.
+    copy operator.
+    rhs may be self.
+    */
+    op=(Vector<T>^ v);
+
+    /*
+    move operator.
+    rhs may be self.
+    */
+    op<--(mutable Vector<T>^ v);
+
     /* return the number of elements. */
     intptr size();
 

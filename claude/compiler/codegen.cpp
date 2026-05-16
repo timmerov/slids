@@ -600,7 +600,34 @@ void Codegen::analyzeNestedFunctions(const FunctionDef& fn) {
     findNested(*fn.body);
 }
 
-void Codegen::ensureSlidInstantiated(const std::string& type) {
+// True if `t` names a type the compiler can resolve: a built-in scalar/
+// pointer type, a known slid (regular or already-instantiated template), an
+// anon tuple of resolvable types, or a template-mangled instance whose base
+// is a known template. Const qualifiers and pointer/iterator/inline-array
+// suffixes are stripped before the check.
+bool Codegen::isResolvableType(const std::string& t) {
+    std::string s = baseSlidType(t); // unwrap "(const X)" / drop leading "const "
+    while (true) {
+        if (s.size() >= 2 && s.substr(s.size() - 2) == "[]") { s.resize(s.size() - 2); continue; }
+        if (isInlineArrayType(s)) { s = s.substr(0, s.rfind('[')); continue; }
+        if (!s.empty() && s.back() == '^') { s.pop_back(); continue; }
+        break;
+    }
+    if (s.empty()) return false;
+    if (isPrimitive(s) || s == "void") return true;
+    if (slid_info_.count(s) || emitted_slid_templates_.count(s)) return true;
+    if (isAnonTupleType(s)) {
+        for (auto& e : anonTupleElems(s))
+            if (!isResolvableType(e)) return false;
+        return true;
+    }
+    auto sep = s.find("__");
+    if (sep != std::string::npos && template_slids_.count(s.substr(0, sep)))
+        return true;
+    return false;
+}
+
+void Codegen::ensureSlidInstantiated(const std::string& type, const Stmt* site) {
     if (slid_info_.count(type) || emitted_slid_templates_.count(type)) return;
     for (auto& [base, def] : template_slids_) {
         std::string prefix = base + "__";
@@ -619,6 +646,13 @@ void Codegen::ensureSlidInstantiated(const std::string& type) {
             }
         }
         if (type_args.size() == def->type_params.size()) {
+            for (auto& ta : type_args) {
+                if (isResolvableType(ta)) continue;
+                std::string msg = "Type argument '" + ta + "' to template '"
+                    + base + "' is not a known type.";
+                if (site) errorAtNode(*site, msg);
+                error(msg);
+            }
             instantiateSlidTemplate(base, type_args);
             return;
         }

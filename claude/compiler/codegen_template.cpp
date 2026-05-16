@@ -36,6 +36,23 @@ static std::string subTypeSuffix(const std::string& t,
         }
         return s + ")";
     }
+    // Mangled template type "Base__Arg1__Arg2..." — substitute each
+    // underscore-delimited segment individually so a bare type param (T)
+    // nested in the mangled name is rewritten (e.g. "Vector__T" → "Vector__int").
+    if (t.find("__") != std::string::npos) {
+        std::string out;
+        size_t i = 0;
+        while (true) {
+            size_t sep = t.find("__", i);
+            std::string seg = (sep == std::string::npos)
+                ? t.substr(i) : t.substr(i, sep - i);
+            out += subType(seg, subst);
+            if (sep == std::string::npos) break;
+            out += "__";
+            i = sep + 2;
+        }
+        return out;
+    }
     return subType(t, subst);
 }
 
@@ -856,6 +873,8 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
         md.return_type = subTypeSuffix(m.return_type, subst);
         for (auto& [pt, pn] : m.params)
             md.params.emplace_back(subTypeSuffix(pt, subst), pn);
+        md.param_mutable  = m.param_mutable;
+        md.param_mut_toks = m.param_mut_toks;
         if (m.body) md.body = cloneBlock(*m.body, subst);
         concrete.methods.push_back(std::move(md));
     }

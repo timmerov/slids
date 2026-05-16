@@ -17,6 +17,56 @@ Vector<T>(
         delete storage_;
     }
 
+    /*
+    assignment from Vector.
+    copy operator.
+    rhs may be self.
+    */
+    op=(Vector<T>^ v) {
+        /* don't copy self. */
+        if (v == ^self) {
+            return;
+        }
+
+        /* make space. */
+        resize(v^.size_);
+
+        /* copy elements. */
+        for (
+            intptr i = 0,
+            T[] src = <T[]> v^.storage_,
+            T[] dst = <T[]> storage_
+        ) (i < size_) {
+            ++i; ++src; ++dst;
+        } {
+            dst^ = src^;
+        }
+    }
+
+    /*
+    move operator.
+    rhs may be self.
+    */
+    op<--(mutable Vector<T>^ v) {
+        /* don't move self. */
+        if (v == ^self) {
+            return;
+        }
+
+        /* delete our storage. */
+        delete storage_;
+
+        /* copy from v. */
+        size_ = v^.size_;
+        capacity_ = v^.capacity_;
+        storage_ = v^.storage_;
+
+        /* clear v. */
+        v^.size_ = 0;
+        v^.capacity_ = 0;
+        v^.storage_ = nullptr;
+    }
+
     /* return the number of elements. */
     intptr size() {
         return size_;

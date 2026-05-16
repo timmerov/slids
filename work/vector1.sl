@@ -4,13 +4,17 @@ use a template class declared in a header.
 
 import vector;
 
+global int g_count = 0;
+
 Value(
     int x_
 ) {
     _() {
+        ++g_count;
         __println("Value:ctor");
     }
     ~() {
+        --g_count;
         __println("Value:dtor");
     }
     op<--(mutable Value^ rhs) {
@@ -26,6 +30,7 @@ int32 main() {
         __println("resize(3)");
         intvec.resize(3);
     }
+    __println("ctor/dtor count = " + g_count);
     __println("---Vector<Value>---");
     {
         Vector<Value> valvec;
@@ -39,6 +44,22 @@ int32 main() {
         valvec.resize(5);
         __println("---dtors---");
     }
+    __println("ctor/dtor count = " + g_count);
+    __println("---Vector a,b,c---");
+    {
+        Vector<Value> a;
+        __println("resize(3)");
+        a.resize(3);
+        __println("copy");
+        Vector<Value> b = a;
+        __println("move");
+        Vector<Value> c <-- a;
+        __println("a.size() = " + a.size());
+        __println("b.size() = " + b.size());
+        __println("c.size() = " + c.size());
+        __println("---dtors---");
+    }
+    __println("ctor/dtor count = " + g_count);
     __println("----------");
 
     return 0;

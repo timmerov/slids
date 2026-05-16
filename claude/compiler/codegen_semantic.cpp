@@ -646,7 +646,7 @@ void Codegen::scanForSlidTemplateUses() {
     };
     scanStmt = [&](const Stmt& stmt) {
         if (auto* d = dynamic_cast<const VarDeclStmt*>(&stmt)) {
-            ensureSlidInstantiated(d->type);
+            ensureSlidInstantiated(d->type, d);
         } else if (auto* b = dynamic_cast<const BlockStmt*>(&stmt)) {
             scanBlock(*b);
         } else if (auto* i = dynamic_cast<const IfStmt*>(&stmt)) {

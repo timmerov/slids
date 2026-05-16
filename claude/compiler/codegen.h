@@ -510,7 +510,8 @@ private:
     std::string instantiateSlidTemplate(const std::string& name,
                                         const std::vector<std::string>& type_args,
                                         bool force = false);
-    void ensureSlidInstantiated(const std::string& type);
+    void ensureSlidInstantiated(const std::string& type, const Stmt* site = nullptr);
+    bool isResolvableType(const std::string& t);
     void scanForSlidTemplateUses();
     // Pre-instantiate template-function calls (with explicit type args) found
     // in non-template bodies, so any local classes they carry are materialized
