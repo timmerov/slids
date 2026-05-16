@@ -24,11 +24,11 @@ Remaining genuine technical gaps (not coverage artifacts):
 
 ## Compiler
 
-- **Expand ##name scope**: Currently `##name(expr)` only accepts a bare variable reference (`VarExpr`). Consider extending to field access (`obj.field` → `"field"` or `"obj.field"`), array index (`arr[i]` → `"arr"`), and other lvalue forms.
-
 - **##value operator**: Implement `##value(expr)` for runtime-to-string conversion of enum values and bools. Enums require a lookup table (name → string); bools are a simple conditional. This needs runtime code emission and a table-generation pass during codegen.
 
 - **Future stringification macros**: `##pathname` (full source file path), `##function_mangled` (linker-mangled name), and other compile-time introspection macros noted in `stringification.txt`.
+
+- **`__println` formats every pointer segment as `%s`**: the per-segment dispatch in the `__println` codegen keys on the LLVM type — any `^`/`[]` value lowers to `ptr`, and the `ptr` branch unconditionally emits `%s`. So a non-string pointer/reference segment (`int^`, `Foo^`, …) is silently treated as a C string: `%s` walks the pointee's bytes, usually printing garbage or nothing (an `int^` at value 0 prints empty — the first byte is `\0`). It should reject a pointer segment whose slids type isn't `char[]` (or a `char` array), rather than mis-format it. The dispatch needs the slids type, not just `exprLlvmType`.
 
 
 - **Optimize temporary object usage**: Allow a class to declare `op reset() { ... }` that returns the object to a valid default state. When this overload exists, the compiler should reuse the same temporary slot across successive operations — avoiding the allocate/free cycle entirely. This is especially valuable for types like `String` where each construction involves a heap allocation.
