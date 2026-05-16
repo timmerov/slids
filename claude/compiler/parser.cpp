@@ -298,6 +298,7 @@ std::string Parser::typeInScope(const std::string& name) const {
 
 void Parser::recordSlidMethods(const SlidDef& s) {
     auto& info = class_info_[s.name];
+    if (!s.type_params.empty()) info.type_params = s.type_params;
     for (auto& m : s.methods) {
         info.method_names.insert(m.name);
         MethodSig sig;
@@ -2212,10 +2213,60 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     } else {
                         std::string src_type = typeInScope(iter_name);
                         auto mit = class_info_.find(src_type);
+                        // Template-instance type (mangled "Base__Arg..."): the
+                        // instance is never in class_info_ (it's minted by
+                        // codegen). Fall back to the base template's recorded
+                        // methods and substitute type params in return types.
+                        std::map<std::string, std::string> tmpl_subst;
+                        if (mit == class_info_.end()) {
+                            auto us = src_type.find("__");
+                            if (us != std::string::npos) {
+                                auto bit = class_info_.find(src_type.substr(0, us));
+                                if (bit != class_info_.end()
+                                    && !bit->second.type_params.empty()) {
+                                    std::vector<std::string> args;
+                                    std::string rest = src_type.substr(us + 2), cur;
+                                    for (size_t i = 0; i <= rest.size(); i++) {
+                                        if (i == rest.size()
+                                            || (rest[i] == '_' && i + 1 < rest.size()
+                                                && rest[i + 1] == '_')) {
+                                            if (!cur.empty()) args.push_back(cur);
+                                            cur.clear();
+                                            i++;
+                                        } else { cur += rest[i]; }
+                                    }
+                                    if (args.size() == bit->second.type_params.size()) {
+                                        mit = bit;
+                                        for (size_t i = 0; i < args.size(); i++)
+                                            tmpl_subst[bit->second.type_params[i]] = args[i];
+                                    }
+                                }
+                            }
+                        }
                         ClassInfo empty_ci;
                         const ClassInfo& ci = (mit != class_info_.end()) ? mit->second : empty_ci;
                         ProtocolDiag idx_diag = classifyByValue(ci, src_type);
                         ProtocolDiag ref_diag = classifyByRef(ci, src_type);
+                        // Substitute template type params in protocol return
+                        // types so they compare against a concrete loop var.
+                        if (!tmpl_subst.empty()) {
+                            auto subT = [&](const std::string& t) {
+                                std::string b = t, suf;
+                                while (true) {
+                                    if (b.size() >= 2 && b.substr(b.size() - 2) == "[]") {
+                                        suf = "[]" + suf; b.resize(b.size() - 2);
+                                    } else if (!b.empty() && b.back() == '^') {
+                                        suf = "^" + suf; b.pop_back();
+                                    } else { break; }
+                                }
+                                auto s = tmpl_subst.find(b);
+                                return (s != tmpl_subst.end() ? s->second : b) + suf;
+                            };
+                            if (idx_diag.status == ProtocolStatus::Good)
+                                idx_diag.return_type = subT(idx_diag.return_type);
+                            if (ref_diag.status == ProtocolStatus::Good)
+                                ref_diag.return_type = subT(ref_diag.return_type);
+                        }
                         // Pick protocol per option D + compat-as-availability.
                         // A protocol is "available" iff Good AND its return is
                         // compatible with the loop variable:

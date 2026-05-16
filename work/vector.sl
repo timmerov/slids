@@ -67,8 +67,18 @@ Vector<T>(
         v^.storage_ = nullptr;
     }
 
+    /*
+    overload index operation to fetch/set the indexed element.
+    T elem = vec[3];
+    vec[3] = elem;
+    */
+    T^ const op[](intptr index) {
+        T[] ptr = <T[]> storage_;
+        return ptr + index;
+    }
+
     /* return the number of elements. */
-    intptr size() {
+    intptr const size() {
         return size_;
     }
 

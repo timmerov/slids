@@ -45,7 +45,7 @@ int32 main() {
         __println("---dtors---");
     }
     __println("ctor/dtor count = " + g_count);
-    __println("---Vector a,b,c---");
+    __println("---copy/move---");
     {
         Vector<Value> a;
         __println("resize(3)");
@@ -57,6 +57,22 @@ int32 main() {
         __println("a.size() = " + a.size());
         __println("b.size() = " + b.size());
         __println("c.size() = " + c.size());
+        __println("---dtors---");
+    }
+    __println("ctor/dtor count = " + g_count);
+    __println("---index---");
+    {
+        Vector<Value> vec;
+        __println("resize(3)");
+        vec.resize(3);
+        vec[0].x_ = 10;
+        vec[1].x_ = 20;
+        vec[2].x_ = 40;
+        __print("vec = [");
+        for (Value^ v : vec) {
+            __print(" " + v^.x_);
+        }
+        __println(" ]");
         __println("---dtors---");
     }
     __println("ctor/dtor count = " + g_count);

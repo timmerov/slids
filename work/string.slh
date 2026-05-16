@@ -86,6 +86,9 @@ String(...)
     */
     char^ const op[](intptr index);
 
+    /* return size of string. */
+    intptr const size();
+
     /* begin iterator */
     char^ const begin();
 
@@ -94,9 +97,6 @@ String(...)
 
     /* update iterator */
     char^ const next(char^ prev);
-
-    /* return size of string. */
-    intptr const size();
 
     /* set to empty string. */
     void clear();

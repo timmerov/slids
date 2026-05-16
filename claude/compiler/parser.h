@@ -845,6 +845,7 @@ private:
     struct ClassInfo {
         std::set<std::string> method_names;
         std::map<std::string, MethodSig> sigs;
+        std::vector<std::string> type_params; // non-empty for template slids
     };
     std::map<std::string, ClassInfo> class_info_;
     void recordSlidMethods(const SlidDef& s);
