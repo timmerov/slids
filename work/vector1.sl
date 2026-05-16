@@ -11,11 +11,11 @@ Value(
 ) {
     _() {
         ++g_count;
-        __println("Value:ctor");
+        //__println("Value:ctor");
     }
     ~() {
         --g_count;
-        __println("Value:dtor");
+        //__println("Value:dtor");
     }
     op<--(mutable Value^ rhs) {
         __println("Value::move");
@@ -94,6 +94,22 @@ int32 main() {
         vec.insert(1, ^val);
         vp = vec.insert(2);
         vp^.x_ = 300;
+        __print("vec = [");
+        for (Value^ v : vec) {
+            __print(" " + v^.x_);
+        }
+        __println(" ]");
+        __println("---dtors---");
+    }
+    __println("ctor/dtor count = " + g_count);
+    __println("---remove---");
+    {
+        Vector<Value> vec;
+        vec.resize(7);
+        for (i : 0..7) {
+            vec[i].x_ = i;
+        }
+        vec.remove(2, 3);
         __print("vec = [");
         for (Value^ v : vec) {
             __print(" " + v^.x_);

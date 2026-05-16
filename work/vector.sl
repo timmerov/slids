@@ -193,13 +193,12 @@ Vector<T>(
         move the tail into the gap.
         stop when the tail is exhausted.
         */
-        tail_size = size_ - (index + count);
-        dst = <T[]> storage_ + index;
-        src = dst + count;
-        for () (tail_size > 0) {
-            ++src; ++dst; --tail_size;
+        for (
+            from = index + count
+        ) (from < size_) {
+            ++index; ++from;
         } {
-            dst^ <-- src^;
+            self[index] <-- self[from];
         }
         /* resize and destruct elements. */
         resize(size_ - count);
