@@ -391,21 +391,10 @@ void Codegen::collectFunctionSignatures() {
                         + slid.name + "' must return a built-in type (bool, int, pointer), not a class."));
             }
         }
-        for (auto& [method_name, entries] : by_name) {
-            std::string base = slid.name + "__" + method_name;
-            for (auto& e : entries) {
-                std::vector<std::string> ptypes = buildParamTypes(e.params, e.param_mutable);
-                std::string mangled = mangleMethod(slid.name, method_name, ptypes);
-                func_return_types_[mangled] = e.ret;
-                func_param_types_[mangled] = ptypes;
-                if (e.is_const) const_methods_.insert(mangled);
-                // avoid duplicate overload entries (transport slid + impl slid both contribute)
-                auto& overloads = method_overloads_[base];
-                if (std::none_of(overloads.begin(), overloads.end(),
-                        [&](const auto& p){ return std::get<1>(p) == ptypes; }))
-                    overloads.push_back({mangled, ptypes, e.param_mutable, e.param_mut_toks, e.file_id});
-            }
-        }
+        for (auto& [method_name, entries] : by_name)
+            for (auto& e : entries)
+                registerMethodOverload(slid.name, method_name, e.params,
+                    e.param_mutable, e.param_mut_toks, e.ret, e.is_const, e.file_id);
 
         // mark exported: methods with a bodyless declaration (from header)
         for (auto& m : slid.methods) {

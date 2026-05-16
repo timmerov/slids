@@ -160,6 +160,31 @@ std::string Codegen::resolveMethodMangledName(
     return base;
 }
 
+// Register one method overload: writes func_return_types_/func_param_types_
+// under the per-overload mangled name, records const-ness, and appends a
+// deduped method_overloads_ entry under the un-suffixed `<slid>__<method>`
+// bucket. Single source of truth so the normal-class and template-
+// instantiation registration paths cannot drift in their mangling.
+void Codegen::registerMethodOverload(
+    const std::string& slid_name,
+    const std::string& method_name,
+    const std::vector<std::pair<std::string, std::string>>& params,
+    const std::vector<bool>& param_mutable,
+    const std::vector<int>& param_mut_toks,
+    const std::string& return_type,
+    bool is_const, int file_id)
+{
+    std::vector<std::string> ptypes = buildParamTypes(params, param_mutable);
+    std::string mangled = mangleMethod(slid_name, method_name, ptypes);
+    func_return_types_[mangled] = return_type;
+    func_param_types_[mangled]  = ptypes;
+    if (is_const) const_methods_.insert(mangled);
+    auto& overloads = method_overloads_[slid_name + "__" + method_name];
+    for (auto& e : overloads)
+        if (std::get<1>(e) == ptypes) return;   // already registered
+    overloads.push_back({mangled, ptypes, param_mutable, param_mut_toks, file_id});
+}
+
 std::string Codegen::resolveOverloadForCall(
     const std::string& base_mangled,
     const std::vector<std::unique_ptr<Expr>>& args)

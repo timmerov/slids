@@ -707,13 +707,10 @@ void Codegen::materializeLocalClass(const SlidDef& tmpl,
     info.has_dtor = (concrete.dtor_body != nullptr) || concrete.has_explicit_dtor_decl;
     slid_info_[mangled] = info;
 
-    for (auto& m : concrete.methods) {
-        std::string base = mangled + "__" + m.name;
-        std::vector<std::string> ptypes = buildParamTypes(m.params, m.param_mutable);
-        func_return_types_[base] = m.return_type;
-        func_param_types_[base]  = ptypes;
-        method_overloads_[base].push_back({base, ptypes, m.param_mutable, m.param_mut_toks, m.file_id});
-    }
+    for (auto& m : concrete.methods)
+        registerMethodOverload(mangled, m.name, m.params, m.param_mutable,
+                               m.param_mut_toks, m.return_type, m.is_const_method,
+                               m.file_id);
 
     concrete_slid_template_defs_[mangled] = std::move(concrete);
     // Local classes are TU-private — they go on their own list (not
@@ -916,13 +913,10 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
     slid_info_[mangled] = info;
 
     // register method signatures so call sites resolve correctly
-    for (auto& m : concrete.methods) {
-        std::string base = mangled + "__" + m.name;
-        std::vector<std::string> ptypes = buildParamTypes(m.params, m.param_mutable);
-        func_return_types_[base] = m.return_type;
-        func_param_types_[base]  = ptypes;
-        method_overloads_[base].push_back({base, ptypes, m.param_mutable, m.param_mut_toks, m.file_id});
-    }
+    for (auto& m : concrete.methods)
+        registerMethodOverload(mangled, m.name, m.params, m.param_mutable,
+                               m.param_mut_toks, m.return_type, m.is_const_method,
+                               m.file_id);
 
     // store in the stable map
     concrete_slid_template_defs_[mangled] = std::move(concrete);

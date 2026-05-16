@@ -598,6 +598,19 @@ private:
     std::string methodMangled(const std::string& obj_slid,
                               const std::string& method,
                               const std::vector<std::unique_ptr<Expr>>& args);
+    // Register one method overload into func_return_types_/func_param_types_
+    // (keyed by the per-overload mangled name), const_methods_, and the
+    // method_overloads_ bucket (keyed by the un-suffixed `<slid>__<method>`,
+    // deduped on param types). Single source of truth shared by the normal-
+    // class and template-instantiation registration paths.
+    void registerMethodOverload(
+        const std::string& slid_name,
+        const std::string& method_name,
+        const std::vector<std::pair<std::string, std::string>>& params,
+        const std::vector<bool>& param_mutable,
+        const std::vector<int>& param_mut_toks,
+        const std::string& return_type,
+        bool is_const, int file_id);
     bool isPointerExpr(const Expr& expr);
     bool isUnsignedExpr(const Expr& expr);
     std::string resolveOperatorOverload(const std::string& op,
