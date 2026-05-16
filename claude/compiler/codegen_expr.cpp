@@ -895,8 +895,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         // implicit self method call (peer call inside a slid method) — takes precedence
         // over global free functions per the bare-name lookup rule
         if (!current_slid_.empty()) {
-            std::string base = current_slid_ + "__" + call->callee;
-            std::string mangled = resolveOverloadForCall(base, call->args);
+            std::string mangled = selfMethodMangled(call->callee, call->args);
             auto mit = func_return_types_.find(mangled);
             if (mit != func_return_types_.end()) {
                 auto& mptypes = func_param_types_[mangled];
@@ -2379,8 +2378,7 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
                         return llvmType(slot.return_type);
                 }
             }
-            std::string base = slid_name + "__" + mc->method;
-            std::string mangled = resolveOverloadForCall(base, mc->args);
+            std::string mangled = methodMangled(slid_name, mc->method, mc->args);
             auto rit = func_return_types_.find(mangled);
             if (rit != func_return_types_.end()) return llvmType(rit->second);
         }
@@ -2400,6 +2398,11 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             if (it2 != subst.end()) rt = it2->second;
             if (slid_info_.count(rt)) return "ptr";
             return llvmType(rt);
+        }
+        // implicit-self method call — resolved the same way emitExpr does.
+        if (std::string sm = selfMethodMangled(ce->callee, ce->args); !sm.empty()) {
+            const std::string& rt = func_return_types_[sm];
+            return slid_info_.count(rt) ? "ptr" : llvmType(rt);
         }
         // check if already instantiated
         std::string mangled = resolveFreeFunctionMangledName(ce->callee, ce->args.size());
@@ -2749,6 +2752,9 @@ std::string Codegen::inferSlidType(const Expr& expr) {
             auto it2 = subst.find(tmpl.return_type);
             return it2 != subst.end() ? it2->second : tmpl.return_type;
         }
+        // implicit-self method call — resolved the same way emitExpr does.
+        if (std::string sm = selfMethodMangled(ce->callee, ce->args); !sm.empty())
+            return func_return_types_[sm];
         // tuple-returning function: reconstruct Slids form "(t1,t2,...)"
         std::string mangled = resolveFreeFunctionMangledName(ce->callee, ce->args.size());
         if (!mangled.empty()) {
@@ -2769,7 +2775,7 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     if (auto* me = dynamic_cast<const MethodCallExpr*>(&expr)) {
         std::string slid_type = exprSlidType(*me->object);
         if (!slid_type.empty()) {
-            std::string mangled = slid_type + "__" + me->method;
+            std::string mangled = methodMangled(slid_type, me->method, me->args);
             auto tfit = func_tuple_fields_.find(mangled);
             if (tfit != func_tuple_fields_.end()) {
                 std::string s = "(";

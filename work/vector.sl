@@ -148,6 +148,44 @@ Vector<T>(
         shrink(new_size);
     }
 
+    /* add the element at the end. */
+    void append(T^ element) {
+        insert(size_, element);
+    }
+
+    /*
+    create an element at the end.
+    return a reference to it.
+    */
+    T^ append() {
+        return insert(size_);
+    }
+
+    /* insert the element at the index. */
+    void insert(intptr index, T^ element) {
+        slot = insert(index);
+        slot^ = element^;
+    }
+
+    /*
+    insert the element at the index.
+    return a reference to it.
+    */
+    T^ insert(intptr index) {
+        grow(size_ + 1);
+
+        /* move existing elements */
+        for (
+            intptr i = size_ - 1
+        ) (i > index) {
+            --i;
+        } {
+            self[i] <-- self[i-1];
+        }
+
+        return self[index];
+    }
+
 /* private interface. */
 
     /* add more elements. */

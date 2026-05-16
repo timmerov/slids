@@ -225,6 +225,30 @@ std::string Codegen::resolveOverloadForCall(
     return base_mangled;
 }
 
+// Resolve a bare callee as an implicit-self method of current_slid_. Returns
+// the overload-resolved mangled name, or "" when current_slid_ is unset or
+// the callee names no method of it. Mirrors emitExpr's self-call arm so type
+// queries and emission resolve self-method calls identically.
+std::string Codegen::selfMethodMangled(
+    const std::string& callee,
+    const std::vector<std::unique_ptr<Expr>>& args)
+{
+    if (current_slid_.empty()) return "";
+    std::string mangled = resolveOverloadForCall(current_slid_ + "__" + callee, args);
+    return func_return_types_.count(mangled) ? mangled : "";
+}
+
+// Overload-resolved `<obj_slid>__<method>` mangled name for an explicit
+// method call. Single source of truth for the method-call base so every
+// type query resolves overloads the same way emission does.
+std::string Codegen::methodMangled(
+    const std::string& obj_slid,
+    const std::string& method,
+    const std::vector<std::unique_ptr<Expr>>& args)
+{
+    return resolveOverloadForCall(obj_slid + "__" + method, args);
+}
+
 bool Codegen::isPointerExpr(const Expr& expr) {
     if (dynamic_cast<const StringLiteralExpr*>(&expr)) return true;
     if (dynamic_cast<const NullptrExpr*>(&expr))       return true;
@@ -382,6 +406,11 @@ std::string Codegen::exprSlidType(const Expr& expr) {
             std::string rt = (it2 != subst.end()) ? it2->second : tmpl.return_type;
             if (slid_info_.count(rt)) return rt;
         }
+        // implicit-self method call — resolved the same way emitExpr does.
+        if (std::string sm = selfMethodMangled(ce->callee, ce->args); !sm.empty()) {
+            const std::string& rt = func_return_types_[sm];
+            if (slid_info_.count(rt)) return rt;
+        }
         std::string mangled = resolveFreeFunctionMangledName(ce->callee, ce->args.size());
         if (!mangled.empty()) {
             auto rit = func_return_types_.find(mangled);
@@ -402,7 +431,7 @@ std::string Codegen::exprSlidType(const Expr& expr) {
             }
         }
         if (!obj_slid.empty()) {
-            std::string mangled = resolveOverloadForCall(obj_slid + "__" + mc->method, mc->args);
+            std::string mangled = methodMangled(obj_slid, mc->method, mc->args);
             auto rit = func_return_types_.find(mangled);
             if (rit != func_return_types_.end() && slid_info_.count(rit->second))
                 return rit->second;
@@ -571,6 +600,9 @@ std::string Codegen::exprType(const Expr& expr) {
             auto rit = func_return_types_.find(mangled);
             if (rit != func_return_types_.end()) return rit->second;
         }
+        // implicit-self method call — resolved the same way emitExpr does.
+        if (std::string sm = selfMethodMangled(ce->callee, ce->args); !sm.empty())
+            return func_return_types_[sm];
         std::string mangled = resolveFreeFunctionMangledName(ce->callee, ce->args.size());
         if (!mangled.empty()) {
             auto rit = func_return_types_.find(mangled);
@@ -592,7 +624,7 @@ std::string Codegen::exprType(const Expr& expr) {
             obj_slid = exprSlidType(*mc->object);
         }
         if (!obj_slid.empty()) {
-            std::string mangled = resolveOverloadForCall(obj_slid + "__" + mc->method, mc->args);
+            std::string mangled = methodMangled(obj_slid, mc->method, mc->args);
             auto rit = func_return_types_.find(mangled);
             if (rit != func_return_types_.end()) return rit->second;
         }

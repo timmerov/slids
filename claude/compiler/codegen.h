@@ -589,6 +589,15 @@ private:
                              const std::vector<std::string>& ptypes) const;
     std::string resolveOverloadForCall(const std::string& base_mangled,
                                        const std::vector<std::unique_ptr<Expr>>& args);
+    // Resolve a bare callee as an implicit-self method of current_slid_.
+    // "" when current_slid_ is unset or callee is not a method of it.
+    std::string selfMethodMangled(const std::string& callee,
+                                  const std::vector<std::unique_ptr<Expr>>& args);
+    // Overload-resolved `<obj_slid>__<method>` mangled name for an explicit
+    // method call.
+    std::string methodMangled(const std::string& obj_slid,
+                              const std::string& method,
+                              const std::vector<std::unique_ptr<Expr>>& args);
     bool isPointerExpr(const Expr& expr);
     bool isUnsignedExpr(const Expr& expr);
     std::string resolveOperatorOverload(const std::string& op,
