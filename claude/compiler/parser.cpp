@@ -2017,10 +2017,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 };
                 // Ref form: loop var is pointer-typed (Class^ or Class[]).
                 // Switches the desugar to alias-into-source instead of copy.
-                bool ref_form = !for_var_type.empty()
-                    && (for_var_type.back() == '^'
-                        || (for_var_type.size() >= 2
-                            && for_var_type.substr(for_var_type.size() - 2) == "[]"));
+                bool ref_form = !disambig_type.empty()
+                    && (disambig_type.back() == '^'
+                        || (disambig_type.size() >= 2
+                            && disambig_type.substr(disambig_type.size() - 2) == "[]"));
                 auto _addrOf = [&](std::unique_ptr<Expr> e) -> std::unique_ptr<Expr> {
                     return make<AddrOfExpr>(t_start, std::move(e));
                 };
@@ -2054,7 +2054,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     };
                     std::unique_ptr<Stmt> loop_var_decl;
                     if (ref_form) {
-                        loop_var_decl = _loopDecl(_addrOf(_srcAt(_intLit(0))));
+                        loop_var_decl = _loopInit(_addrOf(_srcAt(_intLit(0))));
                     } else if (for_var_type.empty()) {
                         // Inferred type: codegen reads elem type from src[0].
                         // Under reuse, this becomes an assign into the outer alloca.
@@ -2367,7 +2367,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                                 "__$end_" + std::to_string(synthetic_counter_++);
                             std::vector<std::unique_ptr<Expr>> beg_args, end_args, next_args;
                             next_args.push_back(_var(for_var_name));
-                            auto loop_var_decl = _loopDecl(
+                            auto loop_var_decl = _loopInit(
                                 std::unique_ptr<Expr>(make<MethodCallExpr>(t_start,
                                     _var(iter_name), "begin", std::move(beg_args))));
                             if (auto* d = dynamic_cast<VarDeclStmt*>(loop_var_decl.get()))
