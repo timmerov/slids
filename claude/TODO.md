@@ -115,9 +115,17 @@ Remaining genuine technical gaps (not coverage artifacts):
 
 - **Unify index and deref through reference-returning ops — landed.** `op[]=` removed; `op[](idx)` returns `T^`; `op^()` arity 0 added. Reads via `c[i]` desugar to `c.op[](i)^`; writes via `c[i] = x` to `c.op[](i)^ = x`. Same shape for iterator-style classes via `op^()`. Arity 2 of op^ stays binary XOR; arity 1 reserved. See [[project_op_index_deref_landed]]. Remaining: tighten return-type validator (today no compile-error if op[] returns a value type — fails downstream cryptically); audit const propagation on the returned ref (op[] on a const String returns mutable `char^`).
 
-## Virtual methods (design, not yet implemented)
+- **Local classes — landed, with gaps.** Classes definable in any code block (function/method/nested-function/control-flow body, and template bodies); block-scoped, unreachable outside; plain, derived, and template-enclosed forms all work. See [[project_local_classes_landed]]. Remaining gaps, none currently covered by tests: (1) inferred-type-arg template-function calls carrying local classes — `scanForTemplateFunctionUses` only pre-instantiates explicit-type-arg calls, so an inferred call would materialize its local classes after the struct-type pass and fail; (2) template functions called only from inside another template body (not pre-scanned); (3) a local class that itself contains a nested class, declared inside a template.
 
-Single-inheritance virtuals through a per-class vtable. Compatible with incomplete-class reopens (impl can have hidden virtuals invisible to consumers).
+## Virtual methods
+
+Single-inheritance virtual methods are **implemented intra-TU**: per-class vtables (`buildVtables` / `classifyVirtualClasses`), one vptr at flat slot 0, Itanium-style recursive-descent ctor/dtor with vptr writes in every virtual class, auto-generated empty virtual dtors, and `= default` / `= delete` inheritance contracts on virtual methods. Remaining work is dispatch gaps and the cross-TU story.
+
+Dispatch gaps:
+- **Polymorphic delete via base pointer** — `delete base_ptr;` calls only the static type's dtor chain; correctness needs a vtable dtor slot (Itanium D0/D1) so the runtime type's dtor runs first. See [[project_dtor_balance_invariant]].
+- **Virtual dispatch through chained-lvalue receivers** — see the Compiler-section item above; `indirect` fires only on `DerefExpr`/`self`.
+
+Cross-TU virtual classes — designed, not yet implemented. A consumer importing a virtual class from a `.slh` reads a vtable-size sentinel from the impl `.o` and emits its derived vtable. Compatible with incomplete-class reopens (impl can have hidden virtuals invisible to consumers).
 
 - **Layout**: one vtable per class as static rodata; one vptr at offset 0 of each polymorphic instance. Slots `0..P-1` are public virtuals (declared in `.slh`); slots `P..N-1` are hidden virtuals (declared in impl/friends); derived classes append at `N..`.
 - **Hidden virtuals**: emitted with two symbols — the mangled internal name and a slot alias `<Class>__$vtable_method_<i>`. The impl also emits a sentinel `<Class>__$vtable_size = N`.
