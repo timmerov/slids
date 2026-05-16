@@ -199,8 +199,12 @@ static std::unique_ptr<Expr> cloneExprImpl(const Expr& expr,
         return t;
     }
 
-    if (auto* e = dynamic_cast<const StringifyExpr*>(&expr))
-        return std::make_unique<StringifyExpr>(e->kind, e->operand ? cloneExpr(*e->operand, subst) : nullptr);
+    if (auto* e = dynamic_cast<const StringifyExpr*>(&expr)) {
+        auto r = std::make_unique<StringifyExpr>(
+            e->kind, e->operand ? cloneExpr(*e->operand, subst) : nullptr);
+        r->text = e->text;
+        return r;
+    }
 
     throw CompileError{expr.file_id, expr.tok, "Unhandled expression type during template instantiation."};
 }

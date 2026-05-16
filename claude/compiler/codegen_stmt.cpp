@@ -499,11 +499,13 @@ Codegen::Lvalue Codegen::drillIndexChain(std::string addr, std::string type,
             type = elem_type;
             break;
         }
-        // pointer / iterator base
-        if (isPtrType(type) || isRefType(type)) {
-            std::string elem_type = isPtrType(type)
-                ? type.substr(0, type.size() - 2)
-                : type.substr(0, type.size() - 1);
+        // reference base: `^` has no arithmetic — indexing it is illegal.
+        if (isRefType(type))
+            errorAtNode(err_site, "Reference type '" + type
+                + "' cannot be indexed; dereference it with '^' first.");
+        // iterator base: `[]` allows arithmetic, so indexing is a GEP.
+        if (isPtrType(type)) {
+            std::string elem_type = type.substr(0, type.size() - 2);
             std::string base_ptr = newTmp();
             out_ << "    " << base_ptr << " = load ptr, ptr " << addr << "\n";
             std::string idx_llvm = exprLlvmType(idx);
@@ -2954,10 +2956,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
             emitSlotWrite(gep, elem_type);
             return;
         }
-        if (isPtrType(type) || isRefType(type)) {
-            std::string elem_type = isPtrType(type)
-                ? type.substr(0, type.size() - 2)
-                : type.substr(0, type.size() - 1);
+        if (isRefType(type))
+            errorAtNode(*ia, "Reference type '" + type
+                + "' cannot be indexed; dereference it with '^' first.");
+        if (isPtrType(type)) {
+            std::string elem_type = type.substr(0, type.size() - 2);
             std::string base_ptr = newTmp();
             out_ << "    " << base_ptr << " = load ptr, ptr " << addr << "\n";
             std::string idx_llvm = exprLlvmType(last);

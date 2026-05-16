@@ -1891,9 +1891,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
     if (auto* se = dynamic_cast<const StringifyExpr*>(&expr)) {
         std::string result;
         if (se->kind == "name") {
-            auto* ve = dynamic_cast<const VarExpr*>(se->operand.get());
-            if (!ve) error(std::string("##name requires a simple variable"));
-            result = ve->name;
+            // ##name carries the literal source text captured at parse time.
+            result = se->text;
         } else if (se->kind == "type") {
             result = inferSlidType(*se->operand);
         } else if (se->kind == "line") {

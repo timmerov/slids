@@ -1129,11 +1129,34 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         advance();
         std::string kw = expect(TokenType::kIdentifier,
             "Expected name, type, line, file, func, date, or time after ##").value;
-        if (kw == "name" || kw == "type") {
-            expect(TokenType::kLParen, "Expected '(' after ##" + kw);
+        if (kw == "type") {
+            expect(TokenType::kLParen, "Expected '(' after ##type");
             auto operand = parseExpr();
             expect(TokenType::kRParen, "Expected ')'");
             return make<StringifyExpr>(src_tok, kw, std::move(operand));
+        }
+        if (kw == "name") {
+            // ##name reproduces its argument as a string literal — the content
+            // is not parsed as an expression. Scan to the matching ')' by
+            // bracket depth and concatenate the lexed token values.
+            expect(TokenType::kLParen, "Expected '(' after ##name");
+            std::string text;
+            int depth = 1;
+            while (peek().type != TokenType::kEof) {
+                TokenType tt = peek().type;
+                if (tt == TokenType::kLParen || tt == TokenType::kLBracket
+                    || tt == TokenType::kLBrace) depth++;
+                else if (tt == TokenType::kRParen || tt == TokenType::kRBracket
+                         || tt == TokenType::kRBrace) {
+                    depth--;
+                    if (depth == 0) break;
+                }
+                text += advance().value;
+            }
+            expect(TokenType::kRParen, "Expected ')' to close ##name");
+            auto se = make<StringifyExpr>(src_tok, "name", nullptr);
+            se->text = std::move(text);
+            return se;
         }
         if (kw == "line" || kw == "file" || kw == "func" || kw == "date" || kw == "time")
             return make<StringifyExpr>(src_tok, kw, nullptr);
@@ -1210,21 +1233,28 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
 
 std::unique_ptr<Expr> Parser::parseUnary() {
     [[maybe_unused]] int t_start = pos_;
-    // #x — desugar to (##type(x), ##name(x), ^x)
+    // #x — desugar to (##type(x), ##name(x), ^x). The operand may be any
+    // postfix lvalue expression (`obj.field_.arr_[1][2]`, etc.). It is parsed
+    // twice — once for the ##type arm, once for the ^ arm — so the two arms
+    // get independent ASTs; ##name reproduces the operand's lexed text.
     if (peek().type == TokenType::kHash) {
         int src_tok = pos_;
         advance();
-        auto operand = parsePostfix(parsePrimary());
-        auto* ve = dynamic_cast<VarExpr*>(operand.get());
-        if (!ve)
-            errorAt(src_tok, "The '#' operator requires a simple variable name.");
-        std::string name = ve->name;
+        int operand_start = pos_;
+        auto type_operand = parsePostfix(parsePrimary());
+        int operand_end = pos_;
+        std::string name_text;
+        for (int i = operand_start; i < operand_end; i++)
+            name_text += tokens_[i].value;
+        pos_ = operand_start;
+        auto addr_operand = parsePostfix(parsePrimary());
         auto tuple = make<TupleExpr>(src_tok);
         tuple->values.push_back(
-            make<StringifyExpr>(src_tok, "type", make<VarExpr>(src_tok, name)));
-        tuple->values.push_back(
-            make<StringifyExpr>(src_tok, "name", make<VarExpr>(src_tok, name)));
-        tuple->values.push_back(make<AddrOfExpr>(src_tok, std::move(operand)));
+            make<StringifyExpr>(src_tok, "type", std::move(type_operand)));
+        auto name_se = make<StringifyExpr>(src_tok, "name", nullptr);
+        name_se->text = std::move(name_text);
+        tuple->values.push_back(std::move(name_se));
+        tuple->values.push_back(make<AddrOfExpr>(src_tok, std::move(addr_operand)));
         return tuple;
     }
     // qualifier-only cast: <const> expr  or  <mutable> expr — any value.

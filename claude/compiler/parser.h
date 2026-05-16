@@ -383,7 +383,8 @@ struct SizeofExpr : Expr {
 // stringification: ##name(x), ##type(x), ##line, ##file, ##func, ##date, ##time
 struct StringifyExpr : Expr {
     std::string kind;                // "name"|"type"|"line"|"file"|"func"|"date"|"time"
-    std::unique_ptr<Expr> operand;   // non-null for name/type; null for others
+    std::unique_ptr<Expr> operand;   // non-null for type; null for name and others
+    std::string text;                // for kind "name": the literal source text
     StringifyExpr(std::string k, std::unique_ptr<Expr> op = nullptr)
         : kind(std::move(k)), operand(std::move(op)) {}
 };

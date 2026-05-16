@@ -105,6 +105,20 @@ void Codegen::checkResolvedFreeFunction(
     for (auto& entry : foit->second) {
         if (std::get<0>(entry) != mangled) continue;
         rejectConstToMutable(callee, args, entry);
+        // An anon-tuple argument must structurally match the parameter's
+        // tuple type (deref'd and const-stripped). Mismatched element types,
+        // or a tuple passed where a non-tuple is expected, are rejected.
+        auto& ptypes = std::get<1>(entry);
+        for (size_t i = 0; i < args.size() && i < ptypes.size(); i++) {
+            std::string at = inferSlidType(*args[i]);
+            if (!isAnonTupleType(at)) continue;
+            std::string pbase = (isRefType(ptypes[i]) || isPtrType(ptypes[i]))
+                ? pointeeInfo(ptypes[i]).name
+                : canonicalType(ptypes[i]);
+            if (canonicalType(at) != pbase)
+                errorAtNode(*args[i], "Argument of type '" + at
+                    + "' does not match parameter type '" + ptypes[i] + "'.");
+        }
         return;
     }
 }
