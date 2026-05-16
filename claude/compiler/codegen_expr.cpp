@@ -1272,8 +1272,13 @@ std::string Codegen::emitExpr(const Expr& expr) {
         bool right_is_literal = (dynamic_cast<const IntLiteralExpr*>(b->right.get()) != nullptr);
         std::string lt = exprLlvmType(*b->left);
         std::string rt = exprLlvmType(*b->right);
+        bool is_float = (lt == "float" || lt == "double"
+                      || rt == "float" || rt == "double");
         std::string op_type;
-        {
+        if (is_float) {
+            // float arithmetic — result is the wider of the two float widths.
+            op_type = (lt == "double" || rt == "double") ? "double" : "float";
+        } else {
             if (left_is_literal && !right_is_literal)
                 op_type = rt;
             else if (right_is_literal && !left_is_literal)
@@ -1602,6 +1607,17 @@ std::string Codegen::emitExpr(const Expr& expr) {
             static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
             auto extend = [&](std::string val, const std::string& src, const Expr& e) -> std::string {
                 if (src == op_type || op_type == "ptr" || src == "ptr") return val;
+                if (is_float) {
+                    // widen/convert an operand to the float op type.
+                    std::string c = newTmp();
+                    if (src == "float")
+                        out_ << "    " << c << " = fpext float " << val
+                             << " to " << op_type << "\n";
+                    else
+                        out_ << "    " << c << " = " << (isUnsignedExpr(e) ? "uitofp" : "sitofp")
+                             << " " << src << " " << val << " to " << op_type << "\n";
+                    return c;
+                }
                 auto si = rank.find(src), di = rank.find(op_type);
                 if (si == rank.end() || di == rank.end() || si->second >= di->second) return val;
                 std::string ext = newTmp();
@@ -1609,11 +1625,37 @@ std::string Codegen::emitExpr(const Expr& expr) {
                      << " " << src << " " << val << " to " << op_type << "\n";
                 return ext;
             };
-            if (!left_is_literal)  left  = extend(left,  lt, *b->left);
-            if (!right_is_literal) right = extend(right, rt, *b->right);
+            if (!left_is_literal  || is_float) left  = extend(left,  lt, *b->left);
+            if (!right_is_literal || is_float) right = extend(right, rt, *b->right);
         }
 
         std::string tmp   = newTmp();
+
+        // Float arithmetic and comparison — fadd/fsub/fmul/fdiv/frem, fcmp.
+        if (is_float) {
+            std::string fi;
+            if      (b->op == "+") fi = "fadd";
+            else if (b->op == "-") fi = "fsub";
+            else if (b->op == "*") fi = "fmul";
+            else if (b->op == "/") fi = "fdiv";
+            else if (b->op == "%") fi = "frem";
+            if (!fi.empty()) {
+                out_ << "    " << tmp << " = " << fi << " " << op_type
+                     << " " << left << ", " << right << "\n";
+                return tmp;
+            }
+            static const std::map<std::string,std::string> fpred = {
+                {"==","oeq"},{"!=","une"},{"<","olt"},{">","ogt"},{"<=","ole"},{">=","oge"}};
+            auto fp = fpred.find(b->op);
+            if (fp == fpred.end())
+                error(std::string("Operator '" + b->op
+                    + "' is not allowed on floating-point operands."));
+            std::string fcmp = newTmp();
+            out_ << "    " << fcmp << " = fcmp " << fp->second << " " << op_type
+                 << " " << left << ", " << right << "\n";
+            out_ << "    " << tmp << " = zext i1 " << fcmp << " to i32\n";
+            return tmp;
+        }
 
         // Step 2: signed→unsigned after size match — handled implicitly by choosing
         // unsigned operations (udiv/urem/ult/ugt etc.) when either operand is unsigned.
@@ -2277,6 +2319,9 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             if (b->op == "-" && lt == "ptr" && rt == "ptr") return "i64";
             if ((b->op == "+" || b->op == "-") && (lt == "ptr" || rt == "ptr"))
                 return "ptr";
+            // float arithmetic — result is the wider of the two float widths.
+            if (lt == "float" || lt == "double" || rt == "float" || rt == "double")
+                return (lt == "double" || rt == "double") ? "double" : "float";
             static const std::map<std::string,int> rank = {
                 {"i8",0},{"i16",1},{"i32",2},{"i64",3}};
             auto li = rank.find(lt), ri = rank.find(rt);

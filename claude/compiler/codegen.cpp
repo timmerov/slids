@@ -280,7 +280,9 @@ void Codegen::collectFunctionSignatures() {
         // collapses both forms to the same).
         std::vector<std::string> ptypes = buildParamTypes(fn.params, fn.param_mutable);
 
-        std::string mangled = mangleFreeFunction(fn.name, ptypes);
+        // `= import` functions emit/reference the bare C symbol — no mangling.
+        std::string mangled = fn.is_foreign ? fn.name
+                                            : mangleFreeFunction(fn.name, ptypes);
         free_func_overloads_[fn.name].push_back({mangled, ptypes, fn.param_mutable, fn.param_mut_toks, fn.file_id});
 
         if (!fn.tuple_return_fields.empty()) {

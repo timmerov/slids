@@ -705,6 +705,7 @@ struct FunctionDef {
     std::vector<std::string> type_params; // non-empty for template functions: T add<T>(T a, T b)
     bool is_local = true;        // false when body loaded from a separate impl file
     std::string impl_module;     // module name of the impl file (when !is_local)
+    bool is_foreign = false;     // `= import;` — a C function: bare symbol, no slids body
     // Classes declared inside this (template) function's body. Carried with
     // the template and re-instantiated per type-arg — see codegen_template.
     std::vector<SlidDef> local_classes;

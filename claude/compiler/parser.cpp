@@ -3884,7 +3884,14 @@ FunctionDef Parser::parseFunctionDef() {
             errorAt(params_tok, "Parameter '" + p.second + "' shares the name of its enclosing function.");
         }
     }
-    if (peek().type == TokenType::kSemicolon) {
+    if (peek().type == TokenType::kEquals
+        && pos_ + 1 < (int)tokens_.size()
+        && tokens_[pos_ + 1].type == TokenType::kImport) {
+        // `= import;` — foreign C function: bare symbol, C ABI, no slids body.
+        advance(); advance();
+        expect(TokenType::kSemicolon, "Expected ';' after '= import'");
+        fn.is_foreign = true;
+    } else if (peek().type == TokenType::kSemicolon) {
         advance(); // forward declaration — body remains null
     } else {
         std::vector<std::string> param_names;

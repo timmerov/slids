@@ -6,6 +6,9 @@ LLCFLAGS = --filetype=obj --relocation-model=pic
 BIN_DIR   = ../bin
 BUILD_DIR = ../build/sample
 
+# --- per-sample link libraries (C interop) ---
+LDLIBS_math = -lm
+
 # --- add new samples here ---
 SAMPLES = \
 	biz_buzz \
@@ -14,6 +17,7 @@ SAMPLES = \
 	counter1 counter2 \
 	hello1 \
 	leap_years \
+	math \
 	memcpy \
 	namespace \
 	primes1 \
@@ -31,7 +35,7 @@ define SAMPLE_RULES
 $(1): $(BIN_DIR)/$(1)
 
 $(BIN_DIR)/$(1): $(BUILD_DIR)/$(1)/$(1).o
-	$(CXX) $$< -o $$@
+	$(CXX) $$< -o $$@ $(LDLIBS_$(1))
 
 $(BUILD_DIR)/$(1)/$(1).o: $(BUILD_DIR)/$(1)/$(1).ll
 	$(LLC) $(LLCFLAGS) $$< -o $$@
