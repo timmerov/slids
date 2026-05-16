@@ -1,5 +1,7 @@
 
 main should be a keyword.
+claude says no cause it's not a keyword in any other language.
+hrm...
 
 global 2d arrays of class objects.
 not yet supported.

@@ -167,6 +167,14 @@ std::string Parser::lookupAlias(const std::string& name) const {
     return "";
 }
 
+std::string Parser::lookupLocalClass(const std::string& name) const {
+    for (auto it = local_class_stack_.rbegin(); it != local_class_stack_.rend(); ++it) {
+        auto sit = it->find(name);
+        if (sit != it->end()) return sit->second;
+    }
+    return "";
+}
+
 void Parser::parseAliasDecl() {
     advance(); // 'alias'
     int name_tok = pos_;
@@ -215,6 +223,12 @@ void Parser::declareVar(const std::string& name, int name_tok) {
                 "Local '" + name + "' shadows a field of the enclosing class."}
                 .addNote(fit->second.file_id, fit->second.tok, "Field declared here.");
         }
+    }
+    // (collision rule) a local must not collide with a local class declared in
+    // the same block — one namespace per scope spans variables and classes.
+    if (!local_class_stack_.empty() && local_class_stack_.back().count(name)) {
+        throw CompileError{file_id_, name_tok,
+            "Local '" + name + "' collides with a class of the same name in this scope."};
     }
     if (!scope_stack_.empty()) {
         LocalInfo info;
@@ -481,6 +495,53 @@ bool Parser::isVarDeclLookahead() const {
              && tokens_[i].type == TokenType::kLBracket
              && tokens_[i+1].type == TokenType::kRBracket) i += 2;
     return i < (int)tokens_.size() && tokens_[i].type == TokenType::kIdentifier;
+}
+
+bool Parser::slidBodyFollows(int name_idx) const {
+    // tokens_[name_idx] is the class name; `[<...>] (...) {` must follow. The
+    // matching ')' followed by '{' is unambiguously a slid body — a ctor-call
+    // statement ends in ';'.
+    if (name_idx >= (int)tokens_.size()
+        || tokens_[name_idx].type != TokenType::kIdentifier) return false;
+    int scan = name_idx + 1;
+    if (scan >= (int)tokens_.size()) return false;
+    if (tokens_[scan].type != TokenType::kLParen
+        && tokens_[scan].type != TokenType::kLt) return false;
+    if (tokens_[scan].type == TokenType::kLt) {
+        int depth = 1;
+        scan++;
+        while (scan < (int)tokens_.size() && depth > 0) {
+            if (tokens_[scan].type == TokenType::kLt) depth++;
+            else if (tokens_[scan].type == TokenType::kGt) depth--;
+            scan++;
+        }
+        if (scan >= (int)tokens_.size() || tokens_[scan].type != TokenType::kLParen)
+            return false;
+    }
+    int depth = 1;
+    scan++;
+    while (scan < (int)tokens_.size() && depth > 0) {
+        if (tokens_[scan].type == TokenType::kLParen) depth++;
+        else if (tokens_[scan].type == TokenType::kRParen) depth--;
+        scan++;
+    }
+    return scan < (int)tokens_.size() && tokens_[scan].type == TokenType::kLBrace;
+}
+
+bool Parser::isSlidDeclLookahead() const {
+    // `Identifier [<...>] (...) {` — a method or nested function has a return
+    // type before the name, so a lone leading identifier marks a class def.
+    return tokens_[pos_].type == TokenType::kIdentifier
+        && slidBodyFollows(pos_);
+}
+
+bool Parser::isDerivedSlidDeclLookahead() const {
+    // `Base : Derived [<...>] (...) {`.
+    return pos_ + 2 < (int)tokens_.size()
+        && tokens_[pos_].type == TokenType::kIdentifier
+        && tokens_[pos_ + 1].type == TokenType::kColon
+        && tokens_[pos_ + 2].type == TokenType::kIdentifier
+        && slidBodyFollows(pos_ + 2);
 }
 
 // Pointer-shaped type: ends with '^' (ref) or '[]' (iterator).
@@ -771,6 +832,12 @@ std::string Parser::parseTypeName() {
         if (!a.empty()) {
             base = a;
             resolved_alias = true;
+        } else {
+            // local class in scope: substitute the base to its canonical name
+            // but leave resolved_alias false — `:Inner` suffixes still apply,
+            // so `InFunc:Hoisted` resolves to `<func>.<n>.InFunc.Hoisted`.
+            std::string lc = lookupLocalClass(base);
+            if (!lc.empty()) base = lc;
         }
     }
     else errorHere("Expected type name, got " + tokenLabel(peek()) + ".");
@@ -1337,6 +1404,7 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     expect(TokenType::kLBrace, "Expected '{'");
     scope_stack_.push_back({});
     alias_stack_.push_back({});
+    local_class_stack_.push_back({});
     for (auto& n : predeclare)
         declareVar(n, t_start);
     auto block = make<BlockStmt>(t_start);
@@ -1365,6 +1433,7 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     }
     scope_stack_.pop_back();
     alias_stack_.pop_back();
+    local_class_stack_.pop_back();
     expect(TokenType::kRBrace, "Expected '}'");
     return block;
 }
@@ -1522,6 +1591,37 @@ std::unique_ptr<Stmt> Parser::parseLvalueTail(std::unique_ptr<Expr> lhs) {
     return make<ExprStmt>(t_start, std::move(lhs));
 }
 
+void Parser::collectLocalClass(SlidDef slid, const std::string& short_name,
+                               int name_tok) {
+    // (collision rule) the name must be free in this block — no local var and
+    // no other local class may already own it.
+    bool clash = (!scope_stack_.empty()
+                  && scope_stack_.back().count(short_name))
+               || (!local_class_stack_.empty()
+                   && local_class_stack_.back().count(short_name));
+    if (clash)
+        errorAt(name_tok, "'" + short_name
+            + "' is already declared in this scope.");
+    // Canonical name: function path (':' → '.' so it stays a valid LLVM
+    // identifier) + a unique numeric id + the source name. The id is
+    // unspellable by the author, so the class is unreachable from outside.
+    std::string func_path = current_function_name_;
+    for (char& c : func_path) if (c == ':') c = '.';
+    std::string canonical = (func_path.empty() ? "" : func_path + ".")
+        + std::to_string(local_slid_counter_++) + "." + short_name;
+    slid.name = canonical;
+    if (!local_class_stack_.empty())
+        local_class_stack_.back()[short_name] = canonical;
+    // Inside a template, a local class may reference an unbound type param —
+    // it can't become a concrete slid until the template is instantiated.
+    // Carry it with the enclosing template (drained by parseFunctionDef /
+    // parseSlidDef). Outside a template, collect it as a concrete slid now.
+    if (in_template_)
+        pending_local_classes_.push_back(std::move(slid));
+    else
+        pending_slids_.push_back(std::move(slid));
+}
+
 std::unique_ptr<Stmt> Parser::parseStmt() {
     [[maybe_unused]] int t_start = pos_;
     Token t = peek();
@@ -1565,6 +1665,36 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         pending_globals_.push_back(std::move(g));
         // No statement is emitted into the function body — the global lives in
         // the program-level registry.
+        return make<BlockStmt>(t_start);
+    }
+
+    // local class definition: a slid defined inside a code block. The class is
+    // scoped to its block — outside the block its name is not registered, so
+    // it simply doesn't resolve. It is renamed to a unique internal canonical
+    // name `<funcpath>.<n>.<ClassName>` and hoisted into program.slids; any
+    // nested classes flatten via the post-parse hoist pass. No runtime
+    // statement is emitted.
+    if (isSlidDeclLookahead()) {
+        int name_tok = pos_;
+        std::string short_name = peek().value;
+        SlidDef slid = parseSlidDef();
+        collectLocalClass(std::move(slid), short_name, name_tok);
+        return make<BlockStmt>(t_start);
+    }
+
+    // derived local class: `Base : Derived(...) { ... }` inside a code block.
+    // The base name resolves through the local-class scope (a local class can
+    // be a base), otherwise it names a file-scope class.
+    if (isDerivedSlidDeclLookahead()) {
+        std::string base_name = advance().value; // consume base name
+        advance();                                // consume ':'
+        std::string lc = lookupLocalClass(base_name);
+        if (!lc.empty()) base_name = lc;
+        int name_tok = pos_;
+        std::string short_name = peek().value;
+        SlidDef slid = parseSlidDef();
+        slid.base_name = base_name;
+        collectLocalClass(std::move(slid), short_name, name_tok);
         return make<BlockStmt>(t_start);
     }
 
@@ -2823,6 +2953,12 @@ SlidDef Parser::parseSlidDef() {
         expect(TokenType::kGt, "Expected '>' after type parameters");
     }
 
+    // A template class's method bodies are template context — local classes
+    // declared there are carried with the class for per-instantiation
+    // materialization.
+    bool saved_tmpl = in_template_;
+    if (!slid.type_params.empty()) in_template_ = true;
+
     // parse tuple: (type field_ = default, ...)
     expect(TokenType::kLParen, "Expected '('");
 
@@ -3124,37 +3260,7 @@ SlidDef Parser::parseSlidDef() {
             return op_end < (int)tokens_.size() && tokens_[op_end].type == TokenType::kLParen;
         };
         // nested slid def: Identifier ( <field-list-or-empty-or-...> ) { body }
-        // distinguish from method decl (return type before identifier) and from a ctor
-        // statement (call/assignment, terminated by ';'). Disambiguator: matching ')'
-        // followed by '{' is unambiguously a slid body — calls/assignments end in ';'.
-        auto isNestedSlidDecl = [&]() {
-            if (peek().type != TokenType::kIdentifier) return false;
-            if (pos_ + 1 >= (int)tokens_.size()) return false;
-            if (tokens_[pos_ + 1].type != TokenType::kLParen
-                && tokens_[pos_ + 1].type != TokenType::kLt) return false;
-            // scan past the (...) (and optional <...> template params) to find a {
-            int scan = pos_ + 1;
-            if (tokens_[scan].type == TokenType::kLt) {
-                int depth = 1;
-                scan++;
-                while (scan < (int)tokens_.size() && depth > 0) {
-                    if (tokens_[scan].type == TokenType::kLt) depth++;
-                    else if (tokens_[scan].type == TokenType::kGt) depth--;
-                    scan++;
-                }
-                if (scan >= (int)tokens_.size() || tokens_[scan].type != TokenType::kLParen)
-                    return false;
-            }
-            int depth = 1;
-            scan++;
-            while (scan < (int)tokens_.size() && depth > 0) {
-                if (tokens_[scan].type == TokenType::kLParen) depth++;
-                else if (tokens_[scan].type == TokenType::kRParen) depth--;
-                scan++;
-            }
-            return scan < (int)tokens_.size() && tokens_[scan].type == TokenType::kLBrace;
-        };
-        if (isNestedSlidDecl()) {
+        if (isSlidDeclLookahead()) {
             // save outer's per-slid context across the recursive call
             auto saved_fields = current_slid_fields_;
             SlidDef inner = parseSlidDef();
@@ -3194,6 +3300,13 @@ SlidDef Parser::parseSlidDef() {
     seen_classes_.insert(slid.name);
     if (!slid.has_trailing_ellipsis)
         closed_classes_[slid.name] = FieldRef{file_id_, close_tok};
+
+    in_template_ = saved_tmpl;
+    // Drain local classes collected from a template class's method bodies.
+    if (!slid.type_params.empty()) {
+        slid.local_classes = std::move(pending_local_classes_);
+        pending_local_classes_.clear();
+    }
 
     return slid;
 }
@@ -3728,8 +3841,16 @@ FunctionDef Parser::parseFunctionDef() {
         for (auto& p : fn.params) param_names.push_back(p.second);
         std::string saved_fn = current_function_name_;
         current_function_name_ = fn.user_name;
+        bool saved_tmpl = in_template_;
+        if (!fn.type_params.empty()) in_template_ = true;
         fn.body = parseBlock(param_names);
+        in_template_ = saved_tmpl;
         current_function_name_ = saved_fn;
+        // Drain local classes collected from a template function body.
+        if (!fn.type_params.empty()) {
+            fn.local_classes = std::move(pending_local_classes_);
+            pending_local_classes_.clear();
+        }
     }
     return fn;
 }
@@ -3959,6 +4080,14 @@ Program Parser::parse() {
         // Drain any globals collected by the just-parsed top-level decl.
         for (auto& g : pending_globals_) program.globals.push_back(std::move(g));
         pending_globals_.clear();
+        // Drain local classes collected from function bodies. They already
+        // carry a unique canonical name; the hoist pass below flattens any
+        // classes nested inside them.
+        for (auto& s : pending_slids_) {
+            recordSlidMethods(s);
+            program.slids.push_back(std::move(s));
+        }
+        pending_slids_.clear();
     }
 
     // hoist nested slid defs to top level. each nested slid is renamed

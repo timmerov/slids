@@ -634,6 +634,70 @@ void Codegen::writeSliFile(std::ostream& out) const {
     }
 }
 
+// --- Codegen::materializeLocalClass ---
+
+void Codegen::materializeLocalClass(const SlidDef& tmpl,
+        const std::map<std::string, std::string>& subst,
+        const std::string& mangled) {
+    if (emitted_slid_templates_.count(mangled)) return;
+    emitted_slid_templates_.insert(mangled);
+
+    SlidDef concrete;
+    concrete.name = mangled;
+    concrete.base_name = subTypeSuffix(tmpl.base_name, subst);
+    concrete.has_explicit_ctor_decl = tmpl.has_explicit_ctor_decl;
+    concrete.has_explicit_dtor_decl = tmpl.has_explicit_dtor_decl;
+    for (auto& f : tmpl.fields) {
+        FieldDef fd;
+        fd.type = subTypeSuffix(f.type, subst);
+        fd.name = f.name;
+        if (f.default_val) fd.default_val = cloneExpr(*f.default_val, subst);
+        concrete.fields.push_back(std::move(fd));
+    }
+    if (tmpl.ctor_body)          concrete.ctor_body          = cloneBlock(*tmpl.ctor_body, subst);
+    if (tmpl.explicit_ctor_body) concrete.explicit_ctor_body = cloneBlock(*tmpl.explicit_ctor_body, subst);
+    if (tmpl.dtor_body)          concrete.dtor_body          = cloneBlock(*tmpl.dtor_body, subst);
+    for (auto& m : tmpl.methods) {
+        MethodDef md;
+        md.name        = m.name;
+        md.return_type = subTypeSuffix(m.return_type, subst);
+        for (auto& [pt, pn] : m.params)
+            md.params.emplace_back(subTypeSuffix(pt, subst), pn);
+        md.param_mutable  = m.param_mutable;
+        md.param_mut_toks = m.param_mut_toks;
+        if (m.body) md.body = cloneBlock(*m.body, subst);
+        concrete.methods.push_back(std::move(md));
+    }
+
+    SlidInfo info;
+    info.name = mangled;
+    for (int i = 0; i < (int)concrete.fields.size(); i++) {
+        info.field_index[concrete.fields[i].name] = i;
+        info.field_types.push_back(concrete.fields[i].type);
+    }
+    info.own_field_count = (int)concrete.fields.size();
+    info.inheritance_resolved = true;
+    info.has_explicit_ctor = concrete.has_explicit_ctor_decl
+                          || (concrete.explicit_ctor_body != nullptr);
+    info.has_dtor = (concrete.dtor_body != nullptr) || concrete.has_explicit_dtor_decl;
+    slid_info_[mangled] = info;
+
+    for (auto& m : concrete.methods) {
+        std::string base = mangled + "__" + m.name;
+        std::vector<std::string> ptypes = buildParamTypes(m.params, m.param_mutable);
+        func_return_types_[base] = m.return_type;
+        func_param_types_[base]  = ptypes;
+        method_overloads_[base].push_back({base, ptypes, m.param_mutable, m.param_mut_toks, m.file_id});
+    }
+
+    concrete_slid_template_defs_[mangled] = std::move(concrete);
+    // Local classes are TU-private — they go on their own list (not
+    // pending_slid_instantiations_, which feeds the cross-TU export pass) and
+    // are emitted in a late pass, since a template-function instantiation can
+    // materialize them after the main struct-type pass has run.
+    local_class_instances_.push_back(&concrete_slid_template_defs_[mangled]);
+}
+
 // --- Codegen::instantiateTemplate ---
 
 std::string Codegen::instantiateTemplate(const TemplateFuncEntry& entry,
@@ -651,6 +715,14 @@ std::string Codegen::instantiateTemplate(const TemplateFuncEntry& entry,
     std::map<std::string, std::string> subst;
     for (int i = 0; i < (int)tmpl.type_params.size(); i++)
         subst[tmpl.type_params[i]] = type_args[i];
+
+    // Local classes declared in the template body: assign each a per-
+    // instantiation name and add a whole-name rename to `subst`, so that
+    // every `LocalClass x;` reference in the cloned body rewrites to it.
+    std::string targ;
+    for (auto& t : type_args) targ += "__" + t;
+    for (auto& lc : tmpl.local_classes)
+        subst[lc.name] = lc.name + targ;
 
     // post-substitution param types (with class-type auto-promote to ref).
     // promoted[i] tracks which params got the value→ref promotion — used by
@@ -703,6 +775,10 @@ std::string Codegen::instantiateTemplate(const TemplateFuncEntry& entry,
     concrete.body = cloneBlock(*tmpl.body, subst);
     g_promoted_stack.clear();
 
+    // Materialize the body's local classes as concrete per-instantiation slids.
+    for (auto& lc : tmpl.local_classes)
+        materializeLocalClass(lc, subst, lc.name + targ);
+
     // register signatures so call sites work
     func_return_types_[mangled] = concrete.return_type;
     func_param_types_[mangled]  = ptypes;
@@ -739,6 +815,14 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
     for (int i = 0; i < (int)tmpl.type_params.size(); i++)
         subst[tmpl.type_params[i]] = type_args[i];
 
+    // Local classes declared in this template class's method bodies: assign
+    // a per-instantiation name and add a whole-name rename to `subst` before
+    // the method bodies are cloned, so references rewrite.
+    std::string targ;
+    for (auto& t : type_args) targ += "__" + t;
+    for (auto& lc : tmpl.local_classes)
+        subst[lc.name] = lc.name + targ;
+
     std::string mangled = name;
     for (auto& t : type_args) mangled += "__" + t;
 
@@ -771,6 +855,10 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
         if (m.body) md.body = cloneBlock(*m.body, subst);
         concrete.methods.push_back(std::move(md));
     }
+
+    // Materialize local classes from the method bodies as concrete slids.
+    for (auto& lc : tmpl.local_classes)
+        materializeLocalClass(lc, subst, lc.name + targ);
 
     // substitution constants: clone rhs with type substitution, fold under
     // the instantiated class name. Phase 1 supports T-independent rhs; rhs

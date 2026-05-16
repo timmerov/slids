@@ -1207,6 +1207,7 @@ void Codegen::emit() {
     validatePureSlots();
     collectFunctionSignatures();
     scanForSlidTemplateUses();
+    scanForTemplateFunctionUses();
 
     // process explicit instantiate statements before string-constant collection so
     // their bodies are included in the pre-scan and in the ctor/dtor/method emit loops
@@ -1358,6 +1359,9 @@ void Codegen::emit() {
         }
         out_ << " }\n";
     }
+    // emit struct types for per-instantiation local classes
+    for (auto* slid : local_class_instances_)
+        emitStructType(*slid);
     // emit struct types for imported template class instantiations (deferred)
     for (auto* slid : pending_slid_declares_) {
         auto& info = slid_info_[slid->name];
@@ -1600,12 +1604,16 @@ void Codegen::emit() {
     }
     for (auto* slid : pending_slid_instantiations_)
         emitSlidCtorDtor(*slid);
+    for (auto* slid : local_class_instances_)
+        emitSlidCtorDtor(*slid);
 
     for (auto& slid : program_.slids) {
         if (!slid.type_params.empty()) continue;
         emitSlidMethods(slid);
     }
     for (auto* slid : pending_slid_instantiations_)
+        emitSlidMethods(*slid);
+    for (auto* slid : local_class_instances_)
         emitSlidMethods(*slid);
 
     for (auto& fn : program_.functions)

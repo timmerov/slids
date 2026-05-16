@@ -417,6 +417,7 @@ private:
     std::map<std::string, SlidDef> concrete_slid_template_defs_; // mangled name -> owned concrete SlidDef
     std::vector<SlidDef*> pending_slid_instantiations_;          // local instantiations: emit full bodies
     std::vector<SlidDef*> pending_slid_declares_;                // imported instantiations: emit struct + declares only
+    std::vector<SlidDef*> local_class_instances_;                // per-instantiation local classes; emitted in a late pass
     std::set<std::string> local_slid_template_names_;            // template class names defined in this TU
     std::map<std::string, std::string> slid_template_modules_;   // imported template class name -> module
 
@@ -511,6 +512,10 @@ private:
                                         bool force = false);
     void ensureSlidInstantiated(const std::string& type);
     void scanForSlidTemplateUses();
+    // Pre-instantiate template-function calls (with explicit type args) found
+    // in non-template bodies, so any local classes they carry are materialized
+    // before the struct-type emit pass.
+    void scanForTemplateFunctionUses();
     // template instantiation: builds substituted FunctionDef, registers signatures.
     // Caller has already disambiguated the overload via resolveTemplateOverload.
     // force=true: always emit define (for explicit instantiate statements).
@@ -519,6 +524,12 @@ private:
     std::string instantiateTemplate(const TemplateFuncEntry& entry,
                                     const std::vector<std::string>& type_args,
                                     bool force = false);
+    // Materialize one local class (declared inside a template body) as a
+    // concrete slid: clone with `subst`, register slid_info_/method sigs,
+    // store, and queue for emission. `mangled` is the per-instantiation name.
+    void materializeLocalClass(const SlidDef& tmpl,
+                               const std::map<std::string, std::string>& subst,
+                               const std::string& mangled);
     void emitTemplateDeclare(const FunctionDef& fn);
     void recordSliEntry(const std::string& func_name,
                         const std::vector<std::string>& type_args,

@@ -661,6 +661,9 @@ struct SlidDef {
     std::vector<MethodDef> methods;
     std::vector<SlidDef> nested_slids;             // slid defs declared inside this slid's body
     std::vector<ConstDef> consts;                  // class-scope const decls (no storage)
+    // Classes declared inside this (template) class's method bodies. Carried
+    // with the template and re-instantiated per type-arg — see codegen_template.
+    std::vector<SlidDef> local_classes;
 };
 
 // nested function defined inside a parent function body
@@ -694,6 +697,9 @@ struct FunctionDef {
     std::vector<std::string> type_params; // non-empty for template functions: T add<T>(T a, T b)
     bool is_local = true;        // false when body loaded from a separate impl file
     std::string impl_module;     // module name of the impl file (when !is_local)
+    // Classes declared inside this (template) function's body. Carried with
+    // the template and re-instantiated per type-arg — see codegen_template.
+    std::vector<SlidDef> local_classes;
 };
 
 // method defined outside the class body: void String:clear() { ... }
@@ -892,6 +898,32 @@ private:
     // `program.globals` at the end of each loop iteration in `parse()`.
     std::vector<GlobalDef> pending_globals_;
 
+    // Local classes (slids defined inside a code block). Collected during the
+    // current top-level declaration, drained into `program.slids` alongside
+    // pending_globals_. Each is renamed to a unique internal canonical name
+    // `<funcpath>.<n>.<ClassName>` before collection — see local_slid_counter_.
+    std::vector<SlidDef> pending_slids_;
+
+    // Monotonic counter giving each local class declaration a unique id. The
+    // id becomes a numeric dot-component of the canonical name, so the name
+    // can never be spelled by the author (parseTypeName only accepts
+    // colon-separated identifiers, never a bare integer).
+    int local_slid_counter_ = 0;
+
+    // True while parsing inside a template function/class body. Local classes
+    // declared here can't be concrete slids yet (a type param is unbound) —
+    // they are collected into pending_local_classes_ and carried with the
+    // enclosing template for per-instantiation materialization.
+    bool in_template_ = false;
+    std::vector<SlidDef> pending_local_classes_;
+
+    // Per-block short-name → canonical-name map for local classes. Innermost
+    // frame is the current block; pushed/popped by parseBlock alongside
+    // scope_stack_. parseTypeName resolves a bare type name's base component
+    // through this (without finalizing — colon suffixes still apply).
+    std::vector<std::map<std::string, std::string>> local_class_stack_;
+    std::string lookupLocalClass(const std::string& name) const;
+
     // user-declared type aliases (alias Name = TypeExpr;). innermost frame is
     // current block; bottom frame is file-scope. resolved type strings are
     // already in canonical form (e.g. "int^", "Class.Hoisted", "Template__int")
@@ -919,6 +951,19 @@ private:
     bool isInstantiationLookahead() const;
     // lookahead: pos_ is at identifier used as a type name; returns true if a var-name identifier follows
     bool isVarDeclLookahead() const;
+    // lookahead: tokens_[name_idx] is a class-name identifier; returns true if
+    // `[<...>] (...) {` follows it — the matching ')' followed by '{'.
+    bool slidBodyFollows(int name_idx) const;
+    // lookahead: returns true if pos_ begins a slid definition — `Identifier
+    // [<...>] (...) {`. Distinguishes a class def from a ctor-call statement
+    // (ends in ';') and a method/nested function (return type before the name).
+    bool isSlidDeclLookahead() const;
+    // lookahead: returns true if pos_ begins a derived slid definition —
+    // `Base : Derived [<...>] (...) {`.
+    bool isDerivedSlidDeclLookahead() const;
+    // Rename a just-parsed local slid to a unique canonical name, register its
+    // short name in the current block, and collect it into pending_slids_.
+    void collectLocalClass(SlidDef slid, const std::string& short_name, int name_tok);
 
     // op-symbol recognition: returns canonical "<sym>" (e.g. "+=", "<-", "[]") if
     // the token(s) at pos_+offset (peek) or pos_ (consume) form an overloadable op symbol.

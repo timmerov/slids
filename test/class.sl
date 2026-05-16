@@ -183,14 +183,65 @@ BaseHoist(int x_ = 1) {
 
 /* class in function */
 void classInFunction() {
-    /*
     InFunc(int x_ = 88) {
         Hoisted(int y_ = 66) {
         }
     }
     InFunc:Hoisted cls;
     __println("foo:cls.y_ + " + cls.y_);
-    */
+
+    /* derived classes in function. */
+    BaseHoist : DerivedHoist(int u_ = 32) {
+    }
+    InFunc : DerivedIF(int p_ = 64) {
+    }
+
+    /* class in nested function. */
+    void nestedFunc() {
+        DerivedHoist dh;
+        DerivedIF dif;
+        __println("dh.u_ = " + dh.u_);
+        __println("dif.p_ = " + dif.p_);
+    }
+    nestedFunc();
+}
+
+/* class in a template function. each instantiation gets its own copy of */
+/* the local class; a template-dependent field type is substituted per */
+/* instantiation. */
+T templateLocal<T>(T seed) {
+    Holder(T item_) {
+    }
+    Holder h;
+    h.item_ = seed;
+    return h.item_;
+}
+
+/* template-independent local class inside a template function. */
+int templateLocalIndep<T>(T ignored) {
+    Tally(int n_ = 9) {
+    }
+    Tally t;
+    return t.n_;
+}
+
+/* local classes inside the methods of a template class. the local class */
+/* may reference the template class's type parameter (Echo), or be */
+/* template-independent (Tag). */
+Boxed<T>(T value_) {
+    T unwrap() {
+        Echo(T copy_) {
+        }
+        Echo e;
+        e.copy_ = value_;
+        return e.copy_;
+    }
+    int tag() {
+        Tag(int id_ = 5) {
+        }
+        Tag g;
+        return g.id_;
+    }
 }
 
 /*
@@ -220,6 +271,24 @@ int32 main() {
     __println("TopHoist: hoist.v_ = " + hoist.v_);
 
     classInFunction();
+
+    __println("templateLocal<int> = " + templateLocal<int>(42));
+    __println("templateLocal<float> = " + templateLocal<float>(3.5));
+    __println("templateLocalIndep<int> = " + templateLocalIndep<int>(0));
+
+    Boxed<int> bi(7);
+    __println("Boxed<int>.unwrap = " + bi.unwrap());
+    __println("Boxed<int>.tag = " + bi.tag());
+    Boxed<float> bf(2.5);
+    __println("Boxed<float>.unwrap = " + bf.unwrap());
+
+    /* compile errors: a local class is unreachable outside its block — */
+    /* not by bare name, and not via the enclosing function (a function */
+    /* is not a namespace). */
+    //-EXPECT-ERROR: Unknown type 'InFunc'
+    // InFunc na1;
+    //-EXPECT-ERROR: Unknown type 'classInFunction.InFunc'
+    // classInFunction:InFunc na2;
 
     return 0;
 }

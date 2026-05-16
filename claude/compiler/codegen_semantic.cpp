@@ -675,6 +675,106 @@ void Codegen::scanForSlidTemplateUses() {
     }
 }
 
+void Codegen::scanForTemplateFunctionUses() {
+    if (template_funcs_.empty()) return;
+
+    std::function<void(const Expr&)> scanExpr;
+    std::function<void(const Stmt&)> scanStmt;
+    std::function<void(const BlockStmt&)> scanBlock = [&](const BlockStmt& b) {
+        for (auto& s : b.stmts) scanStmt(*s);
+    };
+    // A template-function call with explicit type args needs no inference, so
+    // it can be resolved and instantiated up front (idempotent — instantiate
+    // dedups). This pulls any local classes it carries into the struct pass.
+    auto tryInstantiate = [&](const std::string& callee,
+                              const std::vector<std::string>& type_args,
+                              const std::vector<std::unique_ptr<Expr>>& args) {
+        if (type_args.empty()) return;
+        if (!template_funcs_.count(callee)) return;
+        auto resolved = resolveTemplateOverload(callee, type_args, args);
+        if (resolved.entry) instantiateTemplate(*resolved.entry, resolved.type_args);
+    };
+    scanExpr = [&](const Expr& e) {
+        if (auto* c = dynamic_cast<const CallExpr*>(&e)) {
+            tryInstantiate(c->callee, c->type_args, c->args);
+            for (auto& a : c->args) scanExpr(*a);
+        } else if (auto* b = dynamic_cast<const BinaryExpr*>(&e)) {
+            scanExpr(*b->left); scanExpr(*b->right);
+        } else if (auto* u = dynamic_cast<const UnaryExpr*>(&e)) {
+            scanExpr(*u->operand);
+        } else if (auto* d = dynamic_cast<const DerefExpr*>(&e)) {
+            scanExpr(*d->operand);
+        } else if (auto* a = dynamic_cast<const AddrOfExpr*>(&e)) {
+            scanExpr(*a->operand);
+        } else if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&e)) {
+            scanExpr(*fa->object);
+        } else if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&e)) {
+            scanExpr(*ai->base); scanExpr(*ai->index);
+        } else if (auto* mc = dynamic_cast<const MethodCallExpr*>(&e)) {
+            scanExpr(*mc->object);
+            for (auto& a : mc->args) scanExpr(*a);
+        } else if (auto* t = dynamic_cast<const TupleExpr*>(&e)) {
+            for (auto& v : t->values) scanExpr(*v);
+        }
+    };
+    scanStmt = [&](const Stmt& stmt) {
+        if (auto* c = dynamic_cast<const CallStmt*>(&stmt)) {
+            tryInstantiate(c->callee, c->type_args, c->args);
+            for (auto& a : c->args) scanExpr(*a);
+        } else if (auto* es = dynamic_cast<const ExprStmt*>(&stmt)) {
+            scanExpr(*es->expr);
+        } else if (auto* d = dynamic_cast<const VarDeclStmt*>(&stmt)) {
+            if (d->init) scanExpr(*d->init);
+            for (auto& a : d->ctor_args) scanExpr(*a);
+        } else if (auto* as = dynamic_cast<const AssignStmt*>(&stmt)) {
+            scanExpr(*as->value);
+        } else if (auto* r = dynamic_cast<const ReturnStmt*>(&stmt)) {
+            if (r->value) scanExpr(*r->value);
+        } else if (auto* fa = dynamic_cast<const FieldAssignStmt*>(&stmt)) {
+            scanExpr(*fa->object); scanExpr(*fa->value);
+        } else if (auto* ia = dynamic_cast<const IndexAssignStmt*>(&stmt)) {
+            scanExpr(*ia->base); scanExpr(*ia->index); scanExpr(*ia->value);
+        } else if (auto* da = dynamic_cast<const DerefAssignStmt*>(&stmt)) {
+            scanExpr(*da->ptr); scanExpr(*da->value);
+        } else if (auto* ca = dynamic_cast<const CompoundAssignStmt*>(&stmt)) {
+            scanExpr(*ca->lhs); scanExpr(*ca->rhs);
+        } else if (auto* mc = dynamic_cast<const MethodCallStmt*>(&stmt)) {
+            scanExpr(*mc->object);
+            for (auto& a : mc->args) scanExpr(*a);
+        } else if (auto* b = dynamic_cast<const BlockStmt*>(&stmt)) {
+            scanBlock(*b);
+        } else if (auto* i = dynamic_cast<const IfStmt*>(&stmt)) {
+            scanExpr(*i->cond);
+            scanBlock(*i->then_block);
+            if (i->else_block) scanBlock(*i->else_block);
+        } else if (auto* w = dynamic_cast<const WhileStmt*>(&stmt)) {
+            scanExpr(*w->cond);
+            scanBlock(*w->body);
+        } else if (auto* fl = dynamic_cast<const ForLongStmt*>(&stmt)) {
+            for (auto& s : fl->init_stmts) scanStmt(*s);
+            if (fl->cond) scanExpr(*fl->cond);
+            scanBlock(*fl->update_block);
+            scanBlock(*fl->body);
+        } else if (auto* sw = dynamic_cast<const SwitchStmt*>(&stmt)) {
+            scanExpr(*sw->expr);
+            for (auto& sc : sw->cases)
+                for (auto& s : sc.stmts) scanStmt(*s);
+        } else if (auto* nf = dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) {
+            if (nf->def.body) scanBlock(*nf->def.body);
+        }
+    };
+    for (auto& fn : program_.functions)
+        if (fn.body && fn.type_params.empty()) scanBlock(*fn.body);
+    for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) continue;
+        if (slid.ctor_body)          scanBlock(*slid.ctor_body);
+        if (slid.explicit_ctor_body) scanBlock(*slid.explicit_ctor_body);
+        if (slid.dtor_body)          scanBlock(*slid.dtor_body);
+        for (auto& m : slid.methods)
+            if (m.body) scanBlock(*m.body);
+    }
+}
+
 // --- substitution constants -------------------------------------------------
 
 namespace {
