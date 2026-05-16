@@ -194,7 +194,8 @@ Vector<T>(
             return;
         }
 
-        /* reserve space. */
+        /* reserve extra space. */
+        new_size += new_size / 2;
         reserve(new_size);
 
         /* create new elements. */

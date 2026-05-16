@@ -9,6 +9,19 @@
 #include <algorithm>
 #include "codegen_helpers.h"
 
+// True if a call argument of slids type `arg` can bind to a parameter of
+// slids type `param`: an exact canonical-type match, or class-value → `T^`
+// reference auto-promotion (a `T` lvalue binds a `T^` / `(const T)^` param —
+// the call site takes its address). Shared by every arg/param overload match.
+static bool argBindsToParam(const std::string& arg, const std::string& param) {
+    std::string a = canonicalType(arg);
+    std::string p = canonicalType(param);
+    if (a == p) return true;
+    // value → reference promotion for slid types.
+    if (!p.empty() && p.back() == '^' && p.substr(0, p.size() - 1) == a) return true;
+    return false;
+}
+
 Codegen::TemplateResolution Codegen::resolveTemplateOverload(
     const std::string& name,
     const std::vector<std::string>& explicit_type_args,
@@ -66,14 +79,7 @@ Codegen::TemplateResolution Codegen::resolveTemplateOverload(
             if (slid_info_.count(substituted)) substituted += "^";
             std::string actual = exprType(*args[i]);
             if (actual.empty()) continue; // can't resolve actual; skip strict check
-            std::string actual_canon = canonicalType(actual);
-            std::string substituted_canon = canonicalType(substituted);
-            if (actual_canon != substituted_canon) {
-                // tolerate auto-promote (value to ref) for slid types
-                if (!substituted_canon.empty() && substituted_canon.back() == '^'
-                    && substituted_canon.substr(0, substituted_canon.size()-1) == actual_canon) continue;
-                match = false; break;
-            }
+            if (!argBindsToParam(actual, substituted)) { match = false; break; }
         }
         if (!match) continue;
         matches++;
@@ -272,7 +278,7 @@ std::string Codegen::resolveOverloadIn(
         if (ptypes.size() != args.size()) continue;
         bool match = true;
         for (int i = 0; i < (int)args.size(); i++) {
-            if (canonicalType(exprType(*args[i])) != canonicalType(ptypes[i])) { match = false; break; }
+            if (!argBindsToParam(exprType(*args[i]), ptypes[i])) { match = false; break; }
         }
         if (match) {
             rejectConstToMutable(display(), args, entry);
@@ -297,7 +303,30 @@ std::string Codegen::resolveOverloadIn(
             return std::get<0>(entry);
         }
     }
-    return base_mangled;
+    // Arity matched but no overload's parameter types accept the arguments.
+    // Fail loudly rather than returning the bare base (which can alias a
+    // zero-parameter overload's mangled name).
+    std::string got;
+    for (size_t i = 0; i < args.size(); i++) {
+        if (i > 0) got += ", ";
+        std::string t = exprType(*args[i]);
+        got += t.empty() ? "?" : t;
+    }
+    std::string cands;
+    for (auto& entry : overloads) {
+        auto& ptypes = std::get<1>(entry);
+        if (ptypes.size() != args.size()) continue;
+        std::string sig;
+        for (size_t i = 0; i < ptypes.size(); i++) {
+            if (i > 0) sig += ", ";
+            sig += ptypes[i];
+        }
+        if (!cands.empty()) cands += " / ";
+        cands += "(" + sig + ")";
+    }
+    error("No overload of '" + display() + "' matches arguments ("
+          + got + "); candidates: " + cands + ".");
+    return base_mangled; // unreachable — error() throws
 }
 
 // Resolve a bare callee as an implicit-self method of current_slid_. Returns

@@ -82,6 +82,26 @@ int32 main() {
         __println("---dtors---");
     }
     __println("ctor/dtor count = " + g_count);
+    __println("---insert/append---");
+    {
+        Vector<Value> vec;
+        Value val;
+        val.x_ = 100;
+        vec.append(val);
+        vp = vec.append();
+        vp^.x_ = 400;
+        val.x_ = 200;
+        vec.insert(1, ^val);
+        vp = vec.insert(2);
+        vp^.x_ = 300;
+        __print("vec = [");
+        for (Value^ v : vec) {
+            __print(" " + v^.x_);
+        }
+        __println(" ]");
+        __println("---dtors---");
+    }
+    __println("ctor/dtor count = " + g_count);
     __println("----------");
 
     return 0;
