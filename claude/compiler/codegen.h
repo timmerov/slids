@@ -136,6 +136,9 @@ private:
     std::set<std::string> emitted_alloca_regs_;      // all alloca register names emitted in current function
     std::map<std::string, std::string> func_return_types_;
     std::map<std::string, std::vector<std::string>> func_param_types_; // func name -> param types
+    // mangled name -> trailing default-value exprs (borrowed from the AST,
+    // one per defaulted param; size = number of defaulted trailing params).
+    std::map<std::string, std::vector<const Expr*>> func_param_defaults_;
     std::map<std::string, std::vector<std::pair<std::string,std::string>>> func_tuple_fields_; // func -> [(type,name)]
     std::string current_func_return_type_; // LLVM return type of the function being emitted
     std::string current_func_slids_return_type_; // Slids-form return type of the function being emitted
@@ -612,7 +615,12 @@ private:
         const std::vector<bool>& param_mutable,
         const std::vector<int>& param_mut_toks,
         const std::string& return_type,
-        bool is_const, int file_id);
+        bool is_const, int file_id,
+        const std::vector<std::unique_ptr<Expr>>& param_defaults);
+    // Validate (1A: const-only) and record a function's trailing default-value
+    // exprs under its mangled name. First registration for a name wins.
+    void storeParamDefaults(const std::string& mangled,
+                            const std::vector<std::unique_ptr<Expr>>& param_defaults);
     // Register one nested-function overload: signature maps under the
     // per-overload mangled name, plus a nested_func_overloads_ bucket entry.
     void registerNestedOverload(const std::string& parent_name,
@@ -626,6 +634,15 @@ private:
     std::string resolveOverloadIn(const std::string& base_mangled,
                                   const std::vector<std::unique_ptr<Expr>>& args,
                                   const std::vector<OverloadEntry>& overloads);
+    // Number of non-defaulted (required) parameters of a registered function:
+    // total params minus its trailing defaulted-param count.
+    size_t requiredArity(const std::string& mangled) const;
+    // Append default-value args to a call whose provided-arg count is short of
+    // the resolved overload's parameter count. Idempotent via `padded`. Takes
+    // const refs (call exprs are const during emit) and casts away — the AST
+    // objects are not truly const.
+    void padCallArgs(const std::vector<std::unique_ptr<Expr>>& args,
+                     const bool& padded, const std::string& mangled);
     bool isPointerExpr(const Expr& expr);
     bool isUnsignedExpr(const Expr& expr);
     std::string resolveOperatorOverload(const std::string& op,

@@ -252,6 +252,7 @@ struct CallExpr : Expr {
     std::vector<std::unique_ptr<Expr>> args;
     std::vector<std::string> type_args; // non-empty for template calls: add<int>(...)
     std::string qualifier;              // "" for bare; slid name for `Name:fn()`; "::" for `::fn()`
+    bool args_padded = false;           // codegen: default-value args appended once
     CallExpr(std::string callee, std::vector<std::unique_ptr<Expr>> args)
         : callee(std::move(callee)), args(std::move(args)) {}
 };
@@ -276,6 +277,7 @@ struct MethodCallExpr : Expr {
     std::unique_ptr<Expr> object;
     std::string method;
     std::vector<std::unique_ptr<Expr>> args;
+    bool args_padded = false;           // codegen: default-value args appended once
     MethodCallExpr(std::unique_ptr<Expr> obj, std::string method,
                    std::vector<std::unique_ptr<Expr>> args)
         : object(std::move(obj)), method(std::move(method)), args(std::move(args)) {}
@@ -441,6 +443,7 @@ struct CallStmt : Stmt {
     std::string callee;
     std::vector<std::unique_ptr<Expr>> args;
     std::vector<std::string> type_args; // non-empty for template calls: add<int>(...)
+    bool args_padded = false;           // codegen: default-value args appended once
     CallStmt(std::string callee, std::vector<std::unique_ptr<Expr>> args)
         : callee(std::move(callee)), args(std::move(args)) {}
 };
@@ -456,6 +459,7 @@ struct MethodCallStmt : Stmt {
     std::unique_ptr<Expr> object;
     std::string method;
     std::vector<std::unique_ptr<Expr>> args;
+    bool args_padded = false;           // codegen: default-value args appended once
     MethodCallStmt(std::unique_ptr<Expr> obj, std::string method,
                    std::vector<std::unique_ptr<Expr>> args)
         : object(std::move(obj)), method(std::move(method)), args(std::move(args)) {}
@@ -618,6 +622,7 @@ struct MethodDef {
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params; true if 'mutable' on that param
     std::vector<int> param_mut_toks;  // parallel to params; tok of the 'mutable' keyword for diagnostic notes
+    std::vector<std::unique_ptr<Expr>> param_defaults; // parallel to params; null when no default
     std::unique_ptr<BlockStmt> body;
     int file_id = 0;
     int tok = 0;               // token index of the method name (for diagnostics)
@@ -675,6 +680,7 @@ struct NestedFunctionDef {
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params
     std::vector<int> param_mut_toks;  // parallel to params; tok of the 'mutable' keyword for diagnostic notes
+    std::vector<std::unique_ptr<Expr>> param_defaults; // parallel to params; null when no default
     std::unique_ptr<BlockStmt> body;
 };
 
@@ -691,6 +697,7 @@ struct FunctionDef {
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params
     std::vector<int> param_mut_toks;  // parallel to params; tok of the 'mutable' keyword for diagnostic notes
+    std::vector<std::unique_ptr<Expr>> param_defaults; // parallel to params; null when no default
     std::vector<bool> param_auto_promoted;  // parallel to params; true when class-T value→ref auto-promoted at template instantiation
     std::unique_ptr<BlockStmt> body;
     int file_id = 0;
@@ -712,6 +719,7 @@ struct ExternalMethodDef {
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params
     std::vector<int> param_mut_toks;  // parallel to params; tok of the 'mutable' keyword for diagnostic notes
+    std::vector<std::unique_ptr<Expr>> param_defaults; // parallel to params; null when no default
     std::unique_ptr<BlockStmt> body;
     int file_id = 0;
     int tok = 0;                       // token index of method_name (for diagnostics)
@@ -812,6 +820,14 @@ private:
     bool isTypeName(const Token& t) const;
     bool isUserTypeName(const Token& t) const;
     std::string parseTypeName();
+    // Parse a parameter list body (between '(' and ')', not consuming either):
+    // `[mutable] type name [= constexpr]`, comma-separated. Fills the four
+    // parallel vectors. Enforces trailing-only defaults. Shared by every
+    // function/method/nested-function/external-method head parser.
+    void parseParamList(std::vector<std::pair<std::string, std::string>>& params,
+                        std::vector<bool>& param_mutable,
+                        std::vector<int>& param_mut_toks,
+                        std::vector<std::unique_ptr<Expr>>& param_defaults);
 
     // Per-scope record for each declared local. Visibility (the name being in
     // the map at all) drives decl-vs-assign disambiguation; the optional
@@ -974,7 +990,8 @@ private:
     // Validates the explicit-parameter count of an in-class op<sym> method.
     // Errors at op_tok if the count doesn't match the spec for the named op.
     // No-op for non-op names (regular methods).
-    void checkOpArity(const std::string& op_name, int actual, int op_tok);
+    void checkOpArity(const std::string& op_name, int actual, int op_tok,
+                      const std::vector<std::unique_ptr<Expr>>& param_defaults);
     void checkOpMutable(const std::string& op_name,
                         const std::vector<std::pair<std::string,std::string>>& params,
                         const std::vector<bool>& param_mutable,

@@ -172,6 +172,7 @@ Vector<T>(
     return a reference to it.
     */
     T^ insert(intptr index) {
+        /* make space. */
         grow(size_ + 1);
 
         /* move existing elements */
@@ -186,6 +187,24 @@ Vector<T>(
         return ^self[index];
     }
 
+    /* remove elements. */
+    void remove(intptr index, intptr count = 1) {
+        /*
+        move the tail into the gap.
+        stop when the tail is exhausted.
+        */
+        tail_size = size_ - (index + count);
+        dst = <T[]> storage_ + index;
+        src = dst + count;
+        for () (tail_size > 0) {
+            ++src; ++dst; --tail_size;
+        } {
+            dst^ <-- src^;
+        }
+        /* resize and destruct elements. */
+        resize(size_ - count);
+    }
+
 /* private interface. */
 
     /* add more elements. */
@@ -195,8 +214,8 @@ Vector<T>(
         }
 
         /* reserve extra space. */
-        new_size += new_size / 2;
-        reserve(new_size);
+        reserve_size = new_size * 3 / 2;
+        reserve(reserve_size);
 
         /* create new elements. */
         construct(size_, new_size);
@@ -239,6 +258,9 @@ Vector<T>(
         intptr begin,
         intptr end
     ) {
+        if (end > size_) {
+            end = size_;
+        }
         for (
             intptr i = begin,
             T[] ptr = <T[]> storage_ + 1

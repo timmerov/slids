@@ -67,4 +67,7 @@ Vector<T>(...) {
     return a reference to it.
     */
     T^ insert(intptr index);
+
+    /* remove elements. */
+    void remove(intptr index, intptr count = 1);
 }

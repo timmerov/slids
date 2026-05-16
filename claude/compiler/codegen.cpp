@@ -291,6 +291,9 @@ void Codegen::collectFunctionSignatures() {
         }
         func_param_types_[mangled] = ptypes;
 
+        // default parameter values (1A: const expressions only).
+        storeParamDefaults(mangled, fn.param_defaults);
+
         if (!fn.body) { exported_symbols_.insert(mangled); continue; } // forward declaration = exported
 
         // recurse into all blocks to find nested function defs
@@ -320,6 +323,7 @@ void Codegen::collectFunctionSignatures() {
             std::vector<int> param_mut_toks;
             int file_id = 0;
             bool is_const = false;
+            const std::vector<std::unique_ptr<Expr>>* param_defaults = nullptr;
         };
         // build set of method names covered by external implementations
         // so forward decls from an imported header don't get double-counted as overloads
@@ -338,12 +342,12 @@ void Codegen::collectFunctionSignatures() {
             // ancestor (default) or nowhere (delete / pure-virtual). Registering
             // would emit a `Derived__m` reference that no body satisfies.
             if (m.is_default || m.is_delete) continue;
-            by_name[m.name].push_back({m.return_type, m.params, m.param_mutable, m.param_mut_toks, m.file_id, m.is_const_method});
+            by_name[m.name].push_back({m.return_type, m.params, m.param_mutable, m.param_mut_toks, m.file_id, m.is_const_method, &m.param_defaults});
         }
         for (auto& em : program_.external_methods) {
             if (em.slid_name != slid.name || !em.body) continue;
             if (em.method_name == "_" || em.method_name == "~") continue;
-            by_name[em.method_name].push_back({em.return_type, em.params, em.param_mutable, em.param_mut_toks, em.file_id, em.is_const_method});
+            by_name[em.method_name].push_back({em.return_type, em.params, em.param_mutable, em.param_mut_toks, em.file_id, em.is_const_method, &em.param_defaults});
         }
         // external forward decls: register signature for methods not defined in this TU
         for (auto& em : program_.external_methods) {
@@ -351,7 +355,7 @@ void Codegen::collectFunctionSignatures() {
             if (em.method_name == "_" || em.method_name == "~") continue;
             if (em.is_default || em.is_delete) continue;
             if (!by_name.count(em.method_name))
-                by_name[em.method_name].push_back({em.return_type, em.params, em.param_mutable, em.param_mut_toks, em.file_id, em.is_const_method});
+                by_name[em.method_name].push_back({em.return_type, em.params, em.param_mutable, em.param_mut_toks, em.file_id, em.is_const_method, &em.param_defaults});
         }
         // op<-> may only take a single SameType^ parameter — reject anything else.
         if (auto it = by_name.find("op<->"); it != by_name.end()) {
@@ -384,7 +388,8 @@ void Codegen::collectFunctionSignatures() {
         for (auto& [method_name, entries] : by_name)
             for (auto& e : entries)
                 registerMethodOverload(slid.name, method_name, e.params,
-                    e.param_mutable, e.param_mut_toks, e.ret, e.is_const, e.file_id);
+                    e.param_mutable, e.param_mut_toks, e.ret, e.is_const, e.file_id,
+                    *e.param_defaults);
 
         // mark exported: methods with a bodyless declaration (from header)
         for (auto& m : slid.methods) {

@@ -612,7 +612,8 @@ std::optional<std::string> Parser::peekOpSymbolAt(int offset) {
     return it->second;
 }
 
-void Parser::checkOpArity(const std::string& op_name, int actual, int op_tok) {
+void Parser::checkOpArity(const std::string& op_name, int actual, int op_tok,
+                          const std::vector<std::unique_ptr<Expr>>& param_defaults) {
     // Allowed explicit-parameter counts per in-class op<sym>. self is implicit.
     // Unary + and - accept arity 0 (self-only), 1 (unary), 2 (binary).
     // Unary ~ and ! accept arity 0 (self-only), 1 (unary). No binary form.
@@ -631,6 +632,10 @@ void Parser::checkOpArity(const std::string& op_name, int actual, int op_tok) {
     };
     auto it = arity.find(op_name);
     if (it == arity.end()) return;
+    // operators have fixed syntactic arity — a default could never be exercised.
+    for (auto& d : param_defaults)
+        if (d) errorAt(op_tok, "Operator '" + op_name
+            + "' cannot have a default parameter value.");
     const auto& allowed = it->second;
     for (int n : allowed) if (n == actual) return;
     std::string list;
@@ -2838,6 +2843,40 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
 // --- Top-level parsing ---
 
+void Parser::parseParamList(
+    std::vector<std::pair<std::string, std::string>>& params,
+    std::vector<bool>& param_mutable,
+    std::vector<int>& param_mut_toks,
+    std::vector<std::unique_ptr<Expr>>& param_defaults)
+{
+    bool seen_default = false;
+    while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+        bool is_mutable = false;
+        int mut_tok = pos_;
+        if (peek().type == TokenType::kMutable) { advance(); is_mutable = true; }
+        std::string type = parseTypeName();
+        if (is_mutable && !isParamIndirectType(type))
+            errorAt(mut_tok, "The 'mutable' keyword applies only to pointer types '^' and '[]'.");
+        int p_tok = pos_;
+        std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
+        rejectReserved(file_id_, p_tok, name, "parameter");
+        params.emplace_back(type, name);
+        param_mutable.push_back(is_mutable);
+        param_mut_toks.push_back(mut_tok);
+        std::unique_ptr<Expr> dflt;
+        if (peek().type == TokenType::kEquals) {
+            advance();
+            dflt = parseExpr();
+            seen_default = true;
+        } else if (seen_default) {
+            errorAt(p_tok, "Parameter '" + name + "' has no default but follows a "
+                "defaulted parameter; defaults must be trailing.");
+        }
+        param_defaults.push_back(std::move(dflt));
+        if (peek().type == TokenType::kComma) advance();
+    }
+}
+
 NestedFunctionDef Parser::parseNestedFunctionDef() {
     [[maybe_unused]] int t_start = pos_;
     NestedFunctionDef fn;
@@ -2865,22 +2904,7 @@ NestedFunctionDef Parser::parseNestedFunctionDef() {
         }
     }
     expect(TokenType::kLParen, "Expected '('");
-    while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
-        bool is_mutable = false;
-        int mut_tok = pos_;
-        if (peek().type == TokenType::kMutable) {
-            advance();
-            is_mutable = true;
-        }
-        std::string type = parseTypeName();
-        if (is_mutable && !isParamIndirectType(type))
-            errorAt(mut_tok, "The 'mutable' keyword applies only to pointer types '^' and '[]'.");
-        std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
-        fn.params.emplace_back(type, name);
-        fn.param_mutable.push_back(is_mutable);
-        fn.param_mut_toks.push_back(mut_tok);
-        if (peek().type == TokenType::kComma) advance();
-    }
+    parseParamList(fn.params, fn.param_mutable, fn.param_mut_toks, fn.param_defaults);
     expect(TokenType::kRParen, "Expected ')'");
     std::vector<std::string> param_names;
     for (auto& p : fn.params) param_names.push_back(p.second);
@@ -2954,24 +2978,9 @@ MethodDef Parser::parseMethodDef(const std::string& class_name) {
         m.name = expect(TokenType::kIdentifier, "Expected method name").value;
     }
     expect(TokenType::kLParen, "Expected '('");
-    while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
-        bool is_mutable = false;
-        int mut_tok = pos_;
-        if (peek().type == TokenType::kMutable) {
-            advance();
-            is_mutable = true;
-        }
-        std::string type = parseTypeName();
-        if (is_mutable && !isParamIndirectType(type))
-            errorAt(mut_tok, "The 'mutable' keyword applies only to pointer types '^' and '[]'.");
-        std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
-        m.params.emplace_back(type, name);
-        m.param_mutable.push_back(is_mutable);
-        m.param_mut_toks.push_back(mut_tok);
-        if (peek().type == TokenType::kComma) advance();
-    }
+    parseParamList(m.params, m.param_mutable, m.param_mut_toks, m.param_defaults);
     expect(TokenType::kRParen, "Expected ')'");
-    checkOpArity(m.name, (int)m.params.size(), op_tok);
+    checkOpArity(m.name, (int)m.params.size(), op_tok, m.param_defaults);
     checkOpMutable(m.name, m.params, m.param_mutable, m.param_mut_toks, op_tok);
     checkMethodHeadRules(file_id_, m.name, (int)m.params.size(),
         m.has_explicit_return, m.is_const_method,
@@ -3661,22 +3670,7 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
         em.method_name = expect(TokenType::kIdentifier, "Expected method name").value;
     }
     expect(TokenType::kLParen, "Expected '('");
-    while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
-        bool is_mutable = false;
-        int mut_tok = pos_;
-        if (peek().type == TokenType::kMutable) {
-            advance();
-            is_mutable = true;
-        }
-        std::string type = parseTypeName();
-        if (is_mutable && !isParamIndirectType(type))
-            errorAt(mut_tok, "The 'mutable' keyword applies only to pointer types '^' and '[]'.");
-        std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
-        em.params.emplace_back(type, name);
-        em.param_mutable.push_back(is_mutable);
-        em.param_mut_toks.push_back(mut_tok);
-        if (peek().type == TokenType::kComma) advance();
-    }
+    parseParamList(em.params, em.param_mutable, em.param_mut_toks, em.param_defaults);
     expect(TokenType::kRParen, "Expected ')'");
     checkMethodHeadRules(file_id_, em.method_name, (int)em.params.size(),
         em.has_explicit_return, em.is_const_method,
@@ -3805,24 +3799,9 @@ void Parser::parseExternalMethodBlock(Program& program) {
             errorAt(em_tok, "Method '" + em.method_name + "' shares the name of its enclosing class.");
         }
         expect(TokenType::kLParen, "Expected '('");
-        while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
-            bool is_mutable = false;
-            int mut_tok = pos_;
-            if (peek().type == TokenType::kMutable) {
-                advance();
-                is_mutable = true;
-            }
-            std::string type = parseTypeName();
-            if (is_mutable && !isParamIndirectType(type))
-                errorAt(mut_tok, "The 'mutable' keyword applies only to pointer types '^' and '[]'.");
-            std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
-            em.params.emplace_back(type, name);
-            em.param_mutable.push_back(is_mutable);
-            em.param_mut_toks.push_back(mut_tok);
-            if (peek().type == TokenType::kComma) advance();
-        }
+        parseParamList(em.params, em.param_mutable, em.param_mut_toks, em.param_defaults);
         expect(TokenType::kRParen, "Expected ')'");
-        checkOpArity(em.method_name, (int)em.params.size(), em_tok);
+        checkOpArity(em.method_name, (int)em.params.size(), em_tok, em.param_defaults);
         checkOpMutable(em.method_name, em.params, em.param_mutable, em.param_mut_toks, em_tok);
         checkMethodHeadRules(file_id_, em.method_name, (int)em.params.size(),
             em.has_explicit_return, em.is_const_method,
@@ -3897,24 +3876,7 @@ FunctionDef Parser::parseFunctionDef() {
     }
     expect(TokenType::kLParen, "Expected '('");
     int params_tok = pos_;
-    while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
-        bool is_mutable = false;
-        int mut_tok = pos_;
-        if (peek().type == TokenType::kMutable) {
-            advance();
-            is_mutable = true;
-        }
-        std::string type = parseTypeName();
-        if (is_mutable && !isParamIndirectType(type))
-            errorAt(mut_tok, "The 'mutable' keyword applies only to pointer types '^' and '[]'.");
-        int p_tok = pos_;
-        std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
-        rejectReserved(file_id_, p_tok, name, "parameter");
-        fn.params.emplace_back(type, name);
-        fn.param_mutable.push_back(is_mutable);
-        fn.param_mut_toks.push_back(mut_tok);
-        if (peek().type == TokenType::kComma) advance();
-    }
+    parseParamList(fn.params, fn.param_mutable, fn.param_mut_toks, fn.param_defaults);
     expect(TokenType::kRParen, "Expected ')'");
     // (P1) function header+body merge — parameter name cannot equal function name.
     for (auto& p : fn.params) {

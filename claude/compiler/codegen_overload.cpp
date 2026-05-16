@@ -47,7 +47,9 @@ Codegen::TemplateResolution Codegen::resolveTemplateOverload(
     int matches = 0;
     for (auto& entry : it->second) {
         const FunctionDef& tmpl = *entry.def;
-        if (tmpl.params.size() != args.size()) continue;
+        size_t treq = tmpl.params.size();
+        for (auto& d : tmpl.param_defaults) if (d) treq--;
+        if (args.size() < treq || args.size() > tmpl.params.size()) continue;
         std::vector<std::string> targs;
         try {
             targs = explicit_type_args.empty() ? inferTypeArgs(tmpl, args) : explicit_type_args;
@@ -94,28 +96,61 @@ Codegen::TemplateResolution Codegen::resolveTemplateOverload(
     return {best, std::move(best_targs)};
 }
 
+// Number of required (non-defaulted) parameters of a registered function.
+size_t Codegen::requiredArity(const std::string& mangled) const {
+    auto pit = func_param_types_.find(mangled);
+    size_t total = (pit != func_param_types_.end()) ? pit->second.size() : 0;
+    auto dit = func_param_defaults_.find(mangled);
+    size_t ndef = (dit != func_param_defaults_.end()) ? dit->second.size() : 0;
+    return total > ndef ? total - ndef : 0;
+}
+
+// Append default-value args for the trailing slots a call left unfilled, so
+// emit/mangle proceed at full arity. Idempotent via `padded`.
+void Codegen::padCallArgs(const std::vector<std::unique_ptr<Expr>>& cargs,
+                          const bool& cpadded, const std::string& mangled) {
+    bool& padded = const_cast<bool&>(cpadded);
+    if (padded) return;
+    padded = true;
+    auto& args = const_cast<std::vector<std::unique_ptr<Expr>>&>(cargs);
+    auto dit = func_param_defaults_.find(mangled);
+    auto pit = func_param_types_.find(mangled);
+    if (dit == func_param_defaults_.end() || dit->second.empty()
+        || pit == func_param_types_.end()) return;
+    int total = (int)pit->second.size();
+    int first_def = total - (int)dit->second.size();
+    for (int i = (int)args.size(); i < total; i++) {
+        std::set<std::string> cyc;
+        ConstEntry c = foldConstExpr(*dit->second[i - first_def], "", cyc);
+        if (c.is_float)
+            args.push_back(std::make_unique<FloatLiteralExpr>(c.float_value));
+        else
+            args.push_back(std::make_unique<IntLiteralExpr>(c.int_value));
+    }
+}
+
 std::string Codegen::resolveFreeFunctionMangledName(
     const std::string& name,
     size_t arg_count) const
 {
     if (func_return_types_.count(name)) {
-        // Bare name resolves only if the registered function's arity matches.
-        // Without this gate, e.g. a zero-param `foo()` would absorb a `foo(1,2)` call.
+        // Bare name resolves only if the call's arity is in the function's
+        // [required, total] range (defaults make the upper end reachable).
         auto pit = func_param_types_.find(name);
-        if (pit == func_param_types_.end() || pit->second.size() == arg_count)
+        if (pit == func_param_types_.end()
+            || (arg_count >= requiredArity(name) && arg_count <= pit->second.size()))
             return name;
     }
-    // nested function: match an overload by arity. Full arg-type resolution is
-    // done by nestedCallMangled at sites that have the argument expressions.
+    // nested function: match an overload by arity range. Full arg-type
+    // resolution is done by nestedCallMangled at sites that have the args.
     auto nit = nested_func_overloads_.find(name);
     if (nit != nested_func_overloads_.end())
         for (auto& [mn, ptypes, _pm, _pmt, _fid] : nit->second)
-            if (ptypes.size() == arg_count) return mn;
+            if (arg_count >= requiredArity(mn) && arg_count <= ptypes.size()) return mn;
     auto foit = free_func_overloads_.find(name);
     if (foit == free_func_overloads_.end()) return "";
-    for (auto& [mn, ptypes, _pm, _pmt, _fid] : foit->second) {
-        if (ptypes.size() == arg_count) return mn;
-    }
+    for (auto& [mn, ptypes, _pm, _pmt, _fid] : foit->second)
+        if (arg_count >= requiredArity(mn) && arg_count <= ptypes.size()) return mn;
     return "";
 }
 
@@ -170,6 +205,21 @@ std::string Codegen::resolveMethodMangledName(
 // deduped method_overloads_ entry under the un-suffixed `<slid>__<method>`
 // bucket. Single source of truth so the normal-class and template-
 // instantiation registration paths cannot drift in their mangling.
+void Codegen::storeParamDefaults(
+    const std::string& mangled,
+    const std::vector<std::unique_ptr<Expr>>& param_defaults)
+{
+    std::vector<const Expr*> defs;
+    for (auto& d : param_defaults)
+        if (d) {
+            if (!isFoldableConstShape(*d, ""))
+                error("Default parameter value must be a constant expression.");
+            defs.push_back(d.get());
+        }
+    if (!defs.empty() && !func_param_defaults_.count(mangled))
+        func_param_defaults_[mangled] = defs;
+}
+
 void Codegen::registerMethodOverload(
     const std::string& slid_name,
     const std::string& method_name,
@@ -177,13 +227,15 @@ void Codegen::registerMethodOverload(
     const std::vector<bool>& param_mutable,
     const std::vector<int>& param_mut_toks,
     const std::string& return_type,
-    bool is_const, int file_id)
+    bool is_const, int file_id,
+    const std::vector<std::unique_ptr<Expr>>& param_defaults)
 {
     std::vector<std::string> ptypes = buildParamTypes(params, param_mutable);
     std::string mangled = mangleMethod(slid_name, method_name, ptypes);
     func_return_types_[mangled] = return_type;
     func_param_types_[mangled]  = ptypes;
     if (is_const) const_methods_.insert(mangled);
+    storeParamDefaults(mangled, param_defaults);
     auto& overloads = method_overloads_[slid_name + "__" + method_name];
     for (auto& e : overloads)
         if (std::get<1>(e) == ptypes) return;   // already registered
@@ -212,6 +264,7 @@ void Codegen::registerNestedOverload(const std::string& parent_name,
     }
     func_return_types_[mangled] = ret;
     func_param_types_[mangled]  = ptypes;
+    storeParamDefaults(mangled, def.param_defaults);
     auto& bucket = nested_func_overloads_[def.name];
     for (auto& e : bucket)
         if (std::get<1>(e) == ptypes) return;   // already registered
@@ -252,7 +305,8 @@ std::string Codegen::resolveOverloadIn(
     // arity for size-1 or silently fail for size-N).
     bool any_arity = false;
     for (auto& [mangled, ptypes, _pm, _pmt, _fid] : overloads)
-        if (ptypes.size() == args.size()) { any_arity = true; break; }
+        if (args.size() >= requiredArity(mangled) && args.size() <= ptypes.size())
+            { any_arity = true; break; }
     if (!any_arity) {
         std::string arities;
         for (size_t i = 0; i < overloads.size(); i++) {
@@ -275,7 +329,8 @@ std::string Codegen::resolveOverloadIn(
     // Pass 1: canonical type match (const-stripping)
     for (auto& entry : overloads) {
         auto& ptypes = std::get<1>(entry);
-        if (ptypes.size() != args.size()) continue;
+        if (args.size() < requiredArity(std::get<0>(entry))
+            || args.size() > ptypes.size()) continue;
         bool match = true;
         for (int i = 0; i < (int)args.size(); i++) {
             if (!argBindsToParam(exprType(*args[i]), ptypes[i])) { match = false; break; }
@@ -288,7 +343,8 @@ std::string Codegen::resolveOverloadIn(
     // Pass 2: indirect-type match (pointer vs scalar)
     for (auto& entry : overloads) {
         auto& ptypes = std::get<1>(entry);
-        if (ptypes.size() != args.size()) continue;
+        if (args.size() < requiredArity(std::get<0>(entry))
+            || args.size() > ptypes.size()) continue;
         bool match = true;
         for (int i = 0; i < (int)args.size(); i++) {
             bool param_ptr = isIndirectType(ptypes[i]);
@@ -315,7 +371,8 @@ std::string Codegen::resolveOverloadIn(
     std::string cands;
     for (auto& entry : overloads) {
         auto& ptypes = std::get<1>(entry);
-        if (ptypes.size() != args.size()) continue;
+        if (args.size() < requiredArity(std::get<0>(entry))
+            || args.size() > ptypes.size()) continue;
         std::string sig;
         for (size_t i = 0; i < ptypes.size(); i++) {
             if (i > 0) sig += ", ";

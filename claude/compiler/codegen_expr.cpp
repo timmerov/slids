@@ -619,6 +619,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 }
                 std::string base = dispatch_class + "__" + mc->method;
                 mangled = resolveOverloadForCall(base, mc->args);
+                padCallArgs(mc->args, mc->args_padded, mangled);
                 auto ret_it = func_return_types_.find(mangled);
                 if (ret_it == func_return_types_.end())
                     error(std::string("Unknown method: " + mc->method));
@@ -713,6 +714,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 bool empty = sit->second.is_empty;
                 std::string base_q = call->qualifier + "__" + call->callee;
                 std::string mangled_q = resolveOverloadForCall(base_q, call->args);
+                padCallArgs(call->args, call->args_padded, mangled_q);
                 auto rit_q = func_return_types_.find(mangled_q);
                 if (rit_q == func_return_types_.end())
                     error(std::string("Unknown method: "
@@ -752,6 +754,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             }
             std::string base = call->qualifier + "__" + call->callee;
             std::string mangled = resolveOverloadForCall(base, call->args);
+            padCallArgs(call->args, call->args_padded, mangled);
             auto rit = func_return_types_.find(mangled);
             if (rit == func_return_types_.end())
                 error(std::string("Unknown namespace function: " + call->qualifier + ":" + call->callee));
@@ -785,6 +788,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             std::string mangled = resolveFreeFunctionMangledName(call->callee, call->args.size());
             if (mangled.empty())
                 error(std::string("Undefined global function: " + call->callee));
+            padCallArgs(call->args, call->args_padded, mangled);
             checkResolvedFreeFunction(call->callee, mangled, call->args);
             auto it = func_return_types_.find(mangled);
             auto& ptypes = func_param_types_[mangled];
@@ -828,6 +832,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         if (std::string mangled = nestedCallMangled(call->callee, call->args);
                 !mangled.empty()) {
             auto& info = nested_info_[mangled];
+            padCallArgs(call->args, call->args_padded, mangled);
             std::string ret_type = llvmType(func_return_types_[mangled]);
 
             std::string arg_str;
@@ -895,6 +900,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         // over global free functions per the bare-name lookup rule
         if (!current_slid_.empty()) {
             std::string mangled = selfMethodMangled(call->callee, call->args);
+            padCallArgs(call->args, call->args_padded, mangled);
             auto mit = func_return_types_.find(mangled);
             if (mit != func_return_types_.end()) {
                 auto& mptypes = func_param_types_[mangled];
@@ -932,6 +938,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         std::string mangled = resolveFreeFunctionMangledName(call->callee, call->args.size());
         if (mangled.empty())
             error(std::string("Undefined function: " + call->callee));
+        padCallArgs(call->args, call->args_padded, mangled);
         checkResolvedFreeFunction(call->callee, mangled, call->args);
         auto it = func_return_types_.find(mangled);
         auto& ptypes = func_param_types_[mangled];

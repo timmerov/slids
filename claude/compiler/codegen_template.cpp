@@ -401,6 +401,9 @@ static std::unique_ptr<Stmt> cloneStmtImpl(const Stmt& stmt,
             r->def.params.emplace_back(subTypeSuffix(t, subst), n);
         r->def.param_mutable = s->def.param_mutable;
         r->def.param_mut_toks = s->def.param_mut_toks;
+        for (auto& d : s->def.param_defaults)
+            r->def.param_defaults.push_back(
+                d ? cloneExpr(*d, subst) : std::unique_ptr<Expr>());
         r->def.body = cloneBlock(*s->def.body, subst);
         return r;
     }
@@ -690,6 +693,9 @@ void Codegen::materializeLocalClass(const SlidDef& tmpl,
             md.params.emplace_back(subTypeSuffix(pt, subst), pn);
         md.param_mutable  = m.param_mutable;
         md.param_mut_toks = m.param_mut_toks;
+        for (auto& d : m.param_defaults)
+            md.param_defaults.push_back(
+                d ? cloneExpr(*d, subst) : std::unique_ptr<Expr>());
         if (m.body) md.body = cloneBlock(*m.body, subst);
         concrete.methods.push_back(std::move(md));
     }
@@ -710,7 +716,7 @@ void Codegen::materializeLocalClass(const SlidDef& tmpl,
     for (auto& m : concrete.methods)
         registerMethodOverload(mangled, m.name, m.params, m.param_mutable,
                                m.param_mut_toks, m.return_type, m.is_const_method,
-                               m.file_id);
+                               m.file_id, m.param_defaults);
 
     concrete_slid_template_defs_[mangled] = std::move(concrete);
     // Local classes are TU-private — they go on their own list (not
@@ -876,6 +882,9 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
             md.params.emplace_back(subTypeSuffix(pt, subst), pn);
         md.param_mutable  = m.param_mutable;
         md.param_mut_toks = m.param_mut_toks;
+        for (auto& d : m.param_defaults)
+            md.param_defaults.push_back(
+                d ? cloneExpr(*d, subst) : std::unique_ptr<Expr>());
         if (m.body) md.body = cloneBlock(*m.body, subst);
         concrete.methods.push_back(std::move(md));
     }
@@ -916,7 +925,7 @@ std::string Codegen::instantiateSlidTemplate(const std::string& name,
     for (auto& m : concrete.methods)
         registerMethodOverload(mangled, m.name, m.params, m.param_mutable,
                                m.param_mut_toks, m.return_type, m.is_const_method,
-                               m.file_id);
+                               m.file_id, m.param_defaults);
 
     // store in the stable map
     concrete_slid_template_defs_[mangled] = std::move(concrete);

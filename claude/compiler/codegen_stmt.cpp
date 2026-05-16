@@ -3332,6 +3332,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 mptypes = func_param_types_[mangled];
             }
             checkConstReceiver(*mcs->object, mcs->method, mangled);
+            padCallArgs(mcs->args, mcs->args_padded, mangled);
             std::string ret_type = llvmType(ret_slids);
             bool empty = sinfo.is_empty;
             std::string arg_str = empty ? "" : "ptr " + obj_ptr;
@@ -4122,6 +4123,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (std::string mangled = nestedCallMangled(call->callee, call->args);
                 !mangled.empty()) {
             auto& info = nested_info_[mangled];
+            padCallArgs(call->args, call->args_padded, mangled);
             std::string ret_type = llvmType(func_return_types_[mangled]);
 
             std::string arg_str;
@@ -4183,6 +4185,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
             } else {
                 std::string base = current_slid_ + "__" + call->callee;
                 mangled = resolveOverloadForCall(base, call->args);
+                padCallArgs(call->args, call->args_padded, mangled);
                 auto mit = func_return_types_.find(mangled);
                 if (mit == func_return_types_.end()) goto fallthrough_self;
                 ret_slids = mit->second;
@@ -4234,6 +4237,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
 
         // regular top-level function call as statement
         std::string resolved_callee = resolveFreeFunctionMangledName(call->callee, call->args.size());
+        padCallArgs(call->args, call->args_padded, resolved_callee);
         auto fit = resolved_callee.empty()
             ? func_return_types_.end()
             : func_return_types_.find(resolved_callee);
