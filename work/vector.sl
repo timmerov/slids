@@ -257,9 +257,6 @@ Vector<T>(
         intptr begin,
         intptr end
     ) {
-        if (end > size_) {
-            end = size_;
-        }
         for (
             intptr i = begin,
             T[] ptr = <T[]> storage_ + 1

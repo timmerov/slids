@@ -42,7 +42,7 @@ int32 main() {
         valvec.resize(7);
         __println("resize(5)");
         valvec.resize(5);
-        __println("---dtors---");
+        //__println("---dtors---");
     }
     __println("ctor/dtor count = " + g_count);
     __println("---copy/move---");
@@ -57,7 +57,7 @@ int32 main() {
         __println("a.size() = " + a.size());
         __println("b.size() = " + b.size());
         __println("c.size() = " + c.size());
-        __println("---dtors---");
+        //__println("---dtors---");
     }
     __println("ctor/dtor count = " + g_count);
     __println("---index---");
@@ -79,7 +79,7 @@ int32 main() {
             __print(" " + v.x_);
         }
         __println(" ]");
-        __println("---dtors---");
+        //__println("---dtors---");
     }
     __println("ctor/dtor count = " + g_count);
     __println("---insert/append---");
@@ -99,7 +99,7 @@ int32 main() {
             __print(" " + v^.x_);
         }
         __println(" ]");
-        __println("---dtors---");
+        //__println("---dtors---");
     }
     __println("ctor/dtor count = " + g_count);
     __println("---remove---");
@@ -115,7 +115,7 @@ int32 main() {
             __print(" " + v^.x_);
         }
         __println(" ]");
-        __println("---dtors---");
+        //__println("---dtors---");
     }
     __println("ctor/dtor count = " + g_count);
     __println("----------");
