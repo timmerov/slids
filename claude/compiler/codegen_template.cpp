@@ -167,6 +167,10 @@ static std::unique_ptr<Expr> cloneExprImpl(const Expr& expr,
         return std::make_unique<PtrCastExpr>(subTypeSuffix(e->target_type, subst),
                                               cloneExpr(*e->operand, subst));
 
+    if (auto* e = dynamic_cast<const QualifierCastExpr*>(&expr))
+        return std::make_unique<QualifierCastExpr>(e->qualifier,
+                                                   cloneExpr(*e->operand, subst));
+
     if (auto* e = dynamic_cast<const NewExpr*>(&expr))
         return std::make_unique<NewExpr>(subTypeSuffix(e->elem_type, subst),
                                           cloneExpr(*e->count, subst));

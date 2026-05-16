@@ -29,6 +29,15 @@ Vector<T>(...) {
     /* return the number of elements. */
     intptr const size();
 
+    /* begin iterator */
+    T^ const begin();
+
+    /* end iterator */
+    T^ const end();
+
+    /* update iterator */
+    T^ const next(T^ prev);
+
     /*
     reserve space for more elements.
     preserve existing elements.
@@ -40,4 +49,22 @@ Vector<T>(...) {
     preserve existing elements.
     */
     void resize(intptr new_size);
+
+    /* aadd the element at the end. */
+    void append(T^ element);
+
+    /*
+    create an element at the end.
+    return a reference to it.
+    */
+    T^ append();
+
+    /* insert the element at the index. */
+    void insert(intptr index, T^ element);
+
+    /*
+    insert the element at the index.
+    return a reference to it.
+    */
+    T^ insert(intptr index);
 }

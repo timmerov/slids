@@ -2077,8 +2077,17 @@ std::string Codegen::emitExpr(const Expr& expr) {
             return "";
         };
         std::string src_slids = inferSlidType(*pc->operand);
-        std::string src_base  = ptrBase(src_slids);
-        std::string dst_base  = ptrBase(pc->target_type);
+        std::string src_base_raw = ptrBase(src_slids);
+        std::string dst_base_raw = ptrBase(pc->target_type);
+        // const-correctness: a pointer reinterpret may not silently drop
+        // `const` from the pointee. Cast through <mutable> to opt out.
+        if (!src_base_raw.empty() && !dst_base_raw.empty()
+            && typeHasConst(src_base_raw) && !typeHasConst(dst_base_raw))
+            error(std::string("Pointer cast drops 'const' from the pointee of '"
+                + src_slids + "'; cast through <mutable> to opt out"));
+        // relatedness compares the underlying type, not the qualifier.
+        std::string src_base = canonicalType(src_base_raw);
+        std::string dst_base = canonicalType(dst_base_raw);
         bool src_opaque = (src_base == "void" || src_base == "int8" || src_base == "uint8");
         bool dst_opaque = (dst_base == "void" || dst_base == "int8" || dst_base == "uint8");
         if (!src_base.empty() && !dst_base.empty()
@@ -2646,9 +2655,9 @@ std::string Codegen::inferSlidType(const Expr& expr) {
             if (inner.rfind("const ", 0) == 0) return inner;
             return "const " + inner;
         }
-        // mutable: strip a single leading `const ` if present
-        if (inner.rfind("const ", 0) == 0) return inner.substr(6);
-        return inner;
+        // mutable: strip const wherever it sits — leading `const ` (by-value)
+        // or `(const T)^` / `(const T)[]` (reference-to-const, pointee const).
+        return canonicalType(inner);
     }
     // variable — look up its declared type, then fall back to current slid's fields
     if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {

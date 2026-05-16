@@ -121,7 +121,7 @@ Flexible(
     }
 
     int^ next(int^ prev) {
-        piter = <int[]> prev;
+        piter = <int[]> <mutable> prev;
         return piter + 1;
     }
 }

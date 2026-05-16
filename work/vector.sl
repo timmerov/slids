@@ -82,6 +82,29 @@ Vector<T>(
         return size_;
     }
 
+    /* begin iterator */
+    T^ const begin() {
+        return <T[]> storage_;
+    }
+
+    /* end iterator */
+    T^ const end() {
+        ptr = <T[]> storage_;
+        return ptr + size_;
+    }
+
+    /* update iterator */
+    T^ const next(T^ prev) {
+        /*
+        reinterpret the refernce to const:
+            (const char)^ prev
+        as a mutable iterator.
+            char[] iter
+        */
+        iter = <T[]> <mutable> prev;
+        return iter + 1;
+    }
+
     /*
     reserve space for more elements.
     preserve existing elements.

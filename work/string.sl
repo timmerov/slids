@@ -226,7 +226,13 @@ String (
 
     /* update iterator */
     char^ const next(char^ prev) {
-        iter = <char[]> prev;
+        /*
+        reinterpret the refernce to const:
+            (const char)^ prev
+        as a mutable iterator.
+            char[] iter
+        */
+        iter = <char[]> <mutable> prev;
         return iter + 1;
     }
 
