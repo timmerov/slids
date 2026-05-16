@@ -1948,6 +1948,13 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 bool reuse_outer = for_var_type.empty() && isInScope(for_var_name);
                 if (!reuse_outer) declareVar(for_var_name, t_var_tok);
 
+                // Effective loop-var type for protocol disambiguation. With no
+                // type in the header, a reuse-outer loop var is not "inferred":
+                // its type is the reused local's tracked declared type.
+                std::string disambig_type = for_var_type;
+                if (disambig_type.empty() && reuse_outer)
+                    if (auto* li = findLocal(for_var_name)) disambig_type = li->type;
+
                 auto first_expr = parseExpr();
 
                 auto stmt = make<ForLongStmt>(t_start);
@@ -2281,11 +2288,11 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         //   neither available: report Bad reason or incompat.
                         bool pick_by_value = false;
                         bool pick_by_ref = false;
-                        bool inferred = for_var_type.empty();
+                        bool inferred = disambig_type.empty();
                         bool loop_var_is_ref = !inferred &&
-                            (for_var_type.back() == '^'
-                             || (for_var_type.size() >= 2
-                                 && for_var_type.substr(for_var_type.size()-2) == "[]"));
+                            (disambig_type.back() == '^'
+                             || (disambig_type.size() >= 2
+                                 && disambig_type.substr(disambig_type.size()-2) == "[]"));
                         auto pointeeOf = [](const std::string& t) -> std::string {
                             if (t.size() >= 2 && t.substr(t.size()-2) == "[]")
                                 return t.substr(0, t.size()-2);
@@ -2297,16 +2304,16 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         if (idx_diag.status == ProtocolStatus::Good) {
                             if (inferred) idx_avail = true;
                             else if (loop_var_is_ref)
-                                idx_avail = (for_var_type == idx_diag.return_type);
+                                idx_avail = (disambig_type == idx_diag.return_type);
                             else {
                                 std::string p = pointeeOf(idx_diag.return_type);
-                                idx_avail = !p.empty() && widensTo(p, for_var_type);
+                                idx_avail = !p.empty() && widensTo(p, disambig_type);
                             }
                         }
                         bool ref_avail = false;
                         if (ref_diag.status == ProtocolStatus::Good) {
                             if (inferred) ref_avail = true;
-                            else ref_avail = (for_var_type == ref_diag.return_type);
+                            else ref_avail = (disambig_type == ref_diag.return_type);
                         }
 
                         if (inferred
@@ -2341,7 +2348,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                         } else {
                             // Both Good but neither compatible with the loop var.
                             errorAt(ve->tok, "For-iterator loop variable type '"
-                                + for_var_type + "' is not compatible with the"
+                                + disambig_type + "' is not compatible with the"
                                   " iteration types of '" + src_type
                                 + "' (op[] returns '" + idx_diag.return_type
                                 + "', begin returns '" + ref_diag.return_type + "').");

@@ -68,9 +68,15 @@ int32 main() {
         vec[0].x_ = 10;
         vec[1].x_ = 20;
         vec[2].x_ = 40;
-        __print("vec = [");
+        __print("vec (by ref) = [");
         for (Value^ v : vec) {
             __print(" " + v^.x_);
+        }
+        __println(" ]");
+        Value v;
+        __print("vec (by value) = [");
+        for (v : vec) {
+            __print(" " + v.x_);
         }
         __println(" ]");
         __println("---dtors---");
