@@ -54,7 +54,7 @@ enum Bases (
     kSecond,
     kThird,
     kLast
-)
+);
 
 BeginEndInt(
     int low_,

@@ -413,3 +413,26 @@ void strcpy(
         dst^ = ch;
     }
 }
+
+/* formatted strings. */
+String : Format() {
+    /* constructor/destructor */
+    _() {
+    }
+    ~() {
+    }
+
+    /*
+    format a string.
+    rhs may be self.
+    */
+    op=(String^ rhs) {
+        if (rhs == ^self) {
+            String temp = rhs^;
+            self = temp;
+            return;
+        }
+
+        self = String + "[" + rhs^ + "]";
+    }
+}

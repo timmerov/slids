@@ -7,7 +7,7 @@ enum Piece (
     kBishop,
     kKnight,
     kPawn
-)
+);
 
 int32 main() {
 

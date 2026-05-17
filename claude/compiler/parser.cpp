@@ -3652,6 +3652,7 @@ EnumDef Parser::parseEnumDef() {
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "Expected ')'");
+    expect(TokenType::kSemicolon, "Expected ';' after enum declaration");
     return e;
 }
 

@@ -68,7 +68,7 @@ shadow per the standard rule.
 enum Dir06 (
     kNorth06,
     kSouth06
-)
+);
 void test_p1_06() {
     // allowed. different scope.
     int kNorth06;
@@ -108,12 +108,12 @@ inject their values as siblings; kFoo16 collides.
 enum Color16 (
     kFoo16,
     kRed16
-)
+);
 // enum value collides with sibling enum's value at file scope
 // enum Shape16 (
 //     kFoo16,
 //     kSquare16
-// )
+// );
 
 /*
 NOT ALLOWED: typed enum follows the same rules as bare enum. Default
@@ -124,7 +124,7 @@ TODO: blocked on typed-enum parser support; re-enable once available.
 enum Status17 : int32 (
     kOk17 = 0,
     kErr17 = 1
-)
+);
 void kOk17() { }
 */
 
