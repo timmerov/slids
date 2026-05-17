@@ -160,15 +160,30 @@ Token Lexer::readNumber() {
         value += advance();
     std::string clean;
     for (char c : value) if (c != '_') clean += c;
+    bool is_float = false;
+    // fractional part
     if (peek() == '.' && peek2() != '.') {
+        is_float = true;
         clean += advance();
         while (pos_ < (int)source_.size() && (isdigit(peek()) || peek() == '_')) {
             char ch = advance();
             if (ch != '_') clean += ch;
         }
-        return Token(TokenType::kFloatLiteral, clean);
     }
-    return Token(TokenType::kIntLiteral, clean);
+    // exponent: e/E [+/-] digit+ . scientific notation is always a float
+    // literal, even with an integer mantissa and no fractional part (1e6).
+    if (peek() == 'e' || peek() == 'E') {
+        is_float = true;
+        clean += advance();
+        if (peek() == '+' || peek() == '-') clean += advance();
+        if (!isdigit(peek()))
+            throwLexError(line_, col_, 1, "malformed exponent: expected a digit");
+        while (pos_ < (int)source_.size() && (isdigit(peek()) || peek() == '_')) {
+            char ch = advance();
+            if (ch != '_') clean += ch;
+        }
+    }
+    return Token(is_float ? TokenType::kFloatLiteral : TokenType::kIntLiteral, clean);
 }
 
 Token Lexer::readIdentifierOrKeyword() {
