@@ -3187,6 +3187,12 @@ SlidDef Parser::parseSlidDef() {
             pending_globals_.push_back(parseGlobalDef(slid.name, ""));
             continue;
         }
+        // class-scoped nested enum: `enum Name (values);` — its values are
+        // scoped to this class (registered as Class:value), not file scope.
+        if (peek().type == TokenType::kEnum) {
+            slid.nested_enums.push_back(parseEnumDef());
+            continue;
+        }
         // class-scope const declaration: const [type] name = expr;
         // BUT: a leading `const` followed by an elided-return method shape
         // (`_(`, `~(`, `op<sym>(`) is the method-const marker, not a const decl.
@@ -4469,6 +4475,8 @@ void Parser::mergeReopens(Program& program) {
             for (auto& m : src.methods) dst.methods.push_back(std::move(m));
             // accumulate any nested slids that haven't been hoisted yet
             for (auto& n : src.nested_slids) dst.nested_slids.push_back(std::move(n));
+            // accumulate class-scoped nested enums across reopens
+            for (auto& e : src.nested_enums) dst.nested_enums.push_back(std::move(e));
             to_remove.insert(indices[i]);
         }
     }

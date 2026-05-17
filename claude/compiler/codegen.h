@@ -449,6 +449,12 @@ private:
     // name's overload set is extended. Runs after collectFunctionSignatures so
     // every target signature is known regardless of source order.
     void resolveFunctionAliases();
+    // Rewrite class field defaults that resolve through the owning class's
+    // own nested-enum values into plain integer literals. Nested-enum values
+    // are class-scoped (registered as Class:value), so a bare `kLeft` in a
+    // field default would not resolve at an external construction site;
+    // folding it here, in the class's scope, makes it a literal by emit time.
+    void resolveNestedEnumDefaults();
     // For each class field declared in the shape `name = expr` (no type),
     // fold the default expression and derive the field's type from the
     // folded value. Runs after `collectAndFoldConsts` (which populates

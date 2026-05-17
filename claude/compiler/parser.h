@@ -673,6 +673,7 @@ struct SlidDef {
     std::unique_ptr<BlockStmt> dtor_body;          // ~() { ... }, or null
     std::vector<MethodDef> methods;
     std::vector<SlidDef> nested_slids;             // slid defs declared inside this slid's body
+    std::vector<EnumDef> nested_enums;             // enum defs declared inside this slid's body (class-scoped)
     std::vector<ConstDef> consts;                  // class-scope const decls (no storage)
     // Classes declared inside this (template) class's method bodies. Carried
     // with the template and re-instantiated per type-arg — see codegen_template.

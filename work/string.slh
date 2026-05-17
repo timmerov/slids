@@ -154,20 +154,20 @@ compare at most count characters. return:
 */
 int strcmp(char[] sa, char[] sb, int count);
 
-enum FormatOptions (
-    kAuto,
-    kLeftJustify,
-    kRightJustify
-);
-
 /* formatted strings. */
 String : Format(
-    int8 justify_ = 0, //FormatOptions:kAuto,
+    int8 justify_ = kAuto,
     char leading_pad_ = ' ',
     char trailing_pad_ = ' ',
     int min_width_ = 0,
     int max_width_ = -1
 ) {
+    enum Options (
+        kAuto,
+        kLeftJustify,
+        kRightJustify
+    );
+
     /* constructor/destructor */
     _();
     ~();

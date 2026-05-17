@@ -1,2 +1,6 @@
 hello from a namespace
 global greet
+Format default (kLeft) : 0
+Format Format:kRight   : 2
+Format:kCenter         : 1
+Layout default (kLeft) : 0

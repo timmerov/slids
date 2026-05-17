@@ -83,8 +83,65 @@ Forward {
 }
 */
 
+/*
+nested enum — class-scoped (feature B). An `enum` declared inside a class
+body: its values resolve unqualified inside the class (field defaults and
+method bodies) and as Class:value from outside. They do not leak to file
+scope, so two classes may reuse a value name without colliding.
+*/
+Format(
+    int just_ = kLeft
+) {
+    enum Align (
+        kLeft,
+        kCenter,
+        kRight
+    );
+
+    int alignment() {
+        return just_;
+    }
+}
+
+/* a second class reuses `kLeft` — class scoping means no collision. */
+Layout(
+    int flow_ = kLeft
+) {
+    enum Flow (
+        kLeft,
+        kDown
+    );
+
+    int flow() {
+        return flow_;
+    }
+}
+
+/*
+a bare nested-enum value is unknown outside its class — the values are
+class-scoped, not file-scoped. Body disabled; the negative runner drives it.
+*/
+//-EXPECT-ERROR: Undefined variable: kCenter
+// void leak() {
+//     int x = kCenter;
+// }
+
 int32 main() {
     Space:greet();
     Thing t;
+
+    /* nested enum: unqualified value as a field default, used via a method. */
+    Format f;
+    __println("Format default (kLeft) : " + f.alignment());
+
+    /* external access to a nested-enum value: Class:value. */
+    Format r(Format:kRight);
+    __println("Format Format:kRight   : " + r.alignment());
+    __println("Format:kCenter         : " + Format:kCenter);
+
+    /* Layout reuses kLeft — its own class-scoped value. */
+    Layout l;
+    __println("Layout default (kLeft) : " + l.flow());
+
     return 0;
 }

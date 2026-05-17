@@ -1227,6 +1227,33 @@ void Codegen::resolveFunctionAliases() {
     }
 }
 
+// Rewrite a class field default that resolves through that class's own
+// nested-enum values into a plain integer literal — see header comment.
+void Codegen::resolveNestedEnumDefaults() {
+    Program& prog = const_cast<Program&>(program_);
+    for (auto& slid : prog.slids) {
+        if (slid.nested_enums.empty()) continue;
+        std::map<std::string, int> scope;
+        for (auto& e : slid.nested_enums)
+            for (int i = 0; i < (int)e.values.size(); i++)
+                scope[e.values[i]] = i;
+        for (auto& f : slid.fields) {
+            if (!f.default_val) continue;
+            int with_v, plain_v;
+            std::map<std::string, int> none;
+            // rewrite only when the class's enum scope was actually needed —
+            // a default that already folds without it is left untouched.
+            if (constExprToInt(*f.default_val, scope, with_v)
+                && !constExprToInt(*f.default_val, none, plain_v)) {
+                auto lit = std::make_unique<IntLiteralExpr>((int64_t)with_v);
+                lit->file_id = f.default_val->file_id;
+                lit->tok = f.default_val->tok;
+                f.default_val = std::move(lit);
+            }
+        }
+    }
+}
+
 void Codegen::emit() {
     out_ << "target triple = \"x86_64-pc-linux-gnu\"\n\n";
 
@@ -1244,6 +1271,10 @@ void Codegen::emit() {
             ns.consts.clear();
         }
     }
+
+    // Fold class-scoped nested-enum values used in field defaults to literals
+    // before any slid/field processing reads the defaults.
+    resolveNestedEnumDefaults();
 
     // Establish the bottom frame of block_const_stack_ — the file/global scope.
     // File-scope const decls land here via collectAndFoldConsts. Each function
@@ -1392,6 +1423,15 @@ void Codegen::emit() {
         for (int i = 0; i < (int)e.values.size(); i++)
             enum_values_[e.values[i]] = i;
         enum_sizes_[e.name] = (int)e.values.size();
+    }
+    // class-scoped nested enums: values are keyed `Class:value`, so they
+    // resolve only as `Class:value` and never leak into file scope.
+    for (auto& slid : program_.slids) {
+        for (auto& e : slid.nested_enums) {
+            for (int i = 0; i < (int)e.values.size(); i++)
+                enum_values_[slid.name + ":" + e.values[i]] = i;
+            enum_sizes_[slid.name + ":" + e.name] = (int)e.values.size();
+        }
     }
 
     // analyze nested functions for all top-level functions (skip templates)
