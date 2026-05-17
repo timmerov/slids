@@ -4334,31 +4334,38 @@ Program Parser::parse() {
 
     // (P1) file-scope function uniqueness — at most one definition per
     // signature. Forward declarations (body == nullptr) are pair-able with a
-    // matching definition and don't count as duplicates.
+    // matching definition and don't count as duplicates. Namespace functions
+    // (program.namespaces[].functions) are keyed by their `ns:name` qualified
+    // form, so `Space:greet` never collides with a global `greet` but two
+    // `Space:greet` of the same signature do.
     {
         struct Site { std::string raw_key; int file_id; int tok; };
         std::map<std::string, Site> sigs;
-        for (auto& fn : program.functions) {
-            if (!fn.body) continue;
-            std::string raw = fn.user_name + "(";
+        auto check = [&](const FunctionDef& fn) {
+            if (!fn.body) return;
+            std::string qname = qualifiedName(fn.namespace_name, fn.user_name);
+            std::string raw = qname + "(";
             for (size_t i = 0; i < fn.params.size(); i++) {
                 raw += fn.params[i].first;
                 if (i < fn.param_mutable.size() && fn.param_mutable[i]) raw += "!mut";
                 raw += ",";
             }
             raw += ")";
-            std::string canon = fn.user_name + "(";
+            std::string canon = qname + "(";
             for (auto& p : fn.params) canon += canonicalType(p.first) + ",";
             canon += ")";
             auto [it, inserted] = sigs.emplace(canon, Site{raw, fn.file_id, fn.tok});
             if (!inserted) {
                 std::string msg = (it->second.raw_key == raw)
-                    ? "Function '" + fn.user_name + "' is redefined with the same signature."
-                    : "Function '" + fn.user_name + "' is redefined with the same signature without qualifiers.";
+                    ? "Function '" + qname + "' is redefined with the same signature."
+                    : "Function '" + qname + "' is redefined with the same signature without qualifiers.";
                 throw CompileError{fn.file_id, fn.tok, msg}
                     .addNote(it->second.file_id, it->second.tok, "First defined here.");
             }
-        }
+        };
+        for (auto& fn : program.functions) check(fn);
+        for (auto& ns : program.namespaces)
+            for (auto& fn : ns.functions) check(fn);
     }
 
     // (P1.5) decl-def `mutable` agreement for free functions. A forward

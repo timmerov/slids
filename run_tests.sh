@@ -28,6 +28,7 @@ SAMPLES=(
     lvalues
     macros
     math1 math2
+    misc
     move
     mutable
     namespace
