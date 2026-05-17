@@ -271,9 +271,9 @@ Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
         if (fit == sit->second.field_index.end())
             errorAtNode(e, "Unknown field '" + fa->field
                 + "' on type '" + stype + "'.");
-        std::string gep = newTmp();
-        out_ << "    " << gep << " = getelementptr %struct." << stype
-             << ", ptr " << addr << ", i32 0, i32 " << fit->second << "\n";
+        // emitFieldGep handles the opaque-base case (runtime offset via
+        // __$ownbase) — a plain %struct GEP would use the wrong static layout.
+        std::string gep = emitFieldGep(stype, addr, fit->second);
         std::string ftype = sit->second.field_types[fit->second];
         if (obj_is_const) ftype = propagateConst(ftype);
         return {gep, ftype};

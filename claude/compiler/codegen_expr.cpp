@@ -431,9 +431,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 error(std::string("Unknown field: " + fa->field));
             int idx = fit->second;
             std::string field_type = llvmType(info.field_types[idx]);
-            std::string gep = newTmp();
-            out_ << "    " << gep << " = getelementptr %struct." << slid_name
-                 << ", ptr " << ptr_val << ", i32 0, i32 " << idx << "\n";
+            std::string gep = emitFieldGep(slid_name, ptr_val, idx);
             std::string tmp = newTmp();
             out_ << "    " << tmp << " = load " << field_type << ", ptr " << gep << "\n";
             return tmp;

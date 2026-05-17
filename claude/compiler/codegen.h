@@ -659,6 +659,11 @@ private:
     // error, no throw. Safe for speculative type queries.
     std::string matchOverload(const std::vector<OverloadEntry>& overloads,
                               const std::vector<std::unique_ptr<Expr>>& args);
+    // Derived→base upcast: true when a slid arg of type `arg` (a class, or a
+    // reference to one) can bind a base-reference parameter `param` (`B^`)
+    // because the arg's class derives from B. Lowest-priority match — every
+    // matcher tries it only after exact/indirect matching fails.
+    bool argUpcastsToParam(const std::string& arg, const std::string& param);
     // Non-throwing type-aware resolution of a namespace-qualified free-function
     // call (`Ns:fn` key already qualified). "" when nothing resolves. Used by
     // the type-query paths; the emit path uses resolveOverloadIn for errors.

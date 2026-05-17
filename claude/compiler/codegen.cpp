@@ -426,6 +426,7 @@ void Codegen::collectFunctionSignatures() {
             if (!bd) break;
             if (bd->is_transport_impl || bd->has_trailing_ellipsis) {
                 exported_symbols_.insert(slid.name + "__$sizeof");
+                exported_symbols_.insert(slid.name + "__$ownbase");
                 break;
             }
             b = bd->base_name;
@@ -1667,6 +1668,9 @@ void Codegen::emit() {
             out_ << "declare void @" << slid.name << "__$dtor(" << self_arg << ")\n";
         if (info.has_private_suffix && !local_methods.count(slid.name + "__$sizeof"))
             out_ << "declare i64 @" << slid.name << "__$sizeof()\n";
+        // a class with an opaque base declares __$ownbase (impl defines it).
+        if (info.has_private_suffix && derivesFromTransportBase(slid.name))
+            out_ << "declare i64 @" << slid.name << "__$ownbase()\n";
         // regular methods: first arg is ptr (self) unless slid is empty
         for (auto& [base, overloads] : method_overloads_) {
             if (base.substr(0, slid.name.size() + 2) != slid.name + "__") continue;
@@ -1910,6 +1914,8 @@ void Codegen::emitNestedFunction(
     if (fn.return_type == "void" && !block_terminated_) {
         emitDtors();
         out_ << "    ret void\n";
+        block_terminated_ = true;   // the ret terminates the block — popScope
+                                    // must not re-emit this scope's dtors.
     }
     popScope();
 
@@ -2246,6 +2252,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid,
         if (return_type == "void" || uses_sret) {
             emitDtors();
             out_ << "    ret void\n";
+            block_terminated_ = true;   // popScope must not re-emit dtors.
         } else {
             error(std::string("Method '" + full_mangled + "' is missing a return statement."));
         }
@@ -2348,6 +2355,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
         if (fn.return_type == "void" || uses_sret) {
             emitDtors();
             out_ << "    ret void\n";
+            block_terminated_ = true;   // popScope must not re-emit dtors.
         } else {
             error(std::string("Function '" + fn.name + "' is missing a return statement."));
         }
@@ -2440,9 +2448,6 @@ std::string Codegen::emitFieldPtr(const std::string& obj_name, const std::string
     if (field_it == info.field_index.end())
         error(std::string("Unknown field '" + field + "' on type '" + slid_name + "'."));
 
-    int idx = field_it->second;
-    std::string gep = newTmp();
-    out_ << "    " << gep << " = getelementptr %struct." << slid_name
-         << ", ptr " << obj_ptr << ", i32 0, i32 " << idx << "\n";
-    return gep;
+    // emitFieldGep handles the opaque-base case (runtime offset via __$ownbase).
+    return emitFieldGep(slid_name, obj_ptr, field_it->second);
 }

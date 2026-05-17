@@ -81,7 +81,8 @@ Codegen::TemplateResolution Codegen::resolveTemplateOverload(
             if (slid_info_.count(substituted)) substituted += "^";
             std::string actual = exprType(*args[i]);
             if (actual.empty()) continue; // can't resolve actual; skip strict check
-            if (!argBindsToParam(actual, substituted)) { match = false; break; }
+            if (!argBindsToParam(actual, substituted)
+                && !argUpcastsToParam(actual, substituted)) { match = false; break; }
         }
         if (!match) continue;
         matches++;
@@ -302,6 +303,18 @@ std::string Codegen::resolveOverloadForCall(
     return resolveOverloadIn(base_mangled, args, it->second);
 }
 
+// Derived→base upcast check — see header. `arg` (a class type, possibly `^`)
+// binds `param` (`B^`) when arg's class derives from B.
+bool Codegen::argUpcastsToParam(const std::string& arg, const std::string& param) {
+    std::string p = canonicalType(param);
+    if (p.empty() || p.back() != '^') return false;       // param must be a reference
+    std::string base = p.substr(0, p.size() - 1);
+    std::string a = canonicalType(arg);
+    if (!a.empty() && a.back() == '^') a.pop_back();        // accept D or D^
+    return !a.empty() && a != base && slid_info_.count(a) > 0
+        && isAncestor(base, a);
+}
+
 // Pure type-match core: canonical-type pass then indirect-type pass over an
 // explicit bucket. Returns the matching mangled name, or "" if none — no
 // arity error, no throw. resolveOverloadIn layers fast paths and diagnostics
@@ -334,6 +347,20 @@ std::string Codegen::matchOverload(
                          : (!at.empty()      ? isIndirectType(at)
                                              : isPointerExpr(*args[i]));
             if (param_ptr != arg_ptr) { match = false; break; }
+        }
+        if (match) return std::get<0>(entry);
+    }
+    // Pass 3: derived→base upcast — lowest priority, tried only after exact
+    // and indirect matching fail, so an exact overload always wins.
+    for (auto& entry : overloads) {
+        auto& ptypes = std::get<1>(entry);
+        if (args.size() < requiredArity(std::get<0>(entry))
+            || args.size() > ptypes.size()) continue;
+        bool match = true;
+        for (int i = 0; i < (int)args.size(); i++) {
+            std::string at = exprType(*args[i]);
+            if (argBindsToParam(at, ptypes[i])) continue;
+            if (!argUpcastsToParam(at, ptypes[i])) { match = false; break; }
         }
         if (match) return std::get<0>(entry);
     }
@@ -927,7 +954,9 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
         // VarExpr: local variable of exact slid type, or type name used as anonymous temp
         if (auto* ve = dynamic_cast<const VarExpr*>(&left)) {
             auto tit = locals_.find(ve->name);
-            if (tit != locals_.end() && tit->second.type == slid_name) return true;
+            if (tit != locals_.end()
+                && (tit->second.type == slid_name
+                    || isAncestor(slid_name, tit->second.type))) return true;
             if (tit == locals_.end() && ve->name == slid_name) return true;
         }
         // DerefExpr: sa^ where sa: SlidType^
@@ -968,7 +997,9 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
                 if (slid_info_.count(t)) r_slid = t;
                 else if (!t.empty() && t.back() == '^' && slid_info_.count(t.substr(0, t.size()-1)))
                     r_slid = t.substr(0, t.size()-1);
-                if (p1_is_slid_ref) return !r_slid.empty() && r_slid == p1_slid;
+                if (p1_is_slid_ref)
+                    return !r_slid.empty()
+                        && (r_slid == p1_slid || isAncestor(p1_slid, r_slid));
                 return r_slid.empty();
             }
         }
@@ -976,13 +1007,14 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
         if (auto* de = dynamic_cast<const DerefExpr*>(&arg)) {
             if (p1_is_slid_ref) {
                 std::string ds = derefSlidName(*de);
-                if (!ds.empty()) return ds == p1_slid;
+                if (!ds.empty()) return ds == p1_slid || isAncestor(p1_slid, ds);
                 if (auto* ve = dynamic_cast<const VarExpr*>(de->operand.get())) {
                     auto tit = locals_.find(ve->name);
                     if (tit != locals_.end()) {
                         std::string t = canonicalType(tit->second.type);
                         if (!t.empty() && t.back() == '^') t.pop_back();
-                        if (slid_info_.count(t)) return t == p1_slid;
+                        if (slid_info_.count(t))
+                            return t == p1_slid || isAncestor(p1_slid, t);
                     }
                 }
             }

@@ -94,11 +94,19 @@ int32 main() {
     String s8 = s2.slice(7, 5);
     println(String + "s8<World>=" + s8);
 
-    __println("sizeof(Format) = " + sizeof(Format));
     Format fmt;
-    //fmt.justify_ = Format:kRightJustify;
-    //fmt = s1;
-    //println(String + "fmt = " + fmt);
+    fmt.justify_ = Format:kRightJustify;
+    fmt.pad_ = '.';
+    fmt.min_width_ = 16;
+    fmt = s2;
+    println(String + "right: [" + fmt + "]");
+    /*
+    fmt.clear();
+    println(fmt + "right: [" + s1 + "]");
+    fmt.clear();
+    fmt.justify_ = Format:kLeftJustify;
+    println(fmt + "right: [" + s1 + "]");
+    */
 
     return 0;
 }

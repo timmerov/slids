@@ -186,6 +186,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
 
         out_ << "    musttail call void @" << slid.name << "__$ctor_body(ptr %self)\n";
         out_ << "    ret void\n";
+        block_terminated_ = true;   // popScope must not emit after the ret.
         popScope();
         out_ << "}\n\n";
     }
@@ -261,8 +262,9 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         if (implicit_ctor_body) emitBlock(*implicit_ctor_body);
         if (!block_terminated_ && explicit_ctor_body) emitBlock(*explicit_ctor_body);
 
-        if (!block_terminated_) out_ << "    ret void\n";
+        // popScope drains this scope's dtors first — they must precede the ret.
         popScope();
+        if (!block_terminated_) out_ << "    ret void\n";
         out_ << "}\n\n";
     }
 
@@ -336,8 +338,9 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
             emitDtorChainCall(info.base_info->name, "%self");
         }
 
-        if (!block_terminated_) out_ << "    ret void\n";
+        // popScope drains this scope's dtors first — they must precede the ret.
         popScope();
+        if (!block_terminated_) out_ << "    ret void\n";
         out_ << "}\n\n";
     }
 
@@ -357,6 +360,22 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         out_ << "    ret i64 %sz0\n";
         out_ << "}\n\n";
     }
+
+    // emit __$ownbase for a class deriving from a transport base — the byte
+    // offset where this class's own fields begin, behind the opaque base.
+    // Defined by the impl (complete layout); consumers declare and call it to
+    // place own-field accesses. Same define/declare split as __$sizeof.
+    if (!slid.has_trailing_ellipsis && !slid_info_[slid.name].has_private_suffix
+        && derivesFromTransportBase(slid.name)) {
+        std::string linkage = isExported(slid.name + "__$ownbase") ? "" : "internal ";
+        out_ << "define " << linkage << "i64 @" << slid.name << "__$ownbase() {\n";
+        out_ << "entry:\n";
+        out_ << "    %ob0 = getelementptr %struct." << slid.name
+             << ", ptr null, i32 0, i32 " << info.base_field_count << "\n";
+        out_ << "    %ob1 = ptrtoint ptr %ob0 to i64\n";
+        out_ << "    ret i64 %ob1\n";
+        out_ << "}\n\n";
+    }
 }
 
 // Copy all fields of slid_name from src_ptr into dst_ptr (synthesized default copy).
@@ -369,6 +388,26 @@ std::vector<std::string> Codegen::fieldTypesOf(const std::string& struct_type) {
 
 std::string Codegen::emitFieldGep(const std::string& struct_type,
                                   const std::string& ptr, int i) {
+    // Opaque-base class (consumer view): own fields sit at a runtime offset
+    // behind the opaque base. address = ptr + __$ownbase() + (static relative
+    // offset of own field i within this TU's own-only %struct.<type>).
+    auto sit = slid_info_.find(struct_type);
+    if (sit != slid_info_.end() && sit->second.has_private_suffix
+        && derivesFromTransportBase(struct_type)) {
+        std::string ob = newTmp();
+        out_ << "    " << ob << " = call i64 @" << struct_type << "__$ownbase()\n";
+        std::string relp = newTmp();
+        out_ << "    " << relp << " = getelementptr %struct." << struct_type
+             << ", ptr null, i32 0, i32 " << i << "\n";
+        std::string rel = newTmp();
+        out_ << "    " << rel << " = ptrtoint ptr " << relp << " to i64\n";
+        std::string off = newTmp();
+        out_ << "    " << off << " = add i64 " << ob << ", " << rel << "\n";
+        std::string gep = newTmp();
+        out_ << "    " << gep << " = getelementptr i8, ptr " << ptr
+             << ", i64 " << off << "\n";
+        return gep;
+    }
     std::string gep = newTmp();
     std::string leading = slid_info_.count(struct_type)
         ? ("%struct." + struct_type)
