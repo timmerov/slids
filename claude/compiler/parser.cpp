@@ -3405,7 +3405,8 @@ SlidDef Parser::parseSlidDef() {
     auto ns_clash = seen_namespaces_.find(slid.name);
     if (ns_clash != seen_namespaces_.end())
         throw CompileError{slid.name_file_id, slid.name_tok,
-            slid.name + " is a namespace, not a class."}
+            "'" + slid.name + "' is a namespace, not a class. Reopen with '"
+                + slid.name + "', no parentheses."}
             .addNote(ns_clash->second.file_id, ns_clash->second.tok,
                 "Namespace declared here.");
 
@@ -3737,7 +3738,8 @@ void Parser::parseNamespace(Program& program) {
     auto cls_clash = seen_classes_.find(ns_name);
     if (cls_clash != seen_classes_.end())
         throw CompileError{file_id_, ns_tok,
-            ns_name + " is a class, not a namespace."}
+            "'" + ns_name + "' is a class, not a namespace. Reopen with '"
+                + ns_name + "()'."}
             .addNote(cls_clash->second.file_id, cls_clash->second.tok,
                 "Class declared here.");
     seen_namespaces_.emplace(ns_name, FieldRef{file_id_, ns_tok});

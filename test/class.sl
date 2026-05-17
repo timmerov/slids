@@ -119,14 +119,14 @@ Base: Derived() {
 // negatives — bodies disabled with `//` so the file compiles. the runner
 // strips the `//` prefixes for the lone live case driven by each marker.
 
-//-EXPECT-ERROR: Simple is a class, not a namespace.
+//-EXPECT-ERROR: 'Simple' is a class, not a namespace. Reopen with 'Simple()'.
 // Simple {
 //     void error() {
 //         __println("Simple is a class, not a namespace.");
 //     }
 // }
 
-//-EXPECT-ERROR: Space is a namespace, not a class.
+//-EXPECT-ERROR: 'Space' is a namespace, not a class. Reopen with 'Space', no parentheses.
 // Space {
 //     void namespace() { }
 // }
