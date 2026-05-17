@@ -30,6 +30,7 @@ SAMPLES=(
     math1 math2
     move
     mutable
+    namespace
     nested
     new_delete
     operators
