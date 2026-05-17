@@ -94,7 +94,10 @@ int32 main() {
     String s8 = s2.slice(7, 5);
     println(String + "s8<World>=" + s8);
 
-    Format fmt = s1;
+    __println("sizeof(Format) = " + sizeof(Format));
+    Format fmt;
+    //fmt.justify_ = Format:kRightJustify;
+    //fmt = s1;
     //println(String + "fmt = " + fmt);
 
     return 0;

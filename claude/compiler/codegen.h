@@ -576,6 +576,10 @@ private:
 
     void emitFrameStruct(const FunctionDef& fn);
     void emitSlidCtorDtor(const SlidDef& slid);
+    // True if the class's base chain includes a transport/opaque class. Such a
+    // class is opaque to consumers, so its field defaults cannot be applied at
+    // a consumer construction site — its __$ctor applies them instead.
+    bool derivesFromTransportBase(const std::string& slid_name) const;
     void emitSlidMethod(const SlidDef& slid,
                         const std::string& method_user_name,
                         const std::string& full_mangled,
@@ -773,7 +777,11 @@ private:
     //   otherwise              → no-op (no work to do)
     // Single source of truth shared with emitConstructAtPtrs and the
     // open-coded ctor sites.
-    void emitCtorCall(const std::string& class_name, const std::string& ptr);
+    // as_base: this is a base sub-object call from a derived ctor — always
+    // construct fully (__$ctor), never the body-only form (which assumes a
+    // construction site applied the field defaults).
+    void emitCtorCall(const std::string& class_name, const std::string& ptr,
+                      bool as_base = false);
     // Inline the synthesized ctor walk: vptr (if any) + base call + own
     // slid-field ctor calls (recursing into implicit slid fields). Used for
     // implicit classes (must_inline_ctor=true) that have no __$ctor symbol.

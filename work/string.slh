@@ -156,13 +156,12 @@ int strcmp(char[] sa, char[] sb, int count);
 
 /* formatted strings. */
 String : Format(
-    int8 justify_ = kAuto,
-    char leading_pad_ = ' ',
-    char trailing_pad_ = ' ',
+    Option justify_ = kAuto,
+    char pad_ = ' ',
     int min_width_ = 0,
     int max_width_ = -1
 ) {
-    enum Options (
+    enum Option (
         kAuto,
         kLeftJustify,
         kRightJustify

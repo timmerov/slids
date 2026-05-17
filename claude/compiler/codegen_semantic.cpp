@@ -158,6 +158,11 @@ void Codegen::resolveSlidInheritanceFor(SlidInfo& info) {
     SlidInfo& base = bit->second;
     resolveSlidInheritanceFor(base); // ensure base's flat layout is built first
     info.base_info = &base;
+    // A class deriving from an incomplete (opaque-layout) base is itself
+    // opaque-layout: the base's size is only known at runtime, so the derived
+    // class's size and field offsets are too. Treat it like an incomplete
+    // class — alloca via __$sizeof, __$sizeof declared (not defined) here.
+    if (base.has_private_suffix) info.has_private_suffix = true;
     // virtual-base validation: a virtual class must have a virtual base.
     if (info.is_virtual_class && !base.is_virtual_class)
         error(std::string("Class '" + info.name

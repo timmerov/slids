@@ -84,6 +84,14 @@ void Codegen::emitDtors() {
     }
 }
 
+bool Codegen::derivesFromTransportBase(const std::string& slid_name) const {
+    auto it = slid_info_.find(slid_name);
+    if (it == slid_info_.end()) return false;
+    for (const SlidInfo* b = it->second.base_info; b; b = b->base_info)
+        if (b->is_transport_impl || b->has_private_suffix) return true;
+    return false;
+}
+
 void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     // find ctor/dtor bodies — either inline or external
     const BlockStmt* explicit_ctor_body = slid.explicit_ctor_body.get();
@@ -141,29 +149,39 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         out_ << "entry:\n";
 
         pushScope();
-        // Private-suffix init: only the closing TU sees the private fields, so
-        // only it emits this prefix. Consumers' __$ctor declares are external;
-        // the closing TU's definition fills them.
-        if (slid.is_transport_impl) {
-            for (int i = info.public_field_count; i < (int)slid.fields.size(); i++) {
-                std::string gep = newTmp();
-                out_ << "    " << gep << " = getelementptr %struct." << slid.name
-                     << ", ptr %self, i32 0, i32 " << i << "\n";
-                std::string val;
-                if (slid.fields[i].default_val) {
-                    val = emitExpr(*slid.fields[i].default_val);
-                } else if (i < (int)info.field_types.size()) {
-                    const std::string& ft = info.field_types[i];
-                    val = (ft == "float" || ft == "float32" || ft == "float64") ? "0.0"
-                        : isIndirectType(ft) ? "null" : "0";
-                } else {
-                    val = "0";
-                }
-                if (i < (int)info.field_types.size()) {
-                    out_ << "    store " << llvmType(info.field_types[i]) << " "
-                         << val << ", ptr " << gep << "\n";
-                }
+        // Recursive descent (Itanium order): construct the base sub-object
+        // fully first, then this class's own field defaults, then __$ctor_body.
+        if (info.base_info)
+            emitCtorCall(info.base_info->name, "%self", /*as_base=*/true);
+
+        // Field-default init that no construction site can do:
+        //  - transport impl: the private suffix — consumers can't see it.
+        //  - opaque-base class: this class's own fields — consumers can't
+        //    offset past the opaque base.
+        // Helper: store field `flat_idx`'s default (own-field index `own_j`).
+        auto initField = [&](int flat_idx, int own_j) {
+            std::string gep = newTmp();
+            out_ << "    " << gep << " = getelementptr %struct." << slid.name
+                 << ", ptr %self, i32 0, i32 " << flat_idx << "\n";
+            if (flat_idx >= (int)info.field_types.size()) return;
+            const std::string& ft = info.field_types[flat_idx];
+            std::string val;
+            if (own_j >= 0 && own_j < (int)slid.fields.size()
+                && slid.fields[own_j].default_val) {
+                val = emitExpr(*slid.fields[own_j].default_val);
+            } else {
+                val = (ft == "float" || ft == "float32" || ft == "float64") ? "0.0"
+                    : isIndirectType(ft) ? "null" : "0";
             }
+            out_ << "    store " << llvmType(ft) << " " << val
+                 << ", ptr " << gep << "\n";
+        };
+        if (slid.is_transport_impl) {
+            for (int i = info.public_field_count; i < (int)slid.fields.size(); i++)
+                initField(i, i);
+        } else if (derivesFromTransportBase(slid.name)) {
+            for (int j = 0; j < n_own; j++)
+                initField(info.base_field_count + vptr_local + j, j);
         }
 
         out_ << "    musttail call void @" << slid.name << "__$ctor_body(ptr %self)\n";
@@ -197,14 +215,11 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
         out_ << "entry:\n";
 
         pushScope();
-        // 1. base call first (Itanium ABI — base ctor runs before our work,
-        //    so our vptr write below overwrites whatever the base wrote)
-        if (info.base_info) {
-            emitCtorCall(info.base_info->name, "%self");
-        }
+        // The base sub-object was constructed by __$ctor before it tail-called
+        // here (Itanium order: base, then our vptr/fields/body).
 
-        // 2. own vptr — every virtual class writes its own vtable pointer
-        //    after the base call, leaving the most-derived ctor's value visible
+        // own vptr — every virtual class writes its own vtable pointer after
+        // the base call, leaving the most-derived ctor's value visible
         if (info.is_virtual_class) {
             std::string vptr_gep = emitFieldGep(slid.name, "%self", 0);
             out_ << "    store ptr @_ZTV" << slid.name << ", ptr " << vptr_gep << "\n";
@@ -329,8 +344,11 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     current_slid_ = "";
     self_ptr_ = "";
 
-    // emit __$sizeof for every locally-complete slid (not for consumer-side declarations)
-    if (!slid.has_trailing_ellipsis) {
+    // emit __$sizeof for every locally-complete slid (not for consumer-side
+    // declarations). A class with an opaque base is not locally complete —
+    // its size is unknown here; the impl TU, where the base is complete,
+    // defines __$sizeof and this TU only declares it.
+    if (!slid.has_trailing_ellipsis && !slid_info_[slid.name].has_private_suffix) {
         std::string linkage = isExported(slid.name + "__$sizeof") ? "" : "internal ";
         out_ << "define " << linkage << "i64 @" << slid.name << "__$sizeof() {\n";
         out_ << "entry:\n";
@@ -714,6 +732,19 @@ void Codegen::emitInitFieldsAtPtrs(const std::string& stype, const std::string& 
     bool is_tuple = isAnonTupleType(stype);
     if (!is_slid && !is_tuple) return;
 
+    // An initializer list cannot place a derived class's fields when a base in
+    // the chain has private/hidden fields — the layout past the opaque base is
+    // not known at the construction site.
+    if (is_slid && (!args.empty() || !overrides.empty())) {
+        auto bit = slid_info_.find(stype);
+        if (bit != slid_info_.end())
+            for (const SlidInfo* b = bit->second.base_info; b; b = b->base_info)
+                if (b->has_private_suffix)
+                    error("An initializer list cannot be used with '" + stype
+                        + "' because its base class '" + b->name
+                        + "' has private fields");
+    }
+
     auto fields = fieldTypesOf(stype);
     int nfields = (int)fields.size();
     if ((int)args.size() > nfields) {
@@ -887,7 +918,8 @@ void Codegen::emitConstructAtPtrs(const std::string& stype, const std::string& p
     emitCtorCall(stype, ptr);
 }
 
-void Codegen::emitCtorCall(const std::string& class_name, const std::string& ptr) {
+void Codegen::emitCtorCall(const std::string& class_name, const std::string& ptr,
+                           bool as_base) {
     auto sit = slid_info_.find(class_name);
     if (sit == slid_info_.end()) return;       // tuple or unknown — no call
     auto& info = sit->second;
@@ -898,7 +930,9 @@ void Codegen::emitCtorCall(const std::string& class_name, const std::string& ptr
         return;
     }
     if (!info.has_explicit_ctor) return;        // no work to do
-    bool use_body = info.is_transport_impl;
+    // A base sub-object must be fully constructed (its own field defaults
+    // applied); only a direct construction site uses the body-only form.
+    bool use_body = info.is_transport_impl && !as_base;
     out_ << "    call void @" << class_name << "__"
          << (use_body ? "$ctor_body" : "$ctor") << "(ptr " << ptr << ")\n";
 }
@@ -910,7 +944,7 @@ void Codegen::emitInlineCtorWalk(const std::string& class_name,
     auto& info = sit->second;
     // 1. base call first (recursive dispatch — may inline or call)
     if (info.base_info) {
-        emitCtorCall(info.base_info->name, ptr);
+        emitCtorCall(info.base_info->name, ptr, /*as_base=*/true);
     }
     // 2. own vptr — every virtual class writes its own vtable pointer
     //    after the base call (Itanium ABI)

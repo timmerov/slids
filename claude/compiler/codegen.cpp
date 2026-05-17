@@ -417,6 +417,19 @@ void Codegen::collectFunctionSignatures() {
             exported_symbols_.insert(slid.name + "__$ctor");
             exported_symbols_.insert(slid.name + "__$sizeof");
         }
+        // A class deriving (transitively) from a transport/incomplete class is
+        // opaque to consumers — they size it at runtime, so the impl TU that
+        // defines its __$sizeof must export it (consumers only declare it).
+        for (std::string b = slid.base_name; !b.empty(); ) {
+            const SlidDef* bd = nullptr;
+            for (auto& s : program_.slids) if (s.name == b) { bd = &s; break; }
+            if (!bd) break;
+            if (bd->is_transport_impl || bd->has_trailing_ellipsis) {
+                exported_symbols_.insert(slid.name + "__$sizeof");
+                break;
+            }
+            b = bd->base_name;
+        }
     }
 }
 
@@ -1583,8 +1596,10 @@ void Codegen::emit() {
         if (slid.is_transport_impl) {
             local_methods.insert(slid.name + "__$sizeof");
         }
-        // all non-declaration slids define __$sizeof locally
-        if (!slid.has_trailing_ellipsis) local_methods.insert(slid.name + "__$sizeof");
+        // all non-declaration slids define __$sizeof locally — except a class
+        // with an opaque base, whose __$sizeof is defined by the impl TU.
+        if (!slid.has_trailing_ellipsis && !slid_info_[slid.name].has_private_suffix)
+            local_methods.insert(slid.name + "__$sizeof");
         for (auto& m : slid.methods) {
             if (!m.body) continue;
             std::string base = slid.name + "__" + m.name;

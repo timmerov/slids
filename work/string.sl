@@ -427,12 +427,13 @@ String : Format() {
     rhs may be self.
     */
     op=(String^ rhs) {
-        if (rhs == ^self) {
+        /*if (rhs == ^self) {
             String temp = rhs^;
             self = temp;
             return;
-        }
+        }*/
 
-        self = String + "[" + rhs^ + "]";
+        //String s = String + "[" + rhs^ + "]";
+        //String:set(s.storage_, s.size_);
     }
 }
