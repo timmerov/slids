@@ -583,6 +583,13 @@ struct SwitchStmt : Stmt {
 
 // --- Constants ---
 
+// Build the slids-level name of a namespaced declaration: `ns:name` when it
+// lives inside a namespace block, the bare `name` otherwise. Free functions
+// and consts are keyed by this throughout codegen.
+inline std::string qualifiedName(const std::string& ns, const std::string& name) {
+    return ns.empty() ? name : ns + ":" + name;
+}
+
 // const [type] name = expr;
 //   declared_type empty when inferred from rhs.
 //   substitution-only: never emits storage or a link-time symbol.

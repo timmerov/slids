@@ -821,8 +821,7 @@ void Codegen::collectAndFoldConsts() {
     auto& global_frame = block_const_stack_.front();
     for (auto& cd : program_.consts) {
         // a const declared inside a namespace is keyed `ns:name`.
-        std::string key = cd.namespace_name.empty()
-            ? cd.name : cd.namespace_name + ":" + cd.name;
+        std::string key = qualifiedName(cd.namespace_name, cd.name);
         if (global_frame.count(key))
             errorAtNodeWithNote(*cd.rhs,
                 "Global const '" + key + "' is already declared.",
@@ -850,8 +849,7 @@ void Codegen::collectAndFoldConsts() {
 
     std::set<std::string> cycle;
     for (auto& cd : program_.consts) {
-        std::string key = cd.namespace_name.empty()
-            ? cd.name : cd.namespace_name + ":" + cd.name;
+        std::string key = qualifiedName(cd.namespace_name, cd.name);
         if (global_frame[key].slid_type.empty()) {
             cycle.clear();
             foldConstDef(cd, "", cycle);
@@ -876,9 +874,8 @@ void Codegen::foldConstDef(const ConstDef& cd,
     ConstEntry final_e = applyConstDeclaredType(cd, folded);
     cycle.erase(key);
     if (slid_scope.empty()) {
-        std::string key = cd.namespace_name.empty()
-            ? cd.name : cd.namespace_name + ":" + cd.name;
-        block_const_stack_.front()[key] = final_e;
+        std::string ns_key = qualifiedName(cd.namespace_name, cd.name);
+        block_const_stack_.front()[ns_key] = final_e;
     }
     else slid_consts_[slid_scope][cd.name] = final_e;
 }

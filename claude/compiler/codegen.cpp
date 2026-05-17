@@ -283,8 +283,7 @@ void Codegen::collectFunctionSignatures() {
         // `= import` functions emit/reference the bare C symbol — no mangling.
         // a namespace function is keyed `ns:name` on the slids side; its emit
         // symbol is unchanged (the bare C symbol for `= import`).
-        std::string slids_name = fn.namespace_name.empty() ? fn.name
-                               : fn.namespace_name + ":" + fn.name;
+        std::string slids_name = qualifiedName(fn.namespace_name, fn.name);
         // emit symbol: bare C name for `= import`; for a slids namespace
         // function, mangle a `:`-free base (`:` is not LLVM-symbol-safe).
         std::string emit_base = slids_name;
@@ -1456,8 +1455,7 @@ void Codegen::emit() {
         if (has_body.count(fn.name)) continue; // defined locally — no declare needed
 
         // use the mangled name from free_func_overloads_ for correct quoting and overload suffix
-        std::string slids_name = fn.namespace_name.empty() ? fn.name
-            : fn.namespace_name + ":" + fn.name;
+        std::string slids_name = qualifiedName(fn.namespace_name, fn.name);
         auto foit = free_func_overloads_.find(slids_name);
         if (foit == free_func_overloads_.end()) continue;
         for (auto& [mangled, ptypes, _pm, _pmt, _fid] : foit->second) {
@@ -2212,8 +2210,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
 
     // find mangled name (may differ from fn.name when multiple overloads exist;
     // a namespace function is keyed `ns:name`).
-    std::string slids_name = fn.namespace_name.empty() ? fn.name
-                           : fn.namespace_name + ":" + fn.name;
+    std::string slids_name = qualifiedName(fn.namespace_name, fn.name);
     std::string emit_name = slids_name;
     auto foit = free_func_overloads_.find(slids_name);
     if (foit != free_func_overloads_.end()) {
