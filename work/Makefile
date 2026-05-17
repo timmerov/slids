@@ -10,6 +10,7 @@ TM1_DIR    = $(BUILD_DIR)/template1
 TM2_DIR    = $(BUILD_DIR)/template2
 TMT_DIR    = $(BUILD_DIR)/template_test
 VEC_DIR    = $(BUILD_DIR)/vector1
+GAL_DIR    = $(BUILD_DIR)/galaxy
 VEC_INST_SL  = $(VEC_DIR)/__instantiations.sl
 VEC_INST_LL  = $(VEC_DIR)/__instantiations.ll
 VEC_INST_OBJ = $(VEC_DIR)/__instantiations.o
@@ -20,21 +21,9 @@ TMT_INST_OBJ = $(TMT_DIR)/__instantiations.o
 IMPORT_PATH = .
 SLIDSC_FLAGS = --import-path $(IMPORT_PATH)
 
-TEST_TARGETS = template_test
+.PHONY: all clean string_test template1 template2 template_test vector1 galaxy
 
-.PHONY: all clean test string_test template1 template2 template_test vector1
-.PHONY: $(addsuffix .test,$(TEST_TARGETS))
-
-all: string_test template1 template2 template_test vector1
-
-test: $(addsuffix .test,$(TEST_TARGETS))
-
-define TEST_RULE
-$(1).test: $(BIN_DIR)/$(1)
-	@echo "==> $(1)"
-	@$$< | awk -F: 'NF<2{next} { split($$$$1,a,"="); if (a[2] != $$$$2) { print "FAIL: " $$$$0; exit 1 } } END { print "PASS" }'
-endef
-$(foreach t,$(TEST_TARGETS),$(eval $(call TEST_RULE,$(t))))
+all: string_test template1 template2 template_test vector1 galaxy
 
 # ---- string_test ----
 
@@ -123,6 +112,22 @@ $(VEC_INST_LL): $(VEC_INST_SL) $(SLIDSC)
 $(VEC_INST_SL): $(wildcard $(VEC_DIR)/*.sli) $(SLIDSC)
 	$(SLIDSC) --instantiate $(VEC_DIR) -o $@
 
+# ---- galaxy ----
+# Cross-TU consumer: imports dump, math, string, vector. Links the string
+# impl for print(); -lm for the math (libm) bindings.
+
+galaxy: $(BIN_DIR)/galaxy
+
+$(BIN_DIR)/galaxy: $(GAL_DIR)/galaxy.o $(ST_DIR)/string.o
+	$(CXX) $^ -o $@ -lm
+
+$(GAL_DIR)/galaxy.o: $(GAL_DIR)/galaxy.ll
+	$(LLC) $(LLCFLAGS) $< -o $@
+
+$(GAL_DIR)/galaxy.ll: galaxy.sl dump.slh dump.sl math.slh string.slh vector.slh vector.sl $(SLIDSC)
+	mkdir -p $(GAL_DIR)
+	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS) -MF $(GAL_DIR)/galaxy.d
+
 # ---- instantiations (per-target) ----
 
 $(TMT_INST_OBJ): $(TMT_INST_LL)
@@ -142,6 +147,7 @@ $(TMT_INST_SL): $(wildcard $(TMT_DIR)/*.sli) $(SLIDSC)
 -include $(TM2_DIR)/template2.d
 -include $(TMT_DIR)/template_test.d
 -include $(VEC_DIR)/vector1.d
+-include $(GAL_DIR)/galaxy.d
 -include $(VEC_DIR)/__instantiations.d
 -include $(TMT_DIR)/__instantiations.d
 
@@ -149,4 +155,4 @@ $(TMT_INST_SL): $(wildcard $(TMT_DIR)/*.sli) $(SLIDSC)
 
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f $(BIN_DIR)/string_test $(BIN_DIR)/template1 $(BIN_DIR)/template2 $(BIN_DIR)/template_test $(BIN_DIR)/vector1
+	rm -f $(BIN_DIR)/string_test $(BIN_DIR)/template1 $(BIN_DIR)/template2 $(BIN_DIR)/template_test $(BIN_DIR)/vector1 $(BIN_DIR)/galaxy

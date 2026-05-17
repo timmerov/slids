@@ -1,51 +1,35 @@
 /*
 interop with the C math library (libm).
+
+link option: -lm
+
 bindings for the float64 and float32 functions of <math.h>.
+
 Excluded: the classification entries (isnan / isinf / signbit / fpclassify /
 isfinite / isnormal) — they are type-generic macros, not linkable symbols —
 and nexttoward / nexttowardf, whose second argument is C `long double`,
 which has no slids type.
 */
 
-/* math namespace. */
+/* constants. */
 math {
-    const float64 kPi64 = 3.14;
-    const float32 kPi32 = 3.14;
-    const float kPi = 3.14;
-
-    /* import functions individually. */
-    float64 sin(float64 x) = import;
-    float32 sinf(float32 x) = import;
-
-    /* import block of functions. */
-    import {
-        float64 cos(float64 x);
-        float32 cosf(float32 x);
-    }
-
-    /* alias them after defined. */
-    alias sin = sinf;
-    alias cos = cosf;
+    const float64 kPi64 = 3.14159265358979323846264338327950288419716939937510;
+    const float32 kPi32 = 3.14159265358979323846264338327950288419716939937510;
+    const float kPi = 3.14159265358979323846264338327950288419716939937510;
 }
 
-/*
-reopen math namespace with import shorthand.
-this:
-    math import { ... }
-desugars to:
-    math { import { ... } }
-*/
+/* imported functions. */
 math import {
     /* --- trigonometric --- */
-    //float64 sin(float64 x);
-    //float64 cos(float64 x);
-    //float32 sinf(float32 x);
-    //float32 cosf(float32 x);
+    float64 sin(float64 x);
+    float64 cos(float64 x);
     float64 tan(float64 x);
     float64 asin(float64 x);
     float64 acos(float64 x);
     float64 atan(float64 x);
     float64 atan2(float64 y, float64 x);
+    float32 sinf(float32 x);
+    float32 cosf(float32 x);
     float32 tanf(float32 x);
     float32 asinf(float32 x);
     float32 acosf(float32 x);
@@ -165,9 +149,11 @@ math import {
     float32 nanf(char[] tag);
 }
 
-/* reopen math namespace for aliases. */
+/* aliases. */
 math {
     /* --- trigonometric --- */
+    alias sin = sinf;
+    alias cos = cosf;
     alias tan = tanf;
     alias asin = asinf;
     alias acos = acosf;
@@ -238,29 +224,3 @@ math {
     /* nan and nanf both take char[] — identical signature, cannot be aliased. */
 }
 
-int32 main() {
-
-    {
-        angle = math:kPi64/2.0/3.0;
-        x = math:cos(angle);
-        y = math:sin(angle);
-        __println(##type(x) + " x = " + x);
-        __println(##type(y) + " y = " + y);
-    }
-    {
-        float32 angle = math:kPi32/2.0/3.0;
-        float32 x = math:cosf(angle);
-        float32 y = math:sinf(angle);
-        __println(##type(x) + " x = " + x);
-        __println(##type(y) + " y = " + y);
-    }
-    {
-        float32 angle = math:kPi32/2.0/3.0;
-        float32 x = math:cos(angle);
-        float32 y = math:sin(angle);
-        __println(##type(x) + " x = " + x);
-        __println(##type(y) + " y = " + y);
-    }
-
-    return 0;
-}
