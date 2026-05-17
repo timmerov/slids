@@ -302,6 +302,63 @@ std::string Codegen::resolveOverloadForCall(
     return resolveOverloadIn(base_mangled, args, it->second);
 }
 
+// Pure type-match core: canonical-type pass then indirect-type pass over an
+// explicit bucket. Returns the matching mangled name, or "" if none — no
+// arity error, no throw. resolveOverloadIn layers fast paths and diagnostics
+// on top; type-query callers use it directly without risking a throw.
+std::string Codegen::matchOverload(
+    const std::vector<OverloadEntry>& overloads,
+    const std::vector<std::unique_ptr<Expr>>& args)
+{
+    // Pass 1: canonical type match (const-stripping)
+    for (auto& entry : overloads) {
+        auto& ptypes = std::get<1>(entry);
+        if (args.size() < requiredArity(std::get<0>(entry))
+            || args.size() > ptypes.size()) continue;
+        bool match = true;
+        for (int i = 0; i < (int)args.size(); i++) {
+            if (!argBindsToParam(exprType(*args[i]), ptypes[i])) { match = false; break; }
+        }
+        if (match) return std::get<0>(entry);
+    }
+    // Pass 2: indirect-type match (pointer vs scalar)
+    for (auto& entry : overloads) {
+        auto& ptypes = std::get<1>(entry);
+        if (args.size() < requiredArity(std::get<0>(entry))
+            || args.size() > ptypes.size()) continue;
+        bool match = true;
+        for (int i = 0; i < (int)args.size(); i++) {
+            bool param_ptr = isIndirectType(ptypes[i]);
+            std::string at = exprType(*args[i]);
+            bool arg_ptr = (at == "nullptr") ? true
+                         : (!at.empty()      ? isIndirectType(at)
+                                             : isPointerExpr(*args[i]));
+            if (param_ptr != arg_ptr) { match = false; break; }
+        }
+        if (match) return std::get<0>(entry);
+    }
+    return "";
+}
+
+// Non-throwing type-aware resolution of a namespace-qualified free-function
+// call. `qname` is the already-qualified `Ns:fn` key. "" when nothing
+// resolves. The emit path uses resolveOverloadIn instead, for rich errors.
+std::string Codegen::resolveQualifiedFreeCall(
+    const std::string& qname,
+    const std::vector<std::unique_ptr<Expr>>& args)
+{
+    auto it = free_func_overloads_.find(qname);
+    if (it == free_func_overloads_.end() || it->second.empty()) return "";
+    auto& bucket = it->second;
+    if (bucket.size() == 1) {
+        if (args.size() >= requiredArity(std::get<0>(bucket[0]))
+            && args.size() <= std::get<1>(bucket[0]).size())
+            return std::get<0>(bucket[0]);
+        return "";
+    }
+    return matchOverload(bucket, args);
+}
+
 // Core overload picker over an explicit bucket — shared by method calls
 // (method_overloads_) and nested-function calls (nested_func_overloads_).
 std::string Codegen::resolveOverloadIn(
@@ -336,38 +393,14 @@ std::string Codegen::resolveOverloadIn(
         rejectConstToMutable(display(), args, overloads[0]);
         return std::get<0>(overloads[0]);
     }
-    // Pass 1: canonical type match (const-stripping)
-    for (auto& entry : overloads) {
-        auto& ptypes = std::get<1>(entry);
-        if (args.size() < requiredArity(std::get<0>(entry))
-            || args.size() > ptypes.size()) continue;
-        bool match = true;
-        for (int i = 0; i < (int)args.size(); i++) {
-            if (!argBindsToParam(exprType(*args[i]), ptypes[i])) { match = false; break; }
-        }
-        if (match) {
-            rejectConstToMutable(display(), args, entry);
-            return std::get<0>(entry);
-        }
-    }
-    // Pass 2: indirect-type match (pointer vs scalar)
-    for (auto& entry : overloads) {
-        auto& ptypes = std::get<1>(entry);
-        if (args.size() < requiredArity(std::get<0>(entry))
-            || args.size() > ptypes.size()) continue;
-        bool match = true;
-        for (int i = 0; i < (int)args.size(); i++) {
-            bool param_ptr = isIndirectType(ptypes[i]);
-            std::string at = exprType(*args[i]);
-            bool arg_ptr = (at == "nullptr") ? true
-                         : (!at.empty()      ? isIndirectType(at)
-                                             : isPointerExpr(*args[i]));
-            if (param_ptr != arg_ptr) { match = false; break; }
-        }
-        if (match) {
-            rejectConstToMutable(display(), args, entry);
-            return std::get<0>(entry);
-        }
+    // Type-aware pick: canonical-type then indirect-type passes.
+    if (std::string m = matchOverload(overloads, args); !m.empty()) {
+        for (auto& entry : overloads)
+            if (std::get<0>(entry) == m) {
+                rejectConstToMutable(display(), args, entry);
+                break;
+            }
+        return m;
     }
     // Arity matched but no overload's parameter types accept the arguments.
     // Fail loudly rather than returning the bare base (which can alias a
@@ -567,6 +600,17 @@ std::string Codegen::exprSlidType(const Expr& expr) {
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
         // slid ctor call: SlidName(args) → fresh SlidName temp
         if (slid_info_.count(ce->callee)) return ce->callee;
+        // namespace-qualified free-function call: ns:fn(args)
+        if (!ce->qualifier.empty() && ce->qualifier != "::"
+            && !slid_info_.count(ce->qualifier)) {
+            std::string m = resolveQualifiedFreeCall(
+                qualifiedName(ce->qualifier, ce->callee), ce->args);
+            if (!m.empty()) {
+                auto rit = func_return_types_.find(m);
+                if (rit != func_return_types_.end() && slid_info_.count(rit->second))
+                    return rit->second;
+            }
+        }
         if (std::string nm = nestedCallMangled(ce->callee, ce->args); !nm.empty()) {
             const std::string& rt = func_return_types_[nm];
             if (slid_info_.count(rt)) return rt;
@@ -769,6 +813,16 @@ std::string Codegen::exprType(const Expr& expr) {
         return "";
     }
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        // namespace-qualified free-function call: ns:fn(args)
+        if (!ce->qualifier.empty() && ce->qualifier != "::"
+            && !slid_info_.count(ce->qualifier)) {
+            std::string m = resolveQualifiedFreeCall(
+                qualifiedName(ce->qualifier, ce->callee), ce->args);
+            if (!m.empty()) {
+                auto rit = func_return_types_.find(m);
+                if (rit != func_return_types_.end()) return rit->second;
+            }
+        }
         if (std::string nm = nestedCallMangled(ce->callee, ce->args); !nm.empty())
             return func_return_types_[nm];
         // implicit-self method call — resolved the same way emitExpr does.

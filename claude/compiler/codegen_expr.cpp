@@ -703,11 +703,14 @@ std::string Codegen::emitExpr(const Expr& expr) {
         if (!call->qualifier.empty() && call->qualifier != "::") {
             auto sit = slid_info_.find(call->qualifier);
             if (sit == slid_info_.end()) {
-                // namespace-qualified free-function call: ns:fn(args)
+                // namespace-qualified free-function call: ns:fn(args).
+                // Type-aware overload pick so an alias-merged set (e.g.
+                // `math:sin` carrying both sin and sinf) dispatches by arg type.
                 std::string nm = call->qualifier + ":" + call->callee;
-                std::string mangled = resolveFreeFunctionMangledName(nm, call->args.size());
-                if (mangled.empty())
+                auto nsit = free_func_overloads_.find(nm);
+                if (nsit == free_func_overloads_.end() || nsit->second.empty())
                     error(std::string("Unknown slid or namespace: " + call->qualifier));
+                std::string mangled = resolveOverloadIn(nm, call->args, nsit->second);
                 padCallArgs(call->args, call->args_padded, mangled);
                 auto rit = func_return_types_.find(mangled);
                 auto& ptypes = func_param_types_[mangled];
@@ -2434,8 +2437,8 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
         if (!ce->qualifier.empty() && ce->qualifier != "::"
             && !slid_info_.count(ce->qualifier)) {
-            std::string m = resolveFreeFunctionMangledName(
-                ce->qualifier + ":" + ce->callee, ce->args.size());
+            std::string m = resolveQualifiedFreeCall(
+                qualifiedName(ce->qualifier, ce->callee), ce->args);
             if (!m.empty()) {
                 const std::string& rt = func_return_types_[m];
                 return slid_info_.count(rt) ? "ptr" : llvmType(rt);
@@ -2804,8 +2807,8 @@ std::string Codegen::inferSlidType(const Expr& expr) {
         // namespace-qualified free-function call: ns:fn(args)
         if (!ce->qualifier.empty() && ce->qualifier != "::"
             && !slid_info_.count(ce->qualifier)) {
-            std::string m = resolveFreeFunctionMangledName(
-                ce->qualifier + ":" + ce->callee, ce->args.size());
+            std::string m = resolveQualifiedFreeCall(
+                qualifiedName(ce->qualifier, ce->callee), ce->args);
             if (!m.empty()) return func_return_types_[m];
         }
         if (std::string nm = nestedCallMangled(ce->callee, ce->args); !nm.empty())

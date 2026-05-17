@@ -3779,6 +3779,20 @@ void Parser::parseNamespace(Program& program) {
             while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof)
                 parseImportDecl();
             expect(TokenType::kRBrace, "Expected '}'");
+        } else if (peek().type == TokenType::kAlias) {
+            // function alias: `alias <name> = <target>;` — additive overload
+            // merge, resolved in codegen. Recorded on the Program tagged with
+            // this namespace; lhs and rhs are looked up qualified by it.
+            advance(); // 'alias'
+            AliasDef ad;
+            ad.namespace_name = ns_name;
+            ad.file_id = file_id_;
+            ad.tok = pos_;
+            ad.name = expect(TokenType::kIdentifier, "Expected alias name after 'alias'").value;
+            expect(TokenType::kEquals, "Expected '=' after alias name");
+            ad.target = expect(TokenType::kIdentifier, "Expected a function name after '='").value;
+            expect(TokenType::kSemicolon, "Expected ';' after alias declaration");
+            program.aliases.push_back(std::move(ad));
         } else {
             // a slids namespace function: `ret f(params) = import;` (foreign) or
             // `ret f(params) { body }` (slids). parseFunctionDef handles both.

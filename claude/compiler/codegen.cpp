@@ -1194,6 +1194,39 @@ void Codegen::collectStringConstants() {
             for (auto& stmt : fn.body->stmts) collect(*stmt);
 }
 
+// Apply `alias <name> = <target>;` declarations. Each alias copies the
+// target's free_func_overloads_ entries under the alias name, both keys
+// qualified by the enclosing namespace. Additive: the alias name's overload
+// set is extended (or created, for a fresh name). Runs after
+// collectFunctionSignatures so every target signature is known.
+void Codegen::resolveFunctionAliases() {
+    for (auto& a : program_.aliases) {
+        std::string target_key = qualifiedName(a.namespace_name, a.target);
+        std::string alias_key  = qualifiedName(a.namespace_name, a.name);
+        auto tit = free_func_overloads_.find(target_key);
+        if (tit == free_func_overloads_.end() || tit->second.empty())
+            throw CompileError{a.file_id, a.tok, finalizeErrorMsg(
+                "Alias target '" + a.target + "' is not a function in this scope")};
+        // Copy the target's entries before touching dst — alias_key may equal
+        // target_key (a self-alias), in which case dst and tit->second alias.
+        std::vector<OverloadEntry> src = tit->second;
+        auto& dst = free_func_overloads_[alias_key];
+        for (auto& entry : src) {
+            std::vector<std::string> sig;
+            for (auto& t : std::get<1>(entry)) sig.push_back(canonicalType(t));
+            for (auto& existing : dst) {
+                std::vector<std::string> esig;
+                for (auto& t : std::get<1>(existing)) esig.push_back(canonicalType(t));
+                if (esig == sig)
+                    throw CompileError{a.file_id, a.tok, finalizeErrorMsg(
+                        "Alias '" + a.name + "' is redefined with the same "
+                        "signature as an existing overload of that name")};
+            }
+            dst.push_back(entry);
+        }
+    }
+}
+
 void Codegen::emit() {
     out_ << "target triple = \"x86_64-pc-linux-gnu\"\n\n";
 
@@ -1262,6 +1295,7 @@ void Codegen::emit() {
     markImportableClasses();
     validatePureSlots();
     collectFunctionSignatures();
+    resolveFunctionAliases();
     scanForSlidTemplateUses();
     scanForTemplateFunctionUses();
 

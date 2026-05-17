@@ -783,6 +783,19 @@ struct NamespaceDef {
     int tok = 0;
 };
 
+// A function alias — `alias <name> = <target>;`. Additive: `name` gains
+// `target`'s overload(s) without removing `target` itself. Resolved in codegen
+// after function signatures are collected (the rhs may be forward-declared).
+// `namespace_name` is the enclosing namespace ("" at file scope); both `name`
+// and `target` are looked up qualified by it.
+struct AliasDef {
+    std::string name;            // lhs — the alias
+    std::string target;          // rhs — the aliased function
+    std::string namespace_name;  // enclosing namespace, empty at file scope
+    int file_id = 0;
+    int tok = 0;                 // token index of the alias name (diagnostics)
+};
+
 struct Program {
     std::vector<EnumDef> enums;
     std::vector<SlidDef> slids;
@@ -791,6 +804,7 @@ struct Program {
     std::vector<ConstDef> consts;                   // program-scope const decls (no storage)
     std::vector<GlobalDef> globals;                 // global slid declarations (file/class/function-internal)
     std::vector<NamespaceDef> namespaces;           // declared namespace blocks
+    std::vector<AliasDef> aliases;                   // function aliases (alias x = y;)
 
     std::vector<std::string> imported_headers; // resolved .slh paths, for -MF dep output
     std::map<std::string, std::string> slid_modules; // slid name -> module that provides it

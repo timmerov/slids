@@ -24,8 +24,8 @@ math {
     }
 
     /* alias them after defined. */
-    //alias sin = sinf;
-    //alias cos = cosf;
+    alias sin = sinf;
+    alias cos = cosf;
 }
 
 /*
@@ -167,7 +167,7 @@ math import {
 
 /* reopen math namespace for aliases. */
 math {
-    //alias tan = tanf;
+    alias tan = tanf;
 }
 
 int32 main() {
@@ -186,13 +186,13 @@ int32 main() {
         __println(##type(x) + " x = " + x);
         __println(##type(y) + " y = " + y);
     }
-    /*{
+    {
         float32 angle = math:kPi32/2.0/3.0;
         float32 x = math:cos(angle);
         float32 y = math:sin(angle);
         __println(##type(x) + " x = " + x);
         __println(##type(y) + " y = " + y);
-    }*/
+    }
 
     return 0;
 }

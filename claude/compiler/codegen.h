@@ -444,6 +444,11 @@ private:
 
     void collectStringConstants();
     void collectFunctionSignatures();
+    // Apply `alias <name> = <target>;` declarations: copy each target's
+    // free_func_overloads_ entries under the alias name. Additive — the alias
+    // name's overload set is extended. Runs after collectFunctionSignatures so
+    // every target signature is known regardless of source order.
+    void resolveFunctionAliases();
     // For each class field declared in the shape `name = expr` (no type),
     // fold the default expression and derive the field's type from the
     // folded value. Runs after `collectAndFoldConsts` (which populates
@@ -639,6 +644,16 @@ private:
     std::string resolveOverloadIn(const std::string& base_mangled,
                                   const std::vector<std::unique_ptr<Expr>>& args,
                                   const std::vector<OverloadEntry>& overloads);
+    // Pure type-match core of resolveOverloadIn: canonical-type pass then
+    // indirect-type pass. Returns the matching mangled name or "" — no arity
+    // error, no throw. Safe for speculative type queries.
+    std::string matchOverload(const std::vector<OverloadEntry>& overloads,
+                              const std::vector<std::unique_ptr<Expr>>& args);
+    // Non-throwing type-aware resolution of a namespace-qualified free-function
+    // call (`Ns:fn` key already qualified). "" when nothing resolves. Used by
+    // the type-query paths; the emit path uses resolveOverloadIn for errors.
+    std::string resolveQualifiedFreeCall(const std::string& qname,
+                                         const std::vector<std::unique_ptr<Expr>>& args);
     // Number of non-defaulted (required) parameters of a registered function:
     // total params minus its trailing defaulted-param count.
     size_t requiredArity(const std::string& mangled) const;
