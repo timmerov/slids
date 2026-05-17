@@ -43,7 +43,7 @@ NOT ALLOWED: method shares its enclosing class's name (a1).
 Class scope merges name + body; the class name is bound twice.
 */
 Cls02(int x_ = 0) { }
-Cls02 {
+Cls02() {
     // method name equals enclosing class name — class scope merges name + body
     // int Cls02() { return 0; }
 }
@@ -83,10 +83,10 @@ Current compiler emits duplicate LLVM symbol — llc fails. Once the
 parser-level (P1) ban lands the duplicate becomes a slidsc error.
 */
 Cls07(int x_ = 0) { }
-Cls07 {
+Cls07() {
     void bar07() { }
 }
-Cls07 {
+Cls07() {
     // duplicate method across reopens — same name and signature
     // void bar07() { }
 }

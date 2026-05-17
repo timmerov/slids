@@ -100,7 +100,7 @@ int readPlain(int^ p) { return p^; }
 // DeclDefMethod(int x_ = 0) {
 //     void set(mutable int^ p);
 // }
-// DeclDefMethod {
+// DeclDefMethod() {
 //     void set(int^ p) { }
 // }
 

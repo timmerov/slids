@@ -30,7 +30,6 @@ struct SlidInfo {
     bool has_private_suffix = false;  // class has private fields after `...` (consumer view: layout opaque, alloca size queried via __$sizeof)
     bool is_transport_impl = false; // impl side: emit __$pinit, treat as complete locally
     bool is_empty = false;         // class with () but zero fields: methods/ctor/dtor take no self
-    bool is_namespace = false;     // declared as `Name { ... }` only — non-instantiable, called as Name:fn()
     int public_field_count = 0;    // number of public fields before private ones (for __$pinit)
     int64_t sizeof_override = 0;   // >0: use this value for sizeof()
     int64_t padding_bytes = 0;     // extra opaque bytes appended after known fields in struct type
@@ -338,6 +337,9 @@ private:
     std::string break_label_;
     std::string continue_label_;
     std::string current_slid_;
+    // namespace of the function body currently being emitted ("" outside a
+    // namespace) — an unqualified call resolves to a sibling member first.
+    std::string current_namespace_;
     // `self` has dual representation. `locals_["self"]` carries the type
     // (current_slid_) for type-aware queries (inferSlidType, op-method
     // dispatch, field lookup) and is set once at method/ctor/dtor entry.
@@ -579,8 +581,11 @@ private:
     // is not a known free function. Tries the bare name first (single-overload
     // fast path where mangled == base), then falls back to picking an entry
     // from free_func_overloads_ that matches the argument count.
+    // force_global skips the namespace-local lookup — used by `::`-qualified
+    // calls, which mean "the global scope, ignore the enclosing namespace".
     std::string resolveFreeFunctionMangledName(const std::string& name,
-                                               size_t arg_count) const;
+                                               size_t arg_count,
+                                               bool force_global = false) const;
     // Mangling helpers — single source of truth. Mangling is unconditional:
     // every free function gets a __<paramToken> suffix per parameter, every
     // method gets <Slid>__<method>__<paramToken>...  Carve-outs:

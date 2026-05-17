@@ -109,11 +109,9 @@ void Codegen::collectSlids() {
         }
         // empty class: has () but no fields, not incomplete. methods/ctor/dtor take no self.
         info.is_empty = info.field_types.empty() && !info.has_private_suffix && !info.is_transport_impl;
-        // namespace: declared as `Name { ... }` only — non-instantiable, called as Name:fn()
-        info.is_namespace = slid.is_namespace;
         // _() and ~() must be declared together or both auto-generated. Declaring
-        // only one is a compile error. (Namespaces have no instances — skip.)
-        if (!info.is_namespace && info.has_explicit_ctor != info.has_dtor) {
+        // only one is a compile error.
+        if (info.has_explicit_ctor != info.has_dtor) {
             const char* present = info.has_explicit_ctor ? "_" : "~";
             const char* missing = info.has_explicit_ctor ? "~" : "_";
             error(std::string("Class '" + slid.name
@@ -158,8 +156,6 @@ void Codegen::resolveSlidInheritanceFor(SlidInfo& info) {
         error(std::string("Base class '" + info.base_name
             + "' of class '" + info.name + "' is not defined."));
     SlidInfo& base = bit->second;
-    if (base.is_namespace)
-        error(std::string("Cannot inherit from namespace '" + info.base_name + "'."));
     resolveSlidInheritanceFor(base); // ensure base's flat layout is built first
     info.base_info = &base;
     // virtual-base validation: a virtual class must have a virtual base.
@@ -515,7 +511,6 @@ void Codegen::synthesizeFieldDtors() {
     // so emitDtors schedules the call and emitSlidCtorDtor emits a synthetic
     // body containing only the field-destruction loop.
     for (auto& [name, info] : slid_info_) {
-        if (info.is_namespace) continue;
         if (info.has_dtor) continue;
         bool owns_vptr = info.is_virtual_class && info.base_info == nullptr;
         int vptr_local = owns_vptr ? 1 : 0;
@@ -540,7 +535,7 @@ void Codegen::synthesizeCtorNeeds() {
         changed = false;
         for (auto& [name, info] : slid_info_) {
             if (info.needs_ctor_fn) continue;
-            if (info.is_namespace || info.is_empty) continue;
+            if (info.is_empty) continue;
             bool need = info.has_explicit_ctor
                 || info.has_dtor
                 || info.is_transport_impl
@@ -825,15 +820,18 @@ void Codegen::collectAndFoldConsts() {
     // unresolved. duplicate-name detection per scope.
     auto& global_frame = block_const_stack_.front();
     for (auto& cd : program_.consts) {
-        if (global_frame.count(cd.name))
+        // a const declared inside a namespace is keyed `ns:name`.
+        std::string key = cd.namespace_name.empty()
+            ? cd.name : cd.namespace_name + ":" + cd.name;
+        if (global_frame.count(key))
             errorAtNodeWithNote(*cd.rhs,
-                "Global const '" + cd.name + "' is already declared.",
-                global_frame[cd.name].file_id, global_frame[cd.name].tok,
+                "Global const '" + key + "' is already declared.",
+                global_frame[key].file_id, global_frame[key].tok,
                 "First declared here.");
         ConstEntry e;
         e.file_id = cd.file_id;
         e.tok = cd.tok;
-        global_frame[cd.name] = e;
+        global_frame[key] = e;
     }
     for (auto& slid : program_.slids) {
         for (auto& cd : slid.consts) {
@@ -852,7 +850,9 @@ void Codegen::collectAndFoldConsts() {
 
     std::set<std::string> cycle;
     for (auto& cd : program_.consts) {
-        if (global_frame[cd.name].slid_type.empty()) {
+        std::string key = cd.namespace_name.empty()
+            ? cd.name : cd.namespace_name + ":" + cd.name;
+        if (global_frame[key].slid_type.empty()) {
             cycle.clear();
             foldConstDef(cd, "", cycle);
         }
@@ -875,7 +875,11 @@ void Codegen::foldConstDef(const ConstDef& cd,
     ConstEntry folded = foldConstExpr(*cd.rhs, slid_scope, cycle);
     ConstEntry final_e = applyConstDeclaredType(cd, folded);
     cycle.erase(key);
-    if (slid_scope.empty()) block_const_stack_.front()[cd.name] = final_e;
+    if (slid_scope.empty()) {
+        std::string key = cd.namespace_name.empty()
+            ? cd.name : cd.namespace_name + ":" + cd.name;
+        block_const_stack_.front()[key] = final_e;
+    }
     else slid_consts_[slid_scope][cd.name] = final_e;
 }
 

@@ -131,8 +131,18 @@ void Codegen::padCallArgs(const std::vector<std::unique_ptr<Expr>>& cargs,
 
 std::string Codegen::resolveFreeFunctionMangledName(
     const std::string& name,
-    size_t arg_count) const
+    size_t arg_count,
+    bool force_global) const
 {
+    // inside a namespace function body, an unqualified call resolves to a
+    // sibling namespace member before falling back to the global scope.
+    if (!current_namespace_.empty() && !force_global) {
+        auto nsit = free_func_overloads_.find(current_namespace_ + ":" + name);
+        if (nsit != free_func_overloads_.end())
+            for (auto& [mn, ptypes, _pm, _pmt, _fid] : nsit->second)
+                if (arg_count >= requiredArity(mn) && arg_count <= ptypes.size())
+                    return mn;
+    }
     if (func_return_types_.count(name)) {
         // Bare name resolves only if the call's arity is in the function's
         // [required, total] range (defaults make the upper end reachable).

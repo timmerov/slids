@@ -590,6 +590,7 @@ struct ConstDef {
     std::string name;
     std::string declared_type;   // empty when inferred
     std::unique_ptr<Expr> rhs;
+    std::string namespace_name;  // non-empty when declared inside a namespace block
     int file_id = 0;
     int tok = 0;                 // token index of the name (for diagnostics)
 };
@@ -660,7 +661,6 @@ struct SlidDef {
     int public_field_count = 0;          // number of public fields before private ones (for __$pinit)
     bool is_local = true;                // false when template body loaded from an imported .sl file
     std::string impl_module;             // module name of the impl file (when !is_local)
-    bool is_namespace = false;           // declared as `Name { ... }` only — no `()` data block ever
     std::unique_ptr<BlockStmt> ctor_body;          // loose code (implicit ctor), or null
     std::unique_ptr<BlockStmt> explicit_ctor_body; // _() { ... }, or null
     std::unique_ptr<BlockStmt> dtor_body;          // ~() { ... }, or null
@@ -706,6 +706,7 @@ struct FunctionDef {
     bool is_local = true;        // false when body loaded from a separate impl file
     std::string impl_module;     // module name of the impl file (when !is_local)
     bool is_foreign = false;     // `= import;` — a C function: bare symbol, no slids body
+    std::string namespace_name;  // non-empty when declared inside a namespace block
     // Classes declared inside this (template) function's body. Carried with
     // the template and re-instantiated per type-arg — see codegen_template.
     std::vector<SlidDef> local_classes;
@@ -763,6 +764,18 @@ struct GlobalDef {
     bool is_lazy() const { return has_ctor_decl || has_dtor_decl; }
 };
 
+// A namespace declaration — `Name { ... }` (no `()`). A namespace is not a
+// class: no fields, no `self`. Its members (functions, consts) are carried in
+// program.functions / program.consts tagged with `namespace_name`; this record
+// just notes that the namespace was declared. Reopening adds another record.
+struct NamespaceDef {
+    std::string name;
+    std::vector<FunctionDef> functions;  // the namespace's own functions
+    std::vector<ConstDef> consts;        // the namespace's own consts
+    int file_id = 0;
+    int tok = 0;
+};
+
 struct Program {
     std::vector<EnumDef> enums;
     std::vector<SlidDef> slids;
@@ -770,6 +783,7 @@ struct Program {
     std::vector<ExternalMethodDef> external_methods;
     std::vector<ConstDef> consts;                   // program-scope const decls (no storage)
     std::vector<GlobalDef> globals;                 // global slid declarations (file/class/function-internal)
+    std::vector<NamespaceDef> namespaces;           // declared namespace blocks
 
     std::vector<std::string> imported_headers; // resolved .slh paths, for -MF dep output
     std::map<std::string, std::string> slid_modules; // slid name -> module that provides it
@@ -896,8 +910,12 @@ private:
     int synthetic_counter_ = 0;
     // class names seen so far in this TU — disambiguates lone `(...)` between
     // first-occurrence (open) and subsequent (closing). populated by tuple-form
-    // decls and bare-block reopens.
-    std::set<std::string> seen_classes_;
+    // decls and bare-block reopens. Value is the first declaration's location,
+    // used for the class/namespace name-collision note.
+    std::map<std::string, FieldRef> seen_classes_;
+    // namespace names seen so far in this TU. Value is the first declaration's
+    // location. A name cannot be both a class and a namespace.
+    std::map<std::string, FieldRef> seen_namespaces_;
     // class names that have been closed in this TU — further tuple-form
     // reopens are an error; bare-block reopens are still allowed. Value is
     // the location of the closing `}` for "completed here" notes.
@@ -1025,7 +1043,7 @@ private:
     // qualified namespace (and stays invisible outside that method).
     MethodDef parseMethodDef(const std::string& class_name = "");
     ExternalMethodDef parseExternalMethodDef();
-    void parseExternalMethodBlock(Program& program); // TypeName { method() {...} ... }
+    void parseNamespace(Program& program);           // Name { ... }  /  Name import { ... }
     NestedFunctionDef parseNestedFunctionDef();
     FunctionDef parseFunctionDef();
     std::unique_ptr<BlockStmt> parseBlock(std::vector<std::string> predeclare = {});

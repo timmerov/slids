@@ -330,7 +330,7 @@ void Codegen::emitSlidCtorDtor(const SlidDef& slid) {
     self_ptr_ = "";
 
     // emit __$sizeof for every locally-complete slid (not for consumer-side declarations)
-    if (!slid.has_trailing_ellipsis && !slid.is_namespace) {
+    if (!slid.has_trailing_ellipsis) {
         std::string linkage = isExported(slid.name + "__$sizeof") ? "" : "internal ";
         out_ << "define " << linkage << "i64 @" << slid.name << "__$sizeof() {\n";
         out_ << "entry:\n";

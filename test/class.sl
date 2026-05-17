@@ -34,7 +34,7 @@ two valid syntaxes for forward declarations.
 */
 void foo();
 void Simple:hello();
-Simple {
+Simple() {
     void goodbye();
 }
 
@@ -44,7 +44,7 @@ two valid syntaxes for after-the-fact definitions.
 void foo() {
     __println("foo");
 }
-Simple {
+Simple() {
     void hello() {
         __println("Hello, World!");
     }
@@ -119,15 +119,28 @@ Base: Derived() {
 // negatives — bodies disabled with `//` so the file compiles. the runner
 // strips the `//` prefixes for the lone live case driven by each marker.
 
+//-EXPECT-ERROR: Simple is a class, not a namespace.
+// Simple {
+//     void error() {
+//         __println("Simple is a class, not a namespace.");
+//     }
+// }
+
+//-EXPECT-ERROR: Space is a namespace, not a class.
+// Space {
+//     void namespace() { }
+// }
+// Space() { }
+
 //-EXPECT-ERROR: 'greet()' is = default in 'Derived'
-// Derived {
+// Derived() {
 //     void greet() {
 //         __println("Derived:greet()");
 //     }
 // }
 
 //-EXPECT-ERROR: 'speak()' is = delete in 'Derived'
-// Derived {
+// Derived() {
 //     void speak() {
 //         __println("Derived:speak()");
 //     }

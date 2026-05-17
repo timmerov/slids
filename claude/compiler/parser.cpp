@@ -3023,14 +3023,19 @@ SlidDef Parser::parseSlidDef() {
     slid.name_tok = name_tok;
     advance(); // consume class name
 
-    // a closed class accepts no more tuple-form reopens (bare-block reopens are
-    // allowed via parseExternalMethodBlock and bypass this check).
+    // a closed class accepts no more *field* reopens — but an empty-`()` reopen
+    // (`Name() { ... }`) adds only declarations/methods, no fields, and is the
+    // post-`Class()` replacement for the old bare-block reopen, so it is always
+    // allowed.
     {
+        bool empty_tuple_reopen = peek().type == TokenType::kLParen
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kRParen;
         auto cit = closed_classes_.find(slid.name);
-        if (cit != closed_classes_.end()) {
+        if (cit != closed_classes_.end() && !empty_tuple_reopen) {
             throw CompileError{file_id_, name_tok,
                 "Class '" + slid.name
-                    + "' is already complete; further field or declaration reopens are not permitted."}
+                    + "' is already complete; further field reopens are not permitted."}
                 .addNote(cit->second.file_id, cit->second.tok, "Class was completed here.");
         }
     }
@@ -3154,8 +3159,12 @@ SlidDef Parser::parseSlidDef() {
         }
     }
 
-    // record field names to prevent method-body field assignments from being mistaken for inferred declarations
+    // record field names to prevent method-body field assignments from being mistaken for inferred declarations.
+    // a reopen seeds from the class's accumulated fields so method bodies see fields declared in earlier occurrences.
     current_slid_fields_.clear();
+    auto prior_fields = all_slid_fields_.find(slid.name);
+    if (prior_fields != all_slid_fields_.end())
+        current_slid_fields_ = prior_fields->second;
     for (auto& f : slid.fields)
         current_slid_fields_.emplace(f.name, FieldRef{f.file_id, f.tok});
     all_slid_fields_[slid.name] = current_slid_fields_;
@@ -3392,10 +3401,24 @@ SlidDef Parser::parseSlidDef() {
     current_slid_fields_.clear();
     nested_alias_ = std::move(saved_alias);
 
+    // a name cannot be both a class and a namespace.
+    auto ns_clash = seen_namespaces_.find(slid.name);
+    if (ns_clash != seen_namespaces_.end())
+        throw CompileError{slid.name_file_id, slid.name_tok,
+            slid.name + " is a namespace, not a class."}
+            .addNote(ns_clash->second.file_id, ns_clash->second.tok,
+                "Namespace declared here.");
+
     // register this class as seen (disambiguates lone `(...)` on next reopen)
-    // and mark it closed if this reopen has no trailing `...`.
-    seen_classes_.insert(slid.name);
-    if (!slid.has_trailing_ellipsis)
+    // and mark it closed if this reopen has no trailing `...`. Exception: an
+    // empty-`()` reopen of an already-seen class is method/declaration-only —
+    // it touches no field layout, so it neither closes nor reopens. (A
+    // first-occurrence `Foo()` IS a complete field-less class and does close.)
+    bool method_only_reopen = seen_classes_.count(slid.name)
+        && slid.fields.empty()
+        && !slid.has_trailing_ellipsis && !slid.has_leading_ellipsis;
+    seen_classes_.emplace(slid.name, FieldRef{slid.name_file_id, slid.name_tok});
+    if (!slid.has_trailing_ellipsis && !method_only_reopen)
         closed_classes_[slid.name] = FieldRef{file_id_, close_tok};
 
     in_template_ = saved_tmpl;
@@ -3701,137 +3724,69 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
     return em;
 }
 
-void Parser::parseExternalMethodBlock(Program& program) {
-    [[maybe_unused]] int t_start = pos_;
-    // TypeName { [returnType] methodName(params) { body } ... }
-    std::string slid_name = expect(TokenType::kIdentifier, "Expected class name").value;
-    seen_classes_.insert(slid_name);
-    {
-        auto fit = all_slid_fields_.find(slid_name);
-        current_slid_fields_ = (fit != all_slid_fields_.end()) ? fit->second : std::map<std::string, FieldRef>{};
-    }
+// Namespace block: `Name { members }`, or the shorthand `Name import { … }`
+// which desugars to `Name { import { … } }`. A namespace is not a class — no
+// fields, no `self`; its members are functions and consts, carried in
+// program.functions / program.consts tagged with the namespace name. An
+// `import { … }` (sub-)block makes every `;`-declaration inside it a foreign
+// C function (is_foreign).
+void Parser::parseNamespace(Program& program) {
+    int ns_tok = pos_;
+    std::string ns_name = expect(TokenType::kIdentifier, "Expected namespace name").value;
+    // a name cannot be both a class and a namespace.
+    auto cls_clash = seen_classes_.find(ns_name);
+    if (cls_clash != seen_classes_.end())
+        throw CompileError{file_id_, ns_tok,
+            ns_name + " is a class, not a namespace."}
+            .addNote(cls_clash->second.file_id, cls_clash->second.tok,
+                "Class declared here.");
+    seen_namespaces_.emplace(ns_name, FieldRef{file_id_, ns_tok});
+    // The namespace OWNS its functions/consts (NamespaceDef.functions/.consts).
+    // They are not free functions — keeping them out of program.functions is
+    // what stops the free-function duplicate-detector from conflating, e.g.,
+    // a global `greet` with `Space:greet`.
+    NamespaceDef nd;
+    nd.name = ns_name;
+    nd.file_id = file_id_;
+    nd.tok = ns_tok;
+
+    // `Name import { … }` shorthand: the whole body is one import block.
+    bool shorthand_import = (peek().type == TokenType::kImport);
+    if (shorthand_import) advance();
     expect(TokenType::kLBrace, "Expected '{'");
+
+    // parse one foreign-import function declaration into the namespace.
+    auto parseImportDecl = [&]() {
+        FunctionDef fn = parseFunctionDef();
+        fn.is_foreign = true;
+        fn.namespace_name = ns_name;
+        nd.functions.push_back(std::move(fn));
+    };
+
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
-        ExternalMethodDef em;
-        em.slid_name = slid_name;
-        if (peek().type == TokenType::kVirtual) {
-            em.is_virtual = true;
-            advance();
-        }
-        // optional leading `const` marker — only valid as a method marker
-        // when followed by an elided-return method-name (`_`, `~`, `op<sym>`).
-        int leading_const_tok = -1;
-        bool leading_const_consumed = false;
-        if (peek().type == TokenType::kConst && pos_ + 1 < (int)tokens_.size()) {
-            const Token& after = tokens_[pos_ + 1];
-            if (after.type == TokenType::kOp
-                || after.type == TokenType::kBitNot
-                || (after.type == TokenType::kIdentifier && after.value == "_")) {
-                leading_const_tok = pos_;
-                advance();
-                em.is_const_method = true;
-                leading_const_consumed = true;
-            }
-        }
-        // ctor: _() { ... }
-        if (peek().type == TokenType::kIdentifier && peek().value == "_"
-            && pos_ + 1 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kLParen) {
-            em.tok = pos_;
-            em.file_id = file_id_;
-            advance(); // consume _
-            em.method_name = "_";
-            expect(TokenType::kLParen, "Expected '('");
-            expect(TokenType::kRParen, "Expected ')'");
-            em.body = parseBlock();
-            program.external_methods.push_back(std::move(em));
-            continue;
-        }
-        // dtor: ~() { ... }  or  virtual ~() { ... }
-        if (peek().type == TokenType::kBitNot
-            && pos_ + 1 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kLParen) {
-            em.tok = pos_;
-            em.file_id = file_id_;
-            advance(); // consume ~
-            em.method_name = "~";
-            expect(TokenType::kLParen, "Expected '('");
-            expect(TokenType::kRParen, "Expected ')'");
-            em.body = parseBlock();
-            program.external_methods.push_back(std::move(em));
-            continue;
-        }
-        int return_type_tok = -1;
-        int em_const_tok = leading_const_tok;
-        if (leading_const_consumed) {
-            // leading const + elided-return name; return type stays elided.
-            em.return_type = "void";
-            em.has_explicit_return = false;
-        } else if (peek().type == TokenType::kOp) {
-            em.return_type = "void";
-            em.has_explicit_return = false;
+        if (shorthand_import) {
+            parseImportDecl();
+        } else if (peek().type == TokenType::kConst) {
+            ConstDef cd = parseConstDef();
+            cd.namespace_name = ns_name;
+            nd.consts.push_back(std::move(cd));
+        } else if (peek().type == TokenType::kImport) {
+            // import sub-block: `import { ret f(params); … }`
+            advance(); // 'import'
+            expect(TokenType::kLBrace, "Expected '{' after 'import'");
+            while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof)
+                parseImportDecl();
+            expect(TokenType::kRBrace, "Expected '}'");
         } else {
-            return_type_tok = pos_;
-            em.return_type = parseTypeName();
-            em.has_explicit_return = true;
-            // optional `const` method marker between return type and method name
-            if (peek().type == TokenType::kConst) {
-                em_const_tok = pos_;
-                em.is_const_method = true;
-                advance();
-            }
+            // a slids namespace function: `ret f(params) = import;` (foreign) or
+            // `ret f(params) { body }` (slids). parseFunctionDef handles both.
+            FunctionDef fn = parseFunctionDef();
+            fn.namespace_name = ns_name;
+            nd.functions.push_back(std::move(fn));
         }
-        int em_tok = pos_;
-        em.file_id = file_id_;
-        em.tok = em_tok;
-        if (peek().type == TokenType::kOp) {
-            advance();
-            if (auto sym = consumeOpSymbol()) em.method_name = "op" + *sym;
-            else errorAt(em_tok, "Expected an operator symbol after 'op'.");
-        } else if (peek().type == TokenType::kBitNot) {
-            advance();
-            em.method_name = "~";
-        } else {
-            em.method_name = expect(TokenType::kIdentifier, "Expected method name").value;
-        }
-        // (P1) reopen merges into class scope — method name cannot equal class name.
-        if (em.method_name == slid_name) {
-            errorAt(em_tok, "Method '" + em.method_name + "' shares the name of its enclosing class.");
-        }
-        expect(TokenType::kLParen, "Expected '('");
-        parseParamList(em.params, em.param_mutable, em.param_mut_toks, em.param_defaults);
-        expect(TokenType::kRParen, "Expected ')'");
-        checkOpArity(em.method_name, (int)em.params.size(), em_tok, em.param_defaults);
-        checkOpMutable(em.method_name, em.params, em.param_mutable, em.param_mut_toks, em_tok);
-        checkMethodHeadRules(file_id_, em.method_name, (int)em.params.size(),
-            em.has_explicit_return, em.is_const_method,
-            em.tok, return_type_tok, em_const_tok);
-        if (peek().type == TokenType::kEquals
-            && pos_ + 1 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kDelete) {
-            advance(); advance();
-            expect(TokenType::kSemicolon, "Expected ';' after '= delete'");
-            em.is_delete = true;
-        } else if (peek().type == TokenType::kEquals
-            && pos_ + 1 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kDefault) {
-            advance(); advance();
-            expect(TokenType::kSemicolon, "Expected ';' after '= default'");
-            em.is_default = true;
-        } else if (peek().type == TokenType::kSemicolon) {
-            advance(); // forward declaration — no body
-        } else {
-            std::vector<std::string> param_names;
-            for (auto& p : em.params) param_names.push_back(p.second);
-            std::string saved_fn = current_function_name_;
-            current_function_name_ = em.slid_name + ":" + em.method_name;
-            em.body = parseBlock(param_names);
-            current_function_name_ = saved_fn;
-        }
-        program.external_methods.push_back(std::move(em));
     }
     expect(TokenType::kRBrace, "Expected '}'");
-    current_slid_fields_.clear();
+    program.namespaces.push_back(std::move(nd));
 }
 
 FunctionDef Parser::parseFunctionDef() {
@@ -4098,11 +4053,16 @@ Program Parser::parse() {
                 program.slids.push_back(std::move(slid));
             }
         }
-        // block-style external methods: TypeName { void method() { ... } ... }
+        // namespace block: `Name { ... }`  or shorthand `Name import { ... }`.
+        // (Class reopens now require `()` — `Class() { ... }` — and route to
+        // the slid-def path above.)
         else if (peek().type == TokenType::kIdentifier
             && pos_ + 1 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kLBrace) {
-            parseExternalMethodBlock(program);
+            && (tokens_[pos_ + 1].type == TokenType::kLBrace
+                || (tokens_[pos_ + 1].type == TokenType::kImport
+                    && pos_ + 2 < (int)tokens_.size()
+                    && tokens_[pos_ + 2].type == TokenType::kLBrace))) {
+            parseNamespace(program);
         }
         // bare file-scope short-form global: TYPE NAME [= EXPR];
         // shape requires a type token then identifier then `=` or `;`.
@@ -4129,7 +4089,31 @@ Program Parser::parse() {
             if (p + 1 < (int)tokens_.size()
                 && tokens_[p].type == TokenType::kIdentifier
                 && tokens_[p + 1].type == TokenType::kColon) {
-                program.external_methods.push_back(parseExternalMethodDef());
+                // `ret Ns:fn(...) { ... }` — if Ns is a declared namespace, this
+                // is an external definition of a namespace function, not a
+                // class method. Route it into the namespace's own function list
+                // (so it never lands in external_methods / synthesizes a slid).
+                NamespaceDef* ns = nullptr;
+                for (auto& n : program.namespaces)
+                    if (n.name == tokens_[p].value) { ns = &n; break; }
+                if (ns) {
+                    ExternalMethodDef em = parseExternalMethodDef();
+                    FunctionDef fn;
+                    fn.return_type    = em.return_type;
+                    fn.name           = em.method_name;
+                    fn.user_name      = em.method_name;
+                    fn.params         = std::move(em.params);
+                    fn.param_mutable  = std::move(em.param_mutable);
+                    fn.param_mut_toks = std::move(em.param_mut_toks);
+                    fn.param_defaults = std::move(em.param_defaults);
+                    fn.body           = std::move(em.body);
+                    fn.file_id        = em.file_id;
+                    fn.tok            = em.tok;
+                    fn.namespace_name = ns->name;
+                    ns->functions.push_back(std::move(fn));
+                } else {
+                    program.external_methods.push_back(parseExternalMethodDef());
+                }
             } else {
                 program.functions.push_back(parseFunctionDef());
             }
@@ -4404,32 +4388,15 @@ Program Parser::parse() {
         }
     }
 
-    // synthesize SlidDef entries for namespaces — slid names that appear only
-    // in external_methods (block reopens or `void Name:fn()` defs) with no `Name(...)` data block.
-    {
-        std::set<std::string> existing;
-        for (auto& s : program.slids) existing.insert(s.name);
-        std::set<std::string> seen_ns;
-        for (auto& em : program.external_methods) {
-            if (existing.count(em.slid_name)) continue;
-            if (!seen_ns.insert(em.slid_name).second) continue;
-            SlidDef ns;
-            ns.name = em.slid_name;
-            ns.is_namespace = true;
-            program.slids.push_back(std::move(ns));
-        }
-    }
-
     return program;
 }
 
 void Parser::mergeReopens(Program& program) {
     [[maybe_unused]] int t_start = pos_;
-    // group SlidDef indices by class name in source order. skip namespaces
-    // (synthesized later) and template slids (have separate machinery).
+    // group SlidDef indices by class name in source order. skip template
+    // slids (have separate machinery).
     std::map<std::string, std::vector<int>> groups;
     for (int i = 0; i < (int)program.slids.size(); i++) {
-        if (program.slids[i].is_namespace) continue;
         if (!program.slids[i].type_params.empty()) continue;
         groups[program.slids[i].name].push_back(i);
     }

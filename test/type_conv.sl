@@ -6,7 +6,7 @@ Value(int32 n_ = 0) {
     int32 get();
 }
 
-Value {
+Value() {
     // convert from int32
     op=(int32 n) {
         n_ = n;

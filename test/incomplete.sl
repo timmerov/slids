@@ -30,7 +30,7 @@ Incomplete (
 }
 
 /* normal reopen with no new fields. */
-Incomplete {
+Incomplete() {
     void reopen() {
         __println("Grand reopening!");
     }

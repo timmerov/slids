@@ -68,7 +68,7 @@ PureVirtual : BaseVirtual(
 /*
 reopen virtual class.
 */
-BaseVirtual {
+BaseVirtual() {
     virtual int goodbye() {
         __println("Base: goodbye");
         return -1;

@@ -281,9 +281,17 @@ void Codegen::collectFunctionSignatures() {
         std::vector<std::string> ptypes = buildParamTypes(fn.params, fn.param_mutable);
 
         // `= import` functions emit/reference the bare C symbol — no mangling.
+        // a namespace function is keyed `ns:name` on the slids side; its emit
+        // symbol is unchanged (the bare C symbol for `= import`).
+        std::string slids_name = fn.namespace_name.empty() ? fn.name
+                               : fn.namespace_name + ":" + fn.name;
+        // emit symbol: bare C name for `= import`; for a slids namespace
+        // function, mangle a `:`-free base (`:` is not LLVM-symbol-safe).
+        std::string emit_base = slids_name;
+        for (char& c : emit_base) if (c == ':') c = '.';
         std::string mangled = fn.is_foreign ? fn.name
-                                            : mangleFreeFunction(fn.name, ptypes);
-        free_func_overloads_[fn.name].push_back({mangled, ptypes, fn.param_mutable, fn.param_mut_toks, fn.file_id});
+                                            : mangleFreeFunction(emit_base, ptypes);
+        free_func_overloads_[slids_name].push_back({mangled, ptypes, fn.param_mutable, fn.param_mut_toks, fn.file_id});
 
         if (!fn.tuple_return_fields.empty()) {
             func_return_types_[mangled] = buildTupleType(fn.tuple_return_fields);
@@ -1190,6 +1198,21 @@ void Codegen::collectStringConstants() {
 void Codegen::emit() {
     out_ << "target triple = \"x86_64-pc-linux-gnu\"\n\n";
 
+    // Namespace members are owned by NamespaceDef in the AST — so the parser's
+    // free-function duplicate-detector never conflates `Space:greet` with a
+    // global `greet`. Pull them into the codegen working lists before any pass
+    // runs; they keep their `namespace_name` tag (the registration / const-fold
+    // / call paths key on it). The Program is not truly const — we own it.
+    {
+        Program& prog = const_cast<Program&>(program_);
+        for (auto& ns : prog.namespaces) {
+            for (auto& fn : ns.functions) prog.functions.push_back(std::move(fn));
+            for (auto& cd : ns.consts)    prog.consts.push_back(std::move(cd));
+            ns.functions.clear();
+            ns.consts.clear();
+        }
+    }
+
     // Establish the bottom frame of block_const_stack_ — the file/global scope.
     // File-scope const decls land here via collectAndFoldConsts. Each function
     // body emit pushes its own frame on top (via pushScope) and pops it on exit,
@@ -1368,7 +1391,6 @@ void Codegen::emit() {
     // first pass: emit implementation slids (complete field layout)
     for (auto& slid : program_.slids) {
         if (!slid.type_params.empty()) continue;
-        if (slid.is_namespace) continue;
         if (!slid.is_transport_impl) continue;
         if (!emitted_structs.insert(slid.name).second) continue;
         emitStructType(slid);
@@ -1376,7 +1398,6 @@ void Codegen::emit() {
     // second pass: emit remaining slids (skip names already covered by impl)
     for (auto& slid : program_.slids) {
         if (!slid.type_params.empty()) continue;
-        if (slid.is_namespace) continue;
         if (slid.is_transport_impl) continue;
         if (!emitted_structs.insert(slid.name).second) continue;
         emitStructType(slid);
@@ -1435,7 +1456,9 @@ void Codegen::emit() {
         if (has_body.count(fn.name)) continue; // defined locally — no declare needed
 
         // use the mangled name from free_func_overloads_ for correct quoting and overload suffix
-        auto foit = free_func_overloads_.find(fn.name);
+        std::string slids_name = fn.namespace_name.empty() ? fn.name
+            : fn.namespace_name + ":" + fn.name;
+        auto foit = free_func_overloads_.find(slids_name);
         if (foit == free_func_overloads_.end()) continue;
         for (auto& [mangled, ptypes, _pm, _pmt, _fid] : foit->second) {
             if (!declared_fns.insert(mangled).second) continue; // already emitted
@@ -1720,6 +1743,7 @@ void Codegen::emitNestedFunction(
     break_label_ = "";
     continue_label_ = "";
     current_slid_ = "";
+    current_namespace_ = "";
     frame_ptr_reg_ = "";
     block_terminated_ = false;
 
@@ -2088,6 +2112,7 @@ void Codegen::emitSlidMethod(const SlidDef& slid,
     break_label_ = "";
     continue_label_ = "";
     current_slid_ = slid.name;
+    current_namespace_ = "";
     block_terminated_ = false;
     current_func_name_ = method_user_name;
     // Phase 3: a `const` method sees `self` as const. Writes through self
@@ -2175,6 +2200,7 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     break_label_ = "";
     continue_label_ = "";
     current_slid_ = "";
+    current_namespace_ = fn.namespace_name;
     current_parent_ = fn.name;
     current_func_name_ = !fn.user_name.empty() ? fn.user_name : fn.name;
     frame_ptr_reg_ = "";
@@ -2184,9 +2210,12 @@ void Codegen::emitFunction(const FunctionDef& fn) {
     bool uses_sret = !fn.return_type.empty() && slid_info_.count(fn.return_type) > 0;
     current_func_uses_sret_ = uses_sret;
 
-    // find mangled name (may differ from fn.name when multiple overloads exist)
-    std::string emit_name = fn.name;
-    auto foit = free_func_overloads_.find(fn.name);
+    // find mangled name (may differ from fn.name when multiple overloads exist;
+    // a namespace function is keyed `ns:name`).
+    std::string slids_name = fn.namespace_name.empty() ? fn.name
+                           : fn.namespace_name + ":" + fn.name;
+    std::string emit_name = slids_name;
+    auto foit = free_func_overloads_.find(slids_name);
     if (foit != free_func_overloads_.end()) {
         // Match by param types in the registry's canonical form (default-const
         // applied per slot). Raw fn.params types must run through the same

@@ -16,7 +16,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
         if (v->name == "self" && !current_slid_.empty()) {
             auto& info = slid_info_[current_slid_];
             if (info.is_empty)
-                error(std::string((info.is_namespace ? "namespace '" : "empty class '")
+                error(std::string("empty class '"
                     + current_slid_ + "' has no self"));
             return self_ptr_.empty() ? "%self" : self_ptr_;
         }
@@ -162,7 +162,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 if (!current_slid_.empty()) {
                     auto& info = slid_info_[current_slid_];
                     if (info.is_empty)
-                        error(std::string((info.is_namespace ? "namespace '" : "empty class '")
+                        error(std::string("empty class '"
                             + current_slid_ + "' has no self"));
                 }
                 return self_ptr_.empty() ? "%self" : self_ptr_;
@@ -702,90 +702,84 @@ std::string Codegen::emitExpr(const Expr& expr) {
         // namespace-qualified call: Name:method(args)
         if (!call->qualifier.empty() && call->qualifier != "::") {
             auto sit = slid_info_.find(call->qualifier);
-            if (sit == slid_info_.end())
-                error(std::string("Unknown slid: " + call->qualifier));
-            // inherited base method call from inside a derived's method body:
-            // `Base:method(args)` with current_slid_ in Base's descendant set.
-            if (!sit->second.is_namespace) {
-                if (current_slid_.empty()
-                    || (call->qualifier != current_slid_ && !isAncestor(call->qualifier, current_slid_)))
-                    error(std::string("Operator '" + call->qualifier
-                        + "' is not a namespace; use instance.method() instead"));
-                bool empty = sit->second.is_empty;
-                std::string base_q = call->qualifier + "__" + call->callee;
-                std::string mangled_q = resolveOverloadForCall(base_q, call->args);
-                padCallArgs(call->args, call->args_padded, mangled_q);
-                auto rit_q = func_return_types_.find(mangled_q);
-                if (rit_q == func_return_types_.end())
-                    error(std::string("Unknown method: "
-                        + call->qualifier + ":" + call->callee));
-                auto& mptypes_q = func_param_types_[mangled_q];
-                std::string self_str = self_ptr_.empty() ? "%self" : self_ptr_;
-                std::string method_args_q;
+            if (sit == slid_info_.end()) {
+                // namespace-qualified free-function call: ns:fn(args)
+                std::string nm = call->qualifier + ":" + call->callee;
+                std::string mangled = resolveFreeFunctionMangledName(nm, call->args.size());
+                if (mangled.empty())
+                    error(std::string("Unknown slid or namespace: " + call->qualifier));
+                padCallArgs(call->args, call->args_padded, mangled);
+                auto rit = func_return_types_.find(mangled);
+                auto& ptypes = func_param_types_[mangled];
+                std::string arg_str;
                 for (int i = 0; i < (int)call->args.size(); i++) {
-                    std::string ptype_str = (i < (int)mptypes_q.size()) ? mptypes_q[i] : "";
+                    if (i > 0) arg_str += ", ";
+                    std::string ptype_str = (i < (int)ptypes.size()) ? ptypes[i] : "";
                     std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
-                    method_args_q += ", " + ptype + " "
-                        + emitPhraseArg(*call->args[i], ptype_str);
+                    arg_str += ptype + " " + emitPhraseArg(*call->args[i], ptype_str);
                 }
-                std::string self_arg_q = empty ? "" : "ptr " + self_str;
-                if (slid_info_.count(rit_q->second)) {
-                    std::string tmp = emitRawSlidAlloca(rit_q->second);
-                    std::string sret_arg = "ptr sret(%struct." + rit_q->second + ") " + tmp;
-                    std::string args = self_arg_q.empty() ? sret_arg : self_arg_q + ", " + sret_arg;
-                    args += method_args_q;
-                    out_ << "    call void @" << llvmGlobalName(mangled_q)
-                         << "(" << args << ")\n";
-                    return tmp;
-                }
-                std::string ret_type = llvmType(rit_q->second);
-                std::string args_prefix = self_arg_q;
-                if (args_prefix.empty() && !method_args_q.empty())
-                    method_args_q = method_args_q.substr(2);
+                std::string ret_slids = (rit != func_return_types_.end()) ? rit->second : "";
+                std::string ret_type = ret_slids.empty() ? "void" : llvmType(ret_slids);
                 if (ret_type == "void") {
-                    out_ << "    call void @" << llvmGlobalName(mangled_q)
-                         << "(" << args_prefix << method_args_q << ")\n";
+                    out_ << "    call void @" << llvmGlobalName(mangled)
+                         << "(" << arg_str << ")\n";
                     return "";
                 }
                 std::string tmp = newTmp();
                 out_ << "    " << tmp << " = call " << ret_type << " @"
-                     << llvmGlobalName(mangled_q) << "(" << args_prefix << method_args_q << ")\n";
+                     << llvmGlobalName(mangled) << "(" << arg_str << ")\n";
                 return tmp;
             }
-            std::string base = call->qualifier + "__" + call->callee;
-            std::string mangled = resolveOverloadForCall(base, call->args);
-            padCallArgs(call->args, call->args_padded, mangled);
-            auto rit = func_return_types_.find(mangled);
-            if (rit == func_return_types_.end())
-                error(std::string("Unknown namespace function: " + call->qualifier + ":" + call->callee));
-            auto& ptypes = func_param_types_[mangled];
-            std::string arg_str;
+            // inherited base method call from inside a derived's method body:
+            // `Base:method(args)` with current_slid_ in Base's descendant set.
+            if (current_slid_.empty()
+                || (call->qualifier != current_slid_ && !isAncestor(call->qualifier, current_slid_)))
+                error(std::string("Operator '" + call->qualifier
+                    + "' is not a namespace; use instance.method() instead"));
+            bool empty = sit->second.is_empty;
+            std::string base_q = call->qualifier + "__" + call->callee;
+            std::string mangled_q = resolveOverloadForCall(base_q, call->args);
+            padCallArgs(call->args, call->args_padded, mangled_q);
+            auto rit_q = func_return_types_.find(mangled_q);
+            if (rit_q == func_return_types_.end())
+                error(std::string("Unknown method: "
+                    + call->qualifier + ":" + call->callee));
+            auto& mptypes_q = func_param_types_[mangled_q];
+            std::string self_str = self_ptr_.empty() ? "%self" : self_ptr_;
+            std::string method_args_q;
             for (int i = 0; i < (int)call->args.size(); i++) {
-                if (i > 0) arg_str += ", ";
-                std::string ptype_str = (i < (int)ptypes.size()) ? ptypes[i] : "";
+                std::string ptype_str = (i < (int)mptypes_q.size()) ? mptypes_q[i] : "";
                 std::string ptype = ptype_str.empty() ? "i32" : llvmType(ptype_str);
-                arg_str += ptype + " " + emitPhraseArg(*call->args[i], ptype_str);
+                method_args_q += ", " + ptype + " "
+                    + emitPhraseArg(*call->args[i], ptype_str);
             }
-            if (slid_info_.count(rit->second)) {
-                std::string tmp = emitRawSlidAlloca(rit->second);
-                std::string sret_arg = "ptr sret(%struct." + rit->second + ") " + tmp;
-                if (!arg_str.empty()) sret_arg += ", " + arg_str;
-                out_ << "    call void @" << llvmGlobalName(mangled) << "(" << sret_arg << ")\n";
+            std::string self_arg_q = empty ? "" : "ptr " + self_str;
+            if (slid_info_.count(rit_q->second)) {
+                std::string tmp = emitRawSlidAlloca(rit_q->second);
+                std::string sret_arg = "ptr sret(%struct." + rit_q->second + ") " + tmp;
+                std::string args = self_arg_q.empty() ? sret_arg : self_arg_q + ", " + sret_arg;
+                args += method_args_q;
+                out_ << "    call void @" << llvmGlobalName(mangled_q)
+                     << "(" << args << ")\n";
                 return tmp;
             }
-            std::string ret_type = llvmType(rit->second);
+            std::string ret_type = llvmType(rit_q->second);
+            std::string args_prefix = self_arg_q;
+            if (args_prefix.empty() && !method_args_q.empty())
+                method_args_q = method_args_q.substr(2);
             if (ret_type == "void") {
-                out_ << "    call void @" << llvmGlobalName(mangled) << "(" << arg_str << ")\n";
+                out_ << "    call void @" << llvmGlobalName(mangled_q)
+                     << "(" << args_prefix << method_args_q << ")\n";
                 return "";
             }
             std::string tmp = newTmp();
-            out_ << "    " << tmp << " = call " << ret_type << " @" << llvmGlobalName(mangled)
-                 << "(" << arg_str << ")\n";
+            out_ << "    " << tmp << " = call " << ret_type << " @"
+                 << llvmGlobalName(mangled_q) << "(" << args_prefix << method_args_q << ")\n";
             return tmp;
         }
         // ::name(args) — global lookup: skip nested/template/method paths, go straight to free function
         if (call->qualifier == "::") {
-            std::string mangled = resolveFreeFunctionMangledName(call->callee, call->args.size());
+            std::string mangled = resolveFreeFunctionMangledName(call->callee, call->args.size(), true);
             if (mangled.empty())
                 error(std::string("Undefined global function: " + call->callee));
             padCallArgs(call->args, call->args_padded, mangled);
@@ -2438,6 +2432,15 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // function call — look up return type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        if (!ce->qualifier.empty() && ce->qualifier != "::"
+            && !slid_info_.count(ce->qualifier)) {
+            std::string m = resolveFreeFunctionMangledName(
+                ce->qualifier + ":" + ce->callee, ce->args.size());
+            if (!m.empty()) {
+                const std::string& rt = func_return_types_[m];
+                return slid_info_.count(rt) ? "ptr" : llvmType(rt);
+            }
+        }
         if (std::string nm = nestedCallMangled(ce->callee, ce->args); !nm.empty()) {
             const std::string& rt = func_return_types_[nm];
             return slid_info_.count(rt) ? "ptr" : llvmType(rt);
@@ -2798,6 +2801,13 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
         // slid ctor call: SlidName(args) → type is SlidName
         if (slid_info_.count(ce->callee)) return ce->callee;
+        // namespace-qualified free-function call: ns:fn(args)
+        if (!ce->qualifier.empty() && ce->qualifier != "::"
+            && !slid_info_.count(ce->qualifier)) {
+            std::string m = resolveFreeFunctionMangledName(
+                ce->qualifier + ":" + ce->callee, ce->args.size());
+            if (!m.empty()) return func_return_types_[m];
+        }
         if (std::string nm = nestedCallMangled(ce->callee, ce->args); !nm.empty())
             return func_return_types_[nm];
         auto resolved = resolveTemplateOverload(ce->callee, ce->type_args, ce->args);

@@ -85,7 +85,7 @@ don't need fully qualified name because
 from a visibility point of view, Dog contains Animal.
 block mode addition.
 */
-Dog {
+Dog() {
     void perform() {
         __println("Dog:perform: " + name_ + " sits.");
     }
