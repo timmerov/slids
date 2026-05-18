@@ -1,4 +1,9 @@
 
+this should be a compile error:
+    char[] format = "%g";
+format is mutable.
+but that's a const char[];
+
 this should probably be a compile error:
     (String^ = ^self)^ = s;
 the syntax is type conversion.

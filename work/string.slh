@@ -165,14 +165,18 @@ void strfill(mutable char[] s, char ch, intptr count);
 /* formatted strings. */
 String : Format(
     Option justify_ = kAuto,
+    Option float_style_ = kAuto,
     char pad_ = ' ',
+    bool leading_plus_ = false,
     int min_width_ = 0,
     int max_width_ = -1
 ) {
     enum Option (
         kAuto,
         kLeftJustify,
-        kRightJustify
+        kRightJustify,
+        kFixedPoint,
+        kScientificNotation
     );
 
     /* constructor/destructor */

@@ -16,6 +16,13 @@ stdc import {
     int32 strfromd(mutable char[] s, intptr n, char[] fmt, float64 fp);
 }
 
+/* maximum size for converting numbers. */
+/*
+this should be in String.
+but that's borken.
+*/
+const intptr kNumberBufferSize = 32;
+
 /* block definitions. */
 String (
     /* there are no public fields. */
@@ -30,6 +37,10 @@ String (
     /* pointer to stored string. */
     char[] storage_ = nullptr
 ) {
+    /* maximum size for converting numbers. */
+    /* this should work but doesn't. */
+    //const intptr kNumberBufferSize = 32;
+
     /* constructor */
     _() {
     }
@@ -124,10 +135,9 @@ String (
 
     /* assignment and type converstion from float64. */
     op=(float64 x) {
-        const intptr kMaxSize = 24;
         clear();
-        reserve(kMaxSize);
-        size_ = stdc:strfromd(storage_, kMaxSize, "%g", x);
+        reserve(kNumberBufferSize);
+        size_ = stdc:strfromd(storage_, capacity_, "%g", x);
     }
 
     /* overload += to append a string. */
@@ -506,7 +516,12 @@ String : Format() {
     excluding char.
     */
     op=(int64 x) {
-        String str = x;
+        String str;
+        str.reserve(kNumberBufferSize);
+        if (x >= 0 && leading_plus_) {
+            str = "+";
+        }
+        str += x;
         self = str;
     }
 
@@ -528,7 +543,38 @@ String : Format() {
 
     /* format a float64. */
     op=(float64 x) {
-        String str = x;
+        String str;
+        str.reserve(kNumberBufferSize);
+        if (x >= 0.0 && leading_plus_) {
+            str = "+";
+        }
+        /*
+        this doesn't actually work.
+        cause the case statements are enums not constants.
+        who writes this crap?
+        */
+        /*
+        char[] format;
+        switch (float_style_) {
+        case Format:kFixedPoint:
+            format = "%f";
+            break;
+        case Format:kScientificNotation:
+            format = "%e";
+            break;
+        default:
+            format = "%f";
+            break;
+        }
+        */
+        char[] format = "%g";
+        if (float_style_ == Format:kFixedPoint) {
+            format = "%f";
+        } else if (float_style_ == Format:kScientificNotation) {
+            format = "%e";
+        }
+        /* end of crap. */
+        str.size_ += stdc:strfromd(str.storage_ + str.size_, str.capacity_ - str.size_, format, x);
         self = str;
     }
 }

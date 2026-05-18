@@ -134,10 +134,26 @@ int32 main() {
     println(String + "float  =[" + fmt + "]");
     fmt.clear();
     fmt = (float32=3.14);
-    println(String + "floa32 =[" + fmt + "]");
+    println(String + "float32=[" + fmt + "]");
     fmt.clear();
     fmt = (float64=3.14);
-    println(String + "floa64 =[" + fmt + "]");
+    println(String + "float64=[" + fmt + "]");
+    fmt.clear();
+    fmt.leading_plus_ = true;
+    fmt = 1337;
+    println(String + "int    =[" + fmt + "]");
+    fmt.clear();
+    fmt.justify_ = Format:kLeftJustify;
+    fmt = 2.78;
+    println(String + "float  =[" + fmt + "]");
+    fmt.clear();
+    fmt.float_style_ = Format:kFixedPoint;
+    fmt = 99.44;
+    println(String + "fixed  =[" + fmt + "]");
+    fmt.clear();
+    fmt.float_style_ = Format:kScientificNotation;
+    fmt = 20.26;
+    println(String + "SciNot =[" + fmt + "]");
 
     return 0;
 }
