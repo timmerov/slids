@@ -391,13 +391,24 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {
-        // substitution const lookup: instance.const_name and Type.const_name
-        // resolve the receiver's slid type and check that class's const table.
+        // `Type.member` — '.' is for instances; a type reaches a scoped
+        // member with the ':' operator.
+        if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
+            bool fa_is_field = !current_slid_.empty()
+                && slid_info_.count(current_slid_)
+                && slid_info_[current_slid_].field_index.count(ve->name);
+            if (!locals_.count(ve->name) && !fa_is_field
+                && slid_info_.count(ve->name))
+                errorAtNode(*fa, "'" + ve->name + "' is a type; reach a "
+                    "type-scoped member with ':' — write '" + ve->name + ":"
+                    + fa->field + "'.");
+        }
+        // substitution const lookup: instance.const_name resolves the
+        // receiver's slid type and checks that class's const table.
         if (auto* ve = dynamic_cast<const VarExpr*>(fa->object.get())) {
             std::string recv_slid;
             auto lit = locals_.find(ve->name);
             if (lit != locals_.end()) recv_slid = lit->second.type;
-            else if (slid_info_.count(ve->name)) recv_slid = ve->name; // Type.const_name
             else if (!current_slid_.empty()) {
                 auto& parent_info = slid_info_[current_slid_];
                 auto fi = parent_info.field_index.find(ve->name);
@@ -489,7 +500,9 @@ std::string Codegen::emitExpr(const Expr& expr) {
             if (auto* ve = dynamic_cast<const VarExpr*>(mc->object.get())) {
                 auto tit = locals_.find(ve->name);
                 if (tit != locals_.end()) slid_name = tit->second.type;
-                else if (slid_info_.count(ve->name)) slid_name = ve->name; // TypeName.sizeof()
+                else if (slid_info_.count(ve->name))
+                    errorAtNode(*mc, "'" + ve->name + "' is a type; write '"
+                        + ve->name + ":sizeof()' — '.' is for instances.");
             }
             if (slid_name.empty())
                 error(std::string("Sizeof(): cannot determine slid type"));
@@ -742,6 +755,13 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 out_ << "    " << tmp << " = call " << ret_type << " @"
                      << llvmGlobalName(mangled) << "(" << arg_str << ")\n";
                 return tmp;
+            }
+            // `Type:sizeof()` — type-scoped builtin, needs no instance.
+            if (call->callee == "sizeof" && call->args.empty()) {
+                std::string reg = newTmp();
+                out_ << "    " << reg << " = call i64 @"
+                     << call->qualifier << "__$sizeof()\n";
+                return reg;
             }
             // inherited base method call from inside a derived's method body:
             // `Base:method(args)` with current_slid_ in Base's descendant set.
@@ -2464,6 +2484,8 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // function call — look up return type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        if (ce->callee == "sizeof" && slid_info_.count(ce->qualifier))
+            return "i64";
         if (!ce->qualifier.empty() && ce->qualifier != "::"
             && !slid_info_.count(ce->qualifier)) {
             std::string m = resolveQualifiedFreeCall(
@@ -2953,6 +2975,9 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     }
     // free function call — look up return type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        // `Type:sizeof()` → intptr
+        if (ce->callee == "sizeof" && slid_info_.count(ce->qualifier))
+            return "intptr";
         // slid ctor call: SlidName(args) → type is SlidName
         if (slid_info_.count(ce->callee)) return ce->callee;
         // namespace-qualified free-function call: ns:fn(args)

@@ -25,6 +25,9 @@ Animal(
         __println("Animal:dtor");
     }
 
+    /* a base-class const — inherited by Cat and Dog. */
+    const int kMaxLegs = 8;
+
     void speak() {
         __println("Animal:speak: " + name_ + " says nothing.");
     }
@@ -88,6 +91,8 @@ block mode addition.
 Dog() {
     void perform() {
         __println("Dog:perform: " + name_ + " sits.");
+        /* unqualified base-class const, used from a derived method. */
+        __println("Dog:perform: legs allowed = " + kMaxLegs);
     }
 }
 
@@ -119,6 +124,8 @@ int32 main() {
     d.speak();
     d.perform();
     d.perform2();
+    /* base-class const reached through the derived type name. */
+    __println("Dog:kMaxLegs = " + Dog:kMaxLegs);
 
     /*
     automatic in-cast pointer assignments.

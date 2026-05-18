@@ -16,13 +16,6 @@ stdc import {
     int32 strfromd(mutable char[] s, intptr n, char[] fmt, float64 fp);
 }
 
-/* maximum size for converting numbers. */
-/*
-this should be in String.
-but that's borken.
-*/
-const intptr kNumberBufferSize = 32;
-
 /* block definitions. */
 String (
     /* there are no public fields. */
@@ -38,8 +31,7 @@ String (
     char[] storage_ = nullptr
 ) {
     /* maximum size for converting numbers. */
-    /* this should work but doesn't. */
-    //const intptr kNumberBufferSize = 32;
+    const intptr kNumberBufferSize = 32;
 
     /* constructor */
     _() {

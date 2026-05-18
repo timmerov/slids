@@ -185,7 +185,11 @@ int32 main() {
     __println("circle_full=" + circle_full);
 
     /* class-scope const accessed via Type qualifier (no instance). */
-    __println("NoTors.size=" + NoTors.size);
+    __println("NoTors:size=" + NoTors:size);
+
+    /* dot is for instances — a type reaches a member with ':'. */
+    //-EXPECT-ERROR: is a type; reach a type-scoped member with ':'
+    // __println("bad=" + NoTors.size);
 
     /* inferred type via type conversion: tt is int8. */
     const tt = (int8 = 4);

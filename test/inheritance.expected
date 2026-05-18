@@ -10,7 +10,9 @@ Dog:ctor
 Dog:speak: Spot barks.
 Animal:speak: Spot says nothing.
 Dog:perform: Spot sits.
+Dog:perform: legs allowed = 8
 Dog:perform2: Spot begs.
+Dog:kMaxLegs = 8
 Goodbye, World!
 Dog:dtor
 Animal:dtor

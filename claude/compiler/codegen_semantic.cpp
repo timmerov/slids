@@ -1174,6 +1174,17 @@ Codegen::ConstEntry Codegen::applyConstDeclaredType(const ConstDef& cd,
 }
 
 const Codegen::ConstEntry* Codegen::lookupConst(const std::string& name) const {
+    // qualified `Class:member` — a class-scoped const reached via the type
+    // name with the `:` scope operator (inherits up the base chain).
+    {
+        auto colon = name.find(':');
+        if (colon != std::string::npos && colon > 0
+            && colon == name.rfind(':')) {
+            std::string cls = name.substr(0, colon);
+            if (slid_info_.count(cls))
+                return lookupSlidConst(cls, name.substr(colon + 1));
+        }
+    }
     // Walk block frames top-down EXCEPT the bottom (global) frame so that
     // the enclosing class scope is consulted between function-block frames
     // and the global frame — preserves the old global_consts_ ordering.
@@ -1182,12 +1193,17 @@ const Codegen::ConstEntry* Codegen::lookupConst(const std::string& name) const {
         auto cit = frame.find(name);
         if (cit != frame.end()) return &cit->second;
     }
-    // enclosing class scope
+    // enclosing class scope — walk the base chain so a derived class's
+    // methods see consts declared in a base class.
     if (!current_slid_.empty()) {
-        auto sit = slid_consts_.find(current_slid_);
-        if (sit != slid_consts_.end()) {
-            auto cit = sit->second.find(name);
-            if (cit != sit->second.end()) return &cit->second;
+        auto siit = slid_info_.find(current_slid_);
+        for (const SlidInfo* b = (siit != slid_info_.end() ? &siit->second : nullptr);
+             b; b = b->base_info) {
+            auto sit = slid_consts_.find(b->name);
+            if (sit != slid_consts_.end()) {
+                auto cit = sit->second.find(name);
+                if (cit != sit->second.end()) return &cit->second;
+            }
         }
     }
     // global scope = block_const_stack_.front()
@@ -1201,11 +1217,23 @@ const Codegen::ConstEntry* Codegen::lookupConst(const std::string& name) const {
 
 const Codegen::ConstEntry* Codegen::lookupSlidConst(const std::string& slid_name,
                                                     const std::string& member) const {
-    auto sit = slid_consts_.find(slid_name);
-    if (sit == slid_consts_.end()) return nullptr;
-    auto cit = sit->second.find(member);
-    if (cit == sit->second.end()) return nullptr;
-    return &cit->second;
+    // direct scope, then up the base chain so `Derived:const` resolves a
+    // const declared in a base class.
+    auto direct = slid_consts_.find(slid_name);
+    if (direct != slid_consts_.end()) {
+        auto cit = direct->second.find(member);
+        if (cit != direct->second.end()) return &cit->second;
+    }
+    auto siit = slid_info_.find(slid_name);
+    for (const SlidInfo* b = (siit != slid_info_.end() ? siit->second.base_info : nullptr);
+         b; b = b->base_info) {
+        auto sit = slid_consts_.find(b->name);
+        if (sit != slid_consts_.end()) {
+            auto cit = sit->second.find(member);
+            if (cit != sit->second.end()) return &cit->second;
+        }
+    }
+    return nullptr;
 }
 
 bool Codegen::isFoldableConstShape(const Expr& e, const std::string& slid_scope) const {

@@ -127,8 +127,8 @@ int32 main() {
     __println("inc.sizeof()<12>=" + size);
 
     /* sizeof by type */
-    size = Incomplete.sizeof();
-    __println("Incomplete.sizeof()<12>=" + size);
+    size = Incomplete:sizeof();
+    __println("Incomplete:sizeof()<12>=" + size);
 
     return 0;
 }

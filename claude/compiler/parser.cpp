@@ -1037,6 +1037,21 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     }
     if (t.type == TokenType::kIdentifier) {
         advance();
+        // `Type:sizeof()` — type-scoped sizeof. `sizeof` is a keyword, so it
+        // does not fit the general Ident(:Ident)* qualified-name path below.
+        if (colon_terminates_expr_ == 0
+            && peek().type == TokenType::kColon
+            && pos_ + 1 < (int)tokens_.size()
+            && tokens_[pos_ + 1].type == TokenType::kSizeof) {
+            advance(); // ':'
+            advance(); // 'sizeof'
+            expect(TokenType::kLParen, "Expected '(' after 'sizeof'");
+            expect(TokenType::kRParen, "Expected ')' after 'sizeof('");
+            auto call = make<CallExpr>(t_start, "sizeof",
+                                       std::vector<std::unique_ptr<Expr>>{});
+            call->qualifier = t.value;
+            return call;
+        }
         // namespace-qualified access: Name : Name [: Name]* — covers
         // `Slid:method(args)`, `parts:doors_`, and chains like `Box:lid:open_`.
         // Suppressed in contexts where ':' terminates the expression (e.g. case labels).
