@@ -1038,13 +1038,41 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         if (colon_terminates_expr_ == 0
             && peek().type == TokenType::kColon
             && pos_ + 1 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kIdentifier) {
+            && (tokens_[pos_ + 1].type == TokenType::kIdentifier
+                || tokens_[pos_ + 1].type == TokenType::kSelf
+                || tokens_[pos_ + 1].type == TokenType::kOp)) {
             std::string path = t.value;
             while (peek().type == TokenType::kColon
                    && pos_ + 1 < (int)tokens_.size()
                    && tokens_[pos_ + 1].type == TokenType::kIdentifier) {
                 advance(); // consume ':'
                 path += ":" + advance().value;
+            }
+            // `Base:self` — self viewed as the named base sub-object (an
+            // lvalue at offset 0). Carried as a colon-joined VarExpr name.
+            if (peek().type == TokenType::kColon
+                && pos_ + 1 < (int)tokens_.size()
+                && tokens_[pos_ + 1].type == TokenType::kSelf) {
+                advance(); advance(); // ':' 'self'
+                return make<VarExpr>(t_start, path + ":self");
+            }
+            // `Base:op<sym>(args)` — invoke the base's operator on self.
+            if (peek().type == TokenType::kColon
+                && pos_ + 1 < (int)tokens_.size()
+                && tokens_[pos_ + 1].type == TokenType::kOp) {
+                advance(); advance(); // ':' 'op'
+                auto sym = consumeOpSymbol();
+                if (!sym) errorHere("Expected an operator symbol after 'op'.");
+                expect(TokenType::kLParen, "Expected '('");
+                std::vector<std::unique_ptr<Expr>> args;
+                while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                    args.push_back(parseExpr());
+                    if (peek().type == TokenType::kComma) advance();
+                }
+                expect(TokenType::kRParen, "Expected ')'");
+                auto call = make<CallExpr>(t_start, "op" + *sym, std::move(args));
+                call->qualifier = path;
+                return call;
             }
             if (peek().type == TokenType::kLParen) {
                 // call form. qualifier carries the namespace prefix; callee is
@@ -2767,13 +2795,42 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         // `Box:lid:open_ = true;`. Greedily consume the colon chain.
         if (peek().type == TokenType::kColon
             && pos_ + 1 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kIdentifier) {
+            && (tokens_[pos_ + 1].type == TokenType::kIdentifier
+                || tokens_[pos_ + 1].type == TokenType::kSelf
+                || tokens_[pos_ + 1].type == TokenType::kOp)) {
             std::string path = name;
             while (peek().type == TokenType::kColon
                    && pos_ + 1 < (int)tokens_.size()
                    && tokens_[pos_ + 1].type == TokenType::kIdentifier) {
                 advance(); // consume ':'
                 path += ":" + advance().value;
+            }
+            // `Base:self` — self as a base sub-object; route to the lvalue tail.
+            if (peek().type == TokenType::kColon
+                && pos_ + 1 < (int)tokens_.size()
+                && tokens_[pos_ + 1].type == TokenType::kSelf) {
+                advance(); advance(); // ':' 'self'
+                auto lhs = parsePostfix(make<VarExpr>(t_start, path + ":self"));
+                return parseLvalueTail(std::move(lhs));
+            }
+            // `Base:op<sym>(args);` — invoke the base's operator on self.
+            if (peek().type == TokenType::kColon
+                && pos_ + 1 < (int)tokens_.size()
+                && tokens_[pos_ + 1].type == TokenType::kOp) {
+                advance(); advance(); // ':' 'op'
+                auto sym = consumeOpSymbol();
+                if (!sym) errorHere("Expected an operator symbol after 'op'.");
+                expect(TokenType::kLParen, "Expected '('");
+                std::vector<std::unique_ptr<Expr>> args;
+                while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                    args.push_back(parseExpr());
+                    if (peek().type == TokenType::kComma) advance();
+                }
+                expect(TokenType::kRParen, "Expected ')'");
+                expect(TokenType::kSemicolon, "Expected ';'");
+                auto call = make<CallExpr>(t_start, "op" + *sym, std::move(args));
+                call->qualifier = path;
+                return make<ExprStmt>(t_start, std::move(call));
             }
             // Namespace call statement: <ns-path>:method(args);
             if (peek().type == TokenType::kLParen) {

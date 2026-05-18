@@ -1,4 +1,10 @@
 
+this should probably be a compile error:
+    (String^ = ^self)^ = s;
+the syntax is type conversion.
+but pointer types should use cast syntax.
+    (<String^> ^self)^ = s;
+
 main should be a keyword.
 claude says no cause it's not a keyword in any other language.
 hrm...

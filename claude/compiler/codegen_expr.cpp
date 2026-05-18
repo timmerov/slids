@@ -20,6 +20,18 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     + current_slid_ + "' has no self"));
             return self_ptr_.empty() ? "%self" : self_ptr_;
         }
+        // `Base:self` — self viewed as the named base sub-object. The base
+        // sits at offset 0, so the value is the same pointer as self.
+        if (v->name.size() > 5
+            && v->name.compare(v->name.size() - 5, 5, ":self") == 0) {
+            std::string base = v->name.substr(0, v->name.size() - 5);
+            if (current_slid_.empty()
+                || (base != current_slid_ && !isAncestor(base, current_slid_)))
+                error(std::string("'" + base + "' is not a base class of '"
+                    + (current_slid_.empty() ? std::string("this context")
+                                             : current_slid_) + "'"));
+            return self_ptr_.empty() ? "%self" : self_ptr_;
+        }
         // substitution const lookup — block stack → enclosing slid → global.
         if (auto* ce = lookupConst(v->name)) return emitConstValue(*ce);
         // check if it's a field access via self in a method

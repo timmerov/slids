@@ -211,6 +211,17 @@ void Codegen::emitPrePass(const Stmt& root) {
 
 Codegen::Lvalue Codegen::resolveLvalue(const Expr& e) {
     if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
+        // `Base:self` — self viewed as the named base sub-object (offset 0).
+        if (ve->name.size() > 5
+            && ve->name.compare(ve->name.size() - 5, 5, ":self") == 0) {
+            std::string base = ve->name.substr(0, ve->name.size() - 5);
+            if (current_slid_.empty()
+                || (base != current_slid_ && !isAncestor(base, current_slid_)))
+                errorAtNode(e, "'" + base + "' is not a base class of '"
+                    + (current_slid_.empty() ? std::string("this context")
+                                             : current_slid_) + "'.");
+            return {self_ptr_.empty() ? "%self" : self_ptr_, base};
+        }
         auto it = locals_.find(ve->name);
         if (it != locals_.end()) return {it->second.reg, it->second.type};
         if (!current_slid_.empty()) {
@@ -1860,6 +1871,30 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string op_func = resolveSingleArgOverload(current_slid_ + "__op=", *assign->value);
             if (op_func.empty())
                 error(std::string("No matching op= on '" + current_slid_ + "' for 'self = <expr>'"));
+            auto& ptypes = func_param_types_[op_func];
+            std::string param_type = ptypes.empty() ? "" : ptypes[0];
+            std::string arg_val = emitArgForParam(*assign->value, param_type);
+            std::string ptype_str = ptypes.empty() ? "ptr" : llvmType(ptypes[0]);
+            std::string self_ptr = self_ptr_.empty() ? "%self" : self_ptr_;
+            out_ << "    call void @" << llvmGlobalName(op_func)
+                 << "(ptr " << self_ptr << ", " << ptype_str << " " << arg_val << ")\n";
+            return;
+        }
+        // `Base:self = expr` — assign through op= on the named base sub-object.
+        // Mirrors `self = expr`, but dispatches the base class's op=, so it is
+        // not the recursion `self = expr` would be inside that class's own op=.
+        if (assign->name.size() > 5
+            && assign->name.compare(assign->name.size() - 5, 5, ":self") == 0) {
+            std::string base = assign->name.substr(0, assign->name.size() - 5);
+            if (current_slid_.empty()
+                || (base != current_slid_ && !isAncestor(base, current_slid_)))
+                errorAtNode(stmt, "'" + base + "' is not a base class of '"
+                    + (current_slid_.empty() ? std::string("this context")
+                                             : current_slid_) + "'.");
+            std::string op_func = resolveSingleArgOverload(base + "__op=", *assign->value);
+            if (op_func.empty())
+                error(std::string("No matching op= on '" + base + "' for '"
+                    + assign->name + " = <expr>'"));
             auto& ptypes = func_param_types_[op_func];
             std::string param_type = ptypes.empty() ? "" : ptypes[0];
             std::string arg_val = emitArgForParam(*assign->value, param_type);

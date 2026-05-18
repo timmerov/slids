@@ -95,18 +95,15 @@ int32 main() {
     println(String + "s8<World>=" + s8);
 
     Format fmt;
-    fmt.justify_ = Format:kRightJustify;
+    fmt.justify_ = Format:kLeftJustify;
     fmt.pad_ = '.';
     fmt.min_width_ = 16;
     fmt = s2;
+    println(String + "left : [" + fmt + "]");
+    fmt.clear();
+    fmt.justify_ = Format:kRightJustify;
+    fmt = s2;
     println(String + "right: [" + fmt + "]");
-    /*
-    fmt.clear();
-    println(fmt + "right: [" + s1 + "]");
-    fmt.clear();
-    fmt.justify_ = Format:kLeftJustify;
-    println(fmt + "right: [" + s1 + "]");
-    */
 
     return 0;
 }

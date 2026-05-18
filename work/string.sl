@@ -433,7 +433,6 @@ String : Format() {
             return;
         }*/
 
-        String s = String + "[" + rhs^ + "]";
-        String:set(s.storage_, s.size_);
+        String:self = String + "[" + rhs^ + "]";
     }
 }

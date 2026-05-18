@@ -299,8 +299,24 @@ std::string Codegen::resolveOverloadForCall(
     const std::vector<std::unique_ptr<Expr>>& args)
 {
     auto it = method_overloads_.find(base_mangled);
-    if (it == method_overloads_.end()) return base_mangled;
-    return resolveOverloadIn(base_mangled, args, it->second);
+    if (it != method_overloads_.end())
+        return resolveOverloadIn(base_mangled, args, it->second);
+    // Not a method of this class — walk the base chain so a derived class
+    // inherits its base's methods. The `<Class>` part of base_mangled is
+    // everything before the final `__`; `self` upcasts to the base sub-object
+    // at offset 0, so the resolved `<Base>__<method>` is called with it as-is.
+    size_t sep = base_mangled.rfind("__");
+    if (sep != std::string::npos) {
+        std::string method = base_mangled.substr(sep + 2);
+        auto ci = slid_info_.find(base_mangled.substr(0, sep));
+        for (const SlidInfo* b = (ci != slid_info_.end() ? ci->second.base_info : nullptr);
+             b; b = b->base_info) {
+            auto bit = method_overloads_.find(b->name + "__" + method);
+            if (bit != method_overloads_.end())
+                return resolveOverloadIn(b->name + "__" + method, args, bit->second);
+        }
+    }
+    return base_mangled;
 }
 
 // Derived→base upcast check — see header. `arg` (a class type, possibly `^`)
@@ -739,6 +755,10 @@ std::string Codegen::exprType(const Expr& expr) {
     if (auto* pc = dynamic_cast<const PtrCastExpr*>(&expr))   return pc->target_type;
     if (auto t = newExprResultType(expr); !t.empty()) return t;
     if (auto* ve = dynamic_cast<const VarExpr*>(&expr)) {
+        // `Base:self` — typed as the named base sub-object.
+        if (ve->name.size() > 5
+            && ve->name.compare(ve->name.size() - 5, 5, ":self") == 0)
+            return ve->name.substr(0, ve->name.size() - 5);
         if (!current_slid_.empty()) {
             auto& info = slid_info_[current_slid_];
             auto fit = info.field_index.find(ve->name);
