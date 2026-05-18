@@ -414,6 +414,19 @@ void strcpy(
     }
 }
 
+/* fill the string with the character. */
+void strfill(
+    mutable char[] s,
+    char ch,
+    intptr count
+) {
+    for() (count > 0) {
+        ++s; --count;
+    } {
+        s^ = ch;
+    }
+}
+
 /* formatted strings. */
 String : Format() {
     /* constructor/destructor */
@@ -433,6 +446,43 @@ String : Format() {
             return;
         }*/
 
-        String:self = String + "[" + rhs^ + "]";
+        /* reserve space for the justified width. */
+        intptr rhs_size = rhs^.size_;
+        intptr width = min_width_;
+        if (width < rhs_size) {
+            width = rhs_size;
+        }
+        if (max_width_ >= 0 && width > max_width_) {
+            width = max_width_;
+        }
+        if (rhs_size > width) {
+            rhs_size = width;
+        }
+        reserve(width);
+        size_ = width;
+        __println("size = " + size_);
+        __println("capacity = " + capacity_);
+
+        __println("rhs_size = " + rhs_size);
+        __println("width = " + width);
+
+        /* number of pad characters. */
+        fill_count = width - rhs_size;
+
+        __println("fill_count = " + fill_count);
+        __println("justify = " + justify_);
+        __println("pad = " + pad_);
+        println(String + "rhs = " + rhs^);
+        strfill(storage_, pad_, width);
+
+        /* right or left justify the string. */
+        /*if (justify_ == Format:kRightJustify) {
+            strfill(storage_, pad_, fill_count);
+            strcpy(storage_ + fill_count, rhs^.storage_, rhs_size);
+        } else {
+            strcpy(storage_, rhs^.storage_, rhs_size);
+            strfill(storage_ + rhs_size, pad_, fill_count);
+        }*/
+        println(self);
     }
 }

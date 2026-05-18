@@ -1039,7 +1039,7 @@ private:
                         const std::vector<int>& param_mut_toks,
                         int op_tok);
 
-    SlidDef parseSlidDef();
+    SlidDef parseSlidDef(const std::string& base_name = "");
     // Parses a single global slid declaration. Caller has already verified that
     // `pos_` points at the `global` keyword and ruled out the `global;` lifetime
     // statement shape. `namespace_prefix` is "" at file scope, the enclosing

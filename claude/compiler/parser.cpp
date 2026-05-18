@@ -1756,8 +1756,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         if (!lc.empty()) base_name = lc;
         int name_tok = pos_;
         std::string short_name = peek().value;
-        SlidDef slid = parseSlidDef();
-        slid.base_name = base_name;
+        SlidDef slid = parseSlidDef(base_name);
         collectLocalClass(std::move(slid), short_name, name_tok);
         return make<BlockStmt>(t_start);
     }
@@ -3071,9 +3070,12 @@ MethodDef Parser::parseMethodDef(const std::string& class_name) {
     return m;
 }
 
-SlidDef Parser::parseSlidDef() {
+SlidDef Parser::parseSlidDef(const std::string& base_name) {
     [[maybe_unused]] int t_start = pos_;
     SlidDef slid;
+    // Set early (the `Base :` prefix is consumed by the caller) so the field
+    // seeding below can merge the base's fields.
+    slid.base_name = base_name;
     int name_tok = pos_;
     slid.name = peek().value;
     slid.name_file_id = file_id_;
@@ -3222,6 +3224,16 @@ SlidDef Parser::parseSlidDef() {
     auto prior_fields = all_slid_fields_.find(slid.name);
     if (prior_fields != all_slid_fields_.end())
         current_slid_fields_ = prior_fields->second;
+    // a derived class's method bodies see the base's fields too — seed them so
+    // an inherited-field assignment isn't mistaken for an inferred declaration.
+    // all_slid_fields_[base] already accumulates the base's own + inherited
+    // fields, so a single merge covers the whole chain.
+    if (!slid.base_name.empty()) {
+        auto base_fields = all_slid_fields_.find(slid.base_name);
+        if (base_fields != all_slid_fields_.end())
+            for (auto& [fname, fref] : base_fields->second)
+                current_slid_fields_.emplace(fname, fref);
+    }
     for (auto& f : slid.fields)
         current_slid_fields_.emplace(f.name, FieldRef{f.file_id, f.tok});
     all_slid_fields_[slid.name] = current_slid_fields_;
@@ -4127,8 +4139,7 @@ Program Parser::parse() {
                 recordSlidMethods(fwd);
                 program.slids.push_back(std::move(fwd));
             } else {
-                SlidDef slid = parseSlidDef();
-                slid.base_name = base_name;
+                SlidDef slid = parseSlidDef(base_name);
                 recordSlidMethods(slid);
                 program.slids.push_back(std::move(slid));
             }

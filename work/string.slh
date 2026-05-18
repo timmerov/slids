@@ -154,6 +154,9 @@ compare at most count characters. return:
 */
 int strcmp(char[] sa, char[] sb, int count);
 
+/* fill the string with the character. */
+void strfill(mutable char[] s, char ch, intptr count);
+
 /* formatted strings. */
 String : Format(
     Option justify_ = kAuto,
