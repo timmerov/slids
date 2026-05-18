@@ -460,29 +460,17 @@ String : Format() {
         }
         reserve(width);
         size_ = width;
-        __println("size = " + size_);
-        __println("capacity = " + capacity_);
-
-        __println("rhs_size = " + rhs_size);
-        __println("width = " + width);
 
         /* number of pad characters. */
         fill_count = width - rhs_size;
 
-        __println("fill_count = " + fill_count);
-        __println("justify = " + justify_);
-        __println("pad = " + pad_);
-        println(String + "rhs = " + rhs^);
-        strfill(storage_, pad_, width);
-
         /* right or left justify the string. */
-        /*if (justify_ == Format:kRightJustify) {
+        if (justify_ == Format:kRightJustify) {
             strfill(storage_, pad_, fill_count);
             strcpy(storage_ + fill_count, rhs^.storage_, rhs_size);
         } else {
             strcpy(storage_, rhs^.storage_, rhs_size);
             strfill(storage_ + rhs_size, pad_, fill_count);
-        }*/
-        println(self);
+        }
     }
 }
