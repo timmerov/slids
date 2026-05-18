@@ -455,6 +455,12 @@ private:
     // field default would not resolve at an external construction site;
     // folding it here, in the class's scope, makes it a literal by emit time.
     void resolveNestedEnumDefaults();
+    // Rewrite a class field whose declared type is a bare nested-enum name of
+    // the owning class into the qualified `Class:Enum` form, so the type
+    // string matches the enum_sizes_ registry key and survives type
+    // inference (a field read into an inferred local must carry a type the
+    // variable-declaration path recognizes).
+    void qualifyNestedEnumFieldTypes();
     // For each class field declared in the shape `name = expr` (no type),
     // fold the default expression and derive the field's type from the
     // folded value. Runs after `collectAndFoldConsts` (which populates

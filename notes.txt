@@ -1,4 +1,22 @@
 
+syntax validity question:
+legal or not?
+    Class(1,2,3);
+currently not.
+if legal then it creates a temporary Class object
+that lives until the end of scope.
+but it's unreachable.
+only ctor and dtor run.
+kinda like globals; .
+hrm...
+
+we don't want to allow executable code in the slid body.
+ctor code must be in the ctor.
+that leads to vexing parses when you define a function
+and accidentally leave off the void type.
+it becomes a nested class with code in the body instead
+of a ctor.
+
 this should be a compile error:
     char[] format = "%g";
 format is mutable.

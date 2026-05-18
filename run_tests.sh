@@ -19,6 +19,7 @@ SAMPLES=(
     function1
     global1
     global2
+    headerfields
     incomplete
     indexop
     inheritance

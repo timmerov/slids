@@ -169,7 +169,8 @@ String : Format(
     char pad_ = ' ',
     bool leading_plus_ = false,
     int min_width_ = 0,
-    int max_width_ = -1
+    int max_width_ = -1,
+    int precision_ = 6
 ) {
     enum Option (
         kAuto,
@@ -214,4 +215,16 @@ String : Format(
 
     /* format a float64. */
     op=(float64 x);
+
+    /* overload * to format a string in place. */
+    op*(Format^ fmt, String^ s);
+
+    /* overload * to format a signed number in place. */
+    op*(Format^ fmt, int64 x);
+
+    /* overload * to format an unsigned number in place. */
+    op*(Format^ fmt, uint64 x);
+
+    /* overload * to format a floating point number in place. */
+    op*(Format^ fmt, float64 x);
 }

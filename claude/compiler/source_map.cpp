@@ -96,8 +96,8 @@ void renderBlock(const std::vector<SourceFile>& files,
         if (cstart > (int)text.size()) cstart = (int)text.size();
         int avail = (int)text.size() - cstart;
         int clen = std::max(0, std::min(loc.length, avail));
-        os << buf
-           << cBlueish() << text.substr(0, cstart)
+        os << cBlueish() << buf
+           << text.substr(0, cstart)
            << cRed() << text.substr(cstart, clen)
            << cBlueish() << text.substr(cstart + clen)
            << cReset() << "\n";

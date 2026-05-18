@@ -1047,10 +1047,14 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
                 || tokens_[pos_ + 1].type == TokenType::kSelf
                 || tokens_[pos_ + 1].type == TokenType::kOp)) {
             std::string path = t.value;
+            // token of the final path segment — diagnostics about a qualified
+            // name should caret the member being looked up, not the namespace.
+            int last_seg_tok = t_start;
             while (peek().type == TokenType::kColon
                    && pos_ + 1 < (int)tokens_.size()
                    && tokens_[pos_ + 1].type == TokenType::kIdentifier) {
                 advance(); // consume ':'
+                last_seg_tok = pos_;
                 path += ":" + advance().value;
             }
             // `Base:self` — self viewed as the named base sub-object (an
@@ -1097,7 +1101,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
                 return call;
             }
             // namespace var access: path is the full colon-joined name.
-            return make<VarExpr>(t_start, path);
+            return make<VarExpr>(last_seg_tok, path);
         }
         // template call: name<TypeArg,...>(args)
         if (peek().type == TokenType::kLt && isTemplateCallLookahead()) {
@@ -4006,6 +4010,15 @@ Program Parser::parse() {
             Lexer hdr_lexer(sm_, hdr_file_id);
             Parser hdr_parser(sm_, hdr_file_id, hdr_lexer.tokenize(), source_dir_, import_paths_, imported_once_);
             Program hdr = hdr_parser.parse();
+
+            // Fold the header parser's class field sets into ours. A `.sl` that
+            // reopens an imported class must be able to tell a header-declared
+            // field assignment from an inferred declaration — parseSlid() seeds
+            // current_slid_fields_ from all_slid_fields_, which is otherwise
+            // only populated from class blocks in the current file.
+            for (auto& [cname, fields] : hdr_parser.all_slid_fields_)
+                for (auto& [fname, fref] : fields)
+                    all_slid_fields_[cname].emplace(fname, fref);
 
             // check before moving whether any functions or slids are template declarations
             bool has_templates = false;

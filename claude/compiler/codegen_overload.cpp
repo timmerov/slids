@@ -1011,9 +1011,16 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
         std::string p1_slid = p1_is_slid_ref ? p1.substr(0, p1.size()-1) : "";
         // arg is a string literal → matches slid ref (implicit temp) or ptr param
         if (dynamic_cast<const StringLiteralExpr*>(&arg)) return p1_is_slid_ref || p1_is_ptr;
-        // arg is an integer/char/float literal → matches non-pointer param
+        // an integer/char literal matches any non-pointer param (it flexes,
+        // including to a float param).
         if (dynamic_cast<const IntLiteralExpr*>(&arg)) return !p1_is_ptr;
-        if (dynamic_cast<const FloatLiteralExpr*>(&arg)) return !p1_is_ptr;
+        // a float literal binds only to a float param — forcing it into an
+        // integer param would emit a float constant for an i-typed operand.
+        if (dynamic_cast<const FloatLiteralExpr*>(&arg)) {
+            static const std::set<std::string> float_types =
+                {"float","float32","float64"};
+            return float_types.count(p1) > 0;
+        }
         // arg is a variable
         if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
             auto tit = locals_.find(ve->name);
@@ -1220,9 +1227,19 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
     } else if (auto* nc = dynamic_cast<const TypeConvExpr*>(&arg)) {
         classify_int(nc->target_type);
     } else if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
+        // Resolve the bare name from locals_, falling back to a field of the
+        // enclosing class — an unqualified field name is not in locals_.
+        std::string raw_t;
         auto tit = locals_.find(ve->name);
         if (tit != locals_.end()) {
-            std::string raw_t = tit->second.type;
+            raw_t = tit->second.type;
+        } else if (!current_slid_.empty()) {
+            auto& info = slid_info_[current_slid_];
+            auto fit = info.field_index.find(ve->name);
+            if (fit != info.field_index.end())
+                raw_t = info.field_types[fit->second];
+        }
+        if (!raw_t.empty()) {
             std::string t = canonicalType(raw_t);
             if (!t.empty() && t.back() == '^') t.pop_back();
             else if (t.size() >= 2 && t.substr(t.size()-2) == "[]") t = t.substr(0, t.size()-2);
@@ -1236,13 +1253,23 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
         // ^x where x: SlidType (non-indirect) → SlidType^ — valid slid ref arg
         // ^x where x: SlidType^ or char[] → double-indirect — no match for any overload
         if (auto* ve = dynamic_cast<const VarExpr*>(ao->operand.get())) {
+            // locals_ first, then a field of the enclosing class.
+            std::string raw_t;
             auto tit = locals_.find(ve->name);
             if (tit != locals_.end()) {
-                if (isIndirectType(tit->second.type))
+                raw_t = tit->second.type;
+            } else if (!current_slid_.empty()) {
+                auto& info = slid_info_[current_slid_];
+                auto fit = info.field_index.find(ve->name);
+                if (fit != info.field_index.end())
+                    raw_t = info.field_types[fit->second];
+            }
+            if (!raw_t.empty()) {
+                if (isIndirectType(raw_t))
                     return "";  // ^ref is double-indirect: type error
-                if (slid_info_.count(tit->second.type)) {
+                if (slid_info_.count(raw_t)) {
                     arg_is_slid = true;  // ^slid_var is a valid slid ref
-                    arg_slid_name = tit->second.type;
+                    arg_slid_name = raw_t;
                 }
             }
         }

@@ -563,18 +563,58 @@ String : Format() {
             format = "%e";
             break;
         default:
-            format = "%f";
+            format = "%g";
             break;
         }
         */
-        char[] format = "%g";
+        char style = 'g';
         if (float_style_ == Format:kFixedPoint) {
-            format = "%f";
+            style = 'f';
         } else if (float_style_ == Format:kScientificNotation) {
-            format = "%e";
+            style = 'e';
         }
         /* end of crap. */
-        str.size_ += stdc:strfromd(str.storage_ + str.size_, str.capacity_ - str.size_, format, x);
+        fmt = String + "%." + precision_ + style + '\0';
+        str.size_ += stdc:strfromd(str.storage_ + str.size_, str.capacity_ - str.size_, fmt.storage_, x);
         self = str;
+    }
+
+    /* overload * to format a string in place. */
+    op*(Format^ fmt, String^ s) {
+        copyFormatClear(fmt);
+        self = s^;
+    }
+
+    /* overload * to format a signed number in place. */
+    op*(Format^ fmt, int64 x) {
+        copyFormatClear(fmt);
+        self = x;
+    }
+
+    /* overload * to format an unsigned number in place. */
+    op*(Format^ fmt, uint64 x) {
+        copyFormatClear(fmt);
+        self = x;
+    }
+
+    /* overload * to format a floating point number in place. */
+    op*(Format^ fmt, float64 x) {
+        copyFormatClear(fmt);
+        self = x;
+    }
+
+/* private methods */
+
+    /* copy the format fields. */
+    void copyFormatClear(Format^ fmt) {
+        clear();
+        x = fmt^.justify_;
+        justify_      = fmt^.justify_;
+        float_style_  = fmt^.float_style_;
+        pad_          = fmt^.pad_;
+        leading_plus_ = fmt^.leading_plus_;
+        min_width_    = fmt^.min_width_;
+        max_width_    = fmt^.max_width_;
+        precision_    = fmt^.precision_;
     }
 }

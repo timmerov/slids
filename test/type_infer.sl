@@ -14,6 +14,8 @@ intptr strlen_helper(char[] s) {
     return len;
 }
 
+enum Color (kRed, kGreen, kBlue);
+
 int main() {
     // decimal integers: int if fits in 32 bits, int64 if larger
     a = 0;
@@ -43,6 +45,10 @@ int main() {
     // reassignment works: a is still int
     a = 42;
 
+    // enum-typed locals: explicit type, and inferred from another enum value
+    Color col = kGreen;
+    col2 = col;
+
     __println(a);        // 42
     __println(b);        // 100
     __println(c);        // 3000000000
@@ -53,6 +59,8 @@ int main() {
     __println(buf);      // Hi
     __println(slen);     // 2
     __println(local);    // 77
+    __println(col);      // 1
+    __println(col2);     // 1
     delete buf;
     return 0;
 }

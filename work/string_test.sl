@@ -94,6 +94,7 @@ int32 main() {
     String s8 = s2.slice(7, 5);
     println(String + "s8<World>=" + s8);
 
+    /* exercise formatting strings. */
     Format fmt;
     fmt.justify_ = Format:kLeftJustify;
     fmt.pad_ = '.';
@@ -152,8 +153,21 @@ int32 main() {
     println(String + "fixed  =[" + fmt + "]");
     fmt.clear();
     fmt.float_style_ = Format:kScientificNotation;
+    fmt.precision_ = 4;
     fmt = 20.26;
     println(String + "SciNot =[" + fmt + "]");
+
+    fmt.float_style_ = Format:kFixedPoint;
+    fmt.justify_ = Format:kRightJustify;
+    println(String + "factor =[" + fmt*1234.56 + "]");
+
+    Format fmt1;
+    fmt1.justify_ = Format:kLeftJustify;
+    fmt1.min_width_ = 8;
+    Format fmt2;
+    fmt2.justify_ = Format:kRightJustify;
+    fmt2.min_width_ = 8;
+    println(String + "2 fmts =[" + fmt1*123 + fmt2*4.56 + "]");
 
     return 0;
 }

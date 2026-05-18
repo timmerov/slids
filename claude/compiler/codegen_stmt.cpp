@@ -1815,7 +1815,13 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string canon = canonType(eff_type);
             bool is_ptr = (!canon.empty() && canon.back() == '^')
                        || (canon.size() >= 2 && canon.substr(canon.size()-2) == "[]");
-            if (!known_primitives.count(canon) && !is_ptr)
+            // an enum type is a valid local type — it lowers to i32. The type
+            // string is either already qualified (`Class:Enum`) or a bare
+            // nested-enum name resolved against the enclosing class scope.
+            bool is_enum = enum_sizes_.count(canon)
+                || (!current_slid_.empty()
+                    && enum_sizes_.count(current_slid_ + ":" + canon));
+            if (!known_primitives.count(canon) && !is_ptr && !is_enum)
                 error(std::string("Unknown type '" + eff_type + "'"));
         }
         std::string reg = uniqueAllocaReg(decl->name);

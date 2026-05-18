@@ -1268,6 +1268,17 @@ void Codegen::resolveNestedEnumDefaults() {
     }
 }
 
+void Codegen::qualifyNestedEnumFieldTypes() {
+    Program& prog = const_cast<Program&>(program_);
+    for (auto& slid : prog.slids) {
+        if (slid.nested_enums.empty()) continue;
+        std::set<std::string> enums;
+        for (auto& e : slid.nested_enums) enums.insert(e.name);
+        for (auto& f : slid.fields)
+            if (enums.count(f.type)) f.type = slid.name + ":" + f.type;
+    }
+}
+
 void Codegen::emit() {
     out_ << "target triple = \"x86_64-pc-linux-gnu\"\n\n";
 
@@ -1289,6 +1300,7 @@ void Codegen::emit() {
     // Fold class-scoped nested-enum values used in field defaults to literals
     // before any slid/field processing reads the defaults.
     resolveNestedEnumDefaults();
+    qualifyNestedEnumFieldTypes();
 
     // Establish the bottom frame of block_const_stack_ — the file/global scope.
     // File-scope const decls land here via collectAndFoldConsts. Each function

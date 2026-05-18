@@ -20,6 +20,7 @@ SAMPLES = \
 	function1 \
 	global1 \
 	global2 \
+	headerfields \
 	incomplete \
 	indexop \
 	inheritance \
@@ -35,6 +36,7 @@ SAMPLES = \
 	namespace \
 	nested \
 	new_delete \
+	opdispatch \
 	operators \
 	parsing \
 	phrases \
