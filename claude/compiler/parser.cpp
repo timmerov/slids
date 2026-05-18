@@ -4763,9 +4763,40 @@ std::unique_ptr<SwitchStmt> Parser::parseSwitchStmt() {
         SwitchCase sc;
         if (peek().type == TokenType::kCase) {
             advance();
-            colon_terminates_expr_++;
-            sc.value = parseExpr();
-            colon_terminates_expr_--;
+            // A case value that is a (possibly qualified) name `Ident(:Ident)*`:
+            // the `:` separators belong to the name, the final `:` terminates
+            // the label. parseExpr() can't see this — the case context makes
+            // `:` a terminator — so scan the Ident-run and split it here.
+            if (peek().type == TokenType::kIdentifier
+                && pos_ + 1 < (int)tokens_.size()
+                && tokens_[pos_ + 1].type == TokenType::kColon) {
+                std::vector<int> seg;          // token index of each segment
+                seg.push_back(pos_);
+                int i = pos_;
+                while (i + 2 < (int)tokens_.size()
+                       && tokens_[i + 1].type == TokenType::kColon
+                       && tokens_[i + 2].type == TokenType::kIdentifier) {
+                    i += 2;
+                    seg.push_back(i);
+                }
+                // token after the run decides where the value ends: a `:` means
+                // the whole run is the value; otherwise the run's last segment
+                // is the case body's first token and the value is the rest.
+                int after = i + 1;
+                int last = (after < (int)tokens_.size()
+                            && tokens_[after].type == TokenType::kColon)
+                           ? (int)seg.size() - 1
+                           : (int)seg.size() - 2;
+                std::string path = tokens_[seg[0]].value;
+                for (int s = 1; s <= last; s++)
+                    path += ":" + tokens_[seg[s]].value;
+                sc.value = make<VarExpr>(seg[last], path);
+                pos_ = seg[last] + 1;  // leave the terminator ':' for expect()
+            } else {
+                colon_terminates_expr_++;
+                sc.value = parseExpr();
+                colon_terminates_expr_--;
+            }
             expect(TokenType::kColon, "Expected ':'");
         } else if (peek().type == TokenType::kDefault) {
             advance();

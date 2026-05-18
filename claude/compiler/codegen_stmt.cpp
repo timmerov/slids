@@ -3889,11 +3889,28 @@ void Codegen::emitStmt(const Stmt& stmt) {
         for (int i = 0; i < (int)sw->cases.size(); i++)
             if (!sw->cases[i].value) { default_lbl = case_lbls[i]; break; }
 
+        // owning class of the scrutinee's enum, if it is a nested enum
+        // (`Owner:Enum`). A bare `case kX:` then resolves against it — the
+        // qualified value is keyed `Owner:kX` in enum_values_.
+        std::string enum_owner;
+        {
+            std::string disc_slids = inferSlidType(*sw->expr);
+            auto cp = disc_slids.find(':');
+            if (cp != std::string::npos) enum_owner = disc_slids.substr(0, cp);
+        }
         out_ << "    switch i32 " << disc << ", label %" << default_lbl << " [\n";
         for (int i = 0; i < (int)sw->cases.size(); i++) {
             if (!sw->cases[i].value) continue; // skip default
             int val;
-            if (!constExprToInt(*sw->cases[i].value, enum_values_, val))
+            const Expr& cv = *sw->cases[i].value;
+            bool ok = constExprToInt(cv, enum_values_, val);
+            if (!ok && !enum_owner.empty()) {
+                if (auto* ve = dynamic_cast<const VarExpr*>(&cv)) {
+                    auto eit = enum_values_.find(enum_owner + ":" + ve->name);
+                    if (eit != enum_values_.end()) { val = eit->second; ok = true; }
+                }
+            }
+            if (!ok)
                 error(std::string("Switch case value must be a constant integer or enum"));
             out_ << "        i32 " << val << ", label %" << case_lbls[i] << "\n";
         }

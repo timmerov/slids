@@ -163,9 +163,11 @@ int32 main() {
 
     Format fmt1;
     fmt1.justify_ = Format:kLeftJustify;
+    fmt1.pad_ = '.';
     fmt1.min_width_ = 8;
     Format fmt2;
     fmt2.justify_ = Format:kRightJustify;
+    fmt2.pad_ = '~';
     fmt2.min_width_ = 8;
     println(String + "2 fmts =[" + fmt1*123 + fmt2*4.56 + "]");
 

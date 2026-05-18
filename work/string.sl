@@ -551,29 +551,19 @@ String : Format() {
         /*
         this doesn't actually work.
         cause the case statements are enums not constants.
-        who writes this crap?
         */
-        /*
-        char[] format;
+        char style;
         switch (float_style_) {
         case Format:kFixedPoint:
-            format = "%f";
+            style = 'f';
             break;
         case Format:kScientificNotation:
-            format = "%e";
+            style = 'e';
             break;
         default:
-            format = "%g";
+            style = 'g';
             break;
         }
-        */
-        char style = 'g';
-        if (float_style_ == Format:kFixedPoint) {
-            style = 'f';
-        } else if (float_style_ == Format:kScientificNotation) {
-            style = 'e';
-        }
-        /* end of crap. */
         fmt = String + "%." + precision_ + style + '\0';
         str.size_ += stdc:strfromd(str.storage_ + str.size_, str.capacity_ - str.size_, fmt.storage_, x);
         self = str;
