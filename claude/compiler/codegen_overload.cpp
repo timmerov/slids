@@ -744,6 +744,7 @@ std::string Codegen::exprSlidType(const Expr& expr) {
 std::string Codegen::exprType(const Expr& expr) {
     if (dynamic_cast<const StringLiteralExpr*>(&expr)) return "char[]";
     if (auto* il = dynamic_cast<const IntLiteralExpr*>(&expr)) {
+        if (il->is_bool)         return "bool";
         if (il->is_char_literal) return "char";
         if (il->is_nondecimal)   return "uint64";
         return "int";
@@ -1201,6 +1202,7 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
         arg_is_char = ile->is_char_literal;
         arg_is_scalar_int = !ile->is_char_literal;
         if (ile->is_char_literal) arg_int_type = "char";
+        else if (ile->is_bool)    arg_int_type = "bool";
         // untyped integer literal: arg_int_type left empty — any signed int overload is acceptable
     } else if (auto* nc = dynamic_cast<const TypeConvExpr*>(&arg)) {
         classify_int(nc->target_type);

@@ -440,11 +440,11 @@ String : Format() {
     rhs may be self.
     */
     op=(String^ rhs) {
-        /*if (rhs == ^self) {
+        if (rhs == ^self) {
             String temp = rhs^;
             self = temp;
             return;
-        }*/
+        }
 
         /* reserve space for the justified width. */
         intptr rhs_size = rhs^.size_;
@@ -472,5 +472,43 @@ String : Format() {
             strcpy(storage_, rhs^.storage_, rhs_size);
             strfill(storage_ + rhs_size, pad_, fill_count);
         }
+    }
+
+    /* format a null terminated string literal. */
+    op=(char[] s) {
+        String str = s;
+        self = str;
+    }
+
+    /* format a character literal. */
+    op=(char c) {
+        String str = c;
+        self = str;
+    }
+
+    /*
+    format an int64.
+    all smaller signed ints should promote to int64.
+    excluding char.
+    */
+    op=(int64 x) {
+        String str = x;
+        self = str;
+    }
+
+    /*
+    format a uint64.
+    all smaller unsigned ints should promote to uint64.
+    excluding char.
+    */
+    op=(uint64 x) {
+        String str = x;
+        self = str;
+    }
+
+    /* format a bool. */
+    op=(bool b) {
+        String str = b;
+        self = str;
     }
 }

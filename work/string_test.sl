@@ -104,6 +104,31 @@ int32 main() {
     fmt.justify_ = Format:kRightJustify;
     fmt = s2;
     println(String + "right: [" + fmt + "]");
+    fmt.clear();
+    fmt.max_width_ = 10;
+    fmt = s2;
+    println(String + "max_r: [" + fmt + "]");
+    fmt.clear();
+    fmt.justify_ = Format:kLeftJustify;
+    fmt = s2;
+    println(String + "max_l: [" + fmt + "]");
+    fmt.clear();
+    fmt.max_width_ = -1;
+    fmt.justify_ = Format:kRightJustify;
+    fmt = "Howdy!";
+    println(String + "char[] =[" + fmt + "]");
+    fmt.clear();
+    fmt = 'A';
+    println(String + "char   =[" + fmt + "]");
+    fmt.clear();
+    fmt = -123456789;
+    println(String + "int64  =[" + fmt + "]");
+    fmt.clear();
+    fmt = (uint64=-123456789);
+    println(String + "uint64 =[" + fmt + "]");
+    fmt.clear();
+    fmt = true;
+    println(String + "bool   =[" + fmt + "]");
 
     return 0;
 }

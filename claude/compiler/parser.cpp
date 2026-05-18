@@ -950,8 +950,13 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
             value += advance().value;
         return make<StringLiteralExpr>(t_start, value);
     }
-    if (t.type == TokenType::kTrue)  { advance(); return make<IntLiteralExpr>(t_start, 1); }
-    if (t.type == TokenType::kFalse) { advance(); return make<IntLiteralExpr>(t_start, 0); }
+    if (t.type == TokenType::kTrue || t.type == TokenType::kFalse) {
+        bool v = (t.type == TokenType::kTrue);
+        advance();
+        auto lit = make<IntLiteralExpr>(t_start, v ? 1 : 0);
+        lit->is_bool = true;
+        return lit;
+    }
     if (t.type == TokenType::kNullptr) { advance(); return make<NullptrExpr>(t_start); }
     if (t.type == TokenType::kNew) {
         advance();

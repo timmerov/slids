@@ -179,4 +179,27 @@ String : Format(
     rhs may be self.
     */
     op=(String^ s);
+
+    /* format a null terminated string literal. */
+    op=(char[] s);
+
+    /* format a character literal. */
+    op=(char c);
+
+    /*
+    format an int64.
+    all smaller signed ints should promote to int64.
+    excluding char.
+    */
+    op=(int64 x);
+
+    /*
+    format a uint64.
+    all smaller unsigned ints should promote to uint64.
+    excluding char.
+    */
+    op=(uint64 x);
+
+    /* format a bool. */
+    op=(bool b);
 }

@@ -230,6 +230,7 @@ struct IntLiteralExpr : Expr {
     int64_t value;
     bool is_char_literal = false;
     bool is_nondecimal = false;  // hex/binary/octal — infers uint/uint64
+    bool is_bool = false;        // the `true`/`false` literal — typed `bool`
     IntLiteralExpr(int64_t v, bool is_char = false, bool is_nondec = false)
         : value(v), is_char_literal(is_char), is_nondecimal(is_nondec) {}
 };
