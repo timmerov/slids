@@ -3249,8 +3249,12 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         current_slid_fields_.emplace(f.name, FieldRef{f.file_id, f.tok});
     all_slid_fields_[slid.name] = current_slid_fields_;
 
-    // parse body: methods and optional constructor code
+    // parse body: methods and definitions
     expect(TokenType::kLBrace, "Expected '{'");
+
+    // alias frame for the class body — an `alias` declared here is visible to
+    // the body's methods (nested below this frame) and popped at the close.
+    alias_stack_.push_back({});
 
     auto ctor_body = make<BlockStmt>(t_start);
     bool has_ctor_code = false;
@@ -3271,6 +3275,12 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         // scoped to this class (registered as Class:value), not file scope.
         if (peek().type == TokenType::kEnum) {
             slid.nested_enums.push_back(parseEnumDef());
+            continue;
+        }
+        // class-scope alias: `alias Name = TypeExpr;` — registered in the
+        // class body's alias frame, visible to this class's methods.
+        if (peek().type == TokenType::kAlias) {
+            parseAliasDecl();
             continue;
         }
         // class-scope const declaration: const [type] name = expr;
@@ -3473,14 +3483,16 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             }
             slid.methods.push_back(std::move(method));
         } else {
-            // constructor code
-            ctor_body->stmts.push_back(parseStmt());
-            has_ctor_code = true;
+            // A class body holds only definitions — methods, nested classes,
+            // enums, aliases, constants. Executable statements belong in '_()'.
+            errorHere("Executable code is not allowed directly in a class "
+                      "body; put statements in the constructor '_()'.");
         }
     }
 
     if (has_ctor_code)
         slid.ctor_body = std::move(ctor_body);
+    alias_stack_.pop_back();
 
     int close_tok = pos_;
     expect(TokenType::kRBrace, "Expected '}'");
@@ -4565,6 +4577,8 @@ void Parser::mergeReopens(Program& program) {
             for (auto& n : src.nested_slids) dst.nested_slids.push_back(std::move(n));
             // accumulate class-scoped nested enums across reopens
             for (auto& e : src.nested_enums) dst.nested_enums.push_back(std::move(e));
+            // accumulate class-scoped consts across reopens
+            for (auto& c : src.consts) dst.consts.push_back(std::move(c));
             to_remove.insert(indices[i]);
         }
     }

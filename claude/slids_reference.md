@@ -740,26 +740,6 @@ if (!result[0]) { /* error */ }
 if (!ok) { /* error */ }
 ```
 
-**Slid as a type — body is the constructor (no `_` or `~`):**
-
-> **Note:** `Counter(int value_ = 0)` is shorthand for `Counter Counter(int value_ = 0)` — Counter is a function that returns an object of type Counter. The return type is omitted when it matches the slid name.
-
-```
-Counter(int value_ = 0) {
-    value_ = value_ * 2;   // runs on construction
-
-    void increment() {
-        value_ += 1;
-    }
-
-    int getValue() {
-        return value_;
-    }
-}
-
-Counter c(5);   // value_ is now 10
-```
-
 **Slid as a type — with explicit constructor `_` and destructor `~`:**
 ```
 Counter(int value_ = 0) {

@@ -17,6 +17,10 @@ Box() {
     ~() {
     }
 
+    /* a class-body alias and const survive the header reopen. */
+    alias Tick = int;
+    const Tick kBonus = 10;
+
     void start() {
         /* bare writes to header-declared fields. */
         mode_ = Box:kRunning;
@@ -33,7 +37,8 @@ Box() {
         /* explicit local of the nested-enum type. */
         Mode m2 = mode_;
         if (m == Box:kRunning && m2 == Box:kRunning) {
-            return ticks_;
+            Tick t = ticks_;
+            return t + kBonus;
         }
         return -1;
     }

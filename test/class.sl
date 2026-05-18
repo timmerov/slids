@@ -181,6 +181,12 @@ InferFieldTypes(
 //-EXPECT-ERROR: Expression is not allowed in a constant initializer
 // NullDefault(x_ = nullptr) { }
 
+//-EXPECT-ERROR: Executable code is not allowed directly in a class body
+// LooseBody(int x_ = 0) {
+//     x_ = x_ + 1;
+//     int get() { return x_; }
+// }
+
 
 /* hoisted classes. */
 BaseHoist(int x_ = 1) {

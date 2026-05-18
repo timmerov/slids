@@ -548,10 +548,6 @@ String : Format() {
         if (x >= 0.0 && leading_plus_) {
             str = "+";
         }
-        /*
-        this doesn't actually work.
-        cause the case statements are enums not constants.
-        */
         char style;
         switch (float_style_) {
         case Format:kFixedPoint:
@@ -564,6 +560,7 @@ String : Format() {
             style = 'g';
             break;
         }
+        /* build format c-string. */
         fmt = String + "%." + precision_ + style + '\0';
         str.size_ += stdc:strfromd(str.storage_ + str.size_, str.capacity_ - str.size_, fmt.storage_, x);
         self = str;
