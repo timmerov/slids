@@ -144,7 +144,11 @@ std::string Codegen::resolveFreeFunctionMangledName(
                 if (arg_count >= requiredArity(mn) && arg_count <= ptypes.size())
                     return mn;
     }
-    if (func_return_types_.count(name)) {
+    // The bare-name fast path (mangled == base). Gated on the name being a
+    // genuine free-function slids-name: func_return_types_ is keyed by mangled
+    // names, and a namespace foreign function's mangled name is its bare C
+    // symbol — without this gate a bare call would wrongly match `Ns:fn`.
+    if (func_return_types_.count(name) && free_func_overloads_.count(name)) {
         // Bare name resolves only if the call's arity is in the function's
         // [required, total] range (defaults make the upper end reachable).
         auto pit = func_param_types_.find(name);
@@ -1007,8 +1011,9 @@ std::string Codegen::resolveOperatorOverload(const std::string& op,
         std::string p1_slid = p1_is_slid_ref ? p1.substr(0, p1.size()-1) : "";
         // arg is a string literal → matches slid ref (implicit temp) or ptr param
         if (dynamic_cast<const StringLiteralExpr*>(&arg)) return p1_is_slid_ref || p1_is_ptr;
-        // arg is an integer/char literal → matches non-pointer param
+        // arg is an integer/char/float literal → matches non-pointer param
         if (dynamic_cast<const IntLiteralExpr*>(&arg)) return !p1_is_ptr;
+        if (dynamic_cast<const FloatLiteralExpr*>(&arg)) return !p1_is_ptr;
         // arg is a variable
         if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
             auto tit = locals_.find(ve->name);
@@ -1189,10 +1194,15 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
     bool arg_is_char = false;
     bool arg_is_scalar_int = false; // signed integer (including bool)
     bool arg_is_unsigned = false;
+    bool arg_is_float = false;
     std::string arg_int_type;       // specific type name when known (enables exact + best-fit matching)
+    std::string arg_float_type;     // float32 / float64 when arg_is_float
     std::string arg_slid_name;      // specific slid type name when arg_is_slid
 
     auto classify_int = [&](const std::string& t) {
+        if (t == "float" || t == "float32" || t == "float64") {
+            arg_is_float = true; arg_float_type = t; return;
+        }
         if (t == "char") { arg_is_char = true; arg_int_type = "char"; }
         else if (unsigned_types.count(t)) { arg_is_unsigned = true; arg_int_type = t; }
         else { arg_is_scalar_int = true; arg_int_type = t; } // bool, int8, int16, int32, int64, int, ...
@@ -1204,6 +1214,9 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
         if (ile->is_char_literal) arg_int_type = "char";
         else if (ile->is_bool)    arg_int_type = "bool";
         // untyped integer literal: arg_int_type left empty — any signed int overload is acceptable
+    } else if (dynamic_cast<const FloatLiteralExpr*>(&arg)) {
+        // a float literal has no fixed width — treat as float64 for matching.
+        arg_is_float = true; arg_float_type = "float64";
     } else if (auto* nc = dynamic_cast<const TypeConvExpr*>(&arg)) {
         classify_int(nc->target_type);
     } else if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
@@ -1248,6 +1261,8 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
             classify_int(slids_t == "bool" ? "bool" : "int32");
         }
         else if (lt == "i64") classify_int("int64");
+        else if (lt == "float" || lt == "double")
+            classify_int(lt == "float" ? "float32" : "float64");
     }
 
     auto is_signed_int_param = [&](const std::string& pt) {
@@ -1268,6 +1283,16 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
         for (auto& [m, ptypes, _pm, _pmt, _fid] : oit->second) {
             if (ptypes.size() == 1 && ptypes[0] == arg_int_type) return m;
         }
+    }
+
+    // float arg → float param: exact width first, then any float overload.
+    if (arg_is_float) {
+        static const std::set<std::string> float_types = {"float","float32","float64"};
+        for (auto& [m, ptypes, _pm, _pmt, _fid] : oit->second)
+            if (ptypes.size() == 1 && canonicalType(ptypes[0]) == arg_float_type) return m;
+        for (auto& [m, ptypes, _pm, _pmt, _fid] : oit->second)
+            if (ptypes.size() == 1 && float_types.count(canonicalType(ptypes[0]))) return m;
+        return "";  // no float overload — caller coerces via temp / errors
     }
 
     // pass 3: best-fit — smallest overload rank >= arg rank (avoids picking int64 when int32 exists)
@@ -1306,7 +1331,8 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
     }
 
     // pass 5: non-slid, non-int arg — ptr/indirect param (e.g. string literal / char[])
-    if (!arg_is_slid && !arg_is_char && !arg_is_scalar_int && !arg_is_unsigned) {
+    if (!arg_is_slid && !arg_is_char && !arg_is_scalar_int && !arg_is_unsigned
+            && !arg_is_float) {
         for (auto& [m, ptypes, _pm, _pmt, _fid] : oit->second) {
             if (ptypes.size() == 1 && isPtrType(ptypes[0])) return m;
         }

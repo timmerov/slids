@@ -10,6 +10,12 @@ copying null terminated strings limited by length.
 
 import string;
 
+/* import c libaries. */
+stdc import {
+    /* converts float to c string. */
+    int32 strfromd(mutable char[] s, intptr n, char[] fmt, float64 fp);
+}
+
 /* block definitions. */
 String (
     /* there are no public fields. */
@@ -114,6 +120,14 @@ String (
         } else {
             set("false", 5);
         }
+    }
+
+    /* assignment and type converstion from float64. */
+    op=(float64 x) {
+        const intptr kMaxSize = 24;
+        clear();
+        reserve(kMaxSize);
+        size_ = stdc:strfromd(storage_, kMaxSize, "%g", x);
     }
 
     /* overload += to append a string. */
@@ -509,6 +523,12 @@ String : Format() {
     /* format a bool. */
     op=(bool b) {
         String str = b;
+        self = str;
+    }
+
+    /* format a float64. */
+    op=(float64 x) {
+        String str = x;
         self = str;
     }
 }

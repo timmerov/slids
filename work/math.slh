@@ -1,7 +1,7 @@
 /*
 interop with the C math library (libm).
 
-link option: -lm
+include link option: -lm
 
 bindings for the float64 and float32 functions of <math.h>.
 

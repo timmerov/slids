@@ -831,6 +831,24 @@ private:
     // float/double → fcmp une <T> X, 0.0, integer → icmp ne <T> X, 0.
     std::string emitToBool(const std::string& val, const std::string& llvm_type);
     std::string exprLlvmType(const Expr& expr); // infer LLVM type without emitting IR
+    // Implicit value-preserving width coercion between built-in (non-pointer)
+    // types: widening emits sext/zext (integers) or fpext (floats); a same-width
+    // pair is a no-op. Narrowing — and any int<->float mismatch — is rejected
+    // here: narrowing requires an explicit type conversion. `val` is the value
+    // register; `from`/`to` are slids type names.
+    std::string emitCoerced(const std::string& val,
+                            const std::string& from, const std::string& to);
+    // An integer literal has no fixed type — it adopts the target type when one
+    // is supplied, provided the value fits. Range-checks `value` against
+    // `target` (erroring on overflow) and returns true; returns false when
+    // `target` is not a built-in integer type.
+    bool checkIntLiteralFits(int64_t value, bool is_nondecimal,
+                             const Expr& node, const std::string& target);
+    // Adjust an already-emitted value so it can flow into a slot of type
+    // `target`: an integer/float literal flexes to the target width; any other
+    // value goes through emitCoerced (widen, or reject an implicit narrowing).
+    std::string coerceToType(const std::string& val, const Expr& src,
+                             const std::string& target);
     void requirePtrInit(const std::string& dst_type, const Expr& src); // dst is ^ or [] -> src must be ptr w/ compatible pointee
     // Reject "primitive lhs ← slid rhs" — there is no implicit slid-to-primitive
     // conversion. Returns early when dst is itself indirect or a slid (those

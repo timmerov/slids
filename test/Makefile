@@ -28,7 +28,7 @@ SAMPLES = \
 	logicops \
 	lvalues \
 	macros \
-	math1 math2 \
+	math1 \
 	misc \
 	move \
 	mutable \

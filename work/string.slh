@@ -1,6 +1,8 @@
 /*
 String class declaration.
 
+include link option: -lc
+
 also included are helper functions for:
 concatenating strings,
 length of a null terminated string,
@@ -55,6 +57,9 @@ String(...)
 
     /* assignment and type converstion from bool. */
     op=(bool b);
+
+    /* assignment and type converstion from float64. */
+    op=(float64 x);
 
     /* overload += to append a string. */
     op+=(String^ s);
@@ -202,4 +207,7 @@ String : Format(
 
     /* format a bool. */
     op=(bool b);
+
+    /* format a float64. */
+    op=(float64 x);
 }

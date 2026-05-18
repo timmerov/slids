@@ -129,6 +129,15 @@ int32 main() {
     fmt.clear();
     fmt = true;
     println(String + "bool   =[" + fmt + "]");
+    fmt.clear();
+    fmt = 3.14;
+    println(String + "float  =[" + fmt + "]");
+    fmt.clear();
+    fmt = (float32=3.14);
+    println(String + "floa32 =[" + fmt + "]");
+    fmt.clear();
+    fmt = (float64=3.14);
+    println(String + "floa64 =[" + fmt + "]");
 
     return 0;
 }

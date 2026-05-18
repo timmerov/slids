@@ -2108,7 +2108,9 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     }
                     stmt->init_stmts.push_back(std::move(loop_var_decl));
                     stmt->init_stmts.push_back(_decl("int", idx_name, _intLit(0)));
-                    stmt->init_stmts.push_back(_decl("int", end_name, std::move(count_expr)));
+                    // __$end holds a class's size() (intptr) or an array's
+                    // count (a literal that flexes) — intptr fits both.
+                    stmt->init_stmts.push_back(_decl("intptr", end_name, std::move(count_expr)));
                     stmt->cond = _bin("<", _var(idx_name), _var(end_name));
                     auto upd = make<BlockStmt>(t_start);
                     upd->stmts.push_back(_assign(idx_name,

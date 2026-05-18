@@ -1283,8 +1283,16 @@ std::string Codegen::emitExpr(const Expr& expr) {
                       || rt == "float" || rt == "double");
         std::string op_type;
         if (is_float) {
-            // float arithmetic — result is the wider of the two float widths.
-            op_type = (lt == "double" || rt == "double") ? "double" : "float";
+            // float arithmetic — a float literal has no fixed width and flexes
+            // to a typed float operand; otherwise the wider of the two.
+            bool l_flit = dynamic_cast<const FloatLiteralExpr*>(b->left.get())  != nullptr;
+            bool r_flit = dynamic_cast<const FloatLiteralExpr*>(b->right.get()) != nullptr;
+            if (l_flit && !r_flit && (rt == "float" || rt == "double"))
+                op_type = rt;
+            else if (r_flit && !l_flit && (lt == "float" || lt == "double"))
+                op_type = lt;
+            else
+                op_type = (lt == "double" || rt == "double") ? "double" : "float";
         } else {
             if (left_is_literal && !right_is_literal)
                 op_type = rt;
@@ -1615,10 +1623,15 @@ std::string Codegen::emitExpr(const Expr& expr) {
             auto extend = [&](std::string val, const std::string& src, const Expr& e) -> std::string {
                 if (src == op_type || op_type == "ptr" || src == "ptr") return val;
                 if (is_float) {
-                    // widen/convert an operand to the float op type.
+                    // adjust an operand to the float op type — fpext widens a
+                    // float32, fptrunc narrows a flexed-down double literal,
+                    // sitofp/uitofp converts an integer operand.
                     std::string c = newTmp();
                     if (src == "float")
                         out_ << "    " << c << " = fpext float " << val
+                             << " to " << op_type << "\n";
+                    else if (src == "double")
+                        out_ << "    " << c << " = fptrunc double " << val
                              << " to " << op_type << "\n";
                     else
                         out_ << "    " << c << " = " << (isUnsignedExpr(e) ? "uitofp" : "sitofp")
@@ -2326,9 +2339,15 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             if (b->op == "-" && lt == "ptr" && rt == "ptr") return "i64";
             if ((b->op == "+" || b->op == "-") && (lt == "ptr" || rt == "ptr"))
                 return "ptr";
-            // float arithmetic — result is the wider of the two float widths.
-            if (lt == "float" || lt == "double" || rt == "float" || rt == "double")
+            // float arithmetic — a float literal flexes to a typed float
+            // operand; otherwise the result is the wider of the two.
+            if (lt == "float" || lt == "double" || rt == "float" || rt == "double") {
+                bool l_flit = dynamic_cast<const FloatLiteralExpr*>(b->left.get())  != nullptr;
+                bool r_flit = dynamic_cast<const FloatLiteralExpr*>(b->right.get()) != nullptr;
+                if (l_flit && !r_flit && (rt == "float" || rt == "double")) return rt;
+                if (r_flit && !l_flit && (lt == "float" || lt == "double")) return lt;
                 return (lt == "double" || rt == "double") ? "double" : "float";
+            }
             static const std::map<std::string,int> rank = {
                 {"i8",0},{"i16",1},{"i32",2},{"i64",3}};
             auto li = rank.find(lt), ri = rank.find(rt);
@@ -2516,6 +2535,128 @@ std::string Codegen::emitToBool(const std::string& val, const std::string& llvm_
         out_ << "    " << b << " = icmp ne " << llvm_type << " " << val << ", 0\n";
     }
     return b;
+}
+
+std::string Codegen::emitCoerced(const std::string& val,
+                                 const std::string& from,
+                                 const std::string& to) {
+    std::string cfrom = canonType(from), cto = canonType(to);
+    std::string fl = llvmType(cfrom), tl = llvmType(cto);
+    if (fl == tl) return val;
+    // integer family — i8/i16/i32/i64 (i1/bool handled elsewhere).
+    static const std::map<std::string,int> irank =
+        {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+    auto fi = irank.find(fl), ti = irank.find(tl);
+    if (fi != irank.end() && ti != irank.end()) {
+        if (ti->second > fi->second) {
+            static const std::set<std::string> unsigned_types =
+                {"uint","uint8","uint16","uint32","uint64","char"};
+            std::string op = unsigned_types.count(cfrom) ? "zext" : "sext";
+            std::string t = newTmp();
+            out_ << "    " << t << " = " << op << " " << fl << " " << val
+                 << " to " << tl << "\n";
+            return t;
+        }
+        error("Cannot implicitly narrow '" + cfrom + "' to '" + cto
+              + "'; use an explicit type conversion.");
+    }
+    // float family — float32/float64.
+    static const std::map<std::string,int> frank = {{"float",0},{"double",1}};
+    auto ff = frank.find(fl), tf = frank.find(tl);
+    if (ff != frank.end() && tf != frank.end()) {
+        if (tf->second > ff->second) {
+            std::string t = newTmp();
+            out_ << "    " << t << " = fpext " << fl << " " << val
+                 << " to " << tl << "\n";
+            return t;
+        }
+        error("Cannot implicitly narrow '" + cfrom + "' to '" + cto
+              + "'; use an explicit type conversion.");
+    }
+    // int<->float, or bool involved: no implicit path — leave unchanged so the
+    // existing call sites' own handling (or a later malformed-IR catch) stands.
+    return val;
+}
+
+bool Codegen::checkIntLiteralFits(int64_t v, bool is_nondecimal,
+                                  const Expr& node, const std::string& target) {
+    std::string t = canonType(target);
+    bool ok;
+    if (is_nondecimal) {
+        // hex/octal/binary literals are unsigned bit patterns.
+        uint64_t uv = (uint64_t)v;
+        if      (t == "int8")                ok = uv <= 0x7Full;
+        else if (t == "int16")               ok = uv <= 0x7FFFull;
+        else if (t == "int32" || t == "int") ok = uv <= 0x7FFFFFFFull;
+        else if (t == "int64" || t == "intptr") ok = uv <= 0x7FFFFFFFFFFFFFFFull;
+        else if (t == "uint8")               ok = uv <= 0xFFull;
+        else if (t == "uint16")              ok = uv <= 0xFFFFull;
+        else if (t == "uint32" || t == "uint") ok = uv <= 0xFFFFFFFFull;
+        else if (t == "uint64")              ok = true;
+        else if (t == "char")                ok = uv <= 0xFFull;
+        else if (t == "bool")                ok = uv <= 1ull;
+        else return false;
+    } else {
+        if      (t == "int8")                ok = v >= -128 && v <= 127;
+        else if (t == "int16")               ok = v >= -32768 && v <= 32767;
+        else if (t == "int32" || t == "int") ok = v >= -2147483648LL && v <= 2147483647LL;
+        else if (t == "int64" || t == "intptr") ok = true;
+        else if (t == "uint8")               ok = v >= 0 && v <= 255;
+        else if (t == "uint16")              ok = v >= 0 && v <= 65535;
+        else if (t == "uint32" || t == "uint") ok = v >= 0 && v <= 4294967295LL;
+        else if (t == "uint64")              ok = v >= 0;
+        else if (t == "char")                ok = v >= -128 && v <= 255;
+        else if (t == "bool")                ok = v == 0 || v == 1;
+        else return false;
+    }
+    if (!ok)
+        errorAtNode(node, "Integer literal " + std::to_string(v)
+            + " does not fit in '" + t + "'.");
+    return true;
+}
+
+std::string Codegen::coerceToType(const std::string& val, const Expr& src,
+                                  const std::string& target) {
+    // peel a leading unary sign so `-5` is seen as the literal it folds to.
+    const Expr* e = &src;
+    int64_t sign = 1;
+    for (;;) {
+        auto* u = dynamic_cast<const UnaryExpr*>(e);
+        if (!u || (u->op != "-" && u->op != "+")) break;
+        if (u->op == "-") sign = -sign;
+        e = u->operand.get();
+    }
+    // an integer or character literal has no fixed type — flex it to the
+    // target width (a char literal is just its code point as a value).
+    if (auto* il = dynamic_cast<const IntLiteralExpr*>(e);
+        il && !il->is_bool) {
+        int64_t lv = sign * il->value;
+        if (checkIntLiteralFits(lv, il->is_nondecimal, src, target))
+            return std::to_string(lv);
+    }
+    // a float literal flexes between float32/float64 — writing a decimal float
+    // literal is inherently lossy, so this is not a "narrowing" of a value.
+    if (dynamic_cast<const FloatLiteralExpr*>(e)) {
+        if (llvmType(canonType(target)) == "float") {
+            std::string t = newTmp();
+            out_ << "    " << t << " = fptrunc double " << val << " to float\n";
+            return t;
+        }
+        return val;
+    }
+    // a typed value: derive the source type from the LLVM-type oracle —
+    // exprType returns "" for a BinaryExpr and other compound shapes.
+    std::string fl = exprLlvmType(src);
+    static const std::map<std::string,std::string> llvm2slids = {
+        {"i8","int8"},{"i16","int16"},{"i32","int32"},{"i64","int64"},
+        {"float","float32"},{"double","float64"}};
+    auto m = llvm2slids.find(fl);
+    if (m == llvm2slids.end())
+        return val;   // non-numeric (ptr, struct, …) — nothing to width-coerce
+    std::string from = m->second;
+    if (fl[0] == 'i' && isUnsignedExpr(src))
+        from = "u" + from;
+    return emitCoerced(val, from, target);
 }
 
 std::string Codegen::emitCondBool(const Expr& expr) {

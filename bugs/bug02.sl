@@ -1,8 +1,8 @@
 
 int32 main() {
-    uint u = -43;
+    uint u = (uint=-43);
     __println(u);
-    u = -2147483648;
+    u = (uint=-2147483648);
     __println(u);
     return 0;
 }

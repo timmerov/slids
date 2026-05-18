@@ -2184,6 +2184,17 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
                 return tmp;
             }
         }
+        // float width: fpext float32→float64, fptrunc float64→float32.
+        if (want == "float" && src == "double") {
+            std::string tmp = newTmp();
+            out_ << "    " << tmp << " = fptrunc double " << val << " to float\n";
+            return tmp;
+        }
+        if (want == "double" && src == "float") {
+            std::string tmp = newTmp();
+            out_ << "    " << tmp << " = fpext float " << val << " to double\n";
+            return tmp;
+        }
     }
     return val;
 }

@@ -1825,32 +1825,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (!decl->init) return; // uninitialized — alloca only
         requirePtrInit(eff_type, *decl->init);
         std::string val = valOrNullptrCheck(eff_type, *decl->init);
-        // coerce integer or float widths if necessary
-        if (!isIndirectType(eff_type)) {
-            std::string src_t = exprLlvmType(*decl->init);
-            // integer width coercion (sext or trunc)
-            static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
-            auto sit = rank.find(src_t), dit = rank.find(llvm_t);
-            if (sit != rank.end() && dit != rank.end() && sit->second != dit->second) {
-                std::string coerced = newTmp();
-                if (dit->second > sit->second)
-                    out_ << "    " << coerced << " = sext " << src_t << " " << val << " to " << llvm_t << "\n";
-                else
-                    out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << llvm_t << "\n";
-                val = coerced;
-            }
-            // float width coercion (fpext or fptrunc)
-            static const std::map<std::string,int> frank = {{"float",0},{"double",1}};
-            auto sf = frank.find(src_t), df = frank.find(llvm_t);
-            if (sf != frank.end() && df != frank.end() && sf->second != df->second) {
-                std::string coerced = newTmp();
-                if (df->second > sf->second)
-                    out_ << "    " << coerced << " = fpext " << src_t << " " << val << " to " << llvm_t << "\n";
-                else
-                    out_ << "    " << coerced << " = fptrunc " << src_t << " " << val << " to " << llvm_t << "\n";
-                val = coerced;
-            }
-        }
+        // a literal flexes to the declared type; a typed value widens (a
+        // narrowing here is a compile error — use an explicit type conversion).
+        if (!isIndirectType(eff_type))
+            val = coerceToType(val, *decl->init, eff_type);
         out_ << "    store " << llvm_t << " " << val << ", ptr " << reg << "\n";
         // move declaration: null out the source
         if (decl->is_move && isIndirectType(eff_type))
@@ -1921,6 +1899,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 out_ << "    " << gep << " = getelementptr %struct." << current_slid_
                      << ", ptr " << self << ", i32 0, i32 " << idx << "\n";
                 std::string val = valOrNullptrCheck(info.field_types[idx], *assign->value);
+                if (!isIndirectType(info.field_types[idx]))
+                    val = coerceToType(val, *assign->value, info.field_types[idx]);
                 out_ << "    store " << field_type << " " << val << ", ptr " << gep << "\n";
                 if (assign->is_move && isIndirectType(info.field_types[idx]))
                     emitNullOut(*assign->value);
@@ -2449,24 +2429,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
             : emitExpr(*assign->value);
         bool is_ptr = tit != locals_.end() && isIndirectType(tit->second.type);
         std::string store_type = is_ptr ? "ptr" : llvmType(tit != locals_.end() ? tit->second.type : "int");
-        // coerce integer widths if necessary (sext or trunc)
+        // coerce integer/float widths if necessary — widening only; narrowing
+        // here is a compile error (use an explicit type conversion).
         if (!is_ptr && tit != locals_.end()) {
-            std::string src_t = exprLlvmType(*assign->value);
-            if (src_t == "ptr" && tit->second.type == "intptr") {
+            if (exprLlvmType(*assign->value) == "ptr" && tit->second.type == "intptr") {
                 std::string coerced = newTmp();
                 out_ << "    " << coerced << " = ptrtoint ptr " << val << " to i64\n";
                 val = coerced;
             } else {
-                static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
-                auto sit = rank.find(src_t), dit = rank.find(store_type);
-                if (sit != rank.end() && dit != rank.end() && sit->second != dit->second) {
-                    std::string coerced = newTmp();
-                    if (dit->second > sit->second)
-                        out_ << "    " << coerced << " = sext " << src_t << " " << val << " to " << store_type << "\n";
-                    else
-                        out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << store_type << "\n";
-                    val = coerced;
-                }
+                val = coerceToType(val, *assign->value, tit->second.type);
             }
         }
         out_ << "    store " << store_type << " " << val << ", ptr " << it->second.reg << "\n";
@@ -4088,11 +4059,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     args.push_back({"ptr", val});
                     continue;
                 }
-                // Integer family. Sub-i32 zext to i32; i64 stays i64.
+                // Integer family. Sub-i32 extends to i32 — sign-extend signed
+                // types, zero-extend unsigned ones (uint*, char, bool); i64
+                // stays i64.
                 if (val_type != "i32" && val_type != "i64") {
+                    bool uns = s_type.rfind("uint", 0) == 0
+                            || s_type == "char" || s_type == "bool";
                     std::string ext = newTmp();
-                    out_ << "    " << ext << " = zext " << val_type << " "
-                         << val << " to i32\n";
+                    out_ << "    " << ext << " = " << (uns ? "zext" : "sext")
+                         << " " << val_type << " " << val << " to i32\n";
                     val = ext;
                     val_type = "i32";
                 }
