@@ -25,6 +25,20 @@ Outer(
             t = tag_;
             return t;
         }
+
+        /* switch over a nested-class enum — bare case label. */
+        int classify() {
+            int r;
+            switch (tag_) {
+            case kHigh:
+                r = 9;
+                break;
+            default:
+                r = 0;
+                break;
+            }
+            return r;
+        }
     }
 
     void test1() {
@@ -67,6 +81,8 @@ int32 main() {
     Outer:Inner main_in(6, 7, Outer:Inner:kHigh);
     main_in.print("main_inn");
     __println("main_inn tag = " + main_in.tag());
+    __println("main_inn classify = " + main_in.classify());
+    __println("Outer:Inner:sizeof = " + Outer:Inner:sizeof());
 
     Outer:InTemplate<char> main_it(11);
     main_it.print("main_it");

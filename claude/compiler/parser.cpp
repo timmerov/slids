@@ -1037,21 +1037,6 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     }
     if (t.type == TokenType::kIdentifier) {
         advance();
-        // `Type:sizeof()` — type-scoped sizeof. `sizeof` is a keyword, so it
-        // does not fit the general Ident(:Ident)* qualified-name path below.
-        if (colon_terminates_expr_ == 0
-            && peek().type == TokenType::kColon
-            && pos_ + 1 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kSizeof) {
-            advance(); // ':'
-            advance(); // 'sizeof'
-            expect(TokenType::kLParen, "Expected '(' after 'sizeof'");
-            expect(TokenType::kRParen, "Expected ')' after 'sizeof('");
-            auto call = make<CallExpr>(t_start, "sizeof",
-                                       std::vector<std::unique_ptr<Expr>>{});
-            call->qualifier = t.value;
-            return call;
-        }
         // namespace-qualified access: Name : Name [: Name]* — covers
         // `Slid:method(args)`, `parts:doors_`, and chains like `Box:lid:open_`.
         // Suppressed in contexts where ':' terminates the expression (e.g. case labels).
@@ -1060,7 +1045,8 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
             && pos_ + 1 < (int)tokens_.size()
             && (tokens_[pos_ + 1].type == TokenType::kIdentifier
                 || tokens_[pos_ + 1].type == TokenType::kSelf
-                || tokens_[pos_ + 1].type == TokenType::kOp)) {
+                || tokens_[pos_ + 1].type == TokenType::kOp
+                || tokens_[pos_ + 1].type == TokenType::kSizeof)) {
             std::string path = t.value;
             // token of the final path segment — diagnostics about a qualified
             // name should caret the member being looked up, not the namespace.
@@ -1071,6 +1057,21 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
                 advance(); // consume ':'
                 last_seg_tok = pos_;
                 path += ":" + advance().value;
+            }
+            // `<path>:sizeof()` — type-scoped sizeof on a (possibly nested)
+            // class. `sizeof` is a keyword, so it is handled here rather than
+            // in the Ident-only segment loop above.
+            if (peek().type == TokenType::kColon
+                && pos_ + 1 < (int)tokens_.size()
+                && tokens_[pos_ + 1].type == TokenType::kSizeof) {
+                advance(); // ':'
+                advance(); // 'sizeof'
+                expect(TokenType::kLParen, "Expected '(' after 'sizeof'");
+                expect(TokenType::kRParen, "Expected ')' after 'sizeof('");
+                auto call = make<CallExpr>(t_start, "sizeof",
+                                           std::vector<std::unique_ptr<Expr>>{});
+                call->qualifier = path;
+                return call;
             }
             // `Base:self` — self viewed as the named base sub-object (an
             // lvalue at offset 0). Carried as a colon-joined VarExpr name.

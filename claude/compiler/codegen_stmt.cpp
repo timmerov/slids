@@ -3895,7 +3895,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
         std::string enum_owner;
         {
             std::string disc_slids = inferSlidType(*sw->expr);
-            auto cp = disc_slids.find(':');
+            auto cp = disc_slids.rfind(':');
             if (cp != std::string::npos) enum_owner = disc_slids.substr(0, cp);
         }
         out_ << "    switch i32 " << disc << ", label %" << default_lbl << " [\n";

@@ -724,6 +724,19 @@ std::string Codegen::emitExpr(const Expr& expr) {
     if (auto* call = dynamic_cast<const CallExpr*>(&expr)) {
         // namespace-qualified call: Name:method(args)
         if (!call->qualifier.empty() && call->qualifier != "::") {
+            // `Type:sizeof()` — type-scoped builtin on any (possibly nested)
+            // class. The qualifier is written with ':'; the slid is keyed
+            // with '.' internally.
+            if (call->callee == "sizeof" && call->args.empty()) {
+                std::string cls = call->qualifier;
+                for (char& c : cls) if (c == ':') c = '.';
+                if (slid_info_.count(cls)) {
+                    std::string reg = newTmp();
+                    out_ << "    " << reg << " = call i64 @"
+                         << cls << "__$sizeof()\n";
+                    return reg;
+                }
+            }
             auto sit = slid_info_.find(call->qualifier);
             if (sit == slid_info_.end()) {
                 // namespace-qualified free-function call: ns:fn(args).
@@ -755,13 +768,6 @@ std::string Codegen::emitExpr(const Expr& expr) {
                 out_ << "    " << tmp << " = call " << ret_type << " @"
                      << llvmGlobalName(mangled) << "(" << arg_str << ")\n";
                 return tmp;
-            }
-            // `Type:sizeof()` — type-scoped builtin, needs no instance.
-            if (call->callee == "sizeof" && call->args.empty()) {
-                std::string reg = newTmp();
-                out_ << "    " << reg << " = call i64 @"
-                     << call->qualifier << "__$sizeof()\n";
-                return reg;
             }
             // inherited base method call from inside a derived's method body:
             // `Base:method(args)` with current_slid_ in Base's descendant set.
@@ -2484,7 +2490,7 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // function call — look up return type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
-        if (ce->callee == "sizeof" && slid_info_.count(ce->qualifier))
+        if (ce->callee == "sizeof" && !ce->qualifier.empty())
             return "i64";
         if (!ce->qualifier.empty() && ce->qualifier != "::"
             && !slid_info_.count(ce->qualifier)) {
@@ -2976,7 +2982,7 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     // free function call — look up return type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
         // `Type:sizeof()` → intptr
-        if (ce->callee == "sizeof" && slid_info_.count(ce->qualifier))
+        if (ce->callee == "sizeof" && !ce->qualifier.empty())
             return "intptr";
         // slid ctor call: SlidName(args) → type is SlidName
         if (slid_info_.count(ce->callee)) return ce->callee;
