@@ -582,6 +582,14 @@ private:
 
     void emitFrameStruct(const FunctionDef& fn);
     void emitSlidCtorDtor(const SlidDef& slid);
+    // A statement that is a direct class instantiation — `Type;` or
+    // `Type(args);` or `Outer:Inner(args);` — creates an unnamed instance
+    // with scope lifetime (as if a named local). Returns false (callee is
+    // not a slid type) so the caller falls through to its normal handling.
+    bool tryEmitInstantiationStmt(const std::string& callee,
+                                  const std::string& qualifier,
+                                  const std::vector<std::unique_ptr<Expr>>& args,
+                                  int file_id, int tok);
     // True if the class's base chain includes a transport/opaque class. Such a
     // class is opaque to consumers, so its field defaults cannot be applied at
     // a consumer construction site — its __$ctor applies them instead.

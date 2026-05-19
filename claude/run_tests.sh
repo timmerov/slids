@@ -24,6 +24,7 @@ SAMPLES=(
     indexop
     inheritance
     initialization
+    instantiate
     lexer
     logicops
     lvalues

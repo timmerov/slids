@@ -794,6 +794,27 @@ static std::unique_ptr<Expr> cloneExpr(const Expr& e) {
     return cloneExpr(e, kEmpty);
 }
 
+bool Codegen::tryEmitInstantiationStmt(
+        const std::string& callee, const std::string& qualifier,
+        const std::vector<std::unique_ptr<Expr>>& args, int file_id, int tok) {
+    if (qualifier == "::") return false;
+    // The user writes the class path with ':'; a nested class is keyed
+    // with '.' internally. callee alone for a top-level class.
+    std::string cls = qualifier.empty() ? callee : qualifier + ":" + callee;
+    for (char& c : cls) if (c == ':') c = '.';
+    if (!slid_info_.count(cls)) return false;
+    // Construct an unnamed instance with scope lifetime — emit it as a
+    // named local declaration under a synthesized, unspellable name.
+    std::vector<std::unique_ptr<Expr>> cargs;
+    for (auto& a : args) cargs.push_back(cloneExpr(*a));
+    VarDeclStmt synth(cls, "$inst" + std::to_string(tmp_counter_++),
+                      nullptr, std::move(cargs));
+    synth.file_id = file_id;
+    synth.tok = tok;
+    emitStmt(synth);
+    return true;
+}
+
 void Codegen::emitStmt(const Stmt& stmt) {
     EmitGuard _g(*this, stmt.file_id, stmt.tok);
 
@@ -3943,11 +3964,28 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* es = dynamic_cast<const ExprStmt*>(&stmt)) {
+        // a bare class-instantiation statement — `Type;` or `Outer:Inner(args);`
+        // — constructs an unnamed scope-lifetime instance.
+        if (auto* ve = dynamic_cast<const VarExpr*>(es->expr.get())) {
+            if (tryEmitInstantiationStmt(ve->name, "", {},
+                                         es->file_id, es->tok))
+                return;
+        }
+        if (auto* ce = dynamic_cast<const CallExpr*>(es->expr.get())) {
+            if (tryEmitInstantiationStmt(ce->callee, ce->qualifier, ce->args,
+                                         es->file_id, es->tok))
+                return;
+        }
         emitExpr(*es->expr); // evaluate for side effects, discard result
         return;
     }
 
     if (auto* call = dynamic_cast<const CallStmt*>(&stmt)) {
+        // `Type(args);` — a direct class-instantiation statement. A CallStmt
+        // is always unqualified; `Outer:Inner(args);` arrives as an ExprStmt.
+        if (tryEmitInstantiationStmt(call->callee, "",
+                                     call->args, call->file_id, call->tok))
+            return;
         if (call->callee == "__println" || call->callee == "__print") {
             bool newline = (call->callee == "__println");
             if (call->args.size() > 1)

@@ -17,11 +17,9 @@ int32 main() {
     Solitary;
 
     /* these should be too. */
-    /*
     Solitary();
     Solitary(3);
     Solitary(4, 5);
-    */
 
     return 0;
 }
