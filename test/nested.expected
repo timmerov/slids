@@ -1,5 +1,8 @@
 Inner: Outer:test inn: a=5 b=4
 Outer:test2 it
 Inner: main_inn: a=6 b=7
+main_inn tag = 1
 InTemplate: char main_it = 
 Inner2: main_in2: c=102
+Outer:Inner:kBase = 30
+Outer:Inner:kHigh = 1

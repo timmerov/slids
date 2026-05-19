@@ -9,10 +9,21 @@ Outer(
 ) {
     Inner(
         int a_ = 3,
-        int b_ = 4
+        int b_ = 4,
+        Tag tag_ = kLow
     ) {
+        /* a const and a nested enum inside a nested class. */
+        const int kBase = 30;
+        enum Tag (kLow, kHigh);
+
         void print(char[] name) {
             __println("Inner: " + name + ": a=" + a_ + " b=" + b_);
+        }
+
+        /* inferred local of the nested-enum field type. */
+        int tag() {
+            t = tag_;
+            return t;
         }
     }
 
@@ -53,14 +64,19 @@ int32 main() {
     out.test1();
     out.test2();
 
-    Outer:Inner main_in(6,7);
+    Outer:Inner main_in(6, 7, Outer:Inner:kHigh);
     main_in.print("main_inn");
+    __println("main_inn tag = " + main_in.tag());
 
     Outer:InTemplate<char> main_it(11);
     main_it.print("main_it");
 
     Outer:Inner2 main_in2(102);
     main_in2.print("main_in2");
+
+    /* nested-class const and nested-enum value via multi-colon scope. */
+    __println("Outer:Inner:kBase = " + Outer:Inner:kBase);
+    __println("Outer:Inner:kHigh = " + Outer:Inner:kHigh);
 
     return 0;
 }

@@ -1174,13 +1174,15 @@ Codegen::ConstEntry Codegen::applyConstDeclaredType(const ConstDef& cd,
 }
 
 const Codegen::ConstEntry* Codegen::lookupConst(const std::string& name) const {
-    // qualified `Class:member` — a class-scoped const reached via the type
-    // name with the `:` scope operator (inherits up the base chain).
+    // qualified `Class:member` (or `Outer:Inner:member`) — a class-scoped
+    // const reached via the type name with the `:` scope operator. Inherits
+    // up the base chain. The class path is written with `:`; a nested class
+    // is keyed with `.` internally (Outer.Inner), so convert for the lookup.
     {
-        auto colon = name.find(':');
-        if (colon != std::string::npos && colon > 0
-            && colon == name.rfind(':')) {
+        auto colon = name.rfind(':');
+        if (colon != std::string::npos && colon > 0 && name[0] != ':') {
             std::string cls = name.substr(0, colon);
+            for (char& c : cls) if (c == ':') c = '.';
             if (slid_info_.count(cls))
                 return lookupSlidConst(cls, name.substr(colon + 1));
         }

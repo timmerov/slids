@@ -1274,8 +1274,12 @@ void Codegen::qualifyNestedEnumFieldTypes() {
         if (slid.nested_enums.empty()) continue;
         std::set<std::string> enums;
         for (auto& e : slid.nested_enums) enums.insert(e.name);
+        // a nested class is keyed `Outer.Inner` internally; the enum is
+        // registered under the colon scope form — match it.
+        std::string scope = slid.name;
+        for (char& c : scope) if (c == '.') c = ':';
         for (auto& f : slid.fields)
-            if (enums.count(f.type)) f.type = slid.name + ":" + f.type;
+            if (enums.count(f.type)) f.type = scope + ":" + f.type;
     }
 }
 
@@ -1451,12 +1455,17 @@ void Codegen::emit() {
         enum_sizes_[e.name] = (int)e.values.size();
     }
     // class-scoped nested enums: values are keyed `Class:value`, so they
-    // resolve only as `Class:value` and never leak into file scope.
+    // resolve only as `Class:value` and never leak into file scope. A nested
+    // class is keyed `Outer.Inner` internally; its enum values are referenced
+    // with the `:` scope operator, so register them under the colon form
+    // (`Outer:Inner:value`).
     for (auto& slid : program_.slids) {
         for (auto& e : slid.nested_enums) {
+            std::string scope = slid.name;
+            for (char& c : scope) if (c == '.') c = ':';
             for (int i = 0; i < (int)e.values.size(); i++)
-                enum_values_[slid.name + ":" + e.values[i]] = i;
-            enum_sizes_[slid.name + ":" + e.name] = (int)e.values.size();
+                enum_values_[scope + ":" + e.values[i]] = i;
+            enum_sizes_[scope + ":" + e.name] = (int)e.values.size();
         }
     }
 
