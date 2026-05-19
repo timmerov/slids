@@ -299,6 +299,11 @@ int32 main() {
        mutable char[] strips const. */
     //-EXPECT-ERROR: stripping const is not allowed
     // char[] mutable_lit = "string literal";
+
+    /* compile error: the conversion form `(Type = expr)` mints a value — a
+       pointer/iterator target reinterprets, and would strip const. */
+    //-EXPECT-ERROR: is not a conversion target
+    // char[] sneak = (char[] = "string literal");
     //-EXPECT-ERROR: overflows declared type
     // const int32 overflow = 10_000_000_000;
     //-EXPECT-ERROR: negative constant

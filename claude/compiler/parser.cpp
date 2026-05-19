@@ -1158,9 +1158,20 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         && (isTypeName(tokens_[pos_ + 1]) || isUserTypeName(tokens_[pos_ + 1]))) {
         int saved = pos_;
         advance(); // consume '('
+        int type_tok = pos_;
         std::string type_name = parseTypeName();
         if (peek().type == TokenType::kEquals) {
             advance(); // consume '='
+            // The conversion-expression form `(Type = expr)` mints a value. A
+            // pointer/iterator target would alias (not copy) and silently
+            // strip const — that is a reinterpret cast; spell it `<Type>`.
+            bool indirect = (!type_name.empty() && type_name.back() == '^')
+                || (type_name.size() >= 2
+                    && type_name.substr(type_name.size() - 2) == "[]");
+            if (indirect)
+                errorAt(type_tok, "A pointer or iterator type is not a "
+                    "conversion target — '(Type = expr)' mints a value. "
+                    "Reinterpret a pointer with a '<Type>' cast.");
             auto operand = parseExpr();
             expect(TokenType::kRParen, "Expected ')' after type conversion");
             return make<TypeConvExpr>(t_start, type_name, std::move(operand));
