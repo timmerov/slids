@@ -4351,22 +4351,53 @@ Program Parser::parse() {
                     impl_cache->insert(impl_path);
                     Parser impl_parser(sm_, impl_file_id, impl_lexer.tokenize(), source_dir_, import_paths_, impl_cache);
                     Program impl_prog = impl_parser.parse();
+                    // Two things need to flow from the impl parse into the
+                    // consumer's program:
+                    //   (a) the template bodies the consumer is importing here —
+                    //       stamped is_local=false, impl_module=<this module> so
+                    //       calls instantiate against the right .o.
+                    //   (b) everything dump.sl pulled in via its own `import`s
+                    //       (e.g. `import string;` in dump.sl brings in
+                    //       println, String, …). These are needed when a TU
+                    //       imports only the template module yet has to resolve
+                    //       names referenced inside the cloned template body —
+                    //       __instantiations.sl is the canonical case. Without
+                    //       them codegen errors `Unknown function` etc. inside
+                    //       the cloned body.
                     for (size_t i = 0; i < impl_prog.functions.size(); i++) {
                         auto& fn = impl_prog.functions[i];
                         if (!fn.type_params.empty() && fn.body) {
+                            // (a) template body from this module.
                             fn.is_local = false;
                             fn.impl_module = module;
                             program.functions.push_back(std::move(fn));
+                        } else if (!fn.body) {
+                            // (b) transitive declaration from impl's own .slh
+                            // imports. Imported template entries already carry
+                            // is_local=false / impl_module from the deeper
+                            // import; bare .slh decls have no impl_module —
+                            // both shapes are correct to forward as-is.
+                            program.functions.push_back(std::move(fn));
                         }
+                        // fn.body && fn.type_params.empty() — a non-template
+                        // definition local to the impl TU. Not visible to
+                        // consumers of the .slh; drop.
                     }
                     for (size_t i = 0; i < impl_prog.slids.size(); i++) {
                         auto& impl_slid = impl_prog.slids[i];
-                        if (impl_slid.type_params.empty()) continue;
-                        impl_slid.is_local = false;
-                        impl_slid.impl_module = module;
+                        bool is_template = !impl_slid.type_params.empty();
+                        if (is_template) {
+                            // (a) template class from this module.
+                            impl_slid.is_local = false;
+                            impl_slid.impl_module = module;
+                        }
+                        // (b) non-template slids forward as-is — they already
+                        // carry their own impl_module / is_local from the
+                        // transitive .slh that declared them.
                         bool replaced = false;
                         for (auto& prog_slid : program.slids) {
-                            if (prog_slid.name == impl_slid.name && !prog_slid.type_params.empty()) {
+                            if (prog_slid.name == impl_slid.name
+                                && !prog_slid.type_params.empty() == is_template) {
                                 recordSlidMethods(impl_slid);
                                 prog_slid = std::move(impl_slid);
                                 replaced = true;
@@ -4378,6 +4409,28 @@ Program Parser::parse() {
                             program.slids.push_back(std::move(impl_slid));
                         }
                     }
+                    // (b) cross-TU slid → module mapping for the transitive
+                    // imports (e.g. String → "string"). The header-side import
+                    // arm above stamps program.slid_modules for direct imports;
+                    // the impl-load path must mirror it for transitive ones so
+                    // type resolution can find the impl .o for non-template
+                    // slids the cloned template body references.
+                    for (auto& [name, mod] : impl_prog.slid_modules)
+                        program.slid_modules.emplace(name, mod);
+                    // (b) globals the impl's transitive imports carry. Header
+                    // arm pre-stamps impl_module; here we trust impl_prog has
+                    // already applied that for its own imports.
+                    for (auto& g : impl_prog.globals)
+                        program.globals.push_back(std::move(g));
+                    // Record every header impl_prog already loaded into the
+                    // consumer's import-once guard. The impl_parser used its
+                    // own cache (impl_cache), so its transitive .slh imports
+                    // are not in the consumer's set — without this step the
+                    // consumer's later `import string;` would re-load the
+                    // same .slh and double-push every slid/fn it contains,
+                    // tripping the inheritance-field collision check.
+                    for (auto& h : impl_prog.imported_headers)
+                        imported_once_->insert(h);
                 }
             }
         }
