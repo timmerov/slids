@@ -798,6 +798,15 @@ struct AliasDef {
     int tok = 0;                 // token index of the alias name (diagnostics)
 };
 
+// A bare file-scope `Name;` — an unnamed global instance. It has no name to
+// trigger lazy construction, so it is constructed eagerly + unconditionally at
+// main's `global;` statement and destructed at the close of that block.
+struct UnnamedGlobal {
+    std::string type_name;
+    int file_id = 0;
+    int tok = 0;
+};
+
 struct Program {
     std::vector<EnumDef> enums;
     std::vector<SlidDef> slids;
@@ -807,6 +816,7 @@ struct Program {
     std::vector<GlobalDef> globals;                 // global slid declarations (file/class/function-internal)
     std::vector<NamespaceDef> namespaces;           // declared namespace blocks
     std::vector<AliasDef> aliases;                   // function aliases (alias x = y;)
+    std::vector<UnnamedGlobal> unnamed_globals;       // bare file-scope `Name;` instances
 
     std::vector<std::string> imported_headers; // resolved .slh paths, for -MF dep output
     std::map<std::string, std::string> slid_modules; // slid name -> module that provides it

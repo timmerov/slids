@@ -196,6 +196,18 @@ private:
     int global_lifetime_depth_ = 0;
     void collectGlobals();
     void emitStaticGlobals();
+    // Unnamed file-scope globals (`Name;`). Each gets a module-level static
+    // global; construction is eager at main's `global;` statement, teardown
+    // at the close of that block. collectUnnamedGlobals assigns symbols and
+    // rejects inert types; it must run after synthesizeCtorNeeds().
+    struct UnnamedGlobalEntry {
+        std::string llvm_symbol;
+        std::string slids_type;
+        int file_id = 0;
+        int tok = 0;
+    };
+    std::vector<UnnamedGlobalEntry> unnamed_globals_;
+    void collectUnnamedGlobals();
     // Phase 3: emit per-lazy sentinel, ctor function, dtor function, and the
     // ensure widget that wires first-access sentinel-set + dtor-register +
     // tail-call into the ctor.

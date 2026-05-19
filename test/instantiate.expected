@@ -1,3 +1,5 @@
+Beacon:ctor
+Beacon:ctor
 Tag:ctor 0
 Tag:ctor 0
 Tag:ctor 2
@@ -8,6 +10,8 @@ inside block
 Tag:dtor 50
 after block
 Inner:ctor 9
+Probe:ctor
+Probe:dtor
 Tag:ctor 100
 Tag:dtor 100
 Inner:dtor 9
@@ -16,3 +20,5 @@ Tag:dtor 7
 Tag:dtor 2
 Tag:dtor 0
 Tag:dtor 0
+Beacon:dtor
+Beacon:dtor

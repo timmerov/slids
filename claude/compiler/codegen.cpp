@@ -735,9 +735,32 @@ void Codegen::collectGlobals() {
 // type's zero value and the user-supplied ctor body runs at first access —
 // that arm lands in phase 3; for now lazy emits storage only and skips the
 // init computation.
+// Validate unnamed file-scope globals and assign each a static-storage symbol.
+// Runs after synthesizeCtorNeeds() so needs_ctor_fn is final: a provably-inert
+// type (no ctor/dtor, no base/field needing one — including a primitive, which
+// has no SlidInfo) makes the unnamed instance dead code, and is rejected.
+void Codegen::collectUnnamedGlobals() {
+    int idx = 0;
+    for (auto& ug : program_.unnamed_globals) {
+        auto it = slid_info_.find(ug.type_name);
+        if (it == slid_info_.end())
+            throw CompileError{ug.file_id, ug.tok,
+                finalizeErrorMsg("Type '" + ug.type_name + "' is not a class.")};
+        if (!it->second.needs_ctor_fn)
+            throw CompileError{ug.file_id, ug.tok,
+                finalizeErrorMsg("Unnamed instance of '" + ug.type_name
+                    + "' has no constructor or destructor; it would have no effect.")};
+        unnamed_globals_.push_back({"@__$ug." + std::to_string(idx++),
+                                    ug.type_name, ug.file_id, ug.tok});
+    }
+}
+
 void Codegen::emitStaticGlobals() {
-    if (globals_.empty()) return;
+    if (globals_.empty() && unnamed_globals_.empty()) return;
     out_ << "\n";
+    for (auto& ug : unnamed_globals_)
+        out_ << ug.llvm_symbol << " = internal global "
+             << llvmType(ug.slids_type) << " zeroinitializer\n";
     std::set<std::string> emitted;
     std::set<std::string> cycle;
     for (auto& g : program_.globals) {
@@ -1320,6 +1343,7 @@ void Codegen::emit() {
     resolveSlidInheritance();
     synthesizeFieldDtors();
     synthesizeCtorNeeds();
+    collectUnnamedGlobals();
     // Auto-lazy promotion: a global with no user `_()`/`~()` whose fields
     // include at least one slid-typed entry needs the lazy machinery so the
     // field's own ctor/dtor can run. Synthesize empty user bodies (leave

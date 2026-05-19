@@ -2,9 +2,11 @@
 class instantiation as a statement.
 
 `Type;`, `Type();`, and `Type(args);` construct an unnamed instance.
-It has scope lifetime — constructed at the statement, destructed at the
-end of the enclosing block, LIFO with named locals, and unwound on
-early returns — exactly as if it were a named local.
+A bare `Type;` at file scope is an unnamed global: constructed eagerly at
+main's `global;`, destroyed at the close of that block. Inside a code block
+it is an unnamed local — scope lifetime, LIFO with named locals, unwound on
+early returns. An unnamed instance of a type with no constructor or
+destructor is dead code — a compile error at either scope.
 */
 
 Tag(int id_ = 0) {
@@ -28,6 +30,32 @@ Outer(int x_ = 0) {
     }
 }
 
+/* a class for the unnamed-global test below. */
+Beacon(int n_ = 0) {
+    _() {
+        __println("Beacon:ctor");
+    }
+    ~() {
+        __println("Beacon:dtor");
+    }
+}
+
+/* an inert class: no constructor, no destructor, no field needing one.
+   An unnamed instance of it would have no effect — a compile error. */
+Inert(int x_ = 0) {
+}
+
+/*
+bare file-scope `Name;` — an unnamed global. No name to drive lazy
+construction, so it is built eagerly at main's `global;` and destroyed at
+the close of that block. Two of them — two ctors, two dtors.
+*/
+Beacon;
+Beacon;
+
+//-EXPECT-ERROR: has no constructor or destructor
+//Inert;
+
 /* early return: the instantiation's dtor must still run on the way out. */
 void earlyReturn(bool stop) {
     Tag(100);
@@ -38,6 +66,9 @@ void earlyReturn(bool stop) {
 }
 
 int32 main() {
+    /* unnamed globals construct here, at `global;`. */
+    global;
+
     /* the three forms — all construct, all scope-lifetime. */
     Tag;            /* bare — zero-arg */
     Tag();          /* zero-arg */
@@ -57,7 +88,26 @@ int32 main() {
     /* nested-class instantiation statement. */
     Outer:Inner(9);
 
+    /* a local class instantiated before its textual definition — the
+       use-before-decl case, resolved within the block. */
+    {
+        Probe;
+        Probe(int p_ = 0) {
+            _() {
+                __println("Probe:ctor");
+            }
+            ~() {
+                __println("Probe:dtor");
+            }
+        }
+    }
+
     earlyReturn(true);
+
+    //-EXPECT-ERROR: has no constructor or destructor
+    //{
+    //    Inert;
+    //}
 
     return 0;
 }

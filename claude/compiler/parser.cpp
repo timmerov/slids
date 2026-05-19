@@ -1531,6 +1531,28 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
             }
         }
     }
+    // Resolve unnamed local-class instantiation statements (`Name;` /
+    // `Name(args);`) to their canonical class name. The expression parser
+    // never substitutes local-class short names, and a use may textually
+    // precede the definition — so patch the immediate statements now that
+    // local_class_stack_.back() is fully populated.
+    if (!local_class_stack_.empty() && !local_class_stack_.back().empty()) {
+        auto& lcm = local_class_stack_.back();
+        auto canon = [&](std::string& nm) {
+            auto it = lcm.find(nm);
+            if (it != lcm.end()) nm = it->second;
+        };
+        for (auto& st : block->stmts) {
+            if (auto* es = dynamic_cast<ExprStmt*>(st.get())) {
+                if (auto* ve = dynamic_cast<VarExpr*>(es->expr.get())) canon(ve->name);
+                else if (auto* ce = dynamic_cast<CallExpr*>(es->expr.get())) {
+                    if (ce->qualifier.empty()) canon(ce->callee);
+                }
+            } else if (auto* cs = dynamic_cast<CallStmt*>(st.get())) {
+                canon(cs->callee);
+            }
+        }
+    }
     scope_stack_.pop_back();
     alias_stack_.pop_back();
     local_class_stack_.pop_back();
@@ -4248,6 +4270,18 @@ Program Parser::parse() {
                      || tokens_[pos_ + 2].type == TokenType::kSemicolon
                      || tokens_[pos_ + 2].type == TokenType::kLBracket)) {
             program.globals.push_back(parseBareGlobalShortForm());
+        }
+        // bare file-scope unnamed instance: `Name;` declares an unnamed global.
+        // One operation — lexical scope (file scope) makes it a global. It is
+        // never a forward declaration: slids has no explicit forward class
+        // decls. Construction is eager at main's `global;`; see codegen.
+        else if (peek().type == TokenType::kIdentifier
+                 && pos_ + 1 < (int)tokens_.size()
+                 && tokens_[pos_ + 1].type == TokenType::kSemicolon) {
+            int name_tok = pos_;
+            std::string tname = advance().value; // type name
+            advance();                           // ';'
+            program.unnamed_globals.push_back({tname, file_id_, name_tok});
         } else if (peek().type == TokenType::kLParen) {
             program.functions.push_back(parseFunctionDef());
         } else {

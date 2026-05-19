@@ -1,9 +1,12 @@
 
-this should probably be a compile error:
-    (String^ = ^self)^ = s;
-the syntax is type conversion.
-but pointer types should use cast syntax.
-    (<String^> ^self)^ = s;
+apparently main can't have nexted functions.
+sigh.
+
+test/implement unnamed cross-TU globals.
+might need a __$global_ctor_all that instantiates
+all of them at start of main:global scope.
+
+test/implement named and unnamed globals in .slh.
 
 main should be a keyword.
 claude says no cause it's not a keyword in any other language.
@@ -13,20 +16,34 @@ global 2d arrays of class objects.
 not yet supported.
 global Class arr[2][3];
 
-globals have mostly landed.
-globals spanning multiple source files is
-insufficiently tested.
+globals with threads:
+we probably have a race condition with globals in the default
+shared memory space.
+if two threads access the same global at the same time
+they're both going to try to register the dtor.
+which could corrupt the registry.
+probably need to lock it.
+globals in thread memory space are unaffected.
 
 globals with threads:
 global.self name(field list) { ctor dtor methods }
 allocates memory from the thread's heap.
 no locking needed.
-is the default.
+every thread has its own copy of the global.
+...
+global.default name(field list) { dtor dtor methods }
+allocates memory from the shared head.
+locking reauired.
+all threads share one copy of the global.
+
+memory allocation with threads:
+global.self is the default.
+global.self allocates memory from the thread's private heap.
     ptr = new.self buffer[100];
     ptr = new buffer[100];
 allocates memory from the main thread heap.
-locking required.
-    ptr = new.global buffer[100];
+locking required:
+    ptr = new.default buffer[100];
 
 can we configure new?
 new.set_heap_size(1G);
@@ -48,14 +65,6 @@ at end of file, transport exports .slh file.
 String(...) {
     char^ const begin();
 }
-
-probably need a dereference operator for iterator types.
-implemented but unverified.
-x = iter^;  -->  x = iter.op^();
-iter^ = x;  -->  iter.op^=(x);
-or maybe we just use the index operators.
-x = iter^;  -->  x = iter.op[](0);
-iter^ = x;  -->  iter.op[]=(0, x);
 
 what does const virtual dtor mean?
 Class() {

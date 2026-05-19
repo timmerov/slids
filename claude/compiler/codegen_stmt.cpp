@@ -803,6 +803,14 @@ bool Codegen::tryEmitInstantiationStmt(
     std::string cls = qualifier.empty() ? callee : qualifier + ":" + callee;
     for (char& c : cls) if (c == ':') c = '.';
     if (!slid_info_.count(cls)) return false;
+    // An unnamed instance whose type is provably inert (no ctor/dtor, no base
+    // or field needing one) is dead code — reject it. The check mirrors the
+    // unnamed-global site in collectUnnamedGlobals.
+    if (!slid_info_.at(cls).needs_ctor_fn) {
+        std::string disp = cls.substr(cls.rfind('.') + 1);
+        error("Unnamed instance of '" + disp
+              + "' has no constructor or destructor; it would have no effect.");
+    }
     // Construct an unnamed instance with scope lifetime — emit it as a
     // named local declaration under a synthesized, unspellable name.
     std::vector<std::unique_ptr<Expr>> cargs;
@@ -829,6 +837,16 @@ void Codegen::emitStmt(const Stmt& stmt) {
             std::string("    call void @__$global_dtor_all()\n"));
         scope_stack_.back().opens_global_lifetime = true;
         global_lifetime_depth_++;
+        // Unnamed file-scope globals (`Name;`) are eager + unconditional:
+        // construct each here, in declaration order, against its static
+        // storage, and register its dtor in this scope so teardown fires at
+        // the close of the block containing `global;`.
+        for (auto& ug : unnamed_globals_) {
+            emitConstructAt(ug.slids_type, ug.llvm_symbol, {}, {});
+            locals_[ug.llvm_symbol] =
+                {ug.llvm_symbol, ug.slids_type, ug.file_id, ug.tok};
+            dtor_vars_.push_back({ug.llvm_symbol, ug.slids_type});
+        }
         return;
     }
 
