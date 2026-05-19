@@ -63,7 +63,7 @@ int32 main() {
     alias Buf = int;
     Buf outer1 = 7;
     {
-        alias Buf = char[];           /* inner shadows the outer Buf only within this block */
+        alias Buf = (const char)[];   /* inner shadows the outer Buf only within this block */
         Buf inner = "shadowed";
         __println("inner=" + inner);
     }

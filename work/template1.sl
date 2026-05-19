@@ -34,7 +34,7 @@ int32 main() {
     i8 = (int8=i64);
     println(String + "i8[96]=" + i8);
 
-    char[] ptr = "y[42]=";
+    const char[] ptr = "y[42]=";
     int y = 42;
     s = add<String>(ptr, y);
     println(s);

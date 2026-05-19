@@ -146,10 +146,10 @@ int32 main() {
     //-EXPECT-ERROR: Too many tuple values for 'Outer'
     //Outer xtoo = (1, (2,3), (4,5), 6, 7);
 
-    //-EXPECT-ERROR: cannot assign 'char[]' to 'int'
+    //-EXPECT-ERROR: cannot assign '(const char)[]' to 'int'
     //Outer xstr = (1, "str", (4,5), 6);
 
-    //-EXPECT-ERROR: cannot assign 'char[]' to 'int'
+    //-EXPECT-ERROR: cannot assign '(const char)[]' to 'int'
     //int arr_bad[2] = (1, "str");
 
     //-EXPECT-ERROR: Too many values

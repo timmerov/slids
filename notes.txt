@@ -1,15 +1,4 @@
 
-syntax validity question:
-legal or not?
-    Class(1,2,3);
-currently not.
-if legal then it creates a temporary Class object
-that lives until the end of scope.
-but it's unreachable.
-only ctor and dtor run.
-kinda like globals; .
-hrm...
-
 this should be a compile error:
     char[] format = "%g";
 format is mutable.

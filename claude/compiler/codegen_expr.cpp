@@ -2847,8 +2847,9 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     }
     // float literal → float64
     if (dynamic_cast<const FloatLiteralExpr*>(&expr)) return "float64";
-    // string literal → char[]
-    if (dynamic_cast<const StringLiteralExpr*>(&expr)) return "char[]";
+    // string literal → (const char)[] — read-only storage; binding it to a
+    // mutable char[] would strip const.
+    if (dynamic_cast<const StringLiteralExpr*>(&expr)) return "(const char)[]";
     // stringify → char[]
     if (dynamic_cast<const StringifyExpr*>(&expr)) return "char[]";
     // nullptr → anyptr (internal: a pointer with no type information,

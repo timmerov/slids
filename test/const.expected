@@ -30,3 +30,6 @@ ck=3
 ##type(ck)=const int
 ##type(abc)=const int
 doubler(abc)=20
+slit=first lit
+slit=second lit
+slit=greeting lit

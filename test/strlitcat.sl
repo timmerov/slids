@@ -3,7 +3,7 @@ test concatenation of string literals.
 */
 
 int32 main() {
-    char[] greet =
+    (const char)[] greet =
         "Hello"
         ", "
         "World"

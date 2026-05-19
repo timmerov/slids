@@ -168,6 +168,11 @@ WithTors(int x_ = 0) {
 //     }
 // }
 
+/* a function whose return type is the paren-qualified `(const char)[]`. */
+(const char)[] litGreeting() {
+    return "greeting lit";
+}
+
 int32 main() {
     NoTors nt;
     WithTors wt;
@@ -275,10 +280,25 @@ int32 main() {
        T binds to the canonical (unqualified) form — `int`, not `const int`. */
     __println("doubler(abc)=" + doubler(abc));
 
+    /* a string literal is immutable storage, type (const char)[] — a
+       const-char iterator holds and rebinds to them; nullptr is allowed. */
+    (const char)[] slit = "first lit";
+    __println("slit=" + slit);
+    slit = "second lit";
+    __println("slit=" + slit);
+    slit = litGreeting();              /* (const char)[] function return */
+    __println("slit=" + slit);
+    slit = nullptr;
+
 
     /* compile error: cannot truncate constants. */
     //-EXPECT-ERROR: truncate constant
     // const int bad_pi = 3.14;
+
+    /* compile error: a string literal is (const char)[]; binding it to a
+       mutable char[] strips const. */
+    //-EXPECT-ERROR: stripping const is not allowed
+    // char[] mutable_lit = "string literal";
     //-EXPECT-ERROR: overflows declared type
     // const int32 overflow = 10_000_000_000;
     //-EXPECT-ERROR: negative constant

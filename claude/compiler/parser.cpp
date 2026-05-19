@@ -2237,14 +2237,16 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     }
                 }
 
-                // String literal: bind to a `char[]` local once, then iterate.
+                // String literal: bind to a `(const char)[]` local once, then
+                // iterate. The literal is read-only — a mutable `char[]` base
+                // would strip const.
                 if (auto* sl = dynamic_cast<StringLiteralExpr*>(first_expr.get())) {
                     int s_len = (int)sl->value.size();
                     expect(TokenType::kRParen, "Expected ')'");
                     std::string base_name =
                         "__$base_" + std::to_string(synthetic_counter_++);
                     stmt->init_stmts.push_back(
-                        _decl("char[]", base_name, std::move(first_expr)));
+                        _decl("(const char)[]", base_name, std::move(first_expr)));
                     _finishIter(base_name, _intLit(s_len), /*is_iter_class=*/false);
                     _consumeLabel();
                     _popScope();
@@ -2599,7 +2601,14 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 || tokens_[scan + 1].type == TokenType::kArrowLeft
                 || tokens_[scan + 1].type == TokenType::kSemicolon
                 || tokens_[scan + 1].type == TokenType::kLBracket));
-        if (!is_anon_tuple_decl) {
+        // paren-qualified type declaration: `(const T) name ...` or
+        // `(mutable T) name ...` (with optional `^`/`[]` suffix). A `(` is
+        // unambiguously a type, not an expression, when `const`/`mutable`
+        // follows — those are type-qualifier keywords.
+        bool is_paren_qual_decl = pos_ + 1 < (int)tokens_.size()
+            && (tokens_[pos_ + 1].type == TokenType::kConst
+                || tokens_[pos_ + 1].type == TokenType::kMutable);
+        if (!is_anon_tuple_decl && !is_paren_qual_decl) {
             // paren-led lvalue statement: (lvalue) <op> rhs;  /  (expr);
             auto lhs = parsePostfix(parsePrimary());
             return parseLvalueTail(std::move(lhs));
@@ -2963,7 +2972,13 @@ void Parser::parseParamList(
 NestedFunctionDef Parser::parseNestedFunctionDef() {
     [[maybe_unused]] int t_start = pos_;
     NestedFunctionDef fn;
-    if (peek().type == TokenType::kLParen) {
+    // A `(` followed by `const`/`mutable` is a paren-qualified return type,
+    // not a named-tuple return list.
+    bool paren_qual_return = peek().type == TokenType::kLParen
+        && pos_ + 1 < (int)tokens_.size()
+        && (tokens_[pos_ + 1].type == TokenType::kConst
+            || tokens_[pos_ + 1].type == TokenType::kMutable);
+    if (peek().type == TokenType::kLParen && !paren_qual_return) {
         advance(); // consume '('
         while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
             std::string type = parseTypeName();
@@ -3923,7 +3938,13 @@ void Parser::parseNamespace(Program& program) {
 FunctionDef Parser::parseFunctionDef() {
     [[maybe_unused]] int t_start = pos_;
     FunctionDef fn;
-    if (peek().type == TokenType::kLParen) {
+    // A `(` followed by `const`/`mutable` is a paren-qualified return type
+    // (`(const char)[] f()`), not a named-tuple return list.
+    bool paren_qual_return = peek().type == TokenType::kLParen
+        && pos_ + 1 < (int)tokens_.size()
+        && (tokens_[pos_ + 1].type == TokenType::kConst
+            || tokens_[pos_ + 1].type == TokenType::kMutable);
+    if (peek().type == TokenType::kLParen && !paren_qual_return) {
         advance(); // consume '('
         while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
             std::string type = parseTypeName();

@@ -20,8 +20,8 @@ Light(Color hue_ = kRed) {
     }
     ~() {
     }
-    char[] name() {
-        char[] r;
+    (const char)[] name() {
+        (const char)[] r;
         switch (hue_) {
         case Light:kRed:        /* qualified case label */
             r = "red";

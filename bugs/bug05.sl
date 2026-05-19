@@ -1,5 +1,5 @@
 
-char[] getGreeting() {
+(const char)[] getGreeting() {
     /*
     this should compile.
     but doesn't.
@@ -8,7 +8,7 @@ char[] getGreeting() {
 }
 
 int32 main() {
-    char[] greeting = getGreeting();
+    (const char)[] greeting = getGreeting();
     __println(greeting);
     return 0;
 }

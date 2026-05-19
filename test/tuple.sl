@@ -170,13 +170,13 @@ int32 main() {
 
     //-EXPECT-ERROR: 5 values but 'tuple' has 3 elements
     //tuple = (1, 2, 3, 4, 5);
-    //-EXPECT-ERROR: cannot assign 'char[]' to tuple element 1 of type 'int'
+    //-EXPECT-ERROR: cannot assign '(const char)[]' to tuple element 1 of type 'int'
     //tuple = (1, "Hello", 3);
     big_tuple = (1, 2, 3, 4, 5);
     //-EXPECT-ERROR: 5 values but 'tuple' has 3 elements
     //tuple = big_tuple;
     wrong_tuple = (1, "Hello", 3);
-    //-EXPECT-ERROR: cannot assign 'char[]' to tuple element 1 of type 'int'
+    //-EXPECT-ERROR: cannot assign '(const char)[]' to tuple element 1 of type 'int'
     //tuple = wrong_tuple;
 
     /* destructuring. */
