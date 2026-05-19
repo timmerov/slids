@@ -53,9 +53,10 @@ const float64 kG = 6.6743e-11;
 /* estimated mass of milky way: 2e42 to 6e42 kg */
 const float64 kMassGalaxy = 3e42;
 
-/* diameter of milky way. */
+/* diameter and radius of milky way. */
 const float64 kGalaxyDiameterLY = 100_000.0;
 const float64 kGalaxyDiameter = kGalaxyDiameterLY * kMetersPerLightyear;
+const float64 kGalaxyRadius = kGalaxyDiameter / 2.0;
 
 /* characteristic distance aka resolution. */
 const float64 kScaleLY = 100.0;
@@ -72,19 +73,24 @@ const float64 kCentralBulgeRadius = kCentralBulgeRadiusLY * kMetersPerLightyear;
 const float64 kRotationPeriodYr = 237_000_000;
 const float64 kRotationPeriod = kRotationPeriodYr * kSecondsPerYear;
 
-
+/* separate the mass of the galaxy into rings. */
 Ring(
     float64 radius_,
     float64 mass_
 ) {
 }
-
 alias Rings = Vector<Ring>;
 
 Galaxy(
     Rings rings_
 ) {
     void run() {
+        init();
+    }
+
+    void init() {
+        nrings = (kGalaxyRadius - kCentralBulgeRadius) / kScale;
+        dump(#nrings);
     }
 }
 

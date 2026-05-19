@@ -1,7 +1,4 @@
 
-apparently main can't have nested functions.
-sigh.
-
 test/implement unnamed cross-TU globals.
 might need a __$global_ctor_all that instantiates
 all of them at start of main:global scope.

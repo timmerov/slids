@@ -17,6 +17,9 @@ VEC_INST_OBJ = $(VEC_DIR)/__instantiations.o
 TMT_INST_SL = $(TMT_DIR)/__instantiations.sl
 TMT_INST_LL = $(TMT_DIR)/__instantiations.ll
 TMT_INST_OBJ = $(TMT_DIR)/__instantiations.o
+GAL_INST_SL  = $(GAL_DIR)/__instantiations.sl
+GAL_INST_LL  = $(GAL_DIR)/__instantiations.ll
+GAL_INST_OBJ = $(GAL_DIR)/__instantiations.o
 
 IMPORT_PATH = .
 SLIDSC_FLAGS = --import-path $(IMPORT_PATH)
@@ -113,12 +116,16 @@ $(VEC_INST_SL): $(wildcard $(VEC_DIR)/*.sli) $(SLIDSC)
 	$(SLIDSC) --instantiate $(VEC_DIR) -o $@
 
 # ---- galaxy ----
-# Cross-TU consumer: imports dump, math, string, vector. Links the string
-# impl for print(); -lm for the math (libm) bindings.
+# Cross-TU consumer: imports dump, math, string, vector. dump and vector are
+# template-only impls — their bodies are loaded from their .sl files at
+# import time, and concrete instantiations needed by galaxy land in
+# galaxy.sli. The aggregator collects every .sli in $(GAL_DIR) into
+# __instantiations.sl, which compiles to the symbols the linker needs.
+# Links the string impl for print(); -lm for the math (libm) bindings.
 
 galaxy: $(BIN_DIR)/galaxy
 
-$(BIN_DIR)/galaxy: $(GAL_DIR)/galaxy.o $(ST_DIR)/string.o
+$(BIN_DIR)/galaxy: $(GAL_DIR)/galaxy.o $(ST_DIR)/string.o $(GAL_INST_OBJ)
 	$(CXX) $^ -o $@ -lm
 
 $(GAL_DIR)/galaxy.o: $(GAL_DIR)/galaxy.ll
@@ -139,6 +146,15 @@ $(TMT_INST_LL): $(TMT_INST_SL) $(SLIDSC)
 $(TMT_INST_SL): $(wildcard $(TMT_DIR)/*.sli) $(SLIDSC)
 	$(SLIDSC) --instantiate $(TMT_DIR) -o $@
 
+$(GAL_INST_OBJ): $(GAL_INST_LL)
+	$(LLC) $(LLCFLAGS) $< -o $@
+
+$(GAL_INST_LL): $(GAL_INST_SL) $(SLIDSC)
+	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS)
+
+$(GAL_INST_SL): $(wildcard $(GAL_DIR)/*.sli) $(SLIDSC)
+	$(SLIDSC) --instantiate $(GAL_DIR) -o $@
+
 # ---- auto-generated dependencies ----
 
 -include $(ST_DIR)/string.d
@@ -150,6 +166,7 @@ $(TMT_INST_SL): $(wildcard $(TMT_DIR)/*.sli) $(SLIDSC)
 -include $(GAL_DIR)/galaxy.d
 -include $(VEC_DIR)/__instantiations.d
 -include $(TMT_DIR)/__instantiations.d
+-include $(GAL_DIR)/__instantiations.d
 
 # ---- clean ----
 

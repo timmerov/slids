@@ -6,6 +6,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <functional>
 
 // Strip every leading "const " qualifier substring from a type string.
 // "const int" -> "int"; "const (const T)^" -> "T^"; non-pointer and pointer
@@ -16,28 +17,65 @@
 // by default-const-on-indirect-params collapses to "T^" after const-strip.
 // Real anon-tuple types ("(t1,t2,...)") keep their parens.
 inline std::string canonicalType(const std::string& s) {
+    // First pass: strip every `const ` qualifier.
     std::string t;
     t.reserve(s.size());
-    size_t i = 0;
-    while (i < s.size()) {
+    for (size_t i = 0; i < s.size(); ) {
         if (s.compare(i, 6, "const ") == 0) { i += 6; continue; }
         t.push_back(s[i++]);
     }
-    // Strip single-element paren wrappers ("(X)..." where X has no top-level
-    // comma — i.e. X is not itself a tuple). Repeats for nested wraps.
-    while (t.size() >= 2 && t.front() == '(') {
-        int depth = 0;
-        size_t close = 0;
-        bool has_top_comma = false;
-        for (size_t k = 0; k < t.size(); k++) {
-            if (t[k] == '(') depth++;
-            else if (t[k] == ')') { depth--; if (depth == 0) { close = k; break; } }
-            else if (t[k] == ',' && depth == 1) has_top_comma = true;
+    // Second pass: recursively normalize structure. Strip redundant `(X)`
+    // wrappers around a single type at every level, peel trailing `^`/`[]`
+    // suffixes onto the head, and recurse into anon-tuple elements so a
+    // paren-wrapped slot like `(char[], char[], (float64)^)` canonicalizes
+    // to `(char[],char[],float64^)`. A naked outer-only strip is not enough
+    // — type inference (`inferTypeArgs` → unify) recurses into tuple slots
+    // and would otherwise bind `T → "(float64)"` instead of `T → "float64"`.
+    std::function<std::string(const std::string&)> norm =
+        [&](const std::string& u) -> std::string {
+        std::string r = u;
+        // Strip outer single-element parens. Loops in case of nested wrap.
+        while (r.size() >= 2 && r.front() == '(') {
+            int depth = 0; size_t close = 0; bool has_top_comma = false;
+            for (size_t k = 0; k < r.size(); k++) {
+                if (r[k] == '(') depth++;
+                else if (r[k] == ')') { depth--; if (depth == 0) { close = k; break; } }
+                else if (r[k] == ',' && depth == 1) has_top_comma = true;
+            }
+            if (close == 0 || has_top_comma) break;
+            r = r.substr(1, close - 1) + r.substr(close + 1);
         }
-        if (close == 0 || has_top_comma) break;
-        t = t.substr(1, close - 1) + t.substr(close + 1);
-    }
-    return t;
+        // Peel `[]` / `^` and recurse on the head.
+        if (r.size() >= 2 && r.substr(r.size() - 2) == "[]")
+            return norm(r.substr(0, r.size() - 2)) + "[]";
+        if (!r.empty() && r.back() == '^')
+            return norm(r.substr(0, r.size() - 1)) + "^";
+        // Anon tuple: split on top-level commas, recurse on each element.
+        if (r.size() >= 2 && r.front() == '(' && r.back() == ')') {
+            std::vector<std::string> elems;
+            int depth = 0; size_t start = 1;
+            for (size_t k = 1; k + 1 < r.size(); k++) {
+                if (r[k] == '(') depth++;
+                else if (r[k] == ')') depth--;
+                else if (r[k] == ',' && depth == 0) {
+                    elems.push_back(r.substr(start, k - start));
+                    start = k + 1;
+                }
+            }
+            elems.push_back(r.substr(start, r.size() - 1 - start));
+            std::string out = "(";
+            for (size_t k = 0; k < elems.size(); k++) {
+                if (k > 0) out += ",";
+                std::string e = elems[k];
+                // tolerate either ", " or "," element delimiters at input.
+                while (!e.empty() && e.front() == ' ') e.erase(0, 1);
+                out += norm(e);
+            }
+            return out + ")";
+        }
+        return r;
+    };
+    return norm(t);
 }
 
 // Returns true if the type string carries `const ` anywhere (pointee-const or
