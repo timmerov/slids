@@ -305,23 +305,15 @@ void Codegen::collectFunctionSignatures() {
 
         if (!fn.body) { exported_symbols_.insert(mangled); continue; } // forward declaration = exported
 
-        // recurse into all blocks to find nested function defs
-        std::function<void(const BlockStmt&)> findNested = [&](const BlockStmt& block) {
-            for (auto& stmt : block.stmts) {
-                if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
-                    registerNestedOverload(fn.name, nfs->def);
-                } else if (auto* fl = dynamic_cast<const ForLongStmt*>(stmt.get())) {
-                    findNested(*fl->update_block);
-                    findNested(*fl->body);
-                } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get())) {
-                    findNested(*w->body);
-                } else if (auto* i = dynamic_cast<const IfStmt*>(stmt.get())) {
-                    findNested(*i->then_block);
-                    if (i->else_block) findNested(*i->else_block);
-                }
-            }
+        // Register every nested function defined anywhere in this function's
+        // body — at any nesting depth, in any compound stmt — via the shared
+        // child-stmt walker. Nested-fn bodies are opaque (their own closures).
+        std::function<void(const Stmt&)> walk = [&](const Stmt& s) {
+            if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&s))
+                registerNestedOverload(fn.name, nfs->def);
+            forEachChildStmt(s, walk);
         };
-        findNested(*fn.body);
+        for (auto& s : fn.body->stmts) walk(*s);
     }
     for (auto& slid : program_.slids) {
         // collect all method implementations (inline bodies + external defs), grouped by name
@@ -476,6 +468,9 @@ std::set<std::string> Codegen::collectCaptures(
     };
 
     scanStmt = [&](const Stmt& stmt) {
+        // Leaf-level expression scans for this stmt; child statements are
+        // walked uniformly by forEachChildStmt below. NestedFunctionDefStmt
+        // stays opaque (its body is the nested fn's own closure scope).
         if (auto* a = dynamic_cast<const AssignStmt*>(&stmt)) {
             if (parent_locals.count(a->name) && !own_params.count(a->name))
                 captures.insert(a->name);
@@ -492,26 +487,20 @@ std::set<std::string> Codegen::collectCaptures(
             for (auto& a : ms->args) scanExpr(*a);
         } else if (auto* fa = dynamic_cast<const FieldAssignStmt*>(&stmt)) {
             scanExpr(*fa->object); scanExpr(*fa->value);
-        } else if (auto* b = dynamic_cast<const BlockStmt*>(&stmt)) {
-            for (auto& s : b->stmts) scanStmt(*s);
-        } else if (auto* i = dynamic_cast<const IfStmt*>(&stmt)) {
-            scanExpr(*i->cond);
-            for (auto& s : i->then_block->stmts) scanStmt(*s);
-            if (i->else_block) for (auto& s : i->else_block->stmts) scanStmt(*s);
-        } else if (auto* w = dynamic_cast<const WhileStmt*>(&stmt)) {
-            scanExpr(*w->cond);
-            for (auto& s : w->body->stmts) scanStmt(*s);
-        } else if (auto* fl = dynamic_cast<const ForLongStmt*>(&stmt)) {
-            for (auto& s : fl->init_stmts) scanStmt(*s);
-            if (fl->cond) scanExpr(*fl->cond);
-            for (auto& s : fl->update_block->stmts) scanStmt(*s);
-            for (auto& s : fl->body->stmts) scanStmt(*s);
         } else if (auto* td = dynamic_cast<const TupleDestructureStmt*>(&stmt)) {
             scanExpr(*td->init);
-        } else if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) {
-            // don't recurse into nested function defs — they have their own scope
-            (void)nfs;
+        } else if (auto* i = dynamic_cast<const IfStmt*>(&stmt)) {
+            scanExpr(*i->cond);
+        } else if (auto* w = dynamic_cast<const WhileStmt*>(&stmt)) {
+            scanExpr(*w->cond);
+        } else if (auto* fl = dynamic_cast<const ForLongStmt*>(&stmt)) {
+            if (fl->cond) scanExpr(*fl->cond);
+        } else if (auto* sw = dynamic_cast<const SwitchStmt*>(&stmt)) {
+            scanExpr(*sw->expr);
+            for (auto& sc : sw->cases)
+                if (sc.value) scanExpr(*sc.value);
         }
+        forEachChildStmt(stmt, scanStmt);
     };
 
     for (auto& stmt : body.stmts) scanStmt(*stmt);
@@ -523,88 +512,54 @@ void Codegen::analyzeNestedFunctions(const FunctionDef& fn) {
     std::set<std::string> parent_locals;
     for (auto& [type, name] : fn.params) parent_locals.insert(name);
 
-    std::function<void(const BlockStmt&)> collectLocals = [&](const BlockStmt& block) {
-        for (auto& stmt : block.stmts) {
-            if (auto* d = dynamic_cast<const VarDeclStmt*>(stmt.get()))
-                parent_locals.insert(d->name);
-            else if (auto* a = dynamic_cast<const ArrayDeclStmt*>(stmt.get()))
-                parent_locals.insert(a->name);
-            else if (auto* td = dynamic_cast<const TupleDestructureStmt*>(stmt.get())) {
-                for (auto& [type, name] : td->fields) parent_locals.insert(name);
-            } else if (auto* fl = dynamic_cast<const ForLongStmt*>(stmt.get())) {
-                for (auto& s : fl->init_stmts) {
-                    if (auto* d = dynamic_cast<const VarDeclStmt*>(s.get()))
-                        parent_locals.insert(d->name);
-                    else if (auto* a = dynamic_cast<const ArrayDeclStmt*>(s.get()))
-                        parent_locals.insert(a->name);
-                }
-                collectLocals(*fl->update_block);
-                collectLocals(*fl->body);
-            } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get()))
-                collectLocals(*w->body);
-            else if (auto* i = dynamic_cast<const IfStmt*>(stmt.get())) {
-                collectLocals(*i->then_block);
-                if (i->else_block) collectLocals(*i->else_block);
-            }
-        }
+    // Pull in every parent-scope local — at any nesting depth, in any
+    // compound stmt — via the shared child-stmt walker. Nested-fn bodies
+    // stay opaque (their locals belong to their own scope).
+    std::function<void(const Stmt&)> collectLocals = [&](const Stmt& s) {
+        if (auto* d = dynamic_cast<const VarDeclStmt*>(&s))
+            parent_locals.insert(d->name);
+        else if (auto* a = dynamic_cast<const ArrayDeclStmt*>(&s))
+            parent_locals.insert(a->name);
+        else if (auto* td = dynamic_cast<const TupleDestructureStmt*>(&s))
+            for (auto& [type, name] : td->fields) parent_locals.insert(name);
+        forEachChildStmt(s, collectLocals);
     };
-    collectLocals(*fn.body);
+    for (auto& s : fn.body->stmts) collectLocals(*s);
 
-    // find all nested function defs anywhere in body
-    std::function<void(const BlockStmt&)> findNested = [&](const BlockStmt& block) {
-        for (auto& stmt : block.stmts) {
-            if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
-                std::set<std::string> own_params;
-                for (auto& [type, name] : nfs->def.params) own_params.insert(name);
-                // also exclude variables declared locally inside the nested function body
-                std::function<void(const BlockStmt&)> collectNested = [&](const BlockStmt& b) {
-                    for (auto& s : b.stmts) {
-                        if (auto* d = dynamic_cast<const VarDeclStmt*>(s.get()))
-                            own_params.insert(d->name);
-                        else if (auto* a = dynamic_cast<const ArrayDeclStmt*>(s.get()))
-                            own_params.insert(a->name);
-                        else if (auto* td2 = dynamic_cast<const TupleDestructureStmt*>(s.get()))
-                            for (auto& [t, n] : td2->fields) own_params.insert(n);
-                        else if (auto* fl2 = dynamic_cast<const ForLongStmt*>(s.get())) {
-                            for (auto& is : fl2->init_stmts) {
-                                if (auto* d = dynamic_cast<const VarDeclStmt*>(is.get()))
-                                    own_params.insert(d->name);
-                                else if (auto* a = dynamic_cast<const ArrayDeclStmt*>(is.get()))
-                                    own_params.insert(a->name);
-                            }
-                            collectNested(*fl2->update_block);
-                            collectNested(*fl2->body);
-                        } else if (auto* w2 = dynamic_cast<const WhileStmt*>(s.get()))
-                            collectNested(*w2->body);
-                        else if (auto* i2 = dynamic_cast<const IfStmt*>(s.get())) {
-                            collectNested(*i2->then_block);
-                            if (i2->else_block) collectNested(*i2->else_block);
-                        }
-                    }
-                };
-                collectNested(*nfs->def.body);
+    // For every nested function defined anywhere in this function's body —
+    // any nesting depth, any compound stmt — compute its captures and record
+    // its NestedFuncInfo. Nested-fn bodies are opaque to the outer walk
+    // (each is its own closure scope).
+    std::function<void(const Stmt&)> findNested = [&](const Stmt& s) {
+        if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&s)) {
+            std::set<std::string> own_params;
+            for (auto& [type, name] : nfs->def.params) own_params.insert(name);
+            // Exclude variables declared locally inside the nested fn body
+            // (they shadow parent locals, so aren't captures).
+            std::function<void(const Stmt&)> collectNested = [&](const Stmt& inner) {
+                if (auto* d = dynamic_cast<const VarDeclStmt*>(&inner))
+                    own_params.insert(d->name);
+                else if (auto* a = dynamic_cast<const ArrayDeclStmt*>(&inner))
+                    own_params.insert(a->name);
+                else if (auto* td2 = dynamic_cast<const TupleDestructureStmt*>(&inner))
+                    for (auto& [t, n] : td2->fields) own_params.insert(n);
+                forEachChildStmt(inner, collectNested);
+            };
+            for (auto& s2 : nfs->def.body->stmts) collectNested(*s2);
 
-                auto captures = collectCaptures(*nfs->def.body, parent_locals, own_params);
+            auto captures = collectCaptures(*nfs->def.body, parent_locals, own_params);
 
-                std::string mangled = mangleMethod(fn.name, nfs->def.name,
-                    buildParamTypes(nfs->def.params, nfs->def.param_mutable));
-                NestedFuncInfo info;
-                info.mangled_name = mangled;
-                info.captures = captures;
-                info.parent_name = fn.name;
-                nested_info_[mangled] = info;
-            } else if (auto* fl = dynamic_cast<const ForLongStmt*>(stmt.get())) {
-                findNested(*fl->update_block);
-                findNested(*fl->body);
-            } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get())) {
-                findNested(*w->body);
-            } else if (auto* i = dynamic_cast<const IfStmt*>(stmt.get())) {
-                findNested(*i->then_block);
-                if (i->else_block) findNested(*i->else_block);
-            }
+            std::string mangled = mangleMethod(fn.name, nfs->def.name,
+                buildParamTypes(nfs->def.params, nfs->def.param_mutable));
+            NestedFuncInfo info;
+            info.mangled_name = mangled;
+            info.captures = captures;
+            info.parent_name = fn.name;
+            nested_info_[mangled] = info;
         }
+        forEachChildStmt(s, findNested);
     };
-    findNested(*fn.body);
+    for (auto& s : fn.body->stmts) findNested(*s);
 }
 
 // True if `t` names a type the compiler can resolve: a built-in scalar/
@@ -1165,29 +1120,26 @@ void Codegen::collectStringConstants() {
             // collect string literals in constructor args (e.g. String s("hello"))
             for (auto& arg : decl->ctor_args)
                 collectExpr(arg.get(), false);
-        } else if (auto* b = dynamic_cast<const BlockStmt*>(&stmt)) {
-            for (auto& s : b->stmts) collect(*s);
-        } else if (auto* i = dynamic_cast<const IfStmt*>(&stmt)) {
-            for (auto& s : i->then_block->stmts) collect(*s);
-            if (i->else_block) for (auto& s : i->else_block->stmts) collect(*s);
-        } else if (auto* w = dynamic_cast<const WhileStmt*>(&stmt)) {
-            for (auto& s : w->body->stmts) collect(*s);
-        } else if (auto* fl = dynamic_cast<const ForLongStmt*>(&stmt)) {
-            for (auto& s : fl->init_stmts) collect(*s);
-            for (auto& s : fl->update_block->stmts) collect(*s);
-            for (auto& s : fl->body->stmts) collect(*s);
-        } else if (auto* sw = dynamic_cast<const SwitchStmt*>(&stmt)) {
-            for (auto& sc : sw->cases)
-                for (auto& s : sc.stmts) collect(*s);
-        } else if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) {
-            for (auto& s : nfs->def.body->stmts) collect(*s);
         } else if (auto* ret = dynamic_cast<const ReturnStmt*>(&stmt)) {
             if (ret->value) collectExpr(ret->value.get(), false);
         } else if (auto* es = dynamic_cast<const ExprStmt*>(&stmt)) {
             collectExpr(es->expr.get(), false);
         } else if (auto* td = dynamic_cast<const TupleDestructureStmt*>(&stmt)) {
             if (td->init) collectExpr(td->init.get(), false);
+        } else if (auto* i = dynamic_cast<const IfStmt*>(&stmt)) {
+            collectExpr(i->cond.get(), false);
+        } else if (auto* w = dynamic_cast<const WhileStmt*>(&stmt)) {
+            collectExpr(w->cond.get(), false);
+        } else if (auto* fl = dynamic_cast<const ForLongStmt*>(&stmt)) {
+            if (fl->cond) collectExpr(fl->cond.get(), false);
+        } else if (auto* sw = dynamic_cast<const SwitchStmt*>(&stmt)) {
+            collectExpr(sw->expr.get(), false);
+            for (auto& sc : sw->cases)
+                if (sc.value) collectExpr(sc.value.get(), false);
         }
+        // String-constant collection spans every statement in the unit —
+        // including nested-function bodies — so descend into them too.
+        forEachChildStmt(stmt, collect, /*include_nested_fn_body=*/true);
     };
 
     // collection order must match emission order exactly:
@@ -1838,30 +1790,21 @@ void Codegen::emitFrameStruct(const FunctionDef& fn) {
     // One frame struct per nested-function overload with 2+ captures, named
     // by that overload's mangled name so overloads with differing capture
     // sets get independent layouts.
-    std::function<void(const BlockStmt&)> scan = [&](const BlockStmt& block) {
-        for (auto& stmt : block.stmts) {
-            if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
-                std::string mangled = mangleMethod(fn.name, nfs->def.name,
-                    buildParamTypes(nfs->def.params, nfs->def.param_mutable));
-                auto it = nested_info_.find(mangled);
-                if (it != nested_info_.end() && it->second.captures.size() >= 2) {
-                    out_ << "%frame." << mangled << " = type { ";
-                    for (size_t i = 0; i < it->second.captures.size(); i++)
-                        out_ << (i ? ", ptr" : "ptr");
-                    out_ << " }\n";
-                }
-            } else if (auto* fl = dynamic_cast<const ForLongStmt*>(stmt.get())) {
-                scan(*fl->update_block);
-                scan(*fl->body);
-            } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get())) {
-                scan(*w->body);
-            } else if (auto* i = dynamic_cast<const IfStmt*>(stmt.get())) {
-                scan(*i->then_block);
-                if (i->else_block) scan(*i->else_block);
+    std::function<void(const Stmt&)> scan = [&](const Stmt& s) {
+        if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&s)) {
+            std::string mangled = mangleMethod(fn.name, nfs->def.name,
+                buildParamTypes(nfs->def.params, nfs->def.param_mutable));
+            auto it = nested_info_.find(mangled);
+            if (it != nested_info_.end() && it->second.captures.size() >= 2) {
+                out_ << "%frame." << mangled << " = type { ";
+                for (size_t i = 0; i < it->second.captures.size(); i++)
+                    out_ << (i ? ", ptr" : "ptr");
+                out_ << " }\n";
             }
         }
+        forEachChildStmt(s, scan);
     };
-    scan(*fn.body);
+    for (auto& s : fn.body->stmts) scan(*s);
 }
 
 void Codegen::emitNestedFunction(
@@ -2420,27 +2363,18 @@ void Codegen::emitFunction(const FunctionDef& fn) {
 
     out_ << "}\n\n";
 
-    // emit nested functions after parent
-    std::function<void(const BlockStmt&)> emitNested = [&](const BlockStmt& block) {
-        for (auto& stmt : block.stmts) {
-            if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(stmt.get())) {
-                std::string nm = mangleMethod(fn.name, nfs->def.name,
-                    buildParamTypes(nfs->def.params, nfs->def.param_mutable));
-                auto it = nested_info_.find(nm);
-                if (it != nested_info_.end())
-                    emitNestedFunction(nfs->def, fn.name, it->second);
-            } else if (auto* fl = dynamic_cast<const ForLongStmt*>(stmt.get())) {
-                emitNested(*fl->update_block);
-                emitNested(*fl->body);
-            } else if (auto* w = dynamic_cast<const WhileStmt*>(stmt.get())) {
-                emitNested(*w->body);
-            } else if (auto* i = dynamic_cast<const IfStmt*>(stmt.get())) {
-                emitNested(*i->then_block);
-                if (i->else_block) emitNested(*i->else_block);
-            }
+    // emit nested functions after parent — any nesting depth, any compound stmt
+    std::function<void(const Stmt&)> emitNested = [&](const Stmt& s) {
+        if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&s)) {
+            std::string nm = mangleMethod(fn.name, nfs->def.name,
+                buildParamTypes(nfs->def.params, nfs->def.param_mutable));
+            auto it = nested_info_.find(nm);
+            if (it != nested_info_.end())
+                emitNestedFunction(nfs->def, fn.name, it->second);
         }
+        forEachChildStmt(s, emitNested);
     };
-    emitNested(*fn.body);
+    for (auto& s : fn.body->stmts) emitNested(*s);
 
     current_parent_ = "";
 }

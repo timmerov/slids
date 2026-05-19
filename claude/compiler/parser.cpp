@@ -175,6 +175,14 @@ std::string Parser::lookupLocalClass(const std::string& name) const {
     return "";
 }
 
+std::string Parser::lookupNestedFunc(const std::string& name) const {
+    for (auto it = nested_func_stack_.rbegin(); it != nested_func_stack_.rend(); ++it) {
+        auto sit = it->find(name);
+        if (sit != it->end()) return sit->second;
+    }
+    return "";
+}
+
 void Parser::parseAliasDecl() {
     advance(); // 'alias'
     int name_tok = pos_;
@@ -1119,16 +1127,20 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
             // namespace var access: path is the full colon-joined name.
             return make<VarExpr>(last_seg_tok, path);
         }
-        // Bare identifier — if it names a local class in scope, substitute the
-        // canonical name so codegen finds slid_info_[canonical]. Mirrors the
-        // type-position substitution in parseTypeName; `lookupLocalClass` walks
-        // the whole stack so an outer-block class resolves from any sub-block,
-        // and the block-level pre-scan in parseBlock makes the registration
-        // visible before the textual definition (no forward decls needed).
+        // Bare identifier — if it names a block-scoped declarable (local
+        // class or nested function) in scope, substitute the canonical name
+        // so codegen resolves through the right registry. Mirrors the type-
+        // position substitution in parseTypeName; the stack walks (and the
+        // block-level pre-scan) deliver the same "any nesting depth, before
+        // or after the textual definition" property file-scope decls have.
         std::string name = t.value;
         {
             std::string lc = lookupLocalClass(name);
             if (!lc.empty()) name = lc;
+            else {
+                std::string nf = lookupNestedFunc(name);
+                if (!nf.empty()) name = nf;
+            }
         }
         // template call: name<TypeArg,...>(args)
         if (peek().type == TokenType::kLt && isTemplateCallLookahead()) {
@@ -1516,13 +1528,16 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     scope_stack_.push_back({});
     alias_stack_.push_back({});
     local_class_stack_.push_back({});
-    // Pre-scan this block for local class definitions at its top level and
-    // register each short→canonical mapping in local_class_stack_.back()
-    // before statements parse. Slids has no forward class declarations:
-    // file-scope classes work via the file-level two-pass, and local classes
-    // get the same property at the block level here. After the pre-scan,
-    // `lookupLocalClass` resolves any use — before or after the textual
-    // definition, at any nesting depth — exactly like the file-level case.
+    nested_func_stack_.push_back({});
+    // Pre-scan this block for forward-decl-needed declarations at its top
+    // level — local classes AND nested functions — and register each
+    // short→canonical mapping in the matching stack's top frame before
+    // statements parse. Slids has no forward declarations: file-scope
+    // classes/functions work via the file-level two-pass, and block-scope
+    // declarations get the same property here. After the pre-scan,
+    // `lookupLocalClass` and `lookupNestedFunc` resolve uses — before or
+    // after the textual definition, at any nesting depth — and uses
+    // outside the declaring block fail to resolve (intentional block scope).
     prescanLocalClasses();
     for (auto& n : predeclare)
         declareVar(n, t_start);
@@ -1553,6 +1568,7 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     scope_stack_.pop_back();
     alias_stack_.pop_back();
     local_class_stack_.pop_back();
+    nested_func_stack_.pop_back();
     expect(TokenType::kRBrace, "Expected '}'");
     return block;
 }
@@ -1759,7 +1775,8 @@ void Parser::prescanLocalClasses() {
         }
     };
     auto register_class = [&](const std::string& short_name, int name_tok) {
-        if (local_class_stack_.back().count(short_name)) {
+        if (local_class_stack_.back().count(short_name)
+            || nested_func_stack_.back().count(short_name)) {
             errorAt(name_tok, "'" + short_name
                 + "' is already declared in this scope.");
         }
@@ -1768,6 +1785,21 @@ void Parser::prescanLocalClasses() {
         std::string canonical = (func_path.empty() ? "" : func_path + ".")
             + std::to_string(local_slid_counter_++) + "." + short_name;
         local_class_stack_.back()[short_name] = canonical;
+    };
+    auto register_nested_fn = [&](const std::string& short_name, int name_tok) {
+        // Overloads share the short name in this block; the codegen mangle
+        // differentiates by param types. Only collisions to record here are
+        // with same-block local classes (single namespace).
+        if (local_class_stack_.back().count(short_name)) {
+            errorAt(name_tok, "'" + short_name
+                + "' is already declared in this scope.");
+        }
+        if (nested_func_stack_.back().count(short_name)) return; // overload
+        std::string func_path = current_function_name_;
+        for (char& c : func_path) if (c == ':') c = '.';
+        std::string canonical = (func_path.empty() ? "" : func_path + ".")
+            + std::to_string(local_slid_counter_++) + "." + short_name;
+        nested_func_stack_.back()[short_name] = canonical;
     };
     auto skip_template_brackets = [&]() {
         if (pos_ >= (int)tokens_.size() || peek().type != TokenType::kLt) return;
@@ -1781,6 +1813,57 @@ void Parser::prescanLocalClasses() {
             }
             advance();
         }
+    };
+    // Try-detect a nested function def at the current pos_. Pattern:
+    // `<type prefix> Identifier ( ... ) { ... }`. The prefix must be non-
+    // empty (otherwise it'd be a class def — caught above) and must not
+    // contain a `:` at paren-depth 0 (that'd be a namespace-qualified name
+    // — not a nested fn). On match: register + advance past the body `}`.
+    // On miss: restore pos_ and return false so skip_statement runs.
+    auto try_detect_nested_fn = [&]() -> bool {
+        int save_p = pos_;
+        int paren = 0;
+        bool seen_colon = false;
+        while (pos_ < (int)tokens_.size()) {
+            TokenType tt = peek().type;
+            if (paren == 0) {
+                if (tt == TokenType::kSemicolon
+                    || tt == TokenType::kLBrace
+                    || tt == TokenType::kRBrace
+                    || tt == TokenType::kEof) { pos_ = save_p; return false; }
+                if (tt == TokenType::kColon) seen_colon = true;
+                if (tt == TokenType::kIdentifier
+                    && pos_ + 1 < (int)tokens_.size()
+                    && tokens_[pos_ + 1].type == TokenType::kLParen) {
+                    int name_p = pos_;
+                    std::string name = peek().value;
+                    advance(); // identifier
+                    advance(); // '('
+                    int d = 1;
+                    while (pos_ < (int)tokens_.size() && d > 0) {
+                        if (peek().type == TokenType::kLParen) d++;
+                        else if (peek().type == TokenType::kRParen) d--;
+                        advance();
+                    }
+                    if (d == 0
+                        && pos_ < (int)tokens_.size()
+                        && peek().type == TokenType::kLBrace
+                        && name_p > save_p
+                        && !seen_colon) {
+                        skip_balanced(TokenType::kLBrace, TokenType::kRBrace);
+                        register_nested_fn(name, name_p);
+                        return true;
+                    }
+                    pos_ = save_p;
+                    return false;
+                }
+            }
+            if (tt == TokenType::kLParen) paren++;
+            else if (tt == TokenType::kRParen) paren--;
+            advance();
+        }
+        pos_ = save_p;
+        return false;
     };
     while (pos_ < (int)tokens_.size() && peek().type != TokenType::kEof) {
         if (peek().type == TokenType::kRBrace) break; // close of THIS block
@@ -1806,9 +1889,8 @@ void Parser::prescanLocalClasses() {
             register_class(short_name, name_tok);
             continue;
         }
-        // Non-class statement — advance past it as a whole so its internal
-        // tokens (a function's name after a return-type prefix, anything
-        // inside a body block) don't get probed as class-def shapes.
+        if (try_detect_nested_fn()) continue;
+        // Some other statement — advance past it whole.
         skip_statement();
     }
     pos_ = save;
@@ -3030,13 +3112,17 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             return parseLvalueTail(std::move(lhs));
         }
 
-        // Bare identifier — substitute a local-class short name with its
-        // canonical name so codegen finds slid_info_[canonical]. Mirrors the
-        // same lookup in parsePrimary; the block-level pre-scan in parseBlock
-        // makes the registration visible before the textual definition.
+        // Bare identifier — substitute a block-scoped declarable's short name
+        // (local class or nested function) with its canonical name. Mirrors
+        // the same lookup in parsePrimary; the block-level pre-scan makes
+        // the registration visible before the textual definition.
         if (t.type == TokenType::kIdentifier) {
             std::string lc = lookupLocalClass(name);
             if (!lc.empty()) name = lc;
+            else {
+                std::string nf = lookupNestedFunc(name);
+                if (!nf.empty()) name = nf;
+            }
         }
 
         // template call statement: name<Type,...>(args);
@@ -3150,6 +3236,15 @@ NestedFunctionDef Parser::parseNestedFunctionDef() {
                 "Nested function '" + fn.name + "' shadows a field of the enclosing class."}
                 .addNote(fit->second.file_id, fit->second.tok, "Field declared here.");
         }
+    }
+    // The block-level pre-scan assigned a canonical name (`<funcpath>.<n>.<short>`)
+    // for this nested function in the current block's nested_func_stack_ frame.
+    // Rename to canonical so two same-name fns in different blocks get distinct
+    // mangles, and so the codegen `findNested` walker keys overloads off the
+    // block-unique name. Outside the block its short name is unresolvable.
+    {
+        std::string lc = lookupNestedFunc(fn.name);
+        if (!lc.empty()) fn.name = lc;
     }
     expect(TokenType::kLParen, "Expected '('");
     parseParamList(fn.params, fn.param_mutable, fn.param_mut_toks, fn.param_defaults);

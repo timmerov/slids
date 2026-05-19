@@ -994,6 +994,16 @@ private:
     std::vector<std::map<std::string, std::string>> local_class_stack_;
     std::string lookupLocalClass(const std::string& name) const;
 
+    // Per-block short-name → canonical-name map for nested functions. Same
+    // shape and lifetime as local_class_stack_. A nested function is visible
+    // only within its declaring block (and its sub-scopes via the stack walk
+    // in lookupNestedFunc); on block close the frame pops and the name
+    // becomes unresolvable, so the codegen `Unknown function` error fires.
+    // Canonical name format: `<funcpath>.<n>.<short>`, sharing the
+    // local_slid_counter_ namespace so a fn and a class can never collide.
+    std::vector<std::map<std::string, std::string>> nested_func_stack_;
+    std::string lookupNestedFunc(const std::string& name) const;
+
     // user-declared type aliases (alias Name = TypeExpr;). innermost frame is
     // current block; bottom frame is file-scope. resolved type strings are
     // already in canonical form (e.g. "int^", "Class.Hoisted", "Template__int")

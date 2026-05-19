@@ -8,6 +8,41 @@
 #include <vector>
 #include <functional>
 
+// Visit each direct child statement of `s` — one level down, knowing every
+// compound stmt's children layout. Every codegen-side recursive scan of a
+// function/method body uses this as its only recursion mechanism, so adding
+// a new compound stmt kind updates one place and existing scans pick it up
+// automatically (no per-walker arms to keep in sync).
+//
+// `NestedFunctionDefStmt` is opaque by default — its body opens a closure
+// scope, which most scans treat as out of subtree. Pass
+// `include_nested_fn_body = true` for scans that genuinely span every
+// statement in the compilation unit (string-constant collection, template-
+// instantiation discovery).
+template <typename F>
+void forEachChildStmt(const Stmt& s, F&& f, bool include_nested_fn_body = false) {
+    if (auto* b = dynamic_cast<const BlockStmt*>(&s)) {
+        for (auto& c : b->stmts) f(*c);
+    } else if (auto* i = dynamic_cast<const IfStmt*>(&s)) {
+        for (auto& c : i->then_block->stmts) f(*c);
+        if (i->else_block)
+            for (auto& c : i->else_block->stmts) f(*c);
+    } else if (auto* w = dynamic_cast<const WhileStmt*>(&s)) {
+        for (auto& c : w->body->stmts) f(*c);
+    } else if (auto* fl = dynamic_cast<const ForLongStmt*>(&s)) {
+        for (auto& c : fl->init_stmts) f(*c);
+        for (auto& c : fl->update_block->stmts) f(*c);
+        for (auto& c : fl->body->stmts) f(*c);
+    } else if (auto* sw = dynamic_cast<const SwitchStmt*>(&s)) {
+        for (auto& sc : sw->cases)
+            for (auto& c : sc.stmts) f(*c);
+    } else if (auto* nfs = dynamic_cast<const NestedFunctionDefStmt*>(&s)) {
+        if (include_nested_fn_body && nfs->def.body)
+            for (auto& c : nfs->def.body->stmts) f(*c);
+    }
+    // Leaf stmts: nothing to recurse into.
+}
+
 struct SlidInfo {
     std::string name;
     int name_file_id = 0;          // location of the class name token (copied from SlidDef for diagnostic notes)

@@ -32,6 +32,10 @@ int32 main() {
     {
         global;
         {
+            void foo() {
+            }
+            foo();
+
             /*
             is this a forward class declaration? no.
             or a local variable? yes.

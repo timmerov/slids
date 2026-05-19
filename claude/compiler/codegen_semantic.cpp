@@ -640,38 +640,25 @@ bool Codegen::hasDtorInChain(const std::string& slid_name) {
 void Codegen::scanForSlidTemplateUses() {
     if (template_slids_.empty()) return;
 
-    std::function<void(const Stmt&)> scanStmt;
-    std::function<void(const BlockStmt&)> scanBlock = [&](const BlockStmt& b) {
+    // Slid template instantiations may sit anywhere a type name appears —
+    // including inside a nested-function body — so descend into those too.
+    std::function<void(const Stmt&)> scanStmt = [&](const Stmt& stmt) {
+        if (auto* d = dynamic_cast<const VarDeclStmt*>(&stmt))
+            ensureSlidInstantiated(d->type, d);
+        forEachChildStmt(stmt, scanStmt, /*include_nested_fn_body=*/true);
+    };
+    auto scanBody = [&](const BlockStmt& b) {
         for (auto& s : b.stmts) scanStmt(*s);
     };
-    scanStmt = [&](const Stmt& stmt) {
-        if (auto* d = dynamic_cast<const VarDeclStmt*>(&stmt)) {
-            ensureSlidInstantiated(d->type, d);
-        } else if (auto* b = dynamic_cast<const BlockStmt*>(&stmt)) {
-            scanBlock(*b);
-        } else if (auto* i = dynamic_cast<const IfStmt*>(&stmt)) {
-            scanBlock(*i->then_block);
-            if (i->else_block) scanBlock(*i->else_block);
-        } else if (auto* w = dynamic_cast<const WhileStmt*>(&stmt)) {
-            scanBlock(*w->body);
-        } else if (auto* fl = dynamic_cast<const ForLongStmt*>(&stmt)) {
-            for (auto& s : fl->init_stmts) scanStmt(*s);
-            scanBlock(*fl->update_block);
-            scanBlock(*fl->body);
-        } else if (auto* sw = dynamic_cast<const SwitchStmt*>(&stmt)) {
-            for (auto& sc : sw->cases)
-                for (auto& s : sc.stmts) scanStmt(*s);
-        }
-    };
     for (auto& fn : program_.functions)
-        if (fn.body && fn.type_params.empty()) scanBlock(*fn.body);
+        if (fn.body && fn.type_params.empty()) scanBody(*fn.body);
     for (auto& slid : program_.slids) {
         if (!slid.type_params.empty()) continue;
-        if (slid.ctor_body)          scanBlock(*slid.ctor_body);
-        if (slid.explicit_ctor_body) scanBlock(*slid.explicit_ctor_body);
-        if (slid.dtor_body)          scanBlock(*slid.dtor_body);
+        if (slid.ctor_body)          scanBody(*slid.ctor_body);
+        if (slid.explicit_ctor_body) scanBody(*slid.explicit_ctor_body);
+        if (slid.dtor_body)          scanBody(*slid.dtor_body);
         for (auto& m : slid.methods)
-            if (m.body) scanBlock(*m.body);
+            if (m.body) scanBody(*m.body);
     }
 }
 
@@ -718,6 +705,9 @@ void Codegen::scanForTemplateFunctionUses() {
         }
     };
     scanStmt = [&](const Stmt& stmt) {
+        // Leaf-level expression scans; child stmts walked by forEachChildStmt
+        // below. Template-function calls may appear anywhere — including in
+        // nested-function bodies — so descend into those too.
         if (auto* c = dynamic_cast<const CallStmt*>(&stmt)) {
             tryInstantiate(c->callee, c->type_args, c->args);
             for (auto& a : c->args) scanExpr(*a);
@@ -741,27 +731,18 @@ void Codegen::scanForTemplateFunctionUses() {
         } else if (auto* mc = dynamic_cast<const MethodCallStmt*>(&stmt)) {
             scanExpr(*mc->object);
             for (auto& a : mc->args) scanExpr(*a);
-        } else if (auto* b = dynamic_cast<const BlockStmt*>(&stmt)) {
-            scanBlock(*b);
         } else if (auto* i = dynamic_cast<const IfStmt*>(&stmt)) {
             scanExpr(*i->cond);
-            scanBlock(*i->then_block);
-            if (i->else_block) scanBlock(*i->else_block);
         } else if (auto* w = dynamic_cast<const WhileStmt*>(&stmt)) {
             scanExpr(*w->cond);
-            scanBlock(*w->body);
         } else if (auto* fl = dynamic_cast<const ForLongStmt*>(&stmt)) {
-            for (auto& s : fl->init_stmts) scanStmt(*s);
             if (fl->cond) scanExpr(*fl->cond);
-            scanBlock(*fl->update_block);
-            scanBlock(*fl->body);
         } else if (auto* sw = dynamic_cast<const SwitchStmt*>(&stmt)) {
             scanExpr(*sw->expr);
             for (auto& sc : sw->cases)
-                for (auto& s : sc.stmts) scanStmt(*s);
-        } else if (auto* nf = dynamic_cast<const NestedFunctionDefStmt*>(&stmt)) {
-            if (nf->def.body) scanBlock(*nf->def.body);
+                if (sc.value) scanExpr(*sc.value);
         }
+        forEachChildStmt(stmt, scanStmt, /*include_nested_fn_body=*/true);
     };
     for (auto& fn : program_.functions)
         if (fn.body && fn.type_params.empty()) scanBlock(*fn.body);
