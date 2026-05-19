@@ -1034,6 +1034,11 @@ private:
     // Rename a just-parsed local slid to a unique canonical name, register its
     // short name in the current block, and collect it into pending_slids_.
     void collectLocalClass(SlidDef slid, const std::string& short_name, int name_tok);
+    // Block-level two-pass: walk the current block's tokens at depth 0, pre-
+    // register every local class def's short→canonical name into
+    // local_class_stack_.back() before statements parse. Same-block duplicate
+    // class names error here. pos_ is restored.
+    void prescanLocalClasses();
 
     // op-symbol recognition: returns canonical "<sym>" (e.g. "+=", "<-", "[]") if
     // the token(s) at pos_+offset (peek) or pos_ (consume) form an overloadable op symbol.

@@ -56,8 +56,10 @@ int32 main() {
 
             {
                 /* this needs to be in scope. */
-                //Vex2;
-                //{{{{{{{ Vex2; }}}}}}}
+                __println("two Vex2 ctors:");
+                Vex2;
+                {{{{{{{ Vex2; }}}}}}}
+                __println("two Vex2 dtors:");
             }
 
             Vex2(int x_ = 0) {

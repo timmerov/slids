@@ -1,5 +1,5 @@
 
-apparently main can't have nexted functions.
+apparently main can't have nested functions.
 sigh.
 
 test/implement unnamed cross-TU globals.

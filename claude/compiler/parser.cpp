@@ -1119,6 +1119,17 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
             // namespace var access: path is the full colon-joined name.
             return make<VarExpr>(last_seg_tok, path);
         }
+        // Bare identifier — if it names a local class in scope, substitute the
+        // canonical name so codegen finds slid_info_[canonical]. Mirrors the
+        // type-position substitution in parseTypeName; `lookupLocalClass` walks
+        // the whole stack so an outer-block class resolves from any sub-block,
+        // and the block-level pre-scan in parseBlock makes the registration
+        // visible before the textual definition (no forward decls needed).
+        std::string name = t.value;
+        {
+            std::string lc = lookupLocalClass(name);
+            if (!lc.empty()) name = lc;
+        }
         // template call: name<TypeArg,...>(args)
         if (peek().type == TokenType::kLt && isTemplateCallLookahead()) {
             advance(); // consume '<'
@@ -1135,7 +1146,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
                 if (peek().type == TokenType::kComma) advance();
             }
             expect(TokenType::kRParen, "Expected ')'");
-            auto call = make<CallExpr>(t_start, t.value, std::move(args));
+            auto call = make<CallExpr>(t_start, name, std::move(args));
             call->type_args = std::move(type_args);
             return call;
         }
@@ -1147,9 +1158,9 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
                 if (peek().type == TokenType::kComma) advance();
             }
             expect(TokenType::kRParen, "Expected ')'");
-            return make<CallExpr>(t_start, t.value, std::move(args));
+            return make<CallExpr>(t_start, name, std::move(args));
         }
-        return make<VarExpr>(t_start, t.value);
+        return make<VarExpr>(t_start, name);
     }
     // type conversion expression: (Type=expr)
     // distinguished from grouped expression by TypeName immediately followed by =
@@ -1505,6 +1516,14 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     scope_stack_.push_back({});
     alias_stack_.push_back({});
     local_class_stack_.push_back({});
+    // Pre-scan this block for local class definitions at its top level and
+    // register each short→canonical mapping in local_class_stack_.back()
+    // before statements parse. Slids has no forward class declarations:
+    // file-scope classes work via the file-level two-pass, and local classes
+    // get the same property at the block level here. After the pre-scan,
+    // `lookupLocalClass` resolves any use — before or after the textual
+    // definition, at any nesting depth — exactly like the file-level case.
+    prescanLocalClasses();
     for (auto& n : predeclare)
         declareVar(n, t_start);
     auto block = make<BlockStmt>(t_start);
@@ -1528,28 +1547,6 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
                     "Nested function '" + nf->def.name
                         + "' is redefined with the same signature in the same block."}
                     .addNote(it->second.file_id, it->second.tok, "First defined here.");
-            }
-        }
-    }
-    // Resolve unnamed local-class instantiation statements (`Name;` /
-    // `Name(args);`) to their canonical class name. The expression parser
-    // never substitutes local-class short names, and a use may textually
-    // precede the definition — so patch the immediate statements now that
-    // local_class_stack_.back() is fully populated.
-    if (!local_class_stack_.empty() && !local_class_stack_.back().empty()) {
-        auto& lcm = local_class_stack_.back();
-        auto canon = [&](std::string& nm) {
-            auto it = lcm.find(nm);
-            if (it != lcm.end()) nm = it->second;
-        };
-        for (auto& st : block->stmts) {
-            if (auto* es = dynamic_cast<ExprStmt*>(st.get())) {
-                if (auto* ve = dynamic_cast<VarExpr*>(es->expr.get())) canon(ve->name);
-                else if (auto* ce = dynamic_cast<CallExpr*>(es->expr.get())) {
-                    if (ce->qualifier.empty()) canon(ce->callee);
-                }
-            } else if (auto* cs = dynamic_cast<CallStmt*>(st.get())) {
-                canon(cs->callee);
             }
         }
     }
@@ -1713,27 +1710,138 @@ std::unique_ptr<Stmt> Parser::parseLvalueTail(std::unique_ptr<Expr> lhs) {
     return make<ExprStmt>(t_start, std::move(lhs));
 }
 
+void Parser::prescanLocalClasses() {
+    // Walk this block one statement at a time. The slid-def shapes
+    // — `Ident [<...>] (...) {` and `Base : Derived [<...>] (...) {` — are
+    // only valid at a statement-start position; checking elsewhere
+    // misclassifies a nested function with a tuple return type
+    // (`(int,int) fn() {...}`) once its return-type prefix has been stepped
+    // past. So at each statement-start: try class detection; otherwise skip
+    // the whole statement, stopping at its terminating `;` (paren/bracket-
+    // balanced) or the closing `}` of its body block. Restore pos_ on exit.
+    int save = pos_;
+    auto skip_balanced = [&](TokenType open, TokenType close) {
+        if (pos_ >= (int)tokens_.size() || peek().type != open) return;
+        int d = 0;
+        while (pos_ < (int)tokens_.size()) {
+            if (peek().type == open) d++;
+            else if (peek().type == close) {
+                d--; advance();
+                if (d == 0) return;
+                continue;
+            }
+            advance();
+        }
+    };
+    auto skip_statement = [&]() {
+        // Advance past one statement starting at the current pos_. The
+        // statement ends at a `;` at the outermost level (paren/bracket
+        // depth 0), or — if a `{` opens before any such `;` — at the
+        // matching `}`. Nested parens/brackets/braces don't terminate.
+        int pd = 0, bd = 0;
+        while (pos_ < (int)tokens_.size()) {
+            TokenType tt = peek().type;
+            if (tt == TokenType::kEof) return;
+            if (tt == TokenType::kLParen) { pd++; advance(); continue; }
+            if (tt == TokenType::kRParen) { pd--; advance(); continue; }
+            if (tt == TokenType::kLBracket) { bd++; advance(); continue; }
+            if (tt == TokenType::kRBracket) { bd--; advance(); continue; }
+            if (pd == 0 && bd == 0) {
+                if (tt == TokenType::kSemicolon) { advance(); return; }
+                if (tt == TokenType::kLBrace) {
+                    skip_balanced(TokenType::kLBrace, TokenType::kRBrace);
+                    return;
+                }
+                // outer '}' belongs to the enclosing block — leave it.
+                if (tt == TokenType::kRBrace) return;
+            }
+            advance();
+        }
+    };
+    auto register_class = [&](const std::string& short_name, int name_tok) {
+        if (local_class_stack_.back().count(short_name)) {
+            errorAt(name_tok, "'" + short_name
+                + "' is already declared in this scope.");
+        }
+        std::string func_path = current_function_name_;
+        for (char& c : func_path) if (c == ':') c = '.';
+        std::string canonical = (func_path.empty() ? "" : func_path + ".")
+            + std::to_string(local_slid_counter_++) + "." + short_name;
+        local_class_stack_.back()[short_name] = canonical;
+    };
+    auto skip_template_brackets = [&]() {
+        if (pos_ >= (int)tokens_.size() || peek().type != TokenType::kLt) return;
+        int d = 0;
+        while (pos_ < (int)tokens_.size()) {
+            if (peek().type == TokenType::kLt) d++;
+            else if (peek().type == TokenType::kGt) {
+                d--; advance();
+                if (d == 0) return;
+                continue;
+            }
+            advance();
+        }
+    };
+    while (pos_ < (int)tokens_.size() && peek().type != TokenType::kEof) {
+        if (peek().type == TokenType::kRBrace) break; // close of THIS block
+        if (isSlidDeclLookahead()) {
+            int name_tok = pos_;
+            std::string short_name = peek().value;
+            advance(); // identifier
+            skip_template_brackets();
+            skip_balanced(TokenType::kLParen, TokenType::kRParen);
+            skip_balanced(TokenType::kLBrace, TokenType::kRBrace);
+            register_class(short_name, name_tok);
+            continue;
+        }
+        if (isDerivedSlidDeclLookahead()) {
+            advance(); // Base
+            advance(); // ':'
+            int name_tok = pos_;
+            std::string short_name = peek().value;
+            advance(); // Derived
+            skip_template_brackets();
+            skip_balanced(TokenType::kLParen, TokenType::kRParen);
+            skip_balanced(TokenType::kLBrace, TokenType::kRBrace);
+            register_class(short_name, name_tok);
+            continue;
+        }
+        // Non-class statement — advance past it as a whole so its internal
+        // tokens (a function's name after a return-type prefix, anything
+        // inside a body block) don't get probed as class-def shapes.
+        skip_statement();
+    }
+    pos_ = save;
+}
+
 void Parser::collectLocalClass(SlidDef slid, const std::string& short_name,
                                int name_tok) {
-    // (collision rule) the name must be free in this block — no local var and
-    // no other local class may already own it.
-    bool clash = (!scope_stack_.empty()
-                  && scope_stack_.back().count(short_name))
-               || (!local_class_stack_.empty()
-                   && local_class_stack_.back().count(short_name));
-    if (clash)
+    // var-vs-class collision — a local var of this name was declared earlier
+    // in the same block. (declareVar catches the reverse order against the
+    // pre-scan registration.)
+    if (!scope_stack_.empty()
+        && scope_stack_.back().count(short_name)) {
         errorAt(name_tok, "'" + short_name
             + "' is already declared in this scope.");
-    // Canonical name: function path (':' → '.' so it stays a valid LLVM
-    // identifier) + a unique numeric id + the source name. The id is
-    // unspellable by the author, so the class is unreachable from outside.
-    std::string func_path = current_function_name_;
-    for (char& c : func_path) if (c == ':') c = '.';
-    std::string canonical = (func_path.empty() ? "" : func_path + ".")
-        + std::to_string(local_slid_counter_++) + "." + short_name;
+    }
+    // Canonical name comes from the block-level pre-scan; reuse it. Same-block
+    // duplicate class names already errored there. If no pre-scan registration
+    // exists (defensive — should not happen via parseBlock), generate one.
+    std::string canonical;
+    if (!local_class_stack_.empty()) {
+        auto it = local_class_stack_.back().find(short_name);
+        if (it != local_class_stack_.back().end())
+            canonical = it->second;
+    }
+    if (canonical.empty()) {
+        std::string func_path = current_function_name_;
+        for (char& c : func_path) if (c == ':') c = '.';
+        canonical = (func_path.empty() ? "" : func_path + ".")
+            + std::to_string(local_slid_counter_++) + "." + short_name;
+        if (!local_class_stack_.empty())
+            local_class_stack_.back()[short_name] = canonical;
+    }
     slid.name = canonical;
-    if (!local_class_stack_.empty())
-        local_class_stack_.back()[short_name] = canonical;
     // Inside a template, a local class may reference an unbound type param —
     // it can't become a concrete slid until the template is instantiated.
     // Carry it with the enclosing template (drained by parseFunctionDef /
@@ -2920,6 +3028,15 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             // Namespace lvalue/rvalue: hand off to the lvalue tail.
             auto lhs = parsePostfix(make<VarExpr>(t_start, path));
             return parseLvalueTail(std::move(lhs));
+        }
+
+        // Bare identifier — substitute a local-class short name with its
+        // canonical name so codegen finds slid_info_[canonical]. Mirrors the
+        // same lookup in parsePrimary; the block-level pre-scan in parseBlock
+        // makes the registration visible before the textual definition.
+        if (t.type == TokenType::kIdentifier) {
+            std::string lc = lookupLocalClass(name);
+            if (!lc.empty()) name = lc;
         }
 
         // template call statement: name<Type,...>(args);
