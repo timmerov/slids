@@ -59,7 +59,7 @@ const float64 kGalaxyDiameter = kGalaxyDiameterLY * kMetersPerLightyear;
 const float64 kGalaxyRadius = kGalaxyDiameter / 2.0;
 
 /* characteristic distance aka resolution. */
-const float64 kScaleLY = 100.0;
+const float64 kScaleLY = 1000.0; // 100.0;
 const float64 kScale = kScaleLY * kMetersPerLightyear;
 
 /* estimated mass central bulge: 1.5e40 to 4e40 kg */
@@ -75,8 +75,12 @@ const float64 kRotationPeriod = kRotationPeriodYr * kSecondsPerYear;
 
 /* separate the mass of the galaxy into rings. */
 Ring(
+    /* radius from center of galaxy. */
     float64 radius_,
-    float64 mass_
+    /* total mass of the ring. */
+    float64 mass_,
+    /* number of slices. */
+    int slices_
 ) {
 }
 alias Rings = Vector<Ring>;
@@ -86,39 +90,67 @@ Galaxy(
 ) {
     void run() {
         init();
+        acceleration();
     }
 
     void init() {
         /* allocate space for rings. */
-        nrings = (kGalaxyRadius - kCentralBulgeRadius) / kScale;
-        dump(#nrings);
-        nrings = math:round(nrings);
-        size = (int=nrings);
-        dump(#size);
-        rings_.resize(size+1);
+        nrings_f = (kGalaxyRadius - kCentralBulgeRadius) / kScale;
+        //dump(#nrings_f);
+        nrings_f = math:round(nrings_f);
+        nrings = (int=nrings_f);
+        //dump(#nrings);
+        rings_.resize(nrings+1);
+        println(String + "Divided the galaxy into " + nrings + " rings.");
 
         /*
         initialize the rings.
         sum the radii - proportional to circumference.
         */
         float64 sum = 0;
-        for (int i : 0..<=size) {
-            radius = (kGalaxyRadius - kCentralBulgeRadius) * i / nrings + kCentralBulgeRadius;
-            dump(#radius);
+        for (int i : 0..<=nrings) {
+            radius = (kGalaxyRadius - kCentralBulgeRadius) * i / nrings_f + kCentralBulgeRadius;
             sum += radius;
+            //dump(#radius);
+
+            /* divide the ring into equal width slices. */
+            divs = radius / kScale;
+            divs = math:round(divs);
+            //dump(#divs);
 
             ring = ^rings_[i];
             ring^.radius_ = radius;
+            ring^.slices_ = (int=divs);
         }
-        dump(#sum);
+        //dump(#sum);
 
         /* distribute the mass. */
-        for (int i : 0..<=size) {
+        for (int i : 0..<=nrings) {
             ring = ^rings_[i];
             radius = ring^.radius_;
             ring^.mass_ = kMassGalaxy * radius / sum;
-            dump(#ring^.mass_);
+            //dump(#ring^.mass_);
         }
+    }
+
+    void acceleration() {
+        nrings = rings_.size();
+        for (i : 0..nrings) {
+            for (k : 0..nrings) {
+                acceleration(i, k);
+            }
+        }
+    }
+
+    void acceleration(intptr i, intptr k) {
+        /* unknown function: println */
+        println(String + "Calculating acceleration on ring " + i + " caused by ring " + j ".");
+
+        /* cannot init char[] from int */
+        println(String + "Calculating acceleration on ring " + i + " caused by ring " + j + ".");
+
+        /* invalid ll */
+        println(String + "Calculating acceleration on ring " + i + " caused by ring " + k + ".");
     }
 }
 

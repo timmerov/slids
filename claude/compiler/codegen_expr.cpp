@@ -2260,7 +2260,10 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
         if (array_info_.count(v->name)) return "ptr";
         // type name used as anonymous slid temp — ptr
         if (slid_info_.count(v->name)) return "ptr";
-        return "i32";
+        // Unresolved — return "" so callers that error on type-mismatch can
+        // detect this and surface "Undefined variable" instead of treating
+        // the name as a default-typed value.
+        return "";
     }
 
     // dereference: type is the pointee type
@@ -2684,6 +2687,10 @@ bool Codegen::checkIntLiteralFits(int64_t v, bool is_nondecimal,
 
 std::string Codegen::coerceToType(const std::string& val, const Expr& src,
                                   const std::string& target) {
+    // Surface an undefined-VarExpr source before the type-mismatch paths
+    // — without this the downstream message would name the wrong type
+    // (inferSlidType / exprLlvmType return "" for unresolved names).
+    requireDefinedVarExpr(src);
     // peel a leading unary sign so `-5` is seen as the literal it folds to.
     const Expr* e = &src;
     int64_t sign = 1;
@@ -2874,7 +2881,34 @@ std::string Codegen::valOrNullptrCheck(const std::string& dst_type, const Expr& 
     return emitExpr(src);
 }
 
+void Codegen::requireDefinedVarExpr(const Expr& src) {
+    auto* v = dynamic_cast<const VarExpr*>(&src);
+    if (!v) return;
+    // Bare identifiers only. Namespace-qualified names (`::name`, `Ns:name`,
+    // and `Base:self` / `path:method` style) carry their own diagnostics
+    // ("not declared in the unnamed namespace" etc.) — preempting those
+    // would mask the more specific message.
+    if (v->name.find(':') != std::string::npos) return;
+    // Same lookup chain as `emitExpr` / `inferSlidType` for a bare
+    // VarExpr — any single hit means the name resolves.
+    if (lookupConst(v->name)) return;
+    if (locals_.count(v->name)) return;
+    if (!current_slid_.empty()) {
+        auto& info = slid_info_[current_slid_];
+        if (info.field_index.count(v->name)) return;
+    }
+    if (lookupGlobal(v->name)) return;
+    if (enum_values_.count(v->name)) return;
+    if (array_info_.count(v->name)) return;
+    if (slid_info_.count(v->name)) return;
+    errorAtNode(src, "Undefined variable: " + v->name + ".");
+}
+
 void Codegen::requirePtrInit(const std::string& dst_type, const Expr& src) {
+    // Surface an undefined-VarExpr cleanly — without this check the
+    // downstream type-mismatch error would lie about the source's type
+    // (it'd default to "int" via inferSlidType's old fallback).
+    requireDefinedVarExpr(src);
     if (!isRefType(dst_type) && !isPtrType(dst_type)) {
         // primitive dst: still need to reject slid-valued rhs (no implicit conversion).
         requireCompatibleInit(dst_type, src);
@@ -3011,6 +3045,12 @@ std::string Codegen::inferSlidType(const Expr& expr) {
         if (auto* ge = lookupGlobal(ve->name)) return ge->slids_type;
         // type name used as anonymous temporary (e.g. ValueBoth in ValueBoth + 10)
         if (slid_info_.count(ve->name)) return ve->name;
+        // Unresolved VarExpr — return "" so callers that error on type
+        // mismatch detect this and report `Undefined variable` (via
+        // `requireDefinedVarExpr`) instead of treating the name as a
+        // default-typed value. Letting it fall through to the function-
+        // bottom `return "int"` would obscure the real bug.
+        return "";
     }
     // field access — resolve object's slid type, return raw field type
     if (auto* fa = dynamic_cast<const FieldAccessExpr*>(&expr)) {

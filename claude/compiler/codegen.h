@@ -911,6 +911,13 @@ private:
     std::string coerceToType(const std::string& val, const Expr& src,
                              const std::string& target);
     void requirePtrInit(const std::string& dst_type, const Expr& src); // dst is ^ or [] -> src must be ptr w/ compatible pointee
+    // Type-check helper: if `src` is a bare VarExpr whose name resolves
+    // nowhere, error with "Undefined variable: '<name>'". Used at the
+    // entry of type-checking paths (requirePtrInit, coerceToType,
+    // slot-init) so an undefined identifier surfaces with its real
+    // error rather than the misleading downstream type-mismatch message
+    // produced when `inferSlidType` defaults the unresolved name to "int".
+    void requireDefinedVarExpr(const Expr& src);
     // Reject "primitive lhs ← slid rhs" — there is no implicit slid-to-primitive
     // conversion. Returns early when dst is itself indirect or a slid (those
     // paths are handled by op= dispatch and requirePtrInit).
