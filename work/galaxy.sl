@@ -51,7 +51,7 @@ const float64 kSecondsPerYear = 3.154e7;
 const float64 kG = 6.6743e-11;
 
 /* estimated mass of milky way: 2e42 to 6e42 kg */
-const float64 kMassGalaxy = 3e42;
+const float64 kGalaxyMass = 3e42;
 
 /* diameter and radius of milky way. */
 const float64 kGalaxyDiameterLY = 100_000.0;
@@ -59,7 +59,7 @@ const float64 kGalaxyDiameter = kGalaxyDiameterLY * kMetersPerLightyear;
 const float64 kGalaxyRadius = kGalaxyDiameter / 2.0;
 
 /* characteristic distance aka resolution. */
-const float64 kScaleLY = 1000.0; // 100.0;
+const float64 kScaleLY = 3000.0; // 100.0;
 const float64 kScale = kScaleLY * kMetersPerLightyear;
 
 /* estimated mass central bulge: 1.5e40 to 4e40 kg */
@@ -69,9 +69,16 @@ const float64 kCentralBulgeMass = 2e40;
 const float64 kCentralBulgeRadiusLY = 4_000.0;
 const float64 kCentralBulgeRadius = kCentralBulgeRadiusLY * kMetersPerLightyear;
 
+/* estimated total mass of rings: 2e42 to 6e42 kg */
+const float64 kRingsMass = kGalaxyMass - kCentralBulgeMass;
+
 /* estimated rotation period of the galaxy: 225 to 250 million years. */
 const float64 kRotationPeriodYr = 237_000_000;
 const float64 kRotationPeriod = kRotationPeriodYr * kSecondsPerYear;
+
+/* we assume the entire galaxy rotates as a rigid disk. */
+const float64 kAngularVelocity = 2.0 * math:kPi64 / kRotationPeriod;
+const float64 kAngularVelocity2 = kAngularVelocity * kAngularVelocity;
 
 /* separate the mass of the galaxy into rings. */
 Ring(
@@ -99,18 +106,19 @@ Galaxy(
         nrings = (kGalaxyRadius - kCentralBulgeRadius) / kScale;
         //dump(#nrings_f);
         nrings = math:round(nrings);
-        nrings_ = (int=nrings);
+        nrings_ = (int=nrings) + 1;
         //dump(#nrings);
-        rings_.resize(nrings_ + 1);
+        rings_.resize(nrings_);
         println(String + "Divided the galaxy into " + nrings_ + " rings.");
 
         /*
         initialize the rings.
         sum the radii - proportional to circumference.
         */
-        float64 sum = 0;
-        for (int i : 0..<=nrings_) {
-            radius = (kGalaxyRadius - kCentralBulgeRadius) * i / nrings + kCentralBulgeRadius;
+        float64 sum = 0.0;
+        factor = (kGalaxyRadius - kCentralBulgeRadius) / (nrings_ - 1);
+        for (int i : 0..<nrings_) {
+            radius = factor * i + kCentralBulgeRadius;
             sum += radius;
             //dump(#radius);
 
@@ -126,24 +134,48 @@ Galaxy(
         //dump(#sum);
 
         /* distribute the mass. */
-        for (int i : 0..<=nrings_) {
+        factor = kRingsMass / sum;
+        for (int i : 0..<nrings_) {
             ring = ^rings_[i];
-            ring^.mass_ = kMassGalaxy * ring^.radius_ / sum;
+            ring^.mass_ = factor * ring^.radius_;
             //dump(#ring^.mass_);
         }
     }
 
     void acceleration() {
-        for (i : 0..nrings_) {
+        /*for (i : 0..nrings_) {
+            println(String + "Calculating total acceleration on ring " + i + ".");
             for (k : 0..nrings_) {
                 acceleration(i, k);
             }
-        }
+        }*/
+        acceleration(nrings_*2/3, nrings_/3);
     }
 
-    void acceleration(int i, int k) {
-        /* invalid ll */
-        println(String + "Calculating acceleration on ring " + i + " caused by ring " + k + ".");
+    void acceleration(int on_idx, int by_idx) {
+        println(String + "Calculating acceleration on ring " + on_idx + " caused by ring " + by_idx + ".");
+
+        /* the rings. */
+        on_ring = ^rings_[on_idx];
+        by_ring = ^rings_[by_idx];
+
+        /* the mass of each slice. */
+        on_mass = on_ring^.mass_ / on_ring^.slices_;
+        by_mass = by_ring^.mass_ / by_ring^.slices_;
+
+        /* two components of acceleration. */
+        float64 inward = 0.0;
+        float64 spinward = 0.0;
+
+        /* centripetal acceleration is outward - negative. */
+        on_r = on_ring^.radius_;
+        inward -= kAngularVelocity2 * on_r;
+
+        /* gravity of central bulge. */
+        r2 = on_r * on_r;
+        inward += kG * kCentralBulgeMass / r2;
+
+        dump(#inward);
     }
 }
 

@@ -1163,7 +1163,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
         }
         if (u->op == "-") {
             std::string val_llvm = exprLlvmType(*u->operand);
-            out_ << "    " << tmp << " = sub " << val_llvm << " 0, " << val << "\n";
+            if (val_llvm == "float" || val_llvm == "double") {
+                out_ << "    " << tmp << " = fneg " << val_llvm << " " << val << "\n";
+            } else {
+                out_ << "    " << tmp << " = sub " << val_llvm << " 0, " << val << "\n";
+            }
             return tmp;
         }
         if (u->op == "+") {
