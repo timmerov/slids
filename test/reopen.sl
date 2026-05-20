@@ -3,25 +3,26 @@ reopen a class within scoped context.
 */
 
 Class(int x_ = 0) {
-    void foo() {
-        __println("foo");
+    void const foo() {
+        __println("Class:foo");
     }
+}
+
+void sort<Compare, Container>(Container^ container) {
+    result = Compare:less(1.0, 2.0);
+    container^.foo();
+    __println("result = " + result);
 }
 
 int32 main() {
 
     Class cls;
-    {
-        cls.foo();
-        Class() {
-            void bar() {
-                __println("bar");
-            }
+    Less() {
+        bool less(float a, float b) {
+            return (a < b);
         }
-        //cls.bar();
     }
-    cls.foo();
-    //cls.bar();
+    //sort<Less, Class>(^cls);
 
     return 0;
 }

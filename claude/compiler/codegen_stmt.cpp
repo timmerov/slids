@@ -3330,6 +3330,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
     }
 
     if (auto* ret = dynamic_cast<const ReturnStmt*>(&stmt)) {
+        // Return-shape vs declared-return-type mismatch — catch here so we
+        // never emit malformed `ret void %v` (void fn returning a value) or
+        // `ret void` for a non-void declared return.
+        if (current_func_slids_return_type_ == "void" && ret->value)
+            errorAtNode(stmt, "'return' with a value in a void function.");
+        if (current_func_slids_return_type_ != "void"
+            && !current_func_uses_sret_ && !ret->value)
+            errorAtNode(stmt, "'return' without a value in a function returning '"
+                + current_func_slids_return_type_ + "'.");
         if (current_func_uses_sret_ && ret->value) {
             // sret return: move return value into %retval, dtor locals, ret void
             auto* ve = dynamic_cast<const VarExpr*>(ret->value.get());

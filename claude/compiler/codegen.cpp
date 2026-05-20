@@ -1899,11 +1899,15 @@ void Codegen::emitNestedFunction(
     pushScope();
     emitBlock(*fn.body);
 
-    if (fn.return_type == "void" && !block_terminated_) {
-        emitDtors();
-        out_ << "    ret void\n";
-        block_terminated_ = true;   // the ret terminates the block — popScope
-                                    // must not re-emit this scope's dtors.
+    if (!block_terminated_) {
+        if (fn.return_type == "void") {
+            emitDtors();
+            out_ << "    ret void\n";
+            block_terminated_ = true;   // the ret terminates the block — popScope
+                                        // must not re-emit this scope's dtors.
+        } else {
+            error(std::string("Nested function '" + fn.name + "' is missing a return statement."));
+        }
     }
     popScope();
 

@@ -1848,7 +1848,7 @@ void Parser::prescanLocalClasses() {
     auto skip_balanced = [&](TokenType open, TokenType close) {
         if (pos_ >= (int)tokens_.size() || peek().type != open) return;
         int d = 0;
-        while (pos_ < (int)tokens_.size()) {
+        while (pos_ < (int)tokens_.size() && peek().type != TokenType::kEof) {
             if (peek().type == open) d++;
             else if (peek().type == close) {
                 d--; advance();
@@ -1913,7 +1913,7 @@ void Parser::prescanLocalClasses() {
     auto skip_template_brackets = [&]() {
         if (pos_ >= (int)tokens_.size() || peek().type != TokenType::kLt) return;
         int d = 0;
-        while (pos_ < (int)tokens_.size()) {
+        while (pos_ < (int)tokens_.size() && peek().type != TokenType::kEof) {
             if (peek().type == TokenType::kLt) d++;
             else if (peek().type == TokenType::kGt) {
                 d--; advance();
@@ -1933,7 +1933,7 @@ void Parser::prescanLocalClasses() {
         int save_p = pos_;
         int paren = 0;
         bool seen_colon = false;
-        while (pos_ < (int)tokens_.size()) {
+        while (pos_ < (int)tokens_.size() && peek().type != TokenType::kEof) {
             TokenType tt = peek().type;
             if (paren == 0) {
                 if (tt == TokenType::kSemicolon
@@ -1949,7 +1949,8 @@ void Parser::prescanLocalClasses() {
                     advance(); // identifier
                     advance(); // '('
                     int d = 1;
-                    while (pos_ < (int)tokens_.size() && d > 0) {
+                    while (pos_ < (int)tokens_.size() && d > 0
+                           && peek().type != TokenType::kEof) {
                         if (peek().type == TokenType::kLParen) d++;
                         else if (peek().type == TokenType::kRParen) d--;
                         advance();
