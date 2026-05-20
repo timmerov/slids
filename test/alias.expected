@@ -9,3 +9,5 @@ tip^=73
 pr=(99,137)
 w=(wx,13)
 qq=17
+copied float64
+explicit_c const float64

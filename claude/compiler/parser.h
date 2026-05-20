@@ -196,6 +196,48 @@ inline std::string propagateConst(const std::string& t) {
 // const-ness is opt-in via the declaration form `const T x`. From outside
 // the function the qualifier collapses to canonical (overload identity
 // unchanged).
+// Compute the lhs type from the rhs type on a value-copy.
+//
+// Rule: a copy yields a mutable lhs by default. The only place const carries
+// across is the *pointee* of a pointer/iterator — losing it would launder
+// away the rhs's promise that the data behind the pointer is read-only.
+// Top-level (handle) const decomposes:
+//   const T   → T                 (value form — copy is mutable)
+//   const T^  → (const T)^        (mutable handle, pointee const)
+//   const T[] → (const T)[]       (mutable iterator, pointee const)
+// Already pointee-const forms (`(const T)^`, `(const T)[]`) are unchanged.
+// Used at the inferred-`VarDeclStmt` site so `x = expr;` (no explicit type)
+// follows the same copy semantics as an explicit `T x = expr;`.
+inline std::string copyConst(const std::string& t) {
+    // Leading `const ` — top-level const on a copy decomposes: handle-const
+    // drops; pointee-const survives by promoting `const T^` / `const T[]`
+    // into the `(const T)^` / `(const T)[]` pointee-const form.
+    if (t.rfind("const ", 0) == 0) {
+        std::string body = t.substr(6);
+        if (!body.empty() && body.back() == '^')
+            return "(const " + body.substr(0, body.size() - 1) + ")^";
+        if (body.size() >= 2 && body.substr(body.size() - 2) == "[]")
+            return "(const " + body.substr(0, body.size() - 2) + ")[]";
+        return body;
+    }
+    // Paren-wrapped const value `(const T)` — the rvalue read of a pointee-
+    // const (e.g. an element from a `(const T)[]` iter, or a deref of a
+    // `(const T)^`). A copy yields a mutable lhs. Anon tuples (top-level
+    // commas inside the parens) are not this shape — leave those alone.
+    if (t.size() >= 2 && t.front() == '(' && t.back() == ')') {
+        std::string inner = t.substr(1, t.size() - 2);
+        int depth = 0; bool top_comma = false;
+        for (char c : inner) {
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (c == ',' && depth == 0) { top_comma = true; break; }
+        }
+        if (!top_comma && inner.rfind("const ", 0) == 0)
+            return inner.substr(6);
+    }
+    return t;
+}
+
 inline std::string applyParamConstDefault(const std::string& type, bool is_mutable) {
     if (is_mutable || type.empty()) return type;
     // Already carries const? Don't double-qualify — preserves explicit

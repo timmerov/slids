@@ -37,6 +37,10 @@ Template<T>(T z_) {
 
 alias TemplateInt = Template<int>;
 
+/* file-scope consts for the inferred-decl const-on-copy test in main. */
+const float64 kc_a = 3.0;
+const float64 kc_b = 1.0;
+
 /*
 template aliases — `alias Name<T1,...> = TypeExpr;`. The body keeps each
 type-parameter identifier literal; the use site `Name<argT1,...>` substitutes
@@ -106,6 +110,13 @@ int32 main() {
         Box<int> qq = 17;
         __println("qq=" + qq);
     }
+
+    /* inferred-decl from a const rhs: a copy yields a mutable lhs. The
+       explicit form keeps whatever the author wrote. */
+    copied = kc_a - kc_b;
+    __println("copied " + ##type(copied));
+    const float64 explicit_c = kc_a - kc_b;
+    __println("explicit_c " + ##type(explicit_c));
 
     //-EXPECT-ERROR: requires type arguments
     //Ptr bare;

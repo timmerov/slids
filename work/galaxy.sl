@@ -91,6 +91,9 @@ Galaxy(
     void init() {
         nrings = (kGalaxyRadius - kCentralBulgeRadius) / kScale;
         dump(#nrings);
+        nrings = math:round(nrings);
+        size = (int=nrings);
+        dump(#size);
     }
 }
 

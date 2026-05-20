@@ -1392,14 +1392,11 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (decl->type.empty()) {
             if (!decl->init)
                 error(std::string("Inferred variable declaration requires initializer"));
-            inferred = inferSlidType(*decl->init);
-            // A by-value loop var is a fresh per-iteration copy — strip a
-            // const qualifier off a primitive element type so the loop var
-            // is a plain, reassignable local.
-            if (decl->is_loop_var) {
-                std::string c = canonicalType(inferred);
-                if (c != inferred && isPrimitive(c)) inferred = c;
-            }
+            // A copy yields a mutable lhs by default — handle-const drops,
+            // pointee-const survives. The loop-var case (per-iteration copy)
+            // shares this rule with the general assignment, so the prior
+            // is_loop_var-only carve-out folds in.
+            inferred = copyConst(inferSlidType(*decl->init));
         }
         const std::string& eff_type = decl->type.empty() ? inferred : decl->type;
 

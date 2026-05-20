@@ -223,4 +223,3 @@ math {
     alias nextafter = nextafterf;
     /* nan and nanf both take char[] — identical signature, cannot be aliased. */
 }
-

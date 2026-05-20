@@ -268,7 +268,7 @@ int32 main() {
     __println("callMut()=" + callMut());
 
     /* qualifier-only cast on a value. ##type carries the qualifier. */
-    ck = <const> (int=3);
+    const ck = 3;
     __println("ck=" + ck);
     __println("##type(ck)=" + ##type(ck));
 
