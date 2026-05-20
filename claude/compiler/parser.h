@@ -1009,6 +1009,11 @@ private:
     Token& advance();
     Token& expect(TokenType type, const std::string& msg);
     [[noreturn]] void errorHere(const std::string& msg);
+    // After a parseExpr inside a paren-list loop, expect either kComma
+    // (consume) or kRParen (don't consume; loop ends). Anything else is a
+    // missing-comma error — surfaces a focused diagnostic at the wrong
+    // token instead of silently re-parsing it as the next argument.
+    void expectArgSeparator();
     [[noreturn]] void errorAt(int t, const std::string& msg);
     int currentLine();    // line of the current token (used by ##line and friends)
 

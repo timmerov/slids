@@ -133,6 +133,13 @@ static std::string finalizeErrorMsg(std::string msg) {
     return msg;
 }
 
+void Parser::expectArgSeparator() {
+    if (peek().type == TokenType::kComma) { advance(); return; }
+    if (peek().type == TokenType::kRParen || peek().type == TokenType::kEof)
+        return;
+    errorHere("Expected ',' or ')' after argument.");
+}
+
 void Parser::errorHere(const std::string& msg) {
     [[maybe_unused]] int t_start = pos_;
     throw CompileError{file_id_, pos_, finalizeErrorMsg(msg)};
@@ -1074,7 +1081,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
                 advance();
                 while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                     args.push_back(parseExpr());
-                    if (peek().type == TokenType::kComma) advance();
+                    expectArgSeparator();
                 }
                 expect(TokenType::kRParen, "Expected ')'");
             }
@@ -1091,7 +1098,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
             std::vector<std::unique_ptr<Expr>> args;
             while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                 args.push_back(parseExpr());
-                if (peek().type == TokenType::kComma) advance();
+                expectArgSeparator();
             }
             expect(TokenType::kRParen, "Expected ')'");
             return make<NewScalarExpr>(t_start, elem_type, std::move(args));
@@ -1124,7 +1131,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
             std::vector<std::unique_ptr<Expr>> args;
             while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                 args.push_back(parseExpr());
-                if (peek().type == TokenType::kComma) advance();
+                expectArgSeparator();
             }
             expect(TokenType::kRParen, "Expected ')'");
             auto call = make<CallExpr>(t_start, name, std::move(args));
@@ -1195,7 +1202,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
                 std::vector<std::unique_ptr<Expr>> args;
                 while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                     args.push_back(parseExpr());
-                    if (peek().type == TokenType::kComma) advance();
+                    expectArgSeparator();
                 }
                 expect(TokenType::kRParen, "Expected ')'");
                 auto call = make<CallExpr>(t_start, "op" + *sym, std::move(args));
@@ -1212,7 +1219,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
                 std::vector<std::unique_ptr<Expr>> args;
                 while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                     args.push_back(parseExpr());
-                    if (peek().type == TokenType::kComma) advance();
+                    expectArgSeparator();
                 }
                 expect(TokenType::kRParen, "Expected ')'");
                 auto call = make<CallExpr>(t_start, method, std::move(args));
@@ -1250,7 +1257,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
             std::vector<std::unique_ptr<Expr>> args;
             while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                 args.push_back(parseExpr());
-                if (peek().type == TokenType::kComma) advance();
+                expectArgSeparator();
             }
             expect(TokenType::kRParen, "Expected ')'");
             auto call = make<CallExpr>(t_start, name, std::move(args));
@@ -1262,7 +1269,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
             std::vector<std::unique_ptr<Expr>> args;
             while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                 args.push_back(parseExpr());
-                if (peek().type == TokenType::kComma) advance();
+                expectArgSeparator();
             }
             expect(TokenType::kRParen, "Expected ')'");
             return make<CallExpr>(t_start, name, std::move(args));
@@ -1369,7 +1376,7 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
                 std::vector<std::unique_ptr<Expr>> args;
                 while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                     args.push_back(parseExpr());
-                    if (peek().type == TokenType::kComma) advance();
+                    expectArgSeparator();
                 }
                 expect(TokenType::kRParen, "Expected ')'");
                 base = make<MethodCallExpr>(t_start, std::move(base), member, std::move(args));
@@ -3001,7 +3008,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     advance();
                     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                         arr->init_values.push_back(parseExpr());
-                        if (peek().type == TokenType::kComma) advance();
+                        expectArgSeparator();
                     }
                     expect(TokenType::kRParen, "Expected ')'");
                 } else {
@@ -3097,7 +3104,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     advance();
                     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                         arr->init_values.push_back(parseExpr());
-                        if (peek().type == TokenType::kComma) advance();
+                        expectArgSeparator();
                     }
                     expect(TokenType::kRParen, "Expected ')'");
                 } else {
@@ -3128,7 +3135,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             advance();
             while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                 ctor_args.push_back(parseExpr());
-                if (peek().type == TokenType::kComma) advance();
+                expectArgSeparator();
             }
             expect(TokenType::kRParen, "Expected ')'");
         }
@@ -3184,7 +3191,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 std::vector<std::unique_ptr<Expr>> args;
                 while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                     args.push_back(parseExpr());
-                    if (peek().type == TokenType::kComma) advance();
+                    expectArgSeparator();
                 }
                 expect(TokenType::kRParen, "Expected ')'");
                 expect(TokenType::kSemicolon, "Expected ';'");
@@ -3201,7 +3208,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 std::vector<std::unique_ptr<Expr>> args;
                 while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                     args.push_back(parseExpr());
-                    if (peek().type == TokenType::kComma) advance();
+                    expectArgSeparator();
                 }
                 expect(TokenType::kRParen, "Expected ')'");
                 expect(TokenType::kSemicolon, "Expected ';'");
@@ -3240,7 +3247,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             std::vector<std::unique_ptr<Expr>> args;
             while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                 args.push_back(parseExpr());
-                if (peek().type == TokenType::kComma) advance();
+                expectArgSeparator();
             }
             expect(TokenType::kRParen, "Expected ')'");
             expect(TokenType::kSemicolon, "Expected ';'");
@@ -3255,7 +3262,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             std::vector<std::unique_ptr<Expr>> args;
             while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
                 args.push_back(parseExpr());
-                if (peek().type == TokenType::kComma) advance();
+                expectArgSeparator();
             }
             expect(TokenType::kRParen, "Expected ')'");
             expect(TokenType::kSemicolon, "Expected ';'");
@@ -3303,7 +3310,7 @@ void Parser::parseParamList(
                 "defaulted parameter; defaults must be trailing.");
         }
         param_defaults.push_back(std::move(dflt));
-        if (peek().type == TokenType::kComma) advance();
+        expectArgSeparator();
     }
 }
 

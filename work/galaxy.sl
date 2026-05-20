@@ -146,9 +146,6 @@ Galaxy(
         /* unknown function: println */
         println(String + "Calculating acceleration on ring " + i + " caused by ring " + j ".");
 
-        /* cannot init char[] from int */
-        println(String + "Calculating acceleration on ring " + i + " caused by ring " + j + ".");
-
         /* invalid ll */
         println(String + "Calculating acceleration on ring " + i + " caused by ring " + k + ".");
     }
