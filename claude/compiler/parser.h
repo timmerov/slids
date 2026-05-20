@@ -836,6 +836,62 @@ struct AliasDef {
     int tok = 0;                 // token index of the alias name (diagnostics)
 };
 
+// File-scope plain type alias (`alias Name = TypeExpr;`). The rhs is parsed
+// once at definition into the canonical type-string `body`; consumers see
+// the alias name resolve to `body` via `lookupAlias`. Propagates across .slh
+// imports so `import dump;` makes dump.slh's aliases visible.
+struct TypeAliasDef {
+    std::string name;
+    std::string body;
+    int file_id = 0;
+    int tok = 0;
+};
+
+// File-scope template type alias (`alias Name<T,U,...> = TypeExpr;`). The
+// body keeps each type-param identifier literal (`T^`, `(char[], T^)`, etc.);
+// substitution at the use site replaces `type_params[i]` with `args[i]`.
+struct TypeAliasTemplate {
+    std::string name;
+    std::vector<std::string> type_params;
+    std::string body;
+    int file_id = 0;
+    int tok = 0;
+};
+
+// Substitute identifier-shaped names in a slids type-string with their
+// replacements. Walks the string token-by-token: each maximal `[A-Za-z_]
+// [A-Za-z0-9_]*` run is looked up in `subst` and replaced if matched;
+// punctuation (`^`, `[`, `]`, `(`, `)`, `,`, `.`) flows through. Used by the
+// template-alias substitutor at the use site.
+inline std::string substituteTypeIdents(
+    const std::string& body,
+    const std::map<std::string, std::string>& subst)
+{
+    auto is_id_start = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+    };
+    auto is_id_cont = [&](char c) {
+        return is_id_start(c) || (c >= '0' && c <= '9');
+    };
+    std::string out;
+    out.reserve(body.size());
+    size_t i = 0;
+    while (i < body.size()) {
+        if (is_id_start(body[i])) {
+            size_t j = i;
+            while (j < body.size() && is_id_cont(body[j])) j++;
+            std::string id = body.substr(i, j - i);
+            auto it = subst.find(id);
+            out += (it != subst.end()) ? it->second : id;
+            i = j;
+        } else {
+            out.push_back(body[i]);
+            i++;
+        }
+    }
+    return out;
+}
+
 // A bare file-scope `Name;` — an unnamed global instance. It has no name to
 // trigger lazy construction, so it is constructed eagerly + unconditionally at
 // main's `global;` statement and destructed at the close of that block.
@@ -854,6 +910,8 @@ struct Program {
     std::vector<GlobalDef> globals;                 // global slid declarations (file/class/function-internal)
     std::vector<NamespaceDef> namespaces;           // declared namespace blocks
     std::vector<AliasDef> aliases;                   // function aliases (alias x = y;)
+    std::vector<TypeAliasDef> type_aliases;          // file-scope plain type aliases — propagate through .slh import
+    std::vector<TypeAliasTemplate> type_alias_templates; // file-scope template type aliases — propagate through .slh import
     std::vector<UnnamedGlobal> unnamed_globals;       // bare file-scope `Name;` instances
 
     std::vector<std::string> imported_headers; // resolved .slh paths, for -MF dep output
@@ -879,6 +937,16 @@ public:
            std::vector<std::string> import_paths = {},
            std::shared_ptr<std::set<std::string>> imported_once = nullptr);
     Program parse();
+
+    // Seed this parser's file-scope alias frames with type aliases parsed
+    // elsewhere. Used by the .slh import arm to hand its `hdr`'s aliases to
+    // the impl_parser before the impl-parse runs — impl_parser's own
+    // `import dump;` is suppressed by impl_cache (to avoid recursion), so
+    // without seeding, the impl's function defs that reference the alias
+    // would mis-resolve. Entries already present in the front frame are
+    // left untouched.
+    void seedAliasesFrom(const std::vector<TypeAliasDef>& tas,
+                         const std::vector<TypeAliasTemplate>& tats);
 
 private:
     SourceMap& sm_;
@@ -1050,7 +1118,26 @@ private:
     std::vector<std::map<std::string, AliasInfo>> alias_stack_{1};
     void declareAlias(const std::string& name, const std::string& resolved, int name_tok);
     std::string lookupAlias(const std::string& name) const;
-    void parseAliasDecl();
+
+    // Template type aliases (`alias Name<T,...> = TypeExpr;`). Same stacked-
+    // frames model as `alias_stack_`. The bottom frame is file scope; nested
+    // frames pushed/popped by parseBlock alongside the other scope stacks.
+    struct AliasTemplateInfo {
+        std::vector<std::string> type_params;
+        std::string body;
+        int tok = 0;
+    };
+    std::vector<std::map<std::string, AliasTemplateInfo>> alias_template_stack_{1};
+    void declareAliasTemplate(const std::string& name,
+                              std::vector<std::string> type_params,
+                              const std::string& body,
+                              int name_tok);
+    const AliasTemplateInfo* lookupAliasTemplate(const std::string& name) const;
+
+    // Pass `program` from file-scope callers so file-scope aliases also flow
+    // into Program (cross-TU propagation through .slh imports). Block-scope
+    // and class-scope callers pass nullptr — those aliases stay parser-only.
+    void parseAliasDecl(Program* program = nullptr);
 
     // const decl parser: assumes `const` is the current token. Returns the parsed
     // ConstDef. The kind of statement-or-decl context (top-level vs class vs block)

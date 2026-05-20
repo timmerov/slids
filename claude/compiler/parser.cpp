@@ -167,6 +167,44 @@ std::string Parser::lookupAlias(const std::string& name) const {
     return "";
 }
 
+void Parser::declareAliasTemplate(const std::string& name,
+                                  std::vector<std::string> type_params,
+                                  const std::string& body,
+                                  int name_tok) {
+    auto& frame = alias_template_stack_.back();
+    auto it = frame.find(name);
+    if (it != frame.end()) {
+        throw CompileError{file_id_, name_tok,
+            "Alias '" + name + "' is already declared in the same scope."}
+            .addNote(file_id_, it->second.tok, "First declared here.");
+    }
+    frame[name] = AliasTemplateInfo{std::move(type_params), body, name_tok};
+}
+
+const Parser::AliasTemplateInfo* Parser::lookupAliasTemplate(
+    const std::string& name) const
+{
+    for (auto it = alias_template_stack_.rbegin();
+         it != alias_template_stack_.rend(); ++it) {
+        auto sit = it->find(name);
+        if (sit != it->end()) return &sit->second;
+    }
+    return nullptr;
+}
+
+void Parser::seedAliasesFrom(const std::vector<TypeAliasDef>& tas,
+                             const std::vector<TypeAliasTemplate>& tats) {
+    if (alias_stack_.empty()) alias_stack_.push_back({});
+    if (alias_template_stack_.empty()) alias_template_stack_.push_back({});
+    for (auto& ta : tas)
+        if (!alias_stack_.front().count(ta.name))
+            alias_stack_.front()[ta.name] = AliasInfo{ta.body, ta.tok};
+    for (auto& tat : tats)
+        if (!alias_template_stack_.front().count(tat.name))
+            alias_template_stack_.front()[tat.name] =
+                AliasTemplateInfo{tat.type_params, tat.body, tat.tok};
+}
+
 std::string Parser::lookupLocalClass(const std::string& name) const {
     for (auto it = local_class_stack_.rbegin(); it != local_class_stack_.rend(); ++it) {
         auto sit = it->find(name);
@@ -183,16 +221,45 @@ std::string Parser::lookupNestedFunc(const std::string& name) const {
     return "";
 }
 
-void Parser::parseAliasDecl() {
+void Parser::parseAliasDecl(Program* program) {
     advance(); // 'alias'
     int name_tok = pos_;
     std::string name = expect(TokenType::kIdentifier, "Expected alias name after 'alias'").value;
     if (peek().type == TokenType::kLt) {
-        errorHere("Parameterized aliases are not supported; an alias name takes no template parameters.");
+        // Templated alias: `alias Name<T1, T2, ...> = TypeExpr;`. Type-param
+        // names are accepted as bare user-type identifiers by parseTypeName
+        // (the `else` branch's isUserTypeName path), so they survive into the
+        // body string literally. The use site substitutes via
+        // substituteTypeIdents.
+        advance(); // '<'
+        std::vector<std::string> type_params;
+        while (peek().type != TokenType::kGt && peek().type != TokenType::kEof) {
+            int tp_tok = pos_;
+            std::string tp = expect(TokenType::kIdentifier,
+                "Expected type parameter name").value;
+            for (auto& prior : type_params)
+                if (prior == tp)
+                    errorAt(tp_tok, "Type parameter '" + tp
+                        + "' is repeated in the alias template parameter list.");
+            type_params.push_back(std::move(tp));
+            if (peek().type == TokenType::kComma) advance();
+        }
+        expect(TokenType::kGt, "Expected '>' after alias template parameters");
+        expect(TokenType::kEquals, "Expected '=' after alias template parameters");
+        std::string body = parseTypeName();
+        expect(TokenType::kSemicolon, "Expected ';' after alias declaration");
+        // File-scope callers also publish to Program for cross-TU propagation.
+        if (program)
+            program->type_alias_templates.push_back(
+                {name, type_params, body, file_id_, name_tok});
+        declareAliasTemplate(name, std::move(type_params), body, name_tok);
+        return;
     }
     expect(TokenType::kEquals, "Expected '=' after alias name");
     std::string resolved = parseTypeName();
     expect(TokenType::kSemicolon, "Expected ';' after alias declaration");
+    if (program)
+        program->type_aliases.push_back({name, resolved, file_id_, name_tok});
     declareAlias(name, resolved, name_tok);
 }
 
@@ -841,10 +908,36 @@ std::string Parser::parseTypeName() {
     bool resolved_alias = false;
     if (isTypeName(peek())) base = advance().value;
     else if (isUserTypeName(peek())) {
+        int base_tok = pos_;
         base = advance().value;
         std::string a = lookupAlias(base);
         if (!a.empty()) {
             base = a;
+            resolved_alias = true;
+        } else if (const AliasTemplateInfo* at = lookupAliasTemplate(base)) {
+            // Template alias at the use site — parse `<args>`, substitute the
+            // body's type-param identifiers with the parsed args, return the
+            // substituted type-string as a finalized base (skips qualifier /
+            // nested-alias / template-arg-mangling logic below; only the
+            // trailing ^/[]/^^ loop still applies).
+            if (peek().type != TokenType::kLt)
+                errorAt(base_tok, "Template alias '" + base
+                    + "' requires type arguments: '" + base + "<...>'.");
+            advance(); // '<'
+            std::vector<std::string> args;
+            while (peek().type != TokenType::kGt && peek().type != TokenType::kEof) {
+                args.push_back(parseTypeName());
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kGt, "Expected '>' after alias template arguments");
+            if (args.size() != at->type_params.size())
+                errorAt(base_tok, "Template alias '" + base + "' expects "
+                    + std::to_string(at->type_params.size())
+                    + " type argument(s), got " + std::to_string(args.size()) + ".");
+            std::map<std::string, std::string> subst;
+            for (size_t i = 0; i < args.size(); i++)
+                subst[at->type_params[i]] = args[i];
+            base = substituteTypeIdents(at->body, subst);
             resolved_alias = true;
         } else {
             // local class in scope: substitute the base to its canonical name
@@ -1532,6 +1625,7 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     expect(TokenType::kLBrace, "Expected '{'");
     scope_stack_.push_back({});
     alias_stack_.push_back({});
+    alias_template_stack_.push_back({});
     local_class_stack_.push_back({});
     nested_func_stack_.push_back({});
     // Pre-scan this block for forward-decl-needed declarations at its top
@@ -1572,6 +1666,7 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
     }
     scope_stack_.pop_back();
     alias_stack_.pop_back();
+    alias_template_stack_.pop_back();
     local_class_stack_.pop_back();
     nested_func_stack_.pop_back();
     expect(TokenType::kRBrace, "Expected '}'");
@@ -3536,6 +3631,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     // alias frame for the class body — an `alias` declared here is visible to
     // the body's methods (nested below this frame) and popped at the close.
     alias_stack_.push_back({});
+    alias_template_stack_.push_back({});
 
     auto ctor_body = make<BlockStmt>(t_start);
     bool has_ctor_code = false;
@@ -3774,6 +3870,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     if (has_ctor_code)
         slid.ctor_body = std::move(ctor_body);
     alias_stack_.pop_back();
+    alias_template_stack_.pop_back();
 
     int close_tok = pos_;
     expect(TokenType::kRBrace, "Expected '}'");
@@ -4341,6 +4438,23 @@ Program Parser::parse() {
                 g.impl_module = module;
                 program.globals.push_back(std::move(g));
             }
+            // Imported type aliases (plain and template). They flow into the
+            // consumer's Program (so a chained re-import propagates them) and
+            // also seed the consumer's file-scope frames so parseTypeName
+            // resolves the alias names directly in subsequent decls.
+            for (auto& ta : hdr.type_aliases) {
+                if (!alias_stack_.empty()
+                    && !alias_stack_.front().count(ta.name))
+                    alias_stack_.front()[ta.name] = AliasInfo{ta.body, ta.tok};
+                program.type_aliases.push_back(ta);
+            }
+            for (auto& tat : hdr.type_alias_templates) {
+                if (!alias_template_stack_.empty()
+                    && !alias_template_stack_.front().count(tat.name))
+                    alias_template_stack_.front()[tat.name] =
+                        AliasTemplateInfo{tat.type_params, tat.body, tat.tok};
+                program.type_alias_templates.push_back(tat);
+            }
 
             // load template bodies from impl file: foo.slh -> foo.sl
             if (has_templates) {
@@ -4355,6 +4469,15 @@ Program Parser::parse() {
                     impl_cache->insert(header_path);
                     impl_cache->insert(impl_path);
                     Parser impl_parser(sm_, impl_file_id, impl_lexer.tokenize(), source_dir_, import_paths_, impl_cache);
+                    // Seed impl_parser with hdr's aliases. impl_parser's
+                    // impl_cache pre-loads header_path to prevent recursion,
+                    // so impl_parser's own `import dump;` is skipped — and
+                    // without the seed, type aliases declared in the .slh
+                    // would be invisible while the impl's function defs that
+                    // reference them are parsed (they'd mis-resolve as
+                    // template-class mangled names instead).
+                    impl_parser.seedAliasesFrom(hdr.type_aliases,
+                                                hdr.type_alias_templates);
                     Program impl_prog = impl_parser.parse();
                     // Two things need to flow from the impl parse into the
                     // consumer's program:
@@ -4427,6 +4550,24 @@ Program Parser::parse() {
                     // already applied that for its own imports.
                     for (auto& g : impl_prog.globals)
                         program.globals.push_back(std::move(g));
+                    // (b) type aliases (plain and template) the impl's
+                    // transitive imports carry. Same shape as the direct
+                    // header arm above — seed consumer's file-scope frame
+                    // and forward to Program.
+                    for (auto& ta : impl_prog.type_aliases) {
+                        if (!alias_stack_.empty()
+                            && !alias_stack_.front().count(ta.name))
+                            alias_stack_.front()[ta.name] =
+                                AliasInfo{ta.body, ta.tok};
+                        program.type_aliases.push_back(ta);
+                    }
+                    for (auto& tat : impl_prog.type_alias_templates) {
+                        if (!alias_template_stack_.empty()
+                            && !alias_template_stack_.front().count(tat.name))
+                            alias_template_stack_.front()[tat.name] =
+                                AliasTemplateInfo{tat.type_params, tat.body, tat.tok};
+                        program.type_alias_templates.push_back(tat);
+                    }
                     // Record every header impl_prog already loaded into the
                     // consumer's import-once guard. The impl_parser used its
                     // own cache (impl_cache), so its transitive .slh imports
@@ -4440,8 +4581,9 @@ Program Parser::parse() {
             }
         }
         // type alias declaration: alias Name = TypeExpr;
+        // File scope — publish to program so .slh consumers see it.
         else if (peek().type == TokenType::kAlias) {
-            parseAliasDecl();
+            parseAliasDecl(&program);
         }
         // global slid declaration at file scope. `global;` is a lifetime
         // statement and only allowed in main — reject here.

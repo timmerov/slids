@@ -14,7 +14,7 @@ output:
     int x = 42
 */
 void dump<T>(
-    (char[], char[], char[], char[], T^)^ tuple
+    DumpTuple<T>^ tuple
 ) {
     println(String + tuple^[0] + ":" + tuple^[1] + ": "
         + tuple^[2] + " " + tuple^[3] + " = " + tuple^[4]^);
@@ -28,7 +28,7 @@ output:
     int x = 42 : 37;
 */
 void dump<T>(
-    (char[], char[], char[], char[], T^)^ tuple,
+    DumpTuple<T>^ tuple,
     char[] expected
 ) {
     println(String + tuple^[0] + ":" + tuple^[1] + ": "
