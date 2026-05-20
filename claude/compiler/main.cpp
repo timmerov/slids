@@ -108,10 +108,14 @@ static int runInstantiate(const std::string& dir, const std::string& out_path) {
         std::cerr << "slidsc: --instantiate: cannot read directory '" << dir << "'\n";
         return 1;
     }
-    if (insts.empty() && global_sites.empty() && lazy_total == 0) {
-        std::cout << "slidsc: --instantiate: no instantiations or globals found\n";
-        return 0;
-    }
+    // Always write the output file — even when there are no instantiations
+    // or globals to aggregate. A consumer that commented out every template
+    // call still needs the file to exist so the rest of the build pipeline
+    // (slidsc → llc → link) sees a uniform shape: an empty `__instantiations`
+    // object that contributes nothing to the link. The body below already
+    // no-ops when `imports`/`insts`/`global_sites` are empty (the loops
+    // simply don't iterate), so the file ends up with just the three
+    // section-header comments — slidsc reads that as zero declarations.
 
     // sort instantiations for deterministic output
     std::sort(insts.begin(), insts.end());

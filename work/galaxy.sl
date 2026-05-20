@@ -86,6 +86,7 @@ Ring(
 alias Rings = Vector<Ring>;
 
 Galaxy(
+    int nrings_,
     Rings rings_
 ) {
     void run() {
@@ -95,21 +96,21 @@ Galaxy(
 
     void init() {
         /* allocate space for rings. */
-        nrings_f = (kGalaxyRadius - kCentralBulgeRadius) / kScale;
+        nrings = (kGalaxyRadius - kCentralBulgeRadius) / kScale;
         //dump(#nrings_f);
-        nrings_f = math:round(nrings_f);
-        nrings = (int=nrings_f);
+        nrings = math:round(nrings);
+        nrings_ = (int=nrings);
         //dump(#nrings);
-        rings_.resize(nrings+1);
-        println(String + "Divided the galaxy into " + nrings + " rings.");
+        rings_.resize(nrings_ + 1);
+        println(String + "Divided the galaxy into " + nrings_ + " rings.");
 
         /*
         initialize the rings.
         sum the radii - proportional to circumference.
         */
         float64 sum = 0;
-        for (int i : 0..<=nrings) {
-            radius = (kGalaxyRadius - kCentralBulgeRadius) * i / nrings_f + kCentralBulgeRadius;
+        for (int i : 0..<=nrings_) {
+            radius = (kGalaxyRadius - kCentralBulgeRadius) * i / nrings + kCentralBulgeRadius;
             sum += radius;
             //dump(#radius);
 
@@ -125,27 +126,22 @@ Galaxy(
         //dump(#sum);
 
         /* distribute the mass. */
-        for (int i : 0..<=nrings) {
+        for (int i : 0..<=nrings_) {
             ring = ^rings_[i];
-            radius = ring^.radius_;
-            ring^.mass_ = kMassGalaxy * radius / sum;
+            ring^.mass_ = kMassGalaxy * ring^.radius_ / sum;
             //dump(#ring^.mass_);
         }
     }
 
     void acceleration() {
-        nrings = rings_.size();
-        for (i : 0..nrings) {
-            for (k : 0..nrings) {
+        for (i : 0..nrings_) {
+            for (k : 0..nrings_) {
                 acceleration(i, k);
             }
         }
     }
 
-    void acceleration(intptr i, intptr k) {
-        /* unknown function: println */
-        println(String + "Calculating acceleration on ring " + i + " caused by ring " + j ".");
-
+    void acceleration(int i, int k) {
         /* invalid ll */
         println(String + "Calculating acceleration on ring " + i + " caused by ring " + k + ".");
     }
