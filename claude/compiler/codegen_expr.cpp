@@ -2570,16 +2570,56 @@ std::string Codegen::emitCoerced(const std::string& val,
                                  const std::string& to) {
     std::string cfrom = canonType(from), cto = canonType(to);
     std::string fl = llvmType(cfrom), tl = llvmType(cto);
-    if (fl == tl) return val;
-    // integer family — i8/i16/i32/i64 (i1/bool handled elsewhere).
+
+    // Unsigned-like source/destination set. bool is unsigned-1; char is
+    // unsigned-byte-like; the `uintN` family is the usual unsigned ints.
+    static const std::set<std::string> unsigned_types =
+        {"bool","char","uint","uint8","uint16","uint32","uint64"};
+    bool src_unsigned = unsigned_types.count(cfrom) > 0;
+    bool dst_unsigned = unsigned_types.count(cto)   > 0;
+
+    // Integer-family LLVM types (including i1/bool).
+    auto isInt = [](const std::string& l) {
+        return l == "i1" || l == "i8" || l == "i16" || l == "i32" || l == "i64";
+    };
+    auto isFloat = [](const std::string& l) {
+        return l == "float" || l == "double";
+    };
+    bool src_int = isInt(fl), dst_int = isInt(tl);
+    bool src_float = isFloat(fl), dst_float = isFloat(tl);
+
+    // Cross-family int↔float — explicit conversion only. (Per spec: ints
+    // never widen to float; float never narrows to int.)
+    if ((src_int && dst_float) || (src_float && dst_int))
+        error("Cannot implicitly convert '" + cfrom + "' to '" + cto
+              + "'; use an explicit type conversion.");
+
+    if (fl == tl) {
+        // Same LLVM width. Sign-change without an explicit conversion is
+        // a value reinterpretation; reject for the int family. Carve-out:
+        // bool is stored as i32 but its values (0/1) always fit any int
+        // exactly — bool→int (or uint) is a documented implicit widen.
+        // Same-LLVM-type ints with same signedness (`int` ≡ `int32`)
+        // silently pass.
+        if (src_int && dst_int && src_unsigned != dst_unsigned
+            && cfrom != "bool")
+            error("Cannot implicitly convert '" + cfrom + "' to '" + cto
+                  + "' (signedness differs); use an explicit type conversion.");
+        return val;
+    }
+
+    // Integer/bool family widening or narrowing.
     static const std::map<std::string,int> irank =
-        {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
+        {{"i1",-1},{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
     auto fi = irank.find(fl), ti = irank.find(tl);
     if (fi != irank.end() && ti != irank.end()) {
         if (ti->second > fi->second) {
-            static const std::set<std::string> unsigned_types =
-                {"uint","uint8","uint16","uint32","uint64","char"};
-            std::string op = unsigned_types.count(cfrom) ? "zext" : "sext";
+            // Widening. Signed → unsigned is reinterpretation (a signed
+            // negative would alias to a huge positive) — explicit only.
+            if (!src_unsigned && dst_unsigned)
+                error("Cannot implicitly convert '" + cfrom + "' to '" + cto
+                    + "' (signed → unsigned); use an explicit type conversion.");
+            std::string op = src_unsigned ? "zext" : "sext";
             std::string t = newTmp();
             out_ << "    " << t << " = " << op << " " << fl << " " << val
                  << " to " << tl << "\n";
@@ -2588,7 +2628,7 @@ std::string Codegen::emitCoerced(const std::string& val,
         error("Cannot implicitly narrow '" + cfrom + "' to '" + cto
               + "'; use an explicit type conversion.");
     }
-    // float family — float32/float64.
+    // Float family widening or narrowing.
     static const std::map<std::string,int> frank = {{"float",0},{"double",1}};
     auto ff = frank.find(fl), tf = frank.find(tl);
     if (ff != frank.end() && tf != frank.end()) {
@@ -2601,8 +2641,7 @@ std::string Codegen::emitCoerced(const std::string& val,
         error("Cannot implicitly narrow '" + cfrom + "' to '" + cto
               + "'; use an explicit type conversion.");
     }
-    // int<->float, or bool involved: no implicit path — leave unchanged so the
-    // existing call sites' own handling (or a later malformed-IR catch) stands.
+    // Non-numeric shape (ptr, struct, …) — leave unchanged.
     return val;
 }
 
@@ -2654,11 +2693,24 @@ std::string Codegen::coerceToType(const std::string& val, const Expr& src,
         if (u->op == "-") sign = -sign;
         e = u->operand.get();
     }
-    // an integer or character literal has no fixed type — flex it to the
-    // target width (a char literal is just its code point as a value).
-    if (auto* il = dynamic_cast<const IntLiteralExpr*>(e);
-        il && !il->is_bool) {
+    // An integer / character / bool literal has no fixed type — flex it to
+    // the target width. A char literal is its code point as a value; bool
+    // literals are 0 or 1. For a float target, the literal flexes into a
+    // float form (lossy is OK — float-literal writes are inherently lossy).
+    if (auto* il = dynamic_cast<const IntLiteralExpr*>(e); il) {
         int64_t lv = sign * il->value;
+        std::string tcanon = canonType(target);
+        if (tcanon == "float" || tcanon == "float32" || tcanon == "float64") {
+            double dv = (double)lv;
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%.17g", dv);
+            std::string s = buf;
+            // LLVM IR float literals demand a decimal or exponent — bare
+            // integer-shaped strings like "0" are an "integer constant must
+            // have integer type" error in `store double <val>, …` form.
+            if (s.find_first_of(".eE") == std::string::npos) s += ".0";
+            return s;
+        }
         if (checkIntLiteralFits(lv, il->is_nondecimal, src, target))
             return std::to_string(lv);
     }
@@ -2672,18 +2724,59 @@ std::string Codegen::coerceToType(const std::string& val, const Expr& src,
         }
         return val;
     }
-    // a typed value: derive the source type from the LLVM-type oracle —
-    // exprType returns "" for a BinaryExpr and other compound shapes.
+    // A typed value: derive the source's LLVM width from the LLVM-type
+    // oracle, and its signedness from `isUnsignedExpr` (with the dereference
+    // / post-inc-deref / array-index extensions below). LLVM-width is the
+    // safe choice — `inferSlidType` returns the slids form and defaults to
+    // "int" for shapes it can't name, which would emit wrong-width sext for
+    // pointer-arithmetic / `obj.sizeof()` / etc.
     std::string fl = exprLlvmType(src);
     static const std::map<std::string,std::string> llvm2slids = {
-        {"i8","int8"},{"i16","int16"},{"i32","int32"},{"i64","int64"},
+        {"i1","bool"},{"i8","int8"},{"i16","int16"},
+        {"i32","int32"},{"i64","int64"},
         {"float","float32"},{"double","float64"}};
-    auto m = llvm2slids.find(fl);
-    if (m == llvm2slids.end())
-        return val;   // non-numeric (ptr, struct, …) — nothing to width-coerce
-    std::string from = m->second;
-    if (fl[0] == 'i' && isUnsignedExpr(src))
-        from = "u" + from;
+    // Prefer the slids-form name when it agrees with the LLVM width — this
+    // preserves char-vs-int8 / bool-vs-int32 / intptr-vs-int distinctions
+    // that the bare LLVM type collapses. Fall back to the llvm2slids map
+    // when the slids inference defaults to "int" but the actual value is
+    // wider (pointer arithmetic, sizeof, etc.).
+    std::string from;
+    {
+        std::string st = canonType(inferSlidType(src));
+        while (!st.empty()) {
+            if (st.size() >= 2 && st.substr(st.size() - 2) == "[]")
+                st = st.substr(0, st.size() - 2);
+            else if (st.size() >= 2 && st.substr(st.size() - 2) == "^^")
+                st = st.substr(0, st.size() - 2);
+            else if (st.back() == '^')
+                st = st.substr(0, st.size() - 1);
+            else break;
+        }
+        if (!st.empty() && llvmType(st) == fl) from = st;
+    }
+    if (from.empty()) {
+        auto m = llvm2slids.find(fl);
+        if (m == llvm2slids.end()) {
+            // The source isn't a numeric type the coercer can recognise.
+            // If the target IS numeric, the assignment is fundamentally
+            // incompatible (e.g. `(const char)[]` to `int`) — emit a
+            // type-mismatch error rather than letting malformed IR slip
+            // through. Same-shape non-numeric (ptr↔ptr, struct↔struct of
+            // the same type) is handled by the assignment site before
+            // coerceToType is called.
+            std::string tl_check = llvmType(canonType(target));
+            static const std::set<std::string> numeric_tl =
+                {"i1","i8","i16","i32","i64","float","double"};
+            if (numeric_tl.count(tl_check))
+                error("Cannot implicitly convert '"
+                    + canonType(inferSlidType(src)) + "' to '"
+                    + canonType(target)
+                    + "'; use an explicit type conversion.");
+            return val;
+        }
+        from = m->second;
+        if (fl[0] == 'i' && isUnsignedExpr(src)) from = "u" + from;
+    }
     return emitCoerced(val, from, target);
 }
 
@@ -3026,6 +3119,10 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     }
     // method call — look up return type via slid type of object
     if (auto* me = dynamic_cast<const MethodCallExpr*>(&expr)) {
+        // `obj.sizeof()` is a built-in returning intptr — there's no real
+        // method registration, so a plain methodMangled lookup misses.
+        // (`exprLlvmType` already has the parallel special case.)
+        if (me->method == "sizeof") return "intptr";
         std::string slid_type = exprSlidType(*me->object);
         if (!slid_type.empty()) {
             std::string mangled = methodMangled(slid_type, me->method, me->args);

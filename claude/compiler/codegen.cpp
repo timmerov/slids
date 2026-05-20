@@ -2144,46 +2144,12 @@ std::string Codegen::emitArgForParam(const Expr& arg, const std::string& param_t
     }
     requirePtrInit(param_type, arg);
     std::string val = emitExpr(arg);
-    // widen or truncate integer to match param type
-    if (!param_type.empty() && !isIndirectType(param_type)) {
-        std::string want = llvmType(param_type);
-        std::string src  = exprLlvmType(arg);
-        static const std::map<std::string,int> rank = {{"i1",0},{"i8",1},{"i16",2},{"i32",3},{"i64",4}};
-        auto wit = rank.find(want), sit = rank.find(src);
-        if (wit != rank.end() && sit != rank.end() && wit->first != sit->first) {
-            if (wit->second < sit->second) {
-                // truncate: e.g. i32 → i8 for char param
-                std::string tmp = newTmp();
-                out_ << "    " << tmp << " = trunc " << src << " " << val << " to " << want << "\n";
-                return tmp;
-            } else {
-                // widen: zext for unsigned source, sext for signed
-                static const std::set<std::string> unsigned_types = {"uint","uint8","uint16","uint32","uint64","char"};
-                bool src_unsigned = false;
-                if (auto* nc = dynamic_cast<const TypeConvExpr*>(&arg))
-                    src_unsigned = unsigned_types.count(nc->target_type) > 0;
-                else if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
-                    auto tit = locals_.find(ve->name);
-                    if (tit != locals_.end()) src_unsigned = unsigned_types.count(tit->second.type) > 0;
-                }
-                std::string op = src_unsigned ? "zext" : "sext";
-                std::string tmp = newTmp();
-                out_ << "    " << tmp << " = " << op << " " << src << " " << val << " to " << want << "\n";
-                return tmp;
-            }
-        }
-        // float width: fpext float32→float64, fptrunc float64→float32.
-        if (want == "float" && src == "double") {
-            std::string tmp = newTmp();
-            out_ << "    " << tmp << " = fptrunc double " << val << " to float\n";
-            return tmp;
-        }
-        if (want == "double" && src == "float") {
-            std::string tmp = newTmp();
-            out_ << "    " << tmp << " = fpext float " << val << " to double\n";
-            return tmp;
-        }
-    }
+    // Width-coerce (and literal-flex) integer/float arg to the param type
+    // via the single coerceToType helper. The helper rejects implicit
+    // narrowing, signed↔unsigned reinterpretation, and int↔float — same
+    // rules as elsewhere in the assignment family.
+    if (!param_type.empty() && !isIndirectType(param_type))
+        val = coerceToType(val, arg, param_type);
     return val;
 }
 

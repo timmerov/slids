@@ -89,11 +89,36 @@ Galaxy(
     }
 
     void init() {
+        /* allocate space for rings. */
         nrings = (kGalaxyRadius - kCentralBulgeRadius) / kScale;
         dump(#nrings);
         nrings = math:round(nrings);
         size = (int=nrings);
         dump(#size);
+        rings_.resize(size+1);
+
+        /*
+        initialize the rings.
+        sum the radii - proportional to circumference.
+        */
+        float64 sum = 0;
+        for (int i : 0..<=size) {
+            radius = (kGalaxyRadius - kCentralBulgeRadius) * i / nrings + kCentralBulgeRadius;
+            dump(#radius);
+            sum += radius;
+
+            ring = ^rings_[i];
+            ring^.radius_ = radius;
+        }
+        dump(#sum);
+
+        /* distribute the mass. */
+        for (int i : 0..<=size) {
+            ring = ^rings_[i];
+            radius = ring^.radius_;
+            ring^.mass_ = kMassGalaxy * radius / sum;
+            dump(#ring^.mass_);
+        }
     }
 }
 

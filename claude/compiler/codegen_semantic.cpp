@@ -640,16 +640,76 @@ bool Codegen::hasDtorInChain(const std::string& slid_name) {
 void Codegen::scanForSlidTemplateUses() {
     if (template_slids_.empty()) return;
 
-    // Slid template instantiations may sit anywhere a type name appears —
-    // including inside a nested-function body — so descend into those too.
+    // Recurse a type-string into its leaves (peel `^`/`[]`/`^^` suffixes,
+    // descend into anon-tuple elements, drop const wraps), then ask the
+    // instantiator to materialize each leaf if it's a template mangling.
+    // The instantiator no-ops on primitives / already-known / non-template
+    // names, so calling this on every type-bearing AST surface is safe.
+    std::function<void(const std::string&, const Stmt*)> visitType =
+        [&](const std::string& t, const Stmt* site) {
+        std::string s = t;
+        while (true) {
+            if (s.size() >= 2 && s.substr(s.size() - 2) == "[]") {
+                s = s.substr(0, s.size() - 2);
+            } else if (s.size() >= 2 && s.substr(s.size() - 2) == "^^") {
+                s = s.substr(0, s.size() - 2);
+            } else if (!s.empty() && s.back() == '^') {
+                s = s.substr(0, s.size() - 1);
+            } else break;
+        }
+        if (isAnonTupleType(s)) {
+            for (auto& e : anonTupleElems(s)) visitType(e, site);
+            return;
+        }
+        if (s.rfind("const ", 0) == 0) s = s.substr(6);
+        if (s.size() >= 2 && s.front() == '(' && s.back() == ')') {
+            std::string inner = s.substr(1, s.size() - 2);
+            if (inner.rfind("const ", 0) == 0) s = inner.substr(6);
+        }
+        if (s.empty()) return;
+        ensureSlidInstantiated(s, site);
+    };
+
+    // Body walk — locals + everything reachable via forEachChildStmt.
+    // Slid template instantiations may sit anywhere a type name appears,
+    // including inside a nested-function body.
     std::function<void(const Stmt&)> scanStmt = [&](const Stmt& stmt) {
         if (auto* d = dynamic_cast<const VarDeclStmt*>(&stmt))
-            ensureSlidInstantiated(d->type, d);
+            visitType(d->type, d);
         forEachChildStmt(stmt, scanStmt, /*include_nested_fn_body=*/true);
     };
     auto scanBody = [&](const BlockStmt& b) {
         for (auto& s : b.stmts) scanStmt(*s);
     };
+
+    // Surface walk — every place a type-string can be spelled in a
+    // declaration. Without this, a template instance referenced only as a
+    // field/base/signature type (never as a body-local decl) never gets
+    // materialized, and method dispatch against it fails with `… is not a
+    // slid type`. See [[project_slh_propagation]] / the bug22-thread audit.
+    for (auto& slid : program_.slids) {
+        if (!slid.type_params.empty()) continue;
+        if (!slid.base_name.empty()) visitType(slid.base_name, nullptr);
+        for (auto& f : slid.fields)  visitType(f.type, nullptr);
+        for (auto& m : slid.methods) {
+            if (!m.return_type.empty()) visitType(m.return_type, nullptr);
+            for (auto& p : m.params) visitType(p.first, nullptr);
+        }
+    }
+    for (auto& em : program_.external_methods) {
+        if (!em.return_type.empty()) visitType(em.return_type, nullptr);
+        for (auto& p : em.params) visitType(p.first, nullptr);
+    }
+    for (auto& fn : program_.functions) {
+        if (!fn.type_params.empty()) continue;
+        if (!fn.return_type.empty()) visitType(fn.return_type, nullptr);
+        for (auto& p : fn.params) visitType(p.first, nullptr);
+    }
+    for (auto& g : program_.globals)
+        for (auto& f : g.fields) visitType(f.type, nullptr);
+
+    // Body walks — function/method/ctor/dtor bodies (after surfaces, so
+    // surface-only instances are present when bodies are emitted).
     for (auto& fn : program_.functions)
         if (fn.body && fn.type_params.empty()) scanBody(*fn.body);
     for (auto& slid : program_.slids) {

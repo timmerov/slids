@@ -858,43 +858,14 @@ void Codegen::emitInitFieldsAtPtrs(const std::string& stype, const std::string& 
         std::string val;
         if (arg_expr) {
             val = emitExpr(*arg_expr);
-            // Leaf type check: reject incompatible source types before the
-            // store. Slids-level type-equality short-circuits (covers anon-
-            // tuples whose LLVM type may format differently). For mismatched
-            // primitives, width-coerce integers; reject everything else.
+            // Slids-level type-equality short-circuits (covers anon tuples
+            // whose LLVM type may format differently). Otherwise route
+            // through coerceToType — the single width-coercion routine —
+            // which also handles literal flex, narrowing rejection, and
+            // signed↔unsigned reinterpretation rejection.
             std::string src_slids = inferSlidType(*arg_expr);
-            if (src_slids != ftype) {
-                std::string src_t = exprLlvmType(*arg_expr);
-                std::string dst_t = llvmType(ftype);
-                if (src_t != dst_t) {
-                    static const std::map<std::string,int> rank =
-                        {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
-                    auto sit = rank.find(src_t), dit = rank.find(dst_t);
-                    if (sit != rank.end() && dit != rank.end()) {
-                        std::string coerced = newTmp();
-                        if (dit->second > sit->second)
-                            out_ << "    " << coerced << " = sext " << src_t
-                                 << " " << val << " to " << dst_t << "\n";
-                        else
-                            out_ << "    " << coerced << " = trunc " << src_t
-                                 << " " << val << " to " << dst_t << "\n";
-                        val = coerced;
-                    } else if (src_t == "double" && dst_t == "float") {
-                        std::string coerced = newTmp();
-                        out_ << "    " << coerced << " = fptrunc double "
-                             << val << " to float\n";
-                        val = coerced;
-                    } else if (src_t == "float" && dst_t == "double") {
-                        std::string coerced = newTmp();
-                        out_ << "    " << coerced << " = fpext float "
-                             << val << " to double\n";
-                        val = coerced;
-                    } else {
-                        error(std::string("Type mismatch: cannot assign '"
-                            + src_slids + "' to '" + ftype + "'"));
-                    }
-                }
-            }
+            if (src_slids != ftype)
+                val = coerceToType(val, *arg_expr, ftype);
         } else {
             val = isInlineArrayType(ftype) ? "zeroinitializer"
                 : isIndirectType(ftype) ? "null"

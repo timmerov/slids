@@ -635,22 +635,8 @@ void Codegen::emitDestructure(
             if (!reassign)
                 out_ << "    " << reg << " = alloca " << llvm_t << "\n";
             std::string val = emitExpr(*te->values[i]);
-            std::string src_t = exprLlvmType(*te->values[i]);
-            if (src_t != llvm_t) {
-                static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
-                auto sit = rank.find(src_t), dit = rank.find(llvm_t);
-                if (sit != rank.end() && dit != rank.end()) {
-                    std::string coerced = newTmp();
-                    if (dit->second > sit->second)
-                        out_ << "    " << coerced << " = sext " << src_t << " " << val << " to " << llvm_t << "\n";
-                    else
-                        out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << llvm_t << "\n";
-                    val = coerced;
-                } else {
-                    errorAtNode(*te->values[i], "Cannot initialize '" + eff_type
-                        + "' from a value of type '" + inferSlidType(*te->values[i]) + "'.");
-                }
-            }
+            if (inferSlidType(*te->values[i]) != eff_type)
+                val = coerceToType(val, *te->values[i], eff_type);
             out_ << "    store " << llvm_t << " " << val << ", ptr " << reg << "\n";
             if (!reassign) {
                 locals_[name] = {reg, eff_type, init.file_id, init.tok};
@@ -1190,27 +1176,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     continue;
                 }
                 std::string val = emitExpr(*flat[i]);
-                if (inferSlidType(*flat[i]) != elem_type) {
-                    std::string src_t = exprLlvmType(*flat[i]);
-                    if (src_t != elt) {
-                        static const std::map<std::string,int> rank =
-                            {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
-                        auto sit = rank.find(src_t), dit = rank.find(elt);
-                        if (sit != rank.end() && dit != rank.end()) {
-                            std::string coerced = newTmp();
-                            if (dit->second > sit->second)
-                                out_ << "    " << coerced << " = sext "
-                                     << src_t << " " << val << " to " << elt << "\n";
-                            else
-                                out_ << "    " << coerced << " = trunc "
-                                     << src_t << " " << val << " to " << elt << "\n";
-                            val = coerced;
-                        } else {
-                            error(std::string("Type mismatch: cannot assign '"
-                                + inferSlidType(*flat[i]) + "' to '" + elem_type + "'"));
-                        }
-                    }
-                }
+                if (inferSlidType(*flat[i]) != elem_type)
+                    val = coerceToType(val, *flat[i], elem_type);
                 out_ << "    store " << elt << " " << val
                      << ", ptr " << gep << "\n";
             }
@@ -1334,28 +1301,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 }
             } else {
                 std::string val = emitExpr(*arr->init_values[i]);
-                if (inferSlidType(*arr->init_values[i]) != elem_type) {
-                    std::string src_t = exprLlvmType(*arr->init_values[i]);
-                    if (src_t != elt) {
-                        static const std::map<std::string,int> rank =
-                            {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
-                        auto sit = rank.find(src_t), dit = rank.find(elt);
-                        if (sit != rank.end() && dit != rank.end()) {
-                            std::string coerced = newTmp();
-                            if (dit->second > sit->second)
-                                out_ << "    " << coerced << " = sext "
-                                     << src_t << " " << val << " to " << elt << "\n";
-                            else
-                                out_ << "    " << coerced << " = trunc "
-                                     << src_t << " " << val << " to " << elt << "\n";
-                            val = coerced;
-                        } else {
-                            error(std::string("Type mismatch: cannot assign '"
-                                + inferSlidType(*arr->init_values[i])
-                                + "' to '" + elem_type + "'"));
-                        }
-                    }
-                }
+                if (inferSlidType(*arr->init_values[i]) != elem_type)
+                    val = coerceToType(val, *arr->init_values[i], elem_type);
                 out_ << "    store " << elt << " " << val << ", ptr " << gep << "\n";
             }
         }
@@ -2032,25 +1979,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         continue;
                     }
                     std::string val = emitExpr(*te->values[i]);
-                    std::string src_t = exprLlvmType(*te->values[i]);
-                    if (src_t != elem_llvm) {
-                        static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
-                        auto sit = rank.find(src_t), dit = rank.find(elem_llvm);
-                        if (sit != rank.end() && dit != rank.end()) {
-                            std::string coerced = newTmp();
-                            if (dit->second > sit->second)
-                                out_ << "    " << coerced << " = sext " << src_t << " " << val << " to " << elem_llvm << "\n";
-                            else
-                                out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << elem_llvm << "\n";
-                            val = coerced;
-                        } else {
-                            errorWithNote(std::string("Type mismatch: cannot assign '"
-                                + inferSlidType(*te->values[i]) + "' to tuple element "
-                                + std::to_string(i) + " of type '" + ft + "'"),
-                                tit->second.file_id, tit->second.tok,
-                                "'" + assign->name + "' declared here.");
-                        }
-                    }
+                    if (inferSlidType(*te->values[i]) != ft)
+                        val = coerceToType(val, *te->values[i], ft);
                     out_ << "    store " << elem_llvm << " " << val << ", ptr " << gep << "\n";
                     if (assign->is_move && isIndirectType(ft))
                         emitNullOut(*te->values[i]);
@@ -2146,27 +2076,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 // primitive slot
                 std::string val = emitExpr(*assign->value);
                 std::string elem_llvm = llvmType(ft);
-                std::string src_t = exprLlvmType(*assign->value);
-                if (src_t != elem_llvm) {
-                    static const std::map<std::string,int> rank =
-                        {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
-                    auto sit = rank.find(src_t), dit = rank.find(elem_llvm);
-                    if (sit != rank.end() && dit != rank.end()) {
-                        std::string coerced = newTmp();
-                        if (dit->second > sit->second)
-                            out_ << "    " << coerced << " = sext " << src_t
-                                 << " " << val << " to " << elem_llvm << "\n";
-                        else
-                            out_ << "    " << coerced << " = trunc " << src_t
-                                 << " " << val << " to " << elem_llvm << "\n";
-                        val = coerced;
-                    } else {
-                        errorWithNote(std::string("Type mismatch: cannot assign '"
-                            + inferSlidType(*assign->value) + "' to '" + ft + "'"),
-                            tit->second.file_id, tit->second.tok,
-                            "'" + assign->name + "' declared here.");
-                    }
-                }
+                if (inferSlidType(*assign->value) != ft)
+                    val = coerceToType(val, *assign->value, ft);
                 out_ << "    store " << elem_llvm << " " << val
                      << ", ptr " << gep << "\n";
                 return;
@@ -2376,19 +2287,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         continue;
                     }
                     std::string val = emitExpr(*te->values[i]);
-                    if (!isIndirectType(ft)) {
-                        std::string src_t = exprLlvmType(*te->values[i]);
-                        static const std::map<std::string,int> rank = {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
-                        auto sit = rank.find(src_t), dit = rank.find(elem_llvm);
-                        if (sit != rank.end() && dit != rank.end() && sit->second != dit->second) {
-                            std::string coerced = newTmp();
-                            if (dit->second > sit->second)
-                                out_ << "    " << coerced << " = sext " << src_t << " " << val << " to " << elem_llvm << "\n";
-                            else
-                                out_ << "    " << coerced << " = trunc " << src_t << " " << val << " to " << elem_llvm << "\n";
-                            val = coerced;
-                        }
-                    }
+                    if (!isIndirectType(ft) && inferSlidType(*te->values[i]) != ft)
+                        val = coerceToType(val, *te->values[i], ft);
                     out_ << "    store " << elem_llvm << " " << val << ", ptr " << gep << "\n";
                     if (assign->is_move && isIndirectType(ft))
                         emitNullOut(*te->values[i]);
@@ -2892,23 +2792,9 @@ void Codegen::emitStmt(const Stmt& stmt) {
             requirePtrInit(slot_type, *ia->value);
             std::string rhs_val = emitExpr(*ia->value);
             std::string elem_llvm = llvmType(slot_type);
-            if (!isIndirectType(slot_type)) {
-                std::string src_t = exprLlvmType(*ia->value);
-                static const std::map<std::string,int> rank =
-                    {{"i8",0},{"i16",1},{"i32",2},{"i64",3}};
-                auto sit = rank.find(src_t), dit = rank.find(elem_llvm);
-                if (sit != rank.end() && dit != rank.end()
-                        && sit->second != dit->second) {
-                    std::string coerced = newTmp();
-                    if (dit->second > sit->second)
-                        out_ << "    " << coerced << " = sext " << src_t
-                             << " " << rhs_val << " to " << elem_llvm << "\n";
-                    else
-                        out_ << "    " << coerced << " = trunc " << src_t
-                             << " " << rhs_val << " to " << elem_llvm << "\n";
-                    rhs_val = coerced;
-                }
-            }
+            if (!isIndirectType(slot_type)
+                && inferSlidType(*ia->value) != slot_type)
+                rhs_val = coerceToType(rhs_val, *ia->value, slot_type);
             out_ << "    store " << elem_llvm << " " << rhs_val
                  << ", ptr " << slot_addr << "\n";
             if (ia->is_move && isIndirectType(slot_type))
@@ -3195,6 +3081,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
             out_ << "    " << field_gep << " = getelementptr %struct." << stype
                  << ", ptr " << addr << ", i32 0, i32 " << fit->second << "\n";
             std::string val = emitExpr(*fa->value);
+            if (!isIndirectType(ft) && inferSlidType(*fa->value) != ft)
+                val = coerceToType(val, *fa->value, ft);
             out_ << "    store " << ft_llvm << " " << val << ", ptr " << field_gep << "\n";
             if (fa->is_move && isIndirectType(ft))
                 emitNullOut(*fa->value);
@@ -3628,6 +3516,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
                     } else {
                         requirePtrInit(current_func_slids_return_type_, *ret->value);
                         std::string val = valOrNullptrCheck(current_func_slids_return_type_, *ret->value);
+                        // Width-coerce (and literal-flex) return value to the
+                        // declared return type. Pointer/iter return types
+                        // (`isIndirectType`) skip — they're shape-equal by
+                        // construction and `coerceToType` operates on
+                        // numeric leaves only.
+                        if (!isIndirectType(current_func_slids_return_type_)
+                            && inferSlidType(*ret->value) != current_func_slids_return_type_)
+                            val = coerceToType(val, *ret->value,
+                                               current_func_slids_return_type_);
                         emitDtors();
                         out_ << "    ret " << current_func_return_type_ << " " << val << "\n";
                     }

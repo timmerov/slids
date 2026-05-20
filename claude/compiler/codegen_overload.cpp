@@ -588,12 +588,48 @@ bool Codegen::isUnsignedExpr(const Expr& expr) {
 
     // binary arithmetic result: unsigned if either operand is unsigned
     if (auto* be = dynamic_cast<const BinaryExpr*>(&expr)) {
-        // comparisons and logical ops produce a signed i32 0/1
+        // comparisons and logical ops yield a 0/1 boolean value; treat as
+        // unsigned (bool-rank) so it widens cleanly into both signed and
+        // unsigned int targets — the value always fits.
         if (be->op == "==" || be->op == "!=" || be->op == "<"  ||
             be->op == ">"  || be->op == "<=" || be->op == ">=" ||
             be->op == "&&" || be->op == "||" || be->op == "^^")
-            return false;
+            return true;
         return isUnsignedExpr(*be->left) || isUnsignedExpr(*be->right);
+    }
+
+    // dereference: signedness comes from the pointer's pointee type
+    // (`(const char)[]` iter → `^elem` is unsigned `char`; `int^` → signed).
+    if (auto* de = dynamic_cast<const DerefExpr*>(&expr)) {
+        std::string pt = inferSlidType(*de->operand);
+        // Peel one level of ^ / [] to get the pointee type.
+        if (pt.size() >= 2 && pt.substr(pt.size() - 2) == "[]")
+            pt = pt.substr(0, pt.size() - 2);
+        else if (!pt.empty() && pt.back() == '^')
+            pt = pt.substr(0, pt.size() - 1);
+        static const std::set<std::string> utypes_pe =
+            {"bool","char","uint","uint8","uint16","uint32","uint64"};
+        std::string canon = canonicalType(pt);
+        return utypes_pe.count(canon) > 0;
+    }
+
+    // post-inc/dec, pre-inc/dec, unary +/- — result is the operand's type.
+    if (auto* ue = dynamic_cast<const UnaryExpr*>(&expr)) {
+        if (ue->op == "post++" || ue->op == "post--"
+            || ue->op == "pre++" || ue->op == "pre--"
+            || ue->op == "+" || ue->op == "-")
+            return isUnsignedExpr(*ue->operand);
+    }
+
+    // array index: signedness from the base's element type. Walk the chain
+    // to the deepest base, then peel one [] level for the element.
+    if (auto* ai = dynamic_cast<const ArrayIndexExpr*>(&expr)) {
+        std::string pt = inferSlidType(*ai->base);
+        if (pt.size() >= 2 && pt.substr(pt.size() - 2) == "[]")
+            pt = pt.substr(0, pt.size() - 2);
+        static const std::set<std::string> utypes_ai =
+            {"bool","char","uint","uint8","uint16","uint32","uint64"};
+        return utypes_ai.count(canonicalType(pt)) > 0;
     }
 
     return false;

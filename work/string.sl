@@ -97,10 +97,11 @@ String (
     excluding char.
     */
     op=(int64 x) {
+        ux = (uint64=x);
         if (x >= 0) {
-            fillDigitsBackwards(x);
+            fillDigitsBackwards(ux);
         } else {
-            fillDigitsBackwards(-x);
+            fillDigitsBackwards(-ux);
             append('-');
         }
         reverse();
@@ -380,7 +381,8 @@ String (
         clear();
         reserve(24);
         while {
-            append('0' + x % 10);
+            digit = '0' + (char=x % 10);
+            append(digit);
             x /= 10;
         } (x);
     }
