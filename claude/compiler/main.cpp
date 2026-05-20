@@ -227,7 +227,12 @@ int main(int argc, char* argv[]) {
         Lexer lexer(source_map, root_file_id);
         auto tokens = lexer.tokenize();
 
-        Parser parser(source_map, root_file_id, std::move(tokens), source_dir, import_paths);
+        // A .slh root parse is a header context — rejects header-only-incoherent
+        // forms (e.g. file-scope `Name;` unnamed globals) at parse time.
+        bool root_is_header = input_path.size() >= 4
+            && input_path.compare(input_path.size() - 4, 4, ".slh") == 0;
+        Parser parser(source_map, root_file_id, std::move(tokens), source_dir,
+                      import_paths, /*imported_once=*/nullptr, root_is_header);
         auto program = parser.parse();
 
         std::ofstream out(output_path);

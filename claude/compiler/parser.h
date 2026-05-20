@@ -977,7 +977,8 @@ public:
            std::vector<Token> tokens,
            std::string source_dir = "",
            std::vector<std::string> import_paths = {},
-           std::shared_ptr<std::set<std::string>> imported_once = nullptr);
+           std::shared_ptr<std::set<std::string>> imported_once = nullptr,
+           bool is_header = false);
     Program parse();
 
     // Seed this parser's file-scope alias frames with type aliases parsed
@@ -998,6 +999,11 @@ private:
     std::string source_dir_;
     std::vector<std::string> import_paths_; // --import-path dirs (searched for .slh headers)
     std::shared_ptr<std::set<std::string>> imported_once_; // shared across nested parsers; import-once guard
+    // True when this parse is for a `.slh` header file. Used to reject
+    // constructs that have no coherent semantics in a header — currently
+    // file-scope unnamed-global declarations (`Vex1;`), which name nothing
+    // and so can't be shared between TUs.
+    bool is_header_ = false;
 
     Token& peek();
     Token& advance();

@@ -114,12 +114,14 @@ static bool isOperandStartingToken(TokenType t) {
 Parser::Parser(SourceMap& sm, int file_id, std::vector<Token> tokens,
                std::string source_dir,
                std::vector<std::string> import_paths,
-               std::shared_ptr<std::set<std::string>> imported_once)
+               std::shared_ptr<std::set<std::string>> imported_once,
+               bool is_header)
     : sm_(sm), file_id_(file_id),
       tokens_(std::move(tokens)), pos_(0), source_dir_(std::move(source_dir)),
       import_paths_(std::move(import_paths)),
       imported_once_(imported_once ? std::move(imported_once)
-                                   : std::make_shared<std::set<std::string>>()) {}
+                                   : std::make_shared<std::set<std::string>>()),
+      is_header_(is_header) {}
 
 // Ensure every diagnostic ends with terminal punctuation. Messages built
 // with concatenations forget periods constantly; folding the rule into the
@@ -4404,7 +4406,7 @@ Program Parser::parse() {
             std::ostringstream buf; buf << in.rdbuf();
             int hdr_file_id = sm_.openFile(header_path, buf.str(), file_id_);
             Lexer hdr_lexer(sm_, hdr_file_id);
-            Parser hdr_parser(sm_, hdr_file_id, hdr_lexer.tokenize(), source_dir_, import_paths_, imported_once_);
+            Parser hdr_parser(sm_, hdr_file_id, hdr_lexer.tokenize(), source_dir_, import_paths_, imported_once_, /*is_header=*/true);
             Program hdr = hdr_parser.parse();
 
             // Fold the header parser's class field sets into ours. A `.sl` that
@@ -4455,6 +4457,26 @@ Program Parser::parse() {
                         AliasTemplateInfo{tat.type_params, tat.body, tat.tok};
                 program.type_alias_templates.push_back(tat);
             }
+            // Everything else the consumer can refer to that was declared in
+            // the .slh — enums, file-scope consts, external-method decls,
+            // namespaces (which carry their own functions/consts/aliases),
+            // namespace-tagged function aliases, plus chain bookkeeping
+            // (slid_modules / imported_headers — the latter so `-MF` dep
+            // output captures transitive .slh paths).
+            for (auto& e : hdr.enums)
+                program.enums.push_back(std::move(e));
+            for (auto& em : hdr.external_methods)
+                program.external_methods.push_back(std::move(em));
+            for (auto& cd : hdr.consts)
+                program.consts.push_back(std::move(cd));
+            for (auto& ns : hdr.namespaces)
+                program.namespaces.push_back(std::move(ns));
+            for (auto& ad : hdr.aliases)
+                program.aliases.push_back(std::move(ad));
+            for (auto& [name, mod] : hdr.slid_modules)
+                program.slid_modules.emplace(name, mod);
+            for (auto& h : hdr.imported_headers)
+                program.imported_headers.push_back(std::move(h));
 
             // load template bodies from impl file: foo.slh -> foo.sl
             if (has_templates) {
@@ -4568,6 +4590,20 @@ Program Parser::parse() {
                                 AliasTemplateInfo{tat.type_params, tat.body, tat.tok};
                         program.type_alias_templates.push_back(tat);
                     }
+                    // (b) the remaining declarations carried via impl_prog's
+                    // transitive .slh imports — enums, file-scope consts,
+                    // external-method decls, namespaces, namespace-tagged
+                    // function aliases. Same shape as the direct hdr arm.
+                    for (auto& e : impl_prog.enums)
+                        program.enums.push_back(std::move(e));
+                    for (auto& em : impl_prog.external_methods)
+                        program.external_methods.push_back(std::move(em));
+                    for (auto& cd : impl_prog.consts)
+                        program.consts.push_back(std::move(cd));
+                    for (auto& ns : impl_prog.namespaces)
+                        program.namespaces.push_back(std::move(ns));
+                    for (auto& ad : impl_prog.aliases)
+                        program.aliases.push_back(std::move(ad));
                     // Record every header impl_prog already loaded into the
                     // consumer's import-once guard. The impl_parser used its
                     // own cache (impl_cache), so its transitive .slh imports
@@ -4693,6 +4729,11 @@ Program Parser::parse() {
             int name_tok = pos_;
             std::string tname = advance().value; // type name
             advance();                           // ';'
+            if (is_header_)
+                errorAt(name_tok,
+                    "Unnamed instance '" + tname + "' is not allowed in a header (.slh) — "
+                    "an unnamed global has no name to share between translation units; "
+                    "move the declaration to an .sl file.");
             program.unnamed_globals.push_back({tname, file_id_, name_tok});
         } else if (peek().type == TokenType::kLParen) {
             program.functions.push_back(parseFunctionDef());
