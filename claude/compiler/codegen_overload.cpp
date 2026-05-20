@@ -665,6 +665,25 @@ std::string Codegen::exprSlidType(const Expr& expr) {
         auto tit = locals_.find(ve->name);
         if (tit != locals_.end() && slid_info_.count(tit->second.type))
             return tit->second.type;
+        // Self-field reachable via the implicit-self path inside a method —
+        // mirror `inferSlidType`'s VarExpr arm so a receiver like `rings_`
+        // in `rings_.size()` resolves to its slid type. Without this the
+        // gated MethodCallExpr arm in `inferSlidType` loses the receiver's
+        // type, falls through to the default `int`, and an inferred-decl
+        // (`nrings = rings_.size();`) gets the wrong width.
+        if (!current_slid_.empty()) {
+            auto& info = slid_info_[current_slid_];
+            auto fit = info.field_index.find(ve->name);
+            if (fit != info.field_index.end()) {
+                const std::string& t = info.field_types[fit->second];
+                if (slid_info_.count(t)) return t;
+            }
+        }
+        // Global slid field — same access as self-fields, distinguished by
+        // namespace path / function-internal visibility.
+        if (auto* ge = lookupGlobal(ve->name)) {
+            if (slid_info_.count(ge->slids_type)) return ge->slids_type;
+        }
         // type name used directly as an anonymous temp (not in locals_)
         if (tit == locals_.end() && slid_info_.count(ve->name))
             return ve->name;

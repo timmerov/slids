@@ -2462,6 +2462,20 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             else {
                 auto tit = locals_.find(ve->name);
                 if (tit != locals_.end()) slid_name = tit->second.type;
+                // Self-field receiver — `rings_.size()` inside a Galaxy method
+                // routes through the implicit-self path. Without this fall-
+                // through the return-type lookup misses and emitLlvmType
+                // defaults to "i32" — a bug for any non-i32 method return.
+                else if (!current_slid_.empty()) {
+                    auto& info = slid_info_[current_slid_];
+                    auto fit = info.field_index.find(ve->name);
+                    if (fit != info.field_index.end())
+                        slid_name = info.field_types[fit->second];
+                }
+                // Global slid field — mirror the self-field path.
+                if (slid_name.empty())
+                    if (auto* ge = lookupGlobal(ve->name))
+                        slid_name = ge->slids_type;
             }
         } else if (auto* de = dynamic_cast<const DerefExpr*>(mc->object.get())) {
             if (auto* ve2 = dynamic_cast<const VarExpr*>(de->operand.get())) {
