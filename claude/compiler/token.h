@@ -105,7 +105,7 @@ enum class TokenType {
     kSizeof,
 
     // stringification operators
-    kHash,     // #  — desugar: #x → (##type(x), ##name(x), ^x)
+    kHash,     // #  — desugar: #x → (##file, ##line, ##type(x), ##name(x), ^x)
     kHashHash, // ## — compile-time: ##name, ##type, ##line, ##file, ##func, ##date, ##time
 
     // assignment

@@ -1326,10 +1326,13 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
 
 std::unique_ptr<Expr> Parser::parseUnary() {
     [[maybe_unused]] int t_start = pos_;
-    // #x — desugar to (##type(x), ##name(x), ^x). The operand may be any
-    // postfix lvalue expression (`obj.field_.arr_[1][2]`, etc.). It is parsed
-    // twice — once for the ##type arm, once for the ^ arm — so the two arms
-    // get independent ASTs; ##name reproduces the operand's lexed text.
+    // #x — desugar to (##file, ##line, ##type(x), ##name(x), ^x). The
+    // operand may be any postfix lvalue expression (`obj.field_.arr_[1][2]`,
+    // etc.). It is parsed twice — once for the ##type arm, once for the ^
+    // arm — so the two arms get independent ASTs; ##name reproduces the
+    // operand's lexed text. ##file / ##line resolve at the `#` token, so the
+    // slots carry the call-site location of the dump (not the operand's
+    // declaration site).
     if (peek().type == TokenType::kHash) {
         int src_tok = pos_;
         advance();
@@ -1342,6 +1345,8 @@ std::unique_ptr<Expr> Parser::parseUnary() {
         pos_ = operand_start;
         auto addr_operand = parsePostfix(parsePrimary());
         auto tuple = make<TupleExpr>(src_tok);
+        tuple->values.push_back(make<StringifyExpr>(src_tok, "file", nullptr));
+        tuple->values.push_back(make<StringifyExpr>(src_tok, "line", nullptr));
         tuple->values.push_back(
             make<StringifyExpr>(src_tok, "type", std::move(type_operand)));
         auto name_se = make<StringifyExpr>(src_tok, "name", nullptr);

@@ -7,8 +7,8 @@ int fortytwo() {
     return 42;
 }
 
-void dump( (char[], char[], int^)^ tuple) {
-    __println(tuple^[0] + " " + tuple^[1] + " = " + tuple^[2]^);
+void dump( (char[], char[], char[], char[], int^)^ tuple) {
+    __println(tuple^[2] + " " + tuple^[3] + " = " + tuple^[4]^);
 }
 
 int32 main() {
