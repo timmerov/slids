@@ -657,7 +657,7 @@ void Codegen::collectGlobals() {
                 }
                 if (folded.is_float) {
                     double v = std::fabs(folded.float_value);
-                    f.type = (v <= (double)FLT_MAX) ? "float32" : "float64";
+                    f.type = (v <= (double)FLT_MAX) ? "float" : "float64";
                 } else {
                     f.type = folded.slid_type;
                 }

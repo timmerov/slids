@@ -55,14 +55,14 @@ void Codegen::inferFieldTypes() {
             // Inferred field-type rule.
             //   integer: keep foldConstExpr's slid_type (int / int64 by
             //            range, plus the char-literal / nondecimal carve-outs).
-            //   float:   range-based — float32 unless magnitude exceeds
+            //   float:   range-based — float unless magnitude exceeds
             //            FLT_MAX. Distinct from foldConstExpr's lossless
             //            round-trip rule, which would pick float64 for
             //            values like 3.14 that can't be exactly represented
             //            in float32. Field inference accepts precision loss.
             if (folded.is_float) {
                 double v = std::fabs(folded.float_value);
-                f.type = (v <= (double)FLT_MAX) ? "float32" : "float64";
+                f.type = (v <= (double)FLT_MAX) ? "float" : "float64";
             } else {
                 f.type = folded.slid_type;
             }
@@ -946,7 +946,7 @@ Codegen::ConstEntry Codegen::foldConstExpr(const Expr& e,
         r.is_float = true;
         r.float_value = fl->value;
         float fv = (float)fl->value;
-        r.slid_type = ((double)fv == fl->value) ? "float32" : "float64";
+        r.slid_type = ((double)fv == fl->value) ? "float" : "float64";
         return r;
     }
     if (auto* ve = dynamic_cast<const VarExpr*>(&e)) {
@@ -1026,7 +1026,7 @@ Codegen::ConstEntry Codegen::foldConstExpr(const Expr& e,
             return is_unsigned ? "uint64" : "int64";
         };
         auto widerFloat = [&]() -> std::string {
-            return (L.slid_type == "float64" || R.slid_type == "float64") ? "float64" : "float32";
+            return (L.slid_type == "float64" || R.slid_type == "float64") ? "float64" : "float";
         };
 
         if (b->op == "+" || b->op == "-" || b->op == "*" || b->op == "/" || b->op == "%") {

@@ -117,6 +117,7 @@ Galaxy(
         */
         float64 sum = 0.0;
         factor = (kGalaxyRadius - kCentralBulgeRadius) / (nrings_ - 1);
+        total_slices = 0;
         for (int i : 0..<nrings_) {
             radius = factor * i + kCentralBulgeRadius;
             sum += radius;
@@ -125,13 +126,16 @@ Galaxy(
             /* divide the ring into equal width slices. */
             divs = radius / kScale;
             divs = math:round(divs);
+            slices = (int=divs);
+            total_slices += slices;
             //dump(#divs);
 
             ring = ^rings_[i];
             ring^.radius_ = radius;
-            ring^.slices_ = (int=divs);
+            ring^.slices_ = slices;
         }
         //dump(#sum);
+        dump(#total_slices);
 
         /* distribute the mass. */
         factor = kRingsMass / sum;
@@ -163,19 +167,84 @@ Galaxy(
         on_mass = on_ring^.mass_ / on_ring^.slices_;
         by_mass = by_ring^.mass_ / by_ring^.slices_;
 
+        /* radius of each ring. */
+        on_r = on_ring^.radius_;
+        by_r = by_ring^.radius_;
+
         /* two components of acceleration. */
         float64 inward = 0.0;
         float64 spinward = 0.0;
 
+        /* min/max */
+        float64 in_max = -1e300;
+        float64 in_min = +1e300;
+        float64 spin_max = -1e300;
+        float64 spin_min = +1e300;
+
         /* centripetal acceleration is outward - negative. */
-        on_r = on_ring^.radius_;
-        inward -= kAngularVelocity2 * on_r;
+        in = kAngularVelocity2 * on_r;
+        if (in_max < in) {
+            in_max = in;
+        }
+        if (in_min > in) {
+            in_min = in;
+        }
+        inward -= in;
 
         /* gravity of central bulge. */
         r2 = on_r * on_r;
-        inward += kG * kCentralBulgeMass / r2;
+        in = kG * kCentralBulgeMass / r2;
+        if (in_max < in) {
+            in_max = in;
+        }
+        if (in_min > in) {
+            in_min = in;
+        }
+        inward += in;
+
+        /*
+        contribution from each slice.
+        skip the contribution from the slice on itself.
+        */
+        int nslices = by_ring^.slices_;
+        int first = 0;
+        if (on_idx == by_idx) {
+            first = 1;
+        }
+        factor = 2.0 * math:kPi64 / nslices;
+        for (int slice : first..nslices) {
+            angle = factor * slice;
+            x = by_r * math:cos(angle);
+            y = by_r * math:sin(angle);
+            dx = x - on_r;
+            dy = y;
+            d2 = dx*dx + dy*dy;
+            a = kG * by_mass / d2;
+            d = math:sqrt(d2);
+            in = a * dx / d;
+            if (in_max < in) {
+                in_max = in;
+            }
+            if (in_min > in) {
+                in_min = in;
+            }
+            spin = a * dy / d;
+            if (spin_max < in) {
+                spin_max = in;
+            }
+            if (spin_min > in) {
+                spin_min = in;
+            }
+            inward += in;
+            spinward += spin;
+        }
 
         dump(#inward);
+        dump(#spinward);
+        dump(#in_min);
+        dump(#in_max);
+        dump(#spin_min);
+        dump(#spin_max);
     }
 }
 

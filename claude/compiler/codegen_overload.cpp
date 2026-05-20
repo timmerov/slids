@@ -808,7 +808,7 @@ std::string Codegen::exprType(const Expr& expr) {
         if (il->is_nondecimal)   return "uint64";
         return "int";
     }
-    if (dynamic_cast<const FloatLiteralExpr*>(&expr)) return "float64";
+    if (dynamic_cast<const FloatLiteralExpr*>(&expr)) return "float";
     if (dynamic_cast<const NullptrExpr*>(&expr))      return "nullptr";
     if (dynamic_cast<const SizeofExpr*>(&expr))       return "intptr";
     if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr))  return nc->target_type;
@@ -1277,8 +1277,8 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
         else if (ile->is_bool)    arg_int_type = "bool";
         // untyped integer literal: arg_int_type left empty — any signed int overload is acceptable
     } else if (dynamic_cast<const FloatLiteralExpr*>(&arg)) {
-        // a float literal has no fixed width — treat as float64 for matching.
-        arg_is_float = true; arg_float_type = "float64";
+        // untyped float literal: arg_float_type left empty — any float overload is acceptable
+        arg_is_float = true;
     } else if (auto* nc = dynamic_cast<const TypeConvExpr*>(&arg)) {
         classify_int(nc->target_type);
     } else if (auto* ve = dynamic_cast<const VarExpr*>(&arg)) {
@@ -1344,7 +1344,7 @@ std::string Codegen::resolveSingleArgOverload(const std::string& base, const Exp
         }
         else if (lt == "i64") classify_int("int64");
         else if (lt == "float" || lt == "double")
-            classify_int(lt == "float" ? "float32" : "float64");
+            classify_int(lt == "float" ? "float" : "float64");
     }
 
     auto is_signed_int_param = [&](const std::string& pt) {

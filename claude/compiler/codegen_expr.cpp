@@ -4,6 +4,10 @@
 #include <sstream>
 #include <functional>
 #include <stdexcept>
+#include <cfloat>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
 
 std::string Codegen::emitExpr(const Expr& expr) {
     EmitGuard _g(*this, expr.file_id, expr.tok);
@@ -2077,8 +2081,22 @@ std::string Codegen::emitExpr(const Expr& expr) {
         return loaded;
     }
 
-    // float literal — emit as double constant
+    // float literal: emission shape depends on the literal's natural LLVM
+    // type (per exprLlvmType — float if value fits in float32 range, else
+    // double). For double-context, emit %.17g decimal. For float-context,
+    // LLVM rejects decimal forms that don't round-trip exactly to float, so
+    // round the value through float and emit its bit pattern as LLVM's
+    // 16-hex-digit form — losslessly convertible to float by construction.
     if (auto* fl = dynamic_cast<const FloatLiteralExpr*>(&expr)) {
+        bool fits_float = (std::fabs(fl->value) <= (double)FLT_MAX);
+        if (fits_float) {
+            double rounded = (double)((float)fl->value);
+            uint64_t bits;
+            std::memcpy(&bits, &rounded, sizeof(bits));
+            char buf[24];
+            snprintf(buf, sizeof(buf), "0x%016lX", (unsigned long)bits);
+            return buf;
+        }
         char buf[64];
         snprintf(buf, sizeof(buf), "%.17g", fl->value);
         std::string s = buf;
@@ -2552,8 +2570,10 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
         return "i32";
     }
 
-    // float literal — always double internally
-    if (dynamic_cast<const FloatLiteralExpr*>(&expr)) return "double";
+    // float literal: float (LLVM "float") if value fits in float32 range,
+    // else double. Mirrors the int-literal fit-then-widen rule.
+    if (auto* fl = dynamic_cast<const FloatLiteralExpr*>(&expr))
+        return (std::fabs(fl->value) <= (double)FLT_MAX) ? "float" : "double";
 
     // type conversion — result is the target type
     if (auto* nc = dynamic_cast<const TypeConvExpr*>(&expr))
@@ -2759,7 +2779,7 @@ std::string Codegen::coerceToType(const std::string& val, const Expr& src,
     static const std::map<std::string,std::string> llvm2slids = {
         {"i1","bool"},{"i8","int8"},{"i16","int16"},
         {"i32","int32"},{"i64","int64"},
-        {"float","float32"},{"double","float64"}};
+        {"float","float"},{"double","float64"}};
     // Prefer the slids-form name when it agrees with the LLVM width — this
     // preserves char-vs-int8 / bool-vs-int32 / intptr-vs-int distinctions
     // that the bare LLVM type collapses. Fall back to the llvm2slids map
@@ -2990,8 +3010,10 @@ std::string Codegen::inferSlidType(const Expr& expr) {
         if (val >= -2147483648LL && val <= 2147483647LL) return "int";
         return "int64";
     }
-    // float literal → float64
-    if (dynamic_cast<const FloatLiteralExpr*>(&expr)) return "float64";
+    // float literal: prefer float (= float32), widen to float64 only if the
+    // value's magnitude exceeds float range. Mirrors the int-literal rule.
+    if (auto* fl = dynamic_cast<const FloatLiteralExpr*>(&expr))
+        return (std::fabs(fl->value) <= (double)FLT_MAX) ? "float" : "float64";
     // string literal → (const char)[] — read-only storage; binding it to a
     // mutable char[] would strip const.
     if (dynamic_cast<const StringLiteralExpr*>(&expr)) return "(const char)[]";
@@ -3246,6 +3268,16 @@ std::string Codegen::inferSlidType(const Expr& expr) {
         std::string rt = inferSlidType(*be->right);
         if (isAnonTupleType(lt)) return lt;
         if (isAnonTupleType(rt)) return rt;
+        // float arithmetic — mirror the LLVM op picker so the inferred slids
+        // type matches the actual computation width: float if neither side is
+        // float64 (LLVM "double"), else float64. Without this, a FloatLit on
+        // the left + a float64-typed right would falsely report "float".
+        std::string lt_llvm = exprLlvmType(*be->left);
+        std::string rt_llvm = exprLlvmType(*be->right);
+        if (lt_llvm == "float" || lt_llvm == "double"
+            || rt_llvm == "float" || rt_llvm == "double") {
+            return (lt_llvm == "double" || rt_llvm == "double") ? "float64" : "float";
+        }
         return lt;
     }
     // unary — propagate through, except arity-0 slid dispatch returns the method's type

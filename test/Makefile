@@ -44,6 +44,7 @@ SAMPLES = \
 	pointer \
 	ranges \
 	returnslid \
+	reopen \
 	sizeof \
 	strlitcat \
 	shadowing \
