@@ -1259,6 +1259,10 @@ private:
     // a CompileError with a note pointing at the shadowed enclosing's
     // declaration.
     void rejectShadowOfEnclosing(const std::string& inner_name, int inner_file_id, int inner_tok);
+    // Consumes `Ident (: Ident)* ':'` from a `Base : Derived(...)` header and
+    // returns the canonical (dot-joined) base name. Leaves pos_ at the derived
+    // identifier. Precondition: isDerivedSlidDeclLookahead() returned true.
+    std::string consumeDerivedBasePrefix();
     // Parses a single global slid declaration. Caller has already verified that
     // `pos_` points at the `global` keyword and ruled out the `global;` lifetime
     // statement shape. `namespace_prefix` is "" at file scope, the enclosing

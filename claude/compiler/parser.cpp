@@ -621,12 +621,18 @@ bool Parser::isSlidDeclLookahead() const {
 }
 
 bool Parser::isDerivedSlidDeclLookahead() const {
-    // `Base : Derived [<...>] (...) {`.
-    return pos_ + 2 < (int)tokens_.size()
-        && tokens_[pos_].type == TokenType::kIdentifier
-        && tokens_[pos_ + 1].type == TokenType::kColon
-        && tokens_[pos_ + 2].type == TokenType::kIdentifier
-        && slidBodyFollows(pos_ + 2);
+    // `Ident (: Ident)+ [<...>] (...) {` — the last identifier names the
+    // derived class; the preceding chain (one or more segments) is the base.
+    if (tokens_[pos_].type != TokenType::kIdentifier) return false;
+    int p = pos_ + 1;
+    while (p + 1 < (int)tokens_.size()
+           && tokens_[p].type == TokenType::kColon
+           && tokens_[p + 1].type == TokenType::kIdentifier) {
+        p += 2;
+    }
+    // At least one `: Ident` must have been consumed.
+    if (p == pos_ + 1) return false;
+    return slidBodyFollows(p - 1);
 }
 
 // Pointer-shaped type: ends with '^' (ref) or '[]' (iterator).
@@ -2029,8 +2035,7 @@ void Parser::prescanLocalClasses() {
             continue;
         }
         if (isDerivedSlidDeclLookahead()) {
-            advance(); // Base
-            advance(); // ':'
+            (void)consumeDerivedBasePrefix();  // discard base; pos_ now at derived
             int name_tok = pos_;
             std::string short_name = peek().value;
             advance(); // Derived
@@ -2146,11 +2151,11 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     }
 
     // derived local class: `Base : Derived(...) { ... }` inside a code block.
-    // The base name resolves through the local-class scope (a local class can
-    // be a base), otherwise it names a file-scope class.
+    // Base may be multi-segment (`A:B`). For a single-segment base, the local-
+    // class scope is consulted first (a local class can be a base); otherwise
+    // it names a file-scope class.
     if (isDerivedSlidDeclLookahead()) {
-        std::string base_name = advance().value; // consume base name
-        advance();                                // consume ':'
+        std::string base_name = consumeDerivedBasePrefix();
         std::string lc = lookupLocalClass(base_name);
         if (!lc.empty()) base_name = lc;
         int name_tok = pos_;
@@ -3508,6 +3513,20 @@ MethodDef Parser::parseMethodDef(const std::string& class_name) {
     return m;
 }
 
+std::string Parser::consumeDerivedBasePrefix() {
+    std::string base = advance().value;  // first segment
+    while (peek().type == TokenType::kColon
+           && pos_ + 1 < (int)tokens_.size()
+           && tokens_[pos_ + 1].type == TokenType::kIdentifier
+           && pos_ + 2 < (int)tokens_.size()
+           && tokens_[pos_ + 2].type == TokenType::kColon) {
+        advance();                       // consume ':'
+        base += "." + advance().value;   // consume next segment Ident
+    }
+    expect(TokenType::kColon, "Expected ':'");  // final ':' before derived
+    return base;
+}
+
 void Parser::rejectShadowOfEnclosing(const std::string& inner_name,
                                      int inner_file_id, int inner_tok) {
     for (auto& enc : enclosing_class_names_) {
@@ -3919,11 +3938,11 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             continue;
         }
         // nested derived slid def: `Base : Derived(...) { body }` inside this
-        // class. Base resolves through nested_alias_ if it's a sibling hoist;
-        // otherwise it names a file-scope class.
+        // class. Base may be multi-segment (`A:B`). For a single-segment base,
+        // resolve through nested_alias_ if it's a sibling hoist; otherwise it
+        // names a file-scope class.
         if (isDerivedSlidDeclLookahead()) {
-            std::string base_name = advance().value;  // consume base name
-            advance();                                 // consume ':'
+            std::string base_name = consumeDerivedBasePrefix();
             auto it = nested_alias_.find(base_name);
             if (it != nested_alias_.end()) base_name = it->second;
             auto saved_fields = current_slid_fields_;
@@ -4755,18 +4774,14 @@ Program Parser::parse() {
             recordSlidMethods(slid);
             program.slids.push_back(std::move(slid));
         }
-        // derived class definition: Base : Derived(...)
+        // derived class definition: Base : Derived(...) where Base may be a
+        // multi-segment colon-qualified path (e.g. `Outer:Bird : Eagle(...)`).
         // (The bare `Base : Derived;` "forward decl" shape was sugar for an
         // empty subclass — slids has no plain-class forward decls, so this
         // shape doesn't fit the principle. Use `Base : Derived() {}` for an
         // empty subclass.)
-        else if (peek().type == TokenType::kIdentifier
-            && pos_ + 3 < (int)tokens_.size()
-            && tokens_[pos_ + 1].type == TokenType::kColon
-            && tokens_[pos_ + 2].type == TokenType::kIdentifier
-            && tokens_[pos_ + 3].type == TokenType::kLParen) {
-            std::string base_name = advance().value; // consume base name
-            advance();                                // consume ':'
+        else if (isDerivedSlidDeclLookahead()) {
+            std::string base_name = consumeDerivedBasePrefix();
             SlidDef slid = parseSlidDef(base_name);
             recordSlidMethods(slid);
             program.slids.push_back(std::move(slid));

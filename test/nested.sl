@@ -156,6 +156,15 @@ HostB(int b_ = 2) {
     HostA:Guest(int g_ = 3) {
         void show() { __println("HostB:Guest a=" + a_ + " g=" + g_); }
     }
+    /* multi-colon base inside a class body: derives from Outer:Bird (a hoist of a different file-scope class). */
+    Outer:Bird : Hawk(int speed_ = 99) {
+        void dive() { __println("HostB:Hawk wings=" + wings_ + " speed=" + speed_); }
+    }
+}
+
+/* multi-colon base at file scope: derives from Outer:Bird. */
+Outer:Bird : Eagle(int beak_ = 7) {
+    void scream() { __println("Eagle wings=" + wings_ + " beak=" + beak_); }
 }
 
 /* negative: a hoisted class cannot share its immediate enclosing's name. */
@@ -171,6 +180,10 @@ HostB(int b_ = 2) {
 //         TransitiveShadow(int z_ = 0) { }
 //     }
 // }
+
+/* negative: a derived class references a base that doesn't exist. */
+//-EXPECT-ERROR: Base class 'DoesNotExist'
+// DoesNotExist : OrphanDerived(int x_ = 0) { }
 
 /* local class and a derived class inside an if block. */
 void test_in_if() {
@@ -244,6 +257,15 @@ void test_in_switch() {
     }
 }
 
+/* local class with a multi-colon base inside a function block. */
+void test_multi_colon_base() {
+    Outer:Bird : LocalEagle(int span_ = 6) {
+        void soar() { __println("LocalEagle wings=" + wings_ + " span=" + span_); }
+    }
+    LocalEagle le(11, 33);
+    le.soar();
+}
+
 /* local class and a derived class inside a deeply nested anonymous block. */
 void test_deep_nest() {
     {{{{{
@@ -289,11 +311,17 @@ int32 main() {
     HostB:Guest guest(4);
     guest.show();
 
+    Eagle eag(8, 14);
+    eag.scream();
+    HostB:Hawk hk(15, 88);
+    hk.dive();
+
     test_in_if();
     test_in_for();
     test_in_while();
     test_in_switch();
     test_deep_nest();
+    test_multi_colon_base();
 
     return 0;
 }
