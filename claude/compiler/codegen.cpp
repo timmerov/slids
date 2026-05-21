@@ -1025,6 +1025,16 @@ const Codegen::GlobalEntry* Codegen::lookupGlobal(const std::string& name) const
             && it->second.namespace_name == current_global_namespace_)
             return &it->second;
     }
+    // bare name inside a class method sees the class's own globals.
+    if (!current_slid_.empty()) {
+        std::string scope = current_slid_;
+        for (char& c : scope) if (c == '.') c = ':';
+        auto it = globals_.find(scope + ":" + name);
+        if (it != globals_.end()
+            && it->second.namespace_name == scope
+            && it->second.visible_in_function.empty())
+            return &it->second;
+    }
     if (!fn_scope.empty()) {
         auto it = globals_.find(fn_scope + ":" + name);
         if (it != globals_.end()

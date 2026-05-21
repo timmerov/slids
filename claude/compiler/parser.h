@@ -697,6 +697,8 @@ struct ConstDeclStmt : Stmt {
 struct EnumDef {
     std::string name;
     std::vector<std::string> values; // ordered list of enumerator names
+    int file_id = 0;
+    int tok = 0;                     // token index of the enum name
 };
 
 // --- Top-level ---

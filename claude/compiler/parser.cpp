@@ -3744,7 +3744,12 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             if (pos_ + 1 < (int)tokens_.size()
                 && tokens_[pos_ + 1].type == TokenType::kSemicolon)
                 errorAt(global_tok, "Global lifetime statement is only allowed in `main`.");
-            pending_globals_.push_back(parseGlobalDef(slid.name, ""));
+            // Use the full enclosing-class path (colon-form) so a global
+            // declared inside a hoisted class registers under the hoist
+            // path (`Outer:Inner`), not the bare inner name.
+            std::string ns = enclosingClassPath();
+            for (char& c : ns) if (c == '.') c = ':';
+            pending_globals_.push_back(parseGlobalDef(ns, ""));
             continue;
         }
         // class-scoped nested enum: `enum Name (values);` — its values are
@@ -4239,6 +4244,8 @@ EnumDef Parser::parseEnumDef() {
     [[maybe_unused]] int t_start = pos_;
     expect(TokenType::kEnum, "Expected 'enum'");
     EnumDef e;
+    e.file_id = file_id_;
+    e.tok = pos_;
     e.name = expect(TokenType::kIdentifier, "Expected enum name").value;
     expect(TokenType::kLParen, "Expected '('");
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
@@ -5282,6 +5289,23 @@ void Parser::mergeReopens(Program& program) {
         for (auto& em : program.external_methods) {
             if (!em.body) continue;
             check_dup(em.slid_name, em.method_name, em.params, em.param_mutable, em.file_id, em.tok);
+        }
+    }
+    // (P1) class scope merges across reopens — at most one nested enum per
+    // (class, enum name). A second declaration of the same enum is a
+    // re-definition error across the merged class scope.
+    {
+        struct Site { int file_id; int tok; };
+        for (auto& s : program.slids) {
+            std::map<std::string, Site> seen;
+            for (auto& e : s.nested_enums) {
+                auto [it, inserted] = seen.emplace(e.name, Site{e.file_id, e.tok});
+                if (!inserted) {
+                    throw CompileError{e.file_id, e.tok,
+                        "Class '" + s.name + "' has a duplicate enum '" + e.name + "'."}
+                        .addNote(it->second.file_id, it->second.tok, "First defined here.");
+                }
+            }
         }
     }
     // const-method mismatch between forward declaration and definition.

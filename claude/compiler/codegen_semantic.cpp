@@ -1279,6 +1279,16 @@ const Codegen::ConstEntry* Codegen::lookupSlidConst(const std::string& slid_name
     return nullptr;
 }
 
+bool Codegen::lookupCurrentSlidEnumValue(const std::string& name, int& out) const {
+    if (current_slid_.empty()) return false;
+    std::string scope = current_slid_;
+    for (char& c : scope) if (c == '.') c = ':';
+    auto eit = enum_values_.find(scope + ":" + name);
+    if (eit == enum_values_.end()) return false;
+    out = eit->second;
+    return true;
+}
+
 bool Codegen::isFoldableConstShape(const Expr& e, const std::string& slid_scope) const {
     if (dynamic_cast<const IntLiteralExpr*>(&e)) return true;
     if (dynamic_cast<const FloatLiteralExpr*>(&e)) return true;

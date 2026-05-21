@@ -68,7 +68,14 @@ std::string Codegen::emitExpr(const Expr& expr) {
                      << ", ptr " << ge->llvm_symbol << "\n";
                 return tmp;
             }
-            // check if it's an enum value
+            // check if it's an enum value — class-scope first (bare name
+            // inside a method sees the enclosing class's nested enums),
+            // then file scope.
+            {
+                int val;
+                if (lookupCurrentSlidEnumValue(v->name, val))
+                    return std::to_string(val);
+            }
             auto eit = enum_values_.find(v->name);
             if (eit != enum_values_.end())
                 return std::to_string(eit->second);
@@ -2352,7 +2359,11 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
         if (tit != locals_.end()) return llvmType(tit->second.type);
         // global slid field — namespace-qualified or function-internal/unnamed
         if (auto* ge = lookupGlobal(v->name)) return llvmType(ge->slids_type);
-        // enum value — i32
+        // enum value — i32 (class-scope first, then file scope)
+        {
+            int val;
+            if (lookupCurrentSlidEnumValue(v->name, val)) return "i32";
+        }
         if (enum_values_.count(v->name)) return "i32";
         // array name used as pointer — ptr
         if (array_info_.count(v->name)) return "ptr";
@@ -3026,6 +3037,10 @@ void Codegen::requireDefinedVarExpr(const Expr& src) {
         if (info.field_index.count(v->name)) return;
     }
     if (lookupGlobal(v->name)) return;
+    {
+        int val;
+        if (lookupCurrentSlidEnumValue(v->name, val)) return;
+    }
     if (enum_values_.count(v->name)) return;
     if (array_info_.count(v->name)) return;
     if (slid_info_.count(v->name)) return;

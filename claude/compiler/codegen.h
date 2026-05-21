@@ -301,6 +301,7 @@ private:
     const ConstEntry* lookupConst(const std::string& name) const;
     const ConstEntry* lookupSlidConst(const std::string& slid_name,
                                       const std::string& member) const;
+    bool lookupCurrentSlidEnumValue(const std::string& name, int& out) const;
     std::string emitConstValue(const ConstEntry& e) const;
 
     // Strip leading `const `/`mutable ` qualifiers and unwrap paren-qualified
