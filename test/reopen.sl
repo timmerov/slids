@@ -16,6 +16,30 @@ GsA(int x_ = 0) {
         __println("GsA:m_a1");
     }
 
+    /* derived class from later in host class body. */
+    CsB : CsE(int e_ = 22) {
+        /* define things. */
+        const int kE1 = 23;
+        enum EnumE1 ( kEnumE1 );
+        global int g_e1 = 24;
+
+        void m_e1() {
+            /* access scope things qualifiers optional. */
+            h = e_ + kE1 + kEnumE1 + g_e1;
+            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            /* access enclosing scope things qualifier optional. */
+            h = kA1 + kEnumA1 + g_a1;
+            h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+            /* access sibling scope things with qualifiers. */
+            h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+            h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            __println("CsE:m_e1");
+        }
+    }
+
     /* hoisted class definition. */
     CsB(int y_ = 17) {
         /* define things. */
@@ -34,11 +58,13 @@ GsA(int x_ = 0) {
             /* access sibling scope things with qualifiers. */
             h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
             h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
             __println("CsB:m_b1");
         }
     }
 
-    /* derived class definition from global class. */
+    /* derived class definition from global class later in file. */
     GsC : CsD(int x_ = 14) {
         /* define things. */
         const int kD1 = 15;
@@ -56,9 +82,10 @@ GsA(int x_ = 0) {
             /* access sibling scope things with qualifiers. */
             h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
             h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
             __println("CsD:m_d1");
         }
-
     }
 }
 
@@ -71,10 +98,10 @@ GsA() {
 
     void m_a2() {
         /* access scope things qualifier optional. */
-        h = x_ + kA1 + kEnumA1 + g_a1 + kA1;
-        h = kA2 + kEnumA2 + g_a2 + kA2;
-        h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1 + GsA:kA1;
-        h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2 + GsA:kA2;
+        h = x_ + kA1 + kEnumA1 + g_a1;
+        h = kA2 + kEnumA2 + g_a2;
+        h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+        h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
         __println("GsA:m_a2");
     }
 
@@ -109,6 +136,8 @@ GsA() {
             h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
             h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
             h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
             __println("CsB:m_b2");
         }
     }
@@ -127,6 +156,13 @@ GsA() {
         h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
         h = kA2 + kEnumA2 + g_a2;
         h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+        /* access sibling scope things with qualifiers. */
+        h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+        h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+        h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+        h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+        h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+        h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
         __println("CsB:m_b3");
     }
 
@@ -155,11 +191,13 @@ GsA() {
             h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
             h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
             h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
             __println("CsD:m_d2");
         }
     }
 
-    /* in-class inline reopen */
+    /* in-class inline reopen. */
     void CsD:m_d3() {
         /* access scope things qualifiers optional. */
         h = x_ + kD1 + kEnumD1 + g_d1;
@@ -178,6 +216,8 @@ GsA() {
         h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
         h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
         h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+        h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+        h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
         __println("CsD:m_d3");
     }
 
@@ -189,10 +229,10 @@ GsA() {
 /* inline reopen. */
 void GsA:m_a3() {
     /* access scope things qualifier optional. */
-    h = x_ + kA1 + kEnumA1 + g_a1 + kA1;
-    h = kA2 + kEnumA2 + g_a2 + kA2;
-    h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1 + GsA:kA1;
-    h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2 + GsA:kA2;
+    h = x_ + kA1 + kEnumA1 + g_a1;
+    h = kA2 + kEnumA2 + g_a2;
+    h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+    h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
     __println("GsA:m_a3");
 }
 
@@ -210,10 +250,17 @@ void GsA:CsB:m_b4() {
     h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
     h = kA2 + kEnumA2 + g_a2;
     h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+    /* access sibling scope things with qualifiers. */
+    h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+    h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+    h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+    h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+    h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+    h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
     __println("CsB:m_b4");
 }
 
-/* inline reopen derived class */
+/* inline reopen derived class. */
 void CsD:m_d4() {
     /* access scope things qualifiers optional. */
     h = x_ + kD1 + kEnumD1 + g_d1;
@@ -232,6 +279,8 @@ void CsD:m_d4() {
     h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
     h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
     h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+    h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+    h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
     __println("CsD:m_d4");
 }
 
@@ -249,6 +298,14 @@ GsC(int z_ = 11) {
 
 /* compile error: re-definition. */
 //GsA(int y_ = 5) { }
+
+void gs_f() {
+    /*
+    insert lines 5 - 236 here.
+    but change the class names to E F G H.
+    H derives from C.
+    */
+}
 
 int32 main() {
     {

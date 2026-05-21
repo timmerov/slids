@@ -3727,6 +3727,45 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     // parse body: methods and definitions
     expect(TokenType::kLBrace, "Expected '{'");
 
+    // Phase 1 pre-scan: walk the body at depth 1, register each nested-class
+    // short→canonical name into nested_alias_ before the main parse loop
+    // runs. Lets a derived-nested-class shape `Base : Derived(...) {}` resolve
+    // its base through the alias chain even when the base appears LATER in
+    // the same body. Mirrors the file-scope two-pass property for siblings
+    // within a class body.
+    {
+        int save_pos = pos_;
+        int depth = 0;
+        while (pos_ < (int)tokens_.size() && peek().type != TokenType::kEof) {
+            if (peek().type == TokenType::kRBrace && depth == 0) break;
+            if (depth == 0) {
+                std::string short_name;
+                if (isSlidDeclLookahead()) {
+                    short_name = peek().value;
+                } else if (isDerivedSlidDeclLookahead()) {
+                    int p = pos_;
+                    int last_ident = -1;
+                    while (p < (int)tokens_.size()
+                           && tokens_[p].type != TokenType::kLParen
+                           && tokens_[p].type != TokenType::kLt
+                           && tokens_[p].type != TokenType::kEof) {
+                        if (tokens_[p].type == TokenType::kIdentifier) last_ident = p;
+                        p++;
+                    }
+                    if (last_ident >= 0) short_name = tokens_[last_ident].value;
+                }
+                if (!short_name.empty()) {
+                    std::string canonical = enclosingClassPath() + "." + short_name;
+                    nested_alias_[short_name] = canonical;
+                }
+            }
+            if (peek().type == TokenType::kLBrace) depth++;
+            else if (peek().type == TokenType::kRBrace) depth--;
+            advance();
+        }
+        pos_ = save_pos;
+    }
+
     // alias frame for the class body — an `alias` declared here is visible to
     // the body's methods (nested below this frame) and popped at the close.
     alias_stack_.push_back({});
@@ -4979,25 +5018,35 @@ Program Parser::parse() {
     // whose canonical name ends in `.<short>`. If exactly one match,
     // rewrite. Otherwise leave it — downstream resolution will diagnose.
     // Runs after mergeReopens so program.slids has no duplicate names.
+    auto canonicalizeShortClassName = [](const std::set<std::string>& canonical,
+                                          std::string& name) {
+        if (canonical.count(name)) return;
+        std::string suffix = "." + name;
+        std::string match;
+        int count = 0;
+        for (auto& nm : canonical) {
+            if (nm.size() > suffix.size()
+                && nm.compare(nm.size() - suffix.size(),
+                              suffix.size(), suffix) == 0) {
+                match = nm;
+                count++;
+                if (count > 1) break;
+            }
+        }
+        if (count == 1) name = match;
+    };
     {
         std::set<std::string> canonical;
         for (auto& s : program.slids) canonical.insert(s.name);
-        for (auto& em : program.external_methods) {
-            if (canonical.count(em.slid_name)) continue;
-            std::string suffix = "." + em.slid_name;
-            std::string match;
-            int count = 0;
-            for (auto& nm : canonical) {
-                if (nm.size() > suffix.size()
-                    && nm.compare(nm.size() - suffix.size(),
-                                  suffix.size(), suffix) == 0) {
-                    match = nm;
-                    count++;
-                    if (count > 1) break;
-                }
-            }
-            if (count == 1) em.slid_name = match;
-        }
+        for (auto& em : program.external_methods)
+            canonicalizeShortClassName(canonical, em.slid_name);
+        // Phase 2: normalize each slid's base_name to canonical. A class-body
+        // sibling-base via short name normally resolves in Phase 1's pre-scan,
+        // but late-bound references (cross-TU imports, edits) can still leave
+        // a short name. Apply the same unique-suffix-match rule.
+        for (auto& s : program.slids)
+            if (!s.base_name.empty())
+                canonicalizeShortClassName(canonical, s.base_name);
     }
 
     // (P2) header/def dedup. When this TU imports a header that re-declares
