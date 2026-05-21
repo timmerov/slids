@@ -32,7 +32,7 @@ void sort(mutable Vector^ vec, int begin, int end) {
     while() {
         bool repeat = false;
         for (i : begin..end) {
-            for (k : i+k..end) {
+            for (k : i+1..end) {
                 i_less_k = vec^.less(vec^[i], vec^[k]);
                 if (i_less_k == false) {
                     repeat = true;

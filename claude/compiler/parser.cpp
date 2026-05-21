@@ -4971,6 +4971,35 @@ Program Parser::parse() {
     // collapse multiple reopens of the same class into one merged SlidDef.
     mergeReopens(program);
 
+    // Resolve short-name target classes on file-scope external methods to
+    // their canonical hoist paths. A shape like `void CsD:m_d4()` at file
+    // scope sets slid_name="CsD"; if CsD is a hoisted class, its canonical
+    // name is `Outer.CsD`. Walk external_methods; for each whose slid_name
+    // doesn't already match a canonical class, look for a unique class
+    // whose canonical name ends in `.<short>`. If exactly one match,
+    // rewrite. Otherwise leave it — downstream resolution will diagnose.
+    // Runs after mergeReopens so program.slids has no duplicate names.
+    {
+        std::set<std::string> canonical;
+        for (auto& s : program.slids) canonical.insert(s.name);
+        for (auto& em : program.external_methods) {
+            if (canonical.count(em.slid_name)) continue;
+            std::string suffix = "." + em.slid_name;
+            std::string match;
+            int count = 0;
+            for (auto& nm : canonical) {
+                if (nm.size() > suffix.size()
+                    && nm.compare(nm.size() - suffix.size(),
+                                  suffix.size(), suffix) == 0) {
+                    match = nm;
+                    count++;
+                    if (count > 1) break;
+                }
+            }
+            if (count == 1) em.slid_name = match;
+        }
+    }
+
     // (P2) header/def dedup. When this TU imports a header that re-declares
     // a global the TU itself defines, the header's GlobalDef is redundant —
     // the defining TU's bodies / initializers / lazy helpers are canonical.

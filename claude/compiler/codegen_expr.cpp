@@ -3023,6 +3023,24 @@ std::string Codegen::valOrNullptrCheck(const std::string& dst_type, const Expr& 
 }
 
 void Codegen::requireDefinedVarExpr(const Expr& src) {
+    // Walk arithmetic/value-producing combinators down to VarExpr leaves so
+    // unresolved names in nested positions surface with the targeted
+    // "Undefined variable" diagnostic instead of leaking empty types into
+    // downstream "Unknown type ''" messages. Stop at calls/field access/
+    // index — those have their own resolution and error paths.
+    if (auto* b = dynamic_cast<const BinaryExpr*>(&src)) {
+        if (b->left) requireDefinedVarExpr(*b->left);
+        if (b->right) requireDefinedVarExpr(*b->right);
+        return;
+    }
+    if (auto* u = dynamic_cast<const UnaryExpr*>(&src)) {
+        if (u->operand) requireDefinedVarExpr(*u->operand);
+        return;
+    }
+    if (auto* t = dynamic_cast<const TupleExpr*>(&src)) {
+        for (auto& vv : t->values) if (vv) requireDefinedVarExpr(*vv);
+        return;
+    }
     auto* v = dynamic_cast<const VarExpr*>(&src);
     if (!v) return;
     // Skip name forms that carry their own diagnostics: `::name` (unnamed-
