@@ -3025,11 +3025,13 @@ std::string Codegen::valOrNullptrCheck(const std::string& dst_type, const Expr& 
 void Codegen::requireDefinedVarExpr(const Expr& src) {
     auto* v = dynamic_cast<const VarExpr*>(&src);
     if (!v) return;
-    // Bare identifiers only. Namespace-qualified names (`::name`, `Ns:name`,
-    // and `Base:self` / `path:method` style) carry their own diagnostics
-    // ("not declared in the unnamed namespace" etc.) — preempting those
-    // would mask the more specific message.
-    if (v->name.find(':') != std::string::npos) return;
+    // Skip name forms that carry their own diagnostics: `::name` (unnamed-
+    // namespace), and `Base:self` (base-class self refs). Other colon-
+    // qualified paths fall through — lookupConst/lookupGlobal handle the
+    // qualified arms and a generic "Undefined variable" fires if all miss.
+    if (v->name.size() >= 2 && v->name[0] == ':' && v->name[1] == ':') return;
+    if (v->name.size() > 5
+        && v->name.compare(v->name.size() - 5, 5, ":self") == 0) return;
     // Same lookup chain as `emitExpr` / `inferSlidType` for a bare
     // VarExpr — any single hit means the name resolves.
     if (lookupConst(v->name)) return;

@@ -1339,6 +1339,10 @@ void Codegen::emitStmt(const Stmt& stmt) {
         if (decl->type.empty()) {
             if (!decl->init)
                 error(std::string("Inferred variable declaration requires initializer"));
+            // If the initializer is a bare unresolved VarExpr, surface
+            // "Undefined variable" directly instead of letting the empty
+            // inferred type fall through to a downstream "Unknown type ''".
+            requireDefinedVarExpr(*decl->init);
             // A copy yields a mutable lhs by default — handle-const drops,
             // pointee-const survives. The loop-var case (per-iteration copy)
             // shares this rule with the general assignment, so the prior

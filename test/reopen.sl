@@ -26,9 +26,9 @@ GsA(int x_ = 0) {
         void m_b1() {
             /* access scope things qualifiers optional. */
             h = y_ + kB1 + kEnumB1 + g_b1;
-            h = CsB:kB1 + CsB:kEnumA1 + CsB:g_b1;
-            h = GsA:CsB:kB1 + GsA:CsB:kEnumA1 + GsA:CsB:g_b1;
-            /* access scope things qualifier optional. */
+            h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            /* access enclosing scope things qualifier optional. */
             h = kA1 + kEnumA1 + g_a1;
             h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
             __println("CsB:m_b1");
@@ -74,5 +74,20 @@ int32 main() {
         h = csb.y_ + GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
         csb.m_b1();
     }
+
+    /* compile errors: not in global scope. */
+    //h = kA1;
+    //h = kEnumA1;
+    //h = g_a1;
+    //h = kA2;
+    //h = kEnumA2;
+    //h = g_a2;
+    //h = kB1;
+    //h = kEnumB1;
+    //h = g_b1;
+    //h = CsB:kB1;
+    //h = CsB:kEnumB1;
+    //h = CsB:g_b1;
+
     return 0;
 }

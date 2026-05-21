@@ -1237,16 +1237,20 @@ const Codegen::ConstEntry* Codegen::lookupConst(const std::string& name) const {
         auto cit = frame.find(name);
         if (cit != frame.end()) return &cit->second;
     }
-    // enclosing class scope — walk the base chain so a derived class's
-    // methods see consts declared in a base class.
+    // enclosing class scope — walk current_slid_'s lexical enclosing chain
+    // (innermost first) and at each level the base chain so a derived
+    // class's methods see consts declared in a base class, and a nested
+    // class's methods see consts declared in any enclosing class.
     if (!current_slid_.empty()) {
-        auto siit = slid_info_.find(current_slid_);
-        for (const SlidInfo* b = (siit != slid_info_.end() ? &siit->second : nullptr);
-             b; b = b->base_info) {
-            auto sit = slid_consts_.find(b->name);
-            if (sit != slid_consts_.end()) {
-                auto cit = sit->second.find(name);
-                if (cit != sit->second.end()) return &cit->second;
+        for (auto& prefix : enclosingClassPrefixes()) {
+            auto siit = slid_info_.find(prefix);
+            for (const SlidInfo* b = (siit != slid_info_.end() ? &siit->second : nullptr);
+                 b; b = b->base_info) {
+                auto sit = slid_consts_.find(b->name);
+                if (sit != slid_consts_.end()) {
+                    auto cit = sit->second.find(name);
+                    if (cit != sit->second.end()) return &cit->second;
+                }
             }
         }
     }
@@ -1282,12 +1286,26 @@ const Codegen::ConstEntry* Codegen::lookupSlidConst(const std::string& slid_name
 
 bool Codegen::lookupCurrentSlidEnumValue(const std::string& name, int& out) const {
     if (current_slid_.empty()) return false;
-    std::string scope = current_slid_;
-    for (char& c : scope) if (c == '.') c = ':';
-    auto eit = enum_values_.find(scope + ":" + name);
-    if (eit == enum_values_.end()) return false;
-    out = eit->second;
-    return true;
+    for (auto& prefix : enclosingClassPrefixes()) {
+        std::string scope = prefix;
+        for (char& c : scope) if (c == '.') c = ':';
+        auto eit = enum_values_.find(scope + ":" + name);
+        if (eit != enum_values_.end()) { out = eit->second; return true; }
+    }
+    return false;
+}
+
+std::vector<std::string> Codegen::enclosingClassPrefixes() const {
+    std::vector<std::string> r;
+    if (current_slid_.empty()) return r;
+    std::string acc = current_slid_;
+    while (!acc.empty()) {
+        r.push_back(acc);
+        size_t dot = acc.rfind('.');
+        if (dot == std::string::npos) break;
+        acc = acc.substr(0, dot);
+    }
+    return r;
 }
 
 std::string Codegen::canonicalizeShortPath(const std::string& name) const {

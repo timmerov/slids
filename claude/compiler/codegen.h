@@ -309,6 +309,10 @@ private:
     // or child), (c) a top-level class. Returns the input unchanged if no
     // match. Bare names (no colon) and `::name` are passed through.
     std::string canonicalizeShortPath(const std::string& name) const;
+    // Enclosing-class prefixes of current_slid_, innermost first. For
+    // current_slid_ = "GsA.CsB" returns ["GsA.CsB", "GsA"]; for "GsA"
+    // returns ["GsA"]; for empty returns empty.
+    std::vector<std::string> enclosingClassPrefixes() const;
     std::string emitConstValue(const ConstEntry& e) const;
 
     // Strip leading `const `/`mutable ` qualifiers and unwrap paren-qualified
