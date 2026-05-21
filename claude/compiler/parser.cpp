@@ -3974,6 +3974,30 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             slid.nested_slids.push_back(std::move(inner));
             continue;
         }
+        // inline external-method declaration: `RetType Class:method(...) { body }`
+        // inside a class body — adds a method to the target class, with the
+        // target class resolved through the current body's nested_alias_ if
+        // it's a short name for a hoisted class.
+        auto isExternalMethodDeclInBody = [&]() {
+            int p = pos_;
+            if (p >= (int)tokens_.size()) return false;
+            if ((isTypeName(tokens_[p]) || tokens_[p].type == TokenType::kIdentifier)
+                && p + 1 < (int)tokens_.size()
+                && tokens_[p + 1].type == TokenType::kIdentifier) {
+                p++;
+            }
+            return p + 1 < (int)tokens_.size()
+                && tokens_[p].type == TokenType::kIdentifier
+                && tokens_[p + 1].type == TokenType::kColon;
+        };
+        if (isExternalMethodDeclInBody()) {
+            ExternalMethodDef em = parseExternalMethodDef();
+            // resolve short class name through the enclosing-body's alias map.
+            auto it = nested_alias_.find(em.slid_name);
+            if (it != nested_alias_.end()) em.slid_name = it->second;
+            pending_external_methods_.push_back(std::move(em));
+            continue;
+        }
         if (isMethodDecl()) {
             int method_tok = pos_;
             auto method = parseMethodDef(slid.name);
@@ -4277,23 +4301,40 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
         em.is_const_method = true;
         advance();
     }
-    // TypeName:
-    em.slid_name = expect(TokenType::kIdentifier, "Expected class name").value;
-    // set field names for this slid so assignments to fields aren't mistaken for inferred declarations
+    // <Class>(:<Class>)*:<method-or-ctor-or-dtor>
+    // The class path may be multi-segment (`Outer:Inner:method`); the last
+    // segment is the method (or `_`/`~`), and the prior segments join into
+    // the canonical dot-form slid_name (`Outer.Inner`).
+    std::vector<std::string> segments;
+    segments.push_back(expect(TokenType::kIdentifier, "Expected class name").value);
+    em.file_id = file_id_;
+    em.tok = pos_ - 1;
+    while (peek().type == TokenType::kColon) {
+        advance(); // consume ':'
+        em.tok = pos_;
+        if (peek().type == TokenType::kIdentifier && peek().value == "_") {
+            segments.push_back("_"); advance();
+        } else if (peek().type == TokenType::kBitNot) {
+            segments.push_back("~"); advance();
+        } else {
+            segments.push_back(expect(TokenType::kIdentifier,
+                "Expected method or class name").value);
+        }
+    }
+    if (segments.size() < 2)
+        errorAt(em.tok, "Expected ':' after class name");
+    em.method_name = segments.back();
+    segments.pop_back();
+    em.slid_name.clear();
+    for (size_t i = 0; i < segments.size(); i++) {
+        if (i > 0) em.slid_name += ".";
+        em.slid_name += segments[i];
+    }
+    // set field names for this slid so assignments to fields aren't mistaken
+    // for inferred declarations
     {
         auto fit = all_slid_fields_.find(em.slid_name);
         current_slid_fields_ = (fit != all_slid_fields_.end()) ? fit->second : std::map<std::string, FieldRef>{};
-    }
-    expect(TokenType::kColon, "Expected ':'");
-    // method name, or _ (ctor), or ~ (dtor)
-    em.file_id = file_id_;
-    em.tok = pos_;
-    if (peek().type == TokenType::kIdentifier && peek().value == "_") {
-        em.method_name = "_"; advance();
-    } else if (peek().type == TokenType::kBitNot) {
-        em.method_name = "~"; advance();
-    } else {
-        em.method_name = expect(TokenType::kIdentifier, "Expected method name").value;
     }
     expect(TokenType::kLParen, "Expected '('");
     parseParamList(em.params, em.param_mutable, em.param_mut_toks, em.param_defaults);
@@ -4892,6 +4933,10 @@ Program Parser::parse() {
         // Drain any globals collected by the just-parsed top-level decl.
         for (auto& g : pending_globals_) program.globals.push_back(std::move(g));
         pending_globals_.clear();
+        // Drain external methods declared inline inside a class body.
+        for (auto& em : pending_external_methods_)
+            program.external_methods.push_back(std::move(em));
+        pending_external_methods_.clear();
         // Drain local classes collected from function bodies. They already
         // carry a unique canonical name; the hoist pass below flattens any
         // classes nested inside them.

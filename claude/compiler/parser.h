@@ -1139,6 +1139,11 @@ private:
     // `program.globals` at the end of each loop iteration in `parse()`.
     std::vector<GlobalDef> pending_globals_;
 
+    // External methods declared inline inside a class body — shape
+    // `RetType Class:method(...) { body }`. Drained into
+    // `program.external_methods` alongside pending_globals_.
+    std::vector<ExternalMethodDef> pending_external_methods_;
+
     // Local classes (slids defined inside a code block). Collected during the
     // current top-level declaration, drained into `program.slids` alongside
     // pending_globals_. Each is renamed to a unique internal canonical name
