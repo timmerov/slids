@@ -3902,6 +3902,22 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             slid.nested_slids.push_back(std::move(inner));
             continue;
         }
+        // nested derived slid def: `Base : Derived(...) { body }` inside this
+        // class. Base resolves through nested_alias_ if it's a sibling hoist;
+        // otherwise it names a file-scope class.
+        if (isDerivedSlidDeclLookahead()) {
+            std::string base_name = advance().value;  // consume base name
+            advance();                                 // consume ':'
+            auto it = nested_alias_.find(base_name);
+            if (it != nested_alias_.end()) base_name = it->second;
+            auto saved_fields = current_slid_fields_;
+            SlidDef inner = parseSlidDef(base_name);
+            current_slid_fields_ = saved_fields;
+            std::string canonical = slid.name + "." + inner.name;
+            nested_alias_[inner.name] = canonical;
+            slid.nested_slids.push_back(std::move(inner));
+            continue;
+        }
         if (isMethodDecl()) {
             int method_tok = pos_;
             auto method = parseMethodDef(slid.name);

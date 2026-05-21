@@ -8,3 +8,15 @@ InTemplate: char main_it = 
 Inner2: main_in2: c=102
 Outer:Inner:kBase = 30
 Outer:Inner:kHigh = 1
+Outer:Bird wings=3
+Outer:Robin wings=4 feathers=200
+InIf v=11
+DerIf v=13 w=14
+InFor v=21
+DerFor v=23 w=24
+InWhile v=31
+DerWhile v=33 w=34
+InSwitch v=41
+DerSwitch v=43 w=44
+Deep v=51
+DerDeep v=53 w=54

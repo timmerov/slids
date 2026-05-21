@@ -9,21 +9,28 @@ Slids and friends — declarable constructions.
 Y = supported, N = not supported, P = parses but codegen lags,
 D = defered, * = see notes.
 current / spec
+Class means the code body of a class declaration.
+Block means all blocks where runtime code can be.
+includes the code bodies of: function, method, template function,
+template method, for update (weird but allowed) and loop, while,
+if, else, switch, plain code block, etc.
 ============================================================
 
 SHAPE                                                       | Global | Class | Block | Notes
 ------------------------------------------------------------|--------|-------|-------|--------------------------------------------
-Class               Name(fields) { defs }                   |   Y    |   Y   |   Y   | class-body nested hoists to Outer.Inner
+Class               Name(fields) { defs }                   |   Y    |   Y   |   Y   |
 Derived             Base : Name(fields) { defs }            |   Y    |   Y   |   Y   |
-Reopen              Name() { defs }                         |   Y    |  N/Y  |  N/Y  | close-once
+Reopen Class        Name() { defs }                         |   Y    |  N/Y  |  N/Y  |
+Incomplete Class    Name() { defs }                         |   Y    |  ?/Y  |  ?/Y  | close-once
 Template Class      Name<T>(fields) { defs }                |   Y    |   Y   |   P   | block: parses; codegen file-scope-centric
 Function            RetType name(params) { body }           |   Y    |   N   |   Y   |
-Method              RetType name(params) { body }           |   N    |   Y   |   Y   |
+Method              RetType name(params) { body }           |   N    |   Y   |   Y*  | needs clarification
 Template Function   RetType name<T>(params) { body }        |   Y    |   N   |  N/D  |
-Template Method     RetType name<T>(params) { body }        |   N    |   Y   |  N/D  |
+Template Method     RetType name<T>(params) { body }        |   N    |   Y*  |  N/D  | meeds clarification
 External Method     RetType Class:method(...) { body }      |   Y    |  N/Y  |  N/Y  |
 Imported Function   RetType name(params) = import;          |   Y    |  N/Y  |  N/Y  |
 Namespace           Name { defs }                           |   Y    |  N/Y  |  N/Y  |
+Reopen Namespace    Name { defs }                           |   Y    |  N/Y  |  N/Y  |
 Import              import Name;                            |   Y    |   N   |   N   |
 Import Block        import { decls; }                       | P* /Y  |  N/Y  |  N/Y  | * only inside a namespace
 Constructor         _() { body }                            |   N    |   Y   |   N   |
@@ -33,10 +40,11 @@ Method Restriction  RetType name(params) = default;         |   N    |   Y   |  
                     RetType name(params) = delete;          |   N    |   Y   |   N   |
 Local Variable      Type name;                              |   N    |   N   |   Y   |
                     Type name = expr;                       |   N    |   N   |   Y   |
-Inferred Type       var = expr                              |   Y    |   Y   |   Y   |
+Inferred Type       var = expr                              |   Y    |   N   |   Y   |
 Aliases             alias Name = TypeExpr;                  |   Y    |  N/Y  |   Y   | class-body alias not exercised
                     alias Name<T,...> = TypeExpr;           |   Y    |  N/Y  |   Y   |
-                    alias Name = Namespace                  |  N/Y   |  N/Y  |  N/Y  |
+                    alias Name = Namespace;                 |  N/Y   |  N/Y  |  N/Y  |
+                    alias Namespace;                        |  N/Y   |  N/Y  |  N/Y  | Namespace becomes global scope.
 Const               const Type name = expr;                 |   Y    |   Y   |   Y   |
 Enum                enum Name (a, b, c);                    |   Y    |   Y   |  N/Y  | reopen needs review
 Global Namespace    global Name (...) {...}                 |   Y    |  N/Y  |  N/Y  |
@@ -45,8 +53,8 @@ Global Variable     global Type field = expr;               |   Y    |  N/Y  |  
 Glboal Inferred     global name = expr;                     |   Y    |  N/Y  |  N/Y  |
                     name = expr;                            |   Y    |   N   |   N   |
 Global Scope        global;                                 |   N    |   N   |   Y*  | only inside main()
-Instantiate         Name<T>;                                |   *    |   N   |   N   | only used by the pre-linker
-Unnamed             Name;                                   |   Y    |   N   |   Y   | global = eager unnamed; block = scope-lifetime
+Instantiate         Name<T>(types);                         |   *    |   N   |   N   | only used by the pre-linker
+Unnamed Object      Name;                                   |   Y    |   N   |   Y   | global = eager unnamed; block = scope-lifetime
                     Name(args);                             |   Y    |   N   |   Y   |
 
 A few things worth flagging that aren't a clean Y/N:
@@ -117,6 +125,14 @@ Outer(
         InTemplate<uint16> it(10);
         __println("Outer:test2 it");
     }
+
+    /* base and derived class defined inside another class's body. */
+    Bird(int wings_ = 2) {
+        void chirp() { __println("Outer:Bird wings=" + wings_); }
+    }
+    Bird : Robin(int feathers_ = 100) {
+        void sing() { __println("Outer:Robin wings=" + wings_ + " feathers=" + feathers_); }
+    }
 }
 
 Outer (
@@ -130,6 +146,104 @@ Outer (
             __println("Inner2: " + name + ": c=" + c_);
         }
     }
+}
+
+/* hoisted class whose namespace is one class but whose lexical location is another. */
+HostA(int a_ = 1) {
+    void show() { __println("HostA a=" + a_); }
+}
+HostB(int b_ = 2) {
+    HostA:Guest(int g_ = 3) {
+        void show() { __println("HostA:Guest g=" + g_); }
+    }
+}
+
+/* local class and a derived class inside an if block. */
+void test_in_if() {
+    int n = 1;
+    if (n == 1) {
+        InIf(int v_ = 10) {
+            void hi() { __println("InIf v=" + v_); }
+        }
+        InIf : DerIf(int w_ = 12) {
+            void bye() { __println("DerIf v=" + v_ + " w=" + w_); }
+        }
+        InIf x(11);
+        x.hi();
+        DerIf y(13, 14);
+        y.bye();
+    }
+}
+
+/* local class and a derived class inside a for block. */
+void test_in_for() {
+    for (i : 0..1) {
+        InFor(int v_ = 20) {
+            void hi() { __println("InFor v=" + v_); }
+        }
+        InFor : DerFor(int w_ = 22) {
+            void bye() { __println("DerFor v=" + v_ + " w=" + w_); }
+        }
+        InFor x(21);
+        x.hi();
+        DerFor y(23, 24);
+        y.bye();
+    }
+}
+
+/* local class and a derived class inside a while block. */
+void test_in_while() {
+    int n = 1;
+    while (n > 0) {
+        InWhile(int v_ = 30) {
+            void hi() { __println("InWhile v=" + v_); }
+        }
+        InWhile : DerWhile(int w_ = 32) {
+            void bye() { __println("DerWhile v=" + v_ + " w=" + w_); }
+        }
+        InWhile x(31);
+        x.hi();
+        DerWhile y(33, 34);
+        y.bye();
+        n = n - 1;
+    }
+}
+
+/* local class and a derived class inside a switch case. */
+void test_in_switch() {
+    int n = 1;
+    switch (n) {
+    case 1:
+        InSwitch(int v_ = 40) {
+            void hi() { __println("InSwitch v=" + v_); }
+        }
+        InSwitch : DerSwitch(int w_ = 42) {
+            void bye() { __println("DerSwitch v=" + v_ + " w=" + w_); }
+        }
+        InSwitch x(41);
+        x.hi();
+        DerSwitch y(43, 44);
+        y.bye();
+        break;
+    default:
+        break;
+    }
+}
+
+/* local class and a derived class inside a deeply nested anonymous block. */
+void test_deep_nest() {
+    {{{{{
+        Deep(int v_ = 50) {
+            void hi() { __println("Deep v=" + v_); }
+        }
+        Deep : DerDeep(int w_ = 52) {
+            void bye() { __println("DerDeep v=" + v_ + " w=" + w_); }
+        }
+        Deep x(51);
+        x.hi();
+        DerDeep y(53, 54);
+        y.bye();
+    }}}}}
 }
 
 int32 main() {
@@ -152,6 +266,21 @@ int32 main() {
     /* nested-class const and nested-enum value via multi-colon scope. */
     __println("Outer:Inner:kBase = " + Outer:Inner:kBase);
     __println("Outer:Inner:kHigh = " + Outer:Inner:kHigh);
+
+    Outer:Bird main_bird(3);
+    main_bird.chirp();
+    Outer:Robin main_robin(4, 200);
+    main_robin.sing();
+
+    /* HostA:Guest call deferred — see design fork for namespace-qualified vs derived. */
+    /* HostA:Guest guest(4); */
+    /* guest.show(); */
+
+    test_in_if();
+    test_in_for();
+    test_in_while();
+    test_in_switch();
+    test_deep_nest();
 
     return 0;
 }
