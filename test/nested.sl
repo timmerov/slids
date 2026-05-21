@@ -15,13 +15,15 @@ SHAPE                                                       | Global | Class | B
 ------------------------------------------------------------|--------|-------|-------|--------------------------------------------
 Class               Name(fields) { defs }                   |   Y    |   Y   |   Y   | class-body nested hoists to Outer.Inner
 Derived             Base : Name(fields) { defs }            |   Y    |   Y   |   Y   |
-Reopen              Name() { defs }                         |   Y    |  N/Y  |  N/Y  | close-once per TU
+Reopen              Name() { defs }                         |   Y    |  N/Y  |  N/Y  | close-once
 Template Class      Name<T>(fields) { defs }                |   Y    |   Y   |   P   | block: parses; codegen file-scope-centric
-Function            RetType name(params) { body }           |   Y    |   Y   |   Y   | class = method; block = nested fn
-Template Function   RetType name<T>(params) { body }        |   Y    |   Y   |  N/D  | nested templated fn: open follow-up
-External Method     RetType Class:method(...) { body }      |   Y    |  N/Y  |  N/Y  | methods otherwise defined inline
-Imported Function   RetType name(params) = import;          |   Y    |  N/Y  |  N/Y  | C ABI declaration
-Namespace           Name { defs }                           |   Y    |  N/Y  |  N/Y  | block-scope: open feature
+Function            RetType name(params) { body }           |   Y    |   N   |   Y   |
+Method              RetType name(params) { body }           |   N    |   Y   |   Y   |
+Template Function   RetType name<T>(params) { body }        |   Y    |   N   |  N/D  |
+Template Method     RetType name<T>(params) { body }        |   N    |   Y   |  N/D  |
+External Method     RetType Class:method(...) { body }      |   Y    |  N/Y  |  N/Y  |
+Imported Function   RetType name(params) = import;          |   Y    |  N/Y  |  N/Y  |
+Namespace           Name { defs }                           |   Y    |  N/Y  |  N/Y  |
 Import              import Name;                            |   Y    |   N   |   N   |
 Import Block        import { decls; }                       | P* /Y  |  N/Y  |  N/Y  | * only inside a namespace
 Constructor         _() { body }                            |   N    |   Y   |   N   |
@@ -37,13 +39,15 @@ Aliases             alias Name = TypeExpr;                  |   Y    |  N/Y  |  
                     alias Name = Namespace                  |  N/Y   |  N/Y  |  N/Y  |
 Const               const Type name = expr;                 |   Y    |   Y   |   Y   |
 Enum                enum Name (a, b, c);                    |   Y    |   Y   |  N/Y  | reopen needs review
-Global Namespace    global Name (...) {...}                 |   Y    |  N/Y  |  N/Y  | cross-block visibility = the point
-Global Variable     global Type field = expr;               |   Y    |  N/Y  |  N/Y  | by-design
-                    Type name;                              |   Y    |  N/Y  |  N/Y  | meaning shifts by scope
+Global Namespace    global Name (...) {...}                 |   Y    |  N/Y  |  N/Y  |
+Global Variable     global Type field = expr;               |   Y    |  N/Y  |  N/Y  |
+                    Type name;                              |   Y    |   N   |   N   |
+Glboal Inferred     global name = expr;                     |   Y    |  N/Y  |  N/Y  |
+                    name = expr;                            |   Y    |   N   |   N   |
 Global Scope        global;                                 |   N    |   N   |   Y*  | only inside main()
 Instantiate         Name<T>;                                |   *    |   N   |   N   | only used by the pre-linker
 Unnamed             Name;                                   |   Y    |   N   |   Y   | global = eager unnamed; block = scope-lifetime
-Unnamed             Name(args);                             |   Y    |   N   |   Y   | global = eager unnamed; block = scope-lifetime
+                    Name(args);                             |   Y    |   N   |   Y   |
 
 A few things worth flagging that aren't a clean Y/N:
 

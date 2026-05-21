@@ -748,7 +748,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             const Expr* inner = call->callee_expr.get();
             if (auto* de = dynamic_cast<const DerefExpr*>(inner))
                 inner = de->operand.get();
-            std::string fn_slid = inferSlidType(*inner);
+            std::string fn_slid = canonicalType(inferSlidType(*inner));
             if (fn_slid.empty() || fn_slid.back() != '^')
                 error("Call-through requires a function-pointer expression; got '"
                     + fn_slid + "'.");
@@ -2605,6 +2605,20 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
 
     // function call — look up return type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        // Indirect call: LLVM type is llvmType(<ret-slids-type>).
+        if (ce->callee_expr) {
+            const Expr* inner = ce->callee_expr.get();
+            if (auto* de = dynamic_cast<const DerefExpr*>(inner))
+                inner = de->operand.get();
+            std::string fn_slid = canonicalType(inferSlidType(*inner));
+            if (!fn_slid.empty() && fn_slid.back() == '^') {
+                std::string fn_sig = fn_slid.substr(0, fn_slid.size() - 1);
+                auto lp = fn_sig.find('(');
+                if (lp != std::string::npos)
+                    return llvmType(fn_sig.substr(0, lp));
+            }
+            return "i32";
+        }
         if (ce->callee == "sizeof" && !ce->qualifier.empty())
             return "i64";
         if (!ce->qualifier.empty() && ce->qualifier != "::"
@@ -3251,6 +3265,24 @@ std::string Codegen::inferSlidType(const Expr& expr) {
     }
     // free function call — look up return type
     if (auto* ce = dynamic_cast<const CallExpr*>(&expr)) {
+        // Indirect call through a function-pointer expression: return type is
+        // the head of the callee's `RetType(ParamTypes)^` signature.
+        // canonicalType strips the `(const ...)` wrap that pass-by-ref-to-const
+        // adds on plain T^ params, so `(const bool(int,int))^` collapses to
+        // `bool(int,int)^` before we parse out the return type.
+        if (ce->callee_expr) {
+            const Expr* inner = ce->callee_expr.get();
+            if (auto* de = dynamic_cast<const DerefExpr*>(inner))
+                inner = de->operand.get();
+            std::string fn_slid = canonicalType(inferSlidType(*inner));
+            if (!fn_slid.empty() && fn_slid.back() == '^') {
+                std::string fn_sig = fn_slid.substr(0, fn_slid.size() - 1);
+                auto lp = fn_sig.find('(');
+                if (lp != std::string::npos)
+                    return fn_sig.substr(0, lp);
+            }
+            return "";
+        }
         // `Type:sizeof()` → intptr
         if (ce->callee == "sizeof" && !ce->qualifier.empty())
             return "intptr";
