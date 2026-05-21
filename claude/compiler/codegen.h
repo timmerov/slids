@@ -302,6 +302,13 @@ private:
     const ConstEntry* lookupSlidConst(const std::string& slid_name,
                                       const std::string& member) const;
     bool lookupCurrentSlidEnumValue(const std::string& name, int& out) const;
+    // Expand a colon-qualified name whose leading segment is a short class
+    // name into the canonical hoist path. Walks current_slid_'s enclosing
+    // chain: matches the leading segment against (a) any enclosing class
+    // (self/ancestor), (b) a class nested at any enclosing level (sibling
+    // or child), (c) a top-level class. Returns the input unchanged if no
+    // match. Bare names (no colon) and `::name` are passed through.
+    std::string canonicalizeShortPath(const std::string& name) const;
     std::string emitConstValue(const ConstEntry& e) const;
 
     // Strip leading `const `/`mutable ` qualifiers and unwrap paren-qualified

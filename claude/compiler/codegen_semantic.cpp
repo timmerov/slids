@@ -1220,12 +1220,13 @@ const Codegen::ConstEntry* Codegen::lookupConst(const std::string& name) const {
     // up the base chain. The class path is written with `:`; a nested class
     // is keyed with `.` internally (Outer.Inner), so convert for the lookup.
     {
-        auto colon = name.rfind(':');
-        if (colon != std::string::npos && colon > 0 && name[0] != ':') {
-            std::string cls = name.substr(0, colon);
+        std::string canon = canonicalizeShortPath(name);
+        auto colon = canon.rfind(':');
+        if (colon != std::string::npos && colon > 0 && canon[0] != ':') {
+            std::string cls = canon.substr(0, colon);
             for (char& c : cls) if (c == ':') c = '.';
             if (slid_info_.count(cls))
-                return lookupSlidConst(cls, name.substr(colon + 1));
+                return lookupSlidConst(cls, canon.substr(colon + 1));
         }
     }
     // Walk block frames top-down EXCEPT the bottom (global) frame so that
@@ -1287,6 +1288,49 @@ bool Codegen::lookupCurrentSlidEnumValue(const std::string& name, int& out) cons
     if (eit == enum_values_.end()) return false;
     out = eit->second;
     return true;
+}
+
+std::string Codegen::canonicalizeShortPath(const std::string& name) const {
+    if (current_slid_.empty()) return name;
+    auto colon = name.find(':');
+    if (colon == std::string::npos || colon == 0) return name;
+    std::string first = name.substr(0, colon);
+    std::string rest = name.substr(colon);
+    // split current_slid_ into dot-separated segments
+    std::vector<std::string> segs;
+    {
+        size_t start = 0;
+        while (true) {
+            size_t end = current_slid_.find('.', start);
+            if (end == std::string::npos) {
+                segs.push_back(current_slid_.substr(start));
+                break;
+            }
+            segs.push_back(current_slid_.substr(start, end - start));
+            start = end + 1;
+        }
+    }
+    auto colonize = [](const std::string& s) {
+        std::string r;
+        for (char c : s) r += (c == '.') ? ':' : c;
+        return r;
+    };
+    // walk innermost → outermost; for each enclosing class, check the
+    // leading segment as self (the class's own short name) or as a class
+    // nested at this enclosing level.
+    for (int i = (int)segs.size() - 1; i >= 0; i--) {
+        std::string path;
+        for (int j = 0; j <= i; j++) {
+            if (j) path += '.';
+            path += segs[j];
+        }
+        if (segs[i] == first) return colonize(path) + rest;
+        std::string candidate = path + "." + first;
+        if (slid_info_.count(candidate)) return colonize(candidate) + rest;
+    }
+    // file scope: leading segment as a top-level class
+    if (slid_info_.count(first)) return colonize(first) + rest;
+    return name;
 }
 
 bool Codegen::isFoldableConstShape(const Expr& e, const std::string& slid_scope) const {

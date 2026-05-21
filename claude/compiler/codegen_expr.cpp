@@ -70,13 +70,15 @@ std::string Codegen::emitExpr(const Expr& expr) {
             }
             // check if it's an enum value — class-scope first (bare name
             // inside a method sees the enclosing class's nested enums),
-            // then file scope.
+            // then file scope. Qualified short-name paths (e.g. `CsB:kEnumB1`
+            // from inside a hoisted CsB) are expanded to canonical first.
             {
                 int val;
                 if (lookupCurrentSlidEnumValue(v->name, val))
                     return std::to_string(val);
             }
-            auto eit = enum_values_.find(v->name);
+            std::string canon = canonicalizeShortPath(v->name);
+            auto eit = enum_values_.find(canon);
             if (eit != enum_values_.end())
                 return std::to_string(eit->second);
             // check if it's an array — return ptr to first element
@@ -2364,7 +2366,7 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             int val;
             if (lookupCurrentSlidEnumValue(v->name, val)) return "i32";
         }
-        if (enum_values_.count(v->name)) return "i32";
+        if (enum_values_.count(canonicalizeShortPath(v->name))) return "i32";
         // array name used as pointer — ptr
         if (array_info_.count(v->name)) return "ptr";
         // type name used as anonymous slid temp — ptr
@@ -3041,7 +3043,7 @@ void Codegen::requireDefinedVarExpr(const Expr& src) {
         int val;
         if (lookupCurrentSlidEnumValue(v->name, val)) return;
     }
-    if (enum_values_.count(v->name)) return;
+    if (enum_values_.count(canonicalizeShortPath(v->name))) return;
     if (array_info_.count(v->name)) return;
     if (slid_info_.count(v->name)) return;
     errorAtNode(src, "Undefined variable: " + v->name + ".");

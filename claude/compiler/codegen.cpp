@@ -1008,7 +1008,8 @@ const Codegen::GlobalEntry* Codegen::lookupGlobal(const std::string& name) const
     // reachable from inside their owning function, so reject explicit
     // qualified-from-outside.
     if (name.find(':') != std::string::npos) {
-        auto it = globals_.find(name);
+        std::string canon = canonicalizeShortPath(name);
+        auto it = globals_.find(canon);
         if (it == globals_.end()) return nullptr;
         if (!it->second.visible_in_function.empty()
             && it->second.visible_in_function != fn_scope) return nullptr;
