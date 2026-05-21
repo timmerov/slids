@@ -153,8 +153,8 @@ void Codegen::resolveSlidInheritanceFor(SlidInfo& info) {
     }
     auto bit = slid_info_.find(info.base_name);
     if (bit == slid_info_.end())
-        error(std::string("Base class '" + info.base_name
-            + "' of class '" + info.name + "' is not defined."));
+        error(std::string("Base class '" + userTypeName(info.base_name)
+            + "' of class '" + userTypeName(info.name) + "' is not defined."));
     SlidInfo& base = bit->second;
     resolveSlidInheritanceFor(base); // ensure base's flat layout is built first
     info.base_info = &base;

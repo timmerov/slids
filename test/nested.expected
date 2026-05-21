@@ -1,5 +1,7 @@
 Inner: Outer:test inn: a=5 b=4
 Outer:test2 it
+Sparrow wing=3
+Finch wing=4 feather=5
 Inner: main_inn: a=6 b=7
 main_inn tag = 1
 main_inn classify = 9
@@ -13,6 +15,7 @@ Outer:Robin wings=4 feathers=200
 HostB:Guest a=4 g=3
 Eagle wings=8 beak=14
 HostB:Hawk wings=15 speed=88
+Ruby p=8 r=12
 InIf v=11
 DerIf v=13 w=14
 InFor v=21
@@ -24,3 +27,4 @@ DerSwitch v=43 w=44
 Deep v=51
 DerDeep v=53 w=54
 LocalEagle wings=11 span=33
+LocalGoose a=7 gabble=21

@@ -133,6 +133,20 @@ Outer(
     Bird : Robin(int feathers_ = 100) {
         void sing() { __println("Outer:Robin wings=" + wings_ + " feathers=" + feathers_); }
     }
+
+    /* local class and a derived local class defined inside a method body. */
+    void test3() {
+        Sparrow(int wing_ = 1) {
+            void chirp() { __println("Sparrow wing=" + wing_); }
+        }
+        Sparrow : Finch(int feather_ = 2) {
+            void sing() { __println("Finch wing=" + wing_ + " feather=" + feather_); }
+        }
+        Sparrow s(3);
+        s.chirp();
+        Finch f(4, 5);
+        f.sing();
+    }
 }
 
 Outer (
@@ -165,6 +179,22 @@ HostB(int b_ = 2) {
 /* multi-colon base at file scope: derives from Outer:Bird. */
 Outer:Bird : Eagle(int beak_ = 7) {
     void scream() { __println("Eagle wings=" + wings_ + " beak=" + beak_); }
+}
+
+/* deeper-than-2 hoist chain with a derived hoist at the innermost level.
+   Exercises: parseSlidDef recursion + shadow-stack push/pop + sibling-base
+   resolution + canonical name mangling at depth. */
+Chain(int c0_ = 0) {
+    Level1(int c1_ = 1) {
+        Level2(int c2_ = 2) {
+            Pearl(int p_ = 7) {
+                void glow() { __println("Pearl p=" + p_); }
+            }
+            Pearl : Ruby(int r_ = 11) {
+                void shine() { __println("Ruby p=" + p_ + " r=" + r_); }
+            }
+        }
+    }
 }
 
 /* negative: a hoisted class cannot share its immediate enclosing's name. */
@@ -257,6 +287,15 @@ void test_in_switch() {
     }
 }
 
+/* local class derived from a file-scope base. */
+void test_local_from_file_base() {
+    HostA : LocalGoose(int gabble_ = 17) {
+        void honk() { __println("LocalGoose a=" + a_ + " gabble=" + gabble_); }
+    }
+    LocalGoose lg(7, 21);
+    lg.honk();
+}
+
 /* local class with a multi-colon base inside a function block. */
 void test_multi_colon_base() {
     Outer:Bird : LocalEagle(int span_ = 6) {
@@ -286,6 +325,7 @@ int32 main() {
     Outer out;
     out.test1();
     out.test2();
+    out.test3();
 
     Outer:Inner main_in(6, 7, Outer:Inner:kHigh);
     main_in.print("main_inn");
@@ -315,6 +355,8 @@ int32 main() {
     eag.scream();
     HostB:Hawk hk(15, 88);
     hk.dive();
+    Chain:Level1:Level2:Ruby ru(8, 12);
+    ru.shine();
 
     test_in_if();
     test_in_for();
@@ -322,6 +364,7 @@ int32 main() {
     test_in_switch();
     test_deep_nest();
     test_multi_colon_base();
+    test_local_from_file_base();
 
     return 0;
 }

@@ -1263,6 +1263,10 @@ private:
     // returns the canonical (dot-joined) base name. Leaves pos_ at the derived
     // identifier. Precondition: isDerivedSlidDeclLookahead() returned true.
     std::string consumeDerivedBasePrefix();
+    // Dot-joined canonical of the currently-parsing class chain (outermost
+    // first). Empty at file scope, "Outer" inside Outer's body,
+    // "Outer.Inner" inside Outer's Inner, and so on.
+    std::string enclosingClassPath() const;
     // Parses a single global slid declaration. Caller has already verified that
     // `pos_` points at the `global` keyword and ruled out the `global;` lifetime
     // statement shape. `namespace_prefix` is "" at file scope, the enclosing
