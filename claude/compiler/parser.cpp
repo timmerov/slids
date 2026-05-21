@@ -3508,6 +3508,16 @@ MethodDef Parser::parseMethodDef(const std::string& class_name) {
     return m;
 }
 
+void Parser::rejectShadowOfEnclosing(const std::string& inner_name,
+                                     int inner_file_id, int inner_tok) {
+    for (auto& enc : enclosing_class_names_) {
+        if (enc.name != inner_name) continue;
+        throw CompileError{inner_file_id, inner_tok,
+            "Class '" + inner_name + "' shadows enclosing class '" + inner_name + "'."}
+            .addNote(enc.file_id, enc.tok, "Enclosing class declared here.");
+    }
+}
+
 SlidDef Parser::parseSlidDef(const std::string& base_name) {
     [[maybe_unused]] int t_start = pos_;
     SlidDef slid;
@@ -3519,6 +3529,11 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     slid.name_file_id = file_id_;
     slid.name_tok = name_tok;
     advance(); // consume class name
+
+    // push onto the enclosing-class chain so any hoisted class defined inside
+    // this body can detect a transitive name collision and reject it. Popped
+    // just before the return below.
+    enclosing_class_names_.push_back({slid.name, slid.name_file_id, slid.name_tok});
 
     // a closed class accepts no more *field* reopens — but an empty-`()` reopen
     // (`Name() { ... }`) adds only declarations/methods, no fields, and is the
@@ -3895,6 +3910,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             auto saved_fields = current_slid_fields_;
             SlidDef inner = parseSlidDef();
             current_slid_fields_ = saved_fields;
+            rejectShadowOfEnclosing(inner.name, inner.name_file_id, inner.name_tok);
             // register short→canonical alias so subsequent methods of this outer
             // can refer to the nested type by its bare name
             std::string canonical = slid.name + "." + inner.name;
@@ -3913,6 +3929,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             auto saved_fields = current_slid_fields_;
             SlidDef inner = parseSlidDef(base_name);
             current_slid_fields_ = saved_fields;
+            rejectShadowOfEnclosing(inner.name, inner.name_file_id, inner.name_tok);
             std::string canonical = slid.name + "." + inner.name;
             nested_alias_[inner.name] = canonical;
             slid.nested_slids.push_back(std::move(inner));
@@ -3972,6 +3989,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         pending_local_classes_.clear();
     }
 
+    enclosing_class_names_.pop_back();
     return slid;
 }
 

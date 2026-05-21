@@ -1120,6 +1120,12 @@ private:
     // (e.g. "Inner" → "Outer.Inner") — applied by parseTypeName
     std::map<std::string, std::string> nested_alias_;
 
+    // chain of class names currently being parsed — outermost first. Pushed at
+    // parseSlidDef entry, popped at exit. Drives the shadow check that rejects
+    // a hoisted class whose name equals any transitive enclosing class.
+    struct EnclosingClass { std::string name; int file_id = 0; int tok = 0; };
+    std::vector<EnclosingClass> enclosing_class_names_;
+
     // Name of the function/method whose body is currently being parsed.
     // Empty at file scope, set by parseFunctionDef / parseMethodDef /
     // parseExternalMethodDef before parsing the body, restored after.
@@ -1248,6 +1254,11 @@ private:
                         int op_tok);
 
     SlidDef parseSlidDef(const std::string& base_name = "");
+    // Rejects a hoisted class whose short name equals any transitive enclosing
+    // class on the current parse chain. Walks enclosing_class_names_ and throws
+    // a CompileError with a note pointing at the shadowed enclosing's
+    // declaration.
+    void rejectShadowOfEnclosing(const std::string& inner_name, int inner_file_id, int inner_tok);
     // Parses a single global slid declaration. Caller has already verified that
     // `pos_` points at the `global` keyword and ruled out the `global;` lifetime
     // statement shape. `namespace_prefix` is "" at file scope, the enclosing

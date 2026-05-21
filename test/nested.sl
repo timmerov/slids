@@ -159,13 +159,13 @@ HostB(int b_ = 2) {
 }
 
 /* negative: a hoisted class cannot share its immediate enclosing's name. */
-//-EXPECT-ERROR-DEFERRED: parser-side shadow rule not yet implemented (project_hoisted_class_scope_rules)
+//-EXPECT-ERROR: shadows enclosing class
 // DirectShadow(int x_ = 0) {
 //     DirectShadow(int y_ = 0) { }
 // }
 
 /* negative: a hoisted class cannot share any transitive enclosing's name. */
-//-EXPECT-ERROR-DEFERRED: parser-side shadow rule not yet implemented (project_hoisted_class_scope_rules)
+//-EXPECT-ERROR: shadows enclosing class
 // TransitiveShadow(int x_ = 0) {
 //     Middle(int y_ = 0) {
 //         TransitiveShadow(int z_ = 0) { }
