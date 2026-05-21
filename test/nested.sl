@@ -23,7 +23,7 @@ External Method     RetType Class:method(...) { body }      |   Y    |  N/Y  |  
 Imported Function   RetType name(params) = import;          |   Y    |  N/Y  |  N/Y  | C ABI declaration
 Namespace           Name { defs }                           |   Y    |  N/Y  |  N/Y  | block-scope: open feature
 Import              import Name;                            |   Y    |   N   |   N   |
-Import Block        import { decls; }                       |  P*/Y  |  N/Y  |  N/Y  | * only inside a namespace
+Import Block        import { decls; }                       | P* /Y  |  N/Y  |  N/Y  | * only inside a namespace
 Constructor         _() { body }                            |   N    |   Y   |   N   |
 Destructor          ~() { body }                            |   N    |   Y   |   N   |
 Overload Operator   op<sym>(params) { body }                |   N    |   Y   |   N   |

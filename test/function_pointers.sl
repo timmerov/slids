@@ -49,7 +49,13 @@ void sort1(mutable Container^ container, LessFn^ compare) {
         for (i : 0..size) {
             for (k : i+1..size) {
                 /* call pointed-to function. */
-                lt = false; //compare^(container^[k], container^[i]);
+                /*
+                well fark.
+                this syntax sucks.
+                but compare^() doesn't parse.
+                defer until bigger fish get fried.
+                */
+                lt = (compare^)(container^[k], container^[i]);
                 if (lt) {
                     repeat = true;
                     container^[k] <--> container^[i];
