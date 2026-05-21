@@ -991,6 +991,33 @@ std::string Parser::parseTypeName() {
             expect(TokenType::kGt, "Expected '>' after template type args");
         }
     }
+    // function-type recognition: `RetType ( ParamTypeList )` in type position
+    // is a function type whose return is `base`. The trailing ^/[] loop below
+    // then makes the whole thing a function pointer (`bool(int,int)^`).
+    // Tentative: parsePrimary's (Type=expr) speculation path calls parseTypeName
+    // on bare `Cell` followed by `(7)` — we must restore pos_ on failure so
+    // the caller backtracks cleanly rather than throwing through it.
+    if (peek().type == TokenType::kLParen) {
+        int saved = pos_;
+        std::string saved_base = base;
+        try {
+            advance(); // '('
+            base += "(";
+            bool first = true;
+            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                if (!first) base += ",";
+                first = false;
+                base += parseTypeName();
+                if (peek().type == TokenType::kComma) advance();
+            }
+            expect(TokenType::kRParen, "Expected ')' in function-type parameter list");
+            base += ")";
+        } catch (...) {
+            pos_ = saved;
+            base = saved_base;
+            // not a function type — leave `(` for the caller.
+        }
+    }
     // consume trailing ^ or [] for pointer/reference types — kept distinct:
     //   ^ = reference (no arithmetic allowed)
     //   [] = pointer  (arithmetic allowed: ++, --, +, -)
@@ -1411,6 +1438,20 @@ std::unique_ptr<Expr> Parser::parsePostfix(std::unique_ptr<Expr> base) {
             if (isOperandStartingToken(ntt)) break; // leave ^^ for parseExpr
             advance();
             base = make<DerefExpr>(t_start, make<DerefExpr>(t_start, std::move(base)));
+        } else if (peek().type == TokenType::kLParen) {
+            // call-through a function-pointer expression: <expr>(args). Used for
+            // `compare^(a, b)` after the `^` step above. The callee_expr is the
+            // existing chain; codegen lowers as an indirect call.
+            advance(); // '('
+            std::vector<std::unique_ptr<Expr>> args;
+            while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
+                args.push_back(parseExpr());
+                expectArgSeparator();
+            }
+            expect(TokenType::kRParen, "Expected ')'");
+            auto ce = make<CallExpr>(t_start, std::string{}, std::move(args));
+            ce->callee_expr = std::move(base);
+            base = std::move(ce);
         } else if (peek().type == TokenType::kPlusPlus || peek().type == TokenType::kMinusMinus) {
             std::string op = (peek().type == TokenType::kPlusPlus) ? "post++" : "post--";
             advance();
@@ -4680,27 +4721,21 @@ Program Parser::parse() {
             recordSlidMethods(slid);
             program.slids.push_back(std::move(slid));
         }
-        // derived class definition or forward decl: Base : Derived(...)  or  Base : Derived;
+        // derived class definition: Base : Derived(...)
+        // (The bare `Base : Derived;` "forward decl" shape was sugar for an
+        // empty subclass — slids has no plain-class forward decls, so this
+        // shape doesn't fit the principle. Use `Base : Derived() {}` for an
+        // empty subclass.)
         else if (peek().type == TokenType::kIdentifier
             && pos_ + 3 < (int)tokens_.size()
             && tokens_[pos_ + 1].type == TokenType::kColon
             && tokens_[pos_ + 2].type == TokenType::kIdentifier
-            && (tokens_[pos_ + 3].type == TokenType::kLParen
-                || tokens_[pos_ + 3].type == TokenType::kSemicolon)) {
+            && tokens_[pos_ + 3].type == TokenType::kLParen) {
             std::string base_name = advance().value; // consume base name
             advance();                                // consume ':'
-            if (tokens_[pos_ + 1].type == TokenType::kSemicolon) {
-                SlidDef fwd;
-                fwd.name = advance().value;
-                fwd.base_name = base_name;
-                advance(); // consume ';'
-                recordSlidMethods(fwd);
-                program.slids.push_back(std::move(fwd));
-            } else {
-                SlidDef slid = parseSlidDef(base_name);
-                recordSlidMethods(slid);
-                program.slids.push_back(std::move(slid));
-            }
+            SlidDef slid = parseSlidDef(base_name);
+            recordSlidMethods(slid);
+            program.slids.push_back(std::move(slid));
         }
         // namespace block: `Name { ... }`  or shorthand `Name import { ... }`.
         // (Class reopens now require `()` — `Class() { ... }` — and route to

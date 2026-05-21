@@ -199,6 +199,20 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     return gep;
                 }
             }
+            // Free / namespace / nested function — `^name` produces the
+            // function's address as a `ptr` value. Single-overload-per-name
+            // today; multi-overload destination-type-driven resolution
+            // is deferred.
+            for (auto* table : {&free_func_overloads_, &nested_func_overloads_}) {
+                auto fit = table->find(ve->name);
+                if (fit == table->end() || fit->second.empty()) continue;
+                if (fit->second.size() > 1)
+                    error("Ambiguous function reference '" + ve->name
+                        + "': multiple overloads (destination-type-driven "
+                          "selection not yet implemented).");
+                const std::string& mangled = std::get<0>(fit->second.front());
+                return "@" + llvmGlobalName(mangled);
+            }
             error(std::string("Undefined variable '" + ve->name + "'"));
         }
         // ^arr[i][j] — compute GEP but skip the final load, returning the element ptr
@@ -726,6 +740,68 @@ std::string Codegen::emitExpr(const Expr& expr) {
     }
 
     if (auto* call = dynamic_cast<const CallExpr*>(&expr)) {
+        // Indirect call through a function-pointer expression — set by
+        // parsePostfix when `<expr>(args)` chains on a non-name expression
+        // (e.g. `compare^(a, b)`). The callee_expr produces the function ptr
+        // value; we read its slids type to derive the LLVM call signature.
+        if (call->callee_expr) {
+            const Expr* inner = call->callee_expr.get();
+            if (auto* de = dynamic_cast<const DerefExpr*>(inner))
+                inner = de->operand.get();
+            std::string fn_slid = inferSlidType(*inner);
+            if (fn_slid.empty() || fn_slid.back() != '^')
+                error("Call-through requires a function-pointer expression; got '"
+                    + fn_slid + "'.");
+            std::string fn_sig = fn_slid.substr(0, fn_slid.size() - 1);
+            auto lp = fn_sig.find('(');
+            if (lp == std::string::npos || fn_sig.back() != ')')
+                error("Expected function-pointer type, got '" + fn_slid + "'.");
+            std::string ret_t = fn_sig.substr(0, lp);
+            std::string params_str = fn_sig.substr(lp + 1, fn_sig.size() - lp - 2);
+            std::vector<std::string> ptypes;
+            {
+                int depth = 0;
+                std::string cur;
+                for (char c : params_str) {
+                    if (c == '(') depth++;
+                    else if (c == ')') depth--;
+                    if (c == ',' && depth == 0) { ptypes.push_back(cur); cur.clear(); }
+                    else cur += c;
+                }
+                if (!cur.empty()) ptypes.push_back(cur);
+            }
+            // Get the pointer value. For a VarExpr inside DerefExpr, load the
+            // alloca; for the AddrOfExpr value form (`(^name)(args)`) it's
+            // already a constant `@<mangled>`.
+            std::string fn_ptr;
+            if (auto* ve = dynamic_cast<const VarExpr*>(inner)) {
+                auto lit = locals_.find(ve->name);
+                if (lit == locals_.end())
+                    error("Indirect call: '" + ve->name + "' is not a local.");
+                std::string loaded = newTmp();
+                out_ << "    " << loaded << " = load ptr, ptr "
+                     << lit->second.reg << "\n";
+                fn_ptr = loaded;
+            } else {
+                fn_ptr = emitExpr(*inner);
+            }
+            std::string arg_str;
+            for (size_t i = 0; i < call->args.size(); i++) {
+                if (i) arg_str += ", ";
+                std::string pt = i < ptypes.size() ? ptypes[i] : "";
+                std::string pllvm = pt.empty() ? "i32" : llvmType(pt);
+                arg_str += pllvm + " " + emitArgForParam(*call->args[i], pt);
+            }
+            std::string ret_llvm = llvmType(ret_t);
+            if (ret_t == "void") {
+                out_ << "    call void " << fn_ptr << "(" << arg_str << ")\n";
+                return "";
+            }
+            std::string r = newTmp();
+            out_ << "    " << r << " = call " << ret_llvm << " "
+                 << fn_ptr << "(" << arg_str << ")\n";
+            return r;
+        }
         // namespace-qualified call: Name:method(args)
         if (!call->qualifier.empty() && call->qualifier != "::") {
             // `Type:sizeof()` — type-scoped builtin on any (possibly nested)
@@ -3046,6 +3122,26 @@ std::string Codegen::inferSlidType(const Expr& expr) {
                 auto ait = array_info_.find(ve->name);
                 if (ait != array_info_.end())
                     return ait->second.elem_type + "[]";
+            }
+        }
+        // ^free_function — the type is the function's signature with trailing ^.
+        if (auto* ve = dynamic_cast<const VarExpr*>(ae->operand.get())) {
+            if (!locals_.count(ve->name)) {
+                for (auto* table : {&free_func_overloads_, &nested_func_overloads_}) {
+                    auto fit = table->find(ve->name);
+                    if (fit == table->end() || fit->second.empty()) continue;
+                    const auto& entry = fit->second.front();
+                    const std::string& mangled = std::get<0>(entry);
+                    const auto& ptypes = std::get<1>(entry);
+                    auto rit = func_return_types_.find(mangled);
+                    std::string ret_t = (rit != func_return_types_.end()) ? rit->second : "void";
+                    std::string s = ret_t + "(";
+                    for (size_t i = 0; i < ptypes.size(); i++) {
+                        if (i) s += ",";
+                        s += ptypes[i];
+                    }
+                    return s + ")^";
+                }
             }
         }
         std::string inner = inferSlidType(*ae->operand);

@@ -334,6 +334,10 @@ struct CallExpr : Expr {
     std::vector<std::string> type_args; // non-empty for template calls: add<int>(...)
     std::string qualifier;              // "" for bare; slid name for `Name:fn()`; "::" for `::fn()`
     bool args_padded = false;           // codegen: default-value args appended once
+    // For indirect calls through a function-pointer expression: `callee` is "" and
+    // `callee_expr` holds the producing expression. Set by parsePostfix when
+    // `<expr>(args)` chains on a non-name expression (e.g. `compare^(a, b)`).
+    std::unique_ptr<Expr> callee_expr;
     CallExpr(std::string callee, std::vector<std::unique_ptr<Expr>> args)
         : callee(std::move(callee)), args(std::move(args)) {}
 };

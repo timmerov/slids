@@ -1540,22 +1540,35 @@ import vec2;           // imports vec2.slh from same directory
 
 ## C interop
 
-> **TODO:** Needs review.
-
-Use `@foreign` to declare C-linked symbols (no name mangling):
+Declare a C-linked foreign function with `= import;` — no slids body, bare C
+symbol, C ABI:
 
 ```
-@foreign("printf")
-int32 printf(uint8^ fmt, ...);
-
-@foreign("malloc")
-uint8^ malloc(int64 size);
+int32 printf(uint8^ fmt, ...) = import;
+uint8^ malloc(int64 size) = import;
 
 int32 main() {
     printf("Value: %d\n", 42);
     return 0;
 }
 ```
+
+Group foreign declarations inside a namespace via an `import { ... }` block —
+every `;`-terminated declaration in the block becomes a foreign import:
+
+```
+Posix {
+    import {
+        int32 read(int32 fd, uint8^ buf, int64 n);
+        int32 write(int32 fd, uint8^ buf, int64 n);
+    }
+}
+```
+
+The shorthand `Name import { ... }` desugars to `Name { import { ... } }`.
+
+Link C libraries via the build (`-lm`, etc.); there is no in-language `link`
+directive.
 
 ---
 

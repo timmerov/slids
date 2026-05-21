@@ -100,7 +100,7 @@ Test nothing other than the test files in scope.
 
 **Templates across translation units:** When a template function or class is imported, its body is loaded from the adjacent `.sl` impl file at import time. Uses in the consumer TU emit only struct type definitions and `declare` stubs; the compiler records needed instantiations in a `.sli` file. After all sources are compiled, `slidsc --instantiate <build-dir> -o __instantiations.sl` aggregates the `.sli` files and writes a source file with explicit `instantiate Foo<Bar>;` statements. Compiling that file emits the full method bodies. Empty `.sli` files are not written. Exception: if any type argument is a locally-defined (non-importable) slid, that instantiation is emitted inline in the consumer TU instead.
 
-**Enums, operator overloading, nested functions with capture, and labeled break/continue** are all supported. See `slids_reference.md` for full syntax. (`@foreign` for C interop is mentioned in the reference doc but is not yet implemented.)
+**Enums, operator overloading, nested functions with capture, and labeled break/continue** are all supported. See `slids_reference.md` for full syntax.
 
 ## Codegen internals
 

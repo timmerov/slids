@@ -124,6 +124,31 @@ inline std::string paramTokenForType(const std::string& raw_t) {
         s += "_e";
         return s;
     }
+    // function type: RetType ( P1, P2, ... ) — distinguished from anon-tuple
+    // by the leading non-`(` (anon-tuple starts with `(`). Encode as
+    // "fn_<ret>_p_<P1>_<P2>_..._e".
+    if (!t.empty() && t.front() != '(' && t.back() == ')') {
+        auto lp = t.find('(');
+        if (lp != std::string::npos) {
+            std::string ret = t.substr(0, lp);
+            std::string params = t.substr(lp + 1, t.size() - lp - 2);
+            std::string s = "fn_" + paramTokenForType(ret) + "_p";
+            int depth = 0;
+            std::string cur;
+            std::vector<std::string> ptypes;
+            for (char c : params) {
+                if (c == '(') depth++;
+                else if (c == ')') depth--;
+                if (c == ',' && depth == 0) { ptypes.push_back(cur); cur.clear(); }
+                else cur += c;
+            }
+            if (!cur.empty()) ptypes.push_back(cur);
+            for (auto& p : ptypes)
+                s += "_" + paramTokenForType(p);
+            s += "_e";
+            return s;
+        }
+    }
     return t;
 }
 

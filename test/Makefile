@@ -18,6 +18,7 @@ SAMPLES = \
 	constructor \
 	for \
 	function1 \
+	function_pointers \
 	global1 \
 	global2 \
 	headerfields \
@@ -44,7 +45,6 @@ SAMPLES = \
 	pointer \
 	ranges \
 	returnslid \
-	reopen \
 	sizeof \
 	strlitcat \
 	shadowing \
