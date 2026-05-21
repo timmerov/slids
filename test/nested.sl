@@ -21,7 +21,7 @@ SHAPE                                                       | Global | Class | B
 Class               Name(fields) { defs }                   |   Y    |   Y   |   Y   |
 Derived             Base : Name(fields) { defs }            |   Y    |   Y   |   Y   |
 Reopen Class        Name() { defs }                         |   Y    |  N/Y  |  N/Y  |
-Incomplete Class    Name() { defs }                         |   Y    |  ?/Y  |  ?/Y  | close-once
+Incomplete Class    Name(...) { defs }                      |   Y    |  ?/Y  |  ?/Y  | close-once
 Template Class      Name<T>(fields) { defs }                |   Y    |   Y   |   P   | block: parses; codegen file-scope-centric
 Function            RetType name(params) { body }           |   Y    |   N   |   Y   |
 Method              RetType name(params) { body }           |   N    |   Y   |   Y*  | needs clarification
@@ -196,6 +196,89 @@ Chain(int c0_ = 0) {
         }
     }
 }
+
+/*
+class-body reopens — row 23, class-body scope.
+
+aspirational; design under discussion. current direction is (4b):
+a scoped reopen is sugar for declaring an anonymous derived class
+within the scope, with references to the target type implicitly cast
+to the derived. cross-scope access uses Scope:Class:member paths.
+visibility tests below need to revise their main()-side accesses to
+the path form before unhiding.
+
+case 1: global plain class reopened inside a class body — add a method.
+
+GPlain(int p_ = 1) {
+    void show() { __println("GPlain p=" + p_); }
+}
+ReopenHost1(int h1_ = 11) {
+    GPlain() {
+        void extend1() { __println("GPlain:extend1 p=" + p_); }
+    }
+    void use1() {
+        GPlain p;
+        p.show();
+        p.extend1();
+    }
+}
+
+case 2: global derived class reopened inside a class body — add a method and a const.
+
+GBase(int b_ = 2) {
+    void base_show() { __println("GBase b=" + b_); }
+}
+GBase : GDer(int d_ = 3) {
+    void der_show() { __println("GDer b=" + b_ + " d=" + d_); }
+}
+ReopenHost2(int h2_ = 22) {
+    GDer() {
+        const int kExt2 = 222;
+        void der_extend() { __println("GDer:der_extend b=" + b_ + " d=" + d_ + " kExt2=" + kExt2); }
+    }
+    void use2() {
+        GDer gd;
+        gd.der_show();
+        gd.der_extend();
+    }
+}
+
+case 3: class-body nested plain class reopened in the same body — add an overloaded method.
+
+Reopen3Host(int h3_ = 33) {
+    Nested3(int n_ = 5) {
+        void greet() { __println("Nested3:greet n=" + n_); }
+    }
+    Nested3() {
+        void greet(int extra) { __println("Nested3:greet n=" + n_ + " extra=" + extra); }
+    }
+    void use3() {
+        Nested3 n;
+        n.greet();
+        n.greet(99);
+    }
+}
+
+case 4: class-body nested derived class reopened in the same body — add a method and an enum.
+
+Reopen4Host(int h4_ = 44) {
+    Base4(int b_ = 7) {
+        void base4_show() { __println("Base4 b=" + b_); }
+    }
+    Base4 : Der4(int d_ = 8) {
+        void der4_show() { __println("Der4 b=" + b_ + " d=" + d_); }
+    }
+    Der4() {
+        enum Mood4 (kCalm4, kBold4);
+        void der4_extend() { __println("Der4:der4_extend b=" + b_ + " d=" + d_); }
+    }
+    void use4() {
+        Der4 d;
+        d.der4_show();
+        d.der4_extend();
+    }
+}
+*/
 
 /* negative: a hoisted class cannot share its immediate enclosing's name. */
 //-EXPECT-ERROR: shadows enclosing class
