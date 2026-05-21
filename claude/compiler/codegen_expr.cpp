@@ -568,15 +568,15 @@ std::string Codegen::emitExpr(const Expr& expr) {
                             ? slid_name.substr(0, slid_name.size()-2)
                             : slid_name.substr(0, slid_name.size()-1);
                         if (slid_info_.count(pointee))
-                            error("Dtor on '" + ve->name + "' of pointer type '" + slid_name +
+                            error("Dtor on '" + ve->name + "' of pointer type '" + userTypeName(slid_name) +
                                   "': use '" + ve->name + "^.~()' to dtor the pointed-to value");
                     }
                 } else {
                     if (isIndirectType(slid_name))
-                        error("Method call on '" + ve->name + "' of pointer type '" + slid_name +
+                        error("Method call on '" + ve->name + "' of pointer type '" + userTypeName(slid_name) +
                               "': use '" + ve->name + "^." + mc->method + "()' for explicit dereference");
                     if (!slid_info_.count(slid_name))
-                        error("Method call on '" + ve->name + "': '" + slid_name + "' is not a slid type");
+                        error("Method call on '" + ve->name + "': '" + userTypeName(slid_name) + "' is not a slid type");
                 }
                 obj_ptr = self_field_addr.empty()
                     ? locals_[ve->name].reg
@@ -623,8 +623,8 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     if (mk.method_name != mc->method) continue;
                     if (mk.param_types.size() != mc->args.size()) continue;
                     if (mk.is_delete) {
-                        errorWithNote("Class '" + slid_name + "': call to deleted method '"
-                              + mc->method + "()' (deleted in '" + cur->name + "')",
+                        errorWithNote("Class '" + userTypeName(slid_name) + "': call to deleted method '"
+                              + mc->method + "()' (deleted in '" + userTypeName(cur->name) + "')",
                               mk.file_id, mk.tok, "Marked = delete here.");
                     }
                     stop = true; break;

@@ -1812,7 +1812,7 @@ void Codegen::emitStmt(const Stmt& stmt) {
                 || (!current_slid_.empty()
                     && enum_sizes_.count(current_slid_ + ":" + canon));
             if (!known_primitives.count(canon) && !is_ptr && !is_enum)
-                error(std::string("Unknown type '" + eff_type + "'"));
+                error(std::string("Unknown type '" + userTypeName(eff_type) + "'"));
         }
         std::string reg = uniqueAllocaReg(decl->name);
         std::string llvm_t = llvmType(eff_type);
@@ -3148,15 +3148,15 @@ void Codegen::emitStmt(const Stmt& stmt) {
                             ? slid_name.substr(0, slid_name.size()-2)
                             : slid_name.substr(0, slid_name.size()-1);
                         if (slid_info_.count(pointee))
-                            error("Dtor on '" + ve->name + "' of pointer type '" + slid_name +
+                            error("Dtor on '" + ve->name + "' of pointer type '" + userTypeName(slid_name) +
                                   "': use '" + ve->name + "^.~()' to dtor the pointed-to value");
                     }
                 } else {
                     if (isIndirectType(slid_name))
-                        error("Method call on '" + ve->name + "' of pointer type '" + slid_name +
+                        error("Method call on '" + ve->name + "' of pointer type '" + userTypeName(slid_name) +
                               "': use '" + ve->name + "^." + mcs->method + "()' for explicit dereference");
                     if (!slid_info_.count(slid_name))
-                        error("Method call on '" + ve->name + "': '" + slid_name + "' is not a slid type");
+                        error("Method call on '" + ve->name + "': '" + userTypeName(slid_name) + "' is not a slid type");
                 }
                 obj_ptr = self_field_addr.empty()
                     ? locals_[ve->name].reg
@@ -3226,8 +3226,8 @@ void Codegen::emitStmt(const Stmt& stmt) {
                         if (mk.method_name != mcs->method) continue;
                         if (mk.param_types.size() != mcs->args.size()) continue;
                         if (mk.is_delete) {
-                            errorWithNote("Class '" + slid_name + "': call to deleted method '"
-                                  + mcs->method + "()' (deleted in '" + cur->name + "')",
+                            errorWithNote("Class '" + userTypeName(slid_name) + "': call to deleted method '"
+                                  + mcs->method + "()' (deleted in '" + userTypeName(cur->name) + "')",
                                   mk.file_id, mk.tok, "Marked = delete here.");
                         }
                         stop = true; break;

@@ -6,6 +6,16 @@
 #include <vector>
 #include <algorithm>
 
+// internal canonical type names use `.` as the scope separator (e.g.
+// `Outer.Bird`) — chosen for LLVM-IR identifier friendliness. For any string
+// shown to the user (diagnostics, error messages), translate back to the
+// user-facing `:` form.
+inline std::string userTypeName(const std::string& s) {
+    std::string r = s;
+    for (char& c : r) if (c == '.') c = ':';
+    return r;
+}
+
 // op symbols that have a meaningful compound-assign form (op<sym>=) — used by
 // codegen to fuse `temp = lhs op rhs` into `temp op= rhs`. Comparison ops are
 // excluded because appending `=` to `<` or `>` produces another comparison op,

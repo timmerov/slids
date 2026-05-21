@@ -306,7 +306,7 @@ int32 main() {
     /* is not a namespace). */
     //-EXPECT-ERROR: Unknown type 'InFunc'
     // InFunc na1;
-    //-EXPECT-ERROR: Unknown type 'classInFunction.InFunc'
+    //-EXPECT-ERROR: Unknown type 'classInFunction:InFunc'
     // classInFunction:InFunc na2;
 
     return 0;

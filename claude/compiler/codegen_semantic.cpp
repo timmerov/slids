@@ -442,17 +442,17 @@ void Codegen::validateDefaultDelete() {
         if (sit == slid_info_.end()) return;
         if (isCtorDtor(method_name)) {
             std::string kind = is_default ? "= default" : "= delete";
-            error("In class '" + slid_name + "', '" + kind + "' may not be applied to '"
+            error("In class '" + userTypeName(slid_name) + "', '" + kind + "' may not be applied to '"
                   + method_name + "()'.");
         }
         std::vector<std::string> pts;
         for (auto& [t, n] : params) pts.push_back(t);
         bool ancestor = ancestorHasMethod(slid_name, method_name, pts);
         if (is_default && !ancestor)
-            error("In class '" + slid_name + "', '" + method_name
+            error("In class '" + userTypeName(slid_name) + "', '" + method_name
                   + "() = default' has no matching base method.");
         if (is_delete && !ancestor && !is_virtual)
-            error("In class '" + slid_name + "', '" + method_name
+            error("In class '" + userTypeName(slid_name) + "', '" + method_name
                   + "() = delete' is non-virtual but has no matching base method;"
                     " pure-virtual introduction requires 'virtual'.");
         // Pure-virtual introduction (delete + virtual + no ancestor) does NOT

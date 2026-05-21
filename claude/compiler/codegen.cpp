@@ -2406,7 +2406,7 @@ std::string Codegen::emitFieldPtr(const std::string& obj_name, const std::string
     auto& info = slid_info_[slid_name];
     auto field_it = info.field_index.find(field);
     if (field_it == info.field_index.end())
-        error(std::string("Unknown field '" + field + "' on type '" + slid_name + "'."));
+        error(std::string("Unknown field '" + field + "' on type '" + userTypeName(slid_name) + "'."));
 
     // emitFieldGep handles the opaque-base case (runtime offset via __$ownbase).
     return emitFieldGep(slid_name, obj_ptr, field_it->second);

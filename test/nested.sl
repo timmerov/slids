@@ -148,15 +148,29 @@ Outer (
     }
 }
 
-/* hoisted class whose namespace is one class but whose lexical location is another. */
+/* derived hoist: Guest derives from HostA but is hoisted in HostB's namespace. Access path is HostB:Guest. */
 HostA(int a_ = 1) {
     void show() { __println("HostA a=" + a_); }
 }
 HostB(int b_ = 2) {
     HostA:Guest(int g_ = 3) {
-        void show() { __println("HostA:Guest g=" + g_); }
+        void show() { __println("HostB:Guest a=" + a_ + " g=" + g_); }
     }
 }
+
+/* negative: a hoisted class cannot share its immediate enclosing's name. */
+//-EXPECT-ERROR-DEFERRED: parser-side shadow rule not yet implemented (project_hoisted_class_scope_rules)
+// DirectShadow(int x_ = 0) {
+//     DirectShadow(int y_ = 0) { }
+// }
+
+/* negative: a hoisted class cannot share any transitive enclosing's name. */
+//-EXPECT-ERROR-DEFERRED: parser-side shadow rule not yet implemented (project_hoisted_class_scope_rules)
+// TransitiveShadow(int x_ = 0) {
+//     Middle(int y_ = 0) {
+//         TransitiveShadow(int z_ = 0) { }
+//     }
+// }
 
 /* local class and a derived class inside an if block. */
 void test_in_if() {
@@ -272,9 +286,8 @@ int32 main() {
     Outer:Robin main_robin(4, 200);
     main_robin.sing();
 
-    /* HostA:Guest call deferred — see design fork for namespace-qualified vs derived. */
-    /* HostA:Guest guest(4); */
-    /* guest.show(); */
+    HostB:Guest guest(4);
+    guest.show();
 
     test_in_if();
     test_in_for();
