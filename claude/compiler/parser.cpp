@@ -1105,9 +1105,47 @@ std::string Parser::parseTypeName() {
             }
         }
         if (!qualified) {
-            // unqualified — apply nested-alias map (e.g. "Inner" → "Outer.Inner" inside Outer's body)
+            // unqualified — apply nested-alias map first (e.g. "Inner" →
+            // "Outer.Inner" inside Outer's body — current class's children).
             auto it = nested_alias_.find(base);
-            if (it != nested_alias_.end()) base = it->second;
+            if (it != nested_alias_.end()) {
+                base = it->second;
+            } else {
+                // Walk enclosing_class_names_ for self/ancestor (a chain
+                // segment matching base) and sibling/nested-enum (accumulated
+                // path + base in class_aliases_ or enum_sizes_). Bounded by
+                // the chain, so file-scope code (empty chain) gets no match.
+                std::string acc;
+                bool resolved = false;
+                for (auto& enc : enclosing_class_names_) {
+                    if (!acc.empty()) acc += ".";
+                    acc += enc.name;
+                    if (enc.name == base) {
+                        base = acc;
+                        resolved = true;
+                        break;
+                    }
+                }
+                while (!resolved && !acc.empty()) {
+                    std::string cls_candidate = acc + "." + base;
+                    if (class_aliases_.count(cls_candidate)) {
+                        base = cls_candidate;
+                        resolved = true;
+                        break;
+                    }
+                    std::string colon = acc;
+                    for (char& c : colon) if (c == '.') c = ':';
+                    std::string enum_candidate = colon + ":" + base;
+                    if (enum_sizes_.count(enum_candidate)) {
+                        base = enum_candidate;
+                        resolved = true;
+                        break;
+                    }
+                    auto dot = acc.rfind('.');
+                    if (dot == std::string::npos) break;
+                    acc = acc.substr(0, dot);
+                }
+            }
         }
         // template type instantiation in type position: Name<Type> → mangled as Name__Type
         if (peek().type == TokenType::kLt && isTemplateTypeArgLookahead()) {
@@ -3469,6 +3507,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
 void Parser::parseParamList(
     std::vector<std::pair<std::string, std::string>>& params,
+    std::vector<int>& param_toks,
     std::vector<bool>& param_mutable,
     std::vector<int>& param_mut_toks,
     std::vector<std::unique_ptr<Expr>>& param_defaults)
@@ -3485,6 +3524,7 @@ void Parser::parseParamList(
         std::string name = expect(TokenType::kIdentifier, "Expected parameter name").value;
         rejectReserved(file_id_, p_tok, name, "parameter");
         params.emplace_back(type, name);
+        param_toks.push_back(p_tok);
         param_mutable.push_back(is_mutable);
         param_mut_toks.push_back(mut_tok);
         std::unique_ptr<Expr> dflt;
@@ -3543,7 +3583,7 @@ NestedFunctionDef Parser::parseNestedFunctionDef() {
         if (!lc.empty()) fn.name = lc;
     }
     expect(TokenType::kLParen, "Expected '('");
-    parseParamList(fn.params, fn.param_mutable, fn.param_mut_toks, fn.param_defaults);
+    parseParamList(fn.params, fn.param_toks, fn.param_mutable, fn.param_mut_toks, fn.param_defaults);
     expect(TokenType::kRParen, "Expected ')'");
     std::vector<std::string> param_names;
     for (auto& p : fn.params) param_names.push_back(p.second);
@@ -3617,7 +3657,7 @@ MethodDef Parser::parseMethodDef(const std::string& class_name) {
         m.name = expect(TokenType::kIdentifier, "Expected method name").value;
     }
     expect(TokenType::kLParen, "Expected '('");
-    parseParamList(m.params, m.param_mutable, m.param_mut_toks, m.param_defaults);
+    parseParamList(m.params, m.param_toks, m.param_mutable, m.param_mut_toks, m.param_defaults);
     expect(TokenType::kRParen, "Expected ')'");
     checkOpArity(m.name, (int)m.params.size(), op_tok, m.param_defaults);
     checkOpMutable(m.name, m.params, m.param_mutable, m.param_mut_toks, op_tok);
@@ -4609,7 +4649,7 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
         current_slid_fields_ = (fit != all_slid_fields_.end()) ? fit->second : std::map<std::string, FieldRef>{};
     }
     expect(TokenType::kLParen, "Expected '('");
-    parseParamList(em.params, em.param_mutable, em.param_mut_toks, em.param_defaults);
+    parseParamList(em.params, em.param_toks, em.param_mutable, em.param_mut_toks, em.param_defaults);
     expect(TokenType::kRParen, "Expected ')'");
     checkMethodHeadRules(file_id_, em.method_name, (int)em.params.size(),
         em.has_explicit_return, em.is_const_method,
@@ -4853,7 +4893,7 @@ FunctionDef Parser::parseFunctionDef() {
     }
     expect(TokenType::kLParen, "Expected '('");
     int params_tok = pos_;
-    parseParamList(fn.params, fn.param_mutable, fn.param_mut_toks, fn.param_defaults);
+    parseParamList(fn.params, fn.param_toks, fn.param_mutable, fn.param_mut_toks, fn.param_defaults);
     expect(TokenType::kRParen, "Expected ')'");
     // (P1) function header+body merge — parameter name cannot equal function name.
     for (auto& p : fn.params) {
@@ -4934,6 +4974,22 @@ Program Parser::parse() {
             if (!path.empty() && peek().type == TokenType::kRBrace) {
                 path.pop_back();
                 advance();
+                continue;
+            }
+            // Enum decl inside a class body — register under colon-form path
+            // so parseTypeName can resolve a bare nested-enum name to its
+            // canonical via the enclosing-chain walk. Size populated late by
+            // codegen; pre-populate with 0 here for visibility purposes.
+            if (!path.empty() && peek().type == TokenType::kEnum
+                && pos_ + 1 < (int)tokens_.size()
+                && tokens_[pos_ + 1].type == TokenType::kIdentifier) {
+                std::string colon_path;
+                for (size_t i = 0; i < path.size(); i++) {
+                    if (i > 0) colon_path += ":";
+                    colon_path += path[i];
+                }
+                enum_sizes_[colon_path + ":" + tokens_[pos_ + 1].value] = 0;
+                advance(); // 'enum'
                 continue;
             }
             // Alias decl inside a class body.
@@ -5059,6 +5115,14 @@ Program Parser::parse() {
             for (auto& fn : hdr.functions)
                 if (!fn.body) program.functions.push_back(std::move(fn));
             for (auto& slid : hdr.slids) {
+                // Register imported slid's nested-enum names into the
+                // consumer's enum_sizes_ so parseTypeName can resolve a
+                // bare nested-enum reference inside a reopen of this
+                // class. Codegen later populates the real size.
+                std::string colon_scope = slid.name;
+                for (char& c : colon_scope) if (c == '.') c = ':';
+                for (auto& e : slid.nested_enums)
+                    enum_sizes_[colon_scope + ":" + e.name] = (int)e.values.size();
                 program.slid_modules[slid.name] = module;
                 recordSlidMethods(slid);
                 program.slids.push_back(std::move(slid));

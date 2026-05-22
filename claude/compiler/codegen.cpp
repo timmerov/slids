@@ -236,6 +236,15 @@ std::string Codegen::llvmType(const std::string& raw_t) {
         if (!sz.empty() && std::all_of(sz.begin(), sz.end(), ::isdigit))
             return "[" + sz + " x " + llvmType(t.substr(0, lb)) + "]";
     }
+    // enum type → i32. enum_sizes_ is keyed in colon form (file-scope by
+    // short name, nested as `Outer:Inner:Tag`); type strings may arrive in
+    // dot form from parseTypeName's qualified-path conversion. Normalize.
+    {
+        std::string colon = t;
+        for (char& c : colon) if (c == '.') c = ':';
+        if (enum_sizes_.count(colon)) return "i32";
+    }
+    error("Unknown type '" + raw_t + "'.");
     return "i32";
 }
 
@@ -1443,25 +1452,33 @@ void Codegen::emit() {
 
     // validate: class objects and anon-tuples cannot be passed by value
     auto checkParams = [&](const std::string& ctx,
-                           const std::vector<std::pair<std::string,std::string>>& params) {
-        for (auto& [type, name] : params) {
+                           const std::vector<std::pair<std::string,std::string>>& params,
+                           const std::vector<int>& param_toks,
+                           int file_id, int fallback_tok) {
+        for (int i = 0; i < (int)params.size(); i++) {
+            auto& [type, name] = params[i];
+            int tok = (i < (int)param_toks.size()) ? param_toks[i] : fallback_tok;
             if (slid_info_.count(type) > 0)
-                error(std::string("In " + ctx + ", parameter '" + name +
-                    "' has class type '" + type + "' and cannot be passed by value; use '" + type + "^'."));
+                throw CompileError{file_id, tok, finalizeErrorMsg(
+                    "In " + userTypeName(ctx) + ", parameter '" + name +
+                    "' has class type '" + userTypeName(type) +
+                    "' and cannot be passed by value; use '" + userTypeName(type) + "^'.")};
             if (isAnonTupleType(type))
-                error(std::string("In " + ctx + ", parameter '" + name +
-                    "' has tuple type '" + type + "' and cannot be passed by value; use '" + type + "^'."));
+                throw CompileError{file_id, tok, finalizeErrorMsg(
+                    "In " + userTypeName(ctx) + ", parameter '" + name +
+                    "' has tuple type '" + userTypeName(type) +
+                    "' and cannot be passed by value; use '" + userTypeName(type) + "^'.")};
         }
     };
     for (auto& fn : program_.functions)
-        checkParams(fn.name, fn.params);
+        checkParams(fn.name, fn.params, fn.param_toks, fn.file_id, fn.tok);
     for (auto& slid : program_.slids) {
         if (!slid.type_params.empty()) continue; // skip template slids
         for (auto& m : slid.methods)
-            checkParams(slid.name + "." + m.name, m.params);
+            checkParams(slid.name + "." + m.name, m.params, m.param_toks, m.file_id, m.tok);
     }
     for (auto& em : program_.external_methods)
-        checkParams(em.slid_name + "." + em.method_name, em.params);
+        checkParams(em.slid_name + "." + em.method_name, em.params, em.param_toks, em.file_id, em.tok);
 
     // String constants are now registered on-demand from emit-time via
     // registerStringConstant(); the global declarations are flushed at the end

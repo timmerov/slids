@@ -326,7 +326,7 @@ GsA() {
 
         /* op overload added via reopen — exercises op-method through the
            reopen merge path. */
-        op+(CsB a, CsB b) {
+        op+(CsB^ a, CsB^ b) {
             __println("CsB:op+");
         }
     }

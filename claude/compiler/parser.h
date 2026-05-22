@@ -717,6 +717,7 @@ struct MethodDef {
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params; true if 'mutable' on that param
     std::vector<int> param_mut_toks;  // parallel to params; tok of the 'mutable' keyword for diagnostic notes
+    std::vector<int> param_toks;      // parallel to params; tok of the parameter name (for diagnostics)
     std::vector<std::unique_ptr<Expr>> param_defaults; // parallel to params; null when no default
     std::unique_ptr<BlockStmt> body;
     int file_id = 0;
@@ -788,6 +789,7 @@ struct NestedFunctionDef {
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params
     std::vector<int> param_mut_toks;  // parallel to params; tok of the 'mutable' keyword for diagnostic notes
+    std::vector<int> param_toks;      // parallel to params; tok of the parameter name (for diagnostics)
     std::vector<std::unique_ptr<Expr>> param_defaults; // parallel to params; null when no default
     std::unique_ptr<BlockStmt> body;
 };
@@ -805,6 +807,7 @@ struct FunctionDef {
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params
     std::vector<int> param_mut_toks;  // parallel to params; tok of the 'mutable' keyword for diagnostic notes
+    std::vector<int> param_toks;      // parallel to params; tok of the parameter name (for diagnostics)
     std::vector<std::unique_ptr<Expr>> param_defaults; // parallel to params; null when no default
     std::vector<bool> param_auto_promoted;  // parallel to params; true when class-T value→ref auto-promoted at template instantiation
     std::unique_ptr<BlockStmt> body;
@@ -829,6 +832,7 @@ struct ExternalMethodDef {
     std::vector<std::pair<std::string, std::string>> params;
     std::vector<bool> param_mutable;  // parallel to params
     std::vector<int> param_mut_toks;  // parallel to params; tok of the 'mutable' keyword for diagnostic notes
+    std::vector<int> param_toks;      // parallel to params; tok of the parameter name (for diagnostics)
     std::vector<std::unique_ptr<Expr>> param_defaults; // parallel to params; null when no default
     std::unique_ptr<BlockStmt> body;
     int file_id = 0;
@@ -1043,6 +1047,7 @@ private:
     // parallel vectors. Enforces trailing-only defaults. Shared by every
     // function/method/nested-function/external-method head parser.
     void parseParamList(std::vector<std::pair<std::string, std::string>>& params,
+                        std::vector<int>& param_toks,
                         std::vector<bool>& param_mutable,
                         std::vector<int>& param_mut_toks,
                         std::vector<std::unique_ptr<Expr>>& param_defaults);
