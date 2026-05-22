@@ -1,5 +1,5 @@
 /*
-reopen classes.
+reopen classes inside of class bodies.
 */
 
 /* global scope class definition. */
