@@ -1,4 +1,8 @@
 
+make.sh fails to build with multiple cores.
+i suspect there are missing dependencies in the makefile.
+cause there are other oddities sometimes where the build fails.
+
 test/implement unnamed cross-TU globals.
 might need a __$global_ctor_all that instantiates
 all of them at start of main:global scope.
