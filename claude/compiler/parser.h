@@ -729,6 +729,18 @@ struct MethodDef {
     bool has_explicit_return = false; // true when the return type came from a parsed type, not an elision
 };
 
+// File-scope plain type alias (`alias Name = TypeExpr;`). The rhs is parsed
+// once at definition into the canonical type-string `body`; consumers see
+// the alias name resolve to `body` via `lookupAlias`. Propagates across .slh
+// imports so `import dump;` makes dump.slh's aliases visible. Also used by
+// SlidDef.aliases for class-scope aliases.
+struct TypeAliasDef {
+    std::string name;
+    std::string body;
+    int file_id = 0;
+    int tok = 0;
+};
+
 struct SlidDef {
     std::string name;
     int name_file_id = 0;                 // location of the class name token (for diagnostics)
@@ -762,6 +774,7 @@ struct SlidDef {
     std::vector<SlidDef> nested_slids;             // slid defs declared inside this slid's body
     std::vector<EnumDef> nested_enums;             // enum defs declared inside this slid's body (class-scoped)
     std::vector<ConstDef> consts;                  // class-scope const decls (no storage)
+    std::vector<TypeAliasDef> aliases;              // class-scope `alias Name = TypeExpr;` decls — propagate cross-TU via .slh
     // Classes declared inside this (template) class's method bodies. Carried
     // with the template and re-instantiated per type-arg — see codegen_template.
     std::vector<SlidDef> local_classes;
@@ -884,16 +897,8 @@ struct AliasDef {
     int tok = 0;                 // token index of the alias name (diagnostics)
 };
 
-// File-scope plain type alias (`alias Name = TypeExpr;`). The rhs is parsed
-// once at definition into the canonical type-string `body`; consumers see
-// the alias name resolve to `body` via `lookupAlias`. Propagates across .slh
-// imports so `import dump;` makes dump.slh's aliases visible.
-struct TypeAliasDef {
-    std::string name;
-    std::string body;
-    int file_id = 0;
-    int tok = 0;
-};
+// (TypeAliasDef moved earlier in the file so SlidDef can carry class-scope
+// aliases — see definition just before SlidDef.)
 
 // File-scope template type alias (`alias Name<T,U,...> = TypeExpr;`). The
 // body keeps each type-param identifier literal (`T^`, `(char[], T^)`, etc.);
@@ -1189,6 +1194,27 @@ private:
     void declareAlias(const std::string& name, const std::string& resolved, int name_tok);
     std::string lookupAlias(const std::string& name) const;
 
+    // Per-class alias registry for class-path-qualified type-name resolution
+    // (e.g. `GsA:intA`, `Outer:Inner:intX`). Populated alongside alias_stack_
+    // when an alias declaration occurs inside a class body. Keyed by canonical
+    // class name (dot form: "Outer.Inner") → alias-name → resolved type.
+    std::map<std::string, std::map<std::string, AliasInfo>> class_aliases_;
+    // Stack of enclosing-class nested_alias_ snapshots — pushed on parseSlidDef
+    // entry (just before the clear) and popped at exit. Lets parseTypeName
+    // resolve a sibling-class short name from inside a nested class's method
+    // body, where the immediate nested_alias_ frame has been cleared.
+    std::vector<std::map<std::string, std::string>> outer_nested_aliases_;
+    // Canonical-class → canonical-base mapping for inheritance walks during
+    // class-path alias lookup. Populated during parseSlidDef.
+    std::map<std::string, std::string> class_base_name_;
+    // Resolve a path-qualified alias reference `<class-path>.<member>` (dot
+    // form, post-canonicalization). Walks the class's own aliases first, then
+    // its base chain via class_base_name_. Applies nested_alias_ to the
+    // leading short class-name if present. Returns the resolved type string
+    // on hit, empty on miss.
+    std::string lookupClassAlias(const std::string& class_path,
+                                 const std::string& member) const;
+
     // Template type aliases (`alias Name<T,...> = TypeExpr;`). Same stacked-
     // frames model as `alias_stack_`. The bottom frame is file scope; nested
     // frames pushed/popped by parseBlock alongside the other scope stacks.
@@ -1206,8 +1232,9 @@ private:
 
     // Pass `program` from file-scope callers so file-scope aliases also flow
     // into Program (cross-TU propagation through .slh imports). Block-scope
-    // and class-scope callers pass nullptr — those aliases stay parser-only.
-    void parseAliasDecl(Program* program = nullptr);
+    // callers pass nullptr. Class-scope callers pass `slid` so the alias is
+    // captured into SlidDef.aliases for cross-TU propagation via .slh.
+    void parseAliasDecl(Program* program = nullptr, SlidDef* slid = nullptr);
 
     // const decl parser: assumes `const` is the current token. Returns the parsed
     // ConstDef. The kind of statement-or-decl context (top-level vs class vs block)

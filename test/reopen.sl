@@ -8,11 +8,12 @@ GsA(int a_ = 0) {
     const int kA1 = 1;
     enum EnumA1 ( kEnumA1 );
     global int g_a1 = 2;
+    alias intA = int;
 
     void m_a1() {
         /* access scope things qualifier optional. */
-        h = a_ + kA1 + kEnumA1 + g_a1;
-        h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+        intA a = a_ + kA1 + kEnumA1 + g_a1;
+        GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
         __println("GsA:m_a1");
     }
 
@@ -22,20 +23,21 @@ GsA(int a_ = 0) {
         const int kE1 = 23;
         enum EnumE1 ( kEnumE1 );
         global int g_e1 = 24;
+        alias intE = int;
 
         void m_e1() {
             /* access scope things qualifiers optional. */
-            h = e_ + kE1 + kEnumE1 + g_e1;
-            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            intE e = e_ + kE1 + kEnumE1 + g_e1;
+            CsE:intE ce = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            GsA:CsE:intE ace = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
             /* access enclosing scope things qualifier optional. */
-            h = kA1 + kEnumA1 + g_a1;
-            h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+            intA a = kA1 + kEnumA1 + g_a1;
+            GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
             /* access sibling scope things with qualifiers. */
-            h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-            h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-            h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-            h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            /* missing siblings F G. */
+            CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+            GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            /* access base scope things qualifiers optional. */
             __println("CsE:m_e1");
         }
     }
@@ -46,20 +48,21 @@ GsA(int a_ = 0) {
         const int kB1 = 6;
         enum EnumB1 ( kEnumB1 );
         global int g_b1 = 7;
+        alias intB = int;
 
         void m_b1() {
             /* access scope things qualifiers optional. */
-            h = b_ + kB1 + kEnumB1 + g_b1;
-            h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-            h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            intB b = b_ + kB1 + kEnumB1 + g_b1;
+            CsB:intB cb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            GsA:CsB:intB acb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
             /* access enclosing scope things qualifier optional. */
-            h = kA1 + kEnumA1 + g_a1;
-            h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+            intA a = kA1 + kEnumA1 + g_a1;
+            GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
             /* access sibling scope things with qualifiers. */
-            h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-            h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+            GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
             __println("CsB:m_b1");
         }
     }
@@ -70,20 +73,21 @@ GsA(int a_ = 0) {
         const int kD1 = 15;
         enum EnumD1 ( kEnumD1 );
         global int g_d1 = 16;
+        alias intD = int;
 
         void m_d1() {
             /* access scope things qualifiers optional. */
-            h = d_ + kD1 + kEnumD1 + g_d1;
-            h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-            h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            intD d = d_ + kD1 + kEnumD1 + g_d1;
+            CsD:intD cd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+            GsA:CsD:intD acd = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
             /* access enclosing scope things qualifier optional. */
-            h = kA1 + kEnumA1 + g_a1;
-            h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+            intA a = kA1 + kEnumA1 + g_a1;
+            GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
             /* access sibling scope things with qualifiers. */
-            h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-            h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
             __println("CsD:m_d1");
         }
     }
@@ -94,22 +98,23 @@ GsA(int a_ = 0) {
         const int kF1 = 28;
         enum EnumF1 ( kEnumF1 );
         global int g_f1 = 29;
+        alias intF = int;
 
         void m_f1() {
             /* access scope things qualifiers optional. */
-            h = f_ + kF1 + kEnumF1 + g_f1;
-            h = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
-            h = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+            intF f = f_ + kF1 + kEnumF1 + g_f1;
+            CsF:intF cf = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+            GsA:CsF:intF acf = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
             /* access enclosing scope things qualifier optional. */
-            h = kA1 + kEnumA1 + g_a1;
-            h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+            intA a = kA1 + kEnumA1 + g_a1;
+            GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
             /* access sibling scope things with qualifiers. */
-            h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-            h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-            h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-            h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+            GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
             __println("CsF:m_f1");
         }
     }
@@ -123,22 +128,22 @@ GsA(int a_ = 0) {
 
         void m_f2() {
             /* access scope things qualifiers optional. */
-            h = f_ + kF1 + kEnumF1 + g_f1;
-            h = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
-            h = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
-            h = kF2 + kEnumF2 + g_f2;
-            h = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
-            h = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+            intF f = f_ + kF1 + kEnumF1 + g_f1;
+            CsF:intF cf = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+            GsA:CsF:intF acf = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+            f = kF2 + kEnumF2 + g_f2;
+            cf = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+            acf = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
             /* access enclosing scope things qualifier optional. */
-            h = kA1 + kEnumA1 + g_a1;
-            h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+            intA a = kA1 + kEnumA1 + g_a1;
+            GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
             /* access sibling scope things with qualifiers. */
-            h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-            h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-            h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-            h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+            GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
             __println("CsF:m_f2");
         }
     }
@@ -152,25 +157,25 @@ GsA(int a_ = 0) {
 
         void m_f3() {
             /* access scope things qualifiers optional. */
-            h = f_ + kF1 + kEnumF1 + g_f1;
-            h = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
-            h = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
-            h = kF2 + kEnumF2 + g_f2;
-            h = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
-            h = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
-            h = kF3 + kEnumF3 + g_f3;
-            h = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
-            h = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
+            intF f = f_ + kF1 + kEnumF1 + g_f1;
+            CsF:intF cf = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+            GsA:CsF:intF acf = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+            f = kF2 + kEnumF2 + g_f2;
+            cf = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+            acf = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+            f = kF3 + kEnumF3 + g_f3;
+            cf = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
+            acf = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
             /* access enclosing scope things qualifier optional. */
-            h = kA1 + kEnumA1 + g_a1;
-            h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+            intA a = kA1 + kEnumA1 + g_a1;
+            GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
             /* access sibling scope things with qualifiers. */
-            h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-            h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-            h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-            h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+            GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
             __println("CsF:m_f3");
         }
     }
@@ -181,24 +186,25 @@ GsA(int a_ = 0) {
         const int kG1 = 38;
         enum EnumG1 ( kEnumG1 );
         global int g_g1 = 39;
+        alias intG = int;
 
         void m_g1() {
             /* access scope things qualifiers optional. */
-            h = g_ + kG1 + kEnumG1 + g_g1;
-            h = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
-            h = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+            intG g = g_ + kG1 + kEnumG1 + g_g1;
+            GsG:intG cg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+            GsA:GsG:intG acg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
             /* access enclosing scope things qualifier optional. */
-            h = kA1 + kEnumA1 + g_a1;
-            h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+            intA a = kA1 + kEnumA1 + g_a1;
+            GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
             /* access sibling scope things with qualifiers. */
-            h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-            h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-            h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-            h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
-            h = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
-            h = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+            CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+            GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+            GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
             __println("GsG:m_g1");
         }
     }
@@ -213,10 +219,10 @@ GsA() {
 
     void m_a2() {
         /* access scope things qualifier optional. */
-        h = a_ + kA1 + kEnumA1 + g_a1;
-        h = kA2 + kEnumA2 + g_a2;
-        h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-        h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+        intA a = a_ + kA1 + kEnumA1 + g_a1;
+        a = kA2 + kEnumA2 + g_a2;
+        GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+        aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
         __println("GsA:m_a2");
     }
 
@@ -235,26 +241,26 @@ GsA() {
 
         void m_b2() {
             /* access scope things qualifiers optional. */
-            h = b_ + kB1 + kEnumB1 + g_b1;
-            h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-            h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-            h = kB2 + kEnumB2 + g_b2;
-            h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
-            h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+            intB b = b_ + kB1 + kEnumB1 + g_b1;
+            CsB:intB cb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            GsA:CsB:intB acb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            b = kB2 + kEnumB2 + g_b2;
+            cb = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
+            acb = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
             /* access enclosing scope things qualifier optional. */
-            h = kA1 + kEnumA1 + g_a1;
-            h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-            h = kA2 + kEnumA2 + g_a2;
-            h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+            intA a = kA1 + kEnumA1 + g_a1;
+            GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+            a = kA2 + kEnumA2 + g_a2;
+            aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
             /* access sibling scope things with qualifiers. */
-            h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-            h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-            h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
-            h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
-            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
-            h = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
-            h = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+            CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+            GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            dd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+            add = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+            CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
+            aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
             __println("CsB:m_b2");
         }
     }
@@ -262,26 +268,26 @@ GsA() {
     /* in-class inline reopen. */
     void CsB:m_b3() {
         /* access scope things qualifiers optional. */
-        h = b_ + kB1 + kEnumB1 + g_b1;
-        h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-        h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-        h = kB2 + kEnumB2 + g_b2;
-        h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
-        h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+        intB b = b_ + kB1 + kEnumB1 + g_b1;
+        CsB:intB cb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+        GsA:CsB:intB acb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+        b = kB2 + kEnumB2 + g_b2;
+        cb = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
+        acb = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
         /* access enclosing scope things qualifier optional. */
-        h = kA1 + kEnumA1 + g_a1;
-        h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-        h = kA2 + kEnumA2 + g_a2;
-        h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+        intA a = kA1 + kEnumA1 + g_a1;
+        GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+        a = kA2 + kEnumA2 + g_a2;
+        aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
         /* access sibling scope things with qualifiers. */
-        h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-        h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-        h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
-        h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
-        h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-        h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
-        h = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
-        h = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+        CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+        GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+        dd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+        add = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+        CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+        GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+        ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
+        aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
         __println("CsB:m_b3");
     }
 
@@ -294,26 +300,26 @@ GsA() {
 
         void m_d2() {
             /* access scope things qualifiers optional. */
-            h = d_ + kD1 + kEnumD1 + g_d1;
-            h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-            h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-            h = kD2 + kEnumD2 + g_d2;
-            h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
-            h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+            intD d = d_ + kD1 + kEnumD1 + g_d1;
+            CsD:intD cd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+            GsA:CsD:intD acd = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            d = kD2 + kEnumD2 + g_d2;
+            cd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+            acd = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
             /* access enclosing scope things qualifier optional. */
-            h = kA1 + kEnumA1 + g_a1;
-            h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-            h = kA2 + kEnumA2 + g_a2;
-            h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+            intA a = kA1 + kEnumA1 + g_a1;
+            GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+            a = kA2 + kEnumA2 + g_a2;
+            aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
             /* access sibling scope things with qualifiers. */
-            h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-            h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-            h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
-            h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
-            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
-            h = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
-            h = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+            CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            bb = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
+            abb = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+            CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
+            aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
             __println("CsD:m_d2");
         }
     }
@@ -321,26 +327,26 @@ GsA() {
     /* in-class inline reopen. */
     void CsD:m_d3() {
         /* access scope things qualifiers optional. */
-        h = d_ + kD1 + kEnumD1 + g_d1;
-        h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-        h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-        h = kD2 + kEnumD2 + g_d2;
-        h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
-        h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+        intD d = d_ + kD1 + kEnumD1 + g_d1;
+        CsD:intD cd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+        GsA:CsD:intD acd = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+        d = kD2 + kEnumD2 + g_d2;
+        cd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+        acd = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
         /* access enclosing scope things qualifier optional. */
-        h = kA1 + kEnumA1 + g_a1;
-        h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-        h = kA2 + kEnumA2 + g_a2;
-        h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+        intA a = kA1 + kEnumA1 + g_a1;
+        GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+        a = kA2 + kEnumA2 + g_a2;
+        aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
         /* access sibling scope things with qualifiers. */
-        h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-        h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-        h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
-        h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
-        h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-        h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
-        h = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
-        h = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+        CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+        GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+        bb = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
+        abb = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+        CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+        GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+        ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
+        aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
         __println("CsD:m_d3");
     }
 
@@ -353,26 +359,26 @@ GsA() {
 
         void m_e2() {
             /* access scope things qualifiers optional. */
-            h = e_ + kE1 + kEnumE1 + g_e1;
-            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
-            h = kE2 + kEnumE2 + g_e2;
-            h = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
-            h = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+            intE e = e_ + kE1 + kEnumE1 + g_e1;
+            CsE:intE ce = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            GsA:CsE:intE ace = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            e = kE2 + kEnumE2 + g_e2;
+            ce = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
+            ace = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
             /* access enclosing scope things qualifier optional. */
-            h = kA1 + kEnumA1 + g_a1;
-            h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-            h = kA2 + kEnumA2 + g_a2;
-            h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+            intA a = kA1 + kEnumA1 + g_a1;
+            GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+            a = kA2 + kEnumA2 + g_a2;
+            aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
             /* access sibling scope things with qualifiers. */
-            h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-            h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-            h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
-            h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
-            h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-            h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-            h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
-            h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+            CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            bb = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
+            abb = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+            CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+            GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            dd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+            add = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
             __println("CsE:m_e2");
         }
     }
@@ -380,26 +386,26 @@ GsA() {
     /* in-class inline reopen. */
     void CsE:m_e3() {
         /* access scope things qualifiers optional. */
-        h = e_ + kE1 + kEnumE1 + g_e1;
-        h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-        h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
-        h = kE2 + kEnumE2 + g_e2;
-        h = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
-        h = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+        intE e = e_ + kE1 + kEnumE1 + g_e1;
+        CsE:intE ce = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+        GsA:CsE:intE ace = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+        e = kE2 + kEnumE2 + g_e2;
+        ce = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
+        ace = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
         /* access enclosing scope things qualifier optional. */
-        h = kA1 + kEnumA1 + g_a1;
-        h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-        h = kA2 + kEnumA2 + g_a2;
-        h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+        intA a = kA1 + kEnumA1 + g_a1;
+        GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+        a = kA2 + kEnumA2 + g_a2;
+        aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
         /* access sibling scope things with qualifiers. */
-        h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-        h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-        h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
-        h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
-        h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-        h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-        h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
-        h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+        CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+        GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+        bb = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
+        abb = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+        CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+        GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+        dd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+        add = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
         __println("CsE:m_e3");
     }
 
@@ -412,36 +418,36 @@ GsA() {
 
         void m_f4() {
             /* access scope things qualifiers optional. */
-            h = f_ + kF1 + kEnumF1 + g_f1;
-            h = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
-            h = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
-            h = kF2 + kEnumF2 + g_f2;
-            h = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
-            h = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
-            h = kF3 + kEnumF3 + g_f3;
-            h = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
-            h = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
-            h = kF4 + kEnumF4 + g_f4;
-            h = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
-            h = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
+            intF f = f_ + kF1 + kEnumF1 + g_f1;
+            CsF:intF cf = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+            GsA:CsF:intF acf = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+            f = kF2 + kEnumF2 + g_f2;
+            cf = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+            acf = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+            f = kF3 + kEnumF3 + g_f3;
+            cf = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
+            acf = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
+            f = kF4 + kEnumF4 + g_f4;
+            cf = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
+            acf = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
             /* access enclosing scope things qualifier optional. */
-            h = kA1 + kEnumA1 + g_a1;
-            h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-            h = kA2 + kEnumA2 + g_a2;
-            h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+            intA a = kA1 + kEnumA1 + g_a1;
+            GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+            a = kA2 + kEnumA2 + g_a2;
+            aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
             /* access sibling scope things with qualifiers. */
-            h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-            h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-            h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
-            h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
-            h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-            h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-            h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
-            h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
-            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
-            h = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
-            h = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+            CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            bb = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
+            abb = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+            CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+            GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            dd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+            add = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+            CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
+            aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
             __println("CsF:m_f4");
         }
     }
@@ -449,36 +455,36 @@ GsA() {
     /* in-class inline reopen. */
     void CsF:m_f5() {
         /* access scope things qualifiers optional. */
-        h = f_ + kF1 + kEnumF1 + g_f1;
-        h = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
-        h = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
-        h = kF2 + kEnumF2 + g_f2;
-        h = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
-        h = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
-        h = kF3 + kEnumF3 + g_f3;
-        h = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
-        h = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
-        h = kF4 + kEnumF4 + g_f4;
-        h = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
-        h = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
+        intF f = f_ + kF1 + kEnumF1 + g_f1;
+        CsF:intF cf = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+        GsA:CsF:intF acf = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+        f = kF2 + kEnumF2 + g_f2;
+        cf = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+        acf = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+        f = kF3 + kEnumF3 + g_f3;
+        cf = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
+        acf = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
+        f = kF4 + kEnumF4 + g_f4;
+        cf = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
+        acf = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
         /* access enclosing scope things qualifier optional. */
-        h = kA1 + kEnumA1 + g_a1;
-        h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-        h = kA2 + kEnumA2 + g_a2;
-        h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+        intA a = kA1 + kEnumA1 + g_a1;
+        GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+        a = kA2 + kEnumA2 + g_a2;
+        aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
         /* access sibling scope things with qualifiers. */
-        h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-        h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-        h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
-        h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
-        h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-        h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-        h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
-        h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
-        h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-        h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
-        h = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
-        h = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+        CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+        GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+        bb = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
+        abb = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+        CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+        GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+        dd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+        add = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+        CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+        GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+        ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
+        aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
         __println("CsF:m_f5");
     }
 
@@ -491,38 +497,38 @@ GsA() {
 
         void m_g2() {
             /* access scope things qualifiers optional. */
-            h = g_ + kG1 + kEnumG1 + g_g1;
-            h = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
-            h = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
-            h = kG2 + kEnumG2 + g_g2;
-            h = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
-            h = GsA:GsG:kG2 + GsA:GsG:kEnumG2 + GsA:GsG:g_g2;
+            intG g = g_ + kG1 + kEnumG1 + g_g1;
+            GsG:intG cg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+            GsA:GsG:intG acg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+            g = kG2 + kEnumG2 + g_g2;
+            cg = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
+            acg = GsA:GsG:kG2 + GsA:GsG:kEnumG2 + GsA:GsG:g_g2;
             /* access enclosing scope things qualifier optional. */
-            h = kA1 + kEnumA1 + g_a1;
-            h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-            h = kA2 + kEnumA2 + g_a2;
-            h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+            intA a = kA1 + kEnumA1 + g_a1;
+            GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+            a = kA2 + kEnumA2 + g_a2;
+            aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
             /* access sibling scope things with qualifiers. */
-            h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-            h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-            h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
-            h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
-            h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-            h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-            h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
-            h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
-            h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-            h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
-            h = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
-            h = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
-            h = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
-            h = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
-            h = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
-            h = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
-            h = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
-            h = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
-            h = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
-            h = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
+            CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            bb = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
+            abb = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+            CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+            GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            dd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+            add = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+            CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
+            aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+            CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+            GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+            ff = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+            aff = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+            ff = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
+            aff = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
+            ff = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
+            aff = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
             __println("GsG:m_g2");
         }
     }
@@ -538,124 +544,124 @@ GsA() {
 /* inline reopen. */
 void GsA:m_a3() {
     /* access scope things qualifier optional. */
-    h = a_ + kA1 + kEnumA1 + g_a1;
-    h = kA2 + kEnumA2 + g_a2;
-    h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-    h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+    intA a = a_ + kA1 + kEnumA1 + g_a1;
+    a = kA2 + kEnumA2 + g_a2;
+    GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+    aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
     __println("GsA:m_a3");
 }
 
 /* inline reopen hoisted class. */
 void GsA:CsB:m_b4() {
     /* access scope things qualifiers optional. */
-    h = b_ + kB1 + kEnumB1 + g_b1;
-    h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-    h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-    h = kB2 + kEnumB2 + g_b2;
-    h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
-    h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+    intB b = b_ + kB1 + kEnumB1 + g_b1;
+    CsB:intB cb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+    GsA:CsB:intB acb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+    b = kB2 + kEnumB2 + g_b2;
+    cb = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
+    acb = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
     /* access enclosing scope things qualifier optional. */
-    h = kA1 + kEnumA1 + g_a1;
-    h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-    h = kA2 + kEnumA2 + g_a2;
-    h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+    intA a = kA1 + kEnumA1 + g_a1;
+    GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+    a = kA2 + kEnumA2 + g_a2;
+    aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
     /* access sibling scope things with qualifiers. */
-    h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-    h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-    h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
-    h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
-    h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-    h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
-    h = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
-    h = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+    CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+    GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+    dd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+    add = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+    CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+    GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+    ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
+    aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
     __println("CsB:m_b4");
 }
 
 /* inline reopen derived class. */
 void CsD:m_d4() {
     /* access scope things qualifiers optional. */
-    h = d_ + kD1 + kEnumD1 + g_d1;
-    h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-    h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-    h = kD2 + kEnumD2 + g_d2;
-    h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
-    h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+    intD d = d_ + kD1 + kEnumD1 + g_d1;
+    CsD:intD cd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+    GsA:CsD:intD acd = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+    d = kD2 + kEnumD2 + g_d2;
+    cd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+    acd = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
     /* access enclosing scope things qualifier optional. */
-    h = kA1 + kEnumA1 + g_a1;
-    h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-    h = kA2 + kEnumA2 + g_a2;
-    h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+    intA a = kA1 + kEnumA1 + g_a1;
+    GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+    a = kA2 + kEnumA2 + g_a2;
+    aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
     /* access sibling scope things with qualifiers. */
-    h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-    h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-    h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
-    h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
-    h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-    h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
-    h = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
-    h = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+    CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+    GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+    bb = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
+    abb = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+    CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+    GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+    ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
+    aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
     __println("CsD:m_d4");
 }
 
 /* inline reopen derived class. */
 void GsA:CsE:m_e4() {
     /* access scope things qualifiers optional. */
-    h = e_ + kE1 + kEnumE1 + g_e1;
-    h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-    h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
-    h = kE2 + kEnumE2 + g_e2;
-    h = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
-    h = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+    intE e = e_ + kE1 + kEnumE1 + g_e1;
+    CsE:intE ce = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+    GsA:CsE:intE ace = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+    e = kE2 + kEnumE2 + g_e2;
+    ce = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
+    ace = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
     /* access enclosing scope things qualifier optional. */
-    h = kA1 + kEnumA1 + g_a1;
-    h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-    h = kA2 + kEnumA2 + g_a2;
-    h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+    intA a = kA1 + kEnumA1 + g_a1;
+    GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+    a = kA2 + kEnumA2 + g_a2;
+    aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
     /* access sibling scope things with qualifiers. */
-    h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-    h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-    h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
-    h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
-    h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-    h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-    h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
-    h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+    CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+    GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+    bb = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
+    abb = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+    CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+    GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+    dd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+    add = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
     __println("CsE:m_e4");
 }
 
 /* inline reopen incomplete class. */
 void GsA:CsF:m_f6() {
     /* access scope things qualifiers optional. */
-    h = f_ + kF1 + kEnumF1 + g_f1;
-    h = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
-    h = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
-    h = kF2 + kEnumF2 + g_f2;
-    h = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
-    h = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
-    h = kF3 + kEnumF3 + g_f3;
-    h = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
-    h = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
-    h = kF4 + kEnumF4 + g_f4;
-    h = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
-    h = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
+    intF f = f_ + kF1 + kEnumF1 + g_f1;
+    CsF:intF cf = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+    GsA:CsF:intF acf = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+    f = kF2 + kEnumF2 + g_f2;
+    cf = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+    acf = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+    f = kF3 + kEnumF3 + g_f3;
+    cf = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
+    acf = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
+    f = kF4 + kEnumF4 + g_f4;
+    cf = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
+    acf = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
     /* access enclosing scope things qualifier optional. */
-    h = kA1 + kEnumA1 + g_a1;
-    h = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-    h = kA2 + kEnumA2 + g_a2;
-    h = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+    intA a = kA1 + kEnumA1 + g_a1;
+    GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+    a = kA2 + kEnumA2 + g_a2;
+    aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
     /* access sibling scope things with qualifiers. */
-    h = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-    h = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-    h = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
-    h = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
-    h = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-    h = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-    h = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
-    h = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
-    h = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-    h = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
-    h = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
-    h = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+    CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+    GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+    bb = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
+    abb = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+    CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+    GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+    dd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+    add = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+    CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+    GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+    ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
+    aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
     __println("CsF:m_f6");
 }
 
@@ -665,6 +671,7 @@ GsC(int c_ = 11) {
     const int kC1 = 12;
     enum EnumC1 ( kEnumC1 );
     global int g_c1 = 13;
+    alias intC = int;
 
     void m_c1() {
         __println("GsC:m_c1");

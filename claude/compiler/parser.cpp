@@ -161,17 +161,48 @@ void Parser::declareAlias(const std::string& name, const std::string& resolved, 
     auto& frame = alias_stack_.back();
     auto it = frame.find(name);
     if (it != frame.end()) {
+        // Class-body pre-scan registers aliases into the frame via the seed
+        // step before the main body loop runs. The main body loop's
+        // parseAliasDecl then re-encounters the same decl and calls
+        // declareAlias with matching tok + resolved body — accept silently.
+        if (it->second.tok == name_tok && it->second.resolved == resolved)
+            return;
         throw CompileError{file_id_, name_tok,
             "Alias '" + name + "' is already declared in the same scope."}
             .addNote(file_id_, it->second.tok, "First declared here.");
     }
     frame[name] = AliasInfo{resolved, name_tok};
+    // Phase 1: also register in the per-class registry so `Class:alias` path-
+    // qualified type names resolve. enclosingClassPath() is non-empty inside
+    // a class body and gives the canonical (dot-form) class path.
+    std::string class_path = enclosingClassPath();
+    if (!class_path.empty())
+        class_aliases_[class_path][name] = AliasInfo{resolved, name_tok};
 }
 
 std::string Parser::lookupAlias(const std::string& name) const {
     for (auto it = alias_stack_.rbegin(); it != alias_stack_.rend(); ++it) {
         auto sit = it->find(name);
         if (sit != it->end()) return sit->second.resolved;
+    }
+    return "";
+}
+
+std::string Parser::lookupClassAlias(const std::string& class_path,
+                                      const std::string& member) const {
+    // Walk the class's own aliases first, then its base chain. class_path is
+    // canonical (dot form). Returns the resolved type string on hit, "" on
+    // miss.
+    std::string cur = class_path;
+    while (!cur.empty()) {
+        auto cit = class_aliases_.find(cur);
+        if (cit != class_aliases_.end()) {
+            auto mit = cit->second.find(member);
+            if (mit != cit->second.end()) return mit->second.resolved;
+        }
+        auto bit = class_base_name_.find(cur);
+        if (bit == class_base_name_.end() || bit->second.empty()) break;
+        cur = bit->second;
     }
     return "";
 }
@@ -230,7 +261,7 @@ std::string Parser::lookupNestedFunc(const std::string& name) const {
     return "";
 }
 
-void Parser::parseAliasDecl(Program* program) {
+void Parser::parseAliasDecl(Program* program, SlidDef* slid) {
     advance(); // 'alias'
     int name_tok = pos_;
     std::string name = expect(TokenType::kIdentifier, "Expected alias name after 'alias'").value;
@@ -269,6 +300,8 @@ void Parser::parseAliasDecl(Program* program) {
     expect(TokenType::kSemicolon, "Expected ';' after alias declaration");
     if (program)
         program->type_aliases.push_back({name, resolved, file_id_, name_tok});
+    if (slid)
+        slid->aliases.push_back({name, resolved, file_id_, name_tok});
     declareAlias(name, resolved, name_tok);
 }
 
@@ -980,6 +1013,91 @@ std::string Parser::parseTypeName() {
             std::string inner = advance().value;
             base += "." + inner;
             qualified = true;
+        }
+        if (qualified) {
+            // Phase 2: class-path alias lookup. Path is dot-form, e.g.
+            // "GsA.intA" or "GsA.CsE.intE". Split at the last '.' — left =
+            // class path, right = candidate alias name. Q1 rule: alias lookup
+            // is last — only fire if the full path isn't itself a known
+            // class (so a class wins on name collision).
+            auto dot = base.rfind('.');
+            if (dot != std::string::npos
+                && all_slid_fields_.find(base) == all_slid_fields_.end()) {
+                std::string class_path = base.substr(0, dot);
+                std::string member = base.substr(dot + 1);
+                // Phase 3: short-name resolution on the leading segment.
+                // First try enclosing_class_names_ (matches self/ancestor —
+                // e.g. `CsE:intE` from inside CsE's own body, or `GsA:intA`
+                // from inside any nested class). Then fall back to
+                // nested_alias_ (matches sibling nested classes declared
+                // in an enclosing class body — e.g. `CsD:intD` from inside
+                // CsE inside GsA, where CsD is also nested in GsA).
+                {
+                    auto first_dot = class_path.find('.');
+                    std::string first = (first_dot == std::string::npos)
+                        ? class_path : class_path.substr(0, first_dot);
+                    std::string rest = (first_dot == std::string::npos)
+                        ? "" : class_path.substr(first_dot);
+                    bool resolved = false;
+                    std::string acc;
+                    for (auto& enc : enclosing_class_names_) {
+                        if (!acc.empty()) acc += ".";
+                        acc += enc.name;
+                        if (enc.name == first) {
+                            class_path = acc + rest;
+                            resolved = true;
+                            break;
+                        }
+                    }
+                    if (!resolved) {
+                        auto na = nested_alias_.find(first);
+                        if (na != nested_alias_.end()) {
+                            class_path = na->second + rest;
+                            resolved = true;
+                        }
+                    }
+                    if (!resolved) {
+                        // walk outer-class nested_alias_ snapshots (innermost
+                        // first) so sibling short names resolve from inside
+                        // a nested class's method body.
+                        for (auto it = outer_nested_aliases_.rbegin();
+                             it != outer_nested_aliases_.rend(); ++it) {
+                            auto fit = it->find(first);
+                            if (fit != it->end()) {
+                                class_path = fit->second + rest;
+                                resolved = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!resolved) {
+                        // Last-ditch: unique-suffix match against known
+                        // canonical class paths (collected in class_aliases_).
+                        // Handles file-scope external method bodies where the
+                        // path `CsE:intE` carries a short class name and no
+                        // enclosing/nested-alias scope is available.
+                        std::string suffix = "." + first;
+                        std::string match;
+                        int count = 0;
+                        for (auto& kv : class_aliases_) {
+                            if (kv.first.size() > suffix.size()
+                                && kv.first.compare(kv.first.size() - suffix.size(),
+                                                     suffix.size(), suffix) == 0) {
+                                match = kv.first;
+                                count++;
+                                if (count > 1) break;
+                            }
+                        }
+                        if (count == 1) class_path = match + rest;
+                    }
+                }
+                std::string resolved_class_alias =
+                    lookupClassAlias(class_path, member);
+                if (!resolved_class_alias.empty()) {
+                    base = resolved_class_alias;
+                    resolved_alias = true;
+                }
+            }
         }
         if (!qualified) {
             // unqualified — apply nested-alias map (e.g. "Inner" → "Outer.Inner" inside Outer's body)
@@ -3563,6 +3681,11 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     // RAII guard below pops on any exit path (return or throw), keeping the
     // stack consistent if a deeper parser error unwinds through us.
     enclosing_class_names_.push_back({slid.name, slid.name_file_id, slid.name_tok});
+    // Phase 4: record canonical class → base mapping so lookupClassAlias can
+    // walk the inheritance chain. base_name may still be short for forward-
+    // referenced file-scope bases; the post-merge fixup canonicalizes those.
+    if (!slid.base_name.empty())
+        class_base_name_[enclosingClassPath()] = slid.base_name;
     struct StackGuard {
         std::vector<EnclosingClass>& stack;
         ~StackGuard() { stack.pop_back(); }
@@ -3585,8 +3708,12 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         }
     }
 
-    // save outer's alias map; nested slids in this slid's body register short→canonical here
+    // save outer's alias map; nested slids in this slid's body register short→canonical here.
+    // also push onto outer_nested_aliases_ so a nested class's method bodies
+    // can resolve sibling-class short names (e.g. `CsD:intD` from inside CsE
+    // when CsD is a sibling nested in the enclosing class).
     auto saved_alias = nested_alias_;
+    outer_nested_aliases_.push_back(saved_alias);
     nested_alias_.clear();
 
     // template type parameters: Vector<T> or Pair<K, V>
@@ -3735,34 +3862,93 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     // within a class body.
     {
         int save_pos = pos_;
-        int depth = 0;
-        while (pos_ < (int)tokens_.size() && peek().type != TokenType::kEof) {
-            if (peek().type == TokenType::kRBrace && depth == 0) break;
-            if (depth == 0) {
-                std::string short_name;
-                if (isSlidDeclLookahead()) {
-                    short_name = peek().value;
-                } else if (isDerivedSlidDeclLookahead()) {
-                    int p = pos_;
-                    int last_ident = -1;
-                    while (p < (int)tokens_.size()
-                           && tokens_[p].type != TokenType::kLParen
-                           && tokens_[p].type != TokenType::kLt
-                           && tokens_[p].type != TokenType::kEof) {
-                        if (tokens_[p].type == TokenType::kIdentifier) last_ident = p;
-                        p++;
+        std::string my_path = enclosingClassPath();
+        // Recursive walker: at depth 0 of each class body, registers
+        // (a) nested-class short→canonical into nested_alias_ (only at the
+        // outermost level — siblings of THIS class), and (b) class-scope
+        // aliases into class_aliases_ for the appropriate path, descending
+        // into nested class bodies to lift forward-reference order across
+        // sibling classes. parseTypeName is invoked during pre-scan for the
+        // alias RHS; simple primitive RHS works without alias_stack_ being
+        // pushed yet.
+        std::function<void(const std::string&)> walk = [&](const std::string& path) {
+            int depth = 0;
+            while (pos_ < (int)tokens_.size() && peek().type != TokenType::kEof) {
+                if (peek().type == TokenType::kRBrace && depth == 0) break;
+                if (depth == 0) {
+                    // class-scope alias decl
+                    if (peek().type == TokenType::kAlias) {
+                        int save_a = pos_;
+                        advance(); // 'alias'
+                        if (peek().type != TokenType::kIdentifier) {
+                            pos_ = save_a; advance(); continue;
+                        }
+                        int name_tok = pos_;
+                        std::string name = peek().value;
+                        advance(); // alias name
+                        if (peek().type == TokenType::kLt
+                            || peek().type != TokenType::kEquals) {
+                            // templated alias or unexpected shape — defer
+                            pos_ = save_a; advance(); continue;
+                        }
+                        advance(); // '='
+                        std::string body;
+                        try { body = parseTypeName(); }
+                        catch (...) { pos_ = save_a; advance(); continue; }
+                        if (peek().type != TokenType::kSemicolon) {
+                            pos_ = save_a; advance(); continue;
+                        }
+                        advance(); // ';'
+                        class_aliases_[path][name] = AliasInfo{body, name_tok};
+                        continue;
                     }
-                    if (last_ident >= 0) short_name = tokens_[last_ident].value;
+                    // nested class declaration: detect via lookaheads, register
+                    // nested_alias_ (only for THIS slid's level), and recurse
+                    // into the body to collect inner aliases.
+                    std::string short_name;
+                    bool is_class = false;
+                    if (isSlidDeclLookahead()) {
+                        short_name = peek().value;
+                        is_class = true;
+                    } else if (isDerivedSlidDeclLookahead()) {
+                        int p = pos_;
+                        int last_ident = -1;
+                        while (p < (int)tokens_.size()
+                               && tokens_[p].type != TokenType::kLParen
+                               && tokens_[p].type != TokenType::kLt
+                               && tokens_[p].type != TokenType::kEof) {
+                            if (tokens_[p].type == TokenType::kIdentifier) last_ident = p;
+                            p++;
+                        }
+                        if (last_ident >= 0) {
+                            short_name = tokens_[last_ident].value;
+                            is_class = true;
+                        }
+                    }
+                    if (is_class && !short_name.empty()) {
+                        std::string nested_canonical = path + "." + short_name;
+                        if (path == my_path)
+                            nested_alias_[short_name] = nested_canonical;
+                        // skip the header tokens to reach the body's '{'
+                        while (pos_ < (int)tokens_.size()
+                               && peek().type != TokenType::kLBrace
+                               && peek().type != TokenType::kEof) {
+                            advance();
+                        }
+                        if (peek().type == TokenType::kLBrace) {
+                            advance(); // consume '{'
+                            walk(nested_canonical);
+                            if (peek().type == TokenType::kRBrace) advance();
+                        }
+                        continue;
+                    }
                 }
-                if (!short_name.empty()) {
-                    std::string canonical = enclosingClassPath() + "." + short_name;
-                    nested_alias_[short_name] = canonical;
-                }
+                if (peek().type == TokenType::kLBrace) depth++;
+                else if (peek().type == TokenType::kRBrace) depth--;
+                advance();
             }
-            if (peek().type == TokenType::kLBrace) depth++;
-            else if (peek().type == TokenType::kRBrace) depth--;
-            advance();
-        }
+        };
+        walk(my_path);
         pos_ = save_pos;
     }
 
@@ -3770,6 +3956,15 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     // the body's methods (nested below this frame) and popped at the close.
     alias_stack_.push_back({});
     alias_template_stack_.push_back({});
+    // Phase 1: seed this frame with class-scope aliases from prior occurrences
+    // of the same class (reopens). Without this, a reopen's method bodies
+    // wouldn't see aliases declared in the primary body.
+    {
+        auto cit = class_aliases_.find(enclosingClassPath());
+        if (cit != class_aliases_.end())
+            for (auto& kv : cit->second)
+                alias_stack_.back()[kv.first] = kv.second;
+    }
 
     auto ctor_body = make<BlockStmt>(t_start);
     bool has_ctor_code = false;
@@ -3798,9 +3993,11 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             continue;
         }
         // class-scope alias: `alias Name = TypeExpr;` — registered in the
-        // class body's alias frame, visible to this class's methods.
+        // class body's alias frame, visible to this class's methods. Passing
+        // `&slid` also captures the alias into SlidDef.aliases so it can
+        // propagate cross-TU via .slh import.
         if (peek().type == TokenType::kAlias) {
-            parseAliasDecl();
+            parseAliasDecl(nullptr, &slid);
             continue;
         }
         // class-scope const declaration: const [type] name = expr;
@@ -4062,6 +4259,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     expect(TokenType::kRBrace, "Expected '}'");
     current_slid_fields_.clear();
     nested_alias_ = std::move(saved_alias);
+    outer_nested_aliases_.pop_back();
 
     // a name cannot be both a class and a namespace.
     auto ns_clash = seen_namespaces_.find(slid.name);
@@ -4400,7 +4598,60 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
         for (auto& p : em.params) param_names.push_back(p.second);
         std::string saved_fn = current_function_name_;
         current_function_name_ = em.slid_name + ":" + em.method_name;
+        // Seed an alias frame from the target class so the body sees the
+        // class's bare aliases (e.g. `intB` inside `void CsB:m_b3()`). The
+        // frame is popped after parseBlock returns. em.slid_name may still
+        // be the short form (single-segment external method inside a class
+        // body); canonicalize via nested_alias_ before the lookup. Then
+        // walk back through enclosing-class prefixes so the body also sees
+        // outer-class aliases (e.g. `intA` from inside `void GsA:CsE:m_e4()`).
+        std::map<std::string, AliasInfo> em_frame;
+        {
+            std::string scoped_slid = em.slid_name;
+            auto na = nested_alias_.find(scoped_slid);
+            if (na != nested_alias_.end()) scoped_slid = na->second;
+            // For file-scope external methods with a short class name (e.g.
+            // `void CsD:m_d4()`), nested_alias_ is empty. Apply a unique-
+            // suffix match against class_aliases_'s canonical keys before
+            // walking enclosing paths.
+            if (class_aliases_.find(scoped_slid) == class_aliases_.end()) {
+                std::string suffix = "." + scoped_slid;
+                std::string match;
+                int count = 0;
+                for (auto& kv : class_aliases_) {
+                    if (kv.first.size() > suffix.size()
+                        && kv.first.compare(kv.first.size() - suffix.size(),
+                                             suffix.size(), suffix) == 0) {
+                        match = kv.first;
+                        count++;
+                        if (count > 1) break;
+                    }
+                }
+                if (count == 1) scoped_slid = match;
+            }
+            std::vector<std::string> enclosing_paths;
+            {
+                std::string acc = scoped_slid;
+                while (!acc.empty()) {
+                    enclosing_paths.push_back(acc);
+                    auto dot = acc.rfind('.');
+                    if (dot == std::string::npos) break;
+                    acc = acc.substr(0, dot);
+                }
+            }
+            // outer → inner so inner aliases overwrite outer ones with the
+            // same name.
+            for (auto it = enclosing_paths.rbegin();
+                 it != enclosing_paths.rend(); ++it) {
+                auto cit = class_aliases_.find(*it);
+                if (cit != class_aliases_.end())
+                    for (auto& kv : cit->second)
+                        em_frame[kv.first] = kv.second;
+            }
+        }
+        alias_stack_.push_back(std::move(em_frame));
         em.body = parseBlock(param_names);
+        alias_stack_.pop_back();
         current_function_name_ = saved_fn;
     }
     current_slid_fields_.clear();
