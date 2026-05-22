@@ -1071,24 +1071,29 @@ std::string Parser::parseTypeName() {
                         }
                     }
                     if (!resolved) {
-                        // Last-ditch: unique-suffix match against known
-                        // canonical class paths (collected in class_aliases_).
-                        // Handles file-scope external method bodies where the
-                        // path `CsE:intE` carries a short class name and no
-                        // enclosing/nested-alias scope is available.
-                        std::string suffix = "." + first;
-                        std::string match;
-                        int count = 0;
-                        for (auto& kv : class_aliases_) {
-                            if (kv.first.size() > suffix.size()
-                                && kv.first.compare(kv.first.size() - suffix.size(),
-                                                     suffix.size(), suffix) == 0) {
-                                match = kv.first;
-                                count++;
-                                if (count > 1) break;
-                            }
+                        // Enclosing-chain walk against class_aliases_ (which
+                        // the file-scope pre-pass populates across all
+                        // reopens). Lets a sibling defined later in the file
+                        // — possibly in another reopen of the enclosing
+                        // class — resolve from inside a method body. Walks
+                        // innermost to outermost; bounded by the chain, so
+                        // file-scope code (empty chain) gets no match.
+                        std::string acc;
+                        for (auto& enc : enclosing_class_names_) {
+                            if (!acc.empty()) acc += ".";
+                            acc += enc.name;
                         }
-                        if (count == 1) class_path = match + rest;
+                        while (!acc.empty()) {
+                            std::string candidate = acc + "." + first;
+                            if (class_aliases_.count(candidate)) {
+                                class_path = candidate + rest;
+                                resolved = true;
+                                break;
+                            }
+                            auto dot = acc.rfind('.');
+                            if (dot == std::string::npos) break;
+                            acc = acc.substr(0, dot);
+                        }
                     }
                 }
                 std::string resolved_class_alias =
@@ -3692,26 +3697,6 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     slid.name_file_id = file_id_;
     slid.name_tok = name_tok;
     advance(); // consume class name
-    // Canonicalize a file-scope short-name class declaration to its
-    // existing hoisted canonical path via unique-suffix match. Lets
-    // `GsH() {...}` at file scope reopen hoisted `GsA.GsH` rather than
-    // declare a separate top-level GsH. Only fires at the outermost level
-    // (empty enclosing_class_names_); nested-class scope is unaffected.
-    if (enclosing_class_names_.empty() && !class_aliases_.count(slid.name)) {
-        std::string suffix = "." + slid.name;
-        std::string match;
-        int count = 0;
-        for (auto& kv : class_aliases_) {
-            if (kv.first.size() > suffix.size()
-                && kv.first.compare(kv.first.size() - suffix.size(),
-                                     suffix.size(), suffix) == 0) {
-                match = kv.first;
-                count++;
-                if (count > 1) break;
-            }
-        }
-        if (count == 1) slid.name = match;
-    }
 
     // push onto the enclosing-class chain so any hoisted class defined inside
     // this body can detect a transitive name collision and reject it. The
@@ -3997,26 +3982,8 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     // of the same class (reopens) AND the base chain so derived classes see
     // their bases' aliases as bare names (inheritance). Walk base-first to
     // outer-first so own-class aliases shadow base aliases on the same name.
-    // The enclosing path may be a short name (`GsH() {...}` at file scope
-    // reopening hoisted `GsA.GsH`); apply unique-suffix match so the seed
-    // finds the canonical entry.
     {
         std::string root = enclosingClassPath();
-        if (!root.empty() && class_aliases_.find(root) == class_aliases_.end()) {
-            std::string suffix = "." + root;
-            std::string match;
-            int count = 0;
-            for (auto& kv : class_aliases_) {
-                if (kv.first.size() > suffix.size()
-                    && kv.first.compare(kv.first.size() - suffix.size(),
-                                         suffix.size(), suffix) == 0) {
-                    match = kv.first;
-                    count++;
-                    if (count > 1) break;
-                }
-            }
-            if (count == 1) root = match;
-        }
         std::vector<std::string> base_chain;
         std::string cur = root;
         while (!cur.empty()) {
@@ -4729,7 +4696,28 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
             }
         }
         alias_stack_.push_back(std::move(em_frame));
+        // Push target-class segments onto enclosing_class_names_ so type-name
+        // lookups in the body can resolve qualified short names via the
+        // chain walk (e.g. `CsH:intH` inside `void GsA:CsH:m_h4()` matches
+        // the chain segment `CsH`). Uses em.slid_name which has already been
+        // canonicalized to dot-form (and to the hoisted path if the target
+        // was a short-name external method).
+        int em_pushes = 0;
+        {
+            size_t start = 0;
+            while (start <= em.slid_name.size()) {
+                size_t dot = em.slid_name.find('.', start);
+                std::string seg = (dot == std::string::npos)
+                    ? em.slid_name.substr(start)
+                    : em.slid_name.substr(start, dot - start);
+                enclosing_class_names_.push_back({seg, em.file_id, em.tok});
+                em_pushes++;
+                if (dot == std::string::npos) break;
+                start = dot + 1;
+            }
+        }
         em.body = parseBlock(param_names);
+        for (int i = 0; i < em_pushes; i++) enclosing_class_names_.pop_back();
         alias_stack_.pop_back();
         current_function_name_ = saved_fn;
     }
@@ -5446,29 +5434,33 @@ Program Parser::parse() {
         hoist(program.slids[i], program.slids[i].name);
     }
 
-    // Canonicalize file-scope short-name slid declarations to existing
-    // hoisted canonical names via unique-suffix match. Lets `GsH() {...}`
-    // at file scope reopen the nested `GsA.GsH` rather than create a new
-    // top-level GsH. mergeReopens then collapses them into one entry.
+    // Collision detection for the qualified-derived shape. `Outer:Inner() {...}`
+    // at file scope parses as a derived-class declaration (slid.name = "Inner",
+    // slid.base_name = "Outer"). When `Outer.Inner` is already a hoisted class,
+    // the user's spelling is ambiguous — could be a qualified reopen, could be
+    // a new derived class with the same canonical position. Reject. Bare short
+    // names with empty base_name are left alone: by the visibility rule,
+    // `Inner() {...}` at file scope is a fresh top-level class.
     {
         std::set<std::string> canonical;
         for (auto& s : program.slids) canonical.insert(s.name);
         for (auto& s : program.slids) {
-            if (s.name.find('.') != std::string::npos) continue; // already canonical
-            std::string suffix = "." + s.name;
-            std::string match;
-            int count = 0;
-            for (auto& nm : canonical) {
-                if (nm == s.name) continue;
-                if (nm.size() > suffix.size()
-                    && nm.compare(nm.size() - suffix.size(),
-                                   suffix.size(), suffix) == 0) {
-                    match = nm;
-                    count++;
-                    if (count > 1) break;
-                }
+            if (s.name.find('.') != std::string::npos) continue;
+            if (s.base_name.empty()) continue;
+            std::string candidate = s.base_name + "." + s.name;
+            if (!canonical.count(candidate)) continue;
+            // Find the prior hoisted entry to attach a note.
+            std::string user_name = candidate;
+            for (char& c : user_name) if (c == '.') c = ':';
+            for (auto& other : program.slids) {
+                if (other.name != candidate) continue;
+                throw CompileError{s.name_file_id, s.name_tok,
+                    "Class '" + user_name
+                        + "' collides with hoisted nested class '"
+                        + user_name + "'."}
+                    .addNote(other.name_file_id, other.name_tok,
+                             "Hoisted class declared here.");
             }
-            if (count == 1) s.name = match;
         }
     }
 
