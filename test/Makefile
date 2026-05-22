@@ -44,7 +44,7 @@ SAMPLES = \
 	phrases \
 	pointer \
 	ranges \
-	reopen \
+	reopen1 reopen2 \
 	returnslid \
 	sizeof \
 	strlitcat \

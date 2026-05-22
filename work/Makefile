@@ -112,7 +112,7 @@ $(VEC_INST_OBJ): $(VEC_INST_LL)
 $(VEC_INST_LL): $(VEC_INST_SL) $(SLIDSC)
 	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS)
 
-$(VEC_INST_SL): $(wildcard $(VEC_DIR)/*.sli) $(SLIDSC)
+$(VEC_INST_SL): $(VEC_DIR)/vector1.ll $(SLIDSC)
 	$(SLIDSC) --instantiate $(VEC_DIR) -o $@
 
 # ---- galaxy ----
@@ -143,7 +143,7 @@ $(TMT_INST_OBJ): $(TMT_INST_LL)
 $(TMT_INST_LL): $(TMT_INST_SL) $(SLIDSC)
 	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS)
 
-$(TMT_INST_SL): $(wildcard $(TMT_DIR)/*.sli) $(SLIDSC)
+$(TMT_INST_SL): $(TMT_DIR)/template_test.ll $(SLIDSC)
 	$(SLIDSC) --instantiate $(TMT_DIR) -o $@
 
 $(GAL_INST_OBJ): $(GAL_INST_LL)
@@ -152,7 +152,7 @@ $(GAL_INST_OBJ): $(GAL_INST_LL)
 $(GAL_INST_LL): $(GAL_INST_SL) $(SLIDSC)
 	$(SLIDSC) $< -o $@ $(SLIDSC_FLAGS)
 
-$(GAL_INST_SL): $(wildcard $(GAL_DIR)/*.sli) $(SLIDSC)
+$(GAL_INST_SL): $(GAL_DIR)/galaxy.ll $(SLIDSC)
 	$(SLIDSC) --instantiate $(GAL_DIR) -o $@
 
 # ---- auto-generated dependencies ----

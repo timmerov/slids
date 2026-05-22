@@ -1,21 +1,21 @@
 #!/bin/bash
 set -e
 
-OPTS="-j 4"
+OPTS="-j 8"
 
 echo "building slids compiler..."
 make ${OPTS} -C compiler/
 
 echo "building bugs code..."
-make -C bugs/
+make ${OPTS} -C bugs/
 
 echo "building sample code..."
-make -C sample/
+make ${OPTS} -C sample/
 
 echo "building test code..."
-make -C test/
+make ${OPTS} -C test/
 
 echo "building work directory..."
-make -C work/
+make ${OPTS} -C work/
 
 echo "done!"

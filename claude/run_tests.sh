@@ -17,8 +17,7 @@ SAMPLES=(
     constructor
     for
     function1
-    global1
-    global2
+    global1 global2
     headerfields
     incomplete
     indexop
@@ -41,7 +40,7 @@ SAMPLES=(
     phrases
     pointer
     ranges
-    reopen
+    reopen1 reopen2
     returnslid
     sizeof
     strlitcat
