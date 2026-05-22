@@ -724,6 +724,37 @@ GsA() {
         }
     }
 
+    /* block-mode reopen of the new class inside GsA reopen. */
+    GsH() {
+        /* define more things. */
+        const int kH2 = 47;
+        enum EnumH2 ( kEnumH2 );
+        global int g_h2 = 48;
+
+        void m_h2() {
+            /* access scope things qualifiers optional. */
+            intH h = h_ + kH1 + kEnumH1 + g_h1;
+            GsH:intH ch = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+            GsA:GsH:intH ach = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
+            h = kH2 + kEnumH2 + g_h2;
+            ch = GsH:kH2 + GsH:kEnumH2 + GsH:g_h2;
+            ach = GsA:GsH:kH2 + GsA:GsH:kEnumH2 + GsA:GsH:g_h2;
+            __println("GsH:m_h2");
+        }
+    }
+
+    /* inline-mode reopen of the new class inside GsA reopen. */
+    void GsH:m_h3() {
+        /* access scope things qualifiers optional. */
+        intH h = h_ + kH1 + kEnumH1 + g_h1;
+        GsH:intH ch = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+        GsA:GsH:intH ach = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
+        h = kH2 + kEnumH2 + g_h2;
+        ch = GsH:kH2 + GsH:kEnumH2 + GsH:g_h2;
+        ach = GsA:GsH:kH2 + GsA:GsH:kEnumH2 + GsA:GsH:g_h2;
+        __println("GsH:m_h3");
+    }
+
     /* compile error: re-definition. */
     //CsB(int b_ = 10) { }
     //CsD(int d_ = 21) { }
@@ -910,6 +941,43 @@ void GsA:CsF:m_f6() {
     __println("CsF:m_f6");
 }
 
+/* block-mode reopen of the new class at file scope. */
+GsH() {
+    /* define more things. */
+    const int kH3 = 49;
+    enum EnumH3 ( kEnumH3 );
+    global int g_h3 = 50;
+
+    void m_h4() {
+        /* access scope things qualifiers optional. */
+        intH h = h_ + kH1 + kEnumH1 + g_h1;
+        GsH:intH ch = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+        GsA:GsH:intH ach = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
+        h = kH2 + kEnumH2 + g_h2;
+        ch = GsH:kH2 + GsH:kEnumH2 + GsH:g_h2;
+        ach = GsA:GsH:kH2 + GsA:GsH:kEnumH2 + GsA:GsH:g_h2;
+        h = kH3 + kEnumH3 + g_h3;
+        ch = GsH:kH3 + GsH:kEnumH3 + GsH:g_h3;
+        ach = GsA:GsH:kH3 + GsA:GsH:kEnumH3 + GsA:GsH:g_h3;
+        __println("GsH:m_h4");
+    }
+}
+
+/* inline-mode reopen of the new class at file scope. */
+void GsA:GsH:m_h5() {
+    /* access scope things qualifiers optional. */
+    intH h = h_ + kH1 + kEnumH1 + g_h1;
+    GsH:intH ch = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+    GsA:GsH:intH ach = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
+    h = kH2 + kEnumH2 + g_h2;
+    ch = GsH:kH2 + GsH:kEnumH2 + GsH:g_h2;
+    ach = GsA:GsH:kH2 + GsA:GsH:kEnumH2 + GsA:GsH:g_h2;
+    h = kH3 + kEnumH3 + g_h3;
+    ch = GsH:kH3 + GsH:kEnumH3 + GsH:g_h3;
+    ach = GsA:GsH:kH3 + GsA:GsH:kEnumH3 + GsA:GsH:g_h3;
+    __println("GsH:m_h5");
+}
+
 /* global scope class definition. */
 GsC(int c_ = 11) {
     /* define things. */
@@ -973,6 +1041,10 @@ int32 main() {
         GsA:GsH gsh;
         h = gsh.h_ + GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
         gsh.m_h1();
+        gsh.m_h2();
+        gsh.m_h3();
+        gsh.m_h4();
+        gsh.m_h5();
     }
 
     /* compile errors: not in global scope. */

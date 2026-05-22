@@ -3675,6 +3675,26 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     slid.name_file_id = file_id_;
     slid.name_tok = name_tok;
     advance(); // consume class name
+    // Canonicalize a file-scope short-name class declaration to its
+    // existing hoisted canonical path via unique-suffix match. Lets
+    // `GsH() {...}` at file scope reopen hoisted `GsA.GsH` rather than
+    // declare a separate top-level GsH. Only fires at the outermost level
+    // (empty enclosing_class_names_); nested-class scope is unaffected.
+    if (enclosing_class_names_.empty() && !class_aliases_.count(slid.name)) {
+        std::string suffix = "." + slid.name;
+        std::string match;
+        int count = 0;
+        for (auto& kv : class_aliases_) {
+            if (kv.first.size() > suffix.size()
+                && kv.first.compare(kv.first.size() - suffix.size(),
+                                     suffix.size(), suffix) == 0) {
+                match = kv.first;
+                count++;
+                if (count > 1) break;
+            }
+        }
+        if (count == 1) slid.name = match;
+    }
 
     // push onto the enclosing-class chain so any hoisted class defined inside
     // this body can detect a transitive name collision and reject it. The
@@ -3960,9 +3980,28 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     // of the same class (reopens) AND the base chain so derived classes see
     // their bases' aliases as bare names (inheritance). Walk base-first to
     // outer-first so own-class aliases shadow base aliases on the same name.
+    // The enclosing path may be a short name (`GsH() {...}` at file scope
+    // reopening hoisted `GsA.GsH`); apply unique-suffix match so the seed
+    // finds the canonical entry.
     {
+        std::string root = enclosingClassPath();
+        if (!root.empty() && class_aliases_.find(root) == class_aliases_.end()) {
+            std::string suffix = "." + root;
+            std::string match;
+            int count = 0;
+            for (auto& kv : class_aliases_) {
+                if (kv.first.size() > suffix.size()
+                    && kv.first.compare(kv.first.size() - suffix.size(),
+                                         suffix.size(), suffix) == 0) {
+                    match = kv.first;
+                    count++;
+                    if (count > 1) break;
+                }
+            }
+            if (count == 1) root = match;
+        }
         std::vector<std::string> base_chain;
-        std::string cur = enclosingClassPath();
+        std::string cur = root;
         while (!cur.empty()) {
             base_chain.push_back(cur);
             auto bit = class_base_name_.find(cur);
@@ -5388,6 +5427,32 @@ Program Parser::parse() {
     int top_count = (int)program.slids.size();
     for (int i = 0; i < top_count; i++) {
         hoist(program.slids[i], program.slids[i].name);
+    }
+
+    // Canonicalize file-scope short-name slid declarations to existing
+    // hoisted canonical names via unique-suffix match. Lets `GsH() {...}`
+    // at file scope reopen the nested `GsA.GsH` rather than create a new
+    // top-level GsH. mergeReopens then collapses them into one entry.
+    {
+        std::set<std::string> canonical;
+        for (auto& s : program.slids) canonical.insert(s.name);
+        for (auto& s : program.slids) {
+            if (s.name.find('.') != std::string::npos) continue; // already canonical
+            std::string suffix = "." + s.name;
+            std::string match;
+            int count = 0;
+            for (auto& nm : canonical) {
+                if (nm == s.name) continue;
+                if (nm.size() > suffix.size()
+                    && nm.compare(nm.size() - suffix.size(),
+                                   suffix.size(), suffix) == 0) {
+                    match = nm;
+                    count++;
+                    if (count > 1) break;
+                }
+            }
+            if (count == 1) s.name = match;
+        }
     }
 
     // collapse multiple reopens of the same class into one merged SlidDef.
