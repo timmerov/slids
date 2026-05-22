@@ -78,9 +78,11 @@ std::string Codegen::emitExpr(const Expr& expr) {
                     return std::to_string(val);
             }
             std::string canon = canonicalizeShortPath(v->name);
-            auto eit = enum_values_.find(canon);
-            if (eit != enum_values_.end())
-                return std::to_string(eit->second);
+            {
+                int val;
+                if (lookupEnumValueChained(canon, val))
+                    return std::to_string(val);
+            }
             // check if it's an array — return ptr to first element
             auto ait = array_info_.find(v->name);
             if (ait != array_info_.end()) {
@@ -2366,7 +2368,11 @@ std::string Codegen::exprLlvmType(const Expr& expr) {
             int val;
             if (lookupCurrentSlidEnumValue(v->name, val)) return "i32";
         }
-        if (enum_values_.count(canonicalizeShortPath(v->name))) return "i32";
+        {
+            int val;
+            if (lookupEnumValueChained(canonicalizeShortPath(v->name), val))
+                return "i32";
+        }
         // array name used as pointer — ptr
         if (array_info_.count(v->name)) return "ptr";
         // type name used as anonymous slid temp — ptr
@@ -3063,7 +3069,10 @@ void Codegen::requireDefinedVarExpr(const Expr& src) {
         int val;
         if (lookupCurrentSlidEnumValue(v->name, val)) return;
     }
-    if (enum_values_.count(canonicalizeShortPath(v->name))) return;
+    {
+        int val;
+        if (lookupEnumValueChained(canonicalizeShortPath(v->name), val)) return;
+    }
     if (array_info_.count(v->name)) return;
     if (slid_info_.count(v->name)) return;
     errorAtNode(src, "Undefined variable: " + v->name + ".");

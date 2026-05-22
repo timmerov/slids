@@ -18,129 +18,156 @@
 #   //for (x : (Simple(1), Simple(2))) {
 #   //    __println("...");
 #   //}
+#
+# Parallelization:
+#   The slidsc invocations are dispatched concurrently via `xargs -P`. Source
+#   parsing and result reduction stay sequential so output remains in source
+#   order. Set NEG_JOBS=N to override the parallel-job count (default nproc).
 
 set -u
 
+# --- worker mode -------------------------------------------------------------
+# When the script is re-invoked by xargs with `--worker`, it just runs one
+# slidsc case and writes a structured result line to $NEG_TMPDIR/r_$key.
+# Input is a single tab-delimited arg: key<TAB>src<TAB>substring<TAB>body_start<TAB>body_end.
+if [ "${1:-}" = "--worker" ]; then
+    IFS=$'\t' read -r key src substring body_start body_end <<< "$2"
+    case_file="$NEG_TMPDIR/case_$key.sl"
+    awk -v b="$body_start" -v e="$body_end" '
+        NR >= b && NR <= e { sub(/\/\//, "") }
+        { print }
+    ' "$src" > "$case_file"
+    err=$("$SLIDSC" "$case_file" -o "$NEG_TMPDIR/case_$key.ll" --import-path . 2>&1)
+    rc=$?
+    # Strip rendered source-context lines so the marker substring can't match
+    # its own appearance in the listing slidsc prints with each diagnostic.
+    diag=$(printf '%s' "$err" | grep -Ev '^[[:space:]]*[0-9]+:|^[[:space:]]*\^')
+    result_file="$NEG_TMPDIR/r_$key"
+    if [ $rc -eq 0 ]; then
+        printf 'FAIL\texpected error '\''%s'\'' but slidsc succeeded\n' "$substring" > "$result_file"
+    elif printf '%s' "$diag" | grep -qF -- "$substring"; then
+        printf 'PASS\t%s\n' "$substring" > "$result_file"
+    else
+        last=$(printf '%s' "$err" | tail -1)
+        printf 'FAIL\texpected '\''%s'\'', got: %s\n' "$substring" "$last" > "$result_file"
+    fi
+    exit 0
+fi
+
+# --- driver mode -------------------------------------------------------------
+# Resolve SELF before any cd so the dirname-of-$0 trick still works regardless
+# of where the user invoked the script from.
+SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 cd "$(dirname "$0")"
 SLIDSC=../bin/slidsc
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
+NEG_TMPDIR=$(mktemp -d)
+trap 'rm -rf "$NEG_TMPDIR"' EXIT
+export NEG_TMPDIR SLIDSC
 
-pass=0
-fail=0
-skip=0
-fail_lines=()
+NEG_JOBS="${NEG_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
+JOBS_FILE="$NEG_TMPDIR/jobs.tsv"
+: > "$JOBS_FILE"
+
+# Phase 1: parse markers and body ranges per file via awk; emit TSV.
+# fields: key | src | substring | body_start | body_end | kind
+# kind ∈ { SKIP, JOB, NOBODY }
+src_index=0
 for src in "$@"; do
     if [ ! -f "$src" ]; then
         echo "skip: $src (not found)"
         continue
     fi
-    file_header_emitted=0
+    src_index=$((src_index + 1))
+    awk -v src="$src" -v sidx="$src_index" '
+        function flush_pending() {
+            if (pending) {
+                if (body_start > 0)
+                    printf "%05d_%07d\t%s\t%s\t%d\t%d\tJOB\n",
+                        sidx, marker_line, src, substring, body_start, body_end
+                else
+                    printf "%05d_%07d\t%s\t%s\t0\t0\tNOBODY\n",
+                        sidx, marker_line, src, substring
+                pending = 0
+            }
+        }
+        /EXPECT-ERROR-DEFERRED:/ {
+            flush_pending()
+            sub(/.*EXPECT-ERROR-DEFERRED:[[:space:]]*/, "", $0)
+            printf "%05d_%07d\t%s\t%s\t0\t0\tSKIP\n", sidx, NR, src, $0
+            next
+        }
+        /EXPECT-ERROR:/ {
+            flush_pending()
+            sub(/.*EXPECT-ERROR:[[:space:]]*/, "", $0)
+            substring = $0
+            marker_line = NR
+            body_start = 0
+            body_end = 0
+            pending = 1
+            next
+        }
+        pending {
+            if ($0 ~ /^[[:space:]]*\/\//) {
+                if (body_start == 0) body_start = NR
+                body_end = NR
+            } else {
+                flush_pending()
+            }
+        }
+        END { flush_pending() }
+    ' "$src" >> "$JOBS_FILE"
+done
 
-    # walk lines; recognize markers and the contiguous //-block that follows.
-    nlines=$(wc -l < "$src")
-    line_no=1
-    while [ "$line_no" -le "$nlines" ]; do
-        line=$(sed -n "${line_no}p" "$src")
-        marker=""
-        substring=""
-        case "$line" in
-            *EXPECT-ERROR-DEFERRED:*)
-                marker="DEFERRED"
-                substring="${line#*EXPECT-ERROR-DEFERRED:}"
-                substring="${substring# }"
-                ;;
-            *EXPECT-ERROR:*)
-                marker="ACTIVE"
-                substring="${line#*EXPECT-ERROR:}"
-                substring="${substring# }"
-                ;;
-        esac
+# Phase 2: dispatch slidsc invocations in parallel.
+# One job per input line; xargs -d '\n' keeps tabs/spaces intact within args.
+# The worker re-splits on tabs.
+if [ -s "$JOBS_FILE" ]; then
+    awk -F'\t' '$6 == "JOB" {
+        print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5
+    }' "$JOBS_FILE" \
+    | xargs -d '\n' -I {} -P "$NEG_JOBS" "$SELF" --worker {}
+fi
 
-        if [ -z "$marker" ]; then
-            line_no=$((line_no + 1))
-            continue
-        fi
-
-        if [ "$file_header_emitted" -eq 0 ]; then
-            echo "$src:"
-            file_header_emitted=1
-        fi
-
-        if [ "$marker" = "DEFERRED" ]; then
+# Phase 3: walk the job list in source order, print results, tally.
+pass=0
+fail=0
+skip=0
+cur_src=""
+while IFS=$'\t' read -r key src substring body_start body_end kind; do
+    if [ "$src" != "$cur_src" ]; then
+        echo "$src:"
+        cur_src="$src"
+    fi
+    case "$kind" in
+        SKIP)
             echo "  SKIP  $substring"
             skip=$((skip + 1))
-            line_no=$((line_no + 1))
-            continue
-        fi
-
-        # find the contiguous //-prefixed block immediately after the marker.
-        body_start=$((line_no + 1))
-        body_end=$body_start
-        while [ "$body_end" -le "$nlines" ]; do
-            body_line=$(sed -n "${body_end}p" "$src")
-            # stop on another marker — adjacent markers must not chain bodies.
-            if printf '%s\n' "$body_line" | grep -q 'EXPECT-ERROR'; then
-                break
-            fi
-            # match leading-whitespace then `//` (extglob via grep to keep
-            # the script POSIX-portable).
-            if printf '%s\n' "$body_line" | grep -q '^[[:space:]]*//'; then
-                body_end=$((body_end + 1))
-            else
-                break
-            fi
-        done
-        body_end=$((body_end - 1))
-
-        if [ "$body_end" -lt "$body_start" ]; then
+            ;;
+        NOBODY)
             echo "  FAIL  marker has no //-block: $substring"
             fail=$((fail + 1))
-            fail_lines+=("$src:$line_no")
-            line_no=$((line_no + 1))
-            continue
-        fi
-
-        # produce the temp variant: uncomment lines [body_start..body_end].
-        # the body lines were matched as ^[[:space:]]*// already, so removing
-        # the first `//` yields the original line content (portable across
-        # mawk/gawk/POSIX — sub() backref \1 is gawk-only).
-        case_file="$TMPDIR/case_${line_no}.sl"
-        awk -v b="$body_start" -v e="$body_end" '
-            NR >= b && NR <= e {
-                sub(/\/\//, "")
-            }
-            { print }
-        ' "$src" > "$case_file"
-
-        # run slidsc, capture combined stderr.
-        err=$("$SLIDSC" "$case_file" -o "$TMPDIR/case.ll" --import-path . 2>&1)
-        rc=$?
-
-        # Strip rendered source-context lines so the marker substring can't
-        # match its own appearance in the listing slidsc prints alongside each
-        # diagnostic. Source rows are numeric-prefixed ("  N:..."); caret rows
-        # are leading-whitespace `^`. Real diagnostic prose has neither shape.
-        diag=$(printf '%s' "$err" | grep -Ev '^[[:space:]]*[0-9]+:|^[[:space:]]*\^')
-
-        if [ $rc -eq 0 ]; then
-            echo "  FAIL  expected error '$substring' but slidsc succeeded"
-            fail=$((fail + 1))
-            fail_lines+=("$src:$line_no")
-        elif printf '%s' "$diag" | grep -qF -- "$substring"; then
-            echo "  PASS  $substring"
-            pass=$((pass + 1))
-        else
-            last=$(printf '%s' "$err" | tail -1)
-            echo "  FAIL  expected '$substring', got: $last"
-            fail=$((fail + 1))
-            fail_lines+=("$src:$line_no")
-        fi
-
-        line_no=$((body_end + 1))
-    done
-done
+            ;;
+        JOB)
+            result_file="$NEG_TMPDIR/r_$key"
+            if [ -f "$result_file" ]; then
+                # result file: "<STATUS>\t<message>\n"
+                status=$(cut -f1 "$result_file")
+                rest=$(cut -f2- "$result_file")
+                if [ "$status" = "PASS" ]; then
+                    echo "  PASS  $rest"
+                    pass=$((pass + 1))
+                else
+                    echo "  FAIL  $rest"
+                    fail=$((fail + 1))
+                fi
+            else
+                echo "  FAIL  no result file for '$substring'"
+                fail=$((fail + 1))
+            fi
+            ;;
+    esac
+done < "$JOBS_FILE"
 
 echo
 echo "$pass passed, $skip skipped, $fail failed"

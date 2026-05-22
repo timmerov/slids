@@ -302,6 +302,12 @@ private:
     const ConstEntry* lookupSlidConst(const std::string& slid_name,
                                       const std::string& member) const;
     bool lookupCurrentSlidEnumValue(const std::string& name, int& out) const;
+    // Path-qualified enum-value lookup with base-chain walk. Splits a
+    // colon-qualified name into `<class-path>:<member>`, looks up the class
+    // in slid_info_, then walks the base chain trying `<base>:<member>`.
+    // For bare names, falls back to direct lookup. Used by the emit-time
+    // enum probes so `Derived:base-enum-value` resolves through inheritance.
+    bool lookupEnumValueChained(const std::string& canon, int& out) const;
     // Expand a colon-qualified name whose leading segment is a short class
     // name into the canonical hoist path. Walks current_slid_'s enclosing
     // chain: matches the leading segment against (a) any enclosing class

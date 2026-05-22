@@ -1009,11 +1009,35 @@ const Codegen::GlobalEntry* Codegen::lookupGlobal(const std::string& name) const
     // qualified-from-outside.
     if (name.find(':') != std::string::npos) {
         std::string canon = canonicalizeShortPath(name);
+        // Try direct lookup first.
         auto it = globals_.find(canon);
-        if (it == globals_.end()) return nullptr;
-        if (!it->second.visible_in_function.empty()
-            && it->second.visible_in_function != fn_scope) return nullptr;
-        return &it->second;
+        if (it != globals_.end()) {
+            if (!it->second.visible_in_function.empty()
+                && it->second.visible_in_function != fn_scope) return nullptr;
+            return &it->second;
+        }
+        // Path-qualified miss — walk the class's base chain so
+        // `Derived:base-global` resolves through inheritance.
+        auto colon = canon.rfind(':');
+        if (colon != std::string::npos && colon > 0) {
+            std::string class_path = canon.substr(0, colon);
+            std::string member = canon.substr(colon + 1);
+            std::string dot_path = class_path;
+            for (char& c : dot_path) if (c == ':') c = '.';
+            auto siit = slid_info_.find(dot_path);
+            for (const SlidInfo* b = (siit != slid_info_.end() ? &siit->second : nullptr);
+                 b && b->base_info; b = b->base_info) {
+                std::string scope = b->base_info->name;
+                for (char& c : scope) if (c == '.') c = ':';
+                auto bit = globals_.find(scope + ":" + member);
+                if (bit != globals_.end()) {
+                    if (!bit->second.visible_in_function.empty()
+                        && bit->second.visible_in_function != fn_scope) return nullptr;
+                    return &bit->second;
+                }
+            }
+        }
+        return nullptr;
     }
     // Bare name. Try in order:
     //   1. current lazy ctor/dtor body's owning namespace

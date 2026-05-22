@@ -1284,6 +1284,30 @@ const Codegen::ConstEntry* Codegen::lookupSlidConst(const std::string& slid_name
     return nullptr;
 }
 
+bool Codegen::lookupEnumValueChained(const std::string& canon, int& out) const {
+    auto colon = canon.rfind(':');
+    if (colon == std::string::npos || colon == 0) {
+        auto eit = enum_values_.find(canon);
+        if (eit != enum_values_.end()) { out = eit->second; return true; }
+        return false;
+    }
+    std::string class_path = canon.substr(0, colon);
+    std::string member = canon.substr(colon + 1);
+    std::string dot_path = class_path;
+    for (char& c : dot_path) if (c == ':') c = '.';
+    auto siit = slid_info_.find(dot_path);
+    for (const SlidInfo* b = (siit != slid_info_.end() ? &siit->second : nullptr);
+         b; b = b->base_info) {
+        std::string scope = b->name;
+        for (char& c : scope) if (c == '.') c = ':';
+        auto eit = enum_values_.find(scope + ":" + member);
+        if (eit != enum_values_.end()) { out = eit->second; return true; }
+    }
+    auto eit = enum_values_.find(canon);
+    if (eit != enum_values_.end()) { out = eit->second; return true; }
+    return false;
+}
+
 bool Codegen::lookupCurrentSlidEnumValue(const std::string& name, int& out) const {
     if (current_slid_.empty()) return false;
     for (auto& prefix : enclosingClassPrefixes()) {

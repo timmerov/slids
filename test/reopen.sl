@@ -45,6 +45,8 @@ GsA(int a_ = 0) {
             /* access base scope things qualifiers optional. */
             intB b = kB1 + kEnumB1 + g_b1;
             CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            CsE:intB ceb = CsE:kB1 + CsE:kEnumB1 + CsE:g_b1;
+            GsA:CsE:intB aceb = GsA:CsE:kB1 + GsA:CsE:kEnumB1 + GsA:CsE:g_b1;
             __println("CsE:m_e1");
         }
     }
@@ -110,6 +112,8 @@ GsA(int a_ = 0) {
             /* access base scope things qualifiers optional. */
             intC c = kC1 + kEnumC1 + g_c1;
             GsC:intC cc = GsC:kC1 + GsC:kEnumC1 + GsC:g_c1;
+            CsD:intC cdc = CsD:kC1 + CsD:kEnumC1 + CsD:g_c1;
+            GsA:CsD:intC acdc = GsA:CsD:kC1 + GsA:CsD:kEnumC1 + GsA:CsD:g_c1;
             __println("CsD:m_d1");
         }
     }
@@ -262,10 +266,14 @@ GsA() {
         __println("GsA:m_a2");
     }
 
-    /* compile errors: re-definition. */
+    /* negatives: re-definition inside a reopen of the same class. */
+    //-EXPECT-ERROR: kA1
     //const int kA1 = 1;
+    //-EXPECT-ERROR: Class 'GsA' has a duplicate enum 'EnumA1'.
     //enum EnumA1 ( kEnumA1 );
+    //-EXPECT-ERROR: redeclares field 'g_a1'
     //global int g_a1 = 2;
+    //-EXPECT-ERROR: duplicate method 'm_a1'
     //void m_a1() { }
 
     /* reopen hoisted class. */
@@ -314,6 +322,12 @@ GsA() {
             /* access base scope things qualifiers optional. */
             /* CsB has no base. */
             __println("CsB:m_b2");
+        }
+
+        /* op overload added via reopen — exercises op-method through the
+           reopen merge path. */
+        op+(CsB a, CsB b) {
+            __println("CsB:op+");
         }
     }
 
@@ -405,6 +419,8 @@ GsA() {
             /* access base scope things qualifiers optional. */
             intC c = kC1 + kEnumC1 + g_c1;
             GsC:intC cc = GsC:kC1 + GsC:kEnumC1 + GsC:g_c1;
+            c = kC2 + kEnumC2 + g_c2;
+            cc = GsC:kC2 + GsC:kEnumC2 + GsC:g_c2;
             __println("CsD:m_d2");
         }
     }
@@ -449,6 +465,8 @@ GsA() {
         /* access base scope things qualifiers optional. */
         intC c = kC1 + kEnumC1 + g_c1;
         GsC:intC cc = GsC:kC1 + GsC:kEnumC1 + GsC:g_c1;
+        c = kC2 + kEnumC2 + g_c2;
+        cc = GsC:kC2 + GsC:kEnumC2 + GsC:g_c2;
         __println("CsD:m_d3");
     }
 
@@ -755,12 +773,18 @@ GsA() {
         __println("GsH:m_h3");
     }
 
-    /* compile error: re-definition. */
+    /* negatives: nested-class with new fields after the class is already complete. */
+    //-EXPECT-ERROR: is already complete
     //CsB(int b_ = 10) { }
+    //-EXPECT-ERROR: is already complete
     //CsD(int d_ = 21) { }
+    //-EXPECT-ERROR: is already complete
     //CsE(int e_ = 27) { }
+    //-EXPECT-ERROR: is already complete
     //CsF(int f_ = 36) { }
+    //-EXPECT-ERROR: is already complete
     //GsG(int g_ = 42) { }
+    //-EXPECT-ERROR: is already complete
     //GsH(int h_ = 46) { }
 }
 
@@ -772,6 +796,29 @@ void GsA:m_a3() {
     GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
     aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
     __println("GsA:m_a3");
+}
+
+/* second file-scope reopen of GsA — chained reopens. */
+GsA() {
+    /* define more things. */
+    const int kA3 = 56;
+    enum EnumA3 ( kEnumA3 );
+    global int g_a3 = 57;
+
+    void m_a4() {
+        /* access scope things qualifier optional. */
+        intA a = a_ + kA1 + kEnumA1 + g_a1;
+        a = kA2 + kEnumA2 + g_a2;
+        a = kA3 + kEnumA3 + g_a3;
+        GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+        aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+        aa = GsA:kA3 + GsA:kEnumA3 + GsA:g_a3;
+        __println("GsA:m_a4");
+    }
+}
+
+/* empty reopen — bare `Class() {}` with no body content. */
+GsA() {
 }
 
 /* inline reopen hoisted class. */
@@ -856,6 +903,8 @@ void CsD:m_d4() {
     /* access base scope things qualifiers optional. */
     intC c = kC1 + kEnumC1 + g_c1;
     GsC:intC cc = GsC:kC1 + GsC:kEnumC1 + GsC:g_c1;
+    c = kC2 + kEnumC2 + g_c2;
+    cc = GsC:kC2 + GsC:kEnumC2 + GsC:g_c2;
     __println("CsD:m_d4");
 }
 
@@ -987,12 +1036,35 @@ GsC(int c_ = 11) {
     alias intC = int;
 
     void m_c1() {
+        /* access scope things qualifier optional. */
+        intC c = c_ + kC1 + kEnumC1 + g_c1;
+        GsC:intC cc = GsC:kC1 + GsC:kEnumC1 + GsC:g_c1;
         __println("GsC:m_c1");
     }
 }
 
-/* compile error: re-definition. */
+/* reopen global scope class. */
+GsC() {
+    /* define more things. */
+    const int kC2 = 51;
+    enum EnumC2 ( kEnumC2 );
+    global int g_c2 = 52;
+
+    void m_c2() {
+        /* access scope things qualifier optional. */
+        intC c = c_ + kC1 + kEnumC1 + g_c1;
+        c = kC2 + kEnumC2 + g_c2;
+        GsC:intC cc = GsC:kC1 + GsC:kEnumC1 + GsC:g_c1;
+        cc = GsC:kC2 + GsC:kEnumC2 + GsC:g_c2;
+        __println("GsC:m_c2");
+    }
+}
+
+/* negatives: file-scope class with new fields after the class is already complete. */
+//-EXPECT-ERROR: is already complete
 //GsA(int a_ = 5) { }
+//-EXPECT-ERROR: is already complete
+//GsC(int c_ = 53) { }
 
 int32 main() {
     {
@@ -1002,6 +1074,7 @@ int32 main() {
         gsa.m_a1();
         gsa.m_a2();
         gsa.m_a3();
+        gsa.m_a4();
 
         GsA:CsB csb;
         h = csb.b_ + GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
@@ -1016,6 +1089,7 @@ int32 main() {
         csd.m_d2();
         csd.m_d3();
         csd.m_d4();
+        csd.m_c2();
 
         GsA:CsE cse;
         h = cse.e_ + GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
@@ -1045,39 +1119,134 @@ int32 main() {
         gsh.m_h3();
         gsh.m_h4();
         gsh.m_h5();
+
+        GsC gsc;
+        h = gsc.c_ + GsC:kC1 + GsC:kEnumC1 + GsC:g_c1;
+        h = GsC:kC2 + GsC:kEnumC2 + GsC:g_c2;
+        gsc.m_c1();
+        gsc.m_c2();
     }
 
-    /* compile errors: not in global scope. */
+    //-EXPECT-ERROR: Undefined variable: kA1
     //h = kA1;
+    //-EXPECT-ERROR: Undefined variable: kEnumA1
     //h = kEnumA1;
+    //-EXPECT-ERROR: Undefined variable: g_a1
     //h = g_a1;
+    //-EXPECT-ERROR: Undefined variable: kA2
     //h = kA2;
+    //-EXPECT-ERROR: Undefined variable: kEnumA2
     //h = kEnumA2;
+    //-EXPECT-ERROR: Undefined variable: g_a2
     //h = g_a2;
+    //-EXPECT-ERROR: Undefined variable: kA3
+    //h = kA3;
+    //-EXPECT-ERROR: Undefined variable: kEnumA3
+    //h = kEnumA3;
+    //-EXPECT-ERROR: Undefined variable: g_a3
+    //h = g_a3;
+    //-EXPECT-ERROR: Undefined variable: kB1
     //h = kB1;
+    //-EXPECT-ERROR: Undefined variable: kEnumB1
     //h = kEnumB1;
+    //-EXPECT-ERROR: Undefined variable: g_b1
     //h = g_b1;
-    //h = CsB:kB1;
-    //h = CsB:kEnumB1;
-    //h = CsB:g_b1;
+    //-EXPECT-ERROR: Undefined variable: kB2
     //h = kB2;
+    //-EXPECT-ERROR: Undefined variable: kEnumB2
     //h = kEnumB2;
+    //-EXPECT-ERROR: Undefined variable: g_b2
     //h = g_b2;
-    //h = CsB:kB2;
-    //h = CsB:kEnumB2;
-    //h = CsB:g_b2;
+    //-EXPECT-ERROR: Undefined variable: kC1
+    //h = kC1;
+    //-EXPECT-ERROR: Undefined variable: kEnumC1
+    //h = kEnumC1;
+    //-EXPECT-ERROR: Undefined variable: g_c1
+    //h = g_c1;
+    //-EXPECT-ERROR: Undefined variable: kC2
+    //h = kC2;
+    //-EXPECT-ERROR: Undefined variable: kEnumC2
+    //h = kEnumC2;
+    //-EXPECT-ERROR: Undefined variable: g_c2
+    //h = g_c2;
+    //-EXPECT-ERROR: Undefined variable: kD1
     //h = kD1;
+    //-EXPECT-ERROR: Undefined variable: kEnumD1
     //h = kEnumD1;
+    //-EXPECT-ERROR: Undefined variable: g_d1
     //h = g_d1;
-    //h = CsD:kD1;
-    //h = CsD:kEnumD1;
-    //h = CsD:g_d1;
+    //-EXPECT-ERROR: Undefined variable: kD2
     //h = kD2;
+    //-EXPECT-ERROR: Undefined variable: kEnumD2
     //h = kEnumD2;
+    //-EXPECT-ERROR: Undefined variable: g_d2
     //h = g_d2;
-    //h = CsD:kD2;
-    //h = CsD:kEnumD2;
-    //h = CsD:g_d2;
+    //-EXPECT-ERROR: Undefined variable: kE1
+    //h = kE1;
+    //-EXPECT-ERROR: Undefined variable: kEnumE1
+    //h = kEnumE1;
+    //-EXPECT-ERROR: Undefined variable: g_e1
+    //h = g_e1;
+    //-EXPECT-ERROR: Undefined variable: kE2
+    //h = kE2;
+    //-EXPECT-ERROR: Undefined variable: kEnumE2
+    //h = kEnumE2;
+    //-EXPECT-ERROR: Undefined variable: g_e2
+    //h = g_e2;
+    //-EXPECT-ERROR: Undefined variable: kF1
+    //h = kF1;
+    //-EXPECT-ERROR: Undefined variable: kEnumF1
+    //h = kEnumF1;
+    //-EXPECT-ERROR: Undefined variable: g_f1
+    //h = g_f1;
+    //-EXPECT-ERROR: Undefined variable: kF2
+    //h = kF2;
+    //-EXPECT-ERROR: Undefined variable: kEnumF2
+    //h = kEnumF2;
+    //-EXPECT-ERROR: Undefined variable: g_f2
+    //h = g_f2;
+    //-EXPECT-ERROR: Undefined variable: kF3
+    //h = kF3;
+    //-EXPECT-ERROR: Undefined variable: kEnumF3
+    //h = kEnumF3;
+    //-EXPECT-ERROR: Undefined variable: g_f3
+    //h = g_f3;
+    //-EXPECT-ERROR: Undefined variable: kF4
+    //h = kF4;
+    //-EXPECT-ERROR: Undefined variable: kEnumF4
+    //h = kEnumF4;
+    //-EXPECT-ERROR: Undefined variable: g_f4
+    //h = g_f4;
+    //-EXPECT-ERROR: Undefined variable: kG1
+    //h = kG1;
+    //-EXPECT-ERROR: Undefined variable: kEnumG1
+    //h = kEnumG1;
+    //-EXPECT-ERROR: Undefined variable: g_g1
+    //h = g_g1;
+    //-EXPECT-ERROR: Undefined variable: kG2
+    //h = kG2;
+    //-EXPECT-ERROR: Undefined variable: kEnumG2
+    //h = kEnumG2;
+    //-EXPECT-ERROR: Undefined variable: g_g2
+    //h = g_g2;
+    //-EXPECT-ERROR: Undefined variable: kH1
+    //h = kH1;
+    //-EXPECT-ERROR: Undefined variable: kEnumH1
+    //h = kEnumH1;
+    //-EXPECT-ERROR: Undefined variable: g_h1
+    //h = g_h1;
+    //-EXPECT-ERROR: Undefined variable: kH2
+    //h = kH2;
+    //-EXPECT-ERROR: Undefined variable: kEnumH2
+    //h = kEnumH2;
+    //-EXPECT-ERROR: Undefined variable: g_h2
+    //h = g_h2;
+    //-EXPECT-ERROR: Undefined variable: kH3
+    //h = kH3;
+    //-EXPECT-ERROR: Undefined variable: kEnumH3
+    //h = kEnumH3;
+    //-EXPECT-ERROR: Undefined variable: g_h3
+    //h = g_h3;
 
     return 0;
 }
