@@ -1076,6 +1076,8 @@ int32 main() {
         gsa.m_a3();
         gsa.m_a4();
 
+        GsH wrong;
+
         GsA:CsB csb;
         h = csb.b_ + GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
         csb.m_b1();

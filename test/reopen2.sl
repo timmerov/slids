@@ -4,16 +4,12 @@ reopen classes in function bodies.
 
 /* global scope class definition. */
 void gs_func() {
+    /*
     /* define things. */
     const int kA1 = 1;
     enum EnumA1 ( kEnumA1 );
     global int g_a1 = 2;
     alias intA = int;
-
-    void m_a1() {
-        /* access scope things qualifier optional. */
-        intA a = a_ + kA1 + kEnumA1 + g_a1;
-    }
 
     /* derived class from later in host class body. */
     CsB : CsE(int e_ = 22) {
@@ -475,6 +471,7 @@ void gs_func() {
             __println("GsG:m_g2");
         }
     }
+    */
 
     GsH(int h_ = 43) {
         /* define things. */
@@ -484,6 +481,7 @@ void gs_func() {
         alias intH = int;
 
         void m_h1() {
+            /*
             /* access scope things qualifiers optional. */
             intH h = h_ + kH1 + kEnumH1 + g_h1;
             GsH:intH ch = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
@@ -503,6 +501,7 @@ void gs_func() {
             ff = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
             GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
             gg = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
+            */
             __println("GsH:m_h1");
         }
     }

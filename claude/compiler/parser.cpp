@@ -2049,8 +2049,11 @@ void Parser::prescanLocalClasses() {
         }
     };
     auto register_class = [&](const std::string& short_name, int name_tok) {
-        if (local_class_stack_.back().count(short_name)
-            || nested_func_stack_.back().count(short_name)) {
+        // reopen: class already registered in this block. Reuse the existing
+        // canonical so both SlidDefs collide in program.slids; mergeReopens
+        // collapses them after parsing.
+        if (local_class_stack_.back().count(short_name)) return;
+        if (nested_func_stack_.back().count(short_name)) {
             errorAt(name_tok, "'" + short_name
                 + "' is already declared in this scope.");
         }
@@ -3120,6 +3123,20 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     // LParen branch.
     if (isTypeName(t) || t.type == TokenType::kLParen) {
         if (isTypeName(t)) {
+            // inline reopen: `Type Class:method(...) { body }` inside a code
+            // block — treated exactly as if the method had been defined in the
+            // original class body. Mirrors the class-body external-method shape
+            // at parser.cpp:4271, but resolves the short class name through
+            // lookupLocalClass since we know the local canonical at parse time.
+            if (pos_ + 2 < (int)tokens_.size()
+                && tokens_[pos_ + 1].type == TokenType::kIdentifier
+                && tokens_[pos_ + 2].type == TokenType::kColon) {
+                ExternalMethodDef em = parseExternalMethodDef();
+                std::string lc = lookupLocalClass(em.slid_name);
+                if (!lc.empty()) em.slid_name = lc;
+                pending_external_methods_.push_back(std::move(em));
+                return make<BlockStmt>(t_start);
+            }
             // lookahead: type identifier ( ... ) {
             int lookahead = pos_ + 1; // pos_ is at type, +1 is identifier
             if (lookahead < (int)tokens_.size()
