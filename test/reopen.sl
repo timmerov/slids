@@ -34,10 +34,17 @@ GsA(int a_ = 0) {
             intA a = kA1 + kEnumA1 + g_a1;
             GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
             /* access sibling scope things with qualifiers. */
-            /* missing siblings F G. */
             CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
             GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+            GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+            GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+            GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+            GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+            GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
             /* access base scope things qualifiers optional. */
+            intB b = kB1 + kEnumB1 + g_b1;
+            CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
             __println("CsE:m_e1");
         }
     }
@@ -63,6 +70,12 @@ GsA(int a_ = 0) {
             GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
             CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
             GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+            GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+            GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+            GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+            GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+            GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
             __println("CsB:m_b1");
         }
     }
@@ -88,6 +101,15 @@ GsA(int a_ = 0) {
             GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
             CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
             GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+            GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+            GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+            GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+            GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+            GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
+            /* access base scope things qualifiers optional. */
+            intC c = kC1 + kEnumC1 + g_c1;
+            GsC:intC cc = GsC:kC1 + GsC:kEnumC1 + GsC:g_c1;
             __println("CsD:m_d1");
         }
     }
@@ -115,6 +137,10 @@ GsA(int a_ = 0) {
             GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
             CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
             GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+            GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+            GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+            GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
             __println("CsF:m_f1");
         }
     }
@@ -144,6 +170,10 @@ GsA(int a_ = 0) {
             GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
             CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
             GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+            GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+            GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+            GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
             __println("CsF:m_f2");
         }
     }
@@ -176,6 +206,10 @@ GsA(int a_ = 0) {
             GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
             CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
             GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+            GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+            GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+            GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
             __println("CsF:m_f3");
         }
     }
@@ -205,6 +239,8 @@ GsA(int a_ = 0) {
             GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
             CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
             GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+            GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+            GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
             __println("GsG:m_g1");
         }
     }
@@ -261,6 +297,22 @@ GsA() {
             GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
             ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
             aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+            CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+            GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+            ff = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+            aff = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+            ff = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
+            aff = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
+            ff = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
+            aff = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
+            GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+            GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+            gg = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
+            agg = GsA:GsG:kG2 + GsA:GsG:kEnumG2 + GsA:GsG:g_g2;
+            GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+            GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
+            /* access base scope things qualifiers optional. */
+            /* CsB has no base. */
             __println("CsB:m_b2");
         }
     }
@@ -288,6 +340,22 @@ GsA() {
         GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
         ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
         aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+        CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+        GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+        ff = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+        aff = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+        ff = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
+        aff = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
+        ff = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
+        aff = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
+        GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+        GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+        gg = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
+        agg = GsA:GsG:kG2 + GsA:GsG:kEnumG2 + GsA:GsG:g_g2;
+        GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+        GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
+        /* access base scope things qualifiers optional. */
+        /* CsB has no base. */
         __println("CsB:m_b3");
     }
 
@@ -320,6 +388,23 @@ GsA() {
             GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
             ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
             aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+            CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+            GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+            ff = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+            aff = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+            ff = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
+            aff = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
+            ff = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
+            aff = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
+            GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+            GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+            gg = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
+            agg = GsA:GsG:kG2 + GsA:GsG:kEnumG2 + GsA:GsG:g_g2;
+            GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+            GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
+            /* access base scope things qualifiers optional. */
+            intC c = kC1 + kEnumC1 + g_c1;
+            GsC:intC cc = GsC:kC1 + GsC:kEnumC1 + GsC:g_c1;
             __println("CsD:m_d2");
         }
     }
@@ -347,6 +432,23 @@ GsA() {
         GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
         ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
         aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+        CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+        GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+        ff = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+        aff = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+        ff = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
+        aff = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
+        ff = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
+        aff = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
+        GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+        GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+        gg = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
+        agg = GsA:GsG:kG2 + GsA:GsG:kEnumG2 + GsA:GsG:g_g2;
+        GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+        GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
+        /* access base scope things qualifiers optional. */
+        intC c = kC1 + kEnumC1 + g_c1;
+        GsC:intC cc = GsC:kC1 + GsC:kEnumC1 + GsC:g_c1;
         __println("CsD:m_d3");
     }
 
@@ -379,6 +481,20 @@ GsA() {
             GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
             dd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
             add = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+            CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+            GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+            ff = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+            aff = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+            ff = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
+            aff = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
+            ff = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
+            aff = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
+            GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+            GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+            gg = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
+            agg = GsA:GsG:kG2 + GsA:GsG:kEnumG2 + GsA:GsG:g_g2;
+            GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+            GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
             __println("CsE:m_e2");
         }
     }
@@ -406,6 +522,20 @@ GsA() {
         GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
         dd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
         add = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+        CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+        GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+        ff = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+        aff = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+        ff = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
+        aff = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
+        ff = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
+        aff = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
+        GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+        GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+        gg = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
+        agg = GsA:GsG:kG2 + GsA:GsG:kEnumG2 + GsA:GsG:g_g2;
+        GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+        GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
         __println("CsE:m_e3");
     }
 
@@ -448,6 +578,12 @@ GsA() {
             GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
             ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
             aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+            GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+            GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+            gg = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
+            agg = GsA:GsG:kG2 + GsA:GsG:kEnumG2 + GsA:GsG:g_g2;
+            GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+            GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
             __println("CsF:m_f4");
         }
     }
@@ -485,6 +621,12 @@ GsA() {
         GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
         ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
         aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+        GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+        GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+        gg = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
+        agg = GsA:GsG:kG2 + GsA:GsG:kEnumG2 + GsA:GsG:g_g2;
+        GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+        GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
         __println("CsF:m_f5");
     }
 
@@ -529,7 +671,56 @@ GsA() {
             aff = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
             ff = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
             aff = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
+            GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+            GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
             __println("GsG:m_g2");
+        }
+    }
+
+    /* new nested class introduced by the reopen — never seen in GsA's primary. */
+    GsH(int h_ = 43) {
+        /* define things. */
+        const int kH1 = 44;
+        enum EnumH1 ( kEnumH1 );
+        global int g_h1 = 45;
+        alias intH = int;
+
+        void m_h1() {
+            /* access scope things qualifiers optional. */
+            intH h = h_ + kH1 + kEnumH1 + g_h1;
+            GsH:intH ch = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+            GsA:GsH:intH ach = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
+            /* access enclosing scope things qualifier optional. */
+            intA a = kA1 + kEnumA1 + g_a1;
+            GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+            a = kA2 + kEnumA2 + g_a2;
+            aa = GsA:kA2 + GsA:kEnumA2 + GsA:g_a2;
+            /* access sibling scope things with qualifiers. */
+            CsB:intB bb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            GsA:CsB:intB abb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            bb = CsB:kB2 + CsB:kEnumB2 + CsB:g_b2;
+            abb = GsA:CsB:kB2 + GsA:CsB:kEnumB2 + GsA:CsB:g_b2;
+            CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+            GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            dd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
+            add = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+            CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
+            aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+            CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+            GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+            ff = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+            aff = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+            ff = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
+            aff = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
+            ff = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
+            aff = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
+            GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+            GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+            gg = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
+            agg = GsA:GsG:kG2 + GsA:GsG:kEnumG2 + GsA:GsG:g_g2;
+            __println("GsH:m_h1");
         }
     }
 
@@ -539,6 +730,7 @@ GsA() {
     //CsE(int e_ = 27) { }
     //CsF(int f_ = 36) { }
     //GsG(int g_ = 42) { }
+    //GsH(int h_ = 46) { }
 }
 
 /* inline reopen. */
@@ -574,6 +766,22 @@ void GsA:CsB:m_b4() {
     GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
     ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
     aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+    CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+    GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+    ff = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+    aff = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+    ff = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
+    aff = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
+    ff = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
+    aff = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
+    GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+    GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+    gg = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
+    agg = GsA:GsG:kG2 + GsA:GsG:kEnumG2 + GsA:GsG:g_g2;
+    GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+    GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
+    /* access base scope things qualifiers optional. */
+    /* CsB has no base. */
     __println("CsB:m_b4");
 }
 
@@ -600,6 +808,23 @@ void CsD:m_d4() {
     GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
     ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
     aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+    CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+    GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+    ff = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+    aff = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+    ff = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
+    aff = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
+    ff = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
+    aff = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
+    GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+    GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+    gg = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
+    agg = GsA:GsG:kG2 + GsA:GsG:kEnumG2 + GsA:GsG:g_g2;
+    GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+    GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
+    /* access base scope things qualifiers optional. */
+    intC c = kC1 + kEnumC1 + g_c1;
+    GsC:intC cc = GsC:kC1 + GsC:kEnumC1 + GsC:g_c1;
     __println("CsD:m_d4");
 }
 
@@ -626,6 +851,20 @@ void GsA:CsE:m_e4() {
     GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
     dd = CsD:kD2 + CsD:kEnumD2 + CsD:g_d2;
     add = GsA:CsD:kD2 + GsA:CsD:kEnumD2 + GsA:CsD:g_d2;
+    CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+    GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+    ff = CsF:kF2 + CsF:kEnumF2 + CsF:g_f2;
+    aff = GsA:CsF:kF2 + GsA:CsF:kEnumF2 + GsA:CsF:g_f2;
+    ff = CsF:kF3 + CsF:kEnumF3 + CsF:g_f3;
+    aff = GsA:CsF:kF3 + GsA:CsF:kEnumF3 + GsA:CsF:g_f3;
+    ff = CsF:kF4 + CsF:kEnumF4 + CsF:g_f4;
+    aff = GsA:CsF:kF4 + GsA:CsF:kEnumF4 + GsA:CsF:g_f4;
+    GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+    GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+    gg = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
+    agg = GsA:GsG:kG2 + GsA:GsG:kEnumG2 + GsA:GsG:g_g2;
+    GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+    GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
     __println("CsE:m_e4");
 }
 
@@ -662,6 +901,12 @@ void GsA:CsF:m_f6() {
     GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
     ee = CsE:kE2 + CsE:kEnumE2 + CsE:g_e2;
     aee = GsA:CsE:kE2 + GsA:CsE:kEnumE2 + GsA:CsE:g_e2;
+    GsG:intG gg = GsG:kG1 + GsG:kEnumG1 + GsG:g_g1;
+    GsA:GsG:intG agg = GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
+    gg = GsG:kG2 + GsG:kEnumG2 + GsG:g_g2;
+    agg = GsA:GsG:kG2 + GsA:GsG:kEnumG2 + GsA:GsG:g_g2;
+    GsH:intH hh = GsH:kH1 + GsH:kEnumH1 + GsH:g_h1;
+    GsA:GsH:intH ahh = GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
     __println("CsF:m_f6");
 }
 
@@ -680,13 +925,6 @@ GsC(int c_ = 11) {
 
 /* compile error: re-definition. */
 //GsA(int a_ = 5) { }
-
-void gs_f() {
-    /*
-    insert lines 5 - 382 here.
-    but change the class names.
-    */
-}
 
 int32 main() {
     {
@@ -731,6 +969,10 @@ int32 main() {
         h = gsg.g_ + GsA:GsG:kG1 + GsA:GsG:kEnumG1 + GsA:GsG:g_g1;
         gsg.m_g1();
         gsg.m_g2();
+
+        GsA:GsH gsh;
+        h = gsh.h_ + GsA:GsH:kH1 + GsA:GsH:kEnumH1 + GsA:GsH:g_h1;
+        gsh.m_h1();
     }
 
     /* compile errors: not in global scope. */

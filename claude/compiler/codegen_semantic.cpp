@@ -1287,10 +1287,14 @@ const Codegen::ConstEntry* Codegen::lookupSlidConst(const std::string& slid_name
 bool Codegen::lookupCurrentSlidEnumValue(const std::string& name, int& out) const {
     if (current_slid_.empty()) return false;
     for (auto& prefix : enclosingClassPrefixes()) {
-        std::string scope = prefix;
-        for (char& c : scope) if (c == '.') c = ':';
-        auto eit = enum_values_.find(scope + ":" + name);
-        if (eit != enum_values_.end()) { out = eit->second; return true; }
+        auto siit = slid_info_.find(prefix);
+        for (const SlidInfo* b = (siit != slid_info_.end() ? &siit->second : nullptr);
+             b; b = b->base_info) {
+            std::string scope = b->name;
+            for (char& c : scope) if (c == '.') c = ':';
+            auto eit = enum_values_.find(scope + ":" + name);
+            if (eit != enum_values_.end()) { out = eit->second; return true; }
+        }
     }
     return false;
 }

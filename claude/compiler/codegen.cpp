@@ -1027,16 +1027,21 @@ const Codegen::GlobalEntry* Codegen::lookupGlobal(const std::string& name) const
             return &it->second;
     }
     // bare name inside a class method sees its own and enclosing classes'
-    // globals (innermost first).
+    // globals (innermost first; each level walks its base chain so derived
+    // classes inherit base-scope globals via bare name).
     if (!current_slid_.empty()) {
         for (auto& prefix : enclosingClassPrefixes()) {
-            std::string scope = prefix;
-            for (char& c : scope) if (c == '.') c = ':';
-            auto it = globals_.find(scope + ":" + name);
-            if (it != globals_.end()
-                && it->second.namespace_name == scope
-                && it->second.visible_in_function.empty())
-                return &it->second;
+            auto siit = slid_info_.find(prefix);
+            for (const SlidInfo* b = (siit != slid_info_.end() ? &siit->second : nullptr);
+                 b; b = b->base_info) {
+                std::string scope = b->name;
+                for (char& c : scope) if (c == '.') c = ':';
+                auto it = globals_.find(scope + ":" + name);
+                if (it != globals_.end()
+                    && it->second.namespace_name == scope
+                    && it->second.visible_in_function.empty())
+                    return &it->second;
+            }
         }
     }
     if (!fn_scope.empty()) {

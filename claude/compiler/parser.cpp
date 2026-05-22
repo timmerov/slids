@@ -3957,13 +3957,25 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     alias_stack_.push_back({});
     alias_template_stack_.push_back({});
     // Phase 1: seed this frame with class-scope aliases from prior occurrences
-    // of the same class (reopens). Without this, a reopen's method bodies
-    // wouldn't see aliases declared in the primary body.
+    // of the same class (reopens) AND the base chain so derived classes see
+    // their bases' aliases as bare names (inheritance). Walk base-first to
+    // outer-first so own-class aliases shadow base aliases on the same name.
     {
-        auto cit = class_aliases_.find(enclosingClassPath());
-        if (cit != class_aliases_.end())
-            for (auto& kv : cit->second)
-                alias_stack_.back()[kv.first] = kv.second;
+        std::vector<std::string> base_chain;
+        std::string cur = enclosingClassPath();
+        while (!cur.empty()) {
+            base_chain.push_back(cur);
+            auto bit = class_base_name_.find(cur);
+            if (bit == class_base_name_.end() || bit->second.empty()) break;
+            cur = bit->second;
+        }
+        // base first → own last so own aliases overwrite base aliases.
+        for (auto it = base_chain.rbegin(); it != base_chain.rend(); ++it) {
+            auto cit = class_aliases_.find(*it);
+            if (cit != class_aliases_.end())
+                for (auto& kv : cit->second)
+                    alias_stack_.back()[kv.first] = kv.second;
+        }
     }
 
     auto ctor_body = make<BlockStmt>(t_start);
@@ -4640,13 +4652,24 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
                 }
             }
             // outer → inner so inner aliases overwrite outer ones with the
-            // same name.
+            // same name. For each enclosing prefix, also walk the base chain
+            // so derived classes inherit their bases' aliases.
             for (auto it = enclosing_paths.rbegin();
                  it != enclosing_paths.rend(); ++it) {
-                auto cit = class_aliases_.find(*it);
-                if (cit != class_aliases_.end())
-                    for (auto& kv : cit->second)
-                        em_frame[kv.first] = kv.second;
+                std::vector<std::string> chain;
+                std::string cur = *it;
+                while (!cur.empty()) {
+                    chain.push_back(cur);
+                    auto bit = class_base_name_.find(cur);
+                    if (bit == class_base_name_.end() || bit->second.empty()) break;
+                    cur = bit->second;
+                }
+                for (auto cp = chain.rbegin(); cp != chain.rend(); ++cp) {
+                    auto cit = class_aliases_.find(*cp);
+                    if (cit != class_aliases_.end())
+                        for (auto& kv : cit->second)
+                            em_frame[kv.first] = kv.second;
+                }
             }
         }
         alias_stack_.push_back(std::move(em_frame));
@@ -4836,6 +4859,115 @@ static std::string findHeader(const std::string& module,
 Program Parser::parse() {
     [[maybe_unused]] int t_start = pos_;
     Program program;
+    // File-scope pre-pass: walk the entire token stream and collect every
+    // class-scope alias into class_aliases_ before any parseSlidDef runs.
+    // Lifts file-order requirements for class-path-qualified alias references
+    // (e.g. CsE's method can use GsH:intH even though GsH is declared in a
+    // later GsA reopen). Tracks class-body nesting via a stack; reopens of an
+    // already-pushed canonical name re-enter the same path. Method bodies are
+    // skipped via balanced-brace consumption — they don't contain class-scope
+    // alias decls. Namespace bodies and function bodies at file scope likewise
+    // skip — alias decls outside class bodies are not the target.
+    {
+        int save_pos = pos_;
+        std::vector<std::string> path;
+        auto consumeBalanced = [&]() {
+            // pos_ at LBrace; consume past the matching RBrace.
+            int d = 0;
+            while (pos_ < (int)tokens_.size() && peek().type != TokenType::kEof) {
+                if (peek().type == TokenType::kLBrace) d++;
+                else if (peek().type == TokenType::kRBrace) {
+                    d--;
+                    advance();
+                    if (d == 0) return;
+                    continue;
+                }
+                advance();
+            }
+        };
+        while (pos_ < (int)tokens_.size() && peek().type != TokenType::kEof) {
+            // Closing the current class body.
+            if (!path.empty() && peek().type == TokenType::kRBrace) {
+                path.pop_back();
+                advance();
+                continue;
+            }
+            // Alias decl inside a class body.
+            if (!path.empty() && peek().type == TokenType::kAlias) {
+                int save_a = pos_;
+                advance(); // 'alias'
+                if (peek().type != TokenType::kIdentifier) {
+                    pos_ = save_a; advance(); continue;
+                }
+                int name_tok = pos_;
+                std::string name = peek().value;
+                advance();
+                if (peek().type == TokenType::kLt
+                    || peek().type != TokenType::kEquals) {
+                    pos_ = save_a; advance(); continue;
+                }
+                advance(); // '='
+                std::string body;
+                try { body = parseTypeName(); }
+                catch (...) { pos_ = save_a; advance(); continue; }
+                if (peek().type != TokenType::kSemicolon) {
+                    pos_ = save_a; advance(); continue;
+                }
+                advance(); // ';'
+                std::string full;
+                for (size_t i = 0; i < path.size(); i++) {
+                    if (i > 0) full += ".";
+                    full += path[i];
+                }
+                class_aliases_[full][name] = AliasInfo{body, name_tok};
+                continue;
+            }
+            // Class declaration: push the class name onto the path and enter
+            // the body. Works at any depth (file scope or nested).
+            std::string short_name;
+            bool is_class = false;
+            if (isSlidDeclLookahead()) {
+                short_name = peek().value;
+                is_class = true;
+            } else if (isDerivedSlidDeclLookahead()) {
+                int p = pos_;
+                int last_ident = -1;
+                while (p < (int)tokens_.size()
+                       && tokens_[p].type != TokenType::kLParen
+                       && tokens_[p].type != TokenType::kLt
+                       && tokens_[p].type != TokenType::kEof) {
+                    if (tokens_[p].type == TokenType::kIdentifier) last_ident = p;
+                    p++;
+                }
+                if (last_ident >= 0) {
+                    short_name = tokens_[last_ident].value;
+                    is_class = true;
+                }
+            }
+            if (is_class && !short_name.empty()) {
+                while (pos_ < (int)tokens_.size()
+                       && peek().type != TokenType::kLBrace
+                       && peek().type != TokenType::kEof) {
+                    advance();
+                }
+                if (peek().type == TokenType::kLBrace) {
+                    path.push_back(short_name);
+                    advance(); // consume '{'
+                    continue;
+                }
+                continue;
+            }
+            // Any other LBrace (method body, function body, etc.) — skip
+            // balanced. Aliases inside method bodies don't need pre-scan;
+            // they're block-scope, not class-scope.
+            if (peek().type == TokenType::kLBrace) {
+                consumeBalanced();
+                continue;
+            }
+            advance();
+        }
+        pos_ = save_pos;
+    }
     while (peek().type != TokenType::kEof) {
         // import declaration: search export_path first, then import_paths, then source_dir
         if (peek().type == TokenType::kImport) {
