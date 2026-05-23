@@ -211,7 +211,7 @@ void Parser::declareAliasTemplate(const std::string& name,
                                   std::vector<std::string> type_params,
                                   const std::string& body,
                                   int name_tok) {
-    auto& frame = alias_template_stack_.back();
+    auto& frame = frame_stack_.back().alias_templates;
     auto it = frame.find(name);
     if (it != frame.end()) {
         throw CompileError{file_id_, name_tok,
@@ -224,24 +224,23 @@ void Parser::declareAliasTemplate(const std::string& name,
 const Parser::AliasTemplateInfo* Parser::lookupAliasTemplate(
     const std::string& name) const
 {
-    for (auto it = alias_template_stack_.rbegin();
-         it != alias_template_stack_.rend(); ++it) {
-        auto sit = it->find(name);
-        if (sit != it->end()) return &sit->second;
+    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
+        auto sit = it->alias_templates.find(name);
+        if (sit != it->alias_templates.end()) return &sit->second;
     }
     return nullptr;
 }
 
 void Parser::seedAliasesFrom(const std::vector<TypeAliasDef>& tas,
                              const std::vector<TypeAliasTemplate>& tats) {
-    if (alias_template_stack_.empty()) alias_template_stack_.push_back({});
     auto& alias_frame = frame_stack_.front().aliases;
     for (auto& ta : tas)
         if (!alias_frame.count(ta.name))
             alias_frame[ta.name] = AliasInfo{ta.body, ta.tok};
+    auto& tat_frame = frame_stack_.front().alias_templates;
     for (auto& tat : tats)
-        if (!alias_template_stack_.front().count(tat.name))
-            alias_template_stack_.front()[tat.name] =
+        if (!tat_frame.count(tat.name))
+            tat_frame[tat.name] =
                 AliasTemplateInfo{tat.type_params, tat.body, tat.tok};
 }
 
@@ -1839,7 +1838,6 @@ std::unique_ptr<Expr> Parser::parseExpr() {
 
 void Parser::pushFrame() {
     frame_stack_.emplace_back();
-    alias_template_stack_.push_back({});
     local_class_stack_.push_back({});
     nested_func_stack_.push_back({});
 }
@@ -1847,7 +1845,6 @@ void Parser::pushFrame() {
 void Parser::popFrame() {
     nested_func_stack_.pop_back();
     local_class_stack_.pop_back();
-    alias_template_stack_.pop_back();
     frame_stack_.pop_back();
 }
 
@@ -4031,7 +4028,6 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     // The frame's locals/local_classes/nested_funcs lanes stay empty here
     // (class body has no syntax for them; method bodies push their own frames).
     frame_stack_.emplace_back();
-    alias_template_stack_.push_back({});
     // Phase 1: seed this frame with class-scope aliases from prior occurrences
     // of the same class (reopens) AND the base chain so derived classes see
     // their bases' aliases as bare names (inheritance). Walk base-first to
@@ -4342,7 +4338,6 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     if (has_ctor_code)
         slid.ctor_body = std::move(ctor_body);
     frame_stack_.pop_back();
-    alias_template_stack_.pop_back();
 
     int close_tok = pos_;
     expect(TokenType::kRBrace, "Expected '}'");
@@ -5159,9 +5154,8 @@ Program Parser::parse() {
                 program.type_aliases.push_back(ta);
             }
             for (auto& tat : hdr.type_alias_templates) {
-                if (!alias_template_stack_.empty()
-                    && !alias_template_stack_.front().count(tat.name))
-                    alias_template_stack_.front()[tat.name] =
+                if (!frame_stack_.front().alias_templates.count(tat.name))
+                    frame_stack_.front().alias_templates[tat.name] =
                         AliasTemplateInfo{tat.type_params, tat.body, tat.tok};
                 program.type_alias_templates.push_back(tat);
             }
@@ -5296,9 +5290,8 @@ Program Parser::parse() {
                         program.type_aliases.push_back(ta);
                     }
                     for (auto& tat : impl_prog.type_alias_templates) {
-                        if (!alias_template_stack_.empty()
-                            && !alias_template_stack_.front().count(tat.name))
-                            alias_template_stack_.front()[tat.name] =
+                        if (!frame_stack_.front().alias_templates.count(tat.name))
+                            frame_stack_.front().alias_templates[tat.name] =
                                 AliasTemplateInfo{tat.type_params, tat.body, tat.tok};
                         program.type_alias_templates.push_back(tat);
                     }

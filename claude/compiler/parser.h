@@ -1226,7 +1226,6 @@ private:
         std::string body;
         int tok = 0;
     };
-    std::vector<std::map<std::string, AliasTemplateInfo>> alias_template_stack_{1};
     void declareAliasTemplate(const std::string& name,
                               std::vector<std::string> type_params,
                               const std::string& body,
@@ -1234,7 +1233,7 @@ private:
     const AliasTemplateInfo* lookupAliasTemplate(const std::string& name) const;
 
     // Unified per-block scope frame — destination of the 5 legacy stacks
-    // above (locals + aliases already migrated; alias_template_stack_,
+    // above (locals + aliases + alias_templates already migrated;
     // local_class_stack_, nested_func_stack_ remaining). Phase-1 step 1:
     // pushFrame/popFrame keep the legacy stacks lockstep-synchronized at
     // the symmetric site (parseBlock); readers still consult the legacy
