@@ -160,21 +160,51 @@ int Parser::currentLine() {
     return tlocs[pos_].line;
 }
 
+const Parser::AliasEntry* Parser::findAliasInFrame(int frame_id,
+                                                    const std::string& name) const {
+    for (FrameBase* e : frame_entries_) {
+        if (e->enclosing_frame_id == frame_id
+            && e->entry_kind == EntryKind::Alias
+            && e->base_name == name) {
+            return static_cast<const AliasEntry*>(e);
+        }
+    }
+    return nullptr;
+}
+
+void Parser::appendAliasEntry(int frame_id,
+                              const std::string& name,
+                              const std::string& body,
+                              std::vector<std::string> type_params,
+                              int tok) {
+    auto entry = std::make_unique<AliasEntry>();
+    entry->base_name = name;
+    entry->tok = tok;
+    entry->file_id = file_id_;
+    entry->entry_kind = EntryKind::Alias;
+    entry->enclosing_frame_id = frame_id;
+    entry->body = body;
+    entry->type_params = std::move(type_params);
+    frame_entries_.push_back(entry.get());
+    master_list_.push_back(std::move(entry));
+}
+
 void Parser::declareAlias(const std::string& name, const std::string& resolved, int name_tok) {
-    auto& frame = frame_stack_.back().aliases;
-    auto it = frame.find(name);
-    if (it != frame.end()) {
+    int cur = frame_ids_.back().first;
+    if (const AliasEntry* existing = findAliasInFrame(cur, name)) {
         // Class-body pre-scan registers aliases into the frame via the seed
         // step before the main body loop runs. The main body loop's
         // parseAliasDecl then re-encounters the same decl and calls
         // declareAlias with matching tok + resolved body — accept silently.
-        if (it->second.tok == name_tok && it->second.resolved == resolved)
+        if (existing->tok == name_tok
+            && existing->body == resolved
+            && existing->type_params.empty())
             return;
         throw CompileError{file_id_, name_tok,
             "Alias '" + name + "' is already declared in the same scope."}
-            .addNote(file_id_, it->second.tok, "First declared here.");
+            .addNote(file_id_, existing->tok, "First declared here.");
     }
-    frame[name] = AliasInfo{resolved, name_tok};
+    appendAliasEntry(cur, name, resolved, {}, name_tok);
     // Phase 1: also register in the per-class registry so `Class:alias` path-
     // qualified type names resolve. enclosingClassPath() is non-empty inside
     // a class body and gives the canonical (dot-form) class path.
@@ -184,9 +214,12 @@ void Parser::declareAlias(const std::string& name, const std::string& resolved, 
 }
 
 std::string Parser::lookupAlias(const std::string& name) const {
-    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
-        auto sit = it->aliases.find(name);
-        if (sit != it->aliases.end()) return sit->second.resolved;
+    for (auto it = frame_entries_.rbegin(); it != frame_entries_.rend(); ++it) {
+        FrameBase* e = *it;
+        if (e->entry_kind == EntryKind::Alias && e->base_name == name) {
+            auto* ae = static_cast<const AliasEntry*>(e);
+            if (ae->type_params.empty()) return ae->body;
+        }
     }
     return "";
 }
@@ -214,53 +247,130 @@ void Parser::declareAliasTemplate(const std::string& name,
                                   std::vector<std::string> type_params,
                                   const std::string& body,
                                   int name_tok) {
-    auto& frame = frame_stack_.back().alias_templates;
-    auto it = frame.find(name);
-    if (it != frame.end()) {
+    int cur = frame_ids_.back().first;
+    if (const AliasEntry* existing = findAliasInFrame(cur, name)) {
         throw CompileError{file_id_, name_tok,
             "Alias '" + name + "' is already declared in the same scope."}
-            .addNote(file_id_, it->second.tok, "First declared here.");
+            .addNote(file_id_, existing->tok, "First declared here.");
     }
-    frame[name] = AliasTemplateInfo{std::move(type_params), body, name_tok};
+    appendAliasEntry(cur, name, body, std::move(type_params), name_tok);
 }
 
-const Parser::AliasTemplateInfo* Parser::lookupAliasTemplate(
+const Parser::AliasEntry* Parser::lookupAliasTemplate(
     const std::string& name) const
 {
-    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
-        auto sit = it->alias_templates.find(name);
-        if (sit != it->alias_templates.end()) return &sit->second;
+    for (auto it = frame_entries_.rbegin(); it != frame_entries_.rend(); ++it) {
+        FrameBase* e = *it;
+        if (e->entry_kind == EntryKind::Alias && e->base_name == name) {
+            auto* ae = static_cast<const AliasEntry*>(e);
+            if (!ae->type_params.empty()) return ae;
+        }
     }
     return nullptr;
 }
 
 void Parser::seedAliasesFrom(const std::vector<TypeAliasDef>& tas,
                              const std::vector<TypeAliasTemplate>& tats) {
-    auto& alias_frame = frame_stack_.front().aliases;
+    int fs_id = frame_ids_.front().first;
     for (auto& ta : tas)
-        if (!alias_frame.count(ta.name))
-            alias_frame[ta.name] = AliasInfo{ta.body, ta.tok};
-    auto& tat_frame = frame_stack_.front().alias_templates;
+        if (!findAliasInFrame(fs_id, ta.name))
+            appendAliasEntry(fs_id, ta.name, ta.body, {}, ta.tok);
     for (auto& tat : tats)
-        if (!tat_frame.count(tat.name))
-            tat_frame[tat.name] =
-                AliasTemplateInfo{tat.type_params, tat.body, tat.tok};
+        if (!findAliasInFrame(fs_id, tat.name))
+            appendAliasEntry(fs_id, tat.name, tat.body, tat.type_params, tat.tok);
+}
+
+const Parser::LocalClassEntry* Parser::findLocalClassInFrame(
+    int frame_id, const std::string& name) const {
+    for (FrameBase* e : frame_entries_) {
+        if (e->enclosing_frame_id == frame_id
+            && e->entry_kind == EntryKind::LocalClass
+            && e->base_name == name) {
+            return static_cast<const LocalClassEntry*>(e);
+        }
+    }
+    return nullptr;
+}
+
+void Parser::appendLocalClassEntry(int frame_id,
+                                    const std::string& name,
+                                    const std::string& canonical,
+                                    int tok) {
+    auto entry = std::make_unique<LocalClassEntry>();
+    entry->base_name = name;
+    entry->tok = tok;
+    entry->file_id = file_id_;
+    entry->entry_kind = EntryKind::LocalClass;
+    entry->enclosing_frame_id = frame_id;
+    entry->canonical = canonical;
+    frame_entries_.push_back(entry.get());
+    master_list_.push_back(std::move(entry));
 }
 
 std::string Parser::lookupLocalClass(const std::string& name) const {
-    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
-        auto sit = it->local_classes.find(name);
-        if (sit != it->local_classes.end()) return sit->second;
+    for (auto it = frame_entries_.rbegin(); it != frame_entries_.rend(); ++it) {
+        FrameBase* e = *it;
+        if (e->entry_kind == EntryKind::LocalClass && e->base_name == name)
+            return static_cast<const LocalClassEntry*>(e)->canonical;
     }
     return "";
 }
 
+const Parser::NestedFuncEntry* Parser::findNestedFuncInFrame(
+    int frame_id, const std::string& name) const {
+    for (FrameBase* e : frame_entries_) {
+        if (e->enclosing_frame_id == frame_id
+            && e->entry_kind == EntryKind::NestedFunc
+            && e->base_name == name) {
+            return static_cast<const NestedFuncEntry*>(e);
+        }
+    }
+    return nullptr;
+}
+
+void Parser::appendNestedFuncEntry(int frame_id,
+                                    const std::string& name,
+                                    const std::string& canonical,
+                                    int tok) {
+    auto entry = std::make_unique<NestedFuncEntry>();
+    entry->base_name = name;
+    entry->tok = tok;
+    entry->file_id = file_id_;
+    entry->entry_kind = EntryKind::NestedFunc;
+    entry->enclosing_frame_id = frame_id;
+    entry->canonical = canonical;
+    frame_entries_.push_back(entry.get());
+    master_list_.push_back(std::move(entry));
+}
+
 std::string Parser::lookupNestedFunc(const std::string& name) const {
-    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
-        auto sit = it->nested_funcs.find(name);
-        if (sit != it->nested_funcs.end()) return sit->second;
+    for (auto it = frame_entries_.rbegin(); it != frame_entries_.rend(); ++it) {
+        FrameBase* e = *it;
+        if (e->entry_kind == EntryKind::NestedFunc && e->base_name == name)
+            return static_cast<const NestedFuncEntry*>(e)->canonical;
     }
     return "";
+}
+
+const Parser::EnumEntry* Parser::lookupEnum(const std::string& name) const {
+    for (auto it = frame_entries_.rbegin(); it != frame_entries_.rend(); ++it) {
+        FrameBase* e = *it;
+        if (e->entry_kind == EntryKind::Enum && e->base_name == name)
+            return static_cast<const EnumEntry*>(e);
+    }
+    return nullptr;
+}
+
+void Parser::appendEnumEntry(const std::string& name, int value_count, int tok) {
+    auto entry = std::make_unique<EnumEntry>();
+    entry->base_name = name;
+    entry->tok = tok;
+    entry->file_id = file_id_;
+    entry->entry_kind = EntryKind::Enum;
+    entry->enclosing_frame_id = frame_ids_.front().first;
+    entry->value_count = value_count;
+    frame_entries_.push_back(entry.get());
+    master_list_.push_back(std::move(entry));
 }
 
 void Parser::parseAliasDecl(Program* program, SlidDef* slid) {
@@ -345,19 +455,28 @@ void Parser::declareVar(const std::string& name, int name_tok) {
     }
     // (collision rule) a local must not collide with a local class declared in
     // the same block — one namespace per scope spans variables and classes.
-    if (frame_stack_.back().local_classes.count(name)) {
+    if (findLocalClassInFrame(frame_ids_.back().first, name)) {
         throw CompileError{file_id_, name_tok,
             "Local '" + name + "' collides with a class of the same name in this scope."};
     }
-    if (!frame_stack_.empty()) {
-        LocalInfo info;
-        info.tok = name_tok;
-        auto [it, inserted] = frame_stack_.back().locals.emplace(name, info);
-        if (!inserted) {
-            throw CompileError{file_id_, name_tok,
-                "Local '" + name + "' is already declared in the same scope."}
-                .addNote(file_id_, it->second.tok, "First declared here.");
+    if (!frame_ids_.empty()) {
+        std::size_t start = frame_ids_.back().second;
+        for (std::size_t i = start; i < frame_entries_.size(); ++i) {
+            FrameBase* e = frame_entries_[i];
+            if (e->entry_kind == EntryKind::LocalVar && e->base_name == name) {
+                throw CompileError{file_id_, name_tok,
+                    "Local '" + name + "' is already declared in the same scope."}
+                    .addNote(file_id_, e->tok, "First declared here.");
+            }
         }
+        auto entry = std::make_unique<LocalVarEntry>();
+        entry->base_name = name;
+        entry->tok = name_tok;
+        entry->file_id = file_id_;
+        entry->entry_kind = EntryKind::LocalVar;
+        entry->enclosing_frame_id = frame_ids_.back().first;
+        frame_entries_.push_back(entry.get());
+        master_list_.push_back(std::move(entry));
     }
 }
 
@@ -370,47 +489,60 @@ static void rejectReserved(int file_id, int tok, const std::string& name, const 
 
 bool Parser::isInScope(const std::string& name) const {
     [[maybe_unused]] int t_start = pos_;
-    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it)
-        if (it->locals.count(name)) return true;
+    for (auto it = frame_entries_.rbegin(); it != frame_entries_.rend(); ++it) {
+        FrameBase* e = *it;
+        if (e->entry_kind == EntryKind::LocalVar && e->base_name == name) return true;
+    }
     return false;
 }
 
-Parser::LocalInfo* Parser::findLocal(const std::string& name) {
-    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
-        auto sit = it->locals.find(name);
-        if (sit != it->locals.end()) return &sit->second;
+Parser::LocalVarEntry* Parser::findLocal(const std::string& name) {
+    for (auto it = frame_entries_.rbegin(); it != frame_entries_.rend(); ++it) {
+        FrameBase* e = *it;
+        if (e->entry_kind == EntryKind::LocalVar && e->base_name == name)
+            return static_cast<LocalVarEntry*>(e);
     }
     return nullptr;
 }
 
 int Parser::arrayCountInScope(const std::string& name) const {
-    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
-        auto sit = it->locals.find(name);
-        if (sit != it->locals.end()) return sit->second.is_array ? sit->second.array_count : 0;
+    for (auto it = frame_entries_.rbegin(); it != frame_entries_.rend(); ++it) {
+        FrameBase* e = *it;
+        if (e->entry_kind == EntryKind::LocalVar && e->base_name == name) {
+            auto* lv = static_cast<LocalVarEntry*>(e);
+            return lv->is_array ? lv->array_count : 0;
+        }
     }
     return 0;
 }
 
 int Parser::arrayRankInScope(const std::string& name) const {
-    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
-        auto sit = it->locals.find(name);
-        if (sit != it->locals.end()) return sit->second.is_array ? sit->second.array_rank : 0;
+    for (auto it = frame_entries_.rbegin(); it != frame_entries_.rend(); ++it) {
+        FrameBase* e = *it;
+        if (e->entry_kind == EntryKind::LocalVar && e->base_name == name) {
+            auto* lv = static_cast<LocalVarEntry*>(e);
+            return lv->is_array ? lv->array_rank : 0;
+        }
     }
     return 0;
 }
 
 int Parser::tupleSizeInScope(const std::string& name) const {
-    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
-        auto sit = it->locals.find(name);
-        if (sit != it->locals.end()) return sit->second.is_tuple ? sit->second.tuple_count : 0;
+    for (auto it = frame_entries_.rbegin(); it != frame_entries_.rend(); ++it) {
+        FrameBase* e = *it;
+        if (e->entry_kind == EntryKind::LocalVar && e->base_name == name) {
+            auto* lv = static_cast<LocalVarEntry*>(e);
+            return lv->is_tuple ? lv->tuple_count : 0;
+        }
     }
     return 0;
 }
 
 std::string Parser::typeInScope(const std::string& name) const {
-    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
-        auto sit = it->locals.find(name);
-        if (sit != it->locals.end()) return sit->second.type;
+    for (auto it = frame_entries_.rbegin(); it != frame_entries_.rend(); ++it) {
+        FrameBase* e = *it;
+        if (e->entry_kind == EntryKind::LocalVar && e->base_name == name)
+            return static_cast<LocalVarEntry*>(e)->type;
     }
     return "";
 }
@@ -964,7 +1096,7 @@ std::string Parser::parseTypeName() {
         if (!a.empty()) {
             base = a;
             resolved_alias = true;
-        } else if (const AliasTemplateInfo* at = lookupAliasTemplate(base)) {
+        } else if (const AliasEntry* at = lookupAliasTemplate(base)) {
             // Template alias at the use site — parse `<args>`, substitute the
             // body's type-param identifiers with the parsed args, return the
             // substituted type-string as a finalized base (skips qualifier /
@@ -1115,7 +1247,7 @@ std::string Parser::parseTypeName() {
             } else {
                 // Walk enclosing_class_names_ for self/ancestor (a chain
                 // segment matching base) and sibling/nested-enum (accumulated
-                // path + base in class_aliases_ or enum_sizes_). Bounded by
+                // path + base in class_aliases_ or enum entries). Bounded by
                 // the chain, so file-scope code (empty chain) gets no match.
                 std::string acc;
                 bool resolved = false;
@@ -1138,7 +1270,7 @@ std::string Parser::parseTypeName() {
                     std::string colon = acc;
                     for (char& c : colon) if (c == '.') c = ':';
                     std::string enum_candidate = colon + ":" + base;
-                    if (enum_sizes_.count(enum_candidate)) {
+                    if (lookupEnum(enum_candidate)) {
                         base = enum_candidate;
                         resolved = true;
                         break;
@@ -1839,18 +1971,15 @@ std::unique_ptr<Expr> Parser::parseExpr() {
 
 // --- Statement parsing ---
 
-Parser::Frame& Parser::pushFrame() {
+void Parser::pushFrame() {
     int id = next_frame_id_++;
     frame_ids_.emplace_back(id, frame_entries_.size());
-    frame_stack_.emplace_back();
-    return frame_stack_.back();
 }
 
 void Parser::popFrame() {
     std::size_t entries_start = frame_ids_.back().second;
     frame_entries_.resize(entries_start);
     frame_ids_.pop_back();
-    frame_stack_.pop_back();
 }
 
 std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclare) {
@@ -2103,8 +2232,9 @@ void Parser::prescanLocalClasses() {
         // reopen: class already registered in this block. Reuse the existing
         // canonical so both SlidDefs collide in program.classes; mergeReopens
         // collapses them after parsing.
-        if (frame_stack_.back().local_classes.count(short_name)) return;
-        if (frame_stack_.back().nested_funcs.count(short_name)) {
+        int cur = frame_ids_.back().first;
+        if (findLocalClassInFrame(cur, short_name)) return;
+        if (findNestedFuncInFrame(cur, short_name)) {
             errorAt(name_tok, "'" + short_name
                 + "' is already declared in this scope.");
         }
@@ -2112,22 +2242,23 @@ void Parser::prescanLocalClasses() {
         for (char& c : func_path) if (c == ':') c = '.';
         std::string canonical = (func_path.empty() ? "" : func_path + ".")
             + std::to_string(local_slid_counter_++) + "." + short_name;
-        frame_stack_.back().local_classes[short_name] = canonical;
+        appendLocalClassEntry(cur, short_name, canonical, name_tok);
     };
     auto register_nested_fn = [&](const std::string& short_name, int name_tok) {
         // Overloads share the short name in this block; the codegen mangle
         // differentiates by param types. Only collisions to record here are
         // with same-block local classes (single namespace).
-        if (frame_stack_.back().local_classes.count(short_name)) {
+        int cur = frame_ids_.back().first;
+        if (findLocalClassInFrame(cur, short_name)) {
             errorAt(name_tok, "'" + short_name
                 + "' is already declared in this scope.");
         }
-        if (frame_stack_.back().nested_funcs.count(short_name)) return; // overload
+        if (findNestedFuncInFrame(cur, short_name)) return; // overload
         std::string func_path = current_function_name_;
         for (char& c : func_path) if (c == ':') c = '.';
         std::string canonical = (func_path.empty() ? "" : func_path + ".")
             + std::to_string(local_slid_counter_++) + "." + short_name;
-        frame_stack_.back().nested_funcs[short_name] = canonical;
+        appendNestedFuncEntry(cur, short_name, canonical, name_tok);
     };
     auto skip_template_brackets = [&]() {
         if (pos_ >= (int)tokens_.size() || peek().type != TokenType::kLt) return;
@@ -2229,27 +2360,29 @@ void Parser::collectLocalClass(SlidDef slid, const std::string& short_name,
     // var-vs-class collision — a local var of this name was declared earlier
     // in the same block. (declareVar catches the reverse order against the
     // pre-scan registration.)
-    if (!frame_stack_.empty()
-        && frame_stack_.back().locals.count(short_name)) {
-        errorAt(name_tok, "'" + short_name
-            + "' is already declared in this scope.");
+    if (!frame_ids_.empty()) {
+        std::size_t start = frame_ids_.back().second;
+        for (std::size_t i = start; i < frame_entries_.size(); ++i) {
+            FrameBase* e = frame_entries_[i];
+            if (e->entry_kind == EntryKind::LocalVar && e->base_name == short_name) {
+                errorAt(name_tok, "'" + short_name
+                    + "' is already declared in this scope.");
+            }
+        }
     }
     // Canonical name comes from the block-level pre-scan; reuse it. Same-block
     // duplicate class names already errored there. If no pre-scan registration
     // exists (defensive — should not happen via parseBlock), generate one.
     std::string canonical;
-    {
-        auto& lc = frame_stack_.back().local_classes;
-        auto it = lc.find(short_name);
-        if (it != lc.end())
-            canonical = it->second;
-    }
+    int cur = frame_ids_.back().first;
+    if (const LocalClassEntry* lce = findLocalClassInFrame(cur, short_name))
+        canonical = lce->canonical;
     if (canonical.empty()) {
         std::string func_path = current_function_name_;
         for (char& c : func_path) if (c == ':') c = '.';
         canonical = (func_path.empty() ? "" : func_path + ".")
             + std::to_string(local_slid_counter_++) + "." + short_name;
-        frame_stack_.back().local_classes[short_name] = canonical;
+        appendLocalClassEntry(cur, short_name, canonical, name_tok);
     }
     slid.name = canonical;
     // Inside a template, a local class may reference an unbound type param —
@@ -2773,9 +2906,8 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
                 // Enum: VarExpr whose name matches a known enum type.
                 if (auto* ve = dynamic_cast<VarExpr*>(first_expr.get())) {
-                    auto eit = enum_sizes_.find(ve->name);
-                    if (eit != enum_sizes_.end()) {
-                        int size = eit->second;
+                    if (const EnumEntry* ee = lookupEnum(ve->name)) {
+                        int size = ee->value_count;
                         expect(TokenType::kRParen, "Expected ')'");
                         stmt->init_stmts.push_back(reuse_outer
                             ? _loopAssign(_intLit(0))
@@ -4028,11 +4160,25 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         pos_ = save_pos;
     }
 
-    // alias frame for the class body — an `alias` declared here is visible to
-    // the body's methods (nested below this frame) and popped at the close.
-    // The frame's locals/local_classes/nested_funcs lanes stay empty here
-    // (class body has no syntax for them; method bodies push their own frames).
-    auto& body_frame = pushFrame();
+    // Frame for the class body — aliases/methods/etc declared here are
+    // visible to nested method frames and popped at the close. The
+    // ClassEntry scope-opener is appended to the enclosing frame just
+    // before pushFrame, with own_frame_id pre-assigned to the soon-to-be
+    // class-body id; stage C splice unification consumes the entry.
+    {
+        int class_body_id = next_frame_id_;
+        auto entry = std::make_unique<ClassEntry>();
+        entry->base_name = slid.name;
+        entry->tok = slid.name_tok;
+        entry->file_id = slid.name_file_id;
+        entry->entry_kind = EntryKind::Class;
+        entry->enclosing_frame_id = frame_ids_.back().first;
+        entry->own_frame_id = class_body_id;
+        frame_entries_.push_back(entry.get());
+        master_list_.push_back(std::move(entry));
+    }
+    pushFrame();
+    int body_frame_id = frame_ids_.back().first;
     // Phase 1: seed this frame with class-scope aliases from prior occurrences
     // of the same class (reopens) AND the base chain so derived classes see
     // their bases' aliases as bare names (inheritance). Walk base-first to
@@ -4047,12 +4193,14 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             if (bit == class_base_name_.end() || bit->second.empty()) break;
             cur = bit->second;
         }
-        // base first → own last so own aliases overwrite base aliases.
+        // base first → own last so own aliases shadow base aliases (rbegin
+        // walk of frame_entries_ at lookup time returns last-appended first).
         for (auto it = base_chain.rbegin(); it != base_chain.rend(); ++it) {
             auto cit = class_aliases_.find(*it);
             if (cit != class_aliases_.end())
                 for (auto& kv : cit->second)
-                    body_frame.aliases[kv.first] = kv.second;
+                    appendAliasEntry(body_frame_id, kv.first,
+                                     kv.second.resolved, {}, kv.second.tok);
         }
     }
 
@@ -4749,7 +4897,11 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
                 }
             }
         }
-        pushFrame().aliases = std::move(em_frame);
+        pushFrame();
+        int em_frame_id = frame_ids_.back().first;
+        for (auto& kv : em_frame)
+            appendAliasEntry(em_frame_id, kv.first,
+                             kv.second.resolved, {}, kv.second.tok);
         // Push target-class segments onto enclosing_class_names_ so type-name
         // lookups in the body can resolve qualified short names via the
         // chain walk (e.g. `CsH:intH` inside `void GsA:CsH:m_h4()` matches
@@ -5002,7 +5154,8 @@ Program Parser::parse() {
                     if (i > 0) colon_path += ":";
                     colon_path += path[i];
                 }
-                enum_sizes_[colon_path + ":" + tokens_[pos_ + 1].value] = 0;
+                appendEnumEntry(colon_path + ":" + tokens_[pos_ + 1].value, 0,
+                                pos_ + 1);
                 advance(); // 'enum'
                 continue;
             }
@@ -5136,7 +5289,8 @@ Program Parser::parse() {
                 std::string colon_scope = slid.name;
                 for (char& c : colon_scope) if (c == '.') c = ':';
                 for (auto& e : slid.nested_enums)
-                    enum_sizes_[colon_scope + ":" + e.name] = (int)e.values.size();
+                    appendEnumEntry(colon_scope + ":" + e.name,
+                                    (int)e.values.size(), e.tok);
                 program.slid_modules[slid.name] = module;
                 recordSlidMethods(slid);
                 program.classes.push_back(std::move(slid));
@@ -5152,16 +5306,18 @@ Program Parser::parse() {
             // consumer's Program (so a chained re-import propagates them) and
             // also seed the consumer's file-scope frames so parseTypeName
             // resolves the alias names directly in subsequent decls.
-            for (auto& ta : hdr.type_aliases) {
-                if (!frame_stack_.front().aliases.count(ta.name))
-                    frame_stack_.front().aliases[ta.name] = AliasInfo{ta.body, ta.tok};
-                program.type_aliases.push_back(ta);
-            }
-            for (auto& tat : hdr.type_alias_templates) {
-                if (!frame_stack_.front().alias_templates.count(tat.name))
-                    frame_stack_.front().alias_templates[tat.name] =
-                        AliasTemplateInfo{tat.type_params, tat.body, tat.tok};
-                program.type_alias_templates.push_back(tat);
+            {
+                int fs_id = frame_ids_.front().first;
+                for (auto& ta : hdr.type_aliases) {
+                    if (!findAliasInFrame(fs_id, ta.name))
+                        appendAliasEntry(fs_id, ta.name, ta.body, {}, ta.tok);
+                    program.type_aliases.push_back(ta);
+                }
+                for (auto& tat : hdr.type_alias_templates) {
+                    if (!findAliasInFrame(fs_id, tat.name))
+                        appendAliasEntry(fs_id, tat.name, tat.body, tat.type_params, tat.tok);
+                    program.type_alias_templates.push_back(tat);
+                }
             }
             // Everything else the consumer can refer to that was declared in
             // the .slh — enums, file-scope consts, external-method decls,
@@ -5287,17 +5443,18 @@ Program Parser::parse() {
                     // transitive imports carry. Same shape as the direct
                     // header arm above — seed consumer's file-scope frame
                     // and forward to Program.
-                    for (auto& ta : impl_prog.type_aliases) {
-                        if (!frame_stack_.front().aliases.count(ta.name))
-                            frame_stack_.front().aliases[ta.name] =
-                                AliasInfo{ta.body, ta.tok};
-                        program.type_aliases.push_back(ta);
-                    }
-                    for (auto& tat : impl_prog.type_alias_templates) {
-                        if (!frame_stack_.front().alias_templates.count(tat.name))
-                            frame_stack_.front().alias_templates[tat.name] =
-                                AliasTemplateInfo{tat.type_params, tat.body, tat.tok};
-                        program.type_alias_templates.push_back(tat);
+                    {
+                        int fs_id = frame_ids_.front().first;
+                        for (auto& ta : impl_prog.type_aliases) {
+                            if (!findAliasInFrame(fs_id, ta.name))
+                                appendAliasEntry(fs_id, ta.name, ta.body, {}, ta.tok);
+                            program.type_aliases.push_back(ta);
+                        }
+                        for (auto& tat : impl_prog.type_alias_templates) {
+                            if (!findAliasInFrame(fs_id, tat.name))
+                                appendAliasEntry(fs_id, tat.name, tat.body, tat.type_params, tat.tok);
+                            program.type_alias_templates.push_back(tat);
+                        }
                     }
                     // (b) the remaining declarations carried via impl_prog's
                     // transitive .slh imports — enums, file-scope consts,
@@ -5347,7 +5504,7 @@ Program Parser::parse() {
         // enum definition
         else if (peek().type == TokenType::kEnum) {
             EnumDef e = parseEnumDef();
-            enum_sizes_[e.name] = (int)e.values.size();
+            appendEnumEntry(e.name, (int)e.values.size(), e.tok);
             program.enums.push_back(std::move(e));
         }
         // explicit template instantiation: Name<Types>(ParamTypes);

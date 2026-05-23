@@ -1052,25 +1052,18 @@ private:
                         std::vector<int>& param_mut_toks,
                         std::vector<std::unique_ptr<Expr>>& param_defaults);
 
-    // Per-scope record for each declared local. Visibility (the name being in
-    // the map at all) drives decl-vs-assign disambiguation; the optional
-    // properties feed shape-aware downstream logic (short-form for, etc).
-    struct LocalInfo {
-        int  tok = 0;           // token of the name at its declaration site
-        bool is_array = false;
-        int  array_count = 0;   // outer dim
-        int  array_rank = 0;    // number of dims; >1 rejected by short-form for
-        bool is_tuple = false;
-        int  tuple_count = 0;   // anon-tuple element count
-        std::string type;       // declared type ("" when not tracked / inferred)
-    };
+    // LocalInfo migrated to LocalVarEntry (see phase-2 scaffolding below).
+    // Visibility (entry present in frame_entries_) drives decl-vs-assign
+    // disambiguation; the LocalVarEntry payload feeds shape-aware downstream
+    // logic (short-form for, etc).
     void declareVar(const std::string& name, int name_tok);
     bool isInScope(const std::string& name) const;
     int arrayCountInScope(const std::string& name) const; // 0 if not a fixed-size array local
     int arrayRankInScope(const std::string& name) const;  // 0 if not a fixed-size array local
     int tupleSizeInScope(const std::string& name) const;  // 0 if not a tuple local
     std::string typeInScope(const std::string& name) const; // "" if not recorded
-    LocalInfo* findLocal(const std::string& name);        // innermost frame; nullptr if not in scope
+    struct LocalVarEntry;
+    LocalVarEntry* findLocal(const std::string& name);    // innermost frame; nullptr if not in scope
 
     // Per-class info populated as top-level slid defs are parsed (recordSlidMethods).
     // method_names mirrors sigs.keys for fast presence checks; sigs carries the
@@ -1107,10 +1100,7 @@ private:
     std::map<std::string, FieldRef> current_slid_fields_;
     // all parsed slid field names, keyed by slid name (used for external method blocks)
     std::map<std::string, std::map<std::string, FieldRef>> all_slid_fields_;
-    // enum type → value count; populated as enums are parsed. Used by the
-    // short-form for loop to recognize `for (x : EnumName)` and supply the
-    // iteration count for the desugared ForLongStmt.
-    std::map<std::string, int> enum_sizes_;
+    // Enums migrated to EnumEntry; see lookupEnum / appendEnumEntry below.
     // monotonic counter for parser-synthesized loop locals (__$end_<n>,
     // __$step_<n>, __$idx_<n>, __$tup_<n>). Names must not collide between
     // nested loops in the same scope.
@@ -1172,19 +1162,18 @@ private:
     bool in_template_ = false;
     std::vector<SlidDef> pending_local_classes_;
 
-    // Per-block short-name → canonical-name map for local classes lives in
-    // frame_stack_'s local_classes lane. parseTypeName resolves a bare type
-    // name's base component through it (without finalizing — colon suffixes
-    // still apply).
+    // Per-block short-name → canonical-name map for local classes.
+    // parseTypeName resolves a bare type name's base component through it
+    // (without finalizing — colon suffixes still apply).
     std::string lookupLocalClass(const std::string& name) const;
 
-    // Per-block short-name → canonical-name map for nested functions lives in
-    // frame_stack_'s nested_funcs lane. A nested function is visible only
-    // within its declaring block (and its sub-scopes via the stack walk in
-    // lookupNestedFunc); on block close the frame pops and the name becomes
-    // unresolvable, so the codegen `Unknown function` error fires. Canonical
-    // name format: `<funcpath>.<n>.<short>`, sharing the local_slid_counter_
-    // namespace so a fn and a class can never collide.
+    // Per-block short-name → canonical-name map for nested functions. A
+    // nested function is visible only within its declaring block (and its
+    // sub-scopes via the rbegin walk in lookupNestedFunc); on block close
+    // the frame pops and the name becomes unresolvable, so the codegen
+    // `Unknown function` error fires. Canonical name format:
+    // `<funcpath>.<n>.<short>`, sharing the local_slid_counter_ namespace
+    // so a fn and a class can never collide.
     std::string lookupNestedFunc(const std::string& name) const;
 
     // user-declared type aliases (alias Name = TypeExpr;). innermost frame is
@@ -1196,9 +1185,10 @@ private:
     std::string lookupAlias(const std::string& name) const;
 
     // Per-class alias registry for class-path-qualified type-name resolution
-    // (e.g. `GsA:intA`, `Outer:Inner:intX`). Populated alongside frame_stack_'s aliases lane
-    // when an alias declaration occurs inside a class body. Keyed by canonical
-    // class name (dot form: "Outer.Inner") → alias-name → resolved type.
+    // (e.g. `GsA:intA`, `Outer:Inner:intX`). Populated alongside the AliasEntry
+    // master-list write when an alias declaration occurs inside a class body.
+    // Keyed by canonical class name (dot form: "Outer.Inner") → alias-name →
+    // resolved type.
     std::map<std::string, std::map<std::string, AliasInfo>> class_aliases_;
     // Stack of enclosing-class nested_alias_ snapshots — pushed on parseSlidDef
     // entry (just before the clear) and popped at exit. Lets parseTypeName
@@ -1216,46 +1206,27 @@ private:
     std::string lookupClassAlias(const std::string& class_path,
                                  const std::string& member) const;
 
-    // Template type aliases (`alias Name<T,...> = TypeExpr;`). Same stacked-
-    // frames model as the aliases lane in frame_stack_. The bottom frame is
-    // file scope; nested frames pushed/popped by parseBlock.
-    struct AliasTemplateInfo {
-        std::vector<std::string> type_params;
-        std::string body;
-        int tok = 0;
-    };
+    // Template type aliases (`alias Name<T,...> = TypeExpr;`). Stored as
+    // AliasEntry with non-empty type_params. File-scope and nested-block
+    // entries live in master_list_ / frame_entries_ alongside plain aliases.
+    struct AliasEntry;
     void declareAliasTemplate(const std::string& name,
                               std::vector<std::string> type_params,
                               const std::string& body,
                               int name_tok);
-    const AliasTemplateInfo* lookupAliasTemplate(const std::string& name) const;
+    const AliasEntry* lookupAliasTemplate(const std::string& name) const;
 
-    // Unified per-block scope frame. Five lanes hold the data the legacy
-    // scope_stack_ / alias_stack_ / alias_template_stack_ /
-    // local_class_stack_ / nested_func_stack_ used to hold; all five
-    // legacy stacks have been migrated to lanes and deleted. parseBlock
-    // calls pushFrame/popFrame at the symmetric site; for-scope sites
-    // (short and long form) also use pushFrame; class-body and
-    // external-method sites push frame_stack_ directly with only the
-    // relevant lane(s) seeded (other lanes stay empty — the syntax of
-    // those scopes admits no entries in the other lanes).
-    struct Frame {
-        std::map<std::string, LocalInfo> locals;
-        std::map<std::string, AliasInfo> aliases;
-        std::map<std::string, AliasTemplateInfo> alias_templates;
-        std::map<std::string, std::string> local_classes;
-        std::map<std::string, std::string> nested_funcs;
-    };
-    std::vector<Frame> frame_stack_{1};
-    Frame& pushFrame();
+    // Per-block scope. parseBlock calls pushFrame/popFrame at the symmetric
+    // site; for-scope sites (short and long form) also use pushFrame;
+    // class-body and external-method sites push directly with their own
+    // seeding via appendAliasEntry et al.
+    void pushFrame();
     void popFrame();
 
-    // Phase-2 successor scaffolding. Inactive — nothing constructs these yet.
-    // Stage A1 lands the types only; later stages populate master_list_,
-    // frame_ids_, frame_entries_, reopen_cache_, and migrate readers off the
-    // legacy 5-lane Frame above. See project memory project-frame-based-parser-rewrite.
+    // Phase-2 successor scaffolding. See project memory
+    // project-frame-based-parser-rewrite.
     enum class FrameKind { Block, For, Class, Function };
-    enum class EntryKind { LocalVar };
+    enum class EntryKind { LocalVar, Alias, LocalClass, NestedFunc, Enum, Class };
 
     struct FrameBase {
         int enclosing_frame_id = -1;
@@ -1276,15 +1247,80 @@ private:
         std::string type;
     };
 
-    // Stage A2 — containers populated by pushFrame/popFrame only. Nothing
-    // reads them yet; master_list_, frame_entries_, reopen_cache_ stay empty
-    // until stage B starts populating per-kind. The id counter and id stack
-    // are exercised but unobserved.
+    // Plain alias when type_params is empty; template alias otherwise.
+    struct AliasEntry : FrameBase {
+        std::string body;
+        std::vector<std::string> type_params;
+    };
+
+    // base_name = short name, canonical = full canonical (func-path-prefixed).
+    struct LocalClassEntry : FrameBase {
+        std::string canonical;
+    };
+
+    struct NestedFuncEntry : FrameBase {
+        std::string canonical;
+    };
+
+    // base_name is the fully-qualified colon-form key (e.g. "Outer:Inner:E"
+    // for nested enums, "E" for file-scope). Resolves enum-type names at
+    // parseTypeName and supplies iteration count for the short-form for loop.
+    struct EnumEntry : FrameBase {
+        int value_count = 0;
+    };
+
+    // Scope-opener entry for a class declaration. Lives in the enclosing
+    // frame; FrameBase::own_frame_id holds the class body's frame id, so
+    // subsequent class-body entries (aliases, etc) point back at it via
+    // their enclosing_frame_id. base_name = canonical dot-form class name.
+    // Stage C splice unification consumes this.
+    struct ClassEntry : FrameBase {};
+
+    // Phase-2 master list and frame-id stack. Live for the LocalVar and
+    // Alias kinds; remaining lanes (local_classes, nested_funcs) still on
+    // the legacy Frame above.
     std::vector<std::unique_ptr<FrameBase>> master_list_;
     std::vector<std::pair<int, std::size_t>> frame_ids_;   // (own_frame_id, entries_start)
     std::vector<FrameBase*> frame_entries_;
     std::map<int, std::vector<FrameBase*>> reopen_cache_;  // keyed by own_frame_id
     int next_frame_id_ = 0;
+
+    // Alias-entry helpers. findAliasInFrame returns the entry if one with
+    // this name exists at the given frame_id (any kind — plain or template);
+    // nullptr otherwise. appendAliasEntry adds a new entry under the given
+    // frame_id without checking for duplicates (caller decides policy).
+    const AliasEntry* findAliasInFrame(int frame_id,
+                                       const std::string& name) const;
+    void appendAliasEntry(int frame_id,
+                          const std::string& name,
+                          const std::string& body,
+                          std::vector<std::string> type_params,
+                          int tok);
+
+    // LocalClass-entry helpers. Same frame-scoped semantics as the alias
+    // pair. findLocalClassInFrame returns the entry if one exists at the
+    // given frame_id; appendLocalClassEntry adds without duplicate check.
+    const LocalClassEntry* findLocalClassInFrame(int frame_id,
+                                                  const std::string& name) const;
+    void appendLocalClassEntry(int frame_id,
+                                const std::string& name,
+                                const std::string& canonical,
+                                int tok);
+
+    const NestedFuncEntry* findNestedFuncInFrame(int frame_id,
+                                                  const std::string& name) const;
+    void appendNestedFuncEntry(int frame_id,
+                                const std::string& name,
+                                const std::string& canonical,
+                                int tok);
+
+    // Enum-entry helpers. Keys are colon-form (matches legacy enum_sizes_
+    // string keys). appendEnumEntry adds a new entry at file scope without
+    // dedup; rbegin-walk semantics in lookupEnum mean a later write shadows
+    // an earlier same-name entry (matches the legacy map-upsert behavior
+    // for the forward-decl-then-fill flow in .slh class bodies).
+    const EnumEntry* lookupEnum(const std::string& name) const;
+    void appendEnumEntry(const std::string& name, int value_count, int tok);
 
     // Pass `program` from file-scope callers so file-scope aliases also flow
     // into Program (cross-TU propagation through .slh imports). Block-scope
