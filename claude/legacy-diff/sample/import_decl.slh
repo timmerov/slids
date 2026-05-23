@@ -1,0 +1,24 @@
+/*
+header file.
+declarations only.
+no code.
+*/
+
+void printHelloWorld();
+void printGoodbye();
+
+/*
+any source file that imports this header file
+knows this is a declaration, not a definition.
+except one file must define the globals.
+
+initializer is optional.
+but must match the value in the defining file.
+*/
+global query(who_ = 1) { }
+global what_ = 2;
+int where_;
+global query(when_ = 4) {
+    _();
+    ~();
+}

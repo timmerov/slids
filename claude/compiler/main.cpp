@@ -161,7 +161,8 @@ static int runInstantiate(const std::string& dir, const std::string& out_path) {
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         std::cerr << "usage: slidsc <source.sl> [-o <output.ll>] [--import-path <dir>]... [-MF <deps.d>|-M]\n"
-                  << "       slidsc --instantiate <build-dir> -o <output.sl>\n";
+                  << "       slidsc --instantiate <build-dir> -o <output.sl>\n"
+                  << "       slidsc --dump-program <source.sl|.slh> -o <output.dump>\n";
         return 1;
     }
 
@@ -175,6 +176,29 @@ int main(int argc, char* argv[]) {
                 inst_out = argv[++i];
         }
         return runInstantiate(inst_dir, inst_out);
+    }
+
+    // --dump-program mode (stub: writes "Hello, World!" until the real dumper lands)
+    if (std::string(argv[1]) == "--dump-program") {
+        if (argc < 3) { std::cerr << "slidsc: --dump-program requires a source file\n"; return 1; }
+        std::string dump_input = argv[2];
+        std::string dump_out = dump_input + ".dump";
+        for (int i = 3; i < argc; i++) {
+            if (std::string(argv[i]) == "-o" && i + 1 < argc)
+                dump_out = argv[++i];
+        }
+        std::filesystem::path op(dump_out);
+        if (op.has_parent_path()) {
+            std::error_code ec;
+            std::filesystem::create_directories(op.parent_path(), ec);
+        }
+        std::ofstream out(dump_out);
+        if (!out) {
+            std::cerr << "slidsc: cannot write '" << dump_out << "'\n";
+            return 1;
+        }
+        out << "Hello, World!\n";
+        return 0;
     }
 
     std::string input_path = argv[1];

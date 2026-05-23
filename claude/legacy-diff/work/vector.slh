@@ -1,0 +1,73 @@
+/*
+declare a template class in a header file.
+*/
+
+Vector<T>(...) {
+    _();
+    ~();
+
+    /*
+    assignment from Vector.
+    copy operator.
+    rhs may be self.
+    */
+    op=(Vector<T>^ v);
+
+    /*
+    move operator.
+    rhs may be self.
+    */
+    op<--(mutable Vector<T>^ v);
+
+    /*
+    overload index operation to fetch/set the indexed element.
+    T elem = vec[3];
+    vec[3] = elem;
+    */
+    T^ const op[](intptr index);
+
+    /* return the number of elements. */
+    intptr const size();
+
+    /* begin iterator */
+    T^ const begin();
+
+    /* end iterator */
+    T^ const end();
+
+    /* update iterator */
+    T^ const next(T^ prev);
+
+    /*
+    reserve space for more elements.
+    preserve existing elements.
+    */
+    void reserve(intptr new_size);
+
+    /*
+    change the number of elements.
+    preserve existing elements.
+    */
+    void resize(intptr new_size);
+
+    /* add the element at the end. */
+    void append(T^ element);
+
+    /*
+    create an element at the end.
+    return a reference to it.
+    */
+    T^ append();
+
+    /* insert the element at the index. */
+    void insert(intptr index, T^ element);
+
+    /*
+    insert the element at the index.
+    return a reference to it.
+    */
+    T^ insert(intptr index);
+
+    /* remove elements. */
+    void remove(intptr index, intptr count = 1);
+}
