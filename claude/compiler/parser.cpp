@@ -408,6 +408,95 @@ void Parser::emitEnumsIntoProgram(Program& program) const {
     }
 }
 
+void Parser::appendImportedHeaderEntry(const std::string& path) {
+    auto entry = std::make_unique<ImportedHeaderEntry>();
+    entry->base_name = path;
+    entry->file_id = file_id_;
+    entry->entry_kind = EntryKind::ImportedHeader;
+    entry->enclosing_frame_id = frame_ids_.front().first;
+    frame_entries_.push_back(entry.get());
+    master_list_.push_back(std::move(entry));
+}
+
+void Parser::appendUnnamedGlobalEntry(const std::string& type_name, int tok) {
+    auto entry = std::make_unique<UnnamedGlobalEntry>();
+    entry->base_name = type_name;
+    entry->tok = tok;
+    entry->file_id = file_id_;
+    entry->entry_kind = EntryKind::UnnamedGlobal;
+    entry->enclosing_frame_id = frame_ids_.front().first;
+    frame_entries_.push_back(entry.get());
+    master_list_.push_back(std::move(entry));
+}
+
+void Parser::appendFunctionAliasEntry(const std::string& name,
+                                       const std::string& target,
+                                       const std::string& namespace_name,
+                                       int tok, int file_id) {
+    auto entry = std::make_unique<FunctionAliasEntry>();
+    entry->base_name = name;
+    entry->tok = tok;
+    entry->file_id = (file_id < 0) ? file_id_ : file_id;
+    entry->entry_kind = EntryKind::FunctionAlias;
+    entry->enclosing_frame_id = frame_ids_.front().first;
+    entry->target = target;
+    entry->namespace_name = namespace_name;
+    frame_entries_.push_back(entry.get());
+    master_list_.push_back(std::move(entry));
+}
+
+void Parser::appendConstEntry(ConstDef def) {
+    auto entry = std::make_unique<ConstEntry>();
+    entry->base_name = def.name;
+    entry->tok = def.tok;
+    entry->file_id = def.file_id;
+    entry->entry_kind = EntryKind::Const;
+    entry->enclosing_frame_id = frame_ids_.front().first;
+    entry->declared_type = std::move(def.declared_type);
+    entry->namespace_name = std::move(def.namespace_name);
+    entry->rhs = std::move(def.rhs);
+    frame_entries_.push_back(entry.get());
+    master_list_.push_back(std::move(entry));
+}
+
+void Parser::emitImportedHeadersIntoProgram(Program& program) const {
+    for (auto& entry : master_list_)
+        if (entry->entry_kind == EntryKind::ImportedHeader)
+            program.imported_headers.push_back(entry->base_name);
+}
+
+void Parser::emitUnnamedGlobalsIntoProgram(Program& program) const {
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::UnnamedGlobal) continue;
+        program.unnamed_globals.push_back({entry->base_name, entry->file_id, entry->tok});
+    }
+}
+
+void Parser::emitFunctionAliasesIntoProgram(Program& program) const {
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::FunctionAlias) continue;
+        auto* fae = static_cast<const FunctionAliasEntry*>(entry.get());
+        program.aliases.push_back({fae->base_name, fae->target,
+                                    fae->namespace_name,
+                                    fae->file_id, fae->tok});
+    }
+}
+
+void Parser::emitConstsIntoProgram(Program& program) {
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::Const) continue;
+        auto* ce = static_cast<ConstEntry*>(entry.get());
+        ConstDef cd;
+        cd.name = ce->base_name;
+        cd.declared_type = std::move(ce->declared_type);
+        cd.rhs = std::move(ce->rhs);
+        cd.namespace_name = std::move(ce->namespace_name);
+        cd.file_id = ce->file_id;
+        cd.tok = ce->tok;
+        program.consts.push_back(std::move(cd));
+    }
+}
+
 void Parser::parseAliasDecl(Program* program, SlidDef* slid) {
     advance(); // 'alias'
     int name_tok = pos_;
@@ -5033,7 +5122,8 @@ void Parser::parseNamespace(Program& program) {
             expect(TokenType::kEquals, "Expected '=' after alias name");
             ad.target = expect(TokenType::kIdentifier, "Expected a function name after '='").value;
             expect(TokenType::kSemicolon, "Expected ';' after alias declaration");
-            program.aliases.push_back(std::move(ad));
+            appendFunctionAliasEntry(ad.name, ad.target, ad.namespace_name,
+                                     ad.tok, ad.file_id);
         } else {
             // a slids namespace function: `ret f(params) = import;` (foreign) or
             // `ret f(params) { body }` (slids). parseFunctionDef handles both.
@@ -5289,7 +5379,7 @@ Program Parser::parse() {
             // import-once: skip if this header has already been loaded in this compile
             if (!imported_once_->insert(header_path).second) continue;
 
-            program.imported_headers.push_back(header_path);
+            appendImportedHeaderEntry(header_path);
             std::ifstream in(header_path);
             std::ostringstream buf; buf << in.rdbuf();
             int hdr_file_id = sm_.openFile(header_path, buf.str(), file_id_);
@@ -5364,15 +5454,16 @@ Program Parser::parse() {
             for (auto& em : hdr.external_methods)
                 program.external_methods.push_back(std::move(em));
             for (auto& cd : hdr.consts)
-                program.consts.push_back(std::move(cd));
+                appendConstEntry(std::move(cd));
             for (auto& ns : hdr.namespaces)
                 program.namespaces.push_back(std::move(ns));
             for (auto& ad : hdr.aliases)
-                program.aliases.push_back(std::move(ad));
+                appendFunctionAliasEntry(ad.name, ad.target, ad.namespace_name,
+                                          ad.tok, ad.file_id);
             for (auto& [name, mod] : hdr.slid_modules)
                 program.slid_modules.emplace(name, mod);
             for (auto& h : hdr.imported_headers)
-                program.imported_headers.push_back(std::move(h));
+                appendImportedHeaderEntry(h);
 
             // load template bodies from impl file: foo.slh -> foo.sl
             if (has_templates) {
@@ -5384,7 +5475,7 @@ Program Parser::parse() {
                 std::ifstream impl_in;
                 if (!impl_is_root) impl_in.open(impl_path);
                 if (impl_in) {
-                    program.imported_headers.push_back(impl_path);
+                    appendImportedHeaderEntry(impl_path);
                     std::ostringstream impl_buf; impl_buf << impl_in.rdbuf();
                     int impl_file_id = sm_.openFile(impl_path, impl_buf.str(), hdr_file_id);
                     Lexer impl_lexer(sm_, impl_file_id);
@@ -5499,11 +5590,12 @@ Program Parser::parse() {
                     for (auto& em : impl_prog.external_methods)
                         program.external_methods.push_back(std::move(em));
                     for (auto& cd : impl_prog.consts)
-                        program.consts.push_back(std::move(cd));
+                        appendConstEntry(std::move(cd));
                     for (auto& ns : impl_prog.namespaces)
                         program.namespaces.push_back(std::move(ns));
                     for (auto& ad : impl_prog.aliases)
-                        program.aliases.push_back(std::move(ad));
+                        appendFunctionAliasEntry(ad.name, ad.target, ad.namespace_name,
+                                                  ad.tok, ad.file_id);
                     // Record every header impl_prog already loaded into the
                     // consumer's import-once guard. The impl_parser used its
                     // own cache (impl_cache), so its transitive .slh imports
@@ -5533,7 +5625,7 @@ Program Parser::parse() {
         }
         // const declaration: const [type] name = expr;
         else if (peek().type == TokenType::kConst) {
-            program.consts.push_back(parseConstDef());
+            appendConstEntry(parseConstDef());
         }
         // enum definition
         else if (peek().type == TokenType::kEnum) {
@@ -5624,7 +5716,7 @@ Program Parser::parse() {
                     "Unnamed instance '" + tname + "' is not allowed in a header (.slh) — "
                     "an unnamed global has no name to share between translation units; "
                     "move the declaration to an .sl file.");
-            program.unnamed_globals.push_back({tname, file_id_, name_tok});
+            appendUnnamedGlobalEntry(tname, name_tok);
         } else if (peek().type == TokenType::kLParen) {
             program.functions.push_back(parseFunctionDef());
         } else {
@@ -6018,6 +6110,10 @@ Program Parser::parse() {
 
     emitAliasesIntoProgram(program);
     emitEnumsIntoProgram(program);
+    emitImportedHeadersIntoProgram(program);
+    emitUnnamedGlobalsIntoProgram(program);
+    emitFunctionAliasesIntoProgram(program);
+    emitConstsIntoProgram(program);
     return program;
 }
 

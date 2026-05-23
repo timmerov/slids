@@ -1226,7 +1226,10 @@ private:
     // Phase-2 successor scaffolding. See project memory
     // project-frame-based-parser-rewrite.
     enum class FrameKind { Block, For, Class, Function };
-    enum class EntryKind { LocalVar, Alias, LocalClass, NestedFunc, Enum, Class };
+    enum class EntryKind {
+        LocalVar, Alias, LocalClass, NestedFunc, Enum, Class,
+        ImportedHeader, UnnamedGlobal, FunctionAlias, Const,
+    };
 
     struct FrameBase {
         int enclosing_frame_id = -1;
@@ -1283,6 +1286,31 @@ private:
     // their enclosing_frame_id. base_name = canonical dot-form class name.
     // Stage C splice unification consumes this.
     struct ClassEntry : FrameBase {};
+
+    // base_name = resolved header / impl path. Order in master_list_ is the
+    // order in which paths were registered with Program; emit walks in
+    // append order.
+    struct ImportedHeaderEntry : FrameBase {};
+
+    // base_name = type-name spelling. Round-trips to UnnamedGlobal.
+    struct UnnamedGlobalEntry : FrameBase {};
+
+    // Function alias `alias name = target;` inside a namespace block.
+    // base_name = lhs name; target = rhs name; namespace_name from the
+    // enclosing namespace block (empty at file scope, which is currently
+    // disallowed by the parser but kept for symmetry).
+    struct FunctionAliasEntry : FrameBase {
+        std::string target;
+        std::string namespace_name;
+    };
+
+    // File-scope const decl. Carries the parsed Expr by unique_ptr;
+    // emit moves the value out, leaving the entry's rhs null.
+    struct ConstEntry : FrameBase {
+        std::string declared_type;
+        std::string namespace_name;
+        std::unique_ptr<Expr> rhs;
+    };
 
     // Phase-2 master list and frame-id stack. Live for the LocalVar and
     // Alias kinds; remaining lanes (local_classes, nested_funcs) still on
@@ -1344,8 +1372,24 @@ private:
     //   skips is_seed AliasEntries.
     // - emitEnumsIntoProgram: program.enums (file-scope EnumEntries only,
     //   discriminated by absence of ':' in base_name).
+    // - emit{ImportedHeaders,UnnamedGlobals,FunctionAliases,Consts}: round-
+    //   trip the corresponding Program vector. Consts emit moves rhs out
+    //   of ConstEntry (mutating self) — hence non-const.
     void emitAliasesIntoProgram(Program& program) const;
     void emitEnumsIntoProgram(Program& program) const;
+    void emitImportedHeadersIntoProgram(Program& program) const;
+    void emitUnnamedGlobalsIntoProgram(Program& program) const;
+    void emitFunctionAliasesIntoProgram(Program& program) const;
+    void emitConstsIntoProgram(Program& program);
+
+    // Append helpers for the new entry kinds. All add at file-scope frame.
+    void appendImportedHeaderEntry(const std::string& path);
+    void appendUnnamedGlobalEntry(const std::string& type_name, int tok);
+    void appendFunctionAliasEntry(const std::string& name,
+                                  const std::string& target,
+                                  const std::string& namespace_name,
+                                  int tok, int file_id = -1);
+    void appendConstEntry(ConstDef def);
 
     // Pass `program` from file-scope callers so file-scope aliases also flow
     // into Program (cross-TU propagation through .slh imports). Block-scope
