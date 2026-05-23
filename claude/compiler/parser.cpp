@@ -245,9 +245,9 @@ void Parser::seedAliasesFrom(const std::vector<TypeAliasDef>& tas,
 }
 
 std::string Parser::lookupLocalClass(const std::string& name) const {
-    for (auto it = local_class_stack_.rbegin(); it != local_class_stack_.rend(); ++it) {
-        auto sit = it->find(name);
-        if (sit != it->end()) return sit->second;
+    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
+        auto sit = it->local_classes.find(name);
+        if (sit != it->local_classes.end()) return sit->second;
     }
     return "";
 }
@@ -342,7 +342,7 @@ void Parser::declareVar(const std::string& name, int name_tok) {
     }
     // (collision rule) a local must not collide with a local class declared in
     // the same block — one namespace per scope spans variables and classes.
-    if (!local_class_stack_.empty() && local_class_stack_.back().count(name)) {
+    if (frame_stack_.back().local_classes.count(name)) {
         throw CompileError{file_id_, name_tok,
             "Local '" + name + "' collides with a class of the same name in this scope."};
     }
@@ -1838,13 +1838,11 @@ std::unique_ptr<Expr> Parser::parseExpr() {
 
 void Parser::pushFrame() {
     frame_stack_.emplace_back();
-    local_class_stack_.push_back({});
     nested_func_stack_.push_back({});
 }
 
 void Parser::popFrame() {
     nested_func_stack_.pop_back();
-    local_class_stack_.pop_back();
     frame_stack_.pop_back();
 }
 
@@ -2098,7 +2096,7 @@ void Parser::prescanLocalClasses() {
         // reopen: class already registered in this block. Reuse the existing
         // canonical so both SlidDefs collide in program.classes; mergeReopens
         // collapses them after parsing.
-        if (local_class_stack_.back().count(short_name)) return;
+        if (frame_stack_.back().local_classes.count(short_name)) return;
         if (nested_func_stack_.back().count(short_name)) {
             errorAt(name_tok, "'" + short_name
                 + "' is already declared in this scope.");
@@ -2107,13 +2105,13 @@ void Parser::prescanLocalClasses() {
         for (char& c : func_path) if (c == ':') c = '.';
         std::string canonical = (func_path.empty() ? "" : func_path + ".")
             + std::to_string(local_slid_counter_++) + "." + short_name;
-        local_class_stack_.back()[short_name] = canonical;
+        frame_stack_.back().local_classes[short_name] = canonical;
     };
     auto register_nested_fn = [&](const std::string& short_name, int name_tok) {
         // Overloads share the short name in this block; the codegen mangle
         // differentiates by param types. Only collisions to record here are
         // with same-block local classes (single namespace).
-        if (local_class_stack_.back().count(short_name)) {
+        if (frame_stack_.back().local_classes.count(short_name)) {
             errorAt(name_tok, "'" + short_name
                 + "' is already declared in this scope.");
         }
@@ -2233,9 +2231,10 @@ void Parser::collectLocalClass(SlidDef slid, const std::string& short_name,
     // duplicate class names already errored there. If no pre-scan registration
     // exists (defensive — should not happen via parseBlock), generate one.
     std::string canonical;
-    if (!local_class_stack_.empty()) {
-        auto it = local_class_stack_.back().find(short_name);
-        if (it != local_class_stack_.back().end())
+    {
+        auto& lc = frame_stack_.back().local_classes;
+        auto it = lc.find(short_name);
+        if (it != lc.end())
             canonical = it->second;
     }
     if (canonical.empty()) {
@@ -2243,8 +2242,7 @@ void Parser::collectLocalClass(SlidDef slid, const std::string& short_name,
         for (char& c : func_path) if (c == ':') c = '.';
         canonical = (func_path.empty() ? "" : func_path + ".")
             + std::to_string(local_slid_counter_++) + "." + short_name;
-        if (!local_class_stack_.empty())
-            local_class_stack_.back()[short_name] = canonical;
+        frame_stack_.back().local_classes[short_name] = canonical;
     }
     slid.name = canonical;
     // Inside a template, a local class may reference an unbound type param —

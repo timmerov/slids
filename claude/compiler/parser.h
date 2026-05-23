@@ -1172,15 +1172,14 @@ private:
     bool in_template_ = false;
     std::vector<SlidDef> pending_local_classes_;
 
-    // Per-block short-name → canonical-name map for local classes. Innermost
-    // frame is the current block; pushed/popped by parseBlock alongside
-    // frame_stack_. parseTypeName resolves a bare type name's base component
-    // through this (without finalizing — colon suffixes still apply).
-    std::vector<std::map<std::string, std::string>> local_class_stack_;
+    // Per-block short-name → canonical-name map for local classes lives in
+    // frame_stack_'s local_classes lane. parseTypeName resolves a bare type
+    // name's base component through it (without finalizing — colon suffixes
+    // still apply).
     std::string lookupLocalClass(const std::string& name) const;
 
     // Per-block short-name → canonical-name map for nested functions. Same
-    // shape and lifetime as local_class_stack_. A nested function is visible
+    // shape and lifetime as frame_stack_'s local_classes lane. A nested function is visible
     // only within its declaring block (and its sub-scopes via the stack walk
     // in lookupNestedFunc); on block close the frame pops and the name
     // becomes unresolvable, so the codegen `Unknown function` error fires.
@@ -1233,8 +1232,8 @@ private:
     const AliasTemplateInfo* lookupAliasTemplate(const std::string& name) const;
 
     // Unified per-block scope frame — destination of the 5 legacy stacks
-    // above (locals + aliases + alias_templates already migrated;
-    // local_class_stack_, nested_func_stack_ remaining). Phase-1 step 1:
+    // above (locals + aliases + alias_templates + local_classes migrated;
+    // nested_func_stack_ remaining). Phase-1 step 1:
     // pushFrame/popFrame keep the legacy stacks lockstep-synchronized at
     // the symmetric site (parseBlock); readers still consult the legacy
     // stacks. Subsequent commits migrate one lane at a time, deleting
@@ -1290,8 +1289,8 @@ private:
     // short name in the current block, and collect it into pending_slids_.
     void collectLocalClass(SlidDef slid, const std::string& short_name, int name_tok);
     // Block-level two-pass: walk the current block's tokens at depth 0, pre-
-    // register every local class def's short→canonical name into
-    // local_class_stack_.back() before statements parse. Same-block duplicate
+    // register every local class def's short→canonical name into the current
+    // frame's local_classes lane before statements parse. Same-block duplicate
     // class names error here. pos_ is restored.
     void prescanLocalClasses();
 
