@@ -382,16 +382,30 @@ void Parser::emitAliasesIntoProgram(Program& program) const {
     }
 }
 
-void Parser::appendEnumEntry(const std::string& name, int value_count, int tok) {
+void Parser::appendEnumEntry(const std::string& name, int value_count, int tok,
+                             std::vector<std::string> values, int file_id) {
     auto entry = std::make_unique<EnumEntry>();
     entry->base_name = name;
     entry->tok = tok;
-    entry->file_id = file_id_;
+    entry->file_id = (file_id < 0) ? file_id_ : file_id;
     entry->entry_kind = EntryKind::Enum;
     entry->enclosing_frame_id = frame_ids_.front().first;
     entry->value_count = value_count;
+    entry->values = std::move(values);
     frame_entries_.push_back(entry.get());
     master_list_.push_back(std::move(entry));
+}
+
+void Parser::emitEnumsIntoProgram(Program& program) const {
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::Enum) continue;
+        // Class-scope path entries (e.g. "Outer:Inner:E") used only for
+        // path-qualified type resolution; not part of program.enums.
+        if (entry->base_name.find(':') != std::string::npos) continue;
+        auto* ee = static_cast<const EnumEntry*>(entry.get());
+        program.enums.push_back({ee->base_name, ee->values,
+                                  ee->file_id, ee->tok});
+    }
 }
 
 void Parser::parseAliasDecl(Program* program, SlidDef* slid) {
@@ -5344,7 +5358,9 @@ Program Parser::parse() {
             // (slid_modules / imported_headers — the latter so `-MF` dep
             // output captures transitive .slh paths).
             for (auto& e : hdr.enums)
-                program.enums.push_back(std::move(e));
+                appendEnumEntry(e.name, (int)e.values.size(), e.tok,
+                                e.values, e.file_id);
+            // program.enums emitted by emitEnumsIntoProgram at end of parse().
             for (auto& em : hdr.external_methods)
                 program.external_methods.push_back(std::move(em));
             for (auto& cd : hdr.consts)
@@ -5477,7 +5493,9 @@ Program Parser::parse() {
                     // external-method decls, namespaces, namespace-tagged
                     // function aliases. Same shape as the direct hdr arm.
                     for (auto& e : impl_prog.enums)
-                        program.enums.push_back(std::move(e));
+                        appendEnumEntry(e.name, (int)e.values.size(), e.tok,
+                                        e.values, e.file_id);
+                    // program.enums emitted by emitEnumsIntoProgram at end of parse().
                     for (auto& em : impl_prog.external_methods)
                         program.external_methods.push_back(std::move(em));
                     for (auto& cd : impl_prog.consts)
@@ -5520,8 +5538,8 @@ Program Parser::parse() {
         // enum definition
         else if (peek().type == TokenType::kEnum) {
             EnumDef e = parseEnumDef();
-            appendEnumEntry(e.name, (int)e.values.size(), e.tok);
-            program.enums.push_back(std::move(e));
+            appendEnumEntry(e.name, (int)e.values.size(), e.tok, e.values, e.file_id);
+            // program.enums emitted by emitEnumsIntoProgram at end of parse().
         }
         // explicit template instantiation: Name<Types>(ParamTypes);
         else if (peek().type == TokenType::kIdentifier
@@ -5999,6 +6017,7 @@ Program Parser::parse() {
     }
 
     emitAliasesIntoProgram(program);
+    emitEnumsIntoProgram(program);
     return program;
 }
 

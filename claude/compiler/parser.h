@@ -1269,8 +1269,12 @@ private:
     // base_name is the fully-qualified colon-form key (e.g. "Outer:Inner:E"
     // for nested enums, "E" for file-scope). Resolves enum-type names at
     // parseTypeName and supplies iteration count for the short-form for loop.
+    // values is populated for file-scope entries (no ':' in base_name) so
+    // emitEnumsIntoProgram can round-trip the full EnumDef; class-scope
+    // path entries leave it empty (only their existence and count matter).
     struct EnumEntry : FrameBase {
         int value_count = 0;
+        std::vector<std::string> values;
     };
 
     // Scope-opener entry for a class declaration. Lives in the enclosing
@@ -1322,20 +1326,26 @@ private:
                                 const std::string& canonical,
                                 int tok);
 
-    // Enum-entry helpers. Keys are colon-form (matches legacy enum_sizes_
-    // string keys). appendEnumEntry adds a new entry at file scope without
-    // dedup; rbegin-walk semantics in lookupEnum mean a later write shadows
-    // an earlier same-name entry (matches the legacy map-upsert behavior
-    // for the forward-decl-then-fill flow in .slh class bodies).
+    // Enum-entry helpers. Keys are colon-form for nested enums, bare for
+    // file-scope. appendEnumEntry adds without dedup; rbegin-walk semantics
+    // in lookupEnum mean a later write shadows an earlier same-name entry
+    // (matches the legacy map-upsert behavior for the forward-decl-then-fill
+    // flow in .slh class bodies). values populated for file-scope (used by
+    // emitEnumsIntoProgram); class-scope path entries leave it empty.
+    // file_id < 0 → use the parser's current file_id_.
     const EnumEntry* lookupEnum(const std::string& name) const;
-    void appendEnumEntry(const std::string& name, int value_count, int tok);
+    void appendEnumEntry(const std::string& name, int value_count, int tok,
+                         std::vector<std::string> values = {},
+                         int file_id = -1);
 
-    // Stage E sub-step 3 — translator. Walks master_list_ filtered by
-    // file-scope + Alias kind, emits TypeAliasDef / TypeAliasTemplate into
-    // program.type_aliases / program.type_alias_templates. Skips seeded
-    // entries (impl_parser borrows for resolution, not Program). Sole
-    // producer of those Program fields; called at end of parse().
+    // Stage E translators. Walk master_list_, emit Program fields. Sole
+    // producers of the affected fields; called at end of parse().
+    // - emitAliasesIntoProgram: type_aliases + type_alias_templates;
+    //   skips is_seed AliasEntries.
+    // - emitEnumsIntoProgram: program.enums (file-scope EnumEntries only,
+    //   discriminated by absence of ':' in base_name).
     void emitAliasesIntoProgram(Program& program) const;
+    void emitEnumsIntoProgram(Program& program) const;
 
     // Pass `program` from file-scope callers so file-scope aliases also flow
     // into Program (cross-TU propagation through .slh imports). Block-scope
