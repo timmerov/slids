@@ -1,0 +1,3 @@
+program:
+  functions:
+    function main() -> int32  file=hello1.sl tok=1

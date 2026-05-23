@@ -1,0 +1,98 @@
+program:
+  enums:
+    enum Dir06  file=shadowing.sl tok=30
+      value kNorth06
+      value kSouth06
+    enum Color16  file=shadowing.sl tok=78
+      value kFoo16
+      value kRed16
+  classes:
+    class Cls01  file=shadowing.sl tok=0
+      field x_ int = <expr>
+    class Cls02  file=shadowing.sl tok=15
+      field x_ int = <expr>
+    class Cls07  file=shadowing.sl tok=46
+      field x_ int = <expr>
+      method bar07() -> void
+    class Cls20  file=shadowing.sl tok=103
+      field v_ int = <expr>
+      method op=(x int)
+    class Cls21  file=shadowing.sl tok=124
+      ctor
+      dtor
+      field v_ int = <expr>
+    class Cls08  file=shadowing.sl tok=182
+      field len_ int = <expr>
+    class Cls09  file=shadowing.sl tok=354
+      field x_ int = <expr>
+      method via_local() -> void
+      method via_loop() -> void
+      method via_block() -> void
+      method via_nested() -> void
+      method via_method_local_vs_param(p int) -> void
+    class Cls26B  file=shadowing.sl tok=405
+      field x_ int = <expr>
+    class Cls27B  file=shadowing.sl tok=414
+      field n_ int = <expr>
+      method speak() -> void
+    class Cls27D : Cls27B  file=shadowing.sl tok=431
+      field t_ int = <expr>
+      method speak() -> void
+    class Cls28B  file=shadowing.sl tok=446
+      field n_ int = <expr>
+      method bar() -> void
+    class Cls29B  file=shadowing.sl tok=461
+      field f int = <expr>
+    class Cls29D : Cls29B  file=shadowing.sl tok=472
+      field n_ int = <expr>
+    class Val11  file=shadowing.sl tok=481
+      ctor
+      dtor
+      field value_ int = <expr>
+      method op=(rhs Val11^)
+      method op=(x int)
+    class Cls12  file=shadowing.sl tok=528
+      field v_ int = <expr>
+      method bar12() -> void
+      method baz12() -> void
+    class Cls13  file=shadowing.sl tok=554
+      field len_ int = <expr>
+    class Cls14  file=shadowing.sl tok=578
+      field x_ int = <expr>
+    class Cls32  file=shadowing.sl tok=623
+      field v_ int = <expr>
+      method m() -> void
+      method m(x int) -> void
+    class Cls14.Inner14.Deep14  file=shadowing.sl tok=594
+      field x_ int = <expr>
+    class Cls14.Inner14  file=shadowing.sl tok=586
+      field x_ int = <expr>
+  functions:
+    function test_p1_01() -> void  file=shadowing.sl tok=10
+    function test_p1_06() -> void  file=shadowing.sl tok=38
+    function test_p1_15() -> void  file=shadowing.sl tok=72
+    function f18() -> void  file=shadowing.sl tok=86
+    function test_p1_19() -> void  file=shadowing.sl tok=92
+    function test_p1_24b() -> void  file=shadowing.sl tok=159
+    function example_block_shadow() -> void  file=shadowing.sl tok=165
+    function example_class_shadow() -> void  file=shadowing.sl tok=192
+    function render(s Cls08^) -> void  file=shadowing.sl tok=201
+    function example_loop_shadows_outer() -> void  file=shadowing.sl tok=210
+    function example_for_body_shadow() -> void  file=shadowing.sl tok=239
+    function example_nested_for_same_index() -> void  file=shadowing.sl tok=256
+    function example_block_label_shadow() -> void  file=shadowing.sl tok=284
+    function example_block_label_siblings() -> void  file=shadowing.sl tok=321
+    function f25(p int) -> void  file=shadowing.sl tok=398
+    function example_one_binding() -> void  file=shadowing.sl tok=564
+    function g31(x int) -> void  file=shadowing.sl tok=606
+    function g31(s char[]) -> void  file=shadowing.sl tok=614
+    function f44() -> int  file=shadowing.sl tok=647
+    function f44() -> int  file=shadowing.sl tok=652
+    function t45<T>(a T) -> T  file=shadowing.sl tok=661
+    function t45<T>(a T) -> T  file=shadowing.sl tok=671
+    function main() -> int32  file=shadowing.sl tok=685
+  namespaces:
+    namespace Space22  file=shadowing.sl tok=143
+    namespace Space23  file=shadowing.sl tok=146
+      function Space23:greet23() -> void  file=shadowing.sl tok=149
+    namespace Space23  file=shadowing.sl tok=155

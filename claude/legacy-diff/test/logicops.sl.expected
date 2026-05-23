@@ -1,0 +1,3 @@
+program:
+  functions:
+    function main() -> int32  file=logicops.sl tok=1

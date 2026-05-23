@@ -1,0 +1,15 @@
+program:
+  functions:
+    function printHelloWorld() -> void  file=import_decl.slh tok=1
+    function printGoodbye() -> void  file=import_decl.slh tok=6
+  globals:
+    global query static  file=import_decl.slh tok=10
+      field who_  = <expr>
+    global <unnamed> static  file=import_decl.slh tok=19
+      field what_  = <expr>
+    global <unnamed> static  file=import_decl.slh tok=24
+      field where_ int
+    global query lazy  file=import_decl.slh tok=27
+      field when_  = <expr>
+      ctor (no body)
+      dtor (no body)

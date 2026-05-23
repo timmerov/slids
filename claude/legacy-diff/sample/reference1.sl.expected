@@ -1,0 +1,3 @@
+program:
+  functions:
+    function main() -> int32  file=reference1.sl tok=1

@@ -1,0 +1,8 @@
+program:
+  classes:
+    class Simple  file=bug09.sl tok=0
+      field x_ int = <expr>
+      method op=(rhs Simple^)
+      method copy(other Simple^) -> void
+  functions:
+    function main() -> int32  file=bug09.sl tok=45

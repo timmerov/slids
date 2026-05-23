@@ -1,0 +1,20 @@
+program:
+  classes:
+    class Klass  file=macros.sl tok=127
+      field k_ int = <expr>
+      method method(y int) -> void
+    class KlassTpl <T>  file=macros.sl tok=198
+      field t_ T
+      method tmethod(q T) -> void
+    class OuterC  file=macros.sl tok=270
+      field o_ int = <expr>
+    class OuterC.InnerC  file=macros.sl tok=278
+      field i_ int = <expr>
+      method show(z int) -> void
+    class OuterC.InnerCT <T>  file=macros.sl tok=349
+      field it_ T
+      method tshow(q T) -> void
+  functions:
+    function freefn(x int) -> void  file=macros.sl tok=1
+    function freetpl<T>(v T) -> void  file=macros.sl tok=63
+    function main() -> int32  file=macros.sl tok=423

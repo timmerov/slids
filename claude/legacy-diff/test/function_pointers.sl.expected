@@ -1,0 +1,19 @@
+program:
+  classes:
+    class Container  file=function_pointers.sl tok=0
+      ctor
+      dtor
+      field data_ int[5]
+      method op[](index int) -> int^
+      const method size() -> int
+      method print() -> void
+  functions:
+    function int_less_than(a int, b int) -> bool  file=function_pointers.sl tok=114
+    function sort0(mutable container Container^) -> void  file=function_pointers.sl tok=130
+    function sort1(mutable container Container^, compare bool(int,int)^) -> void  file=function_pointers.sl tok=148
+    function main() -> int32  file=function_pointers.sl tok=275
+  namespaces:
+    namespace Backwards  file=function_pointers.sl tok=255
+      function Backwards:int_less_than(a int, b int) -> bool  file=function_pointers.sl tok=258
+  type_aliases:
+    type_alias LessFn = bool(int,int)  file=function_pointers.sl tok=104

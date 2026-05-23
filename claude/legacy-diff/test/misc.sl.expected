@@ -1,0 +1,24 @@
+program:
+  classes:
+    class Thing  file=misc.sl tok=25
+      ctor
+      dtor
+    class Format  file=misc.sl tok=44
+      field just_ int = <expr>
+      enum Align
+        value kLeft
+        value kCenter
+        value kRight
+      method alignment() -> int
+    class Layout  file=misc.sl tok=72
+      field flow_ int = <expr>
+      enum Flow
+        value kLeft
+        value kDown
+      method flow() -> int
+  functions:
+    function greet() -> void  file=misc.sl tok=15
+    function main() -> int32  file=misc.sl tok=99
+  namespaces:
+    namespace Space  file=misc.sl tok=0
+      function Space:greet() -> void  file=misc.sl tok=3

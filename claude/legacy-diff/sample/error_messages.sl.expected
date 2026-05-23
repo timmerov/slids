@@ -1,0 +1,3 @@
+program:
+  functions:
+    function main() -> int32  file=error_messages.sl tok=1

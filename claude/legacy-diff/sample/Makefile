@@ -12,7 +12,6 @@ SL_INPUTS = \
 	math.sl \
 	memcpy.sl \
 	primes1.sl \
-	rangedfor.sl \
 	reference1.sl reference2.sl reference3.sl \
 	reverse_bits.sl \
 	sort.sl

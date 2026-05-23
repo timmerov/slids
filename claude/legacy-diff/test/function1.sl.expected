@@ -1,0 +1,4 @@
+program:
+  functions:
+    function add(a int32, b int32) -> int32  file=function1.sl tok=1
+    function main() -> int32  file=function1.sl tok=19

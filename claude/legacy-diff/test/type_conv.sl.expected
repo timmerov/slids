@@ -1,0 +1,12 @@
+program:
+  classes:
+    class Value  file=type_conv.sl tok=0
+      field n_ int32 = <expr>
+      method op=(n int32) (no body)
+      method op=(v Value^) (no body)
+      method get() -> int32 (no body)
+      method op=(n int32)
+      method op=(v Value^)
+      method get() -> int32
+  functions:
+    function main() -> int32  file=type_conv.sl tok=72

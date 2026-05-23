@@ -1,0 +1,14 @@
+program:
+  classes:
+    class NoMove  file=move.sl tok=0
+      field x_ int
+    class Move  file=move.sl tok=7
+      field x_ int
+      method op<-(mutable rhs Move^)
+    class NestedMove  file=move.sl tok=38
+      field a_ Move
+      field b_ Move
+      field c_ Move
+      method print(name char[]) -> void
+  functions:
+    function main() -> int32  file=move.sl tok=87

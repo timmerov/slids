@@ -1,0 +1,10 @@
+program:
+  classes:
+    class Num  file=opdispatch.sl tok=0
+      ctor
+      dtor
+      field v_ int = <expr>
+      method op*(n Num^, x int64)
+      method op*(n Num^, x float64)
+  functions:
+    function main() -> int32  file=opdispatch.sl tok=54

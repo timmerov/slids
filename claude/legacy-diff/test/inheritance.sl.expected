@@ -1,0 +1,24 @@
+program:
+  classes:
+    class Animal  file=inheritance.sl tok=0
+      ctor
+      dtor
+      field name_ char[]
+      field legs_ int = <expr>
+      const kMaxLegs int
+      method speak() -> void
+    class Cat : Animal  file=inheritance.sl tok=57
+      ctor
+      dtor
+      field toys_ int = <expr>
+      method speak() -> void
+    class Dog : Animal  file=inheritance.sl tok=109
+      ctor
+      dtor
+      field sticks_ int
+      method speak() -> void
+      method perform() -> void
+  functions:
+    function main() -> int32  file=inheritance.sl tok=202
+  external_methods:
+    external_method Dog:perform2() -> void  file=inheritance.sl tok=187

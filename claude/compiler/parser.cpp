@@ -2093,7 +2093,7 @@ void Parser::prescanLocalClasses() {
     };
     auto register_class = [&](const std::string& short_name, int name_tok) {
         // reopen: class already registered in this block. Reuse the existing
-        // canonical so both SlidDefs collide in program.slids; mergeReopens
+        // canonical so both SlidDefs collide in program.classes; mergeReopens
         // collapses them after parsing.
         if (local_class_stack_.back().count(short_name)) return;
         if (nested_func_stack_.back().count(short_name)) {
@@ -2303,7 +2303,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     // local class definition: a slid defined inside a code block. The class is
     // scoped to its block — outside the block its name is not registered, so
     // it simply doesn't resolve. It is renamed to a unique internal canonical
-    // name `<funcpath>.<n>.<ClassName>` and hoisted into program.slids; any
+    // name `<funcpath>.<n>.<ClassName>` and hoisted into program.classes; any
     // nested classes flatten via the post-parse hoist pass. No runtime
     // statement is emitted.
     if (isSlidDeclLookahead()) {
@@ -5109,12 +5109,12 @@ Program Parser::parse() {
             for (auto& fn : hdr.functions)
                 if (!fn.type_params.empty()) { has_templates = true; break; }
             if (!has_templates)
-                for (auto& slid : hdr.slids)
+                for (auto& slid : hdr.classes)
                     if (!slid.type_params.empty()) { has_templates = true; break; }
 
             for (auto& fn : hdr.functions)
                 if (!fn.body) program.functions.push_back(std::move(fn));
-            for (auto& slid : hdr.slids) {
+            for (auto& slid : hdr.classes) {
                 // Register imported slid's nested-enum names into the
                 // consumer's enum_sizes_ so parseTypeName can resolve a
                 // bare nested-enum reference inside a reopen of this
@@ -5125,7 +5125,7 @@ Program Parser::parse() {
                     enum_sizes_[colon_scope + ":" + e.name] = (int)e.values.size();
                 program.slid_modules[slid.name] = module;
                 recordSlidMethods(slid);
-                program.slids.push_back(std::move(slid));
+                program.classes.push_back(std::move(slid));
             }
             // Imported globals: stamp the source module and fold into the
             // consumer's registry. Post-parse dedup drops any imported entry
@@ -5175,7 +5175,12 @@ Program Parser::parse() {
             // load template bodies from impl file: foo.slh -> foo.sl
             if (has_templates) {
                 std::string impl_path = header_path.substr(0, header_path.size() - 4) + ".sl";
-                std::ifstream impl_in(impl_path);
+                // Root file is its own impl: the root parser is parsing the impl
+                // already, so re-loading it here would register every class /
+                // method twice. Skip — the root parse covers the impl contents.
+                bool impl_is_root = (impl_path == sm_.at(file_id_).path);
+                std::ifstream impl_in;
+                if (!impl_is_root) impl_in.open(impl_path);
                 if (impl_in) {
                     program.imported_headers.push_back(impl_path);
                     std::ostringstream impl_buf; impl_buf << impl_in.rdbuf();
@@ -5227,8 +5232,8 @@ Program Parser::parse() {
                         // definition local to the impl TU. Not visible to
                         // consumers of the .slh; drop.
                     }
-                    for (size_t i = 0; i < impl_prog.slids.size(); i++) {
-                        auto& impl_slid = impl_prog.slids[i];
+                    for (size_t i = 0; i < impl_prog.classes.size(); i++) {
+                        auto& impl_slid = impl_prog.classes[i];
                         bool is_template = !impl_slid.type_params.empty();
                         if (is_template) {
                             // (a) template class from this module.
@@ -5239,7 +5244,7 @@ Program Parser::parse() {
                         // carry their own impl_module / is_local from the
                         // transitive .slh that declared them.
                         bool replaced = false;
-                        for (auto& prog_slid : program.slids) {
+                        for (auto& prog_slid : program.classes) {
                             if (prog_slid.name == impl_slid.name
                                 && !prog_slid.type_params.empty() == is_template) {
                                 recordSlidMethods(impl_slid);
@@ -5250,7 +5255,7 @@ Program Parser::parse() {
                         }
                         if (!replaced) {
                             recordSlidMethods(impl_slid);
-                            program.slids.push_back(std::move(impl_slid));
+                            program.classes.push_back(std::move(impl_slid));
                         }
                     }
                     // (b) cross-TU slid → module mapping for the transitive
@@ -5364,7 +5369,7 @@ Program Parser::parse() {
                 || tokens_[pos_ + 1].type == TokenType::kLt)) {
             SlidDef slid = parseSlidDef();
             recordSlidMethods(slid);
-            program.slids.push_back(std::move(slid));
+            program.classes.push_back(std::move(slid));
         }
         // derived class definition: Base : Derived(...) where Base may be a
         // multi-segment colon-qualified path (e.g. `Outer:Bird : Eagle(...)`).
@@ -5376,7 +5381,7 @@ Program Parser::parse() {
             std::string base_name = consumeDerivedBasePrefix();
             SlidDef slid = parseSlidDef(base_name);
             recordSlidMethods(slid);
-            program.slids.push_back(std::move(slid));
+            program.classes.push_back(std::move(slid));
         }
         // namespace block: `Name { ... }`  or shorthand `Name import { ... }`.
         // (Class reopens now require `()` — `Class() { ... }` — and route to
@@ -5472,14 +5477,14 @@ Program Parser::parse() {
         // classes nested inside them.
         for (auto& s : pending_slids_) {
             recordSlidMethods(s);
-            program.slids.push_back(std::move(s));
+            program.classes.push_back(std::move(s));
         }
         pending_slids_.clear();
     }
 
     // hoist nested slid defs to top level. each nested slid is renamed
     // <Outer>.<Inner> so it's globally addressable. parent_name is taken by
-    // value because push_back below may reallocate program.slids, which would
+    // value because push_back below may reallocate program.classes, which would
     // invalidate any reference into it.
     std::function<void(SlidDef&, std::string)> hoist =
         [&](SlidDef& s, std::string parent_name) {
@@ -5490,12 +5495,12 @@ Program Parser::parse() {
                 n.name = canonical;
                 hoist(n, canonical);
                 recordSlidMethods(n);
-                program.slids.push_back(std::move(n));
+                program.classes.push_back(std::move(n));
             }
         };
-    int top_count = (int)program.slids.size();
+    int top_count = (int)program.classes.size();
     for (int i = 0; i < top_count; i++) {
-        hoist(program.slids[i], program.slids[i].name);
+        hoist(program.classes[i], program.classes[i].name);
     }
 
     // Collision detection for the qualified-derived shape. `Outer:Inner() {...}`
@@ -5507,8 +5512,8 @@ Program Parser::parse() {
     // `Inner() {...}` at file scope is a fresh top-level class.
     {
         std::set<std::string> canonical;
-        for (auto& s : program.slids) canonical.insert(s.name);
-        for (auto& s : program.slids) {
+        for (auto& s : program.classes) canonical.insert(s.name);
+        for (auto& s : program.classes) {
             if (s.name.find('.') != std::string::npos) continue;
             if (s.base_name.empty()) continue;
             std::string candidate = s.base_name + "." + s.name;
@@ -5516,7 +5521,7 @@ Program Parser::parse() {
             // Find the prior hoisted entry to attach a note.
             std::string user_name = candidate;
             for (char& c : user_name) if (c == '.') c = ':';
-            for (auto& other : program.slids) {
+            for (auto& other : program.classes) {
                 if (other.name != candidate) continue;
                 throw CompileError{s.name_file_id, s.name_tok,
                     "Class '" + user_name
@@ -5538,7 +5543,7 @@ Program Parser::parse() {
     // doesn't already match a canonical class, look for a unique class
     // whose canonical name ends in `.<short>`. If exactly one match,
     // rewrite. Otherwise leave it — downstream resolution will diagnose.
-    // Runs after mergeReopens so program.slids has no duplicate names.
+    // Runs after mergeReopens so program.classes has no duplicate names.
     auto canonicalizeShortClassName = [](const std::set<std::string>& canonical,
                                           std::string& name) {
         if (canonical.count(name)) return;
@@ -5558,14 +5563,14 @@ Program Parser::parse() {
     };
     {
         std::set<std::string> canonical;
-        for (auto& s : program.slids) canonical.insert(s.name);
+        for (auto& s : program.classes) canonical.insert(s.name);
         for (auto& em : program.external_methods)
             canonicalizeShortClassName(canonical, em.slid_name);
         // Phase 2: normalize each slid's base_name to canonical. A class-body
         // sibling-base via short name normally resolves in Phase 1's pre-scan,
         // but late-bound references (cross-TU imports, edits) can still leave
         // a short name. Apply the same unique-suffix-match rule.
-        for (auto& s : program.slids)
+        for (auto& s : program.classes)
             if (!s.base_name.empty())
                 canonicalizeShortClassName(canonical, s.base_name);
     }
@@ -5729,7 +5734,7 @@ Program Parser::parse() {
                     + "' collides with an enum value from '" + it->second + "'.")};
             }
         }
-        for (auto& s : program.slids) {
+        for (auto& s : program.classes) {
             auto it = enum_values.find(s.name);
             if (it != enum_values.end()) {
                 throw CompileError{-1, 0, std::string("Class or namespace '" + s.name
@@ -5818,21 +5823,21 @@ void Parser::mergeReopens(Program& program) {
     // group SlidDef indices by class name in source order. skip template
     // slids (have separate machinery).
     std::map<std::string, std::vector<int>> groups;
-    for (int i = 0; i < (int)program.slids.size(); i++) {
-        if (!program.slids[i].type_params.empty()) continue;
-        groups[program.slids[i].name].push_back(i);
+    for (int i = 0; i < (int)program.classes.size(); i++) {
+        if (!program.classes[i].type_params.empty()) continue;
+        groups[program.classes[i].name].push_back(i);
     }
     std::set<int> to_remove;
     for (auto& [name, indices] : groups) {
         if (indices.size() <= 1) continue;
-        SlidDef& dst = program.slids[indices[0]];
+        SlidDef& dst = program.classes[indices[0]];
         // public_field_count: the field count of the first reopen that lacks a
         // leading `...` (the public prefix). if dst already qualifies, count is
         // its current field size; otherwise scan for one in the rest of the group.
         bool first_no_leading = !dst.has_leading_ellipsis;
         if (first_no_leading) dst.public_field_count = (int)dst.fields.size();
         for (int i = 1; i < (int)indices.size(); i++) {
-            SlidDef& src = program.slids[indices[i]];
+            SlidDef& src = program.classes[indices[i]];
             if (!first_no_leading && !src.has_leading_ellipsis) {
                 dst.public_field_count = (int)dst.fields.size() + (int)src.fields.size();
                 first_no_leading = true;
@@ -5876,12 +5881,12 @@ void Parser::mergeReopens(Program& program) {
     }
     if (!to_remove.empty()) {
         std::vector<SlidDef> kept;
-        kept.reserve(program.slids.size() - to_remove.size());
-        for (int i = 0; i < (int)program.slids.size(); i++) {
+        kept.reserve(program.classes.size() - to_remove.size());
+        for (int i = 0; i < (int)program.classes.size(); i++) {
             if (!to_remove.count(i))
-                kept.push_back(std::move(program.slids[i]));
+                kept.push_back(std::move(program.classes[i]));
         }
-        program.slids = std::move(kept);
+        program.classes = std::move(kept);
     }
     // (P1) class scope merges across reopens — at most one definition per
     // (class, method, signature). Forward declarations (body == nullptr)
@@ -5924,7 +5929,7 @@ void Parser::mergeReopens(Program& program) {
                     .addNote(it->second.file_id, it->second.tok, "First defined here.");
             }
         };
-        for (auto& s : program.slids) {
+        for (auto& s : program.classes) {
             for (auto& m : s.methods) {
                 if (!m.body) continue;
                 check_dup(s.name, m.name, m.params, m.param_mutable, m.file_id, m.tok);
@@ -5940,7 +5945,7 @@ void Parser::mergeReopens(Program& program) {
     // re-definition error across the merged class scope.
     {
         struct Site { int file_id; int tok; };
-        for (auto& s : program.slids) {
+        for (auto& s : program.classes) {
             std::map<std::string, Site> seen;
             for (auto& e : s.nested_enums) {
                 auto [it, inserted] = seen.emplace(e.name, Site{e.file_id, e.tok});
@@ -5964,7 +5969,7 @@ void Parser::mergeReopens(Program& program) {
             return key;
         };
         std::map<std::string, std::map<std::string, Decl>> decls_by_class;
-        for (auto& s : program.slids)
+        for (auto& s : program.classes)
             for (auto& m : s.methods)
                 if (!m.body)
                     decls_by_class[s.name].emplace(make_key(m.name, m.params),
@@ -5987,7 +5992,7 @@ void Parser::mergeReopens(Program& program) {
             throw CompileError{file_id, tok, msg}
                 .addNote(dit->second.file_id, dit->second.tok, "Declared here.");
         };
-        for (auto& s : program.slids)
+        for (auto& s : program.classes)
             for (auto& m : s.methods)
                 if (m.body)
                     check_const(s.name, m.name, m.params, m.is_const_method, m.file_id, m.tok);
@@ -6033,7 +6038,7 @@ void Parser::mergeReopens(Program& program) {
                     .addNote(it->second.file_id, it->second.tok, "First declared here.");
             }
         };
-        for (auto& s : program.slids)
+        for (auto& s : program.classes)
             for (auto& m : s.methods)
                 check(s.name, m.name, m.params, m.param_mutable, m.file_id, m.tok);
         for (auto& em : program.external_methods)
@@ -6042,16 +6047,16 @@ void Parser::mergeReopens(Program& program) {
     // Inheritance shadow checks — derived field vs base method, derived method vs base field.
     {
         std::map<std::string, SlidDef*> by_name;
-        for (auto& s : program.slids) by_name[s.name] = &s;
+        for (auto& s : program.classes) by_name[s.name] = &s;
         std::map<std::string, std::set<std::string>> method_names_by_class;
-        for (auto& s : program.slids)
+        for (auto& s : program.classes)
             for (auto& m : s.methods) method_names_by_class[s.name].insert(m.name);
         for (auto& em : program.external_methods)
             method_names_by_class[em.slid_name].insert(em.method_name);
         std::map<std::string, std::set<std::string>> field_names_by_class;
-        for (auto& s : program.slids)
+        for (auto& s : program.classes)
             for (auto& f : s.fields) field_names_by_class[s.name].insert(f.name);
-        for (auto& s : program.slids) {
+        for (auto& s : program.classes) {
             if (s.base_name.empty()) continue;
             auto bit = by_name.find(s.base_name);
             if (bit == by_name.end()) continue;

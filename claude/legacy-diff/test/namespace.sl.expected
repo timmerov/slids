@@ -1,0 +1,14 @@
+program:
+  functions:
+    function greet() -> void  file=namespace.sl tok=1
+    function other() -> void  file=namespace.sl tok=12
+    function main() -> int32  file=namespace.sl tok=99
+  namespaces:
+    namespace Space  file=namespace.sl tok=22
+      function Space:greet() -> void  file=namespace.sl tok=25
+      function Space:other() -> void  file=namespace.sl tok=41
+      function Space:greet2() -> void  file=namespace.sl tok=51
+      function Space:other2() -> void  file=namespace.sl tok=56
+      function Space:greet2() -> void  file=namespace.sl tok=64
+    namespace Space  file=namespace.sl tok=85
+      function Space:other2() -> void  file=namespace.sl tok=88

@@ -1,0 +1,3 @@
+program:
+  functions:
+    function main() -> int32  file=blocks.sl tok=1

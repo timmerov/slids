@@ -324,7 +324,7 @@ void Codegen::collectFunctionSignatures() {
         };
         for (auto& s : fn.body->stmts) walk(*s);
     }
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         // collect all method implementations (inline bodies + external defs), grouped by name
         struct Entry {
             std::string ret;
@@ -423,7 +423,7 @@ void Codegen::collectFunctionSignatures() {
         // defines its __$sizeof must export it (consumers only declare it).
         for (std::string b = slid.base_name; !b.empty(); ) {
             const SlidDef* bd = nullptr;
-            for (auto& s : program_.slids) if (s.name == b) { bd = &s; break; }
+            for (auto& s : program_.classes) if (s.name == b) { bd = &s; break; }
             if (!bd) break;
             if (bd->is_transport_impl || bd->has_trailing_ellipsis) {
                 exported_symbols_.insert(slid.name + "__$sizeof");
@@ -1198,7 +1198,7 @@ void Codegen::collectStringConstants() {
     // 1. all ctor/dtor bodies (emitSlidCtorDtor loop, then template instantiations)
     // 2. all method bodies   (emitSlidMethods loop, then template instantiations)
     // 3. all free functions  (emitFunction loop)
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         if (!slid.type_params.empty()) continue; // template slids emitted on demand
         if (slid.ctor_body)
             for (auto& stmt : slid.ctor_body->stmts) collect(*stmt);
@@ -1215,7 +1215,7 @@ void Codegen::collectStringConstants() {
         if (slid->dtor_body)
             for (auto& stmt : slid->dtor_body->stmts) collect(*stmt);
     }
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         if (!slid.type_params.empty()) continue; // template slids emitted on demand
         for (auto& m : slid.methods)
             if (m.body)
@@ -1272,7 +1272,7 @@ void Codegen::resolveFunctionAliases() {
 // nested-enum values into a plain integer literal — see header comment.
 void Codegen::resolveNestedEnumDefaults() {
     Program& prog = const_cast<Program&>(program_);
-    for (auto& slid : prog.slids) {
+    for (auto& slid : prog.classes) {
         if (slid.nested_enums.empty()) continue;
         std::map<std::string, int> scope;
         for (auto& e : slid.nested_enums)
@@ -1297,7 +1297,7 @@ void Codegen::resolveNestedEnumDefaults() {
 
 void Codegen::qualifyNestedEnumFieldTypes() {
     Program& prog = const_cast<Program&>(program_);
-    for (auto& slid : prog.slids) {
+    for (auto& slid : prog.classes) {
         if (slid.nested_enums.empty()) continue;
         std::set<std::string> enums;
         for (auto& e : slid.nested_enums) enums.insert(e.name);
@@ -1472,7 +1472,7 @@ void Codegen::emit() {
     };
     for (auto& fn : program_.functions)
         checkParams(fn.name, fn.params, fn.param_toks, fn.file_id, fn.tok);
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         if (!slid.type_params.empty()) continue; // skip template slids
         for (auto& m : slid.methods)
             checkParams(slid.name + "." + m.name, m.params, m.param_toks, m.file_id, m.tok);
@@ -1495,7 +1495,7 @@ void Codegen::emit() {
     // class is keyed `Outer.Inner` internally; its enum values are referenced
     // with the `:` scope operator, so register them under the colon form
     // (`Outer:Inner:value`).
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         for (auto& e : slid.nested_enums) {
             std::string scope = slid.name;
             for (char& c : scope) if (c == '.') c = ':';
@@ -1512,7 +1512,7 @@ void Codegen::emit() {
     // emit struct types for classes
     // collect which names have an implementation slid in this TU
     std::set<std::string> has_impl_slid;
-    for (auto& slid : program_.slids)
+    for (auto& slid : program_.classes)
         if (slid.is_transport_impl) has_impl_slid.insert(slid.name);
 
     auto emitStructType = [&](const SlidDef& slid) {
@@ -1533,14 +1533,14 @@ void Codegen::emit() {
 
     std::set<std::string> emitted_structs;
     // first pass: emit implementation slids (complete field layout)
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         if (!slid.type_params.empty()) continue;
         if (!slid.is_transport_impl) continue;
         if (!emitted_structs.insert(slid.name).second) continue;
         emitStructType(slid);
     }
     // second pass: emit remaining slids (skip names already covered by impl)
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         if (!slid.type_params.empty()) continue;
         if (slid.is_transport_impl) continue;
         if (!emitted_structs.insert(slid.name).second) continue;
@@ -1578,7 +1578,7 @@ void Codegen::emit() {
     for (auto& fn : program_.functions)
         if (fn.body && fn.type_params.empty()) emitFrameStruct(fn);
 
-    if (!program_.slids.empty() || !program_.functions.empty()) out_ << "\n";
+    if (!program_.classes.empty() || !program_.functions.empty()) out_ << "\n";
 
     // Module-level globals: static-allocated storage + zero-initialized
     // storage for lazy entries (phase 3 fills in the sentinel + ctor glue).
@@ -1625,7 +1625,7 @@ void Codegen::emit() {
     // emit declares for slid methods defined in other translation units
     // build set of locally-implemented method mangled names
     std::set<std::string> local_methods;
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         if (!slid.type_params.empty()) continue; // skip template slids
         // emitSlidCtorDtor emits __$ctor / __$dtor only for has_explicit_ctor
         // classes (paired with user _()/~()). Implicit classes inline at the
@@ -1711,7 +1711,7 @@ void Codegen::emit() {
         if (em.method_name == "_") local_methods.insert(em.slid_name + "__$ctor");
         if (em.method_name == "~") local_methods.insert(em.slid_name + "__$dtor");
     }
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         if (!slid.type_params.empty()) continue; // skip template slids
         // ctor/dtor — declare if not locally defined.
         // Only explicit (user-paired _()/~()) classes have symbols; implicit
@@ -1803,7 +1803,7 @@ void Codegen::emit() {
     emitGlobalDtorRuntime();
     emitLazyGlobalHelpers();
 
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         if (!slid.type_params.empty()) continue;
         emitSlidCtorDtor(slid);
     }
@@ -1812,7 +1812,7 @@ void Codegen::emit() {
     for (auto* slid : local_class_instances_)
         emitSlidCtorDtor(*slid);
 
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         if (!slid.type_params.empty()) continue;
         emitSlidMethods(slid);
     }

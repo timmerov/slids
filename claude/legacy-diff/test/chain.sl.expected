@@ -1,0 +1,12 @@
+program:
+  classes:
+    class Class  file=chain.sl tok=0
+      field x_ int = <expr>
+      method op[](index int) -> int^
+    class Box  file=chain.sl tok=24
+      field v_ int = <expr>
+      method op[](index int) -> int^
+  functions:
+    function main() -> int32  file=chain.sl tok=58
+  type_aliases:
+    type_alias TupleType = (Class,Class)  file=chain.sl tok=49

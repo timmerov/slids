@@ -1,0 +1,9 @@
+program:
+  classes:
+    class Simple  file=bug16.sl tok=0
+      field x_ int = <expr>
+    class Container  file=bug16.sl tok=9
+      field y_ int = <expr>
+      field s_ Simple
+  functions:
+    function main() -> int32  file=bug16.sl tok=22

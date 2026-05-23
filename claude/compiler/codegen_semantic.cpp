@@ -28,7 +28,7 @@ void Codegen::inferFieldTypes() {
     // analogous to const folding, which mutates Codegen-side const tables.
     // const_cast the SlidDef locally to write back the inferred type.
     std::set<std::string> cycle;
-    for (auto& slid_const : program_.slids) {
+    for (auto& slid_const : program_.classes) {
         if (!slid_const.type_params.empty()) continue; // skip template classes
         auto& slid = const_cast<SlidDef&>(slid_const);
         for (auto& f : slid.fields) {
@@ -71,7 +71,7 @@ void Codegen::inferFieldTypes() {
 }
 
 void Codegen::collectSlids() {
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         if (!slid.type_params.empty()) {
             template_slids_[slid.name] = &slid;
             if (slid.is_local)
@@ -200,7 +200,7 @@ void Codegen::resolveSlidInheritance() {
 
 void Codegen::classifyVirtualClasses() {
     // step 1: locally_virtual = any virtual member or virtual ~.
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         if (!slid.type_params.empty()) continue;
         auto it = slid_info_.find(slid.name);
         if (it == slid_info_.end()) continue;
@@ -222,7 +222,7 @@ void Codegen::classifyVirtualClasses() {
     // the `virtual` keyword on `~` is optional/advisory. If the user wrote no
     // dtor, auto-generate an empty one. Either way, mark has_dtor so scope-exit
     // chains include this class.
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         if (!slid.type_params.empty()) continue;
         auto it = slid_info_.find(slid.name);
         if (it == slid_info_.end()) continue;
@@ -255,7 +255,7 @@ void Codegen::buildVtables() {
     // Topological order: base before derived. resolveSlidInheritance has linked
     // base_info pointers, so we can walk chains via chainOf().
     auto findSlid = [&](const std::string& name) -> const SlidDef* {
-        for (auto& s : program_.slids) if (s.name == name) return &s;
+        for (auto& s : program_.classes) if (s.name == name) return &s;
         return nullptr;
     };
     // Build per-class in dependency order using chainOf.
@@ -388,7 +388,7 @@ bool Codegen::ancestorHasMethod(const std::string& class_name,
     if (it == slid_info_.end()) return false;
     const SlidInfo* cur = it->second.base_info;
     while (cur) {
-        for (auto& s : program_.slids) {
+        for (auto& s : program_.classes) {
             if (s.name != cur->name) continue;
             for (auto& m : s.methods) {
                 if (m.name != method_name) continue;
@@ -467,7 +467,7 @@ void Codegen::validateDefaultDelete() {
         mk.tok = decl_tok;
         sit->second.method_marks.push_back(std::move(mk));
     };
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         for (auto& m : slid.methods) {
             checkAndMark(slid.name, m.name, m.params, m.is_default, m.is_delete, m.is_virtual,
                          m.file_id, m.tok);
@@ -496,7 +496,7 @@ void Codegen::validateDefaultDelete() {
                 .addNote(mk->file_id, mk->tok, finalizeErrorMsg(note));
         errorWithNote(msg, mk->file_id, mk->tok, note);
     };
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         for (auto& m : slid.methods) {
             if (m.is_default || m.is_delete) continue;
             if (!m.body) continue;
@@ -687,7 +687,7 @@ void Codegen::scanForSlidTemplateUses() {
     // field/base/signature type (never as a body-local decl) never gets
     // materialized, and method dispatch against it fails with `… is not a
     // slid type`. See [[project_slh_propagation]] / the bug22-thread audit.
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         if (!slid.type_params.empty()) continue;
         if (!slid.base_name.empty()) visitType(slid.base_name, nullptr);
         for (auto& f : slid.fields)  visitType(f.type, nullptr);
@@ -712,7 +712,7 @@ void Codegen::scanForSlidTemplateUses() {
     // surface-only instances are present when bodies are emitted).
     for (auto& fn : program_.functions)
         if (fn.body && fn.type_params.empty()) scanBody(*fn.body);
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         if (!slid.type_params.empty()) continue;
         if (slid.ctor_body)          scanBody(*slid.ctor_body);
         if (slid.explicit_ctor_body) scanBody(*slid.explicit_ctor_body);
@@ -806,7 +806,7 @@ void Codegen::scanForTemplateFunctionUses() {
     };
     for (auto& fn : program_.functions)
         if (fn.body && fn.type_params.empty()) scanBlock(*fn.body);
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         if (!slid.type_params.empty()) continue;
         if (slid.ctor_body)          scanBlock(*slid.ctor_body);
         if (slid.explicit_ctor_body) scanBlock(*slid.explicit_ctor_body);
@@ -878,7 +878,7 @@ void Codegen::collectAndFoldConsts() {
         e.tok = cd.tok;
         global_frame[key] = e;
     }
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         for (auto& cd : slid.consts) {
             auto& tbl = slid_consts_[slid.name];
             if (tbl.count(cd.name))
@@ -901,7 +901,7 @@ void Codegen::collectAndFoldConsts() {
             foldConstDef(cd, "", cycle);
         }
     }
-    for (auto& slid : program_.slids) {
+    for (auto& slid : program_.classes) {
         for (auto& cd : slid.consts) {
             if (slid_consts_[slid.name][cd.name].slid_type.empty()) {
                 cycle.clear();
@@ -961,7 +961,7 @@ Codegen::ConstEntry Codegen::foldConstExpr(const Expr& e,
                         if (cycle.count(key))
                             errorAtNode(e,
                                 "Constant '" + ve->name + "' has a cyclic initializer.");
-                        for (auto& s : program_.slids)
+                        for (auto& s : program_.classes)
                             if (s.name == slid_scope)
                                 for (auto& cd : s.consts)
                                     if (cd.name == ve->name)

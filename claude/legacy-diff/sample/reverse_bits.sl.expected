@@ -1,0 +1,3 @@
+program:
+  functions:
+    function main() -> int32  file=reverse_bits.sl tok=1

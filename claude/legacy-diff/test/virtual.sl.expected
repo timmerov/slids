@@ -1,0 +1,42 @@
+program:
+  classes:
+    class PureVirtual  file=virtual.sl tok=0
+      ctor
+      dtor virtual
+      field x_ int = <expr>
+      virtual method hello(n int) -> void = delete (no body)
+      virtual method goodbye() -> int = delete (no body)
+    class BaseVirtual : PureVirtual  file=virtual.sl tok=45
+      ctor
+      dtor virtual
+      field y_ int = <expr>
+      virtual method hello(n int) -> void
+      virtual method catch() -> void
+      virtual method sum() -> int
+      virtual method intro() -> void
+      virtual method goodbye() -> int
+    class DerivedVirtual : BaseVirtual  file=virtual.sl tok=153
+      ctor
+      dtor virtual
+      field z_ int = <expr>
+      virtual method catch() -> void
+      virtual method hello(n int) -> void
+    class ChainBase  file=virtual.sl tok=213
+      ctor
+      dtor virtual
+      field b_ int = <expr>
+      virtual method tag() -> int
+    class ChainMiddle : ChainBase  file=virtual.sl tok=250
+      field m_ int = <expr>
+      virtual method tag() -> int
+    class ChainLeaf : ChainMiddle  file=virtual.sl tok=271
+      ctor
+      dtor virtual
+      field l_ int = <expr>
+      virtual method tag() -> int
+    class Plain  file=virtual.sl tok=306
+      ctor
+      dtor
+      field a_ int
+  functions:
+    function main() -> int32  file=virtual.sl tok=324

@@ -1,0 +1,21 @@
+program:
+  classes:
+    class GsC  file=reopen2.sl tok=6
+      field c_ int = <expr>
+      alias intC = int
+      const kC1 int
+      const kC2 int
+      enum EnumC1
+        value kEnumC1
+      enum EnumC2
+        value kEnumC2
+      method m_c1() -> void
+      method m_c2() -> void
+  functions:
+    function gs_func() -> void  file=reopen2.sl tok=1
+    function main() -> int32  file=reopen2.sl tok=162
+  globals:
+    global GsC static  file=reopen2.sl tok=26
+      field g_c1 int = <expr>
+    global GsC static  file=reopen2.sl tok=93
+      field g_c2 int = <expr>

@@ -1,0 +1,3 @@
+program:
+  functions:
+    function main() -> int32  file=lexer.sl tok=1

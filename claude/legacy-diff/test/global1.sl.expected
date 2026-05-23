@@ -1,0 +1,70 @@
+program:
+  classes:
+    class Box  file=global1.sl tok=79
+      ctor
+      dtor
+    class Crate  file=global1.sl tok=146
+      ctor
+      dtor
+    class Logger  file=global1.sl tok=237
+      ctor
+      dtor
+      method note(n int) -> void
+    class Green  file=global1.sl tok=353
+      ctor
+      dtor
+      field effect_ int = <expr>
+  functions:
+    function foo() -> void  file=global1.sl tok=122
+    function taggify() -> void  file=global1.sl tok=191
+    function main() -> int32  file=global1.sl tok=424
+  globals:
+    global simple static  file=global1.sl tok=0
+      field garage_  = <expr>
+    global parts static  file=global1.sl tok=9
+      field wheels_  = <expr>
+      field doors_  = <expr>
+    global parts static  file=global1.sl tok=22
+      field color_  = <expr>
+    global lazy lazy  file=global1.sl tok=31
+      field counter_  = <expr>
+      ctor
+      dtor
+    global <unnamed> static  file=global1.sl tok=68
+      field x_ int = <expr>
+    global <unnamed> static  file=global1.sl tok=73
+      field y_ int = <expr>
+    global Box static  file=global1.sl tok=83
+      field count_  = <expr>
+    global Box:lid static  file=global1.sl tok=91
+      field open_  = <expr>
+    global foo static fn=foo  file=global1.sl tok=126
+      field fcount_ int = <expr>
+    global Crate:cargo lazy  file=global1.sl tok=150
+      field weight_  = <expr>
+      ctor
+      dtor
+    global taggify lazy fn=taggify  file=global1.sl tok=195
+      field count_  = <expr>
+      ctor
+      dtor
+    global Logger:note static fn=Logger:note  file=global1.sl tok=268
+      field seen_ int = <expr>
+    global pool lazy  file=global1.sl tok=289
+      field items_  = <expr>
+      ctor
+      dtor
+    global buffer lazy  file=global1.sl tok=324
+      field slots_  = <expr>
+      ctor
+      dtor
+    global warming lazy  file=global1.sl tok=382
+      field house_ Green
+      ctor
+      dtor
+    global <unnamed> static  file=global1.sl tok=410
+      field thumb_ Green
+    global <unnamed> static  file=global1.sl tok=414
+      field beret_ Green
+    global <unnamed> static  file=global1.sl tok=417
+      field apples_ Green[3]

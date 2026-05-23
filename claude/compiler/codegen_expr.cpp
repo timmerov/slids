@@ -1956,7 +1956,7 @@ std::string Codegen::emitExpr(const Expr& expr) {
             // call ctor on each element
             auto& info = slid_info_[ne->elem_type];
             const SlidDef* slid_def = nullptr;
-            for (auto& s : program_.slids)
+            for (auto& s : program_.classes)
                 if (s.name == ne->elem_type) { slid_def = &s; break; }
 
             bool has_any_ctor = info.needs_ctor_fn || (slid_def && slid_def->ctor_body);

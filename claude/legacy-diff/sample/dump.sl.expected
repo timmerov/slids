@@ -1,0 +1,5 @@
+program:
+  functions:
+    function dump<T>(tuple (char[],char[],char[],char[],T^)^) -> void  file=dump.sl tok=1
+    function dump<T>(tuple (char[],char[],char[],char[],T^)^) -> void  file=dump.sl tok=31
+    function main() -> int32  file=dump.sl tok=88

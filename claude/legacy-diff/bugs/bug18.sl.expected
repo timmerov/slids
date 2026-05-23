@@ -1,0 +1,9 @@
+program:
+  classes:
+    class Solitary  file=bug18.sl tok=0
+      ctor
+      dtor
+      field x_ int = <expr>
+      field y_ int = <expr>
+  functions:
+    function main() -> int32  file=bug18.sl tok=41

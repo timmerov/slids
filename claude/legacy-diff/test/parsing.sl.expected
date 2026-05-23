@@ -1,0 +1,28 @@
+program:
+  classes:
+    class ValueBinary  file=parsing.sl tok=0
+      ctor
+      dtor
+      field value_ int = <expr>
+      method op=(rhs ValueBinary^)
+      method op=(x int)
+      method op+(a ValueBinary^, b ValueBinary^)
+    class ValuePlusEquals  file=parsing.sl tok=112
+      ctor
+      dtor
+      field value_ int = <expr>
+      method op=(rhs ValuePlusEquals^)
+      method op=(x int)
+      method op+=(rhs ValuePlusEquals^)
+      method op+=(x int)
+    class ValueBoth  file=parsing.sl tok=249
+      ctor
+      dtor
+      field value_ int = <expr>
+      method op=(rhs ValueBoth^)
+      method op=(x int)
+      method op+(a ValueBoth^, b ValueBoth^)
+      method op+=(rhs ValueBoth^)
+      method op+=(x int)
+  functions:
+    function main() -> int32  file=parsing.sl tok=433

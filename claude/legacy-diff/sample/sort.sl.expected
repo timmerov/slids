@@ -1,0 +1,11 @@
+program:
+  classes:
+    class Vector  file=sort.sl tok=0
+      field array_ float32[100]
+      const method op[](idx int) -> float32^
+      const method size() -> int
+      const method less(a float32, b float32) -> bool
+  functions:
+    function sort(mutable vec Vector^) -> void  file=sort.sl tok=85
+    function sort(mutable vec Vector^, begin int, end int) -> void  file=sort.sl tok=109
+    function main() -> int32  file=sort.sl tok=211

@@ -1,0 +1,34 @@
+program:
+  classes:
+    class Counter  file=lvalues.sl tok=0
+      field v_ int = <expr>
+      method incr() -> void
+    class Pair  file=lvalues.sl tok=21
+      field x_ int = <expr>
+      field y_ int = <expr>
+    class Buffer  file=lvalues.sl tok=35
+      field count_ int = <expr>
+      field last_int_ int = <expr>
+      field last_str_ const char[] = <expr>
+      method op+=(s char[])
+      method op+=(v int)
+    class S  file=lvalues.sl tok=114
+      field x_ int = <expr>
+      method op=(v int)
+      method op=(rhs S^)
+      method op<-(mutable rhs S^)
+    class Inner  file=lvalues.sl tok=175
+      field x_ int = <expr>
+    class Outer  file=lvalues.sl tok=184
+      field i_ Inner = <expr>
+    class Holder  file=lvalues.sl tok=195
+      field inner_ S = <expr>
+    class Box  file=lvalues.sl tok=206
+      field p_ int^ = <expr>
+    class PtrHolder  file=lvalues.sl tok=216
+      field p_ int[] = <expr>
+  functions:
+    function mutate_param(p int) -> void  file=lvalues.sl tok=96
+    function show(s S^) -> int  file=lvalues.sl tok=228
+    function sum2(a int, b int) -> int  file=lvalues.sl tok=243
+    function main() -> int32  file=lvalues.sl tok=259

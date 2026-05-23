@@ -1,0 +1,8 @@
+program:
+  classes:
+    class Index  file=indexop.sl tok=0
+      field rgb_ int[3]
+      method op[](idx intptr) -> int^
+      method print() -> void
+  functions:
+    function main() -> int32  file=indexop.sl tok=75

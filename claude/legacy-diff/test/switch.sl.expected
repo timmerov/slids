@@ -1,0 +1,22 @@
+program:
+  enums:
+    enum Piece  file=switch.sl tok=1
+      value kEmpty
+      value kKing
+      value kQueen
+      value kRook
+      value kBishop
+      value kKnight
+      value kPawn
+  classes:
+    class Light  file=switch.sl tok=18
+      ctor
+      dtor
+      field hue_ Light:Color = <expr>
+      enum Color
+        value kRed
+        value kYellow
+        value kGreen
+      method name() -> (const char)[]
+  functions:
+    function main() -> int32  file=switch.sl tok=115

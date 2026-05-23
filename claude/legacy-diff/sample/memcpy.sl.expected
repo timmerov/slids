@@ -1,0 +1,3 @@
+program:
+  functions:
+    function main() -> int32  file=memcpy.sl tok=1

@@ -1,0 +1,3 @@
+program:
+  functions:
+    function main() -> int32  file=leap_years.sl tok=1

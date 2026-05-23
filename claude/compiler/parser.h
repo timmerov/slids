@@ -960,7 +960,7 @@ struct UnnamedGlobal {
 
 struct Program {
     std::vector<EnumDef> enums;
-    std::vector<SlidDef> slids;
+    std::vector<SlidDef> classes;
     std::vector<FunctionDef> functions;
     std::vector<ExternalMethodDef> external_methods;
     std::vector<ConstDef> consts;                   // program-scope const decls (no storage)
@@ -1155,7 +1155,7 @@ private:
     std::vector<ExternalMethodDef> pending_external_methods_;
 
     // Local classes (slids defined inside a code block). Collected during the
-    // current top-level declaration, drained into `program.slids` alongside
+    // current top-level declaration, drained into `program.classes` alongside
     // pending_globals_. Each is renamed to a unique internal canonical name
     // `<funcpath>.<n>.<ClassName>` before collection — see local_slid_counter_.
     std::vector<SlidDef> pending_slids_;

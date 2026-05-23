@@ -1,0 +1,9 @@
+program:
+  classes:
+    class Counter  file=phrases.sl tok=0
+      field v_ int = <expr>
+      method op+(a Counter^, b Counter^)
+      method op=(rhs Counter^)
+  functions:
+    function take_two(a int, b int) -> void  file=phrases.sl tok=51
+    function main() -> int32  file=phrases.sl tok=73

@@ -1,12 +1,12 @@
 SLIDSC = ../../bin/slidsc
 
+# these should not compile and are excluded from the snapshot corpus:
+#   bug07 bug10 bug12 bug13 bug14 bug19 bug20
 SL_INPUTS = \
 	bug01.sl bug02.sl bug03.sl bug04.sl bug05.sl bug06.sl bug08.sl bug09.sl \
 	bug11.sl bug15.sl bug16.sl bug17.sl bug18.sl bug21.sl bug22.sl bug23.sl
 
-SLH_INPUTS =
-
-INPUTS = $(SL_INPUTS) $(SLH_INPUTS)
+INPUTS = $(SL_INPUTS)
 DUMPS  = $(INPUTS:=.dump)
 
 .PHONY: all check regen clean
@@ -14,9 +14,6 @@ DUMPS  = $(INPUTS:=.dump)
 all: $(DUMPS)
 
 %.sl.dump: %.sl $(SLIDSC)
-	$(SLIDSC) --dump-program $< -o $@
-
-%.slh.dump: %.slh $(SLIDSC)
 	$(SLIDSC) --dump-program $< -o $@
 
 check: $(DUMPS)

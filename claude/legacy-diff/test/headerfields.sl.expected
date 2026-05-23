@@ -1,0 +1,24 @@
+program:
+  classes:
+    class Box  file=boxhdr.slh tok=0
+      ctor
+      dtor
+      field mode_ Box:Mode = <expr>
+      field ticks_ int = <expr>
+      const kBonus int
+      enum Mode
+        value kIdle
+        value kRunning
+        value kDone
+      method start() -> void (no body)
+      method tick() -> void (no body)
+      method report() -> int (no body)
+      method start() -> void
+      method tick() -> void
+      method report() -> int
+  functions:
+    function main() -> int32  file=headerfields.sl tok=103
+  imported_headers:
+    boxhdr.slh
+  slid_modules:
+    Box -> boxhdr

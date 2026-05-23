@@ -1,0 +1,42 @@
+program:
+  classes:
+    class Simple  file=tuple.sl tok=0
+      field x_ int = <expr>
+      field y_ int = <expr>
+      field z_ int = <expr>
+      method print(name char[]) -> void
+      method op+(a Simple^, b Simple^)
+      method op*(a Simple^, b Simple^)
+    class Counted  file=tuple.sl tok=146
+      field c_ int
+      method op=(rhs Counted^)
+    class IntBuf  file=tuple.sl tok=174
+      field data_ int[] = <expr>
+    class TupleHolder  file=tuple.sl tok=185
+      field pair_ (int,int) = <expr>
+      method print(label char[]) -> void
+    class Action  file=tuple.sl tok=233
+      ctor
+      dtor
+      field x_ int
+      method op<-(mutable rhs Action^)
+    class NameValue  file=tuple.sl tok=275
+      field name_ char[]
+      field value_ int
+  functions:
+    function foo(nv NameValue^) -> void  file=tuple.sl tok=288
+    function takeAction(a Action^) -> void  file=tuple.sl tok=314
+    function take_tuple(p (int,int)^) -> void  file=tuple.sl tok=328
+    function modify_tuple(mutable p (int,int)^) -> void  file=tuple.sl tok=360
+    function move_tuple_slot(mutable p (int,int)^, v int) -> void  file=tuple.sl tok=382
+    function take_simples(mutable sp (Simple,Simple)^) -> void  file=tuple.sl tok=407
+    function take_nested(np ((int,int),int)^) -> void  file=tuple.sl tok=443
+    function make_tuple() -> (a int, b int, c int)  file=tuple.sl tok=502
+    function make_simples() -> (s0 Simple, s1 Simple)  file=tuple.sl tok=523
+    function make_tuple_var() -> (t0 int, t1 int, t2 int)  file=tuple.sl tok=559
+    function make_simples_from_locals() -> (s0 Simple, s1 Simple)  file=tuple.sl tok=584
+    function make_simples_var() -> (s0 Simple, s1 Simple)  file=tuple.sl tok=623
+    function make_actions_move() -> (a0 Action, a1 Action)  file=tuple.sl tok=660
+    function make_actions_copy() -> (a0 Action, a1 Action)  file=tuple.sl tok=685
+    function passthrough() -> (s0 Simple, s1 Simple)  file=tuple.sl tok=716
+    function main() -> int32  file=tuple.sl tok=727

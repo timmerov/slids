@@ -1,0 +1,13 @@
+program:
+  classes:
+    class Simple  file=new_delete.sl tok=0
+      ctor
+      dtor
+      field x_ int = <expr>
+      field y_ int = <expr>
+      field z_ int = <expr>
+      method print() -> void
+    class Template <T>  file=new_delete.sl tok=60
+      method test() -> void
+  functions:
+    function main() -> int32  file=new_delete.sl tok=122

@@ -1,0 +1,15 @@
+program:
+  classes:
+    class Inner  file=initialization.sl tok=0
+      field x_ int = <expr>
+      field y_ int = <expr>
+      method print() -> void
+    class Outer  file=initialization.sl tok=33
+      field a_ int = <expr>
+      field inj_ Inner
+      field ink_ Inner
+      field b_ int
+      method println(what char[]) -> void
+  functions:
+    function make_outer_tuple() -> (a int, i1 (int,int), i2 (int,int), b int)  file=initialization.sl tok=119
+    function main() -> int32  file=initialization.sl tok=144

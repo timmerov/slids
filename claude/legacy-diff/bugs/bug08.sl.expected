@@ -1,0 +1,9 @@
+program:
+  classes:
+    class SimpleUndefined  file=bug08.sl tok=0
+      method op=(x int)
+    class SimpleDefined  file=bug08.sl tok=18
+      method op=(x int)
+      method op=(other SimpleDefined^)
+  functions:
+    function main() -> int32  file=bug08.sl tok=51

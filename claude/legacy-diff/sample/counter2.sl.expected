@@ -1,0 +1,8 @@
+program:
+  classes:
+    class Counter  file=counter2.sl tok=0
+      field value_ int32 = <expr>
+      method increment() -> void
+      method getValue() -> int32
+  functions:
+    function main() -> int32  file=counter2.sl tok=28

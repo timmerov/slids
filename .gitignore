@@ -5,5 +5,5 @@ claude/bugs
 claude/sample
 claude/test
 claude/work
-claude/legacy-diff/*.dump
+claude/legacy-diff/*/*.dump
 

@@ -1,0 +1,136 @@
+program:
+  classes:
+    class String ...leading  file=string.slh tok=0
+      ctor
+      dtor
+      field size_ intptr = <expr>
+      field capacity_ intptr = <expr>
+      field storage_ char[] = <expr>
+      const kNumberBufferSize intptr
+      method op=(s String^) (no body)
+      method op<-(mutable s String^) (no body)
+      method op=(s char[]) (no body)
+      method op=(c char) (no body)
+      method op=(x int64) (no body)
+      method op=(x uint64) (no body)
+      method op=(b bool) (no body)
+      method op=(x float64) (no body)
+      method op+=(s String^) (no body)
+      method op+=(s char[]) (no body)
+      method op+=(c char) (no body)
+      method op+=(b bool) (no body)
+      method op+(sa String^, sb String^) (no body)
+      const method op==(s String^) -> bool (no body)
+      const method op!=(s String^) -> bool (no body)
+      const method op<=(s String^) -> bool (no body)
+      const method op>=(s String^) -> bool (no body)
+      const method op<(s String^) -> bool (no body)
+      const method op>(s String^) -> bool (no body)
+      const method op[](index intptr) -> char^ (no body)
+      const method size() -> intptr (no body)
+      const method begin() -> char^ (no body)
+      const method end() -> char^ (no body)
+      const method next(prev char^) -> char^ (no body)
+      method clear() -> void (no body)
+      const method empty() -> bool (no body)
+      method reserve(capacity intptr) -> void (no body)
+      method reverse() -> void (no body)
+      const method compare(other String^) -> int (no body)
+      const method slice(start intptr, count intptr) -> String (no body)
+      method op=(s String^)
+      method op<-(mutable s String^)
+      method op=(str char[])
+      method op=(c char)
+      method op=(x int64)
+      method op=(x uint64)
+      method op=(b bool)
+      method op=(x float64)
+      method op+=(s String^)
+      method op+=(s char[])
+      method op+=(c char)
+      method op+=(b bool)
+      method op+(sa String^, sb String^)
+      const method op==(s String^) -> bool
+      const method op!=(s String^) -> bool
+      const method op<=(s String^) -> bool
+      const method op>=(s String^) -> bool
+      const method op<(s String^) -> bool
+      const method op>(s String^) -> bool
+      const method op[](index intptr) -> char^
+      const method size() -> intptr
+      const method begin() -> char^
+      const method end() -> char^
+      const method next(prev char^) -> char^
+      method clear() -> void
+      const method empty() -> bool
+      method reserve(cap intptr) -> void
+      method reverse() -> void
+      const method compare(other String^) -> int
+      const method slice(start intptr, count intptr) -> String
+      method set(arr char[], sz intptr) -> void
+      method append(arr char[], sz intptr) -> void
+      method append(c char) -> void
+      method expand(cap intptr) -> void
+      method fillDigitsBackwards(x uint64) -> void
+    class Format : String  file=string.slh tok=369
+      ctor
+      dtor
+      field justify_ Format:Option = <expr>
+      field float_style_ Format:Option = <expr>
+      field pad_ char = <expr>
+      field leading_plus_ bool = <expr>
+      field min_width_ int = <expr>
+      field max_width_ int = <expr>
+      field precision_ int = <expr>
+      enum Option
+        value kAuto
+        value kLeftJustify
+        value kRightJustify
+        value kFixedPoint
+        value kScientificNotation
+      method op=(s String^) (no body)
+      method op=(s char[]) (no body)
+      method op=(c char) (no body)
+      method op=(x int64) (no body)
+      method op=(x uint64) (no body)
+      method op=(b bool) (no body)
+      method op=(x float64) (no body)
+      method op*(fmt Format^, s String^) (no body)
+      method op*(fmt Format^, x int64) (no body)
+      method op*(fmt Format^, x uint64) (no body)
+      method op*(fmt Format^, x float64) (no body)
+      method op=(rhs String^)
+      method op=(s char[])
+      method op=(c char)
+      method op=(x int64)
+      method op=(x uint64)
+      method op=(b bool)
+      method op=(x float64)
+      method op*(fmt Format^, s String^)
+      method op*(fmt Format^, x int64)
+      method op*(fmt Format^, x uint64)
+      method op*(fmt Format^, x float64)
+      method copyFormatClear(fmt Format^) -> void
+  functions:
+    function print(s String^) -> void  file=string.slh tok=263
+    function println(s String^) -> void  file=string.slh tok=271
+    function strlen(s char[]) -> intptr  file=string.slh tok=279
+    function strcpy(mutable dst char[], src char[]) -> void  file=string.slh tok=288
+    function strcpy(mutable dst char[], src char[], count intptr) -> void  file=string.slh tok=303
+    function strcmp(sa char[], sb char[]) -> int  file=string.slh tok=321
+    function strcmp(sa char[], sb char[], count int) -> int  file=string.slh tok=335
+    function strfill(mutable s char[], ch char, count intptr) -> void  file=string.slh tok=352
+    function print(s String^) -> void  file=string.sl tok=1205
+    function println(s String^) -> void  file=string.sl tok=1230
+    function strlen(s char[]) -> intptr  file=string.sl tok=1255
+    function strcpy(mutable dst char[], src char[]) -> void  file=string.sl tok=1290
+    function strcpy(mutable dst char[], src char[], count intptr) -> void  file=string.sl tok=1335
+    function strfill(mutable s char[], ch char, count intptr) -> void  file=string.sl tok=1390
+  namespaces:
+    namespace stdc  file=string.sl tok=3
+      foreign function stdc:strfromd(mutable s char[], n intptr, fmt char[], fp float64) -> int32 = import  file=string.sl tok=7
+  imported_headers:
+    string.slh
+  slid_modules:
+    Format -> string
+    String -> string

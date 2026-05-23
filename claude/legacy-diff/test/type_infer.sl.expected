@@ -1,0 +1,9 @@
+program:
+  enums:
+    enum Color  file=type_infer.sl tok=46
+      value kRed
+      value kGreen
+      value kBlue
+  functions:
+    function strlen_helper(s char[]) -> intptr  file=type_infer.sl tok=1
+    function main() -> int  file=type_infer.sl tok=56

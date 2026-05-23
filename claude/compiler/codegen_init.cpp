@@ -808,7 +808,7 @@ void Codegen::emitInitFieldsAtPtrs(const std::string& stype, const std::string& 
     }
 
     auto slidDefFor = [&](const std::string& name) -> const SlidDef* {
-        for (auto& s : program_.slids) if (s.name == name) return &s;
+        for (auto& s : program_.classes) if (s.name == name) return &s;
         auto it = concrete_slid_template_defs_.find(name);
         if (it != concrete_slid_template_defs_.end()) return &it->second;
         return nullptr;

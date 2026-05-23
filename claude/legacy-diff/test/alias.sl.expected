@@ -1,0 +1,28 @@
+program:
+  classes:
+    class Class  file=alias.sl tok=12
+      field x_ int = <expr>
+      method greet() -> void
+    class Template <T>  file=alias.sl tok=86
+      field z_ T
+      method greet() -> void
+    class Class.Hoisted  file=alias.sl tok=33
+      field y_ int = <expr>
+      method greet() -> void
+  functions:
+    function main() -> int32  file=alias.sl tok=168
+  consts:
+    const kc_a float64  file=alias.sl tok=119
+    const kc_b float64  file=alias.sl tok=125
+  type_aliases:
+    type_alias IntPtr = int^  file=alias.sl tok=1
+    type_alias IntHdl = int^^  file=alias.sl tok=7
+    type_alias ClassPtr = Class^  file=alias.sl tok=57
+    type_alias ClassHdl = Class^^  file=alias.sl tok=63
+    type_alias Hoist = Class.Hoisted  file=alias.sl tok=69
+    type_alias TuplePair = (char[],int)  file=alias.sl tok=76
+    type_alias TemplateInt = Template__int  file=alias.sl tok=110
+  type_alias_templates:
+    type_alias_template Ptr<T> = T^  file=alias.sl tok=130
+    type_alias_template Pair<A,B> = (A,B)  file=alias.sl tok=139
+    type_alias_template Wrap<T> = (char[],T^)  file=alias.sl tok=153

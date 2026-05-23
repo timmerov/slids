@@ -1,0 +1,21 @@
+program:
+  classes:
+    class main.1.Vex2  file=bug21.sl tok=81
+      ctor
+      dtor
+      field x_ int = <expr>
+    class Vex1  file=bug21.sl tok=136
+      ctor
+      dtor
+      field x_ int = <expr>
+    class Vex3  file=bug21.sl tok=165
+      ctor
+      dtor
+      field x_ int = <expr>
+    class NoCtorDtor  file=bug21.sl tok=194
+      field x_ int = <expr>
+  functions:
+    function main() -> int32  file=bug21.sl tok=5
+  unnamed_globals:
+    unnamed_global Vex1  file=bug21.sl tok=0
+    unnamed_global Vex1  file=bug21.sl tok=2

@@ -1,0 +1,3 @@
+program:
+  functions:
+    function main() -> int32  file=bug01.sl tok=1

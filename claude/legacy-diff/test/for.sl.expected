@@ -1,0 +1,94 @@
+program:
+  enums:
+    enum Bases  file=for.sl tok=30
+      value kFirst
+      value kSecond
+      value kThird
+      value kLast
+  classes:
+    class Simple  file=for.sl tok=0
+      ctor
+      dtor
+      field x_ int = <expr>
+    class BeginEndInt  file=for.sl tok=41
+      field low_ int
+      field high_ int
+      method begin() -> int
+      method end() -> int
+      method next(prev int) -> int
+    class IndexSizeInt  file=for.sl tok=84
+      ctor
+      dtor
+      field table_ int[3]
+      method size() -> int
+      method op[](index int) -> int^
+    class Flexible  file=for.sl tok=152
+      ctor
+      dtor
+      field table_ int[3]
+      method size() -> int
+      method op[](index int) -> int^
+      method begin() -> int^
+      method end() -> int^
+      method next(prev int^) -> int^
+    class TypeMismatch1  file=for.sl tok=275
+      field x_ int
+      method begin() -> int
+      method end() -> int^
+      method next(prev int^) -> int^
+    class TypeMismatch2  file=for.sl tok=314
+      field x_ int
+      method begin() -> int^
+      method end() -> int
+      method next(prev int^) -> int^
+    class TypeMismatch3  file=for.sl tok=353
+      field x_ int
+      method begin() -> int^
+      method end() -> int^
+      method next(prev int^) -> int
+    class TypeMismatch4  file=for.sl tok=392
+      field x_ int
+      method begin() -> int^
+      method end() -> int^
+      method next(prev int) -> int^
+    class IncompleteByValue  file=for.sl tok=431
+      field x_ int
+      method op[](index int) -> int^
+    class IncompleteByRef  file=for.sl tok=453
+      field x_ int
+      method begin() -> int
+      method end() -> int
+    class MalformedSize  file=for.sl tok=478
+      field x_ int
+      method size(extra int) -> int
+      method op[](index int) -> int^
+    class MalformedNext  file=for.sl tok=511
+      field x_ int
+      method begin() -> int
+      method end() -> int
+      method next() -> int
+    class NotIterable  file=for.sl tok=545
+      field x_ int
+    class BothSame  file=for.sl tok=552
+      field x_ int
+      method size() -> int
+      method op[](index int) -> int^
+      method begin() -> int
+      method end() -> int
+      method next(prev int) -> int
+    class GoodValueBadRef  file=for.sl tok=614
+      field x_ int
+      method size() -> int
+      method op[](index int) -> int^
+      method begin() -> int
+      method end() -> int
+      method next() -> int
+    class BadValueGoodRef  file=for.sl tok=672
+      field x_ int
+      method size(extra int) -> int
+      method op[](index int) -> int^
+      method begin() -> int
+      method end() -> int
+      method next(prev int) -> int
+  functions:
+    function main() -> int32  file=for.sl tok=737

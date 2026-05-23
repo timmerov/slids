@@ -1,6 +1,7 @@
 #include "lexer.h"
 #include "parser.h"
 #include "codegen.h"
+#include "dump.h"
 #include "source_map.h"
 #include <iostream>
 #include <fstream>
@@ -178,26 +179,58 @@ int main(int argc, char* argv[]) {
         return runInstantiate(inst_dir, inst_out);
     }
 
-    // --dump-program mode (stub: writes "Hello, World!" until the real dumper lands)
+    // --dump-program mode: parse the input, write a structural Program dump.
+    // Backs the legacy-diff snapshot harness — see project_legacy_diff_harness.
     if (std::string(argv[1]) == "--dump-program") {
         if (argc < 3) { std::cerr << "slidsc: --dump-program requires a source file\n"; return 1; }
         std::string dump_input = argv[2];
         std::string dump_out = dump_input + ".dump";
+        std::vector<std::string> dump_import_paths;
         for (int i = 3; i < argc; i++) {
-            if (std::string(argv[i]) == "-o" && i + 1 < argc)
+            std::string arg = argv[i];
+            if (arg == "-o" && i + 1 < argc)
                 dump_out = argv[++i];
+            else if (arg == "--import-path" && i + 1 < argc)
+                dump_import_paths.push_back(argv[++i]);
         }
         std::filesystem::path op(dump_out);
         if (op.has_parent_path()) {
             std::error_code ec;
             std::filesystem::create_directories(op.parent_path(), ec);
         }
-        std::ofstream out(dump_out);
-        if (!out) {
-            std::cerr << "slidsc: cannot write '" << dump_out << "'\n";
+        std::ifstream in(dump_input);
+        if (!in) {
+            std::cerr << "slidsc: cannot open '" << dump_input << "'\n";
             return 1;
         }
-        out << "Hello, World!\n";
+        std::ostringstream buf;
+        buf << in.rdbuf();
+        std::string source = buf.str();
+        std::string source_dir;
+        {
+            std::filesystem::path p(dump_input);
+            if (p.has_parent_path()) source_dir = p.parent_path().string();
+        }
+        SourceMap source_map;
+        int root_file_id = source_map.openFile(dump_input, source, -1);
+        bool root_is_header = dump_input.size() >= 4
+            && dump_input.compare(dump_input.size() - 4, 4, ".slh") == 0;
+        try {
+            Lexer lexer(source_map, root_file_id);
+            auto tokens = lexer.tokenize();
+            Parser parser(source_map, root_file_id, std::move(tokens), source_dir,
+                          dump_import_paths, /*imported_once=*/nullptr, root_is_header);
+            auto program = parser.parse();
+            std::ofstream out(dump_out);
+            if (!out) {
+                std::cerr << "slidsc: cannot write '" << dump_out << "'\n";
+                return 1;
+            }
+            dumpProgram(program, source_map, out);
+        } catch (const CompileError& e) {
+            source_map.render(e, std::cerr);
+            return 1;
+        }
         return 0;
     }
 

@@ -1,0 +1,9 @@
+program:
+  classes:
+    class foo.0.Bar  file=bug23.sl tok=5
+  functions:
+    function foo() -> void  file=bug23.sl tok=1
+    function main() -> int32  file=bug23.sl tok=27
+  globals:
+    global Bar static  file=bug23.sl tok=9
+      field g_a int = <expr>

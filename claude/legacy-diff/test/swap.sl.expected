@@ -1,0 +1,14 @@
+program:
+  classes:
+    class Swap  file=swap.sl tok=0
+      field a_ int = <expr>
+      field b_ int = <expr>
+      field p_ int^ = <expr>
+      method op<->(mutable s Swap^)
+    class NoSwap  file=swap.sl tok=49
+      field a_ int = <expr>
+      field b_ int = <expr>
+      field p_ int^ = <expr>
+    class Wrong  file=swap.sl tok=69
+  functions:
+    function main() -> int32  file=swap.sl tok=75
