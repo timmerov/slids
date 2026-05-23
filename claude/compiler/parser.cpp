@@ -452,9 +452,7 @@ void Parser::appendConstEntry(ConstDef def) {
     entry->file_id = def.file_id;
     entry->entry_kind = EntryKind::Const;
     entry->enclosing_frame_id = frame_ids_.front().first;
-    entry->declared_type = std::move(def.declared_type);
-    entry->namespace_name = std::move(def.namespace_name);
-    entry->rhs = std::move(def.rhs);
+    entry->def = std::move(def);
     frame_entries_.push_back(entry.get());
     master_list_.push_back(std::move(entry));
 }
@@ -485,15 +483,7 @@ void Parser::emitFunctionAliasesIntoProgram(Program& program) const {
 void Parser::emitConstsIntoProgram(Program& program) {
     for (auto& entry : master_list_) {
         if (entry->entry_kind != EntryKind::Const) continue;
-        auto* ce = static_cast<ConstEntry*>(entry.get());
-        ConstDef cd;
-        cd.name = ce->base_name;
-        cd.declared_type = std::move(ce->declared_type);
-        cd.rhs = std::move(ce->rhs);
-        cd.namespace_name = std::move(ce->namespace_name);
-        cd.file_id = ce->file_id;
-        cd.tok = ce->tok;
-        program.consts.push_back(std::move(cd));
+        program.consts.push_back(std::move(static_cast<ConstEntry*>(entry.get())->def));
     }
 }
 
@@ -504,19 +494,7 @@ void Parser::appendExternalMethodEntry(ExternalMethodDef def) {
     entry->file_id = def.file_id;
     entry->entry_kind = EntryKind::ExternalMethod;
     entry->enclosing_frame_id = frame_ids_.front().first;
-    entry->slid_name = std::move(def.slid_name);
-    entry->return_type = std::move(def.return_type);
-    entry->params = std::move(def.params);
-    entry->param_mutable = std::move(def.param_mutable);
-    entry->param_mut_toks = std::move(def.param_mut_toks);
-    entry->param_toks = std::move(def.param_toks);
-    entry->param_defaults = std::move(def.param_defaults);
-    entry->body = std::move(def.body);
-    entry->is_virtual = def.is_virtual;
-    entry->is_delete = def.is_delete;
-    entry->is_default = def.is_default;
-    entry->is_const_method = def.is_const_method;
-    entry->has_explicit_return = def.has_explicit_return;
+    entry->def = std::move(def);
     frame_entries_.push_back(entry.get());
     master_list_.push_back(std::move(entry));
 }
@@ -528,12 +506,30 @@ Parser::NamespaceEntry* Parser::appendNamespaceEntry(NamespaceDef def) {
     entry->file_id = def.file_id;
     entry->entry_kind = EntryKind::Namespace;
     entry->enclosing_frame_id = frame_ids_.front().first;
-    entry->functions = std::move(def.functions);
-    entry->consts = std::move(def.consts);
+    entry->def = std::move(def);
     NamespaceEntry* raw = entry.get();
     frame_entries_.push_back(raw);
     master_list_.push_back(std::move(entry));
     return raw;
+}
+
+void Parser::appendFunctionEntry(FunctionDef def) {
+    auto entry = std::make_unique<FunctionEntry>();
+    entry->base_name = def.name;
+    entry->tok = def.tok;
+    entry->file_id = def.file_id;
+    entry->entry_kind = EntryKind::Function;
+    entry->enclosing_frame_id = frame_ids_.front().first;
+    entry->def = std::move(def);
+    frame_entries_.push_back(entry.get());
+    master_list_.push_back(std::move(entry));
+}
+
+void Parser::emitFunctionsIntoProgram(Program& program) {
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::Function) continue;
+        program.functions.push_back(std::move(static_cast<FunctionEntry*>(entry.get())->def));
+    }
 }
 
 Parser::NamespaceEntry* Parser::findNamespaceEntry(const std::string& name) {
@@ -547,14 +543,7 @@ Parser::NamespaceEntry* Parser::findNamespaceEntry(const std::string& name) {
 void Parser::emitNamespacesIntoProgram(Program& program) {
     for (auto& entry : master_list_) {
         if (entry->entry_kind != EntryKind::Namespace) continue;
-        auto* ne = static_cast<NamespaceEntry*>(entry.get());
-        NamespaceDef nd;
-        nd.name = ne->base_name;
-        nd.functions = std::move(ne->functions);
-        nd.consts = std::move(ne->consts);
-        nd.file_id = ne->file_id;
-        nd.tok = ne->tok;
-        program.namespaces.push_back(std::move(nd));
+        program.namespaces.push_back(std::move(static_cast<NamespaceEntry*>(entry.get())->def));
     }
 }
 
@@ -565,14 +554,7 @@ void Parser::appendGlobalEntry(GlobalDef def) {
     entry->file_id = def.file_id;
     entry->entry_kind = EntryKind::Global;
     entry->enclosing_frame_id = frame_ids_.front().first;
-    entry->namespace_name = std::move(def.namespace_name);
-    entry->fields = std::move(def.fields);
-    entry->ctor_body = std::move(def.ctor_body);
-    entry->dtor_body = std::move(def.dtor_body);
-    entry->has_ctor_decl = def.has_ctor_decl;
-    entry->has_dtor_decl = def.has_dtor_decl;
-    entry->visible_in_function = std::move(def.visible_in_function);
-    entry->impl_module = std::move(def.impl_module);
+    entry->def = std::move(def);
     frame_entries_.push_back(entry.get());
     master_list_.push_back(std::move(entry));
 }
@@ -580,19 +562,7 @@ void Parser::appendGlobalEntry(GlobalDef def) {
 void Parser::emitGlobalsIntoProgram(Program& program) {
     for (auto& entry : master_list_) {
         if (entry->entry_kind != EntryKind::Global) continue;
-        auto* ge = static_cast<GlobalEntry*>(entry.get());
-        GlobalDef g;
-        g.namespace_name = std::move(ge->namespace_name);
-        g.fields = std::move(ge->fields);
-        g.ctor_body = std::move(ge->ctor_body);
-        g.dtor_body = std::move(ge->dtor_body);
-        g.has_ctor_decl = ge->has_ctor_decl;
-        g.has_dtor_decl = ge->has_dtor_decl;
-        g.file_id = ge->file_id;
-        g.tok = ge->tok;
-        g.visible_in_function = std::move(ge->visible_in_function);
-        g.impl_module = std::move(ge->impl_module);
-        program.globals.push_back(std::move(g));
+        program.globals.push_back(std::move(static_cast<GlobalEntry*>(entry.get())->def));
     }
 }
 
@@ -620,25 +590,8 @@ void Parser::emitSlidModulesIntoProgram(Program& program) const {
 void Parser::emitExternalMethodsIntoProgram(Program& program) {
     for (auto& entry : master_list_) {
         if (entry->entry_kind != EntryKind::ExternalMethod) continue;
-        auto* eme = static_cast<ExternalMethodEntry*>(entry.get());
-        ExternalMethodDef em;
-        em.slid_name = std::move(eme->slid_name);
-        em.return_type = std::move(eme->return_type);
-        em.method_name = eme->base_name;
-        em.params = std::move(eme->params);
-        em.param_mutable = std::move(eme->param_mutable);
-        em.param_mut_toks = std::move(eme->param_mut_toks);
-        em.param_toks = std::move(eme->param_toks);
-        em.param_defaults = std::move(eme->param_defaults);
-        em.body = std::move(eme->body);
-        em.file_id = eme->file_id;
-        em.tok = eme->tok;
-        em.is_virtual = eme->is_virtual;
-        em.is_delete = eme->is_delete;
-        em.is_default = eme->is_default;
-        em.is_const_method = eme->is_const_method;
-        em.has_explicit_return = eme->has_explicit_return;
-        program.external_methods.push_back(std::move(em));
+        program.external_methods.push_back(
+            std::move(static_cast<ExternalMethodEntry*>(entry.get())->def));
     }
 }
 
@@ -5550,7 +5503,7 @@ Program Parser::parse() {
                     if (!slid.type_params.empty()) { has_templates = true; break; }
 
             for (auto& fn : hdr.functions)
-                if (!fn.body) program.functions.push_back(std::move(fn));
+                if (!fn.body) appendFunctionEntry(std::move(fn));
             for (auto& slid : hdr.classes) {
                 // Register imported slid's nested-enum names into the
                 // consumer's enum_sizes_ so parseTypeName can resolve a
@@ -5657,14 +5610,14 @@ Program Parser::parse() {
                             // (a) template body from this module.
                             fn.is_local = false;
                             fn.impl_module = module;
-                            program.functions.push_back(std::move(fn));
+                            appendFunctionEntry(std::move(fn));
                         } else if (!fn.body) {
                             // (b) transitive declaration from impl's own .slh
                             // imports. Imported template entries already carry
                             // is_local=false / impl_module from the deeper
                             // import; bare .slh decls have no impl_module —
                             // both shapes are correct to forward as-is.
-                            program.functions.push_back(std::move(fn));
+                            appendFunctionEntry(std::move(fn));
                         }
                         // fn.body && fn.type_params.empty() — a non-template
                         // definition local to the impl TU. Not visible to
@@ -5863,7 +5816,7 @@ Program Parser::parse() {
                     "move the declaration to an .sl file.");
             appendUnnamedGlobalEntry(tname, name_tok);
         } else if (peek().type == TokenType::kLParen) {
-            program.functions.push_back(parseFunctionDef());
+            appendFunctionEntry(parseFunctionDef());
         } else {
             // detect external method: [returnType] TypeName:
             // advance past return type (primitive or user type) when followed by another identifier
@@ -5893,12 +5846,12 @@ Program Parser::parse() {
                     fn.file_id        = em.file_id;
                     fn.tok            = em.tok;
                     fn.namespace_name = ns->base_name;
-                    ns->functions.push_back(std::move(fn));
+                    ns->def.functions.push_back(std::move(fn));
                 } else {
                     appendExternalMethodEntry(parseExternalMethodDef());
                 }
             } else {
-                program.functions.push_back(parseFunctionDef());
+                appendFunctionEntry(parseFunctionDef());
             }
         }
         // Drain any globals collected by the just-parsed top-level decl.
@@ -5930,6 +5883,7 @@ Program Parser::parse() {
     emitSlidModulesIntoProgram(program);
     emitGlobalsIntoProgram(program);
     emitNamespacesIntoProgram(program);
+    emitFunctionsIntoProgram(program);
 
     // hoist nested slid defs to top level. each nested slid is renamed
     // <Outer>.<Inner> so it's globally addressable. parent_name is taken by
