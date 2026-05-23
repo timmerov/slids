@@ -121,7 +121,10 @@ Parser::Parser(SourceMap& sm, int file_id, std::vector<Token> tokens,
       import_paths_(std::move(import_paths)),
       imported_once_(imported_once ? std::move(imported_once)
                                    : std::make_shared<std::set<std::string>>()),
-      is_header_(is_header) {}
+      is_header_(is_header) {
+    int fs_id = next_frame_id_++;
+    frame_ids_.emplace_back(fs_id, std::size_t{0});
+}
 
 // Ensure every diagnostic ends with terminal punctuation. Messages built
 // with concatenations forget periods constantly; folding the rule into the
@@ -1837,11 +1840,16 @@ std::unique_ptr<Expr> Parser::parseExpr() {
 // --- Statement parsing ---
 
 Parser::Frame& Parser::pushFrame() {
+    int id = next_frame_id_++;
+    frame_ids_.emplace_back(id, frame_entries_.size());
     frame_stack_.emplace_back();
     return frame_stack_.back();
 }
 
 void Parser::popFrame() {
+    std::size_t entries_start = frame_ids_.back().second;
+    frame_entries_.resize(entries_start);
+    frame_ids_.pop_back();
     frame_stack_.pop_back();
 }
 

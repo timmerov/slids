@@ -1250,6 +1250,42 @@ private:
     Frame& pushFrame();
     void popFrame();
 
+    // Phase-2 successor scaffolding. Inactive — nothing constructs these yet.
+    // Stage A1 lands the types only; later stages populate master_list_,
+    // frame_ids_, frame_entries_, reopen_cache_, and migrate readers off the
+    // legacy 5-lane Frame above. See project memory project-frame-based-parser-rewrite.
+    enum class FrameKind { Block, For, Class, Function };
+    enum class EntryKind { LocalVar };
+
+    struct FrameBase {
+        int enclosing_frame_id = -1;
+        int own_frame_id = -1;             // -1 unless this entry opens a scope
+        std::string base_name;             // as lexed, NOT canonical
+        int file_id = -1;
+        int tok = 0;
+        EntryKind entry_kind = EntryKind::LocalVar;
+        virtual ~FrameBase() = default;
+    };
+
+    struct LocalVarEntry : FrameBase {
+        bool is_array = false;
+        int  array_count = 0;
+        int  array_rank = 0;
+        bool is_tuple = false;
+        int  tuple_count = 0;
+        std::string type;
+    };
+
+    // Stage A2 — containers populated by pushFrame/popFrame only. Nothing
+    // reads them yet; master_list_, frame_entries_, reopen_cache_ stay empty
+    // until stage B starts populating per-kind. The id counter and id stack
+    // are exercised but unobserved.
+    std::vector<std::unique_ptr<FrameBase>> master_list_;
+    std::vector<std::pair<int, std::size_t>> frame_ids_;   // (own_frame_id, entries_start)
+    std::vector<FrameBase*> frame_entries_;
+    std::map<int, std::vector<FrameBase*>> reopen_cache_;  // keyed by own_frame_id
+    int next_frame_id_ = 0;
+
     // Pass `program` from file-scope callers so file-scope aliases also flow
     // into Program (cross-TU propagation through .slh imports). Block-scope
     // callers pass nullptr. Class-scope callers pass `slid` so the alias is
