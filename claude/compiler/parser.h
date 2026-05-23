@@ -1178,14 +1178,13 @@ private:
     // still apply).
     std::string lookupLocalClass(const std::string& name) const;
 
-    // Per-block short-name → canonical-name map for nested functions. Same
-    // shape and lifetime as frame_stack_'s local_classes lane. A nested function is visible
-    // only within its declaring block (and its sub-scopes via the stack walk
-    // in lookupNestedFunc); on block close the frame pops and the name
-    // becomes unresolvable, so the codegen `Unknown function` error fires.
-    // Canonical name format: `<funcpath>.<n>.<short>`, sharing the
-    // local_slid_counter_ namespace so a fn and a class can never collide.
-    std::vector<std::map<std::string, std::string>> nested_func_stack_;
+    // Per-block short-name → canonical-name map for nested functions lives in
+    // frame_stack_'s nested_funcs lane. A nested function is visible only
+    // within its declaring block (and its sub-scopes via the stack walk in
+    // lookupNestedFunc); on block close the frame pops and the name becomes
+    // unresolvable, so the codegen `Unknown function` error fires. Canonical
+    // name format: `<funcpath>.<n>.<short>`, sharing the local_slid_counter_
+    // namespace so a fn and a class can never collide.
     std::string lookupNestedFunc(const std::string& name) const;
 
     // user-declared type aliases (alias Name = TypeExpr;). innermost frame is
@@ -1231,16 +1230,15 @@ private:
                               int name_tok);
     const AliasTemplateInfo* lookupAliasTemplate(const std::string& name) const;
 
-    // Unified per-block scope frame — destination of the 5 legacy stacks
-    // above (locals + aliases + alias_templates + local_classes migrated;
-    // nested_func_stack_ remaining). Phase-1 step 1:
-    // pushFrame/popFrame keep the legacy stacks lockstep-synchronized at
-    // the symmetric site (parseBlock); readers still consult the legacy
-    // stacks. Subsequent commits migrate one lane at a time, deleting
-    // each legacy stack as its readers move to frame_stack_.back().<lane>.
-    // 5 asymmetric push/pop sites (for-loops, class body, external method)
-    // continue to push only their own legacy stack(s) for now — they will
-    // be addressed during lane migration.
+    // Unified per-block scope frame. Five lanes hold the data the legacy
+    // scope_stack_ / alias_stack_ / alias_template_stack_ /
+    // local_class_stack_ / nested_func_stack_ used to hold; all five
+    // legacy stacks have been migrated to lanes and deleted. parseBlock
+    // calls pushFrame/popFrame at the symmetric site; for-scope sites
+    // (short and long form) also use pushFrame; class-body and
+    // external-method sites push frame_stack_ directly with only the
+    // relevant lane(s) seeded (other lanes stay empty — the syntax of
+    // those scopes admits no entries in the other lanes).
     struct Frame {
         std::map<std::string, LocalInfo> locals;
         std::map<std::string, AliasInfo> aliases;

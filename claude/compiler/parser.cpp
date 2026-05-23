@@ -253,9 +253,9 @@ std::string Parser::lookupLocalClass(const std::string& name) const {
 }
 
 std::string Parser::lookupNestedFunc(const std::string& name) const {
-    for (auto it = nested_func_stack_.rbegin(); it != nested_func_stack_.rend(); ++it) {
-        auto sit = it->find(name);
-        if (sit != it->end()) return sit->second;
+    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
+        auto sit = it->nested_funcs.find(name);
+        if (sit != it->nested_funcs.end()) return sit->second;
     }
     return "";
 }
@@ -1838,11 +1838,9 @@ std::unique_ptr<Expr> Parser::parseExpr() {
 
 void Parser::pushFrame() {
     frame_stack_.emplace_back();
-    nested_func_stack_.push_back({});
 }
 
 void Parser::popFrame() {
-    nested_func_stack_.pop_back();
     frame_stack_.pop_back();
 }
 
@@ -2097,7 +2095,7 @@ void Parser::prescanLocalClasses() {
         // canonical so both SlidDefs collide in program.classes; mergeReopens
         // collapses them after parsing.
         if (frame_stack_.back().local_classes.count(short_name)) return;
-        if (nested_func_stack_.back().count(short_name)) {
+        if (frame_stack_.back().nested_funcs.count(short_name)) {
             errorAt(name_tok, "'" + short_name
                 + "' is already declared in this scope.");
         }
@@ -2115,12 +2113,12 @@ void Parser::prescanLocalClasses() {
             errorAt(name_tok, "'" + short_name
                 + "' is already declared in this scope.");
         }
-        if (nested_func_stack_.back().count(short_name)) return; // overload
+        if (frame_stack_.back().nested_funcs.count(short_name)) return; // overload
         std::string func_path = current_function_name_;
         for (char& c : func_path) if (c == ':') c = '.';
         std::string canonical = (func_path.empty() ? "" : func_path + ".")
             + std::to_string(local_slid_counter_++) + "." + short_name;
-        nested_func_stack_.back()[short_name] = canonical;
+        frame_stack_.back().nested_funcs[short_name] = canonical;
     };
     auto skip_template_brackets = [&]() {
         if (pos_ >= (int)tokens_.size() || peek().type != TokenType::kLt) return;
@@ -3581,7 +3579,7 @@ NestedFunctionDef Parser::parseNestedFunctionDef() {
         }
     }
     // The block-level pre-scan assigned a canonical name (`<funcpath>.<n>.<short>`)
-    // for this nested function in the current block's nested_func_stack_ frame.
+    // for this nested function in the current frame's nested_funcs lane.
     // Rename to canonical so two same-name fns in different blocks get distinct
     // mangles, and so the codegen `findNested` walker keys overloads off the
     // block-unique name. Outside the block its short name is unresolvable.
