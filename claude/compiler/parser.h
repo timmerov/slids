@@ -1229,6 +1229,7 @@ private:
     enum class EntryKind {
         LocalVar, Alias, LocalClass, NestedFunc, Enum, Class,
         ImportedHeader, UnnamedGlobal, FunctionAlias, Const,
+        ExternalMethod, SlidModule, Global, Namespace,
     };
 
     struct FrameBase {
@@ -1312,6 +1313,54 @@ private:
         std::unique_ptr<Expr> rhs;
     };
 
+    // base_name = slid (class) name, module = providing .slh module name.
+    // Translator dedups on emit (first writer wins — matches today's
+    // map::emplace semantics).
+    struct SlidModuleEntry : FrameBase {
+        std::string module;
+    };
+
+    // base_name unused; full GlobalDef payload carried by move. Codegen
+    // touches fields/ctor_body/dtor_body, so emit moves them out of the
+    // entry rather than copying.
+    struct GlobalEntry : FrameBase {
+        std::string namespace_name;
+        std::vector<FieldDef> fields;
+        std::unique_ptr<BlockStmt> ctor_body;
+        std::unique_ptr<BlockStmt> dtor_body;
+        bool has_ctor_decl = false;
+        bool has_dtor_decl = false;
+        std::string visible_in_function;
+        std::string impl_module;
+    };
+
+    // base_name = namespace name. functions/consts vectors are mutable
+    // during parse — `ret Ns:fn(...) { ... }` external definitions look up
+    // this entry via findNamespaceEntry and push directly into its lists.
+    struct NamespaceEntry : FrameBase {
+        std::vector<FunctionDef> functions;
+        std::vector<ConstDef> consts;
+    };
+
+    // External method decl. base_name = method_name (for diagnostic
+    // symmetry; the canonical key is slid_name::method_name). Move-only
+    // members force the helpers to take an rvalue.
+    struct ExternalMethodEntry : FrameBase {
+        std::string slid_name;
+        std::string return_type;
+        std::vector<std::pair<std::string, std::string>> params;
+        std::vector<bool> param_mutable;
+        std::vector<int> param_mut_toks;
+        std::vector<int> param_toks;
+        std::vector<std::unique_ptr<Expr>> param_defaults;
+        std::unique_ptr<BlockStmt> body;
+        bool is_virtual = false;
+        bool is_delete = false;
+        bool is_default = false;
+        bool is_const_method = false;
+        bool has_explicit_return = false;
+    };
+
     // Phase-2 master list and frame-id stack. Live for the LocalVar and
     // Alias kinds; remaining lanes (local_classes, nested_funcs) still on
     // the legacy Frame above.
@@ -1381,6 +1430,10 @@ private:
     void emitUnnamedGlobalsIntoProgram(Program& program) const;
     void emitFunctionAliasesIntoProgram(Program& program) const;
     void emitConstsIntoProgram(Program& program);
+    void emitExternalMethodsIntoProgram(Program& program);
+    void emitSlidModulesIntoProgram(Program& program) const;
+    void emitGlobalsIntoProgram(Program& program);
+    void emitNamespacesIntoProgram(Program& program);
 
     // Append helpers for the new entry kinds. All add at file-scope frame.
     void appendImportedHeaderEntry(const std::string& path);
@@ -1390,6 +1443,12 @@ private:
                                   const std::string& namespace_name,
                                   int tok, int file_id = -1);
     void appendConstEntry(ConstDef def);
+    void appendExternalMethodEntry(ExternalMethodDef def);
+    void appendSlidModuleEntry(const std::string& slid_name,
+                                const std::string& module);
+    void appendGlobalEntry(GlobalDef def);
+    NamespaceEntry* appendNamespaceEntry(NamespaceDef def);
+    NamespaceEntry* findNamespaceEntry(const std::string& name);
 
     // Pass `program` from file-scope callers so file-scope aliases also flow
     // into Program (cross-TU propagation through .slh imports). Block-scope
