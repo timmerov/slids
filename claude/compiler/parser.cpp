@@ -347,10 +347,10 @@ void Parser::declareVar(const std::string& name, int name_tok) {
         throw CompileError{file_id_, name_tok,
             "Local '" + name + "' collides with a class of the same name in this scope."};
     }
-    if (!scope_stack_.empty()) {
+    if (!frame_stack_.empty()) {
         LocalInfo info;
         info.tok = name_tok;
-        auto [it, inserted] = scope_stack_.back().emplace(name, info);
+        auto [it, inserted] = frame_stack_.back().locals.emplace(name, info);
         if (!inserted) {
             throw CompileError{file_id_, name_tok,
                 "Local '" + name + "' is already declared in the same scope."}
@@ -368,47 +368,47 @@ static void rejectReserved(int file_id, int tok, const std::string& name, const 
 
 bool Parser::isInScope(const std::string& name) const {
     [[maybe_unused]] int t_start = pos_;
-    for (auto it = scope_stack_.rbegin(); it != scope_stack_.rend(); ++it)
-        if (it->count(name)) return true;
+    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it)
+        if (it->locals.count(name)) return true;
     return false;
 }
 
 Parser::LocalInfo* Parser::findLocal(const std::string& name) {
-    for (auto it = scope_stack_.rbegin(); it != scope_stack_.rend(); ++it) {
-        auto sit = it->find(name);
-        if (sit != it->end()) return &sit->second;
+    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
+        auto sit = it->locals.find(name);
+        if (sit != it->locals.end()) return &sit->second;
     }
     return nullptr;
 }
 
 int Parser::arrayCountInScope(const std::string& name) const {
-    for (auto it = scope_stack_.rbegin(); it != scope_stack_.rend(); ++it) {
-        auto sit = it->find(name);
-        if (sit != it->end()) return sit->second.is_array ? sit->second.array_count : 0;
+    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
+        auto sit = it->locals.find(name);
+        if (sit != it->locals.end()) return sit->second.is_array ? sit->second.array_count : 0;
     }
     return 0;
 }
 
 int Parser::arrayRankInScope(const std::string& name) const {
-    for (auto it = scope_stack_.rbegin(); it != scope_stack_.rend(); ++it) {
-        auto sit = it->find(name);
-        if (sit != it->end()) return sit->second.is_array ? sit->second.array_rank : 0;
+    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
+        auto sit = it->locals.find(name);
+        if (sit != it->locals.end()) return sit->second.is_array ? sit->second.array_rank : 0;
     }
     return 0;
 }
 
 int Parser::tupleSizeInScope(const std::string& name) const {
-    for (auto it = scope_stack_.rbegin(); it != scope_stack_.rend(); ++it) {
-        auto sit = it->find(name);
-        if (sit != it->end()) return sit->second.is_tuple ? sit->second.tuple_count : 0;
+    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
+        auto sit = it->locals.find(name);
+        if (sit != it->locals.end()) return sit->second.is_tuple ? sit->second.tuple_count : 0;
     }
     return 0;
 }
 
 std::string Parser::typeInScope(const std::string& name) const {
-    for (auto it = scope_stack_.rbegin(); it != scope_stack_.rend(); ++it) {
-        auto sit = it->find(name);
-        if (sit != it->end()) return sit->second.type;
+    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
+        auto sit = it->locals.find(name);
+        if (sit != it->locals.end()) return sit->second.type;
     }
     return "";
 }
@@ -1839,7 +1839,6 @@ std::unique_ptr<Expr> Parser::parseExpr() {
 
 void Parser::pushFrame() {
     frame_stack_.emplace_back();
-    scope_stack_.push_back({});
     alias_stack_.push_back({});
     alias_template_stack_.push_back({});
     local_class_stack_.push_back({});
@@ -1851,7 +1850,6 @@ void Parser::popFrame() {
     local_class_stack_.pop_back();
     alias_template_stack_.pop_back();
     alias_stack_.pop_back();
-    scope_stack_.pop_back();
     frame_stack_.pop_back();
 }
 
@@ -2231,8 +2229,8 @@ void Parser::collectLocalClass(SlidDef slid, const std::string& short_name,
     // var-vs-class collision — a local var of this name was declared earlier
     // in the same block. (declareVar catches the reverse order against the
     // pre-scan registration.)
-    if (!scope_stack_.empty()
-        && scope_stack_.back().count(short_name)) {
+    if (!frame_stack_.empty()
+        && frame_stack_.back().locals.count(short_name)) {
         errorAt(name_tok, "'" + short_name
             + "' is already declared in this scope.");
     }
@@ -2528,7 +2526,11 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
 
                 // for-scope: covers the desugared init/cond/update + body.
                 // Loop var, synthesized helpers, and body locals all unwind here.
-                scope_stack_.push_back({});
+                // pushFrame is symmetric across all lanes; for-scope syntax has
+                // no place for alias/local-class/nested-fn declarations so the
+                // other lanes stay empty and pushFrame is behavior-equivalent
+                // to the old scope-only push.
+                pushFrame();
 
                 int t_var_tok = pos_;
                 std::string for_var_type, for_var_name;
@@ -2623,7 +2625,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                     }
                 };
                 auto _popScope = [&] {
-                    scope_stack_.pop_back();
+                    popFrame();
                 };
                 // Ref form: loop var is pointer-typed (Class^ or Class[]).
                 // Switches the desugar to alias-into-source instead of copy.
@@ -3011,7 +3013,9 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
             auto stmt = make<ForLongStmt>(t_start);
             // for-scope: covers init, cond, update, body. push a parser scope frame
             // so init-tuple decls are visible in cond/update/body and don't leak out.
-            scope_stack_.push_back({});
+            // pushFrame is symmetric across all lanes; for-scope syntax has no place
+            // for alias/local-class/nested-fn decls so other lanes stay empty.
+            pushFrame();
 
             // init tuple: comma-separated slots; each is empty / `type name = expr`
             // / `name = expr` (decl-or-assign disambiguated by current scope).
@@ -3077,7 +3081,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
                 stmt->block_label = "for";
             }
 
-            scope_stack_.pop_back();
+            popFrame();
             return stmt;
         }
         errorHere("Expected '(' after 'for'.");

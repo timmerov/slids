@@ -1064,7 +1064,6 @@ private:
         int  tuple_count = 0;   // anon-tuple element count
         std::string type;       // declared type ("" when not tracked / inferred)
     };
-    std::vector<std::map<std::string, LocalInfo>> scope_stack_;
     void declareVar(const std::string& name, int name_tok);
     bool isInScope(const std::string& name) const;
     int arrayCountInScope(const std::string& name) const; // 0 if not a fixed-size array local
@@ -1175,7 +1174,7 @@ private:
 
     // Per-block short-name → canonical-name map for local classes. Innermost
     // frame is the current block; pushed/popped by parseBlock alongside
-    // scope_stack_. parseTypeName resolves a bare type name's base component
+    // frame_stack_. parseTypeName resolves a bare type name's base component
     // through this (without finalizing — colon suffixes still apply).
     std::vector<std::map<std::string, std::string>> local_class_stack_;
     std::string lookupLocalClass(const std::string& name) const;
@@ -1236,8 +1235,8 @@ private:
     const AliasTemplateInfo* lookupAliasTemplate(const std::string& name) const;
 
     // Unified per-block scope frame — destination of the 5 legacy stacks
-    // above (scope_stack_, alias_stack_, alias_template_stack_,
-    // local_class_stack_, nested_func_stack_). Phase-1 step 1:
+    // above (locals already migrated; alias_stack_, alias_template_stack_,
+    // local_class_stack_, nested_func_stack_ remaining). Phase-1 step 1:
     // pushFrame/popFrame keep the legacy stacks lockstep-synchronized at
     // the symmetric site (parseBlock); readers still consult the legacy
     // stacks. Subsequent commits migrate one lane at a time, deleting
