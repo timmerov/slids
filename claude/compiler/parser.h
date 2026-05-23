@@ -1235,6 +1235,27 @@ private:
                               int name_tok);
     const AliasTemplateInfo* lookupAliasTemplate(const std::string& name) const;
 
+    // Unified per-block scope frame — destination of the 5 legacy stacks
+    // above (scope_stack_, alias_stack_, alias_template_stack_,
+    // local_class_stack_, nested_func_stack_). Phase-1 step 1:
+    // pushFrame/popFrame keep the legacy stacks lockstep-synchronized at
+    // the symmetric site (parseBlock); readers still consult the legacy
+    // stacks. Subsequent commits migrate one lane at a time, deleting
+    // each legacy stack as its readers move to frame_stack_.back().<lane>.
+    // 5 asymmetric push/pop sites (for-loops, class body, external method)
+    // continue to push only their own legacy stack(s) for now — they will
+    // be addressed during lane migration.
+    struct Frame {
+        std::map<std::string, LocalInfo> locals;
+        std::map<std::string, AliasInfo> aliases;
+        std::map<std::string, AliasTemplateInfo> alias_templates;
+        std::map<std::string, std::string> local_classes;
+        std::map<std::string, std::string> nested_funcs;
+    };
+    std::vector<Frame> frame_stack_{1};
+    void pushFrame();
+    void popFrame();
+
     // Pass `program` from file-scope callers so file-scope aliases also flow
     // into Program (cross-TU propagation through .slh imports). Block-scope
     // callers pass nullptr. Class-scope callers pass `slid` so the alias is

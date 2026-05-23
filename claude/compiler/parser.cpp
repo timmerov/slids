@@ -1837,14 +1837,28 @@ std::unique_ptr<Expr> Parser::parseExpr() {
 
 // --- Statement parsing ---
 
-std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclare) {
-    [[maybe_unused]] int t_start = pos_;
-    expect(TokenType::kLBrace, "Expected '{'");
+void Parser::pushFrame() {
+    frame_stack_.emplace_back();
     scope_stack_.push_back({});
     alias_stack_.push_back({});
     alias_template_stack_.push_back({});
     local_class_stack_.push_back({});
     nested_func_stack_.push_back({});
+}
+
+void Parser::popFrame() {
+    nested_func_stack_.pop_back();
+    local_class_stack_.pop_back();
+    alias_template_stack_.pop_back();
+    alias_stack_.pop_back();
+    scope_stack_.pop_back();
+    frame_stack_.pop_back();
+}
+
+std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclare) {
+    [[maybe_unused]] int t_start = pos_;
+    expect(TokenType::kLBrace, "Expected '{'");
+    pushFrame();
     // Pre-scan this block for forward-decl-needed declarations at its top
     // level — local classes AND nested functions — and register each
     // short→canonical mapping in the matching stack's top frame before
@@ -1881,11 +1895,7 @@ std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclar
             }
         }
     }
-    scope_stack_.pop_back();
-    alias_stack_.pop_back();
-    alias_template_stack_.pop_back();
-    local_class_stack_.pop_back();
-    nested_func_stack_.pop_back();
+    popFrame();
     expect(TokenType::kRBrace, "Expected '}'");
     return block;
 }
