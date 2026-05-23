@@ -176,11 +176,12 @@ void Parser::appendAliasEntry(int frame_id,
                               const std::string& name,
                               const std::string& body,
                               std::vector<std::string> type_params,
-                              int tok) {
+                              int tok,
+                              int file_id) {
     auto entry = std::make_unique<AliasEntry>();
     entry->base_name = name;
     entry->tok = tok;
-    entry->file_id = file_id_;
+    entry->file_id = (file_id < 0) ? file_id_ : file_id;
     entry->entry_kind = EntryKind::Alias;
     entry->enclosing_frame_id = frame_id;
     entry->body = body;
@@ -272,12 +273,16 @@ const Parser::AliasEntry* Parser::lookupAliasTemplate(
 void Parser::seedAliasesFrom(const std::vector<TypeAliasDef>& tas,
                              const std::vector<TypeAliasTemplate>& tats) {
     int fs_id = frame_ids_.front().first;
-    for (auto& ta : tas)
-        if (!findAliasInFrame(fs_id, ta.name))
-            appendAliasEntry(fs_id, ta.name, ta.body, {}, ta.tok);
-    for (auto& tat : tats)
-        if (!findAliasInFrame(fs_id, tat.name))
-            appendAliasEntry(fs_id, tat.name, tat.body, tat.type_params, tat.tok);
+    for (auto& ta : tas) {
+        if (findAliasInFrame(fs_id, ta.name)) continue;
+        appendAliasEntry(fs_id, ta.name, ta.body, {}, ta.tok);
+        static_cast<AliasEntry*>(master_list_.back().get())->is_seed = true;
+    }
+    for (auto& tat : tats) {
+        if (findAliasInFrame(fs_id, tat.name)) continue;
+        appendAliasEntry(fs_id, tat.name, tat.body, tat.type_params, tat.tok);
+        static_cast<AliasEntry*>(master_list_.back().get())->is_seed = true;
+    }
 }
 
 const Parser::LocalClassEntry* Parser::findLocalClassInFrame(
@@ -361,6 +366,22 @@ const Parser::EnumEntry* Parser::lookupEnum(const std::string& name) const {
     return nullptr;
 }
 
+void Parser::emitAliasesIntoProgram(Program& program) const {
+    int fs_id = frame_ids_.front().first;
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::Alias) continue;
+        if (entry->enclosing_frame_id != fs_id) continue;
+        auto* ae = static_cast<const AliasEntry*>(entry.get());
+        if (ae->is_seed) continue;
+        if (ae->type_params.empty())
+            program.type_aliases.push_back({ae->base_name, ae->body,
+                                            ae->file_id, ae->tok});
+        else
+            program.type_alias_templates.push_back({ae->base_name, ae->type_params,
+                                                     ae->body, ae->file_id, ae->tok});
+    }
+}
+
 void Parser::appendEnumEntry(const std::string& name, int value_count, int tok) {
     auto entry = std::make_unique<EnumEntry>();
     entry->base_name = name;
@@ -400,18 +421,18 @@ void Parser::parseAliasDecl(Program* program, SlidDef* slid) {
         expect(TokenType::kEquals, "Expected '=' after alias template parameters");
         std::string body = parseTypeName();
         expect(TokenType::kSemicolon, "Expected ';' after alias declaration");
-        // File-scope callers also publish to Program for cross-TU propagation.
-        if (program)
-            program->type_alias_templates.push_back(
-                {name, type_params, body, file_id_, name_tok});
+        // File-scope publication into Program now happens via
+        // emitAliasesIntoProgram at end of parse(). The `program` arg is
+        // accepted but unused for type aliases (kept for symmetry with the
+        // SlidDef path below — class-scope aliases still publish directly).
+        (void)program;
         declareAliasTemplate(name, std::move(type_params), body, name_tok);
         return;
     }
     expect(TokenType::kEquals, "Expected '=' after alias name");
     std::string resolved = parseTypeName();
     expect(TokenType::kSemicolon, "Expected ';' after alias declaration");
-    if (program)
-        program->type_aliases.push_back({name, resolved, file_id_, name_tok});
+    (void)program;  // see comment above; program.type_aliases now emitted at end of parse().
     if (slid)
         slid->aliases.push_back({name, resolved, file_id_, name_tok});
     declareAlias(name, resolved, name_tok);
@@ -5308,16 +5329,13 @@ Program Parser::parse() {
             // resolves the alias names directly in subsequent decls.
             {
                 int fs_id = frame_ids_.front().first;
-                for (auto& ta : hdr.type_aliases) {
-                    if (!findAliasInFrame(fs_id, ta.name))
-                        appendAliasEntry(fs_id, ta.name, ta.body, {}, ta.tok);
-                    program.type_aliases.push_back(ta);
-                }
-                for (auto& tat : hdr.type_alias_templates) {
-                    if (!findAliasInFrame(fs_id, tat.name))
-                        appendAliasEntry(fs_id, tat.name, tat.body, tat.type_params, tat.tok);
-                    program.type_alias_templates.push_back(tat);
-                }
+                for (auto& ta : hdr.type_aliases)
+                    appendAliasEntry(fs_id, ta.name, ta.body, {}, ta.tok, ta.file_id);
+                for (auto& tat : hdr.type_alias_templates)
+                    appendAliasEntry(fs_id, tat.name, tat.body, tat.type_params,
+                                     tat.tok, tat.file_id);
+                // program.type_aliases / .type_alias_templates emitted by
+                // emitAliasesIntoProgram at end of parse() from master_list_.
             }
             // Everything else the consumer can refer to that was declared in
             // the .slh — enums, file-scope consts, external-method decls,
@@ -5445,16 +5463,14 @@ Program Parser::parse() {
                     // and forward to Program.
                     {
                         int fs_id = frame_ids_.front().first;
-                        for (auto& ta : impl_prog.type_aliases) {
-                            if (!findAliasInFrame(fs_id, ta.name))
-                                appendAliasEntry(fs_id, ta.name, ta.body, {}, ta.tok);
-                            program.type_aliases.push_back(ta);
-                        }
-                        for (auto& tat : impl_prog.type_alias_templates) {
-                            if (!findAliasInFrame(fs_id, tat.name))
-                                appendAliasEntry(fs_id, tat.name, tat.body, tat.type_params, tat.tok);
-                            program.type_alias_templates.push_back(tat);
-                        }
+                        for (auto& ta : impl_prog.type_aliases)
+                            appendAliasEntry(fs_id, ta.name, ta.body, {}, ta.tok, ta.file_id);
+                        for (auto& tat : impl_prog.type_alias_templates)
+                            appendAliasEntry(fs_id, tat.name, tat.body, tat.type_params,
+                                             tat.tok, tat.file_id);
+                        // program.type_aliases / .type_alias_templates
+                        // emitted by emitAliasesIntoProgram at end of parse()
+                        // from master_list_.
                     }
                     // (b) the remaining declarations carried via impl_prog's
                     // transitive .slh imports — enums, file-scope consts,
@@ -5982,6 +5998,7 @@ Program Parser::parse() {
         }
     }
 
+    emitAliasesIntoProgram(program);
     return program;
 }
 

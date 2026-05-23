@@ -1248,9 +1248,13 @@ private:
     };
 
     // Plain alias when type_params is empty; template alias otherwise.
+    // is_seed marks entries added by seedAliasesFrom — they exist for
+    // resolution during an impl_parser's parse but don't belong to that
+    // parser's Program (the consumer's parser already published them).
     struct AliasEntry : FrameBase {
         std::string body;
         std::vector<std::string> type_params;
+        bool is_seed = false;
     };
 
     // base_name = short name, canonical = full canonical (func-path-prefixed).
@@ -1291,11 +1295,15 @@ private:
     // frame_id without checking for duplicates (caller decides policy).
     const AliasEntry* findAliasInFrame(int frame_id,
                                        const std::string& name) const;
+    // file_id < 0 → use the parser's current file_id_. Callers crossing TU
+    // boundaries (e.g. .slh import arms) pass the source header's file_id
+    // explicitly so the entry preserves origin for diagnostics and dump.
     void appendAliasEntry(int frame_id,
                           const std::string& name,
                           const std::string& body,
                           std::vector<std::string> type_params,
-                          int tok);
+                          int tok,
+                          int file_id = -1);
 
     // LocalClass-entry helpers. Same frame-scoped semantics as the alias
     // pair. findLocalClassInFrame returns the entry if one exists at the
@@ -1321,6 +1329,13 @@ private:
     // for the forward-decl-then-fill flow in .slh class bodies).
     const EnumEntry* lookupEnum(const std::string& name) const;
     void appendEnumEntry(const std::string& name, int value_count, int tok);
+
+    // Stage E sub-step 3 — translator. Walks master_list_ filtered by
+    // file-scope + Alias kind, emits TypeAliasDef / TypeAliasTemplate into
+    // program.type_aliases / program.type_alias_templates. Skips seeded
+    // entries (impl_parser borrows for resolution, not Program). Sole
+    // producer of those Program fields; called at end of parse().
+    void emitAliasesIntoProgram(Program& program) const;
 
     // Pass `program` from file-scope callers so file-scope aliases also flow
     // into Program (cross-TU propagation through .slh imports). Block-scope
