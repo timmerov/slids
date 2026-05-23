@@ -1247,7 +1247,7 @@ private:
         std::map<std::string, std::string> nested_funcs;
     };
     std::vector<Frame> frame_stack_{1};
-    void pushFrame();
+    Frame& pushFrame();
     void popFrame();
 
     // Pass `program` from file-scope callers so file-scope aliases also flow

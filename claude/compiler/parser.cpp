@@ -1836,8 +1836,9 @@ std::unique_ptr<Expr> Parser::parseExpr() {
 
 // --- Statement parsing ---
 
-void Parser::pushFrame() {
+Parser::Frame& Parser::pushFrame() {
     frame_stack_.emplace_back();
+    return frame_stack_.back();
 }
 
 void Parser::popFrame() {
@@ -4023,7 +4024,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     // the body's methods (nested below this frame) and popped at the close.
     // The frame's locals/local_classes/nested_funcs lanes stay empty here
     // (class body has no syntax for them; method bodies push their own frames).
-    frame_stack_.emplace_back();
+    auto& body_frame = pushFrame();
     // Phase 1: seed this frame with class-scope aliases from prior occurrences
     // of the same class (reopens) AND the base chain so derived classes see
     // their bases' aliases as bare names (inheritance). Walk base-first to
@@ -4043,7 +4044,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             auto cit = class_aliases_.find(*it);
             if (cit != class_aliases_.end())
                 for (auto& kv : cit->second)
-                    frame_stack_.back().aliases[kv.first] = kv.second;
+                    body_frame.aliases[kv.first] = kv.second;
         }
     }
 
@@ -4333,7 +4334,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
 
     if (has_ctor_code)
         slid.ctor_body = std::move(ctor_body);
-    frame_stack_.pop_back();
+    popFrame();
 
     int close_tok = pos_;
     expect(TokenType::kRBrace, "Expected '}'");
@@ -4740,8 +4741,7 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
                 }
             }
         }
-        frame_stack_.emplace_back();
-        frame_stack_.back().aliases = std::move(em_frame);
+        pushFrame().aliases = std::move(em_frame);
         // Push target-class segments onto enclosing_class_names_ so type-name
         // lookups in the body can resolve qualified short names via the
         // chain walk (e.g. `CsH:intH` inside `void GsA:CsH:m_h4()` matches
@@ -4764,7 +4764,7 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
         }
         em.body = parseBlock(param_names);
         for (int i = 0; i < em_pushes; i++) enclosing_class_names_.pop_back();
-        frame_stack_.pop_back();
+        popFrame();
         current_function_name_ = saved_fn;
     }
     current_slid_fields_.clear();
