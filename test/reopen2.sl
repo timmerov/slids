@@ -534,17 +534,17 @@ void gs_func() {
     */
 
     /* negatives: nested-class with new fields after the class is already complete. */
-    //-EXPECT-ERROR: is already complete
+    //-EXPECT-ERROR-DEFERRED: is already complete
     //CsB(int b_ = 10) { }
-    //-EXPECT-ERROR: is already complete
+    //-EXPECT-ERROR-DEFERRED: is already complete
     //CsD(int d_ = 21) { }
-    //-EXPECT-ERROR: is already complete
+    //-EXPECT-ERROR-DEFERRED: is already complete
     //CsE(int e_ = 27) { }
-    //-EXPECT-ERROR: is already complete
+    //-EXPECT-ERROR-DEFERRED: is already complete
     //CsF(int f_ = 36) { }
-    //-EXPECT-ERROR: is already complete
+    //-EXPECT-ERROR-DEFERRED: is already complete
     //CsG(int g_ = 42) { }
-    //-EXPECT-ERROR: is already complete
+    //-EXPECT-ERROR-DEFERRED: is already complete
     //CsH(int h_ = 46) { }
 }
 

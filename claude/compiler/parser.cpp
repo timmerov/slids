@@ -158,7 +158,7 @@ int Parser::currentLine() {
 }
 
 void Parser::declareAlias(const std::string& name, const std::string& resolved, int name_tok) {
-    auto& frame = alias_stack_.back();
+    auto& frame = frame_stack_.back().aliases;
     auto it = frame.find(name);
     if (it != frame.end()) {
         // Class-body pre-scan registers aliases into the frame via the seed
@@ -181,9 +181,9 @@ void Parser::declareAlias(const std::string& name, const std::string& resolved, 
 }
 
 std::string Parser::lookupAlias(const std::string& name) const {
-    for (auto it = alias_stack_.rbegin(); it != alias_stack_.rend(); ++it) {
-        auto sit = it->find(name);
-        if (sit != it->end()) return sit->second.resolved;
+    for (auto it = frame_stack_.rbegin(); it != frame_stack_.rend(); ++it) {
+        auto sit = it->aliases.find(name);
+        if (sit != it->aliases.end()) return sit->second.resolved;
     }
     return "";
 }
@@ -234,11 +234,11 @@ const Parser::AliasTemplateInfo* Parser::lookupAliasTemplate(
 
 void Parser::seedAliasesFrom(const std::vector<TypeAliasDef>& tas,
                              const std::vector<TypeAliasTemplate>& tats) {
-    if (alias_stack_.empty()) alias_stack_.push_back({});
     if (alias_template_stack_.empty()) alias_template_stack_.push_back({});
+    auto& alias_frame = frame_stack_.front().aliases;
     for (auto& ta : tas)
-        if (!alias_stack_.front().count(ta.name))
-            alias_stack_.front()[ta.name] = AliasInfo{ta.body, ta.tok};
+        if (!alias_frame.count(ta.name))
+            alias_frame[ta.name] = AliasInfo{ta.body, ta.tok};
     for (auto& tat : tats)
         if (!alias_template_stack_.front().count(tat.name))
             alias_template_stack_.front()[tat.name] =
@@ -1839,7 +1839,6 @@ std::unique_ptr<Expr> Parser::parseExpr() {
 
 void Parser::pushFrame() {
     frame_stack_.emplace_back();
-    alias_stack_.push_back({});
     alias_template_stack_.push_back({});
     local_class_stack_.push_back({});
     nested_func_stack_.push_back({});
@@ -1849,7 +1848,6 @@ void Parser::popFrame() {
     nested_func_stack_.pop_back();
     local_class_stack_.pop_back();
     alias_template_stack_.pop_back();
-    alias_stack_.pop_back();
     frame_stack_.pop_back();
 }
 
@@ -3945,8 +3943,8 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         // aliases into class_aliases_ for the appropriate path, descending
         // into nested class bodies to lift forward-reference order across
         // sibling classes. parseTypeName is invoked during pre-scan for the
-        // alias RHS; simple primitive RHS works without alias_stack_ being
-        // pushed yet.
+        // alias RHS; simple primitive RHS works without the class-body
+        // aliases frame being pushed yet.
         std::function<void(const std::string&)> walk = [&](const std::string& path) {
             int depth = 0;
             while (pos_ < (int)tokens_.size() && peek().type != TokenType::kEof) {
@@ -4030,7 +4028,9 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
 
     // alias frame for the class body — an `alias` declared here is visible to
     // the body's methods (nested below this frame) and popped at the close.
-    alias_stack_.push_back({});
+    // The frame's locals/local_classes/nested_funcs lanes stay empty here
+    // (class body has no syntax for them; method bodies push their own frames).
+    frame_stack_.emplace_back();
     alias_template_stack_.push_back({});
     // Phase 1: seed this frame with class-scope aliases from prior occurrences
     // of the same class (reopens) AND the base chain so derived classes see
@@ -4051,7 +4051,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             auto cit = class_aliases_.find(*it);
             if (cit != class_aliases_.end())
                 for (auto& kv : cit->second)
-                    alias_stack_.back()[kv.first] = kv.second;
+                    frame_stack_.back().aliases[kv.first] = kv.second;
         }
     }
 
@@ -4341,7 +4341,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
 
     if (has_ctor_code)
         slid.ctor_body = std::move(ctor_body);
-    alias_stack_.pop_back();
+    frame_stack_.pop_back();
     alias_template_stack_.pop_back();
 
     int close_tok = pos_;
@@ -4749,7 +4749,8 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
                 }
             }
         }
-        alias_stack_.push_back(std::move(em_frame));
+        frame_stack_.emplace_back();
+        frame_stack_.back().aliases = std::move(em_frame);
         // Push target-class segments onto enclosing_class_names_ so type-name
         // lookups in the body can resolve qualified short names via the
         // chain walk (e.g. `CsH:intH` inside `void GsA:CsH:m_h4()` matches
@@ -4772,7 +4773,7 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
         }
         em.body = parseBlock(param_names);
         for (int i = 0; i < em_pushes; i++) enclosing_class_names_.pop_back();
-        alias_stack_.pop_back();
+        frame_stack_.pop_back();
         current_function_name_ = saved_fn;
     }
     current_slid_fields_.clear();
@@ -5153,9 +5154,8 @@ Program Parser::parse() {
             // also seed the consumer's file-scope frames so parseTypeName
             // resolves the alias names directly in subsequent decls.
             for (auto& ta : hdr.type_aliases) {
-                if (!alias_stack_.empty()
-                    && !alias_stack_.front().count(ta.name))
-                    alias_stack_.front()[ta.name] = AliasInfo{ta.body, ta.tok};
+                if (!frame_stack_.front().aliases.count(ta.name))
+                    frame_stack_.front().aliases[ta.name] = AliasInfo{ta.body, ta.tok};
                 program.type_aliases.push_back(ta);
             }
             for (auto& tat : hdr.type_alias_templates) {
@@ -5290,9 +5290,8 @@ Program Parser::parse() {
                     // header arm above — seed consumer's file-scope frame
                     // and forward to Program.
                     for (auto& ta : impl_prog.type_aliases) {
-                        if (!alias_stack_.empty()
-                            && !alias_stack_.front().count(ta.name))
-                            alias_stack_.front()[ta.name] =
+                        if (!frame_stack_.front().aliases.count(ta.name))
+                            frame_stack_.front().aliases[ta.name] =
                                 AliasInfo{ta.body, ta.tok};
                         program.type_aliases.push_back(ta);
                     }

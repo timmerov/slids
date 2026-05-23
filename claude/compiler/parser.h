@@ -1194,12 +1194,11 @@ private:
     // already in canonical form (e.g. "int^", "Class.Hoisted", "Template__int")
     // and substituted by parseTypeName when a bare ident matches.
     struct AliasInfo { std::string resolved; int tok = 0; };
-    std::vector<std::map<std::string, AliasInfo>> alias_stack_{1};
     void declareAlias(const std::string& name, const std::string& resolved, int name_tok);
     std::string lookupAlias(const std::string& name) const;
 
     // Per-class alias registry for class-path-qualified type-name resolution
-    // (e.g. `GsA:intA`, `Outer:Inner:intX`). Populated alongside alias_stack_
+    // (e.g. `GsA:intA`, `Outer:Inner:intX`). Populated alongside frame_stack_'s aliases lane
     // when an alias declaration occurs inside a class body. Keyed by canonical
     // class name (dot form: "Outer.Inner") → alias-name → resolved type.
     std::map<std::string, std::map<std::string, AliasInfo>> class_aliases_;
@@ -1220,8 +1219,8 @@ private:
                                  const std::string& member) const;
 
     // Template type aliases (`alias Name<T,...> = TypeExpr;`). Same stacked-
-    // frames model as `alias_stack_`. The bottom frame is file scope; nested
-    // frames pushed/popped by parseBlock alongside the other scope stacks.
+    // frames model as the aliases lane in frame_stack_. The bottom frame is
+    // file scope; nested frames pushed/popped by parseBlock.
     struct AliasTemplateInfo {
         std::vector<std::string> type_params;
         std::string body;
@@ -1235,7 +1234,7 @@ private:
     const AliasTemplateInfo* lookupAliasTemplate(const std::string& name) const;
 
     // Unified per-block scope frame — destination of the 5 legacy stacks
-    // above (locals already migrated; alias_stack_, alias_template_stack_,
+    // above (locals + aliases already migrated; alias_template_stack_,
     // local_class_stack_, nested_func_stack_ remaining). Phase-1 step 1:
     // pushFrame/popFrame keep the legacy stacks lockstep-synchronized at
     // the symmetric site (parseBlock); readers still consult the legacy
