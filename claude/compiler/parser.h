@@ -1230,6 +1230,7 @@ private:
         LocalVar, Alias, LocalClass, NestedFunc, Enum, Class,
         ImportedHeader, UnnamedGlobal, FunctionAlias, Const,
         ExternalMethod, SlidModule, Global, Namespace, Function,
+        Instantiation, ClassDef,
     };
 
     struct FrameBase {
@@ -1309,11 +1310,17 @@ private:
     // fields (base_name/tok/file_id), the inner def holds the full
     // Program-side payload. Append helpers copy lookup keys into FrameBase
     // and move the def in; emit moves the def out into Program.
-    struct ConstEntry            : FrameBase { ConstDef          def; };
-    struct GlobalEntry           : FrameBase { GlobalDef         def; };
-    struct NamespaceEntry        : FrameBase { NamespaceDef      def; };
-    struct ExternalMethodEntry   : FrameBase { ExternalMethodDef def; };
-    struct FunctionEntry         : FrameBase { FunctionDef       def; };
+    struct ConstEntry            : FrameBase { ConstDef                     def; };
+    struct GlobalEntry           : FrameBase { GlobalDef                    def; };
+    struct NamespaceEntry        : FrameBase { NamespaceDef                 def; };
+    struct ExternalMethodEntry   : FrameBase { ExternalMethodDef            def; };
+    struct FunctionEntry         : FrameBase { FunctionDef                  def; };
+    struct InstantiationEntry    : FrameBase { Program::InstantiateRequest  def; };
+    // ClassDefEntry is the value-carrying entry for class declarations
+    // (corresponds to one entry in program.classes). Distinct from the
+    // existing ClassEntry, which is the lighter scope-opener marker used
+    // by stage C splice unification.
+    struct ClassDefEntry          : FrameBase { SlidDef                     def; };
 
     // base_name = slid (class) name, module = providing .slh module name.
     // Translator dedups on emit (first writer wins — matches today's
@@ -1396,6 +1403,8 @@ private:
     void emitGlobalsIntoProgram(Program& program);
     void emitNamespacesIntoProgram(Program& program);
     void emitFunctionsIntoProgram(Program& program);
+    void emitInstantiationsIntoProgram(Program& program);
+    void emitClassDefsIntoProgram(Program& program);
 
     // Append helpers for the new entry kinds. All add at file-scope frame.
     void appendImportedHeaderEntry(const std::string& path);
@@ -1412,6 +1421,9 @@ private:
     NamespaceEntry* appendNamespaceEntry(NamespaceDef def);
     NamespaceEntry* findNamespaceEntry(const std::string& name);
     void appendFunctionEntry(FunctionDef def);
+    void appendInstantiationEntry(Program::InstantiateRequest req);
+    void appendClassDefEntry(SlidDef def);
+    ClassDefEntry* findClassDefEntry(const std::string& name, bool is_template);
 
     // Pass `program` from file-scope callers so file-scope aliases also flow
     // into Program (cross-TU propagation through .slh imports). Block-scope

@@ -513,6 +513,55 @@ Parser::NamespaceEntry* Parser::appendNamespaceEntry(NamespaceDef def) {
     return raw;
 }
 
+void Parser::appendClassDefEntry(SlidDef def) {
+    auto entry = std::make_unique<ClassDefEntry>();
+    entry->base_name = def.name;
+    entry->tok = def.name_tok;
+    entry->file_id = def.name_file_id;
+    entry->entry_kind = EntryKind::ClassDef;
+    entry->enclosing_frame_id = frame_ids_.front().first;
+    entry->def = std::move(def);
+    frame_entries_.push_back(entry.get());
+    master_list_.push_back(std::move(entry));
+}
+
+Parser::ClassDefEntry* Parser::findClassDefEntry(const std::string& name,
+                                                  bool is_template) {
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::ClassDef) continue;
+        auto* cde = static_cast<ClassDefEntry*>(entry.get());
+        if (cde->def.name == name && !cde->def.type_params.empty() == is_template)
+            return cde;
+    }
+    return nullptr;
+}
+
+void Parser::emitClassDefsIntoProgram(Program& program) {
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::ClassDef) continue;
+        program.classes.push_back(std::move(static_cast<ClassDefEntry*>(entry.get())->def));
+    }
+}
+
+void Parser::appendInstantiationEntry(Program::InstantiateRequest req) {
+    auto entry = std::make_unique<InstantiationEntry>();
+    entry->base_name = req.func_name;
+    entry->entry_kind = EntryKind::Instantiation;
+    entry->enclosing_frame_id = frame_ids_.front().first;
+    entry->file_id = file_id_;
+    entry->def = std::move(req);
+    frame_entries_.push_back(entry.get());
+    master_list_.push_back(std::move(entry));
+}
+
+void Parser::emitInstantiationsIntoProgram(Program& program) {
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::Instantiation) continue;
+        program.instantiations.push_back(
+            std::move(static_cast<InstantiationEntry*>(entry.get())->def));
+    }
+}
+
 void Parser::appendFunctionEntry(FunctionDef def) {
     auto entry = std::make_unique<FunctionEntry>();
     entry->base_name = def.name;
@@ -5516,7 +5565,7 @@ Program Parser::parse() {
                                     (int)e.values.size(), e.tok);
                 appendSlidModuleEntry(slid.name, module);
                 recordSlidMethods(slid);
-                program.classes.push_back(std::move(slid));
+                appendClassDefEntry(std::move(slid));
             }
             // Imported globals: stamp the source module and fold into the
             // consumer's registry. Post-parse dedup drops any imported entry
@@ -5634,19 +5683,13 @@ Program Parser::parse() {
                         // (b) non-template slids forward as-is — they already
                         // carry their own impl_module / is_local from the
                         // transitive .slh that declared them.
-                        bool replaced = false;
-                        for (auto& prog_slid : program.classes) {
-                            if (prog_slid.name == impl_slid.name
-                                && !prog_slid.type_params.empty() == is_template) {
-                                recordSlidMethods(impl_slid);
-                                prog_slid = std::move(impl_slid);
-                                replaced = true;
-                                break;
-                            }
-                        }
-                        if (!replaced) {
+                        if (ClassDefEntry* existing =
+                                findClassDefEntry(impl_slid.name, is_template)) {
                             recordSlidMethods(impl_slid);
-                            program.classes.push_back(std::move(impl_slid));
+                            existing->def = std::move(impl_slid);
+                        } else {
+                            recordSlidMethods(impl_slid);
+                            appendClassDefEntry(std::move(impl_slid));
                         }
                     }
                     // (b) cross-TU slid → module mapping for the transitive
@@ -5750,7 +5793,7 @@ Program Parser::parse() {
             }
             expect(TokenType::kRParen, "Expected ')'");
             expect(TokenType::kSemicolon, "Expected ';'");
-            program.instantiations.push_back({name, std::move(type_args), std::move(param_types)});
+            appendInstantiationEntry({name, std::move(type_args), std::move(param_types)});
         }
         // slid class definition: bare identifier immediately followed by ( or <
         // (no return type prefix — that's what makes it a class, not a function)
@@ -5760,7 +5803,7 @@ Program Parser::parse() {
                 || tokens_[pos_ + 1].type == TokenType::kLt)) {
             SlidDef slid = parseSlidDef();
             recordSlidMethods(slid);
-            program.classes.push_back(std::move(slid));
+            appendClassDefEntry(std::move(slid));
         }
         // derived class definition: Base : Derived(...) where Base may be a
         // multi-segment colon-qualified path (e.g. `Outer:Bird : Eagle(...)`).
@@ -5772,7 +5815,7 @@ Program Parser::parse() {
             std::string base_name = consumeDerivedBasePrefix();
             SlidDef slid = parseSlidDef(base_name);
             recordSlidMethods(slid);
-            program.classes.push_back(std::move(slid));
+            appendClassDefEntry(std::move(slid));
         }
         // namespace block: `Name { ... }`  or shorthand `Name import { ... }`.
         // (Class reopens now require `()` — `Class() { ... }` — and route to
@@ -5866,7 +5909,7 @@ Program Parser::parse() {
         // classes nested inside them.
         for (auto& s : pending_slids_) {
             recordSlidMethods(s);
-            program.classes.push_back(std::move(s));
+            appendClassDefEntry(std::move(s));
         }
         pending_slids_.clear();
     }
@@ -5884,6 +5927,8 @@ Program Parser::parse() {
     emitGlobalsIntoProgram(program);
     emitNamespacesIntoProgram(program);
     emitFunctionsIntoProgram(program);
+    emitInstantiationsIntoProgram(program);
+    emitClassDefsIntoProgram(program);
 
     // hoist nested slid defs to top level. each nested slid is renamed
     // <Outer>.<Inner> so it's globally addressable. parent_name is taken by
