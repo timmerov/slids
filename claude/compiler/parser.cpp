@@ -238,9 +238,9 @@ std::string Parser::lookupClassAlias(const std::string& class_path,
             auto mit = cit->second.find(member);
             if (mit != cit->second.end()) return mit->second.resolved;
         }
-        auto bit = class_base_name_.find(cur);
-        if (bit == class_base_name_.end() || bit->second.empty()) break;
-        cur = bit->second;
+        std::string nxt = lookupClassBase(cur);
+        if (nxt.empty()) break;
+        cur = nxt;
     }
     return "";
 }
@@ -512,6 +512,17 @@ Parser::NamespaceEntry* Parser::appendNamespaceEntry(NamespaceDef def) {
     frame_entries_.push_back(raw);
     master_list_.push_back(std::move(entry));
     return raw;
+}
+
+std::string Parser::lookupClassBase(const std::string& class_name) const {
+    // Walk master_list_ for ClassEntries matching this canonical class name;
+    // any match returns its base (reopens share the same base by construction).
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::Class) continue;
+        if (entry->base_name != class_name) continue;
+        return static_cast<const ClassEntry*>(entry.get())->base_class_name;
+    }
+    return "";
 }
 
 void Parser::appendClassDefEntry(SlidDef def) {
@@ -4171,11 +4182,24 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     // RAII guard below pops on any exit path (return or throw), keeping the
     // stack consistent if a deeper parser error unwinds through us.
     enclosing_class_names_.push_back({slid.name, slid.name_file_id, slid.name_tok});
-    // Phase 4: record canonical class → base mapping so lookupClassAlias can
-    // walk the inheritance chain. base_name may still be short for forward-
-    // referenced file-scope bases; the post-merge fixup canonicalizes those.
-    if (!slid.base_name.empty())
-        class_base_name_[enclosingClassPath()] = slid.base_name;
+    // ClassEntry scope-opener — lives in the enclosing frame. base_name is
+    // the full dot-form canonical path (matches today's class_base_name_
+    // keying so chain walks via lookupClassBase resolve unambiguously even
+    // for nested classes). own_frame_id pre-allocates next_frame_id_ for
+    // the upcoming pushFrame; nothing between here and the pushFrame for
+    // the class body calls pushFrame, so the reserved id is preserved.
+    {
+        auto entry = std::make_unique<ClassEntry>();
+        entry->base_name = enclosingClassPath();
+        entry->tok = slid.name_tok;
+        entry->file_id = slid.name_file_id;
+        entry->entry_kind = EntryKind::Class;
+        entry->enclosing_frame_id = frame_ids_.back().first;
+        entry->own_frame_id = next_frame_id_;
+        entry->base_class_name = slid.base_name;
+        frame_entries_.push_back(entry.get());
+        master_list_.push_back(std::move(entry));
+    }
     struct StackGuard {
         std::vector<EnclosingClass>& stack;
         ~StackGuard() { stack.pop_back(); }
@@ -4444,21 +4468,9 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
 
     // Frame for the class body — aliases/methods/etc declared here are
     // visible to nested method frames and popped at the close. The
-    // ClassEntry scope-opener is appended to the enclosing frame just
-    // before pushFrame, with own_frame_id pre-assigned to the soon-to-be
-    // class-body id; stage C splice unification consumes the entry.
-    {
-        int class_body_id = next_frame_id_;
-        auto entry = std::make_unique<ClassEntry>();
-        entry->base_name = slid.name;
-        entry->tok = slid.name_tok;
-        entry->file_id = slid.name_file_id;
-        entry->entry_kind = EntryKind::Class;
-        entry->enclosing_frame_id = frame_ids_.back().first;
-        entry->own_frame_id = class_body_id;
-        frame_entries_.push_back(entry.get());
-        master_list_.push_back(std::move(entry));
-    }
+    // ClassEntry scope-opener was appended earlier (right after the
+    // enclosing-class push) so pre-scan walkers see this class in chain
+    // lookups.
     pushFrame(FrameKind::Class);
     int body_frame_id = frame_ids_.back().first;
 
@@ -4473,9 +4485,9 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         std::string cur = root;
         while (!cur.empty()) {
             chain.push_back(cur);
-            auto bit = class_base_name_.find(cur);
-            if (bit == class_base_name_.end() || bit->second.empty()) break;
-            cur = bit->second;
+            std::string nxt = lookupClassBase(cur);
+            if (nxt.empty()) break;
+            cur = nxt;
         }
         // Ancestors-first → own-last so own shadows ancestors at rbegin
         // lookup time. For each class in the chain, find every ClassEntry
@@ -4504,9 +4516,9 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         std::string cur = root;
         while (!cur.empty()) {
             base_chain.push_back(cur);
-            auto bit = class_base_name_.find(cur);
-            if (bit == class_base_name_.end() || bit->second.empty()) break;
-            cur = bit->second;
+            std::string nxt = lookupClassBase(cur);
+            if (nxt.empty()) break;
+            cur = nxt;
         }
         // base first → own last so own aliases shadow base aliases (rbegin
         // walk of frame_entries_ at lookup time returns last-appended first).
@@ -5200,9 +5212,9 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
                 std::string cur = *it;
                 while (!cur.empty()) {
                     chain.push_back(cur);
-                    auto bit = class_base_name_.find(cur);
-                    if (bit == class_base_name_.end() || bit->second.empty()) break;
-                    cur = bit->second;
+                    std::string nxt = lookupClassBase(cur);
+                    if (nxt.empty()) break;
+                    cur = nxt;
                 }
                 for (auto cp = chain.rbegin(); cp != chain.rend(); ++cp) {
                     auto cit = class_aliases_.find(*cp);

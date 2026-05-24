@@ -1195,9 +1195,9 @@ private:
     // resolve a sibling-class short name from inside a nested class's method
     // body, where the immediate nested_alias_ frame has been cleared.
     std::vector<std::map<std::string, std::string>> outer_nested_aliases_;
-    // Canonical-class → canonical-base mapping for inheritance walks during
-    // class-path alias lookup. Populated during parseSlidDef.
-    std::map<std::string, std::string> class_base_name_;
+    // Canonical-class → canonical-base mapping migrated to
+    // ClassEntry.base_class_name (see lookupClassBase below).
+    std::string lookupClassBase(const std::string& class_name) const;
     // Resolve a path-qualified alias reference `<class-path>.<member>` (dot
     // form, post-canonicalization). Walks the class's own aliases first, then
     // its base chain via class_base_name_. Applies nested_alias_ to the
@@ -1288,8 +1288,12 @@ private:
     // frame; FrameBase::own_frame_id holds the class body's frame id, so
     // subsequent class-body entries (aliases, etc) point back at it via
     // their enclosing_frame_id. base_name = canonical dot-form class name.
-    // Stage C splice unification consumes this.
-    struct ClassEntry : FrameBase {};
+    // base_class_name = canonical name of this class's base (empty for
+    // non-derived). May still be a short name during parse; post-merge
+    // fixup canonicalizes. Stage C splice unification consumes this.
+    struct ClassEntry : FrameBase {
+        std::string base_class_name;
+    };
 
     // base_name = resolved header / impl path. Order in master_list_ is the
     // order in which paths were registered with Program; emit walks in
