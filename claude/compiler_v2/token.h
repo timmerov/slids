@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -70,7 +71,10 @@ enum class Kind {
     kColon, kColonColon,
     kLBracket, kRBracket,
 
-    kEof,
+    // terminals
+    kEndOfFile,    // per-file: wrapper emits at end of each file's contribution
+    kEndOfInput,   // global: lex emits once at the outermost return
+
     kUnknown,
     kError,
 };
@@ -78,15 +82,25 @@ enum class Kind {
 struct Token {
     Kind kind;
     std::string text;
+    int file_id;
     int line;
     int col;
     int length;
 };
 
+struct File {
+    std::string path;
+    std::string source;
+    std::vector<int> line_starts;
+    int imported_by;
+};
+
 struct List {
     std::vector<Token> tokens;
+    std::deque<File> files;     // deque for stable references — Stream holds a pointer to source
 };
 
 void add(List& list, Token const& tok);
+int openFile(List& list, std::string path, std::string source, int imported_by = -1);
 
 }  // namespace token

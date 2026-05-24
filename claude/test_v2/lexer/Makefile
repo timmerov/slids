@@ -1,90 +1,26 @@
-SLIDSC   = ../bin/slidsc
-LLC      = llc
-CXX      = g++
-LLCFLAGS = --filetype=obj --relocation-model=pic
+SLIDSC    = ../../bin/slidsc
 
-BIN_DIR   = ../bin
-BUILD_DIR = ../build/test
+BUILD_DIR = ../../build/test_v2/lexer
 
-SAMPLES = \
-	alias \
-	array \
-	blocks \
-	cast \
-	chain \
-	class \
-	comments \
-	const \
-	constructor \
-	for \
-	function1 \
-	function_pointers \
-	global1 \
-	global2 \
-	headerfields \
-	incomplete \
-	indexop \
-	inheritance \
-	initialization \
-	instantiate \
-	lexer \
-	logicops \
-	lvalues \
-	macros \
-	math1 \
-	misc \
-	move \
-	mutable \
-	namespace \
-	nested \
-	new_delete \
-	opdispatch \
-	operators \
-	parsing \
-	phrases \
-	pointer \
-	ranges \
-	reopen1 reopen2 \
-	returnslid \
-	sizeof \
-	strlitcat \
-	shadowing \
-	swap \
-	switch \
-	tuple \
-	type_conv \
-	type_infer \
-	virtual
+SAMPLES = importer
 
-.PHONY: all clean test update negatives $(SAMPLES)
+.PHONY: all clean $(SAMPLES)
 
 all: $(SAMPLES)
 
-test: all
-	@../run_tests.sh
-
-update: all
-	@../run_tests.sh --update
-
-negatives:
-	@./run_negatives.sh $(addsuffix .sl,$(SAMPLES))
-
 define SAMPLE_RULES
-$(1): $(BIN_DIR)/$(1)
+$(1): $(BUILD_DIR)/$(1).stamp
 
-$(BIN_DIR)/$(1): $(BUILD_DIR)/$(1)/$(1).o
-	$(CXX) $$< -o $$@
-
-$(BUILD_DIR)/$(1)/$(1).o: $(BUILD_DIR)/$(1)/$(1).ll
-	$(LLC) $(LLCFLAGS) $$< -o $$@
-
-$(BUILD_DIR)/$(1)/$(1).ll: $(1).sl $(SLIDSC)
-	mkdir -p $(BUILD_DIR)/$(1)
-	$(SLIDSC) $$< -o $$@
+$(BUILD_DIR)/$(1).stamp: $(1).sl $(SLIDSC)
+	mkdir -p $(BUILD_DIR)
+	$(SLIDSC) $$< -o $(BUILD_DIR)/$(1).ll
+	touch $$@
 endef
 
 $(foreach s,$(SAMPLES),$(eval $(call SAMPLE_RULES,$(s))))
 
+# Header dependencies — re-lex importer when its .slh changes
+$(BUILD_DIR)/importer.stamp: importee.slh
+
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f $(addprefix $(BIN_DIR)/, $(SAMPLES))

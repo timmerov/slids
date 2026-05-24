@@ -1,7 +1,7 @@
 #include <fstream>
 #include <iostream>
-#include <sstream>
 #include <string>
+#include <vector>
 
 #include "ast.h"
 #include "classify.h"
@@ -17,31 +17,28 @@
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::cerr << "usage: slidsc_v2 <source.sl> [-o <out.ll>]\n";
+        std::cerr << "usage: slidsc <source.sl> [-o <out.ll>] [-I <path>...]\n";
         return 1;
     }
 
     std::string in_path = argv[1];
     std::string out_path;
+    std::vector<std::string> import_paths;
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-o" && i + 1 < argc) {
             out_path = argv[++i];
+        } else if (arg == "-I" && i + 1 < argc) {
+            import_paths.push_back(argv[++i]);
         }
     }
-
-    std::ifstream f(in_path);
-    std::stringstream buf;
-    buf << f.rdbuf();
-    std::string source = buf.str();
 
     diagnostic::Sink diag;
     token::List tokens;
     parse::Tree parse_tree;
     ast::Tree ast_tree;
 
-    int file_id = 0;
-    lex::run(file_id, source, tokens, diag);
+    lex::run(in_path, import_paths, tokens, diag);
     grammar::run(tokens, parse_tree, diag);
     classify::run(parse_tree, diag);
     desugar::run(parse_tree, ast_tree, diag);
