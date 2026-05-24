@@ -461,6 +461,14 @@ void Parser::emitImportedHeadersIntoProgram(Program& program) const {
             program.imported_headers.push_back(entry->base_name);
 }
 
+std::vector<std::string> Parser::importedHeaders() const {
+    std::vector<std::string> out;
+    for (auto& entry : master_list_)
+        if (entry->entry_kind == EntryKind::ImportedHeader)
+            out.push_back(entry->base_name);
+    return out;
+}
+
 void Parser::emitUnnamedGlobalsIntoProgram(Program& program) const {
     for (auto& entry : master_list_) {
         if (entry->entry_kind != EntryKind::UnnamedGlobal) continue;

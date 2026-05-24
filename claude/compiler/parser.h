@@ -996,6 +996,12 @@ public:
            bool is_header = false);
     Program parse();
 
+    // Reads imported header paths directly from master_list_. Mirrors the
+    // contents of Program.imported_headers but bypasses the translator —
+    // post-phase-2 endpoint where consumers walk master_list_ for the
+    // datum they need rather than going through Program.
+    std::vector<std::string> importedHeaders() const;
+
     // Seed this parser's file-scope alias frames with type aliases parsed
     // elsewhere. Used by the .slh import arm to hand its `hdr`'s aliases to
     // the impl_parser before the impl-parse runs — impl_parser's own

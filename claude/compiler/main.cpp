@@ -336,7 +336,7 @@ int main(int argc, char* argv[]) {
             // build dep line: target: source.sl [header.slh ...]
             std::ostringstream dep;
             dep << output_path << ": " << input_path;
-            for (auto& h : program.imported_headers)
+            for (auto& h : parser.importedHeaders())
                 dep << " " << h;
             dep << "\n";
 
