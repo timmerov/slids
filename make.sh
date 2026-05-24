@@ -4,7 +4,7 @@ set -e
 OPTS="-j 8"
 
 echo "building slids compiler..."
-make ${OPTS} -C compiler/
+make ${OPTS} -C compiler_v2/
 
 echo "building bugs code..."
 make ${OPTS} -C bugs/
