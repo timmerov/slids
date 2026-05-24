@@ -1320,6 +1320,20 @@ private:
         std::unique_ptr<BlockStmt> ctor_body;
         std::unique_ptr<BlockStmt> explicit_ctor_body;
         std::unique_ptr<BlockStmt> dtor_body;
+        // POD metadata flags written piecemeal during parseSlidDef body
+        // parse; copied into slid at gather time. All have safe defaults.
+        bool has_leading_ellipsis = false;
+        bool has_trailing_ellipsis = false;
+        bool has_explicit_ctor_decl = false;
+        bool has_explicit_dtor_decl = false;
+        bool is_const_ctor = false;
+        bool is_const_dtor = false;
+        bool dtor_is_virtual = false;
+        bool is_transport_impl = false;
+        int explicit_ctor_file_id = 0;
+        int explicit_ctor_tok = 0;
+        int explicit_dtor_file_id = 0;
+        int explicit_dtor_tok = 0;
     };
 
     // base_name = resolved header / impl path. Order in master_list_ is the

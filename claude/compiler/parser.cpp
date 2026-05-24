@@ -4405,19 +4405,19 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             // in this TU. first occurrence ⇒ trailing-only (open incomplete);
             // subsequent ⇒ leading-only (closing reopen, no new fields).
             if (seen_classes_.count(slid.name))
-                slid.has_leading_ellipsis = true;
+                class_entry->has_leading_ellipsis = true;
             else
-                slid.has_trailing_ellipsis = true;
+                class_entry->has_trailing_ellipsis = true;
         } else {
-            slid.has_leading_ellipsis = true;
-            slid.is_transport_impl = true;  // emits __$pinit and __$sizeof for the consumer
+            class_entry->has_leading_ellipsis = true;
+            class_entry->is_transport_impl = true;  // emits __$pinit and __$sizeof for the consumer
         }
     }
 
     while (peek().type != TokenType::kRParen && peek().type != TokenType::kEof) {
         // trailing ellipsis?
         if (peek().type == TokenType::kEllipsis) {
-            slid.has_trailing_ellipsis = true;
+            class_entry->has_trailing_ellipsis = true;
             advance(); // consume ...
             if (peek().type == TokenType::kComma) advance();
             break; // ... must be last
@@ -4776,16 +4776,16 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
                 advance(); // consume _
                 expect(TokenType::kLParen, "Expected '('");
                 expect(TokenType::kRParen, "Expected ')'");
-                if (slid.has_explicit_ctor_decl) {
+                if (class_entry->has_explicit_ctor_decl) {
                     throw CompileError{file_id_, ctor_tok,
                         "Constructor is already defined in class '" + slid.name + "'."}
-                        .addNote(slid.explicit_ctor_file_id, slid.explicit_ctor_tok,
+                        .addNote(class_entry->explicit_ctor_file_id, class_entry->explicit_ctor_tok,
                                  "First defined here.");
                 }
-                slid.has_explicit_ctor_decl = true; // declared — consumer must call ctor
-                slid.explicit_ctor_file_id = file_id_;
-                slid.explicit_ctor_tok = ctor_tok;
-                if (probe_const_tok >= 0) slid.is_const_ctor = true;
+                class_entry->has_explicit_ctor_decl = true; // declared — consumer must call ctor
+                class_entry->explicit_ctor_file_id = file_id_;
+                class_entry->explicit_ctor_tok = ctor_tok;
+                if (probe_const_tok >= 0) class_entry->is_const_ctor = true;
                 if (peek().type == TokenType::kSemicolon) {
                     advance(); // forward declaration only
                 } else {
@@ -4817,17 +4817,17 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
                 advance(); // consume ~
                 expect(TokenType::kLParen, "Expected '('");
                 expect(TokenType::kRParen, "Expected ')'");
-                if (slid.has_explicit_dtor_decl) {
+                if (class_entry->has_explicit_dtor_decl) {
                     throw CompileError{file_id_, dtor_tok,
                         "Destructor is already defined in class '" + slid.name + "'."}
-                        .addNote(slid.explicit_dtor_file_id, slid.explicit_dtor_tok,
+                        .addNote(class_entry->explicit_dtor_file_id, class_entry->explicit_dtor_tok,
                                  "First defined here.");
                 }
-                slid.has_explicit_dtor_decl = true; // declared — consumer must call dtor
-                slid.explicit_dtor_file_id = file_id_;
-                slid.explicit_dtor_tok = dtor_tok;
-                if (probe_virtual) slid.dtor_is_virtual = true;
-                if (probe_const_tok >= 0) slid.is_const_dtor = true;
+                class_entry->has_explicit_dtor_decl = true; // declared — consumer must call dtor
+                class_entry->explicit_dtor_file_id = file_id_;
+                class_entry->explicit_dtor_tok = dtor_tok;
+                if (probe_virtual) class_entry->dtor_is_virtual = true;
+                if (probe_const_tok >= 0) class_entry->is_const_dtor = true;
                 if (peek().type == TokenType::kSemicolon) {
                     advance(); // forward declaration only
                 } else {
@@ -5058,6 +5058,21 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     slid.ctor_body = std::move(class_entry->ctor_body);
     slid.explicit_ctor_body = std::move(class_entry->explicit_ctor_body);
     slid.dtor_body = std::move(class_entry->dtor_body);
+
+    // POD metadata copied from class_entry. Codegen reads via SlidDef, so
+    // these need to land in slid before the eventual ClassDefEntry move.
+    slid.has_leading_ellipsis  = class_entry->has_leading_ellipsis;
+    slid.has_trailing_ellipsis = class_entry->has_trailing_ellipsis;
+    slid.has_explicit_ctor_decl = class_entry->has_explicit_ctor_decl;
+    slid.has_explicit_dtor_decl = class_entry->has_explicit_dtor_decl;
+    slid.is_const_ctor         = class_entry->is_const_ctor;
+    slid.is_const_dtor         = class_entry->is_const_dtor;
+    slid.dtor_is_virtual       = class_entry->dtor_is_virtual;
+    slid.is_transport_impl     = class_entry->is_transport_impl;
+    slid.explicit_ctor_file_id = class_entry->explicit_ctor_file_id;
+    slid.explicit_ctor_tok     = class_entry->explicit_ctor_tok;
+    slid.explicit_dtor_file_id = class_entry->explicit_dtor_file_id;
+    slid.explicit_dtor_tok     = class_entry->explicit_dtor_tok;
 
     popFrame();
 
