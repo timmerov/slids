@@ -34,7 +34,13 @@ if [ "${1:-}" = "--worker" ]; then
     IFS=$'\t' read -r key src substring body_start body_end <<< "$2"
     case_file="$NEG_TMPDIR/case_$key.sl"
     awk -v b="$body_start" -v e="$body_end" '
-        NR >= b && NR <= e { sub(/\/\//, "") }
+        NR >= b && NR <= e {
+            sub(/\/\//, "")
+            gsub(/\[/, "")
+            gsub(/\]/, "")
+            gsub(/\\\\/, "\\")
+            gsub(/\\n/, "\n")
+        }
         { print }
     ' "$src" > "$case_file"
     err=$("$SLIDSC" "$case_file" -o "$NEG_TMPDIR/case_$key.ll" -I . 2>&1)
@@ -99,6 +105,10 @@ for src in "$@"; do
         /EXPECT-ERROR:/ {
             flush_pending()
             sub(/.*EXPECT-ERROR:[[:space:]]*/, "", $0)
+            gsub(/\[/, "")
+            gsub(/\]/, "")
+            gsub(/\\\\/, "\\")
+            gsub(/\\n/, "\n")
             substring = $0
             marker_line = NR
             body_start = 0

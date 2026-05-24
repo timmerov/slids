@@ -56,6 +56,32 @@ void skipWhitespaceAndComments(Stream& s) {
     while (s.pos < (int)s.source->size()) {
         char c = peek(s);
         char d = peek2(s);
+
+        if (!in_line && depth == 0 && (c == '/' || c == '*')) {
+            int p = s.pos + 1;
+            if (p < (int)s.source->size() && (*s.source)[p] == '\\') {
+                int q = p + 1;
+                while (q < (int)s.source->size()
+                    && ((*s.source)[q] == ' ' || (*s.source)[q] == '\t' || (*s.source)[q] == '\r')) q++;
+                if (q < (int)s.source->size() && (*s.source)[q] == '\n') {
+                    int r = q + 1;
+                    while (r < (int)s.source->size()
+                        && ((*s.source)[r] == ' ' || (*s.source)[r] == '\t' || (*s.source)[r] == '\r')) r++;
+                    if (r < (int)s.source->size()) {
+                        char e = (*s.source)[r];
+                        bool match = (c == '/' && (e == '/' || e == '*'))
+                                  || (c == '*' && e == '/');
+                        if (match) {
+                            std::string pair = {c, e};
+                            setFatal(s, s.line, s.col + 1, 1,
+                                "escaped newline breaking comment token " + pair);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
         if (c == '/' && d == '/') {
             in_line = true;
             advance(s); advance(s);

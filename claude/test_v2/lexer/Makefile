@@ -24,8 +24,8 @@ endef
 
 $(foreach s,$(SAMPLES),$(eval $(call SAMPLE_RULES,$(s))))
 
-# Header dependencies — re-lex importer when its .slh changes
-$(BUILD_DIR)/importer.stamp: importee.slh
+# Header dependencies — re-lex importer when its .slh change
+$(BUILD_DIR)/importer.stamp: importee1.slh importee2.slh
 
 clean:
 	rm -rf $(BUILD_DIR)
