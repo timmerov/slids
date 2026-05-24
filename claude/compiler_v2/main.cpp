@@ -40,7 +40,8 @@ int main(int argc, char** argv) {
     parse::Tree parse_tree;
     ast::Tree ast_tree;
 
-    lex::run(source, tokens, diag);
+    int file_id = 0;
+    lex::run(file_id, source, tokens, diag);
     grammar::run(tokens, parse_tree, diag);
     classify::run(parse_tree, diag);
     desugar::run(parse_tree, ast_tree, diag);

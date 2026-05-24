@@ -7,6 +7,6 @@ namespace diagnostic { struct Sink; }
 
 namespace lex {
 
-void run(std::string const& source, token::List& out, diagnostic::Sink& diag);
+void run(int file_id, std::string const& source, token::List& out, diagnostic::Sink& diag);
 
 }  // namespace lex
