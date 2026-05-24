@@ -454,6 +454,18 @@ void Parser::appendFunctionAliasEntry(const std::string& name,
     master_list_.push_back(std::move(entry));
 }
 
+void Parser::appendFieldEntry(FieldDef def, int enclosing_id) {
+    auto entry = std::make_unique<FieldEntry>();
+    entry->base_name = def.name;
+    entry->tok = def.tok;
+    entry->file_id = def.file_id;
+    entry->entry_kind = EntryKind::Field;
+    entry->enclosing_frame_id = enclosing_id;
+    entry->def = std::move(def);
+    frame_entries_.push_back(entry.get());
+    master_list_.push_back(std::move(entry));
+}
+
 void Parser::appendConstEntry(ConstDef def, int enclosing_id) {
     auto entry = std::make_unique<ConstEntry>();
     entry->base_name = def.name;
@@ -4247,6 +4259,9 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     // RAII guard below pops on any exit path (return or throw), keeping the
     // stack consistent if a deeper parser error unwinds through us.
     enclosing_class_names_.push_back({slid.name, slid.name_file_id, slid.name_tok});
+    // Pre-reserve the body frame id so the ClassEntry and class-scope appends
+    // (field entries, etc.) can use it before the actual pushFrame runs.
+    int class_body_id = next_frame_id_;
     // ClassEntry scope-opener — lives in the enclosing frame. base_name is
     // the full dot-form canonical path (matches today's class_base_name_
     // keying so chain walks via lookupClassBase resolve unambiguously even
@@ -4286,7 +4301,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         entry->file_id = slid.name_file_id;
         entry->entry_kind = EntryKind::Class;
         entry->enclosing_frame_id = frame_ids_.back().first;
-        entry->own_frame_id = next_frame_id_;
+        entry->own_frame_id = class_body_id;
         entry->base_class_name = canonical_base;
         frame_entries_.push_back(entry.get());
         master_list_.push_back(std::move(entry));
@@ -4387,7 +4402,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
                 advance(); // consume '='
                 f.default_val = parseExpr();
             }
-            slid.fields.push_back(std::move(f));
+            appendFieldEntry(std::move(f), class_body_id);
             if (peek().type == TokenType::kComma) advance();
             continue;
         }
@@ -4410,7 +4425,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             advance();
             f.default_val = parseExpr();
         }
-        slid.fields.push_back(std::move(f));
+        appendFieldEntry(std::move(f), class_body_id);
         if (peek().type == TokenType::kComma) advance();
     }
     expect(TokenType::kRParen, "Expected ')'");
@@ -4452,8 +4467,16 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             for (auto& [fname, fref] : base_fields->second)
                 current_slid_fields_.emplace(fname, fref);
     }
-    for (auto& f : slid.fields)
-        current_slid_fields_.emplace(f.name, FieldRef{f.file_id, f.tok});
+    // Fields just parsed in this reopen's (field_list) header now live in
+    // master_list_ as FieldEntry with enclosing_frame_id == class_body_id.
+    // Walk for them to seed current_slid_fields_ before the body parses.
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::Field) continue;
+        if (entry->enclosing_frame_id != class_body_id) continue;
+        auto* fe = static_cast<const FieldEntry*>(entry.get());
+        current_slid_fields_.emplace(fe->def.name,
+            FieldRef{fe->def.file_id, fe->def.tok});
+    }
     all_slid_fields_[slid.name] = current_slid_fields_;
 
     // parse body: methods and definitions
@@ -4958,6 +4981,15 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         e.file_id = ee->file_id;
         e.tok = ee->tok;
         slid.nested_enums.push_back(std::move(e));
+    }
+
+    // Gather class-scope FieldEntries (parseSlidDef's header (field_list)
+    // appends them via appendFieldEntry with class_body_id). master_list_
+    // append-order preserves source order — critical for struct layout.
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::Field) continue;
+        if (entry->enclosing_frame_id != body_frame_id) continue;
+        slid.fields.push_back(std::move(static_cast<FieldEntry*>(entry.get())->def));
     }
 
     popFrame();
