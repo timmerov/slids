@@ -466,6 +466,18 @@ void Parser::appendFieldEntry(FieldDef def, int enclosing_id) {
     master_list_.push_back(std::move(entry));
 }
 
+void Parser::appendMethodEntry(MethodDef def, int enclosing_id) {
+    auto entry = std::make_unique<MethodEntry>();
+    entry->base_name = def.name;
+    entry->tok = def.tok;
+    entry->file_id = def.file_id;
+    entry->entry_kind = EntryKind::Method;
+    entry->enclosing_frame_id = enclosing_id;
+    entry->def = std::move(def);
+    frame_entries_.push_back(entry.get());
+    master_list_.push_back(std::move(entry));
+}
+
 void Parser::appendConstEntry(ConstDef def, int enclosing_id) {
     auto entry = std::make_unique<ConstEntry>();
     entry->base_name = def.name;
@@ -4934,7 +4946,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             if (method.name == slid.name) {
                 errorAt(method_tok, "Method '" + method.name + "' shares the name of its enclosing class.");
             }
-            slid.methods.push_back(std::move(method));
+            appendMethodEntry(std::move(method), class_body_id);
         } else {
             // A class body holds only definitions — methods, nested classes,
             // enums, aliases, constants. Executable statements belong in '_()'.
@@ -4990,6 +5002,13 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         if (entry->entry_kind != EntryKind::Field) continue;
         if (entry->enclosing_frame_id != body_frame_id) continue;
         slid.fields.push_back(std::move(static_cast<FieldEntry*>(entry.get())->def));
+    }
+
+    // Gather class-scope MethodEntries.
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::Method) continue;
+        if (entry->enclosing_frame_id != body_frame_id) continue;
+        slid.methods.push_back(std::move(static_cast<MethodEntry*>(entry.get())->def));
     }
 
     popFrame();

@@ -1239,7 +1239,7 @@ private:
         LocalVar, Alias, LocalClass, NestedFunc, Enum, Class,
         ImportedHeader, UnnamedGlobal, FunctionAlias, Const,
         ExternalMethod, SlidModule, Global, Namespace, Function,
-        Instantiation, ClassDef, Field,
+        Instantiation, ClassDef, Field, Method,
     };
 
     // Per-block scope. parseBlock calls pushFrame/popFrame at the symmetric
@@ -1334,6 +1334,7 @@ private:
     // and move the def in; emit moves the def out into Program.
     struct ConstEntry            : FrameBase { ConstDef                     def; };
     struct FieldEntry            : FrameBase { FieldDef                     def; };
+    struct MethodEntry           : FrameBase { MethodDef                    def; };
     struct GlobalEntry           : FrameBase { GlobalDef                    def; };
     struct NamespaceEntry        : FrameBase { NamespaceDef                 def; };
     struct ExternalMethodEntry   : FrameBase { ExternalMethodDef            def; };
@@ -1447,6 +1448,9 @@ private:
     // Class-body field decls — always class-scope; gather at parseSlidDef end
     // assembles slid.fields preserving source order via master_list_ order.
     void appendFieldEntry(FieldDef def, int enclosing_id);
+    // Class-body method decls — always class-scope; gather at parseSlidDef
+    // end assembles slid.methods preserving source order.
+    void appendMethodEntry(MethodDef def, int enclosing_id);
     void appendExternalMethodEntry(ExternalMethodDef def);
     void appendSlidModuleEntry(const std::string& slid_name,
                                 const std::string& module);
