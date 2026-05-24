@@ -1,5 +1,5 @@
 CXX      = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -MMD -MP
+CXXFLAGS = -std=c++17 -Wall -Wextra -Werror -Wswitch-enum -MMD -MP
 LDFLAGS  = -lstdc++fs
 
 BUILD_DIR = ../build/compiler_v2

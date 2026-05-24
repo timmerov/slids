@@ -1,5 +1,6 @@
 #include "lex.h"
 
+#include <cassert>
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
@@ -48,6 +49,22 @@ void setFatal(Stream& s, int line, int col, int len, std::string const& msg) {
 
 token::Token errorToken(Stream const& s) {
     return {token::Kind::kError, "", s.file_id, s.fatal_line, s.fatal_col, s.fatal_length};
+}
+
+char closeCharFor(token::Kind k) {
+    if (k == token::Kind::kRParen)   return ')';
+    if (k == token::Kind::kRBrace)   return '}';
+    if (k == token::Kind::kRBracket) return ']';
+    assert(false && "closeCharFor: not a close-bracket kind");
+    __builtin_unreachable();
+}
+
+char openCharFor(char close) {
+    if (close == ')') return '(';
+    if (close == '}') return '{';
+    if (close == ']') return '[';
+    assert(false && "openCharFor: not a close-bracket char");
+    __builtin_unreachable();
 }
 
 void skipWhitespaceAndComments(Stream& s) {
@@ -143,7 +160,10 @@ token::Token readCharLiteral(Stream& s) {
             case '0':  value = '\0'; break;
             case '\\': value = '\\'; break;
             case '\'': value = '\''; break;
-            default:   value = esc;  break;
+            default:
+                setFatal(s, s.line, s.col, 1,
+                    std::string("unknown escape sequence: '\\") + esc + "'");
+                return {token::Kind::kError, "", 0, 0, 0, 0};
         }
     } else {
         value = (unsigned char)advance(s);
@@ -164,8 +184,11 @@ token::Token readString(Stream& s) {
                 case 't':  value += '\t'; break;
                 case '\\': value += '\\'; break;
                 case '"':  value += '"';  break;
-                case '\n': break;
-                default:   value += esc;  break;
+                case '\n': break;   // intentional n/a: line continuation in string literal — consume \-newline, contribute nothing
+                default:
+                    setFatal(s, s.line, s.col, 1,
+                        std::string("unknown escape sequence: '\\") + esc + "'");
+                    return {token::Kind::kError, "", 0, 0, 0, 0};
             }
         } else {
             value += c;
@@ -435,8 +458,9 @@ token::Token next(Stream& s) {
                 else                {             t = {token::Kind::kHash,     "#",  0, 0, 0, 0}; }
                 break;
             default:
-                t = {token::Kind::kUnknown, std::string(1, c), 0, 0, 0, 0};
-                break;
+                setFatal(s, sl, sc, 1,
+                    std::string("unexpected character: '") + c + "'");
+                return errorToken(s);
         }
     }
 
@@ -499,8 +523,7 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
             }
             state = State::Normal;
             if (depth != 0) {
-                char close_char = brackets.back().first;
-                char open_char = (close_char == ')') ? '(' : (close_char == '}') ? '{' : '[';
+                char open_char = openCharFor(brackets.back().first);
                 reportAt(diag, file_id, brackets.back().second,
                     std::string("unterminated '") + open_char + "'");
                 fatal = true;
@@ -525,9 +548,7 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
                 else if (t.kind == token::Kind::kRParen
                       || t.kind == token::Kind::kRBrace
                       || t.kind == token::Kind::kRBracket) {
-                    char want = (t.kind == token::Kind::kRParen) ? ')'
-                              : (t.kind == token::Kind::kRBrace) ? '}'
-                              :                                    ']';
+                    char want = closeCharFor(t.kind);
                     if (brackets.empty()) {
                         int idx = addAndIndex(out, t);
                         reportAt(diag, file_id, idx, std::string("unmatched '") + want + "'");
@@ -537,9 +558,7 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
                     if (brackets.back().first != want) {
                         int idx = addAndIndex(out, t);
                         char close_char = brackets.back().first;
-                        char open_char = (close_char == ')') ? '('
-                                       : (close_char == '}') ? '{'
-                                       :                       '[';
+                        char open_char = openCharFor(close_char);
                         diagnostic::report(diag, {
                             file_id, idx,
                             std::string("mismatched bracket: expected '") + close_char

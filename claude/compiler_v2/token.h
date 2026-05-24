@@ -75,7 +75,6 @@ enum class Kind {
     kEndOfFile,    // per-file: wrapper emits at end of each file's contribution
     kEndOfInput,   // global: lex emits once at the outermost return
 
-    kUnknown,
     kError,
 };
 
