@@ -2789,10 +2789,17 @@ void Parser::collectLocalClass(SlidDef slid, const std::string& short_name,
     // it can't become a concrete slid until the template is instantiated.
     // Carry it with the enclosing template (drained by parseFunctionDef /
     // parseSlidDef). Outside a template, collect it as a concrete slid now.
-    if (in_template_)
-        pending_local_classes_.push_back(std::move(slid));
-    else
+    if (in_template_) {
+        // Route through master_list_ as a ClassDefEntry; enclosing_frame_id
+        // = current scope frame so emitClassDefsIntoProgram filters it out.
+        // The index is queued for the outer template's drain.
+        appendClassDefEntry(std::move(slid));
+        static_cast<ClassDefEntry*>(master_list_.back().get())
+            ->enclosing_frame_id = frame_ids_.back().first;
+        pending_local_classes_.push_back(master_list_.size() - 1);
+    } else {
         pending_slids_.push_back(std::move(slid));
+    }
 }
 
 std::unique_ptr<Stmt> Parser::parseStmt() {
@@ -5084,7 +5091,10 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     in_template_ = saved_tmpl;
     // Drain local classes collected from a template class's method bodies.
     if (!slid.type_params.empty()) {
-        slid.local_classes = std::move(pending_local_classes_);
+        for (std::size_t idx : pending_local_classes_) {
+            slid.local_classes.push_back(
+                std::move(static_cast<ClassDefEntry*>(master_list_[idx].get())->def));
+        }
         pending_local_classes_.clear();
     }
 
@@ -5654,7 +5664,10 @@ FunctionDef Parser::parseFunctionDef() {
         current_function_name_ = saved_fn;
         // Drain local classes collected from a template function body.
         if (!fn.type_params.empty()) {
-            fn.local_classes = std::move(pending_local_classes_);
+            for (std::size_t idx : pending_local_classes_) {
+                fn.local_classes.push_back(
+                    std::move(static_cast<ClassDefEntry*>(master_list_[idx].get())->def));
+            }
             pending_local_classes_.clear();
         }
     }

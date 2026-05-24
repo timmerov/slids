@@ -1166,7 +1166,11 @@ private:
     // they are collected into pending_local_classes_ and carried with the
     // enclosing template for per-instantiation materialization.
     bool in_template_ = false;
-    std::vector<SlidDef> pending_local_classes_;
+    // Queue of master_list_ indices for template-internal local classes.
+    // collectLocalClass (in_template_ path) appends a ClassDefEntry and
+    // pushes its index here; parseSlidDef / parseFunctionDef drains by
+    // moving each entry's .def into the target's local_classes vector.
+    std::vector<std::size_t> pending_local_classes_;
 
     // Per-block short-name → canonical-name map for local classes.
     // parseTypeName resolves a bare type name's base component through it
