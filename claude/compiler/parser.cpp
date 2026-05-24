@@ -124,6 +124,7 @@ Parser::Parser(SourceMap& sm, int file_id, std::vector<Token> tokens,
       is_header_(is_header) {
     int fs_id = next_frame_id_++;
     frame_ids_.emplace_back(fs_id, std::size_t{0});
+    frame_kinds_.push_back(FrameKind::Block);  // file scope acts as Block
 }
 
 // Ensure every diagnostic ends with terminal punctuation. Messages built
@@ -2242,15 +2243,25 @@ std::unique_ptr<Expr> Parser::parseExpr() {
 
 // --- Statement parsing ---
 
-void Parser::pushFrame() {
+void Parser::pushFrame(FrameKind kind) {
     int id = next_frame_id_++;
     frame_ids_.emplace_back(id, frame_entries_.size());
+    frame_kinds_.push_back(kind);
 }
 
 void Parser::popFrame() {
+    int own_id = frame_ids_.back().first;
     std::size_t entries_start = frame_ids_.back().second;
+    // Stage C: snapshot class-scope entries before truncating so a future
+    // reopen / derivation push can splice this scope's accumulated state.
+    if (frame_kinds_.back() == FrameKind::Class) {
+        reopen_cache_[own_id] = std::vector<FrameBase*>(
+            frame_entries_.begin() + entries_start,
+            frame_entries_.end());
+    }
     frame_entries_.resize(entries_start);
     frame_ids_.pop_back();
+    frame_kinds_.pop_back();
 }
 
 std::unique_ptr<BlockStmt> Parser::parseBlock(std::vector<std::string> predeclare) {
@@ -4448,8 +4459,41 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         frame_entries_.push_back(entry.get());
         master_list_.push_back(std::move(entry));
     }
-    pushFrame();
+    pushFrame(FrameKind::Class);
     int body_frame_id = frame_ids_.back().first;
+
+    // Stage C2: splice this class's prior-reopen entries and base-chain
+    // entries from reopen_cache_ into frame_entries_. Pointers, not copies
+    // — the spliced entries live in master_list_ owned by their original
+    // frames. Additive during C2; the legacy class_aliases_-driven seed
+    // loop below still runs (rbegin lookup tolerates the duplicates).
+    {
+        std::string root = enclosingClassPath();
+        std::vector<std::string> chain;
+        std::string cur = root;
+        while (!cur.empty()) {
+            chain.push_back(cur);
+            auto bit = class_base_name_.find(cur);
+            if (bit == class_base_name_.end() || bit->second.empty()) break;
+            cur = bit->second;
+        }
+        // Ancestors-first → own-last so own shadows ancestors at rbegin
+        // lookup time. For each class in the chain, find every ClassEntry
+        // with matching base_name (multiple iff the class was reopened);
+        // each prior ClassEntry's own_frame_id keys a reopen_cache_ slot.
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            for (auto& entry : master_list_) {
+                if (entry->entry_kind != EntryKind::Class) continue;
+                if (entry->base_name != *it) continue;
+                if (entry->own_frame_id == body_frame_id) continue;
+                auto cit = reopen_cache_.find(entry->own_frame_id);
+                if (cit == reopen_cache_.end()) continue;
+                for (FrameBase* e : cit->second)
+                    frame_entries_.push_back(e);
+            }
+        }
+    }
+
     // Phase 1: seed this frame with class-scope aliases from prior occurrences
     // of the same class (reopens) AND the base chain so derived classes see
     // their bases' aliases as bare names (inheritance). Walk base-first to
@@ -5209,6 +5253,7 @@ ExternalMethodDef Parser::parseExternalMethodDef() {
 // `import { … }` (sub-)block makes every `;`-declaration inside it a foreign
 // C function (is_foreign).
 void Parser::parseNamespace(Program& program) {
+    (void)program;  // namespace publication now goes through appendNamespaceEntry.
     int ns_tok = pos_;
     std::string ns_name = expect(TokenType::kIdentifier, "Expected namespace name").value;
     // a name cannot be both a class and a namespace.

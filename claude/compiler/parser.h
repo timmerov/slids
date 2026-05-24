@@ -1216,13 +1216,6 @@ private:
                               int name_tok);
     const AliasEntry* lookupAliasTemplate(const std::string& name) const;
 
-    // Per-block scope. parseBlock calls pushFrame/popFrame at the symmetric
-    // site; for-scope sites (short and long form) also use pushFrame;
-    // class-body and external-method sites push directly with their own
-    // seeding via appendAliasEntry et al.
-    void pushFrame();
-    void popFrame();
-
     // Phase-2 successor scaffolding. See project memory
     // project-frame-based-parser-rewrite.
     enum class FrameKind { Block, For, Class, Function };
@@ -1232,6 +1225,15 @@ private:
         ExternalMethod, SlidModule, Global, Namespace, Function,
         Instantiation, ClassDef,
     };
+
+    // Per-block scope. parseBlock calls pushFrame/popFrame at the symmetric
+    // site; for-scope sites (short and long form) also use pushFrame;
+    // class-body and external-method sites push directly with their own
+    // seeding via appendAliasEntry et al.
+    // FrameKind defaults to Block; class-body pushes pass Class so popFrame
+    // snapshots the scope's entries into reopen_cache_ for stage C splice.
+    void pushFrame(FrameKind kind = FrameKind::Block);
+    void popFrame();
 
     struct FrameBase {
         int enclosing_frame_id = -1;
@@ -1334,6 +1336,7 @@ private:
     // the legacy Frame above.
     std::vector<std::unique_ptr<FrameBase>> master_list_;
     std::vector<std::pair<int, std::size_t>> frame_ids_;   // (own_frame_id, entries_start)
+    std::vector<FrameKind> frame_kinds_;                   // parallel to frame_ids_
     std::vector<FrameBase*> frame_entries_;
     std::map<int, std::vector<FrameBase*>> reopen_cache_;  // keyed by own_frame_id
     int next_frame_id_ = 0;
