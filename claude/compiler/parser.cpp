@@ -639,8 +639,10 @@ Parser::ClassDefEntry* Parser::findClassDefEntry(const std::string& name,
 }
 
 void Parser::emitClassDefsIntoProgram(Program& program) {
+    int fs_id = frame_ids_.front().first;
     for (auto& entry : master_list_) {
         if (entry->entry_kind != EntryKind::ClassDef) continue;
+        if (entry->enclosing_frame_id != fs_id) continue;  // nested → gathered into outer.nested_slids
         program.classes.push_back(std::move(static_cast<ClassDefEntry*>(entry.get())->def));
     }
 }
@@ -4895,7 +4897,9 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             // string the hoist pass will produce post-parse.
             std::string canonical = enclosingClassPath() + "." + inner.name;
             nested_alias_[inner.name] = canonical;
-            slid.nested_slids.push_back(std::move(inner));
+            appendClassDefEntry(std::move(inner));
+            static_cast<ClassDefEntry*>(master_list_.back().get())
+                ->enclosing_frame_id = class_body_id;
             continue;
         }
         // nested derived slid def: `Base : Derived(...) { body }` inside this
@@ -4912,7 +4916,9 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
             rejectShadowOfEnclosing(inner.name, inner.name_file_id, inner.name_tok);
             std::string canonical = enclosingClassPath() + "." + inner.name;
             nested_alias_[inner.name] = canonical;
-            slid.nested_slids.push_back(std::move(inner));
+            appendClassDefEntry(std::move(inner));
+            static_cast<ClassDefEntry*>(master_list_.back().get())
+                ->enclosing_frame_id = class_body_id;
             continue;
         }
         // inline external-method declaration: `RetType Class:method(...) { body }`
@@ -5009,6 +5015,15 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         if (entry->entry_kind != EntryKind::Method) continue;
         if (entry->enclosing_frame_id != body_frame_id) continue;
         slid.methods.push_back(std::move(static_cast<MethodEntry*>(entry.get())->def));
+    }
+
+    // Gather nested ClassDefEntries (nested slids declared in this body).
+    // emitClassDefsIntoProgram skips non-file-scope entries; the hoist pass
+    // post-parse drains slid.nested_slids and renames to canonical.
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::ClassDef) continue;
+        if (entry->enclosing_frame_id != body_frame_id) continue;
+        slid.nested_slids.push_back(std::move(static_cast<ClassDefEntry*>(entry.get())->def));
     }
 
     popFrame();
