@@ -1,5 +1,6 @@
 /*
 test malformed comments.
+
 each //-EXPECT-ERROR case is exercised by run_negatives.sh.
 the file itself lexes clean — all error cases are //-prefixed and
 get uncommented one at a time by the runner.

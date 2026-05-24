@@ -34,10 +34,17 @@ if [ "${1:-}" = "--worker" ]; then
     IFS=$'\t' read -r key src substring body_start body_end <<< "$2"
     case_file="$NEG_TMPDIR/case_$key.sl"
     awk -v b="$body_start" -v e="$body_end" '
+        function strip_brackets(s,    out) {
+            out = ""
+            while (match(s, /\[[^][]+\]/)) {
+                out = out substr(s, 1, RSTART-1) substr(s, RSTART+1, RLENGTH-2)
+                s = substr(s, RSTART+RLENGTH)
+            }
+            return out s
+        }
         NR >= b && NR <= e {
             sub(/\/\//, "")
-            gsub(/\[/, "")
-            gsub(/\]/, "")
+            $0 = strip_brackets($0)
             gsub(/\\\\/, "\\")
             gsub(/\\n/, "\n")
         }
@@ -85,6 +92,14 @@ for src in "$@"; do
     fi
     src_index=$((src_index + 1))
     awk -v src="$src" -v sidx="$src_index" '
+        function strip_brackets(s,    out) {
+            out = ""
+            while (match(s, /\[[^][]+\]/)) {
+                out = out substr(s, 1, RSTART-1) substr(s, RSTART+1, RLENGTH-2)
+                s = substr(s, RSTART+RLENGTH)
+            }
+            return out s
+        }
         function flush_pending() {
             if (pending) {
                 if (body_start > 0)
@@ -105,8 +120,7 @@ for src in "$@"; do
         /EXPECT-ERROR:/ {
             flush_pending()
             sub(/.*EXPECT-ERROR:[[:space:]]*/, "", $0)
-            gsub(/\[/, "")
-            gsub(/\]/, "")
+            $0 = strip_brackets($0)
             gsub(/\\\\/, "\\")
             gsub(/\\n/, "\n")
             substring = $0

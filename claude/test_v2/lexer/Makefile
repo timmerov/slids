@@ -3,6 +3,7 @@ SLIDSC    = ../../bin/slidsc
 BUILD_DIR = ../../build/test_v2/lexer
 
 SAMPLES = \
+	brackets \
 	comments \
 	importer
 
