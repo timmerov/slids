@@ -2,11 +2,16 @@ SLIDSC    = ../../bin/slidsc
 
 BUILD_DIR = ../../build/test_v2/lexer
 
-SAMPLES = importer
+SAMPLES = \
+	comments \
+	importer
 
-.PHONY: all clean $(SAMPLES)
+.PHONY: all clean negatives $(SAMPLES)
 
 all: $(SAMPLES)
+
+negatives:
+	@../run_negatives.sh $(addsuffix .sl,$(SAMPLES))
 
 define SAMPLE_RULES
 $(1): $(BUILD_DIR)/$(1).stamp

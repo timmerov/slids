@@ -1,7 +1,10 @@
 #pragma once
 
+#include <iosfwd>
 #include <string>
 #include <vector>
+
+namespace token { struct List; }
 
 namespace diagnostic {
 
@@ -23,5 +26,7 @@ struct Sink {
 };
 
 void report(Sink& sink, Record const& record);
+bool hasErrors(Sink const& sink);
+void render(token::List const& tokens, Sink const& sink, std::ostream& os);
 
 }  // namespace diagnostic

@@ -45,6 +45,11 @@ int main(int argc, char** argv) {
     optimize::run(ast_tree, diag);
     layout::run(ast_tree, diag);
 
+    if (diagnostic::hasErrors(diag)) {
+        diagnostic::render(tokens, diag, std::cerr);
+        return 1;
+    }
+
     if (out_path.empty()) {
         codegen::run(ast_tree, std::cout, diag);
     } else {

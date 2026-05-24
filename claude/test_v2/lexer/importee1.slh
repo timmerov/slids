@@ -2,6 +2,7 @@
 test the lexer's ability to import a file.
 */
 
-import importee;
+import importee1;
+import importee2;
 
 int32 main();

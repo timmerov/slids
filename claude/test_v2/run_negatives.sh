@@ -37,7 +37,7 @@ if [ "${1:-}" = "--worker" ]; then
         NR >= b && NR <= e { sub(/\/\//, "") }
         { print }
     ' "$src" > "$case_file"
-    err=$("$SLIDSC" "$case_file" -o "$NEG_TMPDIR/case_$key.ll" --import-path . 2>&1)
+    err=$("$SLIDSC" "$case_file" -o "$NEG_TMPDIR/case_$key.ll" -I . 2>&1)
     rc=$?
     # Strip rendered source-context lines so the marker substring can't match
     # its own appearance in the listing slidsc prints with each diagnostic.
@@ -55,11 +55,10 @@ if [ "${1:-}" = "--worker" ]; then
 fi
 
 # --- driver mode -------------------------------------------------------------
-# Resolve SELF before any cd so the dirname-of-$0 trick still works regardless
-# of where the user invoked the script from.
-SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
-cd "$(dirname "$0")"
-SLIDSC=../bin/slidsc
+# Resolve script-anchored paths up front so we don't depend on CWD.
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+SELF="$SCRIPT_DIR/$(basename "$0")"
+SLIDSC="$SCRIPT_DIR/../bin/slidsc"
 NEG_TMPDIR=$(mktemp -d)
 trap 'rm -rf "$NEG_TMPDIR"' EXIT
 export NEG_TMPDIR SLIDSC
