@@ -479,7 +479,7 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
     Stream s = lex::open(file_id, out.files[file_id].source);
 
     int depth = 0;
-    std::vector<char> brackets;   // expected close chars
+    std::vector<std::pair<char, int>> brackets;   // (expected close char, tok index of the open)
 
     enum class State { Normal, SawImport, SawImportIdent };
     State state = State::Normal;
@@ -499,8 +499,10 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
             }
             state = State::Normal;
             if (depth != 0) {
-                int idx = addAndIndex(out, t);
-                reportAt(diag, file_id, idx, "unterminated open bracket at end of file");
+                char close_char = brackets.back().first;
+                char open_char = (close_char == ')') ? '(' : (close_char == '}') ? '{' : '[';
+                reportAt(diag, file_id, brackets.back().second,
+                    std::string("unterminated '") + open_char + "'");
                 fatal = true;
                 return false;
             }
@@ -517,9 +519,9 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
         switch (state) {
             case State::Normal: {
                 // Bracket-kind tracking ( ) { } [ ] only.
-                if (t.kind == token::Kind::kLParen)         { brackets.push_back(')'); depth++; }
-                else if (t.kind == token::Kind::kLBrace)    { brackets.push_back('}'); depth++; }
-                else if (t.kind == token::Kind::kLBracket)  { brackets.push_back(']'); depth++; }
+                if (t.kind == token::Kind::kLParen)         { brackets.push_back({')', (int)out.tokens.size()}); depth++; }
+                else if (t.kind == token::Kind::kLBrace)    { brackets.push_back({'}', (int)out.tokens.size()}); depth++; }
+                else if (t.kind == token::Kind::kLBracket)  { brackets.push_back({']', (int)out.tokens.size()}); depth++; }
                 else if (t.kind == token::Kind::kRParen
                       || t.kind == token::Kind::kRBrace
                       || t.kind == token::Kind::kRBracket) {
@@ -532,11 +534,19 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
                         fatal = true;
                         return false;
                     }
-                    if (brackets.back() != want) {
+                    if (brackets.back().first != want) {
                         int idx = addAndIndex(out, t);
-                        reportAt(diag, file_id, idx,
-                            std::string("mismatched bracket: expected '") + brackets.back()
-                            + "', got '" + want + "'");
+                        char close_char = brackets.back().first;
+                        char open_char = (close_char == ')') ? '('
+                                       : (close_char == '}') ? '{'
+                                       :                       '[';
+                        diagnostic::report(diag, {
+                            file_id, idx,
+                            std::string("mismatched bracket: expected '") + close_char
+                                + "', got '" + want + "'",
+                            {{file_id, brackets.back().second,
+                              std::string("'") + open_char + "' opened here"}}
+                        });
                         fatal = true;
                         return false;
                     }

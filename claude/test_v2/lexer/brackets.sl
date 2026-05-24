@@ -33,13 +33,13 @@ get uncommented one at a time by the runner.
 //-EXPECT-ERROR: unmatched ']'
 // ]
 
-//-EXPECT-ERROR: unterminated open bracket at end of file
+//-EXPECT-ERROR: unterminated '('
 // (
 
-//-EXPECT-ERROR: unterminated open bracket at end of file
+//-EXPECT-ERROR: unterminated '{'
 // {
 
-//-EXPECT-ERROR: unterminated open bracket at end of file
+//-EXPECT-ERROR: unterminated '['
 // [
 
 int32 main() {
