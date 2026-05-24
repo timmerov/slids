@@ -1198,6 +1198,16 @@ private:
     // Canonical-class → canonical-base mapping migrated to
     // ClassEntry.base_class_name (see lookupClassBase below).
     std::string lookupClassBase(const std::string& class_name) const;
+    // class-path-qualified alias lookup against master_list_: finds all
+    // ClassEntries named class_name, then any AliasEntry whose
+    // enclosing_frame_id matches one of those entries' own_frame_id and
+    // whose base_name == member. Walks rbegin for innermost-wins.
+    std::string lookupClassMemberAlias(const std::string& class_name,
+                                        const std::string& member) const;
+    // True if class_name has at least one AliasEntry under any of its
+    // ClassEntries' own_frame_ids. Preserves legacy
+    // class_aliases_.count(name) semantics for parseTypeName chain walks.
+    bool classHasAliases(const std::string& class_name) const;
     // Resolve a path-qualified alias reference `<class-path>.<member>` (dot
     // form, post-canonicalization). Walks the class's own aliases first, then
     // its base chain via class_base_name_. Applies nested_alias_ to the

@@ -233,11 +233,8 @@ std::string Parser::lookupClassAlias(const std::string& class_path,
     // miss.
     std::string cur = class_path;
     while (!cur.empty()) {
-        auto cit = class_aliases_.find(cur);
-        if (cit != class_aliases_.end()) {
-            auto mit = cit->second.find(member);
-            if (mit != cit->second.end()) return mit->second.resolved;
-        }
+        std::string r = lookupClassMemberAlias(cur, member);
+        if (!r.empty()) return r;
         std::string nxt = lookupClassBase(cur);
         if (nxt.empty()) break;
         cur = nxt;
@@ -514,13 +511,60 @@ Parser::NamespaceEntry* Parser::appendNamespaceEntry(NamespaceDef def) {
     return raw;
 }
 
+bool Parser::classHasAliases(const std::string& class_name) const {
+    std::vector<int> ids;
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::Class) continue;
+        if (entry->base_name == class_name)
+            ids.push_back(entry->own_frame_id);
+    }
+    if (ids.empty()) return false;
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::Alias) continue;
+        for (int id : ids)
+            if (entry->enclosing_frame_id == id) return true;
+    }
+    return false;
+}
+
+std::string Parser::lookupClassMemberAlias(const std::string& class_name,
+                                            const std::string& member) const {
+    // Collect all ClassEntries for class_name (multiple iff reopened or
+    // also recorded by the file-scope pre-pass). Then walk master_list_
+    // for AliasEntries whose enclosing_frame_id matches any of those ids
+    // and whose base_name == member. Returns the body (resolved type) or
+    // "" on miss. rbegin walk for innermost-wins consistent with bare-name
+    // lookup semantics.
+    std::vector<int> ids;
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::Class) continue;
+        if (entry->base_name == class_name)
+            ids.push_back(entry->own_frame_id);
+    }
+    if (ids.empty()) return "";
+    for (auto it = master_list_.rbegin(); it != master_list_.rend(); ++it) {
+        auto& entry = *it;
+        if (entry->entry_kind != EntryKind::Alias) continue;
+        if (entry->base_name != member) continue;
+        bool match = false;
+        for (int id : ids) if (entry->enclosing_frame_id == id) { match = true; break; }
+        if (!match) continue;
+        auto* ae = static_cast<const AliasEntry*>(entry.get());
+        if (ae->type_params.empty()) return ae->body;
+    }
+    return "";
+}
+
 std::string Parser::lookupClassBase(const std::string& class_name) const {
     // Walk master_list_ for ClassEntries matching this canonical class name;
-    // any match returns its base (reopens share the same base by construction).
+    // prefer a non-empty base_class_name. Pre-scan-emitted ClassEntries
+    // carry empty base info; real parseSlidDef pushes carry it. Reopens of
+    // a derived class share the same base by construction.
     for (auto& entry : master_list_) {
         if (entry->entry_kind != EntryKind::Class) continue;
         if (entry->base_name != class_name) continue;
-        return static_cast<const ClassEntry*>(entry.get())->base_class_name;
+        const auto* ce = static_cast<const ClassEntry*>(entry.get());
+        if (!ce->base_class_name.empty()) return ce->base_class_name;
     }
     return "";
 }
@@ -1502,7 +1546,7 @@ std::string Parser::parseTypeName() {
                         }
                         while (!acc.empty()) {
                             std::string candidate = acc + "." + first;
-                            if (class_aliases_.count(candidate)) {
+                            if (classHasAliases(candidate)) {
                                 class_path = candidate + rest;
                                 resolved = true;
                                 break;
@@ -1545,7 +1589,7 @@ std::string Parser::parseTypeName() {
                 }
                 while (!resolved && !acc.empty()) {
                     std::string cls_candidate = acc + "." + base;
-                    if (class_aliases_.count(cls_candidate)) {
+                    if (classHasAliases(cls_candidate)) {
                         base = cls_candidate;
                         resolved = true;
                         break;
@@ -5450,6 +5494,10 @@ Program Parser::parse() {
     {
         int save_pos = pos_;
         std::vector<std::string> path;
+        // Parallel stack of provisional ClassEntry frame_ids. As `path` is
+        // pushed/popped, so is this — gives in-pre-pass class-scope a
+        // master_list_ id under which AliasEntries are written.
+        std::vector<int> path_ids;
         auto consumeBalanced = [&]() {
             // pos_ at LBrace; consume past the matching RBrace.
             int d = 0;
@@ -5468,6 +5516,7 @@ Program Parser::parse() {
             // Closing the current class body.
             if (!path.empty() && peek().type == TokenType::kRBrace) {
                 path.pop_back();
+                path_ids.pop_back();
                 advance();
                 continue;
             }
@@ -5516,6 +5565,11 @@ Program Parser::parse() {
                     full += path[i];
                 }
                 class_aliases_[full][name] = AliasInfo{body, name_tok};
+                // Mirror into master_list_ under the provisional ClassEntry's
+                // frame_id so lookupClassMemberAlias can find this alias
+                // without going through class_aliases_.
+                if (!path_ids.empty())
+                    appendAliasEntry(path_ids.back(), name, body, {}, name_tok);
                 continue;
             }
             // Class declaration: push the class name onto the path and enter
@@ -5548,6 +5602,27 @@ Program Parser::parse() {
                 }
                 if (peek().type == TokenType::kLBrace) {
                     path.push_back(short_name);
+                    // Push a provisional ClassEntry into master_list_ so
+                    // lookupClassMemberAlias / hasClassEntry can resolve
+                    // forward references during parse(). base_class_name
+                    // is left empty here — the real parseSlidDef ClassEntry
+                    // carries derivation; lookupClassBase prefers non-empty.
+                    std::string full;
+                    for (size_t i = 0; i < path.size(); i++) {
+                        if (i > 0) full += ".";
+                        full += path[i];
+                    }
+                    int reserved = next_frame_id_++;
+                    auto entry = std::make_unique<ClassEntry>();
+                    entry->base_name = full;
+                    entry->entry_kind = EntryKind::Class;
+                    entry->enclosing_frame_id = frame_ids_.back().first;
+                    entry->own_frame_id = reserved;
+                    entry->file_id = file_id_;
+                    entry->tok = pos_;
+                    frame_entries_.push_back(entry.get());
+                    master_list_.push_back(std::move(entry));
+                    path_ids.push_back(reserved);
                     advance(); // consume '{'
                     continue;
                 }
