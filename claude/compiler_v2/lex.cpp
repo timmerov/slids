@@ -182,6 +182,7 @@ token::Token readString(Stream& s) {
             switch (esc) {
                 case 'n':  value += '\n'; break;
                 case 't':  value += '\t'; break;
+                case '0':  value += '\0'; break;
                 case '\\': value += '\\'; break;
                 case '"':  value += '"';  break;
                 case '\n': break;   // intentional n/a: line continuation in string literal — consume \-newline, contribute nothing

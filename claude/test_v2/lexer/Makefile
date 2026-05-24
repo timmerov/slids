@@ -5,7 +5,8 @@ BUILD_DIR = ../../build/test_v2/lexer
 SAMPLES = \
 	brackets \
 	comments \
-	importer
+	importer \
+	invalid
 
 .PHONY: all clean negatives $(SAMPLES)
 
