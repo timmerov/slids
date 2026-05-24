@@ -3,39 +3,6 @@ reopen classes inside of class bodies.
 */
 
 /* global scope class definition. */
-GsC(int c_ = 11) {
-    /* define things. */
-    const int kC1 = 12;
-    enum EnumC1 ( kEnumC1 );
-    global int g_c1 = 13;
-    alias intC = int;
-
-    void m_c1() {
-        /* access scope things qualifier optional. */
-        intC c = c_ + kC1 + kEnumC1 + g_c1;
-        GsC:intC cc = GsC:kC1 + GsC:kEnumC1 + GsC:g_c1;
-        __println("GsC:m_c1");
-    }
-}
-
-/* reopen global scope class. */
-GsC() {
-    /* define more things. */
-    const int kC2 = 51;
-    enum EnumC2 ( kEnumC2 );
-    global int g_c2 = 52;
-
-    void m_c2() {
-        /* access scope things qualifier optional. */
-        intC c = c_ + kC1 + kEnumC1 + g_c1;
-        c = kC2 + kEnumC2 + g_c2;
-        GsC:intC cc = GsC:kC1 + GsC:kEnumC1 + GsC:g_c1;
-        cc = GsC:kC2 + GsC:kEnumC2 + GsC:g_c2;
-        __println("GsC:m_c2");
-    }
-}
-
-/* global scope class definition. */
 GsA(int a_ = 0) {
     /* define things. */
     const int kA1 = 1;
@@ -48,37 +15,6 @@ GsA(int a_ = 0) {
         intA a = a_ + kA1 + kEnumA1 + g_a1;
         GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
         __println("GsA:m_a1");
-    }
-
-    /* hoisted class definition. */
-    CsB(int b_ = 17) {
-        /* define things. */
-        const int kB1 = 6;
-        enum EnumB1 ( kEnumB1 );
-        global int g_b1 = 7;
-        alias intB = int;
-
-        void m_b1() {
-            /* access scope things qualifiers optional. */
-            intB b = b_ + kB1 + kEnumB1 + g_b1;
-            CsB:intB cb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
-            GsA:CsB:intB acb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
-            /* access enclosing scope things qualifier optional. */
-            intA a = kA1 + kEnumA1 + g_a1;
-            GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
-            /* access sibling scope things with qualifiers. */
-            CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
-            GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
-            CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
-            GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
-            CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
-            GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
-            CsG:intG gg = CsG:kG1 + CsG:kEnumG1 + CsG:g_g1;
-            GsA:CsG:intG agg = GsA:CsG:kG1 + GsA:CsG:kEnumG1 + GsA:CsG:g_g1;
-            CsH:intH hh = CsH:kH1 + CsH:kEnumH1 + CsH:g_h1;
-            GsA:CsH:intH ahh = GsA:CsH:kH1 + GsA:CsH:kEnumH1 + GsA:CsH:g_h1;
-            __println("CsB:m_b1");
-        }
     }
 
     /* derived class from later in host class body. */
@@ -112,6 +48,37 @@ GsA(int a_ = 0) {
             CsE:intB ceb = CsE:kB1 + CsE:kEnumB1 + CsE:g_b1;
             GsA:CsE:intB aceb = GsA:CsE:kB1 + GsA:CsE:kEnumB1 + GsA:CsE:g_b1;
             __println("CsE:m_e1");
+        }
+    }
+
+    /* hoisted class definition. */
+    CsB(int b_ = 17) {
+        /* define things. */
+        const int kB1 = 6;
+        enum EnumB1 ( kEnumB1 );
+        global int g_b1 = 7;
+        alias intB = int;
+
+        void m_b1() {
+            /* access scope things qualifiers optional. */
+            intB b = b_ + kB1 + kEnumB1 + g_b1;
+            CsB:intB cb = CsB:kB1 + CsB:kEnumB1 + CsB:g_b1;
+            GsA:CsB:intB acb = GsA:CsB:kB1 + GsA:CsB:kEnumB1 + GsA:CsB:g_b1;
+            /* access enclosing scope things qualifier optional. */
+            intA a = kA1 + kEnumA1 + g_a1;
+            GsA:intA aa = GsA:kA1 + GsA:kEnumA1 + GsA:g_a1;
+            /* access sibling scope things with qualifiers. */
+            CsD:intD dd = CsD:kD1 + CsD:kEnumD1 + CsD:g_d1;
+            GsA:CsD:intD add = GsA:CsD:kD1 + GsA:CsD:kEnumD1 + GsA:CsD:g_d1;
+            CsE:intE ee = CsE:kE1 + CsE:kEnumE1 + CsE:g_e1;
+            GsA:CsE:intE aee = GsA:CsE:kE1 + GsA:CsE:kEnumE1 + GsA:CsE:g_e1;
+            CsF:intF ff = CsF:kF1 + CsF:kEnumF1 + CsF:g_f1;
+            GsA:CsF:intF aff = GsA:CsF:kF1 + GsA:CsF:kEnumF1 + GsA:CsF:g_f1;
+            CsG:intG gg = CsG:kG1 + CsG:kEnumG1 + CsG:g_g1;
+            GsA:CsG:intG agg = GsA:CsG:kG1 + GsA:CsG:kEnumG1 + GsA:CsG:g_g1;
+            CsH:intH hh = CsH:kH1 + CsH:kEnumH1 + CsH:g_h1;
+            GsA:CsH:intH ahh = GsA:CsH:kH1 + GsA:CsH:kEnumH1 + GsA:CsH:g_h1;
+            __println("CsB:m_b1");
         }
     }
 
@@ -1048,6 +1015,39 @@ void GsA:CsH:m_h4() {
     ch = CsH:kH2 + CsH:kEnumH2 + CsH:g_h2;
     ach = GsA:CsH:kH2 + GsA:CsH:kEnumH2 + GsA:CsH:g_h2;
     __println("CsH:m_h4");
+}
+
+/* global scope class definition. */
+GsC(int c_ = 11) {
+    /* define things. */
+    const int kC1 = 12;
+    enum EnumC1 ( kEnumC1 );
+    global int g_c1 = 13;
+    alias intC = int;
+
+    void m_c1() {
+        /* access scope things qualifier optional. */
+        intC c = c_ + kC1 + kEnumC1 + g_c1;
+        GsC:intC cc = GsC:kC1 + GsC:kEnumC1 + GsC:g_c1;
+        __println("GsC:m_c1");
+    }
+}
+
+/* reopen global scope class. */
+GsC() {
+    /* define more things. */
+    const int kC2 = 51;
+    enum EnumC2 ( kEnumC2 );
+    global int g_c2 = 52;
+
+    void m_c2() {
+        /* access scope things qualifier optional. */
+        intC c = c_ + kC1 + kEnumC1 + g_c1;
+        c = kC2 + kEnumC2 + g_c2;
+        GsC:intC cc = GsC:kC1 + GsC:kEnumC1 + GsC:g_c1;
+        cc = GsC:kC2 + GsC:kEnumC2 + GsC:g_c2;
+        __println("GsC:m_c2");
+    }
 }
 
 /* negatives: file-scope class with new fields after the class is already complete. */

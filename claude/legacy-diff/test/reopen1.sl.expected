@@ -1,17 +1,6 @@
 program:
   classes:
-    class GsC  file=reopen1.sl tok=0
-      field c_ int = <expr>
-      alias intC = int
-      const kC1 int
-      const kC2 int
-      enum EnumC1
-        value kEnumC1
-      enum EnumC2
-        value kEnumC2
-      method m_c1() -> void
-      method m_c2() -> void
-    class GsA  file=reopen1.sl tok=155
+    class GsA  file=reopen1.sl tok=0
       field a_ int = <expr>
       alias intA = int
       const kA1 int
@@ -26,7 +15,29 @@ program:
       method m_a1() -> void
       method m_a2() -> void
       method m_a4() -> void
-    class GsA.CsB  file=reopen1.sl tok=225
+    class GsC  file=reopen1.sl tok=11537
+      field c_ int = <expr>
+      alias intC = int
+      const kC1 int
+      const kC2 int
+      enum EnumC1
+        value kEnumC1
+      enum EnumC2
+        value kEnumC2
+      method m_c1() -> void
+      method m_c2() -> void
+    class GsA.CsE : GsA.CsB  file=reopen1.sl tok=72
+      field e_ int = <expr>
+      alias intE = int
+      const kE1 int
+      const kE2 int
+      enum EnumE1
+        value kEnumE1
+      enum EnumE2
+        value kEnumE2
+      method m_e1() -> void
+      method m_e2() -> void
+    class GsA.CsB  file=reopen1.sl tok=430
       field b_ int = <expr>
       alias intB = int
       const kB1 int
@@ -38,18 +49,7 @@ program:
       method m_b1() -> void
       method m_b2() -> void
       method op+(a GsA.CsB^, b GsA.CsB^)
-    class GsA.CsE : GsA.CsB  file=reopen1.sl tok=559
-      field e_ int = <expr>
-      alias intE = int
-      const kE1 int
-      const kE2 int
-      enum EnumE1
-        value kEnumE1
-      enum EnumE2
-        value kEnumE2
-      method m_e1() -> void
-      method m_e2() -> void
-    class GsA.CsD : GsC  file=reopen1.sl tok=919
+    class GsA.CsD : GsC  file=reopen1.sl tok=764
       field d_ int = <expr>
       alias intD = int
       const kD1 int
@@ -60,7 +60,7 @@ program:
         value kEnumD2
       method m_d1() -> void
       method m_d2() -> void
-    class GsA.CsF ...leading  file=reopen1.sl tok=1319
+    class GsA.CsF ...leading  file=reopen1.sl tok=1164
       field f_ int = <expr>
       alias intF = int
       const kF1 int
@@ -79,7 +79,7 @@ program:
       method m_f2() -> void
       method m_f3() -> void
       method m_f4() -> void
-    class GsA.CsG ...leading  file=reopen1.sl tok=2426
+    class GsA.CsG ...leading  file=reopen1.sl tok=2271
       field g_ int = <expr>
       alias intG = int
       const kG1 int
@@ -90,7 +90,7 @@ program:
         value kEnumG2
       method m_g1() -> void
       method m_g2() -> void
-    class GsA.CsH  file=reopen1.sl tok=8226
+    class GsA.CsH  file=reopen1.sl tok=8071
       field h_ int = <expr>
       alias intH = int
       const kH1 int
@@ -104,53 +104,53 @@ program:
   functions:
     function main() -> int32  file=reopen1.sl tok=11693
   external_methods:
-    external_method GsA.CsB:m_b3() -> void  file=reopen1.sl tok=3456
-    external_method GsA.CsD:m_d3() -> void  file=reopen1.sl tok=4665
-    external_method GsA.CsE:m_e3() -> void  file=reopen1.sl tok=5874
-    external_method GsA.CsF:m_f5() -> void  file=reopen1.sl tok=7051
-    external_method GsA.CsH:m_h3() -> void  file=reopen1.sl tok=8950
-    external_method GsA:m_a3() -> void  file=reopen1.sl tok=9059
-    external_method GsA.CsB:m_b4() -> void  file=reopen1.sl tok=9235
-    external_method GsA.CsD:m_d4() -> void  file=reopen1.sl tok=9807
-    external_method GsA.CsE:m_e4() -> void  file=reopen1.sl tok=10427
-    external_method GsA.CsF:m_f6() -> void  file=reopen1.sl tok=10999
-    external_method GsA.CsH:m_h4() -> void  file=reopen1.sl tok=11587
+    external_method GsA.CsB:m_b3() -> void  file=reopen1.sl tok=3301
+    external_method GsA.CsD:m_d3() -> void  file=reopen1.sl tok=4510
+    external_method GsA.CsE:m_e3() -> void  file=reopen1.sl tok=5719
+    external_method GsA.CsF:m_f5() -> void  file=reopen1.sl tok=6896
+    external_method GsA.CsH:m_h3() -> void  file=reopen1.sl tok=8795
+    external_method GsA:m_a3() -> void  file=reopen1.sl tok=8904
+    external_method GsA.CsB:m_b4() -> void  file=reopen1.sl tok=9080
+    external_method GsA.CsD:m_d4() -> void  file=reopen1.sl tok=9652
+    external_method GsA.CsE:m_e4() -> void  file=reopen1.sl tok=10272
+    external_method GsA.CsF:m_f6() -> void  file=reopen1.sl tok=10844
+    external_method GsA.CsH:m_h4() -> void  file=reopen1.sl tok=11432
   globals:
-    global GsC static  file=reopen1.sl tok=20
-      field g_c1 int = <expr>
-    global GsC static  file=reopen1.sl tok=87
-      field g_c2 int = <expr>
-    global GsA static  file=reopen1.sl tok=175
+    global GsA static  file=reopen1.sl tok=20
       field g_a1 int = <expr>
-    global GsA:CsB static  file=reopen1.sl tok=245
-      field g_b1 int = <expr>
-    global GsA:CsE static  file=reopen1.sl tok=579
+    global GsA:CsE static  file=reopen1.sl tok=92
       field g_e1 int = <expr>
-    global GsA:CsD static  file=reopen1.sl tok=939
+    global GsA:CsB static  file=reopen1.sl tok=450
+      field g_b1 int = <expr>
+    global GsA:CsD static  file=reopen1.sl tok=784
       field g_d1 int = <expr>
-    global GsA:CsF static  file=reopen1.sl tok=1341
+    global GsA:CsF static  file=reopen1.sl tok=1186
       field g_f1 int = <expr>
-    global GsA:CsF static  file=reopen1.sl tok=1669
+    global GsA:CsF static  file=reopen1.sl tok=1514
       field g_f2 int = <expr>
-    global GsA:CsF static  file=reopen1.sl tok=2035
+    global GsA:CsF static  file=reopen1.sl tok=1880
       field g_f3 int = <expr>
-    global GsA:CsG static  file=reopen1.sl tok=2448
+    global GsA:CsG static  file=reopen1.sl tok=2293
       field g_g1 int = <expr>
-    global GsA static  file=reopen1.sl tok=2777
+    global GsA static  file=reopen1.sl tok=2622
       field g_a2 int = <expr>
-    global GsA:CsB static  file=reopen1.sl tok=2860
+    global GsA:CsB static  file=reopen1.sl tok=2705
       field g_b2 int = <expr>
-    global GsA:CsD static  file=reopen1.sl tok=4039
+    global GsA:CsD static  file=reopen1.sl tok=3884
       field g_d2 int = <expr>
-    global GsA:CsE static  file=reopen1.sl tok=5296
+    global GsA:CsE static  file=reopen1.sl tok=5141
       field g_e2 int = <expr>
-    global GsA:CsF static  file=reopen1.sl tok=6457
+    global GsA:CsF static  file=reopen1.sl tok=6302
       field g_f4 int = <expr>
-    global GsA:CsG static  file=reopen1.sl tok=7651
+    global GsA:CsG static  file=reopen1.sl tok=7496
       field g_g2 int = <expr>
-    global GsA:CsH static  file=reopen1.sl tok=8246
+    global GsA:CsH static  file=reopen1.sl tok=8091
       field g_h1 int = <expr>
-    global GsA:CsH static  file=reopen1.sl tok=8834
+    global GsA:CsH static  file=reopen1.sl tok=8679
       field g_h2 int = <expr>
-    global GsA static  file=reopen1.sl tok=9135
+    global GsA static  file=reopen1.sl tok=8980
       field g_a3 int = <expr>
+    global GsC static  file=reopen1.sl tok=11557
+      field g_c1 int = <expr>
+    global GsC static  file=reopen1.sl tok=11624
+      field g_c2 int = <expr>
