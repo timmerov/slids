@@ -8,9 +8,8 @@ namespace desugar {
 
 void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
     (void)in;
-    (void)out;
     (void)diag;
-    // TODO
+    ast::addProgram(out);
 }
 
 }  // namespace desugar

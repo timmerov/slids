@@ -8,9 +8,8 @@ namespace grammar {
 
 void run(token::List const& in, parse::Tree& out, diagnostic::Sink& diag) {
     (void)in;
-    (void)out;
     (void)diag;
-    // TODO
+    parse::addProgram(out);
 }
 
 }  // namespace grammar
