@@ -1402,9 +1402,12 @@ private:
     // emitEnumsIntoProgram); class-scope path entries leave it empty.
     // file_id < 0 → use the parser's current file_id_.
     const EnumEntry* lookupEnum(const std::string& name) const;
+    // enclosing_id < 0 → file scope (default). Class-scope enum decls in
+    // class bodies pass body_frame_id so the SlidDef gather can pick them up.
     void appendEnumEntry(const std::string& name, int value_count, int tok,
                          std::vector<std::string> values = {},
-                         int file_id = -1);
+                         int file_id = -1,
+                         int enclosing_id = -1);
 
     // Stage E translators. Walk master_list_, emit Program fields. Sole
     // producers of the affected fields; called at end of parse().
@@ -1436,7 +1439,10 @@ private:
                                   const std::string& target,
                                   const std::string& namespace_name,
                                   int tok, int file_id = -1);
-    void appendConstEntry(ConstDef def);
+    // enclosing_id < 0 → file scope (default for top-level / namespace fold).
+    // Class-scope const decls pass the class body's frame_id so the SlidDef
+    // gather at parseSlidDef end can pick them up via enclosing_frame_id.
+    void appendConstEntry(ConstDef def, int enclosing_id = -1);
     void appendExternalMethodEntry(ExternalMethodDef def);
     void appendSlidModuleEntry(const std::string& slid_name,
                                 const std::string& module);

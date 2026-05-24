@@ -216,12 +216,19 @@ void Parser::declareAlias(const std::string& name, const std::string& resolved, 
 }
 
 std::string Parser::lookupAlias(const std::string& name) const {
-    for (auto it = frame_entries_.rbegin(); it != frame_entries_.rend(); ++it) {
-        FrameBase* e = *it;
-        if (e->entry_kind == EntryKind::Alias && e->base_name == name) {
-            auto* ae = static_cast<const AliasEntry*>(e);
-            if (ae->type_params.empty()) return ae->body;
-        }
+    // Walk master_list_ rbegin, filter by "enclosing_frame_id is in the
+    // active frame chain". Pre-scan AliasEntries (whose enclosing_frame_id
+    // is a provisional class id NOT in the chain when parsing elsewhere)
+    // are correctly invisible to bare-name lookup.
+    std::set<int> active;
+    for (auto& p : frame_ids_) active.insert(p.first);
+    for (auto it = master_list_.rbegin(); it != master_list_.rend(); ++it) {
+        auto& entry = *it;
+        if (entry->entry_kind != EntryKind::Alias) continue;
+        if (entry->base_name != name) continue;
+        if (!active.count(entry->enclosing_frame_id)) continue;
+        auto* ae = static_cast<const AliasEntry*>(entry.get());
+        if (ae->type_params.empty()) return ae->body;
     }
     return "";
 }
@@ -381,13 +388,15 @@ void Parser::emitAliasesIntoProgram(Program& program) const {
 }
 
 void Parser::appendEnumEntry(const std::string& name, int value_count, int tok,
-                             std::vector<std::string> values, int file_id) {
+                             std::vector<std::string> values, int file_id,
+                             int enclosing_id) {
     auto entry = std::make_unique<EnumEntry>();
     entry->base_name = name;
     entry->tok = tok;
     entry->file_id = (file_id < 0) ? file_id_ : file_id;
     entry->entry_kind = EntryKind::Enum;
-    entry->enclosing_frame_id = frame_ids_.front().first;
+    entry->enclosing_frame_id =
+        (enclosing_id < 0) ? frame_ids_.front().first : enclosing_id;
     entry->value_count = value_count;
     entry->values = std::move(values);
     frame_entries_.push_back(entry.get());
@@ -395,10 +404,12 @@ void Parser::appendEnumEntry(const std::string& name, int value_count, int tok,
 }
 
 void Parser::emitEnumsIntoProgram(Program& program) const {
+    int fs_id = frame_ids_.front().first;
     for (auto& entry : master_list_) {
         if (entry->entry_kind != EntryKind::Enum) continue;
-        // Class-scope path entries (e.g. "Outer:Inner:E") used only for
-        // path-qualified type resolution; not part of program.enums.
+        if (entry->enclosing_frame_id != fs_id) continue;  // class-scope → slid.nested_enums
+        // File-scope colon-form path entries (e.g. "Outer:Inner:E" stub for
+        // path-qualified type resolution) — not part of program.enums.
         if (entry->base_name.find(':') != std::string::npos) continue;
         auto* ee = static_cast<const EnumEntry*>(entry.get());
         program.enums.push_back({ee->base_name, ee->values,
@@ -443,13 +454,14 @@ void Parser::appendFunctionAliasEntry(const std::string& name,
     master_list_.push_back(std::move(entry));
 }
 
-void Parser::appendConstEntry(ConstDef def) {
+void Parser::appendConstEntry(ConstDef def, int enclosing_id) {
     auto entry = std::make_unique<ConstEntry>();
     entry->base_name = def.name;
     entry->tok = def.tok;
     entry->file_id = def.file_id;
     entry->entry_kind = EntryKind::Const;
-    entry->enclosing_frame_id = frame_ids_.front().first;
+    entry->enclosing_frame_id =
+        (enclosing_id < 0) ? frame_ids_.front().first : enclosing_id;
     entry->def = std::move(def);
     frame_entries_.push_back(entry.get());
     master_list_.push_back(std::move(entry));
@@ -487,8 +499,10 @@ void Parser::emitFunctionAliasesIntoProgram(Program& program) const {
 }
 
 void Parser::emitConstsIntoProgram(Program& program) {
+    int fs_id = frame_ids_.front().first;
     for (auto& entry : master_list_) {
         if (entry->entry_kind != EntryKind::Const) continue;
+        if (entry->enclosing_frame_id != fs_id) continue;  // class-scope → slid.consts
         program.consts.push_back(std::move(static_cast<ConstEntry*>(entry.get())->def));
     }
 }
@@ -747,8 +761,7 @@ void Parser::parseAliasDecl(Program* program, SlidDef* slid) {
     std::string resolved = parseTypeName();
     expect(TokenType::kSemicolon, "Expected ';' after alias declaration");
     (void)program;  // see comment above; program.type_aliases now emitted at end of parse().
-    if (slid)
-        slid->aliases.push_back({name, resolved, file_id_, name_tok});
+    (void)slid;     // slid.aliases now gathered from master_list_ at parseSlidDef end.
     declareAlias(name, resolved, name_tok);
 }
 
@@ -4241,6 +4254,32 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     // the upcoming pushFrame; nothing between here and the pushFrame for
     // the class body calls pushFrame, so the reserved id is preserved.
     {
+        // Canonicalize slid.base_name from short to full dot-form using the
+        // enclosing-class chain. Pre-scan has populated ClassEntries for all
+        // classes seen in the token stream, so the lookup finds the canonical
+        // even for not-yet-fully-parsed siblings. Without this, chain walks
+        // (C2 splice, lookupClassBase) miss inherited aliases for nested
+        // derived classes like `CsB : CsE(...)` inside `GsA(...)`.
+        std::string canonical_base = slid.base_name;
+        if (!canonical_base.empty()
+            && canonical_base.find('.') == std::string::npos) {
+            // Short name — try enclosing prefixes innermost-first (excluding
+            // the just-pushed self at the top of enclosing_class_names_).
+            for (int i = (int)enclosing_class_names_.size() - 2; i >= 0; i--) {
+                std::string prefix;
+                for (int j = 0; j <= i; j++) {
+                    if (!prefix.empty()) prefix += ".";
+                    prefix += enclosing_class_names_[j].name;
+                }
+                std::string candidate = prefix + "." + canonical_base;
+                bool found = false;
+                for (auto& e : master_list_) {
+                    if (e->entry_kind != EntryKind::Class) continue;
+                    if (e->base_name == candidate) { found = true; break; }
+                }
+                if (found) { canonical_base = candidate; break; }
+            }
+        }
         auto entry = std::make_unique<ClassEntry>();
         entry->base_name = enclosingClassPath();
         entry->tok = slid.name_tok;
@@ -4248,7 +4287,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         entry->entry_kind = EntryKind::Class;
         entry->enclosing_frame_id = frame_ids_.back().first;
         entry->own_frame_id = next_frame_id_;
-        entry->base_class_name = slid.base_name;
+        entry->base_class_name = canonical_base;
         frame_entries_.push_back(entry.get());
         master_list_.push_back(std::move(entry));
     }
@@ -4545,43 +4584,55 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         // lookup time. For each class in the chain, find every ClassEntry
         // with matching base_name (multiple iff the class was reopened);
         // each prior ClassEntry's own_frame_id keys a reopen_cache_ slot.
-        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-            for (auto& entry : master_list_) {
-                if (entry->entry_kind != EntryKind::Class) continue;
-                if (entry->base_name != *it) continue;
-                if (entry->own_frame_id == body_frame_id) continue;
-                auto cit = reopen_cache_.find(entry->own_frame_id);
-                if (cit == reopen_cache_.end()) continue;
-                for (FrameBase* e : cit->second)
-                    frame_entries_.push_back(e);
+        // Asymmetric splice:
+        // - chain[0] (self) reopens are sourced from reopen_cache_ only —
+        //   only prior real parses populate the cache (popFrame snapshot);
+        //   pre-scan provisional ClassEntries don't populate it. Skipping
+        //   them avoids self-pollution that would trigger declareAlias's
+        //   silent-accept and suppress the real decl.
+        // - chain[1..] (bases) use master_list_-walk — catches forward-ref
+        //   bases via pre-scan provisional AliasEntries AND already-parsed
+        //   bases via real declareAlias entries.
+        for (std::size_t ci = 0; ci < chain.size(); ci++) {
+            bool is_self = (ci == 0);
+            const std::string& cname = chain[ci];
+            std::vector<int> source_ids;
+            for (auto& centry : master_list_) {
+                if (centry->entry_kind != EntryKind::Class) continue;
+                if (centry->base_name != cname) continue;
+                if (centry->own_frame_id == body_frame_id) continue;
+                if (is_self
+                    && reopen_cache_.find(centry->own_frame_id) == reopen_cache_.end())
+                    continue;  // self: skip pre-scan provisional
+                source_ids.push_back(centry->own_frame_id);
+            }
+            if (source_ids.empty()) continue;
+            // Snapshot master_list_ size — appendAliasEntry below grows it,
+            // and we must not iterate over our own appends.
+            std::size_t end_snapshot = master_list_.size();
+            for (std::size_t i = 0; i < end_snapshot; i++) {
+                auto& entry = master_list_[i];
+                bool match = false;
+                for (int sid : source_ids)
+                    if (entry->enclosing_frame_id == sid) { match = true; break; }
+                if (!match) continue;
+                if (entry->entry_kind == EntryKind::Alias) {
+                    auto* ae = static_cast<const AliasEntry*>(entry.get());
+                    if (ae->is_seed) continue;  // don't re-splice already-spliced
+                    appendAliasEntry(body_frame_id, ae->base_name, ae->body,
+                                     ae->type_params, ae->tok, ae->file_id);
+                    static_cast<AliasEntry*>(master_list_.back().get())
+                        ->is_seed = true;
+                }
             }
         }
     }
 
-    // Phase 1: seed this frame with class-scope aliases from prior occurrences
-    // of the same class (reopens) AND the base chain so derived classes see
-    // their bases' aliases as bare names (inheritance). Walk base-first to
-    // outer-first so own-class aliases shadow base aliases on the same name.
-    {
-        std::string root = enclosingClassPath();
-        std::vector<std::string> base_chain;
-        std::string cur = root;
-        while (!cur.empty()) {
-            base_chain.push_back(cur);
-            std::string nxt = lookupClassBase(cur);
-            if (nxt.empty()) break;
-            cur = nxt;
-        }
-        // base first → own last so own aliases shadow base aliases (rbegin
-        // walk of frame_entries_ at lookup time returns last-appended first).
-        for (auto it = base_chain.rbegin(); it != base_chain.rend(); ++it) {
-            auto cit = class_aliases_.find(*it);
-            if (cit != class_aliases_.end())
-                for (auto& kv : cit->second)
-                    appendAliasEntry(body_frame_id, kv.first,
-                                     kv.second.resolved, {}, kv.second.tok);
-        }
-    }
+    // Inheritance / reopen visibility comes from the stage-C splice above
+    // (frame_entries_ now contains pointers into reopen_cache_ slices). The
+    // legacy class_aliases_-driven seed that used to fire here was redundant
+    // — and would pollute master_list_ with copies that the SlidDef-aliases
+    // gather (end of parseSlidDef) cannot distinguish from real decls.
 
     auto ctor_body = make<BlockStmt>(t_start);
     bool has_ctor_code = false;
@@ -4606,7 +4657,9 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         // class-scoped nested enum: `enum Name (values);` — its values are
         // scoped to this class (registered as Class:value), not file scope.
         if (peek().type == TokenType::kEnum) {
-            slid.nested_enums.push_back(parseEnumDef());
+            EnumDef e = parseEnumDef();
+            appendEnumEntry(e.name, (int)e.values.size(), e.tok,
+                            e.values, e.file_id, body_frame_id);
             continue;
         }
         // class-scope alias: `alias Name = TypeExpr;` — registered in the
@@ -4637,7 +4690,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
                 }
             }
             if (!const_is_method_marker) {
-                slid.consts.push_back(parseConstDef());
+                appendConstEntry(parseConstDef(), body_frame_id);
                 continue;
             }
             // fall through — ctor/dtor branches and isMethodDecl peek past const.
@@ -4869,6 +4922,44 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
 
     if (has_ctor_code)
         slid.ctor_body = std::move(ctor_body);
+
+    // Gather class-scope AliasEntries from master_list_ into slid.aliases.
+    // declareAlias writes AliasEntry with enclosing_frame_id=body_frame_id
+    // for every class-body alias decl; this is the single point where they
+    // assemble into the SlidDef view. Replaces the legacy
+    // `slid->aliases.push_back(...)` direct write in parseAliasDecl.
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::Alias) continue;
+        if (entry->enclosing_frame_id != body_frame_id) continue;
+        auto* ae = static_cast<const AliasEntry*>(entry.get());
+        if (ae->is_seed) continue;                  // splice-derived inheritance — skip
+        if (!ae->type_params.empty()) continue;     // template aliases not in slid.aliases
+        slid.aliases.push_back({ae->base_name, ae->body, ae->file_id, ae->tok});
+    }
+
+    // Gather class-scope ConstEntries (parseConstDef calls now route via
+    // appendConstEntry with body_frame_id; move def out for slid.consts).
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::Const) continue;
+        if (entry->enclosing_frame_id != body_frame_id) continue;
+        slid.consts.push_back(std::move(static_cast<ConstEntry*>(entry.get())->def));
+    }
+
+    // Gather class-scope nested EnumEntries (full payload — name short, values
+    // populated; the colon-form stubs from the file-scope pre-pass have a
+    // different enclosing_frame_id so they don't show up here).
+    for (auto& entry : master_list_) {
+        if (entry->entry_kind != EntryKind::Enum) continue;
+        if (entry->enclosing_frame_id != body_frame_id) continue;
+        auto* ee = static_cast<const EnumEntry*>(entry.get());
+        EnumDef e;
+        e.name = ee->base_name;
+        e.values = ee->values;
+        e.file_id = ee->file_id;
+        e.tok = ee->tok;
+        slid.nested_enums.push_back(std::move(e));
+    }
+
     popFrame();
 
     int close_tok = pos_;
