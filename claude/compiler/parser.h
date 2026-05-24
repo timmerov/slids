@@ -1307,8 +1307,15 @@ private:
     // base_class_name = canonical name of this class's base (empty for
     // non-derived). May still be a short name during parse; post-merge
     // fixup canonicalizes. Stage C splice unification consumes this.
+    // The body unique_ptrs hold the parsed ctor/dtor/implicit-ctor blocks
+    // until parseSlidDef gathers them into slid at end of body parse;
+    // singletons (one per class) so they live on the scope-opener rather
+    // than as separate entry kinds.
     struct ClassEntry : FrameBase {
         std::string base_class_name;
+        std::unique_ptr<BlockStmt> ctor_body;
+        std::unique_ptr<BlockStmt> explicit_ctor_body;
+        std::unique_ptr<BlockStmt> dtor_body;
     };
 
     // base_name = resolved header / impl path. Order in master_list_ is the
@@ -1457,7 +1464,11 @@ private:
     void appendGlobalEntry(GlobalDef def);
     NamespaceEntry* appendNamespaceEntry(NamespaceDef def);
     NamespaceEntry* findNamespaceEntry(const std::string& name);
-    void appendFunctionEntry(FunctionDef def);
+    // enclosing_id < 0 → file scope. Namespace-scope function decls pass
+    // the namespace's reserved frame_id so emitNamespacesIntoProgram can
+    // gather them into NamespaceDef.functions; emitFunctionsIntoProgram
+    // filters them out of program.functions.
+    void appendFunctionEntry(FunctionDef def, int enclosing_id = -1);
     void appendInstantiationEntry(Program::InstantiateRequest req);
     void appendClassDefEntry(SlidDef def);
     ClassDefEntry* findClassDefEntry(const std::string& name, bool is_template);

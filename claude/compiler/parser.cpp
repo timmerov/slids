@@ -666,21 +666,24 @@ void Parser::emitInstantiationsIntoProgram(Program& program) {
     }
 }
 
-void Parser::appendFunctionEntry(FunctionDef def) {
+void Parser::appendFunctionEntry(FunctionDef def, int enclosing_id) {
     auto entry = std::make_unique<FunctionEntry>();
     entry->base_name = def.name;
     entry->tok = def.tok;
     entry->file_id = def.file_id;
     entry->entry_kind = EntryKind::Function;
-    entry->enclosing_frame_id = frame_ids_.front().first;
+    entry->enclosing_frame_id =
+        (enclosing_id < 0) ? frame_ids_.front().first : enclosing_id;
     entry->def = std::move(def);
     frame_entries_.push_back(entry.get());
     master_list_.push_back(std::move(entry));
 }
 
 void Parser::emitFunctionsIntoProgram(Program& program) {
+    int fs_id = frame_ids_.front().first;
     for (auto& entry : master_list_) {
         if (entry->entry_kind != EntryKind::Function) continue;
+        if (entry->enclosing_frame_id != fs_id) continue;  // namespace-scope → NamespaceDef.functions
         program.functions.push_back(std::move(static_cast<FunctionEntry*>(entry.get())->def));
     }
 }
@@ -696,7 +699,20 @@ Parser::NamespaceEntry* Parser::findNamespaceEntry(const std::string& name) {
 void Parser::emitNamespacesIntoProgram(Program& program) {
     for (auto& entry : master_list_) {
         if (entry->entry_kind != EntryKind::Namespace) continue;
-        program.namespaces.push_back(std::move(static_cast<NamespaceEntry*>(entry.get())->def));
+        auto* ne = static_cast<NamespaceEntry*>(entry.get());
+        // Gather namespace-scope FunctionEntries and ConstEntries from
+        // master_list_ into the namespace's def before moving to Program.
+        for (auto& child : master_list_) {
+            if (child->enclosing_frame_id != ne->own_frame_id) continue;
+            if (child->entry_kind == EntryKind::Function) {
+                ne->def.functions.push_back(
+                    std::move(static_cast<FunctionEntry*>(child.get())->def));
+            } else if (child->entry_kind == EntryKind::Const) {
+                ne->def.consts.push_back(
+                    std::move(static_cast<ConstEntry*>(child.get())->def));
+            }
+        }
+        program.namespaces.push_back(std::move(ne->def));
     }
 }
 
@@ -4320,6 +4336,9 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         frame_entries_.push_back(entry.get());
         master_list_.push_back(std::move(entry));
     }
+    // Capture the just-pushed ClassEntry — bodies (ctor/dtor/implicit-ctor)
+    // are written here during body parse, then gathered into slid at end.
+    ClassEntry* class_entry = static_cast<ClassEntry*>(master_list_.back().get());
     struct StackGuard {
         std::vector<EnclosingClass>& stack;
         ~StackGuard() { stack.pop_back(); }
@@ -4763,7 +4782,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
                 if (peek().type == TokenType::kSemicolon) {
                     advance(); // forward declaration only
                 } else {
-                    slid.explicit_ctor_body = parseBlock();
+                    class_entry->explicit_ctor_body = parseBlock();
                 }
                 continue;
             }
@@ -4805,7 +4824,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
                 if (peek().type == TokenType::kSemicolon) {
                     advance(); // forward declaration only
                 } else {
-                    slid.dtor_body = parseBlock();
+                    class_entry->dtor_body = parseBlock();
                 }
                 continue;
             }
@@ -4962,7 +4981,7 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
     }
 
     if (has_ctor_code)
-        slid.ctor_body = std::move(ctor_body);
+        class_entry->ctor_body = std::move(ctor_body);
 
     // Gather class-scope AliasEntries from master_list_ into slid.aliases.
     // declareAlias writes AliasEntry with enclosing_frame_id=body_frame_id
@@ -5025,6 +5044,13 @@ SlidDef Parser::parseSlidDef(const std::string& base_name) {
         if (entry->enclosing_frame_id != body_frame_id) continue;
         slid.nested_slids.push_back(std::move(static_cast<ClassDefEntry*>(entry.get())->def));
     }
+
+    // Move scalar bodies from the ClassEntry back into slid (where codegen
+    // expects them). Written via class_entry-> during body parse; gather
+    // moves them out so the eventual ClassDefEntry has the data.
+    slid.ctor_body = std::move(class_entry->ctor_body);
+    slid.explicit_ctor_body = std::move(class_entry->explicit_ctor_body);
+    slid.dtor_body = std::move(class_entry->dtor_body);
 
     popFrame();
 
@@ -5486,10 +5512,11 @@ void Parser::parseNamespace(Program& program) {
             .addNote(cls_clash->second.file_id, cls_clash->second.tok,
                 "Class declared here.");
     seen_namespaces_.emplace(ns_name, FieldRef{file_id_, ns_tok});
-    // The namespace OWNS its functions/consts (NamespaceDef.functions/.consts).
-    // They are not free functions — keeping them out of program.functions is
-    // what stops the free-function duplicate-detector from conflating, e.g.,
-    // a global `greet` with `Space:greet`.
+    // Reserve a frame_id for namespace-scope child entries (functions and
+    // consts) so they live in master_list_ with this enclosing_frame_id.
+    // emitNamespacesIntoProgram gathers them into NamespaceDef at emit
+    // time; emitFunctionsIntoProgram filters them out of program.functions.
+    int ns_body_id = next_frame_id_++;
     NamespaceDef nd;
     nd.name = ns_name;
     nd.file_id = file_id_;
@@ -5505,7 +5532,7 @@ void Parser::parseNamespace(Program& program) {
         FunctionDef fn = parseFunctionDef();
         fn.is_foreign = true;
         fn.namespace_name = ns_name;
-        nd.functions.push_back(std::move(fn));
+        appendFunctionEntry(std::move(fn), ns_body_id);
     };
 
     while (peek().type != TokenType::kRBrace && peek().type != TokenType::kEof) {
@@ -5514,7 +5541,7 @@ void Parser::parseNamespace(Program& program) {
         } else if (peek().type == TokenType::kConst) {
             ConstDef cd = parseConstDef();
             cd.namespace_name = ns_name;
-            nd.consts.push_back(std::move(cd));
+            appendConstEntry(std::move(cd), ns_body_id);
         } else if (peek().type == TokenType::kImport) {
             // import sub-block: `import { ret f(params); … }`
             advance(); // 'import'
@@ -5542,11 +5569,12 @@ void Parser::parseNamespace(Program& program) {
             // `ret f(params) { body }` (slids). parseFunctionDef handles both.
             FunctionDef fn = parseFunctionDef();
             fn.namespace_name = ns_name;
-            nd.functions.push_back(std::move(fn));
+            appendFunctionEntry(std::move(fn), ns_body_id);
         }
     }
     expect(TokenType::kRBrace, "Expected '}'");
-    appendNamespaceEntry(std::move(nd));
+    NamespaceEntry* ne = appendNamespaceEntry(std::move(nd));
+    ne->own_frame_id = ns_body_id;
 }
 
 FunctionDef Parser::parseFunctionDef() {
@@ -6186,7 +6214,7 @@ Program Parser::parse() {
                     fn.file_id        = em.file_id;
                     fn.tok            = em.tok;
                     fn.namespace_name = ns->base_name;
-                    ns->def.functions.push_back(std::move(fn));
+                    appendFunctionEntry(std::move(fn), ns->own_frame_id);
                 } else {
                     appendExternalMethodEntry(parseExternalMethodDef());
                 }
