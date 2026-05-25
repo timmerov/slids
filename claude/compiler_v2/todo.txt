@@ -40,7 +40,7 @@ WIDENING + LITERAL RANGE CHECKING (widen.h / widen.cpp)
   * codegen's SymTab now carries slids_type alongside llvm_type so widen
     has the typed source for ident-load conversions.
   * Still TODO:
-      - explicit type conversion syntax (no `<Type>(expr)` cast yet)
+      - explicit type conversion syntax `(Type=expr)` not yet parsed
       - widen at function-call arg sites (no params yet)
       - widen at binary-op operand sites (no binary ops yet)
       - integer-literal flex defaults (int / int64 / uint64 by value); right
