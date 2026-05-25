@@ -12,6 +12,7 @@ namespace codegen {
 struct VarInfo {
     std::string alloca_name;   // e.g. "%ch"
     std::string llvm_type;     // e.g. "i8", "i32", "ptr"
+    std::string slids_type;    // e.g. "char", "int32", "char[]" — for widening checks
 };
 
 using SymTab = std::map<std::string, VarInfo>;

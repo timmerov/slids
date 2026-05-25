@@ -23,6 +23,8 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kStringLiteral: return ast::Kind::kStringLiteral;
         case parse::Kind::kIntLiteral:    return ast::Kind::kIntLiteral;
         case parse::Kind::kCharLiteral:   return ast::Kind::kCharLiteral;
+        case parse::Kind::kBoolLiteral:   return ast::Kind::kBoolLiteral;
+        case parse::Kind::kFloatLiteral:  return ast::Kind::kFloatLiteral;
         case parse::Kind::kIdentExpr:     return ast::Kind::kIdentExpr;
     }
     assert(false && "toAstKind: unhandled parse::Kind");

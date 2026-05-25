@@ -1,5 +1,6 @@
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -50,11 +51,19 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    std::ostringstream codegen_buf;
+    codegen::run(ast_tree, codegen_buf, diag);
+
+    if (diagnostic::hasErrors(diag)) {
+        diagnostic::render(tokens, diag, std::cerr);
+        return 1;
+    }
+
     if (out_path.empty()) {
-        codegen::run(ast_tree, std::cout, diag);
+        std::cout << codegen_buf.str();
     } else {
         std::ofstream out(out_path);
-        codegen::run(ast_tree, out, diag);
+        out << codegen_buf.str();
     }
 
     return 0;

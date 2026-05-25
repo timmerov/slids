@@ -9,28 +9,66 @@
 #include "diagnostic.h"
 #include "print.h"
 #include "strings.h"
+#include "widen.h"
 
 namespace codegen {
 
 namespace {
 
 std::string llvmTypeFor(std::string const& slids_type, diagnostic::Sink& diag) {
-    if (slids_type == "int32")  return "i32";
-    if (slids_type == "char")   return "i8";
-    if (slids_type == "char[]") return "ptr";
+    if (slids_type == "bool")    return "i1";
+    if (slids_type == "char"
+     || slids_type == "int8"
+     || slids_type == "uint8")   return "i8";
+    if (slids_type == "int16"
+     || slids_type == "uint16")  return "i16";
+    if (slids_type == "int"
+     || slids_type == "int32"
+     || slids_type == "uint"
+     || slids_type == "uint32")  return "i32";
+    if (slids_type == "int64"
+     || slids_type == "uint64"
+     || slids_type == "intptr")  return "i64";
+    if (slids_type == "float"
+     || slids_type == "float32") return "float";
+    if (slids_type == "float64") return "double";
+    if (slids_type == "void")    return "void";
+    if (slids_type.size() >= 2 && slids_type.substr(slids_type.size() - 2) == "[]")
+        return "ptr";
     diagnostic::report(diag, {-1, -1,
         "codegen: unknown type '" + slids_type + "'", {}});
     return "i32";
 }
 
+std::string normalizeFloatLiteral(std::string const& text) {
+    if (text.find('.') != std::string::npos) return text;
+    auto e = text.find_first_of("eE");
+    std::string out = text;
+    if (e == std::string::npos) out += ".0";
+    else out.insert(e, ".0");
+    return out;
+}
+
 std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                      strings::Pool& pool, std::ostream& out,
-                     diagnostic::Sink& diag) {
+                     diagnostic::Sink& diag,
+                     std::string const& dest_type) {
     switch (expr.kind) {
         case ast::Kind::kIntLiteral:
+            widen::checkIntLiteralFits(expr.text, dest_type, diag);
             return expr.text;
         case ast::Kind::kCharLiteral:
+            widen::checkIntLiteralFits(expr.text, dest_type, diag);
             return expr.text;
+        case ast::Kind::kBoolLiteral: {
+            std::string v = (expr.text == "true") ? "1" : "0";
+            widen::checkIntLiteralFits(v, dest_type, diag);
+            return v;
+        }
+        case ast::Kind::kFloatLiteral: {
+            widen::checkFloatLiteralFits(expr.text, dest_type, diag);
+            return normalizeFloatLiteral(expr.text);
+        }
         case ast::Kind::kStringLiteral: {
             int id = strings::add(pool, expr.text);
             return std::string("@.str_") + std::to_string(id);
@@ -42,11 +80,11 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                     "codegen: unknown variable '" + expr.name + "'", {}});
                 return "0";
             }
-            static int tmp_counter = 0;
-            std::string tmp = std::string("%ld_") + std::to_string(tmp_counter++);
+            static int ld_counter = 0;
+            std::string tmp = std::string("%ld_") + std::to_string(ld_counter++);
             out << "  " << tmp << " = load " << it->second.llvm_type
                 << ", ptr " << it->second.alloca_name << "\n";
-            return tmp;
+            return widen::convert(tmp, it->second.slids_type, dest_type, out, diag);
         }
         case ast::Kind::kProgram:
         case ast::Kind::kFunctionDef:
@@ -65,15 +103,17 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
 
 void emitStmt(ast::Node const& stmt, SymTab& syms,
               strings::Pool& pool, print::CallStrings const& cs,
+              std::string const& fn_return_type,
               std::ostream& out, diagnostic::Sink& diag) {
     switch (stmt.kind) {
         case ast::Kind::kVarDeclStmt: {
             std::string llty = llvmTypeFor(stmt.return_type, diag);
             std::string regname = std::string("%") + stmt.name;
             out << "  " << regname << " = alloca " << llty << "\n";
-            syms[stmt.name] = {regname, llty};
+            syms[stmt.name] = {regname, llty, stmt.return_type};
             if (!stmt.children.empty()) {
-                std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag);
+                std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
+                                           stmt.return_type);
                 out << "  store " << llty << " " << val
                     << ", ptr " << regname << "\n";
             }
@@ -86,7 +126,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                     "codegen: unknown variable '" + stmt.name + "'", {}});
                 return;
             }
-            std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag);
+            std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
+                                       it->second.slids_type);
             out << "  store " << it->second.llvm_type << " " << val
                 << ", ptr " << it->second.alloca_name << "\n";
             return;
@@ -98,8 +139,10 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             }
             return;
         case ast::Kind::kReturnStmt: {
-            std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag);
-            out << "  ret i32 " << val << "\n";
+            std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
+                                       fn_return_type);
+            std::string llty = llvmTypeFor(fn_return_type, diag);
+            out << "  ret " << llty << " " << val << "\n";
             return;
         }
         case ast::Kind::kProgram:
@@ -108,6 +151,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kStringLiteral:
         case ast::Kind::kIntLiteral:
         case ast::Kind::kCharLiteral:
+        case ast::Kind::kBoolLiteral:
+        case ast::Kind::kFloatLiteral:
         case ast::Kind::kIdentExpr:
             diagnostic::report(diag, {-1, -1,
                 "codegen: unexpected node kind in statement position", {}});
@@ -120,10 +165,11 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
 void emitFunction(ast::Node const& fn, strings::Pool& pool,
                   print::CallStrings const& cs,
                   std::ostream& out, diagnostic::Sink& diag) {
-    out << "define i32 @" << fn.name << "() {\n";
+    std::string ret_llty = llvmTypeFor(fn.return_type, diag);
+    out << "define " << ret_llty << " @" << fn.name << "() {\n";
     SymTab syms;
     for (auto const& s : fn.children) {
-        emitStmt(*s, syms, pool, cs, out, diag);
+        emitStmt(*s, syms, pool, cs, fn.return_type, out, diag);
     }
     out << "}\n";
 }

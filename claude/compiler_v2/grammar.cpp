@@ -12,6 +12,38 @@ namespace grammar {
 
 namespace {
 
+struct PrimitiveSpelling {
+    token::Kind kind;
+    char const* name;
+};
+
+constexpr PrimitiveSpelling kPrimitives[] = {
+    {token::Kind::kBool,    "bool"},
+    {token::Kind::kChar,    "char"},
+    {token::Kind::kInt,     "int"},
+    {token::Kind::kInt8,    "int8"},
+    {token::Kind::kInt16,   "int16"},
+    {token::Kind::kInt32,   "int32"},
+    {token::Kind::kInt64,   "int64"},
+    {token::Kind::kUint,    "uint"},
+    {token::Kind::kUint8,   "uint8"},
+    {token::Kind::kUint16,  "uint16"},
+    {token::Kind::kUint32,  "uint32"},
+    {token::Kind::kUint64,  "uint64"},
+    {token::Kind::kIntptr,  "intptr"},
+    {token::Kind::kFloat,   "float"},
+    {token::Kind::kFloat32, "float32"},
+    {token::Kind::kFloat64, "float64"},
+    {token::Kind::kVoid,    "void"},
+};
+
+char const* primitiveNameFor(token::Kind k) {
+    for (auto const& m : kPrimitives) {
+        if (m.kind == k) return m.name;
+    }
+    return nullptr;
+}
+
 struct Parser {
     token::List const& tokens;
     parse::Tree& out;
@@ -48,18 +80,16 @@ struct Parser {
     }
 
     bool isTypeStart(token::Kind k) const {
-        return k == token::Kind::kInt32 || k == token::Kind::kChar;
+        return primitiveNameFor(k) != nullptr;
     }
 
     std::string parseType() {
-        token::Token const& t = peek();
-        std::string type;
-        if (t.kind == token::Kind::kInt32)      type = "int32";
-        else if (t.kind == token::Kind::kChar)  type = "char";
-        else {
+        char const* name = primitiveNameFor(peek().kind);
+        if (!name) {
             error("expected type");
             return "";
         }
+        std::string type = name;
         advance();
         if (peek().kind == token::Kind::kLBracket) {
             advance();
@@ -71,6 +101,18 @@ struct Parser {
 
     std::unique_ptr<parse::Node> parseExpr() {
         token::Token const& t = peek();
+        if (t.kind == token::Kind::kMinus) {
+            advance();
+            auto inner = parseExpr();
+            if (!inner) return nullptr;
+            if (inner->kind != parse::Kind::kIntLiteral
+                && inner->kind != parse::Kind::kFloatLiteral) {
+                error("unary '-' requires a numeric literal");
+                return nullptr;
+            }
+            inner->text = "-" + inner->text;
+            return inner;
+        }
         if (t.kind == token::Kind::kStringLiteral) {
             auto node = std::make_unique<parse::Node>();
             node->kind = parse::Kind::kStringLiteral;
@@ -89,6 +131,20 @@ struct Parser {
             auto node = std::make_unique<parse::Node>();
             node->kind = parse::Kind::kCharLiteral;
             node->text = t.text;
+            advance();
+            return node;
+        }
+        if (t.kind == token::Kind::kFloatLiteral) {
+            auto node = std::make_unique<parse::Node>();
+            node->kind = parse::Kind::kFloatLiteral;
+            node->text = t.text;
+            advance();
+            return node;
+        }
+        if (t.kind == token::Kind::kTrue || t.kind == token::Kind::kFalse) {
+            auto node = std::make_unique<parse::Node>();
+            node->kind = parse::Kind::kBoolLiteral;
+            node->text = (t.kind == token::Kind::kTrue) ? "true" : "false";
             advance();
             return node;
         }

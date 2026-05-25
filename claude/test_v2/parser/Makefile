@@ -7,7 +7,8 @@ BIN_DIR   = ../../bin
 BUILD_DIR = ../../build/test_v2/parser
 
 SAMPLES = \
-	hello
+	hello \
+	primitive
 
 .PHONY: all clean negatives positives $(SAMPLES)
 

@@ -1,15 +1,50 @@
 compiler_v2 — known gaps
 
 GRAMMAR
-  * <type> recognizes only int32, char, char[]
-    - missing primitives: int, int8, int16, int64, uint, uint8, uint16, uint32, uint64,
-      intptr, float, float32, float64, bool, void
+  * <type> recognizes all built-in primitives and <T>[] for any of them.
+    Table-driven via kPrimitives in grammar.cpp.
     - no other array shapes (T[N], multi-dim, etc.)
+    - no class / struct / enum / alias type names yet
   * parameter lists not parsed (only bare `()`)
-  * expression parsing: literal leaves (string, int, char) + bare identifier
-    - no binary or unary operators
+  * expression parsing: literal leaves (string, int, char, bool, float)
+    + bare identifier + unary `-` on numeric literals
+    - unary `-` folds into the literal text only; `-x` on an identifier
+      errors ("requires a numeric literal")
+    - no other unary operators (!, ~)
+    - no binary operators
     - no function calls inside expressions
     - no field access, no index, no cast
+    - float literals must be lossless decimal (no hex form yet, no inexact
+      values like 1.1 which would require LLVM hex encoding); codegen
+      normalizes `1e40`-style text to `1.0e40` so LLVM accepts the float
+      form
+
+WIDENING + LITERAL RANGE CHECKING (widen.h / widen.cpp)
+  * widen::checkIntLiteralFits / checkFloatLiteralFits enforce per-type
+    literal ranges (bool 0..1, intN/uintN exact ranges, float32 ≤ FLT_MAX,
+    float64 ≤ DBL_MAX). Called at VarDecl-init, AssignStmt, and ReturnStmt
+    via emitExpr.
+  * widen::convert handles var-to-var conversions per the spec:
+      - signed → strictly larger signed (sext)
+      - unsigned → strictly larger unsigned (zext)
+      - unsigned → strictly larger signed (zext, value-preserving)
+      - bool → any integer (zext from i1)
+      - float → strictly larger float (fpext)
+    Rejects (with v1-shape error messages):
+      - any same-or-narrower target ("Cannot implicitly narrow ...")
+      - signed → unsigned ("(signed → unsigned)")
+      - unsigned → same-width signed ("(unsigned to same-width signed)")
+      - cross-family int↔float (plain "use an explicit type conversion")
+  * Error messages match v1 shape: `Integer literal N does not fit in 'T'.`
+    and `Cannot implicitly narrow 'X' to 'Y'; use an explicit type conversion.`
+  * codegen's SymTab now carries slids_type alongside llvm_type so widen
+    has the typed source for ident-load conversions.
+  * Still TODO:
+      - explicit type conversion syntax (no `<Type>(expr)` cast yet)
+      - widen at function-call arg sites (no params yet)
+      - widen at binary-op operand sites (no binary ops yet)
+      - integer-literal flex defaults (int / int64 / uint64 by value); right
+        now literals carry only their text and the dest type drives the check
   * call statements: exactly one argument
     - zero-arg calls not parsed
     - multi-arg calls not parsed
@@ -36,7 +71,9 @@ CODEGEN
   * VarDecl alloca'd at use site, not at function entry (works for now since
     no control flow; will matter once if/for show up)
   * AssignStmt: only direct identifier lvalues (no field, no index)
-  * llvmTypeFor handles int32/char/char[]; everything else is an error
+  * llvmTypeFor handles all primitives + <T>[] (lowers to ptr); class /
+    struct / enum / alias not yet
+  * bool lowers to i1 (per redesign-memory intent; v1 uses i32 for bool)
   * return value not type-checked against function return type
   * target triple hard-coded to x86_64-pc-linux-gnu
 
