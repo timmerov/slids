@@ -71,6 +71,91 @@ bool isUnsignedType(std::string const& t) {
         || t == "uint64" || t == "char";
 }
 
+std::string newLabel(char const* tag) {
+    static int n = 0;
+    return std::string(tag) + "_" + std::to_string(n++);
+}
+
+// Truthy coercion: 0-like values (false, 0, 0.0, null ptr) → i1 0; everything
+// else → i1 1. Mirrors v1's emitToBool.
+std::string emitToBool(std::string const& val, std::string const& slids_type,
+                       std::ostream& out) {
+    if (slids_type == "bool") return val;  // already i1
+    if (isFloatType(slids_type)) {
+        std::string llty = (slids_type == "float64") ? "double" : "float";
+        std::string tmp = newTmp("tob");
+        out << "  " << tmp << " = fcmp une " << llty << " "
+            << val << ", 0.0\n";
+        return tmp;
+    }
+    std::string llty;
+    if      (slids_type == "char"  || slids_type == "int8"  || slids_type == "uint8")  llty = "i8";
+    else if (slids_type == "int16" || slids_type == "uint16")                          llty = "i16";
+    else if (slids_type == "int64" || slids_type == "uint64" || slids_type == "intptr") llty = "i64";
+    else                                                                                llty = "i32";
+    std::string tmp = newTmp("tob");
+    out << "  " << tmp << " = icmp ne " << llty << " " << val << ", 0\n";
+    return tmp;
+}
+
+// Short-circuit && / || / ^^ borrowed from v1 (compiler/codegen_expr.cpp).
+// Stores into an i1 alloca at each decision point; ^^ always evaluates both
+// sides. Returns the loaded i1.
+std::string emitLogical(ast::Node const& expr, SymTab const& syms,
+                        strings::Pool& pool, std::ostream& out,
+                        diagnostic::Sink& diag) {
+    std::string const& op = expr.text;
+    ast::Node const& lhs = *expr.children[0];
+    ast::Node const& rhs = *expr.children[1];
+
+    std::string result_ptr = newTmp("sc");
+    out << "  " << result_ptr << " = alloca i1\n";
+
+    std::string lty = exprType(lhs, syms);
+    if (lty.empty()) lty = "int";
+    std::string lv = emitExpr(lhs, syms, pool, out, diag, lty);
+    std::string left_bool = emitToBool(lv, lty, out);
+
+    std::string eval_right = newLabel("sc_right");
+    std::string done       = newLabel("sc_done");
+
+    if (op == "&&") {
+        out << "  store i1 0, ptr " << result_ptr << "\n";
+        out << "  br i1 " << left_bool
+            << ", label %" << eval_right
+            << ", label %" << done << "\n";
+    } else if (op == "||") {
+        out << "  store i1 1, ptr " << result_ptr << "\n";
+        out << "  br i1 " << left_bool
+            << ", label %" << done
+            << ", label %" << eval_right << "\n";
+    } else {  // ^^
+        out << "  store i1 0, ptr " << result_ptr << "\n";
+        out << "  br label %" << eval_right << "\n";
+    }
+
+    out << eval_right << ":\n";
+    std::string rty = exprType(rhs, syms);
+    if (rty.empty()) rty = "int";
+    std::string rv = emitExpr(rhs, syms, pool, out, diag, rty);
+    std::string right_bool = emitToBool(rv, rty, out);
+
+    std::string store_val = right_bool;
+    if (op == "^^") {
+        std::string xor_tmp = newTmp("xxor");
+        out << "  " << xor_tmp << " = xor i1 "
+            << left_bool << ", " << right_bool << "\n";
+        store_val = xor_tmp;
+    }
+    out << "  store i1 " << store_val << ", ptr " << result_ptr << "\n";
+    out << "  br label %" << done << "\n";
+    out << done << ":\n";
+
+    std::string result = newTmp("scv");
+    out << "  " << result << " = load i1, ptr " << result_ptr << "\n";
+    return result;
+}
+
 std::string emitUnary(ast::Node const& expr, SymTab const& syms,
                       strings::Pool& pool, std::ostream& out,
                       diagnostic::Sink& diag,
@@ -117,6 +202,10 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
     std::string const& op = expr.text;
     ast::Node const& lhs = *expr.children[0];
     ast::Node const& rhs = *expr.children[1];
+
+    if (op == "&&" || op == "||" || op == "^^") {
+        return emitLogical(expr, syms, pool, out, diag);
+    }
 
     // Comparisons: result type is bool (i1); operands share their natural type.
     if (op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=") {

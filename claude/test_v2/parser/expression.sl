@@ -89,5 +89,44 @@ int32 main() {
     __println("shlL= "  + shlL);
     __println("shrL= "  + shrL);
 
+    bool t = true;
+    bool f = false;
+
+    bool aTT = t && t;
+    bool aTF = t && f;
+    bool aFT = f && t;
+    bool aFF = f && f;
+    __println("aTT= " + aTT);
+    __println("aTF= " + aTF);
+    __println("aFT= " + aFT);
+    __println("aFF= " + aFF);
+
+    bool oTT = t || t;
+    bool oTF = t || f;
+    bool oFT = f || t;
+    bool oFF = f || f;
+    __println("oTT= " + oTT);
+    __println("oTF= " + oTF);
+    __println("oFT= " + oFT);
+    __println("oFF= " + oFF);
+
+    bool xTT = t ^^ t;
+    bool xTF = t ^^ f;
+    bool xFT = f ^^ t;
+    bool xFF = f ^^ f;
+    __println("xTT= " + xTT);
+    __println("xTF= " + xTF);
+    __println("xFT= " + xFT);
+    __println("xFF= " + xFF);
+
+    bool aii = 5 && 3;
+    bool aiz = 5 && 0;
+    bool oiz = 0 || 7;
+    bool xiz = 0 ^^ 7;
+    __println("aii= " + aii);
+    __println("aiz= " + aiz);
+    __println("oiz= " + oiz);
+    __println("xiz= " + xiz);
+
     return 0;
 }
