@@ -9,10 +9,14 @@ namespace ast {
 enum class Kind {
     kProgram,
     kFunctionDef,
+    kFunctionDecl,
+    kVarDeclStmt,
+    kAssignStmt,
     kCallStmt,
     kReturnStmt,
     kStringLiteral,
     kIntLiteral,
+    kCharLiteral,
 };
 
 struct Node {

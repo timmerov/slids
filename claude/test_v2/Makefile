@@ -3,7 +3,7 @@ SUBDIRS = \
 	lexer \
 	parser
 
-.PHONY: all clean test negatives $(SUBDIRS)
+.PHONY: all clean test negatives positives $(SUBDIRS)
 
 all: $(SUBDIRS)
 
@@ -14,6 +14,9 @@ $(SUBDIRS):
 
 negatives:
 	@for d in $(SUBDIRS); do $(MAKE) -C $$d negatives; done
+
+positives:
+	@for d in $(SUBDIRS); do $(MAKE) -C $$d positives; done
 
 clean:
 	@for d in $(SUBDIRS); do $(MAKE) -C $$d clean; done

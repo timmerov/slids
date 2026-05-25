@@ -1,132 +1,18 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BIN_DIR="$SCRIPT_DIR/bin"
-TEST_DIR="$SCRIPT_DIR/test"
+OPTS="-j 8"
 
-SAMPLES=(
-    alias
-    array
-    blocks
-    cast
-    chain
-    class
-    comments
-    const
-    constructor
-    for
-    function1
-    global1 global2
-    headerfields
-    incomplete
-    indexop
-    inheritance
-    initialization
-    instantiate
-    lexer
-    logicops
-    lvalues
-    macros
-    math1
-    misc
-    move
-    mutable
-    namespace
-    nested
-    new_delete
-    operators
-    parsing
-    phrases
-    pointer
-    ranges
-    reopen1 reopen2
-    returnslid
-    sizeof
-    strlitcat
-    shadowing
-    swap
-    switch
-    tuple
-    type_conv
-    type_infer
-    virtual
-)
+echo "building slids compiler..."
+make ${OPTS} -C compiler_v2/
 
-UPDATE=0
-if [[ "${1:-}" == "--update" ]]; then
-    UPDATE=1
-fi
+echo "building test code..."
+make ${OPTS} -C test_v2/
 
-normalize() {
-    sed -e 's/intptr=[0-9][0-9]*/intptr=ADDR/g' \
-        -e 's/##date=[A-Za-z]\{3\} [ 0-9][0-9] [0-9]\{4\}/##date=DATE/' \
-        -e 's/##time=[0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}/##time=TIME/'
-}
+echo "running positive tests..."
+make ${OPTS} -C test_v2/ positives
 
-pass=0
-fail=0
-errors=()
+echo "running negative tests..."
+make ${OPTS} -C test_v2/ negatives
 
-for t in "${SAMPLES[@]}"; do
-    bin="$BIN_DIR/$t"
-    expected="$TEST_DIR/$t.expected"
-
-    if [[ ! -x "$bin" ]]; then
-        echo "SKIP $t (binary not found)"
-        continue
-    fi
-
-    actual=$("$bin" 2>&1 | normalize)
-
-    if [[ $UPDATE -eq 1 ]]; then
-        printf '%s\n' "$actual" > "$expected"
-        echo "UPDATE $t"
-        continue
-    fi
-
-    if [[ ! -f "$expected" ]]; then
-        echo "FAIL $t (no .expected file)"
-        ((fail++)) || true
-        errors+=("$t")
-        continue
-    fi
-
-    expected_content=$(normalize < "$expected")
-
-    if [[ "$actual" == "$expected_content" ]]; then
-        echo "PASS $t"
-        ((pass++)) || true
-    else
-        echo "FAIL $t"
-        diff <(printf '%s\n' "$expected_content") <(printf '%s\n' "$actual") | head -20
-        ((fail++)) || true
-        errors+=("$t")
-    fi
-done
-
-if [[ $UPDATE -eq 1 ]]; then
-    echo "Updated ${#SAMPLES[@]} expected files."
-    exit 0
-fi
-
-echo ""
-echo "$pass passed, $fail failed"
-
-# Negative compile-error suite — disabled cases marked with //-EXPECT-ERROR:
-# in test/*.sl. Counted into the overall pass/fail tally; non-zero failures
-# fail the run.
-echo ""
-NEG_SCRIPT="$TEST_DIR/run_negatives.sh"
-if [[ -x "$NEG_SCRIPT" ]]; then
-    NEG_SAMPLES=()
-    for t in "${SAMPLES[@]}"; do NEG_SAMPLES+=("$TEST_DIR/$t.sl"); done
-    if "$NEG_SCRIPT" "${NEG_SAMPLES[@]}"; then
-        :
-    else
-        ((fail++)) || true
-        errors+=("negatives")
-    fi
-fi
-
-[[ $fail -eq 0 ]]
+echo "done!"

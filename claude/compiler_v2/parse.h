@@ -9,17 +9,21 @@ namespace parse {
 enum class Kind {
     kProgram,
     kFunctionDef,
+    kFunctionDecl,
+    kVarDeclStmt,
+    kAssignStmt,
     kCallStmt,
     kReturnStmt,
     kStringLiteral,
     kIntLiteral,
+    kCharLiteral,
 };
 
 struct Node {
     Kind kind;
-    std::string name;          // function name, callee name
-    std::string text;          // literal value (string / int as text)
-    std::string return_type;   // function return type (text)
+    std::string name;          // function name, callee name, variable name
+    std::string text;          // literal value (string / int as text / char codepoint)
+    std::string return_type;   // function return type; reused for VarDecl's declared type
     std::vector<std::unique_ptr<Node>> children;
 };
 

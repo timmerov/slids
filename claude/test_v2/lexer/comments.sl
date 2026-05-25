@@ -26,5 +26,6 @@ get uncommented one at a time by the runner.
 // [*][\\][\n][/]
 
 int32 main() {
+    __println("Hello, World!");
     return 0;
 }

@@ -1,23 +1,28 @@
-compiler_v2 — known gaps after hello.sl lands
+compiler_v2 — known gaps
 
 GRAMMAR
-  * <type> only recognizes int32; other primitives missing
-    (int, int8, int16, int64, uint, uint8, uint16, uint32, uint64,
-     char, intptr, float, float32, float64, bool, void)
+  * <type> recognizes only int32, char, char[]
+    - missing primitives: int, int8, int16, int64, uint, uint8, uint16, uint32, uint64,
+      intptr, float, float32, float64, bool, void
+    - no other array shapes (T[N], multi-dim, etc.)
   * parameter lists not parsed (only bare `()`)
-  * expression parsing: literals only (string, int)
-    - no identifiers / variables
-    - no binary operators, unary operators, function calls inside expressions
+  * expression parsing: literal leaves only (string, int, char)
+    - no identifier read (variable references in expression position)
+    - no binary or unary operators
+    - no function calls inside expressions
     - no field access, no index, no cast
   * call statements: exactly one argument
     - zero-arg calls not parsed
     - multi-arg calls not parsed
-  * top-level: only function definitions
-    - no imports
+  * top-level: only function definitions and function declarations
+    - imports work (lex-time wrapper expands them; grammar accepts declarations
+      from imported .slh files)
     - no classes, namespaces, enums, aliases, globals
-    - no function declarations (only definitions)
-  * statement-level: only return and call-stmt
-    - no var decls, no if/else, no for/while, no assign, no block
+    - function signatures are name + bare `()` only — no params, no overloads
+    - no duplicate-declaration check (same name twice silently dedup'd by
+      codegen skipping FunctionDecl nodes; will need real symbol resolution)
+  * statement-level: only var-decl, assign, call, return
+    - no if/else, no for/while, no block, no compound assignment
 
 DESUGAR
   * identity-copy from parse -> ast; no canonicalization
@@ -29,9 +34,11 @@ OPTIMIZE / LAYOUT
   * no-op; no perf rewrites, no name mangling, no field-offset computation
 
 CODEGEN
-  * only handles __println / __print (single string-literal arg)
-    and integer-literal `return`
-  * any other call errors via diagnostic
+  * VarDecl alloca'd at use site, not at function entry (works for now since
+    no control flow; will matter once if/for show up)
+  * AssignStmt: only direct identifier lvalues (no field, no index)
+  * llvmTypeFor handles int32/char/char[]; everything else is an error
+  * return value not type-checked against function return type
   * target triple hard-coded to x86_64-pc-linux-gnu
 
 ERROR REPORTING
@@ -40,8 +47,9 @@ ERROR REPORTING
     don't yet carry back-pointers to source tokens
 
 PRINT INTRINSIC (print.h / print.cpp)
-  * walks the ast; single string-literal arg only
+  * handles __println / __print with a single string-literal arg only
   * no `+` concat chains
   * no slice / non-literal segments
-  * easy to delete: drop print.* + the three call sites in codegen.cpp +
-    the SRCS entry in Makefile
+  * shares strings::Pool with the rest of codegen — easy to delete:
+    remove print.* + the two call sites in codegen.cpp (the print::collect
+    and print::tryEmitCall) + the SRCS entry in Makefile

@@ -15,10 +15,14 @@ ast::Kind toAstKind(parse::Kind k) {
     switch (k) {
         case parse::Kind::kProgram:       return ast::Kind::kProgram;
         case parse::Kind::kFunctionDef:   return ast::Kind::kFunctionDef;
+        case parse::Kind::kFunctionDecl:  return ast::Kind::kFunctionDecl;
+        case parse::Kind::kVarDeclStmt:   return ast::Kind::kVarDeclStmt;
+        case parse::Kind::kAssignStmt:    return ast::Kind::kAssignStmt;
         case parse::Kind::kCallStmt:      return ast::Kind::kCallStmt;
         case parse::Kind::kReturnStmt:    return ast::Kind::kReturnStmt;
         case parse::Kind::kStringLiteral: return ast::Kind::kStringLiteral;
         case parse::Kind::kIntLiteral:    return ast::Kind::kIntLiteral;
+        case parse::Kind::kCharLiteral:   return ast::Kind::kCharLiteral;
     }
     assert(false && "toAstKind: unhandled parse::Kind");
     __builtin_unreachable();

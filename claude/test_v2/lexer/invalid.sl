@@ -31,5 +31,7 @@ int32 main() {
     //-EXPECT-ERROR: unknown escape sequence: '\q'
     // str = "Hello [\\]q World!";
 
+    __println("Hello, World!");
+
     return 0;
 }

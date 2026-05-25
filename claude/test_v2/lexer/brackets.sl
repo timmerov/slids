@@ -43,5 +43,6 @@ get uncommented one at a time by the runner.
 // [
 
 int32 main() {
+    __println("Hello, World!");
     return 0;
 }

@@ -9,12 +9,15 @@ BUILD_DIR = ../../build/test_v2/parser
 SAMPLES = \
 	hello
 
-.PHONY: all clean negatives $(SAMPLES)
+.PHONY: all clean negatives positives $(SAMPLES)
 
 all: $(SAMPLES)
 
 negatives:
 	@../run_negatives.sh $(addsuffix .sl,$(SAMPLES))
+
+positives: all
+	@../run_positives.sh parser $(SAMPLES)
 
 define SAMPLE_RULES
 $(1): $(BIN_DIR)/$(1)
