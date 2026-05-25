@@ -1,0 +1,47 @@
+compiler_v2 — known gaps after hello.sl lands
+
+GRAMMAR
+  * <type> only recognizes int32; other primitives missing
+    (int, int8, int16, int64, uint, uint8, uint16, uint32, uint64,
+     char, intptr, float, float32, float64, bool, void)
+  * parameter lists not parsed (only bare `()`)
+  * expression parsing: literals only (string, int)
+    - no identifiers / variables
+    - no binary operators, unary operators, function calls inside expressions
+    - no field access, no index, no cast
+  * call statements: exactly one argument
+    - zero-arg calls not parsed
+    - multi-arg calls not parsed
+  * top-level: only function definitions
+    - no imports
+    - no classes, namespaces, enums, aliases, globals
+    - no function declarations (only definitions)
+  * statement-level: only return and call-stmt
+    - no var decls, no if/else, no for/while, no assign, no block
+
+DESUGAR
+  * identity-copy from parse -> ast; no canonicalization
+
+CLASSIFY
+  * no-op; no symbol resolution, no type inference, no overload resolution
+
+OPTIMIZE / LAYOUT
+  * no-op; no perf rewrites, no name mangling, no field-offset computation
+
+CODEGEN
+  * only handles __println / __print (single string-literal arg)
+    and integer-literal `return`
+  * any other call errors via diagnostic
+  * target triple hard-coded to x86_64-pc-linux-gnu
+
+ERROR REPORTING
+  * parser error messages are minimal ("expected '...'"); no suggestions, no notes
+  * codegen errors use (-1, -1) sentinel attribution because parse/ast nodes
+    don't yet carry back-pointers to source tokens
+
+PRINT INTRINSIC (print.h / print.cpp)
+  * walks the ast; single string-literal arg only
+  * no `+` concat chains
+  * no slice / non-literal segments
+  * easy to delete: drop print.* + the three call sites in codegen.cpp +
+    the SRCS entry in Makefile

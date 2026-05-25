@@ -1,13 +1,9 @@
 #include "parse.h"
 
-#include <utility>
-
 namespace parse {
 
-void addProgram(Tree& tree) {
-    auto node = std::make_unique<Node>();
-    node->kind = 1;   // kProgram
-    tree.nodes.push_back(std::move(node));
-}
+// All parse-tree manipulation is currently inline in the header types.
+// Stays as a translation unit so the build system has somewhere to put
+// the .o, and so future product APIs have a natural home.
 
 }  // namespace parse
