@@ -92,6 +92,13 @@ struct Parser {
             advance();
             return node;
         }
+        if (t.kind == token::Kind::kIdentifier) {
+            auto node = std::make_unique<parse::Node>();
+            node->kind = parse::Kind::kIdentExpr;
+            node->name = t.text;
+            advance();
+            return node;
+        }
         error("expected expression");
         return nullptr;
     }
@@ -105,11 +112,17 @@ struct Parser {
         }
         std::string name = peek().text;
         advance();
-        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
         auto node = std::make_unique<parse::Node>();
         node->kind = parse::Kind::kVarDeclStmt;
         node->name = std::move(name);
         node->return_type = std::move(type);
+        if (peek().kind == token::Kind::kEquals) {
+            advance();
+            auto init = parseExpr();
+            if (!init) return nullptr;
+            node->children.push_back(std::move(init));
+        }
+        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
         return node;
     }
 

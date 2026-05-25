@@ -1,7 +1,6 @@
 #include "codegen.h"
 
 #include <cassert>
-#include <map>
 #include <ostream>
 #include <sstream>
 #include <string>
@@ -15,13 +14,6 @@ namespace codegen {
 
 namespace {
 
-struct VarInfo {
-    std::string alloca_name;   // e.g. "%ch"
-    std::string llvm_type;     // e.g. "i8", "i32", "ptr"
-};
-
-using SymTab = std::map<std::string, VarInfo>;
-
 std::string llvmTypeFor(std::string const& slids_type, diagnostic::Sink& diag) {
     if (slids_type == "int32")  return "i32";
     if (slids_type == "char")   return "i8";
@@ -34,8 +26,6 @@ std::string llvmTypeFor(std::string const& slids_type, diagnostic::Sink& diag) {
 std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                      strings::Pool& pool, std::ostream& out,
                      diagnostic::Sink& diag) {
-    (void)syms;
-    (void)out;
     switch (expr.kind) {
         case ast::Kind::kIntLiteral:
             return expr.text;
@@ -44,6 +34,19 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kStringLiteral: {
             int id = strings::add(pool, expr.text);
             return std::string("@.str_") + std::to_string(id);
+        }
+        case ast::Kind::kIdentExpr: {
+            auto it = syms.find(expr.name);
+            if (it == syms.end()) {
+                diagnostic::report(diag, {-1, -1,
+                    "codegen: unknown variable '" + expr.name + "'", {}});
+                return "0";
+            }
+            static int tmp_counter = 0;
+            std::string tmp = std::string("%ld_") + std::to_string(tmp_counter++);
+            out << "  " << tmp << " = load " << it->second.llvm_type
+                << ", ptr " << it->second.alloca_name << "\n";
+            return tmp;
         }
         case ast::Kind::kProgram:
         case ast::Kind::kFunctionDef:
@@ -69,6 +72,11 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             std::string regname = std::string("%") + stmt.name;
             out << "  " << regname << " = alloca " << llty << "\n";
             syms[stmt.name] = {regname, llty};
+            if (!stmt.children.empty()) {
+                std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag);
+                out << "  store " << llty << " " << val
+                    << ", ptr " << regname << "\n";
+            }
             return;
         }
         case ast::Kind::kAssignStmt: {
@@ -84,20 +92,23 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             return;
         }
         case ast::Kind::kCallStmt:
-            if (!print::tryEmitCall(stmt, cs, out)) {
+            if (!print::tryEmitCall(stmt, cs, syms, out)) {
                 diagnostic::report(diag, {-1, -1,
                     "codegen: unknown call '" + stmt.name + "'", {}});
             }
             return;
-        case ast::Kind::kReturnStmt:
-            out << "  ret i32 " << stmt.children[0]->text << "\n";
+        case ast::Kind::kReturnStmt: {
+            std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag);
+            out << "  ret i32 " << val << "\n";
             return;
+        }
         case ast::Kind::kProgram:
         case ast::Kind::kFunctionDef:
         case ast::Kind::kFunctionDecl:
         case ast::Kind::kStringLiteral:
         case ast::Kind::kIntLiteral:
         case ast::Kind::kCharLiteral:
+        case ast::Kind::kIdentExpr:
             diagnostic::report(diag, {-1, -1,
                 "codegen: unexpected node kind in statement position", {}});
             return;
@@ -123,8 +134,6 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     strings::Pool pool;
     print::CallStrings cs = print::collect(tree, pool);
 
-    // Buffer function bodies so any string literals encountered during emit
-    // (from assignments etc.) get registered in the pool before we flush.
     std::ostringstream body;
     for (auto const& n : tree.nodes) {
         if (n->kind != ast::Kind::kProgram) continue;

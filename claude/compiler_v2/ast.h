@@ -17,6 +17,7 @@ enum class Kind {
     kStringLiteral,
     kIntLiteral,
     kCharLiteral,
+    kIdentExpr,
 };
 
 struct Node {

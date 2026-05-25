@@ -6,8 +6,7 @@ GRAMMAR
       intptr, float, float32, float64, bool, void
     - no other array shapes (T[N], multi-dim, etc.)
   * parameter lists not parsed (only bare `()`)
-  * expression parsing: literal leaves only (string, int, char)
-    - no identifier read (variable references in expression position)
+  * expression parsing: literal leaves (string, int, char) + bare identifier
     - no binary or unary operators
     - no function calls inside expressions
     - no field access, no index, no cast
@@ -47,9 +46,15 @@ ERROR REPORTING
     don't yet carry back-pointers to source tokens
 
 PRINT INTRINSIC (print.h / print.cpp)
-  * handles __println / __print with a single string-literal arg only
+  * handles __println / __print with a single arg only:
+    - string literal  -> printf(@.str_N)
+    - bare identifier -> load + printf("%s\n", val); assumes the ident's
+                         llvm-type is `ptr` (i.e. char[]); other types
+                         produce a printf("%s", non-ptr) at runtime which
+                         will misinterpret the value
   * no `+` concat chains
   * no slice / non-literal segments
-  * shares strings::Pool with the rest of codegen — easy to delete:
-    remove print.* + the two call sites in codegen.cpp (the print::collect
-    and print::tryEmitCall) + the SRCS entry in Makefile
+  * no multi-arg
+  * shares strings::Pool with the rest of codegen; depends on codegen::SymTab
+    via codegen.h. To delete: remove print.* + the two call sites in
+    codegen.cpp + the SRCS entry in Makefile.
