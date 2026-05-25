@@ -371,6 +371,41 @@ struct Parser {
         return node;
     }
 
+    // Map an augmented-assign token kind to its op string. Returns nullptr
+    // for tokens that aren't augmented-assigns.
+    static char const* augAssignOp(token::Kind k) {
+        if (k == token::Kind::kPlusEq)    return "+";
+        if (k == token::Kind::kMinusEq)   return "-";
+        if (k == token::Kind::kStarEq)    return "*";
+        if (k == token::Kind::kSlashEq)   return "/";
+        if (k == token::Kind::kPercentEq) return "%";
+        if (k == token::Kind::kBitAndEq)  return "&";
+        if (k == token::Kind::kBitOrEq)   return "|";
+        if (k == token::Kind::kBitXorEq)  return "^";
+        if (k == token::Kind::kLShiftEq)  return "<<";
+        if (k == token::Kind::kRShiftEq)  return ">>";
+        if (k == token::Kind::kAndEq)     return "&&";
+        if (k == token::Kind::kOrEq)      return "||";
+        if (k == token::Kind::kXorXorEq)  return "^^";
+        return nullptr;
+    }
+
+    std::unique_ptr<parse::Node> parseAugAssignStmt() {
+        std::string name = peek().text;
+        advance();   // ident
+        char const* op = augAssignOp(peek().kind);
+        advance();   // op= (caller verified via lookahead + augAssignOp)
+        auto expr = parseExpr();
+        if (!expr) return nullptr;
+        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+        auto node = std::make_unique<parse::Node>();
+        node->kind = parse::Kind::kAugAssignStmt;
+        node->name = std::move(name);
+        node->text = op;
+        node->children.push_back(std::move(expr));
+        return node;
+    }
+
     std::unique_ptr<parse::Node> parseCallStmt() {
         std::string callee = peek().text;
         advance();   // ident
@@ -405,6 +440,7 @@ struct Parser {
             token::Kind next = peekKind(1);
             if (next == token::Kind::kEquals) return parseAssignStmt();
             if (next == token::Kind::kLParen) return parseCallStmt();
+            if (augAssignOp(next) != nullptr) return parseAugAssignStmt();
             error("expected '=' or '(' after identifier");
             return nullptr;
         }

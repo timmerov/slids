@@ -136,7 +136,11 @@ bool tryEmitCall(ast::Node const& call, codegen::SymTab const& syms,
             continue;
         }
 
-        fmt += "<?>";
+        // Not yet implemented: pointer segments (Phase 4), tuple segments
+        // (Phase 4), slid-typed segments with user-defined __str (Phase 5),
+        // enum segments. Each lands with its phase.
+        diagnostic::report(diag, {-1, -1,
+            "print: segment of type '" + sty + "' not yet supported", {}});
     }
 
     if (newline) fmt += "\n";

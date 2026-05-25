@@ -1,6 +1,8 @@
 /*
 test implementation of expressions.
 
+simplify to ints only to focus on the parser.
+
 unary: + - ~ !
 binary:
     math: + - * / %
@@ -127,6 +129,62 @@ int32 main() {
     __println("aiz= " + aiz);
     __println("oiz= " + oiz);
     __println("xiz= " + xiz);
+
+    int c = 12;
+
+    bool eqAB = a == b;
+    bool eqAC = a == c;
+    bool neAB = a != b;
+    bool neAC = a != c;
+    bool ltAB = a < b;
+    bool ltAC = a < c;
+    bool leAB = a <= b;
+    bool leAC = a <= c;
+    bool gtAB = a > b;
+    bool gtAC = a > c;
+    bool geAB = a >= b;
+    bool geAC = a >= c;
+    __println("eqAB= " + eqAB);
+    __println("eqAC= " + eqAC);
+    __println("neAB= " + neAB);
+    __println("neAC= " + neAC);
+    __println("ltAB= " + ltAB);
+    __println("ltAC= " + ltAC);
+    __println("leAB= " + leAB);
+    __println("leAC= " + leAC);
+    __println("gtAB= " + gtAB);
+    __println("gtAC= " + gtAC);
+    __println("geAB= " + geAB);
+    __println("geAC= " + geAC);
+
+    bool eqL = 12 == 5;
+    bool neL = 12 != 5;
+    bool ltL = 12 < 5;
+    bool leL = 12 <= 5;
+    bool gtL = 12 > 5;
+    bool geL = 12 >= 5;
+    __println("eqL= " + eqL);
+    __println("neL= " + neL);
+    __println("ltL= " + ltL);
+    __println("leL= " + leL);
+    __println("gtL= " + gtL);
+    __println("geL= " + geL);
+
+    int addEq = 100;  addEq += 5;    __println("addEq= " + addEq);
+    int subEq = 100;  subEq -= 5;    __println("subEq= " + subEq);
+    int mulEq = 100;  mulEq *= 3;    __println("mulEq= " + mulEq);
+    int divEq = 100;  divEq /= 7;    __println("divEq= " + divEq);
+    int modEq = 100;  modEq %= 7;    __println("modEq= " + modEq);
+
+    int andEq = 12;   andEq &= 5;    __println("andEq= " + andEq);
+    int orEq  = 12;   orEq  |= 5;    __println("orEq= "  + orEq);
+    int xorEq = 12;   xorEq ^= 5;    __println("xorEq= " + xorEq);
+    int shlEq = 12;   shlEq <<= 2;   __println("shlEq= " + shlEq);
+    int shrEq = 12;   shrEq >>= 2;   __println("shrEq= " + shrEq);
+
+    bool laEq = true;  laEq &&= 0;   __println("laEq= " + laEq);
+    bool loEq = false; loEq ||= 7;   __println("loEq= " + loEq);
+    bool lxEq = true;  lxEq ^^= 7;   __println("lxEq= " + lxEq);
 
     return 0;
 }

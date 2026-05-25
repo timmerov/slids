@@ -22,6 +22,7 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kFunctionDecl:  return ast::Kind::kFunctionDecl;
         case parse::Kind::kVarDeclStmt:   return ast::Kind::kVarDeclStmt;
         case parse::Kind::kAssignStmt:    return ast::Kind::kAssignStmt;
+        case parse::Kind::kAugAssignStmt: return ast::Kind::kAugAssignStmt;
         case parse::Kind::kCallStmt:      return ast::Kind::kCallStmt;
         case parse::Kind::kReturnStmt:    return ast::Kind::kReturnStmt;
         case parse::Kind::kStringLiteral: return ast::Kind::kStringLiteral;
@@ -101,7 +102,8 @@ void foldBitNotIntText(std::string& text) {
 // node carrying the folded result; otherwise return nullptr.
 std::unique_ptr<ast::Node> tryFoldUnary(ast::Node& node) {
     if (node.kind != ast::Kind::kUnaryExpr) return nullptr;
-    if (node.children.size() != 1) return nullptr;
+    assert(node.children.size() == 1
+        && "tryFoldUnary: UnaryExpr needs 1 child");
     ast::Node& operand = *node.children[0];
     std::string const& op = node.text;
 
@@ -155,6 +157,31 @@ std::unique_ptr<ast::Node> tryFoldUnary(ast::Node& node) {
     return nullptr;
 }
 
+// Rewrite `lhs op= rhs;` into `lhs = lhs op rhs;`. Only fires when `node` is
+// a kAugAssignStmt. Lvalue is a bare ident today — when complex lvalues land
+// (`arr[f()] += 1`), bind the lhs to a tmp here to avoid double-evaluation.
+std::unique_ptr<ast::Node> tryDesugarAugAssign(ast::Node& node) {
+    if (node.kind != ast::Kind::kAugAssignStmt) return nullptr;
+    assert(node.children.size() == 1
+        && "tryDesugarAugAssign: AugAssignStmt needs 1 rhs child");
+
+    auto lhs_ref = std::make_unique<ast::Node>();
+    lhs_ref->kind = ast::Kind::kIdentExpr;
+    lhs_ref->name = node.name;
+
+    auto binop = std::make_unique<ast::Node>();
+    binop->kind = ast::Kind::kBinaryExpr;
+    binop->text = node.text;
+    binop->children.push_back(std::move(lhs_ref));
+    binop->children.push_back(std::move(node.children[0]));
+
+    auto out = std::make_unique<ast::Node>();
+    out->kind = ast::Kind::kAssignStmt;
+    out->name = std::move(node.name);
+    out->children.push_back(std::move(binop));
+    return out;
+}
+
 std::unique_ptr<ast::Node> copyNode(parse::Node const& p) {
     auto node = std::make_unique<ast::Node>();
     node->kind = toAstKind(p.kind);
@@ -165,6 +192,7 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p) {
         node->children.push_back(copyNode(*c));
     }
     if (auto folded = tryFoldUnary(*node)) return folded;
+    if (auto rewritten = tryDesugarAugAssign(*node)) return rewritten;
     return node;
 }
 

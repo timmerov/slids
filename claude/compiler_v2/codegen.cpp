@@ -104,6 +104,7 @@ std::string emitToBool(std::string const& val, std::string const& slids_type,
 std::string emitLogical(ast::Node const& expr, SymTab const& syms,
                         strings::Pool& pool, std::ostream& out,
                         diagnostic::Sink& diag) {
+    assert(expr.children.size() == 2 && "emitLogical: BinaryExpr needs 2 children");
     std::string const& op = expr.text;
     ast::Node const& lhs = *expr.children[0];
     ast::Node const& rhs = *expr.children[1];
@@ -160,6 +161,7 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
                       strings::Pool& pool, std::ostream& out,
                       diagnostic::Sink& diag,
                       std::string const& dest_type) {
+    assert(expr.children.size() == 1 && "emitUnary: UnaryExpr needs 1 child");
     std::string const& op = expr.text;
     ast::Node const& operand = *expr.children[0];
 
@@ -190,6 +192,9 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
         out << "  " << tmp << " = icmp eq " << llty << " " << v << ", 0\n";
         return tmp;
     }
+    // Not yet implemented: prefix `++` / `--` (PPID, Phase 1 per todo.txt),
+    // prefix `^` (address-of, Phase 4 pointers), `#` stringify (Phase 5),
+    // `<const>` / `<Type^>` casts (Phase 4/6). Each lands with its phase.
     diagnostic::report(diag, {-1, -1,
         "codegen: unary operator '" + op + "' not yet supported", {}});
     return "0";
@@ -199,6 +204,7 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
                        strings::Pool& pool, std::ostream& out,
                        diagnostic::Sink& diag,
                        std::string const& dest_type) {
+    assert(expr.children.size() == 2 && "emitBinary: BinaryExpr needs 2 children");
     std::string const& op = expr.text;
     ast::Node const& lhs = *expr.children[0];
     ast::Node const& rhs = *expr.children[1];
@@ -256,6 +262,10 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
         else if (op == ">>") instr = uns ? "lshr" : "ashr";
     }
     if (instr.empty()) {
+        // Not yet implemented: float `%` (frem), slid-typed operands routed
+        // to user op-overload (Phase 5), pointer-typed operands (Phase 4).
+        // Mixed-type operands (e.g. int + int8) need a promotion pass before
+        // reaching here — lands when classify gains type inference.
         diagnostic::report(diag, {-1, -1,
             "codegen: binary operator '" + op + "' on '" + dest_type
             + "' not yet supported", {}});
@@ -314,6 +324,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kFunctionDecl:
         case ast::Kind::kVarDeclStmt:
         case ast::Kind::kAssignStmt:
+        case ast::Kind::kAugAssignStmt:
         case ast::Kind::kCallStmt:
         case ast::Kind::kReturnStmt:
             diagnostic::report(diag, {-1, -1,
@@ -370,6 +381,12 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             out << "  ret " << llty << " " << val << "\n";
             return;
         }
+        case ast::Kind::kAugAssignStmt:
+            // Desugar lowers every kAugAssignStmt to kAssignStmt before
+            // codegen runs; reaching here means the rewrite was skipped.
+            diagnostic::report(diag, {-1, -1,
+                "codegen: kAugAssignStmt survived desugar", {}});
+            return;
         case ast::Kind::kProgram:
         case ast::Kind::kFunctionDef:
         case ast::Kind::kFunctionDecl:
@@ -415,36 +432,42 @@ std::string exprType(ast::Node const& expr, SymTab const& syms) {
             return it->second.slids_type;
         }
         case ast::Kind::kUnaryExpr: {
+            assert(expr.children.size() == 1
+                && "exprType: UnaryExpr needs 1 child");
             std::string const& op = expr.text;
             if (op == "!") return "bool";
             if (op == "+" || op == "-" || op == "~") {
-                if (expr.children.empty()) return "";
                 return exprType(*expr.children[0], syms);
             }
-            return "";
+            assert(false && "exprType: unhandled unary op");
+            __builtin_unreachable();
         }
         case ast::Kind::kBinaryExpr: {
+            assert(expr.children.size() == 2
+                && "exprType: BinaryExpr needs 2 children");
             std::string const& op = expr.text;
             if (op == "==" || op == "!=" || op == "<" || op == "<="
              || op == ">"  || op == ">="
              || op == "&&" || op == "||" || op == "^^") return "bool";
-            if (expr.children.empty()) return "";
             std::string lt = exprType(*expr.children[0], syms);
             if (!lt.empty()) return lt;
-            if (expr.children.size() >= 2)
-                return exprType(*expr.children[1], syms);
-            return "";
+            return exprType(*expr.children[1], syms);
         }
         case ast::Kind::kProgram:
         case ast::Kind::kFunctionDef:
         case ast::Kind::kFunctionDecl:
         case ast::Kind::kVarDeclStmt:
         case ast::Kind::kAssignStmt:
+        case ast::Kind::kAugAssignStmt:
         case ast::Kind::kCallStmt:
         case ast::Kind::kReturnStmt:
-            return "";
+            // No caller passes statement-kind nodes; arrival here is a bug
+            // upstream, and there's no diagnostic site that would surface it.
+            assert(false && "exprType: called on a statement-kind node");
+            __builtin_unreachable();
     }
-    return "";
+    assert(false && "exprType: unhandled ast::Kind");
+    __builtin_unreachable();
 }
 
 void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {

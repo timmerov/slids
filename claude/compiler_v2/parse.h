@@ -12,6 +12,7 @@ enum class Kind {
     kFunctionDecl,
     kVarDeclStmt,
     kAssignStmt,
+    kAugAssignStmt,  // name = lhs, text = op (e.g. "+", "&&"); children[0] = rhs
     kCallStmt,
     kReturnStmt,
     kStringLiteral,

@@ -12,6 +12,7 @@ enum class Kind {
     kFunctionDecl,
     kVarDeclStmt,
     kAssignStmt,
+    kAugAssignStmt,
     kCallStmt,
     kReturnStmt,
     kStringLiteral,
