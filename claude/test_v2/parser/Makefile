@@ -8,7 +8,7 @@ BUILD_DIR = ../../build/test_v2/parser
 
 SAMPLES = \
 	hello \
-	primitive
+	widen
 
 .PHONY: all clean negatives positives $(SAMPLES)
 
