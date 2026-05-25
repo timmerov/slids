@@ -19,7 +19,7 @@ the ppid rule has implications for parameters.
 
 augmented assignments: += -= *= /= %= &= |= ^= <<= >>= &&= ||= ^^=
 
-augmented assignements are handled in the desugar stage.
+augmented assignments are handled in the desugar stage.
 */
 
 int32 main() {
@@ -42,6 +42,52 @@ int32 main() {
     __println("n5= " + n5);
     __println("c5= " + c5);
     __println("b5= " + b5);
+
+    int a = 12;
+    int b = 5;
+    int sum = a + b;
+    int dif = a - b;
+    int prd = a * b;
+    int quo = a / b;
+    int rem = a % b;
+    __println("sum= " + sum);
+    __println("dif= " + dif);
+    __println("prd= " + prd);
+    __println("quo= " + quo);
+    __println("rem= " + rem);
+
+    int sumL = 12 + 5;
+    int difL = 12 - 5;
+    int prdL = 12 * 5;
+    int quoL = 12 / 5;
+    int remL = 12 % 5;
+    __println("sumL= " + sumL);
+    __println("difL= " + difL);
+    __println("prdL= " + prdL);
+    __println("quoL= " + quoL);
+    __println("remL= " + remL);
+
+    int band = a & b;
+    int bor  = a | b;
+    int bxor = a ^ b;
+    int shl  = a << 2;
+    int shr  = a >> 2;
+    __println("band= " + band);
+    __println("bor= "  + bor);
+    __println("bxor= " + bxor);
+    __println("shl= "  + shl);
+    __println("shr= "  + shr);
+
+    int bandL = 12 & 5;
+    int borL  = 12 | 5;
+    int bxorL = 12 ^ 5;
+    int shlL  = 12 << 2;
+    int shrL  = 12 >> 2;
+    __println("bandL= " + bandL);
+    __println("borL= "  + borL);
+    __println("bxorL= " + bxorL);
+    __println("shlL= "  + shlL);
+    __println("shrL= "  + shrL);
 
     return 0;
 }
