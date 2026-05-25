@@ -1,22 +1,22 @@
 #pragma once
 
 #include <iosfwd>
-#include <map>
 
 #include "codegen.h"
 
-namespace ast { struct Node; struct Tree; }
+namespace ast { struct Node; }
+namespace diagnostic { struct Sink; }
 namespace strings { struct Pool; }
 
 namespace print {
 
-struct CallStrings {
-    std::map<ast::Node const*, int> call_to_str_id;   // string-literal arg → str id
-    std::map<ast::Node const*, int> call_to_fmt_id;   // ident arg → fmt str id
-};
-
-CallStrings collect(ast::Tree const& tree, strings::Pool& pool);
-bool tryEmitCall(ast::Node const& call_node, CallStrings const& cs,
-                 codegen::SymTab const& syms, std::ostream& out);
+// Emits a __println / __print intrinsic call. Flattens any left-leaning '+'
+// chain in the single argument into segments, classifies each segment via
+// codegen::exprType, builds a composite printf format string, and emits one
+// printf with all collected varargs. Returns false if the callee name isn't
+// a print intrinsic.
+bool tryEmitCall(ast::Node const& call_node, codegen::SymTab const& syms,
+                 strings::Pool& pool, std::ostream& out,
+                 diagnostic::Sink& diag);
 
 }  // namespace print

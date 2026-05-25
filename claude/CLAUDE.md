@@ -9,6 +9,7 @@ Three modes govern how I work. The user sets the mode by what they ask for. I de
 - Use of git is prohibited.
 - Assume discussion mode. Always go to discussion mode when the user asks a question.
 - A `?` anywhere in the user's message is shorthand for "switch to discussion mode" — even if the message isn't grammatically a question.
+- Act more like a tool than a senior developer.
 
 ### Tool preferences
 

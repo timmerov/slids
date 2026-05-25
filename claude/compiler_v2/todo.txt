@@ -1,4 +1,92 @@
-compiler_v2 — known gaps
+compiler_v2
+
+PLAN — feature implementation order
+
+Each phase adds primitives the next phase depends on. widen.cpp threads through
+every conversion site as features land; treat each new expr/decl/assign site
+as a widen call-out.
+
+Phase 0 — foundations (largely landed)
+  * lex stage + import wrapper
+  * diagnostic sink + source rendering
+  * build hygiene (-Wall -Werror -Wswitch-enum)
+  * widen primitives table + literal range checks
+
+Phase 1 — expression core
+  * unary operators (!, ~, full -)
+  * binary operators (arithmetic, comparison, bitwise, logical, shift)
+  * parenthesized expressions, precedence + associativity
+  * calls (zero-arg, one-arg, multi-arg)
+  * compound assigns (+=, -=, *=, /=, %=, &=, |=, ^=, <<=, >>=, ||=, &&=)
+  * PPID — pre/post-inc/dec via phrases
+
+Phase 2 — declarations + flow
+  * var decls (typed init, inferred init, declare-then-assign)
+  * blocks
+  * if / else, while
+  * for-loop (six shapes desugar to one canonical form)
+  * switch / case
+  * labeled break / continue
+  * return
+
+Phase 3 — functions
+  * definitions: params (typed + inferred), return type
+  * declarations (signature-only)
+  * overload resolution (arity → types → const)
+  * nested functions + capture analysis
+  * method dispatch (`.method()`)
+  * function pointers
+
+Phase 4 — types beyond primitives
+  * pointers (`^` reference, no arithmetic)
+  * iterators (`[]`, arithmetic allowed)
+  * memory mgmt (`new T(init)`, `new T[n]`, `delete ptr`)
+  * anonymous tuples (`(T1, T2, ...)`)
+  * type aliases (`alias X = T;`, `alias X<...> = T;`)
+  * constants
+  * enums
+
+Phase 5 — classes
+  * class definitions (fields, ctor, dtor, methods)
+  * inferred field types (`Foo(name = const_expr)`)
+  * operator overloading per slid
+  * move / swap (`<--`, `<-->`)
+  * destructor balance invariant
+  * for-each protocol (op[]+size OR begin/end/next)
+  * stringification operators (`##name`, `##type`, `#`)
+
+Phase 6 — const correctness
+  Threads through phases 3-5; land after classes have the bones.
+  * `const T` qualifier; lvalue carries const, rvalue read is mutable
+  * method-level const (`name(params) const { ... }`); const self
+  * pass-by-ref-to-const default for `T^`/`T[]` params; `mutable` opts out
+  * const-overload matcher (canonical-type strips "const" for match-key)
+  * const→mutable rejection at call sites
+  * write-through-const rejection at every assign-family site
+  * `<const>` cast — the only way to mint a const-value rvalue
+  * goal B (publish-side via transport `.slt` → `.slh`) — design-level only
+
+Phase 7 — class advanced
+  * reopens; incomplete-class semantics
+  * hoisted classes (file-scope hoist across reopens)
+  * derived classes
+  * virtual methods + virtual destructors
+  * inheritance contracts (`= default`, `= delete`)
+  * `instantiation` statement / unnamed instances (`Type(args);`, `Type;`)
+
+Phase 8 — namespaces + cross-TU
+  * namespaces (`Name {}`)
+  * .slh → .sl propagation (header → consumer, transitive impl-load)
+  * C interop (`= import`, `import {}`)
+  * globals (lazy ctor/dtor, sentinel + ensure widget, dtor walker, `global;`)
+
+Phase 9 — templates
+  * template functions
+  * template classes (plain, derived, with nested members)
+  * post-compile-pre-link stage (`--instantiate` aggregation)
+
+
+KNOWN GAPS — current state
 
 GRAMMAR
   * <type> recognizes all built-in primitives and <T>[] for any of them.

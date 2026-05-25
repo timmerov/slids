@@ -20,6 +20,8 @@ enum class Kind {
     kBoolLiteral,
     kFloatLiteral,
     kIdentExpr,
+    kUnaryExpr,    // text = op ("+", "-", "!", "~"); children[0] = operand
+    kBinaryExpr,   // text = op (e.g. "+", "<<", "&&"); children[0] = lhs, [1] = rhs
 };
 
 struct Node {

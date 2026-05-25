@@ -99,28 +99,22 @@ struct Parser {
         return type;
     }
 
-    std::unique_ptr<parse::Node> parseExpr() {
+    std::unique_ptr<parse::Node> parsePrimary() {
         token::Token const& t = peek();
-        if (t.kind == token::Kind::kMinus) {
-            advance();
-            auto inner = parseExpr();
-            if (!inner) return nullptr;
-            if (inner->kind != parse::Kind::kIntLiteral
-                && inner->kind != parse::Kind::kFloatLiteral) {
-                error("unary '-' requires a numeric literal");
-                return nullptr;
-            }
-            inner->text = "-" + inner->text;
-            return inner;
-        }
         if (t.kind == token::Kind::kStringLiteral) {
             auto node = std::make_unique<parse::Node>();
             node->kind = parse::Kind::kStringLiteral;
             node->text = t.text;
             advance();
+            // adjacent string-literal concat at the token level
+            while (peek().kind == token::Kind::kStringLiteral) {
+                node->text += peek().text;
+                advance();
+            }
             return node;
         }
-        if (t.kind == token::Kind::kIntLiteral) {
+        if (t.kind == token::Kind::kIntLiteral
+            || t.kind == token::Kind::kUintLiteral) {
             auto node = std::make_unique<parse::Node>();
             node->kind = parse::Kind::kIntLiteral;
             node->text = t.text;
@@ -155,8 +149,189 @@ struct Parser {
             advance();
             return node;
         }
+        if (t.kind == token::Kind::kLParen) {
+            advance();
+            auto inner = parseExpr();
+            if (!inner) return nullptr;
+            if (!expect(token::Kind::kRParen, ")")) return nullptr;
+            return inner;
+        }
         error("expected expression");
         return nullptr;
+    }
+
+    // Passthrough today. Field access, indexing, postfix-call, postfix-^/^^,
+    // postfix-++/-- all slot in here as their phases land.
+    std::unique_ptr<parse::Node> parsePostfix(std::unique_ptr<parse::Node> base) {
+        return base;
+    }
+
+    std::unique_ptr<parse::Node> parseUnary() {
+        token::Kind k = peek().kind;
+        char const* op = nullptr;
+        if      (k == token::Kind::kPlus)   op = "+";
+        else if (k == token::Kind::kMinus)  op = "-";
+        else if (k == token::Kind::kNot)    op = "!";
+        else if (k == token::Kind::kBitNot) op = "~";
+        if (op) {
+            advance();
+            auto operand = parseUnary();
+            if (!operand) return nullptr;
+            auto node = std::make_unique<parse::Node>();
+            node->kind = parse::Kind::kUnaryExpr;
+            node->text = op;
+            node->children.push_back(std::move(operand));
+            return node;
+        }
+        auto prim = parsePrimary();
+        if (!prim) return nullptr;
+        return parsePostfix(std::move(prim));
+    }
+
+    std::unique_ptr<parse::Node> makeBinary(std::string op,
+                                            std::unique_ptr<parse::Node> lhs,
+                                            std::unique_ptr<parse::Node> rhs) {
+        auto node = std::make_unique<parse::Node>();
+        node->kind = parse::Kind::kBinaryExpr;
+        node->text = std::move(op);
+        node->children.push_back(std::move(lhs));
+        node->children.push_back(std::move(rhs));
+        return node;
+    }
+
+    std::unique_ptr<parse::Node> parseMulDiv() {
+        auto left = parseUnary();
+        if (!left) return nullptr;
+        while (peek().kind == token::Kind::kStar
+            || peek().kind == token::Kind::kSlash
+            || peek().kind == token::Kind::kPercent) {
+            std::string op = peek().text;
+            advance();
+            auto right = parseUnary();
+            if (!right) return nullptr;
+            left = makeBinary(std::move(op), std::move(left), std::move(right));
+        }
+        return left;
+    }
+
+    std::unique_ptr<parse::Node> parseAddSub() {
+        auto left = parseMulDiv();
+        if (!left) return nullptr;
+        while (peek().kind == token::Kind::kPlus
+            || peek().kind == token::Kind::kMinus) {
+            std::string op = peek().text;
+            advance();
+            auto right = parseMulDiv();
+            if (!right) return nullptr;
+            left = makeBinary(std::move(op), std::move(left), std::move(right));
+        }
+        return left;
+    }
+
+    std::unique_ptr<parse::Node> parseShift() {
+        auto left = parseAddSub();
+        if (!left) return nullptr;
+        while (peek().kind == token::Kind::kLShift
+            || peek().kind == token::Kind::kRShift) {
+            std::string op = peek().text;
+            advance();
+            auto right = parseAddSub();
+            if (!right) return nullptr;
+            left = makeBinary(std::move(op), std::move(left), std::move(right));
+        }
+        return left;
+    }
+
+    std::unique_ptr<parse::Node> parseRelational() {
+        auto left = parseShift();
+        if (!left) return nullptr;
+        while (peek().kind == token::Kind::kLt
+            || peek().kind == token::Kind::kGt
+            || peek().kind == token::Kind::kLtEq
+            || peek().kind == token::Kind::kGtEq) {
+            std::string op = peek().text;
+            advance();
+            auto right = parseShift();
+            if (!right) return nullptr;
+            left = makeBinary(std::move(op), std::move(left), std::move(right));
+        }
+        return left;
+    }
+
+    std::unique_ptr<parse::Node> parseEquality() {
+        auto left = parseRelational();
+        if (!left) return nullptr;
+        while (peek().kind == token::Kind::kEqEq
+            || peek().kind == token::Kind::kNotEq) {
+            std::string op = peek().text;
+            advance();
+            auto right = parseRelational();
+            if (!right) return nullptr;
+            left = makeBinary(std::move(op), std::move(left), std::move(right));
+        }
+        return left;
+    }
+
+    std::unique_ptr<parse::Node> parseBitAnd() {
+        auto left = parseEquality();
+        if (!left) return nullptr;
+        while (peek().kind == token::Kind::kBitAnd) {
+            advance();
+            auto right = parseEquality();
+            if (!right) return nullptr;
+            left = makeBinary("&", std::move(left), std::move(right));
+        }
+        return left;
+    }
+
+    std::unique_ptr<parse::Node> parseBitXor() {
+        auto left = parseBitAnd();
+        if (!left) return nullptr;
+        while (peek().kind == token::Kind::kBitXor) {
+            advance();
+            auto right = parseBitAnd();
+            if (!right) return nullptr;
+            left = makeBinary("^", std::move(left), std::move(right));
+        }
+        return left;
+    }
+
+    std::unique_ptr<parse::Node> parseBitOr() {
+        auto left = parseBitXor();
+        if (!left) return nullptr;
+        while (peek().kind == token::Kind::kBitOr) {
+            advance();
+            auto right = parseBitXor();
+            if (!right) return nullptr;
+            left = makeBinary("|", std::move(left), std::move(right));
+        }
+        return left;
+    }
+
+    std::unique_ptr<parse::Node> parseLogicalAnd() {
+        auto left = parseBitOr();
+        if (!left) return nullptr;
+        while (peek().kind == token::Kind::kAnd) {
+            advance();
+            auto right = parseBitOr();
+            if (!right) return nullptr;
+            left = makeBinary("&&", std::move(left), std::move(right));
+        }
+        return left;
+    }
+
+    std::unique_ptr<parse::Node> parseExpr() {
+        auto left = parseLogicalAnd();
+        if (!left) return nullptr;
+        while (peek().kind == token::Kind::kOr
+            || peek().kind == token::Kind::kXorXor) {
+            std::string op = (peek().kind == token::Kind::kOr) ? "||" : "^^";
+            advance();
+            auto right = parseLogicalAnd();
+            if (!right) return nullptr;
+            left = makeBinary(std::move(op), std::move(left), std::move(right));
+        }
+        return left;
     }
 
     std::unique_ptr<parse::Node> parseVarDeclStmt() {

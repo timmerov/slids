@@ -20,6 +20,8 @@ enum class Kind {
     kBoolLiteral,
     kFloatLiteral,
     kIdentExpr,
+    kUnaryExpr,
+    kBinaryExpr,
 };
 
 struct Node {
