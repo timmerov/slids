@@ -7,7 +7,7 @@ BIN_DIR   = ../../bin
 BUILD_DIR = ../../build/test_v2/parser
 
 SAMPLES = \
-	expression \
+	expression1 expression2 \
 	hello \
 	widen
 

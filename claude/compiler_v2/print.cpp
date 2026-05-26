@@ -129,7 +129,7 @@ bool tryEmitCall(ast::Node const& call, codegen::SymTab const& syms,
                 v = ext;
                 llty = "i32";
             }
-            if (llty == "i64")        fmt += "%lld";
+            if (llty == "i64")        fmt += d.is_unsigned ? "%llu" : "%lld";
             else if (d.is_unsigned)   fmt += "%u";
             else                      fmt += "%d";
             args.push_back({llty, v});

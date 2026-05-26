@@ -172,7 +172,11 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
         std::string v = emitExpr(operand, syms, pool, out, diag, dest_type);
         std::string llty = llvmTypeFor(dest_type, diag);
         std::string tmp = newTmp("neg");
-        out << "  " << tmp << " = sub " << llty << " 0, " << v << "\n";
+        if (isFloatType(dest_type)) {
+            out << "  " << tmp << " = fneg " << llty << " " << v << "\n";
+        } else {
+            out << "  " << tmp << " = sub " << llty << " 0, " << v << "\n";
+        }
         return tmp;
     }
     if (op == "~") {
@@ -188,8 +192,15 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
         std::string v = emitExpr(operand, syms, pool, out, diag, operand_type);
         std::string llty = llvmTypeFor(operand_type, diag);
         std::string tmp = newTmp("lnot");
-        // 0-like → true, else false. Integer-truthiness: icmp eq 0.
-        out << "  " << tmp << " = icmp eq " << llty << " " << v << ", 0\n";
+        // 0-like → true, else false. Float uses fcmp oeq (so NaN is truthy,
+        // matching emitToBool's fcmp une). Integer uses icmp eq.
+        if (isFloatType(operand_type)) {
+            out << "  " << tmp << " = fcmp oeq " << llty << " "
+                << v << ", 0.0\n";
+        } else {
+            out << "  " << tmp << " = icmp eq " << llty << " "
+                << v << ", 0\n";
+        }
         return tmp;
     }
     // Not yet implemented: prefix `++` / `--` (PPID, Phase 1 per todo.txt),
