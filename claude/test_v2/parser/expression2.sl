@@ -296,13 +296,14 @@ int32 main() {
     bool ipLXor = ipA ^^ ipB;  __println("ipLXor= " + ipLXor);
     bool ipLNot = !ipA;        __println("ipLNot= " + ipLNot);
 
-    // float32 — math / comparison / logical / unary (no ~, no %, no bitwise, no shift)
+    // float32 — math (incl. %) / comparison / logical / unary (no ~, no bitwise, no shift)
     float32 f32A = 12.5;
     float32 f32B = 2.5;
     float32 f32Add = f32A + f32B;  __println("f32Add= " + f32Add);
     float32 f32Sub = f32A - f32B;  __println("f32Sub= " + f32Sub);
     float32 f32Mul = f32A * f32B;  __println("f32Mul= " + f32Mul);
     float32 f32Div = f32A / f32B;  __println("f32Div= " + f32Div);
+    float32 f32Mod = f32A % f32B;  __println("f32Mod= " + f32Mod);
     float32 f32Pos = +f32A;        __println("f32Pos= " + f32Pos);
     float32 f32Neg = -f32A;        __println("f32Neg= " + f32Neg);
     bool f32Eq   = f32A == f32B;   __println("f32Eq= "  + f32Eq);
@@ -315,6 +316,17 @@ int32 main() {
     bool f32LOr  = f32A || f32B;   __println("f32LOr= "  + f32LOr);
     bool f32LXor = f32A ^^ f32B;   __println("f32LXor= " + f32LXor);
     bool f32LNot = !f32A;          __println("f32LNot= " + f32LNot);
+    // float32 negatives — bitwise and shift not defined on floating-point.
+    //-EXPECT-ERROR: Bitwise '&' not defined on floating-point type 'float32'.
+    // float32 f32And = f32A & f32B;
+    //-EXPECT-ERROR: Bitwise '|' not defined on floating-point type 'float32'.
+    // float32 f32Or  = f32A | f32B;
+    //-EXPECT-ERROR: Bitwise '^' not defined on floating-point type 'float32'.
+    // float32 f32Xor = f32A ^ f32B;
+    //-EXPECT-ERROR: Shift '<<' not defined on floating-point type 'float32'.
+    // float32 f32Shl = f32A << 1;
+    //-EXPECT-ERROR: Shift '>>' not defined on floating-point type 'float32'.
+    // float32 f32Shr = f32A >> 1;
 
     // float64
     float64 f64A = 12.5;
@@ -323,6 +335,7 @@ int32 main() {
     float64 f64Sub = f64A - f64B;  __println("f64Sub= " + f64Sub);
     float64 f64Mul = f64A * f64B;  __println("f64Mul= " + f64Mul);
     float64 f64Div = f64A / f64B;  __println("f64Div= " + f64Div);
+    float64 f64Mod = f64A % f64B;  __println("f64Mod= " + f64Mod);
     float64 f64Pos = +f64A;        __println("f64Pos= " + f64Pos);
     float64 f64Neg = -f64A;        __println("f64Neg= " + f64Neg);
     bool f64Eq   = f64A == f64B;   __println("f64Eq= "  + f64Eq);
@@ -335,6 +348,17 @@ int32 main() {
     bool f64LOr  = f64A || f64B;   __println("f64LOr= "  + f64LOr);
     bool f64LXor = f64A ^^ f64B;   __println("f64LXor= " + f64LXor);
     bool f64LNot = !f64A;          __println("f64LNot= " + f64LNot);
+    // float64 negatives — bitwise and shift not defined on floating-point.
+    //-EXPECT-ERROR: Bitwise '&' not defined on floating-point type 'float64'.
+    // float64 f64And = f64A & f64B;
+    //-EXPECT-ERROR: Bitwise '|' not defined on floating-point type 'float64'.
+    // float64 f64Or  = f64A | f64B;
+    //-EXPECT-ERROR: Bitwise '^' not defined on floating-point type 'float64'.
+    // float64 f64Xor = f64A ^ f64B;
+    //-EXPECT-ERROR: Shift '<<' not defined on floating-point type 'float64'.
+    // float64 f64Shl = f64A << 1;
+    //-EXPECT-ERROR: Shift '>>' not defined on floating-point type 'float64'.
+    // float64 f64Shr = f64A >> 1;
 
     return 0;
 }

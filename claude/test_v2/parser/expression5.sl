@@ -44,6 +44,7 @@ int32 main() {
     xf32 *= 2.0;          __println("xf32 *= 2.0 → " + xf32);  // 23.0 (fmul)
     xf32 -= 3.0;          __println("xf32 -= 3.0 → " + xf32);  // 20.0 (fsub)
     xf32 /= 4.0;          __println("xf32 /= 4.0 → " + xf32);  //  5.0 (fdiv)
+    xf32 %= 1.5;          __println("xf32 %= 1.5 → " + xf32);  //  0.5 (frem: 5.0 % 1.5)
 
     // -- bitwise --
     int32 xbits = 12;  __println("xbits= " + xbits);
@@ -68,6 +69,24 @@ int32 main() {
     // -- logical with non-bool LHS — bool result widens (zext) to lvalue width --
     int32 xint_l = 0;  __println("xint_l= " + xint_l);
     xint_l ||= 5;      __println("xint_l ||= 5 → " + xint_l);  // 1 (0 || 5 = true; zext to i32)
+
+    // -- negative augassigns --
+    // Setup vars used only by the negatives below; declared so the //-EXPECT-ERROR
+    // runner's uncommented lines find them in scope.
+    int8   xi8n  = 1;     __println("xi8n= "  + xi8n);
+    int16  xi16n = 2;     __println("xi16n= " + xi16n);
+    uint64 xu64n = 3;     __println("xu64n= " + xu64n);
+
+    //-EXPECT-ERROR: Bitwise '&' not defined on floating-point type 'float32'.
+    // xf32 &= 7;
+    //-EXPECT-ERROR: Shift '<<' not defined on floating-point type 'float32'.
+    // xf32 <<= 1;
+    //-EXPECT-ERROR: Cannot implicitly narrow 'int32' to 'int16'; use an explicit type conversion.
+    // xi16n += xi32;
+    //-EXPECT-ERROR: Cannot implicitly convert 'int32' to 'bool'; use an explicit type conversion.
+    // xb += 5;
+    //-EXPECT-ERROR: No common type for 'uint64' and 'int8'; use an explicit type conversion.
+    // xu64n += xi8n;
 
     return 0;
 }

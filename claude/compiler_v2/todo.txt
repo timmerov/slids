@@ -135,8 +135,11 @@ WIDENING + LITERAL RANGE CHECKING (widen.h / widen.cpp)
   * codegen handles binary-op shapes:
       - arith / bitwise / comparison: commonType → emit at common → convert
         result to dest_type. Comparison result is bool, converted to dest.
+        Float arith covers `+ - * / %` (frem for `%`); float bitwise (& | ^)
+        rejects sharply: `Bitwise '&' not defined on floating-point type '...'`.
       - shift: LHS dictates result type; RHS resized to LHS width via
-        trunc/zext (LLVM's same-operand-width requirement).
+        trunc/zext (LLVM's same-operand-width requirement). Float LHS
+        rejects sharply: `Shift '<<' not defined on floating-point type '...'`.
       - logical (&& || ^^): each operand → bool independently; result bool.
       - literal + literal int/char: compile-time fold via tryFoldIntBinary,
         produces an untyped literal text that flexes to the surrounding target.
@@ -165,7 +168,21 @@ WIDENING + LITERAL RANGE CHECKING (widen.h / widen.cpp)
     - no if/else, no for/while, no block
 
 DESUGAR
-  * identity-copy from parse -> ast; no canonicalization
+  * copies parse → ast and propagates `(file_id, tok)` per node so codegen
+    errors attribute to source.
+  * tryFoldUnary — constant-folds `+ - ~ !` applied to a literal operand.
+    `+`/`-`/`~` walk the literal text (stripLeadingPlus / toggleSign /
+    foldBitNotIntText); `!` produces a fresh kBoolLiteral. Fresh nodes inherit
+    the unary expr's (file_id, tok).
+  * tryDesugarAugAssign — rewrites `lhs op= rhs;` → `lhs = lhs op rhs;`.
+    Lvalue is a bare ident today; complex lvalues (when arrays / fields land)
+    need a bind-to-tmp step here to avoid double-eval.
+  * Binary literal+literal fold currently lives in codegen (tryFoldIntBinary
+    inside emitBinary) — the natural home is desugar (paired with
+    tryFoldUnary; recursive folds for `1+2+3` fall out for free). Pending.
+  * Other canonicalization not yet here: PPID lowering, for-loop shapes
+    → canonical, operator-overload dispatch lowering, stringify lowering,
+    etc. — slot in as their phases land.
 
 CLASSIFY
   * no-op; no symbol resolution, no type inference, no overload resolution
@@ -194,10 +211,6 @@ ERROR REPORTING
   * parser error messages are minimal ("expected '...'"); no suggestions, no notes
 
 TEST COVERAGE GAPS — features implemented in v2 with no test exercising them
-  * Augmented assignments (`+= -= *= /= %= &= |= ^= <<= >>= &&= ||= ^^=`).
-    Grammar parses; desugar rewrites to assign + binary; no test verifies.
-    Header in expression3.sl / expression4.sl says "augmented assignments
-    are handled in the desugar stage" — currently unverified.
   * Hex (`0xFF`) and binary (`0b1010`) integer literals. lex.cpp::readNumber
     handles both, returning kUintLiteral. No test exercises them.
   * Float literal with exponent (`1e5`, `1.5e-3`). lex parses; codegen
@@ -206,8 +219,6 @@ TEST COVERAGE GAPS — features implemented in v2 with no test exercising them
   * Adjacent string-literal concatenation (`"a" "b"` → `"ab"`).
     parsePrimary's kStringLiteral arm has a while-loop that concatenates
     adjacent tokens. No test uses two adjacent string literals.
-  * bool → float convert via uitofp. widen::convert handles it; no test
-    has a bool source flowing into a float dest.
   * Logical short-circuit observable verification — deferred until
     expressions have side effects (call expressions / PPID). emitLogical
     emits the conditional branches but nothing in any test would distinguish

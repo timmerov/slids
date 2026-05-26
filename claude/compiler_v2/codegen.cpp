@@ -327,6 +327,12 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
     if (op == "<<" || op == ">>") {
         std::string lt = exprType(lhs, syms);
         if (lt.empty()) lt = "int32";
+        if (isFloatType(lt)) {
+            diagnostic::report(diag, {expr.file_id, expr.tok,
+                std::string("Shift '") + op + "' not defined on floating-point type '"
+                + lt + "'.", {}});
+            return "0";
+        }
         std::string rt;
         if (isLiteralKind(rhs)) {
             bool fits = (rhs.kind == ast::Kind::kFloatLiteral)
@@ -446,6 +452,7 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
         else if (op == "-") instr = "fsub";
         else if (op == "*") instr = "fmul";
         else if (op == "/") instr = "fdiv";
+        else if (op == "%") instr = "frem";
     } else {
         if      (op == "+") instr = "add";
         else if (op == "-") instr = "sub";
@@ -457,9 +464,18 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
         else if (op == "^") instr = "xor";
     }
     if (instr.empty()) {
-        diagnostic::report(diag, {expr.file_id, expr.tok,
-            "codegen: binary operator '" + op + "' on '" + opty
-            + "' not yet supported", {}});
+        // Today this fires only for float + bitwise (& | ^) — every int op is
+        // mapped above, and every float arith op is mapped after `%` landed.
+        if (flt) {
+            diagnostic::report(diag, {expr.file_id, expr.tok,
+                std::string("Bitwise '") + op + "' not defined on floating-point type '"
+                + opty + "'.", {}});
+        } else {
+            // Defensive: future ops (slid-typed, pointer-typed) would land here.
+            diagnostic::report(diag, {expr.file_id, expr.tok,
+                "codegen: binary operator '" + op + "' on '" + opty
+                + "' not yet supported", {}});
+        }
         return "0";
     }
     std::string tmp = newTmp("bin");
