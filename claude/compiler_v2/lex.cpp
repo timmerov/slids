@@ -428,7 +428,7 @@ token::Token next(Stream& s) {
                 } else if (n == 2) {
                     if (peek(s) == '=') { advance(s); t = {token::Kind::kXorXorEq, "^^=", 0, 0, 0, 0}; }
                     else                {             t = {token::Kind::kXorXor,   "^^",  0, 0, 0, 0}; }
-                } else {
+                } else /* n == 1 */ {
                     if (peek(s) == '=') { advance(s); t = {token::Kind::kBitXorEq, "^=", 0, 0, 0, 0}; }
                     else                {             t = {token::Kind::kBitXor,   "^",  0, 0, 0, 0}; }
                 }
@@ -444,7 +444,7 @@ token::Token next(Stream& s) {
                 } else if (peek(s) == '.') {
                     advance(s);
                     t = {token::Kind::kDotDot, "..", 0, 0, 0, 0};
-                } else {
+                } else /* single dot */ {
                     t = {token::Kind::kDot, ".", 0, 0, 0, 0};
                 }
                 break;

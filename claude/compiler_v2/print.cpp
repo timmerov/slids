@@ -139,7 +139,7 @@ bool tryEmitCall(ast::Node const& call, codegen::SymTab const& syms,
         // Not yet implemented: pointer segments (Phase 4), tuple segments
         // (Phase 4), slid-typed segments with user-defined __str (Phase 5),
         // enum segments. Each lands with its phase.
-        diagnostic::report(diag, {-1, -1,
+        diagnostic::report(diag, {seg->file_id, seg->tok,
             "print: segment of type '" + sty + "' not yet supported", {}});
     }
 

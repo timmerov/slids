@@ -152,6 +152,8 @@ std::unique_ptr<ast::Node> tryFoldUnary(ast::Node& node) {
         auto out = std::make_unique<ast::Node>();
         out->kind = ast::Kind::kBoolLiteral;
         out->text = result ? "true" : "false";
+        out->file_id = node.file_id;
+        out->tok = node.tok;
         return out;
     }
     return nullptr;
@@ -168,16 +170,22 @@ std::unique_ptr<ast::Node> tryDesugarAugAssign(ast::Node& node) {
     auto lhs_ref = std::make_unique<ast::Node>();
     lhs_ref->kind = ast::Kind::kIdentExpr;
     lhs_ref->name = node.name;
+    lhs_ref->file_id = node.file_id;
+    lhs_ref->tok = node.tok;
 
     auto binop = std::make_unique<ast::Node>();
     binop->kind = ast::Kind::kBinaryExpr;
     binop->text = node.text;
+    binop->file_id = node.file_id;
+    binop->tok = node.tok;
     binop->children.push_back(std::move(lhs_ref));
     binop->children.push_back(std::move(node.children[0]));
 
     auto out = std::make_unique<ast::Node>();
     out->kind = ast::Kind::kAssignStmt;
     out->name = std::move(node.name);
+    out->file_id = node.file_id;
+    out->tok = node.tok;
     out->children.push_back(std::move(binop));
     return out;
 }
@@ -188,6 +196,8 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p) {
     node->name = p.name;
     node->text = p.text;
     node->return_type = p.return_type;
+    node->file_id = p.file_id;
+    node->tok = p.tok;
     for (auto const& c : p.children) {
         node->children.push_back(copyNode(*c));
     }

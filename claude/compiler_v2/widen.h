@@ -18,23 +18,37 @@ struct TypeKind {
 bool classify(std::string const& slids_type, TypeKind& out);
 
 // Literal fit checks. Report a diagnostic and return false if the literal
-// value doesn't fit in dest_type.
+// doesn't fit in dest_type. Int literal targeting a float type requires exact
+// representability against the float's significand; float literal targeting
+// an int type requires the value to be integer-valued and in range. The
+// (file_id, tok) attribute the error to the literal's source token.
 bool checkIntLiteralFits(std::string const& literal_text,
                          std::string const& dest_type,
+                         int file_id, int tok,
                          diagnostic::Sink& diag);
 
 bool checkFloatLiteralFits(std::string const& literal_text,
                            std::string const& dest_type,
+                           int file_id, int tok,
                            diagnostic::Sink& diag);
 
-// Variable-to-variable conversion. Emits any needed LLVM op (sext/zext/fpext)
-// and returns the new value name. On disallowed conversion (truncation,
-// signed→unsigned, cross-family, etc.) reports a diagnostic and returns the
-// original value as a fallback.
+// Silent variants used by the binary-op literal-flex rule.
+bool intLiteralFits(std::string const& literal_text, std::string const& dest_type);
+bool floatLiteralFits(std::string const& literal_text, std::string const& dest_type);
+
+// Variable-to-variable conversion. Emits any needed LLVM op
+// (sext/zext/fpext/sitofp/uitofp) and returns the new value name. On
+// disallowed conversion reports a diagnostic attributed to (file_id, tok)
+// and returns the original value as a fallback.
 std::string convert(std::string const& src_val,
                     std::string const& src_type,
                     std::string const& dest_type,
+                    int file_id, int tok,
                     std::ostream& out,
                     diagnostic::Sink& diag);
+
+// "Smallest type large enough to hold either operand" per the widen.sl binary
+// rule. Returns false if no built-in type fits both.
+bool commonType(std::string const& t1, std::string const& t2, std::string& out);
 
 }  // namespace widen

@@ -83,6 +83,20 @@ struct Parser {
         return primitiveNameFor(k) != nullptr;
     }
 
+    // Build a parse node stamped with explicit (file_id, tok).
+    std::unique_ptr<parse::Node> newNodeAt(parse::Kind kind, int file_id, int tok) {
+        auto n = std::make_unique<parse::Node>();
+        n->kind = kind;
+        n->file_id = file_id;
+        n->tok = tok;
+        return n;
+    }
+
+    // Build a parse node stamped at the current position.
+    std::unique_ptr<parse::Node> newNodeHere(parse::Kind kind) {
+        return newNodeAt(kind, peek().file_id, pos);
+    }
+
     std::string parseType() {
         char const* name = primitiveNameFor(peek().kind);
         if (!name) {
@@ -102,8 +116,7 @@ struct Parser {
     std::unique_ptr<parse::Node> parsePrimary() {
         token::Token const& t = peek();
         if (t.kind == token::Kind::kStringLiteral) {
-            auto node = std::make_unique<parse::Node>();
-            node->kind = parse::Kind::kStringLiteral;
+            auto node = newNodeHere(parse::Kind::kStringLiteral);
             node->text = t.text;
             advance();
             // adjacent string-literal concat at the token level
@@ -115,36 +128,31 @@ struct Parser {
         }
         if (t.kind == token::Kind::kIntLiteral
             || t.kind == token::Kind::kUintLiteral) {
-            auto node = std::make_unique<parse::Node>();
-            node->kind = parse::Kind::kIntLiteral;
+            auto node = newNodeHere(parse::Kind::kIntLiteral);
             node->text = t.text;
             advance();
             return node;
         }
         if (t.kind == token::Kind::kCharLiteral) {
-            auto node = std::make_unique<parse::Node>();
-            node->kind = parse::Kind::kCharLiteral;
+            auto node = newNodeHere(parse::Kind::kCharLiteral);
             node->text = t.text;
             advance();
             return node;
         }
         if (t.kind == token::Kind::kFloatLiteral) {
-            auto node = std::make_unique<parse::Node>();
-            node->kind = parse::Kind::kFloatLiteral;
+            auto node = newNodeHere(parse::Kind::kFloatLiteral);
             node->text = t.text;
             advance();
             return node;
         }
         if (t.kind == token::Kind::kTrue || t.kind == token::Kind::kFalse) {
-            auto node = std::make_unique<parse::Node>();
-            node->kind = parse::Kind::kBoolLiteral;
+            auto node = newNodeHere(parse::Kind::kBoolLiteral);
             node->text = (t.kind == token::Kind::kTrue) ? "true" : "false";
             advance();
             return node;
         }
         if (t.kind == token::Kind::kIdentifier) {
-            auto node = std::make_unique<parse::Node>();
-            node->kind = parse::Kind::kIdentExpr;
+            auto node = newNodeHere(parse::Kind::kIdentExpr);
             node->name = t.text;
             advance();
             return node;
@@ -174,11 +182,12 @@ struct Parser {
         else if (k == token::Kind::kNot)    op = "!";
         else if (k == token::Kind::kBitNot) op = "~";
         if (op) {
+            int op_file = peek().file_id;
+            int op_tok = pos;
             advance();
             auto operand = parseUnary();
             if (!operand) return nullptr;
-            auto node = std::make_unique<parse::Node>();
-            node->kind = parse::Kind::kUnaryExpr;
+            auto node = newNodeAt(parse::Kind::kUnaryExpr, op_file, op_tok);
             node->text = op;
             node->children.push_back(std::move(operand));
             return node;
@@ -190,9 +199,9 @@ struct Parser {
 
     std::unique_ptr<parse::Node> makeBinary(std::string op,
                                             std::unique_ptr<parse::Node> lhs,
-                                            std::unique_ptr<parse::Node> rhs) {
-        auto node = std::make_unique<parse::Node>();
-        node->kind = parse::Kind::kBinaryExpr;
+                                            std::unique_ptr<parse::Node> rhs,
+                                            int op_file, int op_tok) {
+        auto node = newNodeAt(parse::Kind::kBinaryExpr, op_file, op_tok);
         node->text = std::move(op);
         node->children.push_back(std::move(lhs));
         node->children.push_back(std::move(rhs));
@@ -206,10 +215,13 @@ struct Parser {
             || peek().kind == token::Kind::kSlash
             || peek().kind == token::Kind::kPercent) {
             std::string op = peek().text;
+            int op_file = peek().file_id;
+            int op_tok = pos;
             advance();
             auto right = parseUnary();
             if (!right) return nullptr;
-            left = makeBinary(std::move(op), std::move(left), std::move(right));
+            left = makeBinary(std::move(op), std::move(left), std::move(right),
+                              op_file, op_tok);
         }
         return left;
     }
@@ -220,10 +232,13 @@ struct Parser {
         while (peek().kind == token::Kind::kPlus
             || peek().kind == token::Kind::kMinus) {
             std::string op = peek().text;
+            int op_file = peek().file_id;
+            int op_tok = pos;
             advance();
             auto right = parseMulDiv();
             if (!right) return nullptr;
-            left = makeBinary(std::move(op), std::move(left), std::move(right));
+            left = makeBinary(std::move(op), std::move(left), std::move(right),
+                              op_file, op_tok);
         }
         return left;
     }
@@ -234,10 +249,13 @@ struct Parser {
         while (peek().kind == token::Kind::kLShift
             || peek().kind == token::Kind::kRShift) {
             std::string op = peek().text;
+            int op_file = peek().file_id;
+            int op_tok = pos;
             advance();
             auto right = parseAddSub();
             if (!right) return nullptr;
-            left = makeBinary(std::move(op), std::move(left), std::move(right));
+            left = makeBinary(std::move(op), std::move(left), std::move(right),
+                              op_file, op_tok);
         }
         return left;
     }
@@ -250,10 +268,13 @@ struct Parser {
             || peek().kind == token::Kind::kLtEq
             || peek().kind == token::Kind::kGtEq) {
             std::string op = peek().text;
+            int op_file = peek().file_id;
+            int op_tok = pos;
             advance();
             auto right = parseShift();
             if (!right) return nullptr;
-            left = makeBinary(std::move(op), std::move(left), std::move(right));
+            left = makeBinary(std::move(op), std::move(left), std::move(right),
+                              op_file, op_tok);
         }
         return left;
     }
@@ -264,10 +285,13 @@ struct Parser {
         while (peek().kind == token::Kind::kEqEq
             || peek().kind == token::Kind::kNotEq) {
             std::string op = peek().text;
+            int op_file = peek().file_id;
+            int op_tok = pos;
             advance();
             auto right = parseRelational();
             if (!right) return nullptr;
-            left = makeBinary(std::move(op), std::move(left), std::move(right));
+            left = makeBinary(std::move(op), std::move(left), std::move(right),
+                              op_file, op_tok);
         }
         return left;
     }
@@ -276,10 +300,13 @@ struct Parser {
         auto left = parseEquality();
         if (!left) return nullptr;
         while (peek().kind == token::Kind::kBitAnd) {
+            int op_file = peek().file_id;
+            int op_tok = pos;
             advance();
             auto right = parseEquality();
             if (!right) return nullptr;
-            left = makeBinary("&", std::move(left), std::move(right));
+            left = makeBinary("&", std::move(left), std::move(right),
+                              op_file, op_tok);
         }
         return left;
     }
@@ -288,10 +315,13 @@ struct Parser {
         auto left = parseBitAnd();
         if (!left) return nullptr;
         while (peek().kind == token::Kind::kBitXor) {
+            int op_file = peek().file_id;
+            int op_tok = pos;
             advance();
             auto right = parseBitAnd();
             if (!right) return nullptr;
-            left = makeBinary("^", std::move(left), std::move(right));
+            left = makeBinary("^", std::move(left), std::move(right),
+                              op_file, op_tok);
         }
         return left;
     }
@@ -300,10 +330,13 @@ struct Parser {
         auto left = parseBitXor();
         if (!left) return nullptr;
         while (peek().kind == token::Kind::kBitOr) {
+            int op_file = peek().file_id;
+            int op_tok = pos;
             advance();
             auto right = parseBitXor();
             if (!right) return nullptr;
-            left = makeBinary("|", std::move(left), std::move(right));
+            left = makeBinary("|", std::move(left), std::move(right),
+                              op_file, op_tok);
         }
         return left;
     }
@@ -312,10 +345,13 @@ struct Parser {
         auto left = parseBitOr();
         if (!left) return nullptr;
         while (peek().kind == token::Kind::kAnd) {
+            int op_file = peek().file_id;
+            int op_tok = pos;
             advance();
             auto right = parseBitOr();
             if (!right) return nullptr;
-            left = makeBinary("&&", std::move(left), std::move(right));
+            left = makeBinary("&&", std::move(left), std::move(right),
+                              op_file, op_tok);
         }
         return left;
     }
@@ -326,15 +362,20 @@ struct Parser {
         while (peek().kind == token::Kind::kOr
             || peek().kind == token::Kind::kXorXor) {
             std::string op = (peek().kind == token::Kind::kOr) ? "||" : "^^";
+            int op_file = peek().file_id;
+            int op_tok = pos;
             advance();
             auto right = parseLogicalAnd();
             if (!right) return nullptr;
-            left = makeBinary(std::move(op), std::move(left), std::move(right));
+            left = makeBinary(std::move(op), std::move(left), std::move(right),
+                              op_file, op_tok);
         }
         return left;
     }
 
     std::unique_ptr<parse::Node> parseVarDeclStmt() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
         std::string type = parseType();
         if (fatal) return nullptr;
         if (peek().kind != token::Kind::kIdentifier) {
@@ -343,8 +384,7 @@ struct Parser {
         }
         std::string name = peek().text;
         advance();
-        auto node = std::make_unique<parse::Node>();
-        node->kind = parse::Kind::kVarDeclStmt;
+        auto node = newNodeAt(parse::Kind::kVarDeclStmt, stmt_file, stmt_tok);
         node->name = std::move(name);
         node->return_type = std::move(type);
         if (peek().kind == token::Kind::kEquals) {
@@ -358,14 +398,15 @@ struct Parser {
     }
 
     std::unique_ptr<parse::Node> parseAssignStmt() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
         std::string name = peek().text;
         advance();   // ident
         advance();   // =  (caller verified via lookahead)
         auto expr = parseExpr();
         if (!expr) return nullptr;
         if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
-        auto node = std::make_unique<parse::Node>();
-        node->kind = parse::Kind::kAssignStmt;
+        auto node = newNodeAt(parse::Kind::kAssignStmt, stmt_file, stmt_tok);
         node->name = std::move(name);
         node->children.push_back(std::move(expr));
         return node;
@@ -391,6 +432,8 @@ struct Parser {
     }
 
     std::unique_ptr<parse::Node> parseAugAssignStmt() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
         std::string name = peek().text;
         advance();   // ident
         char const* op = augAssignOp(peek().kind);
@@ -398,8 +441,7 @@ struct Parser {
         auto expr = parseExpr();
         if (!expr) return nullptr;
         if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
-        auto node = std::make_unique<parse::Node>();
-        node->kind = parse::Kind::kAugAssignStmt;
+        auto node = newNodeAt(parse::Kind::kAugAssignStmt, stmt_file, stmt_tok);
         node->name = std::move(name);
         node->text = op;
         node->children.push_back(std::move(expr));
@@ -407,6 +449,8 @@ struct Parser {
     }
 
     std::unique_ptr<parse::Node> parseCallStmt() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
         std::string callee = peek().text;
         advance();   // ident
         advance();   // (  (caller verified via lookahead)
@@ -414,20 +458,20 @@ struct Parser {
         if (!arg) return nullptr;
         if (!expect(token::Kind::kRParen, ")")) return nullptr;
         if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
-        auto node = std::make_unique<parse::Node>();
-        node->kind = parse::Kind::kCallStmt;
+        auto node = newNodeAt(parse::Kind::kCallStmt, stmt_file, stmt_tok);
         node->name = std::move(callee);
         node->children.push_back(std::move(arg));
         return node;
     }
 
     std::unique_ptr<parse::Node> parseReturnStmt() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
         advance();   // return
         auto expr = parseExpr();
         if (!expr) return nullptr;
         if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
-        auto node = std::make_unique<parse::Node>();
-        node->kind = parse::Kind::kReturnStmt;
+        auto node = newNodeAt(parse::Kind::kReturnStmt, stmt_file, stmt_tok);
         node->children.push_back(std::move(expr));
         return node;
     }
@@ -449,6 +493,8 @@ struct Parser {
     }
 
     std::unique_ptr<parse::Node> parseFunctionDef() {
+        int fn_file = peek().file_id;
+        int fn_tok = pos;
         std::string ret_type = parseType();
         if (fatal) return nullptr;
         if (peek().kind != token::Kind::kIdentifier) {
@@ -460,7 +506,7 @@ struct Parser {
         if (!expect(token::Kind::kLParen, "(")) return nullptr;
         if (!expect(token::Kind::kRParen, ")")) return nullptr;
 
-        auto node = std::make_unique<parse::Node>();
+        auto node = newNodeAt(parse::Kind::kFunctionDef, fn_file, fn_tok);
         node->name = std::move(name);
         node->return_type = std::move(ret_type);
 
@@ -470,7 +516,6 @@ struct Parser {
             return node;
         }
         if (!expect(token::Kind::kLBrace, "{")) return nullptr;
-        node->kind = parse::Kind::kFunctionDef;
 
         while (!fatal && peek().kind != token::Kind::kRBrace) {
             if (peek().kind == token::Kind::kEndOfFile

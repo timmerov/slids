@@ -1,6 +1,9 @@
 #include "codegen.h"
 
 #include <cassert>
+#include <cerrno>
+#include <cstdint>
+#include <cstdlib>
 #include <ostream>
 #include <sstream>
 #include <string>
@@ -23,7 +26,9 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
 
 namespace {
 
-std::string llvmTypeFor(std::string const& slids_type, diagnostic::Sink& diag) {
+std::string llvmTypeFor(std::string const& slids_type,
+                        int file_id, int tok,
+                        diagnostic::Sink& diag) {
     if (slids_type == "bool")    return "i1";
     if (slids_type == "char"
      || slids_type == "int8"
@@ -43,7 +48,7 @@ std::string llvmTypeFor(std::string const& slids_type, diagnostic::Sink& diag) {
     if (slids_type == "void")    return "void";
     if (slids_type.size() >= 2 && slids_type.substr(slids_type.size() - 2) == "[]")
         return "ptr";
-    diagnostic::report(diag, {-1, -1,
+    diagnostic::report(diag, {file_id, tok,
         "codegen: unknown type '" + slids_type + "'", {}});
     return "i32";
 }
@@ -76,8 +81,100 @@ std::string newLabel(char const* tag) {
     return std::string(tag) + "_" + std::to_string(n++);
 }
 
+bool isLiteralKind(ast::Node const& n) {
+    return n.kind == ast::Kind::kIntLiteral
+        || n.kind == ast::Kind::kCharLiteral
+        || n.kind == ast::Kind::kBoolLiteral
+        || n.kind == ast::Kind::kFloatLiteral;
+}
+
+// Text to pass to widen::intLiteralFits / floatLiteralFits. Bool spelled
+// "true"/"false" → integer "1"/"0"; everything else passes through.
+std::string literalTextForFit(ast::Node const& n) {
+    if (n.kind == ast::Kind::kBoolLiteral) return (n.text == "true") ? "1" : "0";
+    return n.text;
+}
+
+// Default type a literal assumes when it can't flex into a partner type, per
+// the widen.sl rules: int / int64 / uint64 by magnitude for ints; bool/char/
+// float for the others.
+std::string defaultLiteralType(ast::Node const& n) {
+    switch (n.kind) {
+        case ast::Kind::kIntLiteral: {
+            std::string const& s = n.text;
+            bool neg = !s.empty() && s[0] == '-';
+            std::string mag_str = neg ? s.substr(1) : s;
+            errno = 0;
+            char* end = nullptr;
+            uint64_t mag = std::strtoull(mag_str.c_str(), &end, 10);
+            if (mag_str.empty() || end == mag_str.c_str() || *end != '\0'
+                || errno == ERANGE) {
+                return neg ? "int64" : "uint64";
+            }
+            if (neg) {
+                if (mag <= (uint64_t)INT32_MAX + 1) return "int32";
+                return "int64";
+            }
+            if (mag <= (uint64_t)INT32_MAX) return "int32";
+            if (mag <= (uint64_t)INT64_MAX) return "int64";
+            return "uint64";
+        }
+        case ast::Kind::kCharLiteral:  return "char";
+        case ast::Kind::kBoolLiteral:  return "bool";
+        case ast::Kind::kFloatLiteral: return "float32";
+        case ast::Kind::kStringLiteral:
+        case ast::Kind::kIdentExpr:
+        case ast::Kind::kUnaryExpr:
+        case ast::Kind::kBinaryExpr:
+        case ast::Kind::kProgram:
+        case ast::Kind::kFunctionDef:
+        case ast::Kind::kFunctionDecl:
+        case ast::Kind::kVarDeclStmt:
+        case ast::Kind::kAssignStmt:
+        case ast::Kind::kAugAssignStmt:
+        case ast::Kind::kCallStmt:
+        case ast::Kind::kReturnStmt:
+            assert(false && "defaultLiteralType: not a literal kind");
+            __builtin_unreachable();
+    }
+    assert(false && "defaultLiteralType: unhandled ast::Kind");
+    __builtin_unreachable();
+}
+
+// Compile-time fold for int-literal + int-literal binary ops. Used to keep
+// `int8 x = 1 + 2` working — the result of a literal+literal op stays an
+// untyped literal that can flex into the surrounding target. Returns false on
+// overflow / unsupported op / non-int spellings so the caller falls back to
+// the typed common-type path.
+bool tryFoldIntBinary(std::string const& op, std::string const& a_text,
+                      std::string const& b_text, std::string& out) {
+    auto parseI64 = [](std::string const& t, int64_t& v) -> bool {
+        if (t.empty()) return false;
+        errno = 0;
+        char* end = nullptr;
+        v = (int64_t)std::strtoll(t.c_str(), &end, 10);
+        if (end == t.c_str() || *end != '\0' || errno == ERANGE) return false;
+        return true;
+    };
+    int64_t a = 0, b = 0;
+    if (!parseI64(a_text, a)) return false;
+    if (!parseI64(b_text, b)) return false;
+    int64_t r = 0;
+    if      (op == "+") r = a + b;
+    else if (op == "-") r = a - b;
+    else if (op == "*") r = a * b;
+    else if (op == "/") { if (b == 0) return false; r = a / b; }
+    else if (op == "%") { if (b == 0) return false; r = a % b; }
+    else if (op == "&") r = a & b;
+    else if (op == "|") r = a | b;
+    else if (op == "^") r = a ^ b;
+    else return false;
+    out = std::to_string(r);
+    return true;
+}
+
 // Truthy coercion: 0-like values (false, 0, 0.0, null ptr) → i1 0; everything
-// else → i1 1. Mirrors v1's emitToBool.
+// else → i1 1.
 std::string emitToBool(std::string const& val, std::string const& slids_type,
                        std::ostream& out) {
     if (slids_type == "bool") return val;  // already i1
@@ -95,9 +192,6 @@ std::string emitToBool(std::string const& val, std::string const& slids_type,
           || slids_type == "uint"   || slids_type == "uint32")                            llty = "i32";
     else if (slids_type == "int64"  || slids_type == "uint64" || slids_type == "intptr")  llty = "i64";
     else {
-        // No silent default: any new integer family member must extend the
-        // table above. Pointer (ptr) and slid-typed operands need their own
-        // arms (icmp ne null / op-overload) when those phases land.
         assert(false && "emitToBool: unhandled slids type");
         __builtin_unreachable();
     }
@@ -106,9 +200,7 @@ std::string emitToBool(std::string const& val, std::string const& slids_type,
     return tmp;
 }
 
-// Short-circuit && / || / ^^ borrowed from v1 (compiler/codegen_expr.cpp).
-// Stores into an i1 alloca at each decision point; ^^ always evaluates both
-// sides. Returns the loaded i1.
+// Short-circuit && / || / ^^ borrowed from v1.
 std::string emitLogical(ast::Node const& expr, SymTab const& syms,
                         strings::Pool& pool, std::ostream& out,
                         diagnostic::Sink& diag) {
@@ -142,8 +234,6 @@ std::string emitLogical(ast::Node const& expr, SymTab const& syms,
         out << "  store i1 0, ptr " << result_ptr << "\n";
         out << "  br label %" << eval_right << "\n";
     } else {
-        // Routed only via emitBinary's && / || / ^^ dispatch — anything else
-        // means a fourth logical op was added without extending that router.
         assert(false && "emitLogical: unhandled logical op");
         __builtin_unreachable();
     }
@@ -183,7 +273,7 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
     }
     if (op == "-") {
         std::string v = emitExpr(operand, syms, pool, out, diag, dest_type);
-        std::string llty = llvmTypeFor(dest_type, diag);
+        std::string llty = llvmTypeFor(dest_type, expr.file_id, expr.tok, diag);
         std::string tmp = newTmp("neg");
         if (isFloatType(dest_type)) {
             out << "  " << tmp << " = fneg " << llty << " " << v << "\n";
@@ -194,7 +284,7 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
     }
     if (op == "~") {
         std::string v = emitExpr(operand, syms, pool, out, diag, dest_type);
-        std::string llty = llvmTypeFor(dest_type, diag);
+        std::string llty = llvmTypeFor(dest_type, expr.file_id, expr.tok, diag);
         std::string tmp = newTmp("bnot");
         out << "  " << tmp << " = xor " << llty << " " << v << ", -1\n";
         return tmp;
@@ -203,10 +293,8 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
         std::string operand_type = exprType(operand, syms);
         if (operand_type.empty()) operand_type = "int";
         std::string v = emitExpr(operand, syms, pool, out, diag, operand_type);
-        std::string llty = llvmTypeFor(operand_type, diag);
+        std::string llty = llvmTypeFor(operand_type, expr.file_id, expr.tok, diag);
         std::string tmp = newTmp("lnot");
-        // 0-like → true, else false. Float uses fcmp oeq (so NaN is truthy,
-        // matching emitToBool's fcmp une). Integer uses icmp eq.
         if (isFloatType(operand_type)) {
             out << "  " << tmp << " = fcmp oeq " << llty << " "
                 << v << ", 0.0\n";
@@ -216,10 +304,7 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
         }
         return tmp;
     }
-    // Not yet implemented: prefix `++` / `--` (PPID, Phase 1 per todo.txt),
-    // prefix `^` (address-of, Phase 4 pointers), `#` stringify (Phase 5),
-    // `<const>` / `<Type^>` casts (Phase 4/6). Each lands with its phase.
-    diagnostic::report(diag, {-1, -1,
+    diagnostic::report(diag, {expr.file_id, expr.tok,
         "codegen: unary operator '" + op + "' not yet supported", {}});
     return "0";
 }
@@ -234,38 +319,126 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
     ast::Node const& rhs = *expr.children[1];
 
     if (op == "&&" || op == "||" || op == "^^") {
-        return emitLogical(expr, syms, pool, out, diag);
+        std::string r = emitLogical(expr, syms, pool, out, diag);
+        return widen::convert(r, "bool", dest_type,
+                              expr.file_id, expr.tok, out, diag);
     }
 
-    // Comparisons: result type is bool (i1); operands share their natural type.
-    if (op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=") {
+    if (op == "<<" || op == ">>") {
         std::string lt = exprType(lhs, syms);
-        std::string rt = exprType(rhs, syms);
-        std::string opty = !lt.empty() ? lt : (!rt.empty() ? rt : std::string("int"));
-        std::string lv = emitExpr(lhs, syms, pool, out, diag, opty);
-        std::string rv = emitExpr(rhs, syms, pool, out, diag, opty);
-        std::string llty = llvmTypeFor(opty, diag);
+        if (lt.empty()) lt = "int32";
+        std::string rt;
+        if (isLiteralKind(rhs)) {
+            bool fits = (rhs.kind == ast::Kind::kFloatLiteral)
+                ? widen::floatLiteralFits(rhs.text, lt)
+                : widen::intLiteralFits(literalTextForFit(rhs), lt);
+            rt = fits ? lt : defaultLiteralType(rhs);
+        } else {
+            rt = exprType(rhs, syms);
+            if (rt.empty()) rt = "int32";
+        }
+        std::string lv = emitExpr(lhs, syms, pool, out, diag, lt);
+        std::string rv = emitExpr(rhs, syms, pool, out, diag, rt);
+
+        widen::TypeKind lk, rk;
+        widen::classify(lt, lk);
+        widen::classify(rt, rk);
+        std::string lllty = llvmTypeFor(lt, expr.file_id, expr.tok, diag);
+        std::string rllty = llvmTypeFor(rt, expr.file_id, expr.tok, diag);
+        if (rk.bits != lk.bits) {
+            std::string tmp = newTmp("shft");
+            if (rk.bits > lk.bits) {
+                out << "  " << tmp << " = trunc " << rllty << " " << rv
+                    << " to " << lllty << "\n";
+            } else /* rk.bits < lk.bits — zext to wider */ {
+                out << "  " << tmp << " = zext " << rllty << " " << rv
+                    << " to " << lllty << "\n";
+            }
+            rv = tmp;
+        }
+        bool uns = isUnsignedType(lt);
+        std::string instr = (op == "<<") ? "shl" : (uns ? "lshr" : "ashr");
+        std::string tmp = newTmp("bin");
+        out << "  " << tmp << " = " << instr << " " << lllty
+            << " " << lv << ", " << rv << "\n";
+        return widen::convert(tmp, lt, dest_type,
+                              expr.file_id, expr.tok, out, diag);
+    }
+
+    if (isLiteralKind(lhs) && isLiteralKind(rhs)
+        && (lhs.kind == ast::Kind::kIntLiteral || lhs.kind == ast::Kind::kCharLiteral)
+        && (rhs.kind == ast::Kind::kIntLiteral || rhs.kind == ast::Kind::kCharLiteral)) {
+        std::string folded;
+        if (tryFoldIntBinary(op, lhs.text, rhs.text, folded)) {
+            if (op == "==" || op == "!=" || op == "<" || op == "<="
+             || op == ">"  || op == ">=") {
+                // fall through
+            } else {
+                widen::checkIntLiteralFits(folded, dest_type,
+                                           expr.file_id, expr.tok, diag);
+                return folded;
+            }
+        }
+    }
+
+    auto effectiveType = [&](ast::Node const& self, ast::Node const& other) -> std::string {
+        if (!isLiteralKind(self)) {
+            std::string t = exprType(self, syms);
+            return t.empty() ? std::string("int32") : t;
+        }
+        if (!isLiteralKind(other)) {
+            std::string other_ty = exprType(other, syms);
+            if (!other_ty.empty()) {
+                bool fits = (self.kind == ast::Kind::kFloatLiteral)
+                    ? widen::floatLiteralFits(self.text, other_ty)
+                    : widen::intLiteralFits(literalTextForFit(self), other_ty);
+                if (fits) return other_ty;
+            }
+        }
+        return defaultLiteralType(self);
+    };
+
+    std::string lt = effectiveType(lhs, rhs);
+    std::string rt = effectiveType(rhs, lhs);
+
+    std::string opty;
+    if (!widen::commonType(lt, rt, opty)) {
+        diagnostic::report(diag, {expr.file_id, expr.tok,
+            "No common type for '" + lt + "' and '" + rt
+            + "'; use an explicit type conversion.", {}});
+        return "0";
+    }
+
+    std::string lv = emitExpr(lhs, syms, pool, out, diag, opty);
+    std::string rv = emitExpr(rhs, syms, pool, out, diag, opty);
+
+    if (op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=") {
+        std::string llty = llvmTypeFor(opty, expr.file_id, expr.tok, diag);
         bool flt = isFloatType(opty);
         bool uns = isUnsignedType(opty) || opty == "bool";
-        char const* pred =
-              op == "==" ? (flt ? "oeq" : "eq")
-            : op == "!=" ? (flt ? "one" : "ne")
-            : op == "<"  ? (flt ? "olt" : (uns ? "ult" : "slt"))
-            : op == "<=" ? (flt ? "ole" : (uns ? "ule" : "sle"))
-            : op == ">"  ? (flt ? "ogt" : (uns ? "ugt" : "sgt"))
-                          : (flt ? "oge" : (uns ? "uge" : "sge"));
+        char const* pred;
+        if      (op == "==") pred = flt ? "oeq" : "eq";
+        else if (op == "!=") pred = flt ? "one" : "ne";
+        else if (op == "<")  pred = flt ? "olt" : (uns ? "ult" : "slt");
+        else if (op == "<=") pred = flt ? "ole" : (uns ? "ule" : "sle");
+        else if (op == ">")  pred = flt ? "ogt" : (uns ? "ugt" : "sgt");
+        else if (op == ">=") pred = flt ? "oge" : (uns ? "uge" : "sge");
+        else {
+            // Reachable only if the outer comparison-op guard grows a new op
+            // without extending this chain.
+            assert(false && "emitBinary cmp: unhandled comparison op");
+            __builtin_unreachable();
+        }
         std::string tmp = newTmp("cmp");
         out << "  " << tmp << " = " << (flt ? "fcmp " : "icmp ")
             << pred << " " << llty << " " << lv << ", " << rv << "\n";
-        return tmp;
+        return widen::convert(tmp, "bool", dest_type,
+                              expr.file_id, expr.tok, out, diag);
     }
 
-    // Arithmetic / bitwise / shift — both operands at dest_type.
-    std::string lv = emitExpr(lhs, syms, pool, out, diag, dest_type);
-    std::string rv = emitExpr(rhs, syms, pool, out, diag, dest_type);
-    std::string llty = llvmTypeFor(dest_type, diag);
-    bool flt = isFloatType(dest_type);
-    bool uns = isUnsignedType(dest_type);
+    std::string llty = llvmTypeFor(opty, expr.file_id, expr.tok, diag);
+    bool flt = isFloatType(opty);
+    bool uns = isUnsignedType(opty);
 
     std::string instr;
     if (flt) {
@@ -274,31 +447,26 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
         else if (op == "*") instr = "fmul";
         else if (op == "/") instr = "fdiv";
     } else {
-        if      (op == "+")  instr = "add";
-        else if (op == "-")  instr = "sub";
-        else if (op == "*")  instr = "mul";
-        else if (op == "/")  instr = uns ? "udiv" : "sdiv";
-        else if (op == "%")  instr = uns ? "urem" : "srem";
-        else if (op == "&")  instr = "and";
-        else if (op == "|")  instr = "or";
-        else if (op == "^")  instr = "xor";
-        else if (op == "<<") instr = "shl";
-        else if (op == ">>") instr = uns ? "lshr" : "ashr";
+        if      (op == "+") instr = "add";
+        else if (op == "-") instr = "sub";
+        else if (op == "*") instr = "mul";
+        else if (op == "/") instr = uns ? "udiv" : "sdiv";
+        else if (op == "%") instr = uns ? "urem" : "srem";
+        else if (op == "&") instr = "and";
+        else if (op == "|") instr = "or";
+        else if (op == "^") instr = "xor";
     }
     if (instr.empty()) {
-        // Not yet implemented: float `%` (frem), slid-typed operands routed
-        // to user op-overload (Phase 5), pointer-typed operands (Phase 4).
-        // Mixed-type operands (e.g. int + int8) need a promotion pass before
-        // reaching here — lands when classify gains type inference.
-        diagnostic::report(diag, {-1, -1,
-            "codegen: binary operator '" + op + "' on '" + dest_type
+        diagnostic::report(diag, {expr.file_id, expr.tok,
+            "codegen: binary operator '" + op + "' on '" + opty
             + "' not yet supported", {}});
         return "0";
     }
     std::string tmp = newTmp("bin");
     out << "  " << tmp << " = " << instr << " " << llty
         << " " << lv << ", " << rv << "\n";
-    return tmp;
+    return widen::convert(tmp, opty, dest_type,
+                          expr.file_id, expr.tok, out, diag);
 }
 
 }  // namespace
@@ -308,19 +476,48 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                      diagnostic::Sink& diag,
                      std::string const& dest_type) {
     switch (expr.kind) {
-        case ast::Kind::kIntLiteral:
-            widen::checkIntLiteralFits(expr.text, dest_type, diag);
+        case ast::Kind::kIntLiteral: {
+            widen::checkIntLiteralFits(expr.text, dest_type,
+                                       expr.file_id, expr.tok, diag);
+            widen::TypeKind tk;
+            if (!dest_type.empty() && widen::classify(dest_type, tk)
+                && tk.cat == widen::Category::kFloat) {
+                return expr.text + ".0";
+            }
             return expr.text;
-        case ast::Kind::kCharLiteral:
-            widen::checkIntLiteralFits(expr.text, dest_type, diag);
+        }
+        case ast::Kind::kCharLiteral: {
+            widen::checkIntLiteralFits(expr.text, dest_type,
+                                       expr.file_id, expr.tok, diag);
+            widen::TypeKind tk;
+            if (!dest_type.empty() && widen::classify(dest_type, tk)
+                && tk.cat == widen::Category::kFloat) {
+                return expr.text + ".0";
+            }
             return expr.text;
+        }
         case ast::Kind::kBoolLiteral: {
             std::string v = (expr.text == "true") ? "1" : "0";
-            widen::checkIntLiteralFits(v, dest_type, diag);
+            widen::checkIntLiteralFits(v, dest_type,
+                                       expr.file_id, expr.tok, diag);
+            widen::TypeKind tk;
+            if (!dest_type.empty() && widen::classify(dest_type, tk)
+                && tk.cat == widen::Category::kFloat) {
+                return v + ".0";
+            }
             return v;
         }
         case ast::Kind::kFloatLiteral: {
-            widen::checkFloatLiteralFits(expr.text, dest_type, diag);
+            widen::checkFloatLiteralFits(expr.text, dest_type,
+                                         expr.file_id, expr.tok, diag);
+            widen::TypeKind tk;
+            if (!dest_type.empty() && widen::classify(dest_type, tk)
+                && tk.cat != widen::Category::kFloat) {
+                double v = std::strtod(expr.text.c_str(), nullptr);
+                bool neg = (v < 0);
+                uint64_t mag = (uint64_t)(neg ? -v : v);
+                return (neg ? std::string("-") : std::string()) + std::to_string(mag);
+            }
             return normalizeFloatLiteral(expr.text);
         }
         case ast::Kind::kStringLiteral: {
@@ -330,14 +527,15 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kIdentExpr: {
             auto it = syms.find(expr.name);
             if (it == syms.end()) {
-                diagnostic::report(diag, {-1, -1,
+                diagnostic::report(diag, {expr.file_id, expr.tok,
                     "codegen: unknown variable '" + expr.name + "'", {}});
                 return "0";
             }
             std::string tmp = newTmp("ld");
             out << "  " << tmp << " = load " << it->second.llvm_type
                 << ", ptr " << it->second.alloca_name << "\n";
-            return widen::convert(tmp, it->second.slids_type, dest_type, out, diag);
+            return widen::convert(tmp, it->second.slids_type, dest_type,
+                                  expr.file_id, expr.tok, out, diag);
         }
         case ast::Kind::kUnaryExpr:
             return emitUnary(expr, syms, pool, out, diag, dest_type);
@@ -351,7 +549,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kAugAssignStmt:
         case ast::Kind::kCallStmt:
         case ast::Kind::kReturnStmt:
-            diagnostic::report(diag, {-1, -1,
+            diagnostic::report(diag, {expr.file_id, expr.tok,
                 "codegen: not an expression", {}});
             return "0";
     }
@@ -367,7 +565,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
               std::ostream& out, diagnostic::Sink& diag) {
     switch (stmt.kind) {
         case ast::Kind::kVarDeclStmt: {
-            std::string llty = llvmTypeFor(stmt.return_type, diag);
+            std::string llty = llvmTypeFor(stmt.return_type,
+                                           stmt.file_id, stmt.tok, diag);
             std::string regname = std::string("%") + stmt.name;
             out << "  " << regname << " = alloca " << llty << "\n";
             syms[stmt.name] = {regname, llty, stmt.return_type};
@@ -382,7 +581,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kAssignStmt: {
             auto it = syms.find(stmt.name);
             if (it == syms.end()) {
-                diagnostic::report(diag, {-1, -1,
+                diagnostic::report(diag, {stmt.file_id, stmt.tok,
                     "codegen: unknown variable '" + stmt.name + "'", {}});
                 return;
             }
@@ -394,21 +593,20 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         }
         case ast::Kind::kCallStmt:
             if (!print::tryEmitCall(stmt, syms, pool, out, diag)) {
-                diagnostic::report(diag, {-1, -1,
+                diagnostic::report(diag, {stmt.file_id, stmt.tok,
                     "codegen: unknown call '" + stmt.name + "'", {}});
             }
             return;
         case ast::Kind::kReturnStmt: {
             std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
                                        fn_return_type);
-            std::string llty = llvmTypeFor(fn_return_type, diag);
+            std::string llty = llvmTypeFor(fn_return_type,
+                                           stmt.file_id, stmt.tok, diag);
             out << "  ret " << llty << " " << val << "\n";
             return;
         }
         case ast::Kind::kAugAssignStmt:
-            // Desugar lowers every kAugAssignStmt to kAssignStmt before
-            // codegen runs; reaching here means the rewrite was skipped.
-            diagnostic::report(diag, {-1, -1,
+            diagnostic::report(diag, {stmt.file_id, stmt.tok,
                 "codegen: kAugAssignStmt survived desugar", {}});
             return;
         case ast::Kind::kProgram:
@@ -422,7 +620,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kIdentExpr:
         case ast::Kind::kUnaryExpr:
         case ast::Kind::kBinaryExpr:
-            diagnostic::report(diag, {-1, -1,
+            diagnostic::report(diag, {stmt.file_id, stmt.tok,
                 "codegen: unexpected node kind in statement position", {}});
             return;
     }
@@ -432,7 +630,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
 
 void emitFunction(ast::Node const& fn, strings::Pool& pool,
                   std::ostream& out, diagnostic::Sink& diag) {
-    std::string ret_llty = llvmTypeFor(fn.return_type, diag);
+    std::string ret_llty = llvmTypeFor(fn.return_type,
+                                       fn.file_id, fn.tok, diag);
     out << "define " << ret_llty << " @" << fn.name << "() {\n";
     SymTab syms;
     for (auto const& s : fn.children) {
@@ -452,15 +651,6 @@ std::string exprType(ast::Node const& expr, SymTab const& syms) {
         case ast::Kind::kStringLiteral: return "char[]";
         case ast::Kind::kIdentExpr: {
             auto it = syms.find(expr.name);
-            // Documented sentinel: "" means "no type information available
-            // for this identifier" (typically because it's not in the local
-            // sym table — could be a forward-declared global, a typo, or a
-            // name only the future classify stage will resolve). Every
-            // caller MUST handle empty: emitUnary/emitLogical/emitBinary
-            // default to "int" so codegen can continue; print.cpp's segment
-            // loop falls through to its "segment of type '' not yet
-            // supported" diagnostic. Not a silent bug — callers actively
-            // route the sentinel.
             if (it == syms.end()) return "";
             return it->second.slids_type;
         }
@@ -494,8 +684,6 @@ std::string exprType(ast::Node const& expr, SymTab const& syms) {
         case ast::Kind::kAugAssignStmt:
         case ast::Kind::kCallStmt:
         case ast::Kind::kReturnStmt:
-            // No caller passes statement-kind nodes; arrival here is a bug
-            // upstream, and there's no diagnostic site that would surface it.
             assert(false && "exprType: called on a statement-kind node");
             __builtin_unreachable();
     }
@@ -515,7 +703,7 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
             } else if (fn->kind == ast::Kind::kFunctionDecl) {
                 // intentional n/a: declarations carry no body to emit
             } else {
-                diagnostic::report(diag, {-1, -1,
+                diagnostic::report(diag, {fn->file_id, fn->tok,
                     "codegen: unexpected node at program scope", {}});
             }
         }
