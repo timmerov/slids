@@ -202,11 +202,12 @@ int32 main() {
     int64 r_u32_i8  = bu32 + bi8;   __println("r_u32_i8= "  + r_u32_i8);
     int64 r_u32_i16 = bu32 + bi16;  __println("r_u32_i16= " + r_u32_i16);
 
-    // -- int + float (value-preserving) --
-    float32 r_i16_f32 = bi16 + bf32;  __println("r_i16_f32= " + r_i16_f32);
-    float32 r_u8_f32  = bu8  + bf32;  __println("r_u8_f32= "  + r_u8_f32);
-    float64 r_i32_f64 = bi32 + bf64;  __println("r_i32_f64= " + r_i32_f64);
-    float64 r_u16_f64 = bu16 + bf64;  __println("r_u16_f64= " + r_u16_f64);
+    // -- int + float (value-preserving); bool is 1-bit unsigned, fits any float --
+    float32 r_i16_f32  = bi16 + bf32;  __println("r_i16_f32= "  + r_i16_f32);
+    float32 r_u8_f32   = bu8  + bf32;  __println("r_u8_f32= "   + r_u8_f32);
+    float64 r_i32_f64  = bi32 + bf64;  __println("r_i32_f64= "  + r_i32_f64);
+    float64 r_u16_f64  = bu16 + bf64;  __println("r_u16_f64= "  + r_u16_f64);
+    float32 r_bool_f32 = xb   + bf32;  __println("r_bool_f32= " + r_bool_f32);  // bool → float32 via uitofp
 
     // -- comparison on mixed types - result is bool --
     bool cmp_i8_i32  = bi8  < bi32;    __println("cmp_i8_i32= "  + cmp_i8_i32);

@@ -1,7 +1,7 @@
 /*
 test implementation of expressions.
 
-ensure we parse mixed type expressions correctly.
+test mixed type expressions.
 this coordinates with the widen rules.
 
 unary: + - ~ !
@@ -21,7 +21,6 @@ pre/post increment/decrement not tested here.
 the ppid rule has implications for parameters.
 
 augmented assignments: += -= *= /= %= &= |= ^= <<= >>= &&= ||= ^^=
-
 augmented assignments are handled in the desugar stage.
 */
 

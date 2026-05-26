@@ -193,6 +193,26 @@ ERROR REPORTING
     exists) — falls back to bare `slidsc: error: <msg>`.
   * parser error messages are minimal ("expected '...'"); no suggestions, no notes
 
+TEST COVERAGE GAPS — features implemented in v2 with no test exercising them
+  * Augmented assignments (`+= -= *= /= %= &= |= ^= <<= >>= &&= ||= ^^=`).
+    Grammar parses; desugar rewrites to assign + binary; no test verifies.
+    Header in expression3.sl / expression4.sl says "augmented assignments
+    are handled in the desugar stage" — currently unverified.
+  * Hex (`0xFF`) and binary (`0b1010`) integer literals. lex.cpp::readNumber
+    handles both, returning kUintLiteral. No test exercises them.
+  * Float literal with exponent (`1e5`, `1.5e-3`). lex parses; codegen
+    normalizes via normalizeFloatLiteral. The only `1e40` use is in widen.sl's
+    `//-EXPECT-ERROR` markers (negative). No positive in-range case.
+  * Adjacent string-literal concatenation (`"a" "b"` → `"ab"`).
+    parsePrimary's kStringLiteral arm has a while-loop that concatenates
+    adjacent tokens. No test uses two adjacent string literals.
+  * bool → float convert via uitofp. widen::convert handles it; no test
+    has a bool source flowing into a float dest.
+  * Logical short-circuit observable verification — deferred until
+    expressions have side effects (call expressions / PPID). emitLogical
+    emits the conditional branches but nothing in any test would distinguish
+    short-circuit from full evaluation today.
+
 PRINT INTRINSIC (print.h / print.cpp)
   * handles __println / __print with a single arg only:
     - string literal  -> printf(@.str_N)
