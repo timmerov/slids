@@ -89,10 +89,18 @@ std::string emitToBool(std::string const& val, std::string const& slids_type,
         return tmp;
     }
     std::string llty;
-    if      (slids_type == "char"  || slids_type == "int8"  || slids_type == "uint8")  llty = "i8";
-    else if (slids_type == "int16" || slids_type == "uint16")                          llty = "i16";
-    else if (slids_type == "int64" || slids_type == "uint64" || slids_type == "intptr") llty = "i64";
-    else                                                                                llty = "i32";
+    if      (slids_type == "char"   || slids_type == "int8"   || slids_type == "uint8")   llty = "i8";
+    else if (slids_type == "int16"  || slids_type == "uint16")                            llty = "i16";
+    else if (slids_type == "int"    || slids_type == "int32"
+          || slids_type == "uint"   || slids_type == "uint32")                            llty = "i32";
+    else if (slids_type == "int64"  || slids_type == "uint64" || slids_type == "intptr")  llty = "i64";
+    else {
+        // No silent default: any new integer family member must extend the
+        // table above. Pointer (ptr) and slid-typed operands need their own
+        // arms (icmp ne null / op-overload) when those phases land.
+        assert(false && "emitToBool: unhandled slids type");
+        __builtin_unreachable();
+    }
     std::string tmp = newTmp("tob");
     out << "  " << tmp << " = icmp ne " << llty << " " << val << ", 0\n";
     return tmp;
@@ -130,9 +138,14 @@ std::string emitLogical(ast::Node const& expr, SymTab const& syms,
         out << "  br i1 " << left_bool
             << ", label %" << done
             << ", label %" << eval_right << "\n";
-    } else {  // ^^
+    } else if (op == "^^") {
         out << "  store i1 0, ptr " << result_ptr << "\n";
         out << "  br label %" << eval_right << "\n";
+    } else {
+        // Routed only via emitBinary's && / || / ^^ dispatch — anything else
+        // means a fourth logical op was added without extending that router.
+        assert(false && "emitLogical: unhandled logical op");
+        __builtin_unreachable();
     }
 
     out << eval_right << ":\n";
@@ -439,6 +452,15 @@ std::string exprType(ast::Node const& expr, SymTab const& syms) {
         case ast::Kind::kStringLiteral: return "char[]";
         case ast::Kind::kIdentExpr: {
             auto it = syms.find(expr.name);
+            // Documented sentinel: "" means "no type information available
+            // for this identifier" (typically because it's not in the local
+            // sym table — could be a forward-declared global, a typo, or a
+            // name only the future classify stage will resolve). Every
+            // caller MUST handle empty: emitUnary/emitLogical/emitBinary
+            // default to "int" so codegen can continue; print.cpp's segment
+            // loop falls through to its "segment of type '' not yet
+            // supported" diagnostic. Not a silent bug — callers actively
+            // route the sentinel.
             if (it == syms.end()) return "";
             return it->second.slids_type;
         }
