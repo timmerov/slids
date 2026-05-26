@@ -95,44 +95,61 @@ GRAMMAR
     - no class / struct / enum / alias type names yet
   * parameter lists not parsed (only bare `()`)
   * expression parsing: literal leaves (string, int, char, bool, float)
-    + bare identifier + unary `-` on numeric literals
-    - unary `-` folds into the literal text only; `-x` on an identifier
-      errors ("requires a numeric literal")
-    - no other unary operators (!, ~)
-    - no binary operators
+    + bare identifier + unary `! ~ + -` + full binary set (arith / bitwise /
+    shift / comparison / logical) with C precedence + parenthesized grouping.
+    - unary `+ - ~ !` on literals fold at desugar
+    - no postfix ops (field access, indexing, call-through, `^` deref);
+      slot into parsePostfix as their phases land
     - no function calls inside expressions
-    - no field access, no index, no cast
+    - no `<Type^>` or `(Type=expr)` casts
     - float literals must be lossless decimal (no hex form yet, no inexact
       values like 1.1 which would require LLVM hex encoding); codegen
-      normalizes `1e40`-style text to `1.0e40` so LLVM accepts the float
-      form
+      normalizes `1e40`-style text to `1.0e40` so LLVM accepts the float form
 
 WIDENING + LITERAL RANGE CHECKING (widen.h / widen.cpp)
   * widen::checkIntLiteralFits / checkFloatLiteralFits enforce per-type
-    literal ranges (bool 0..1, intN/uintN exact ranges, float32 ≤ FLT_MAX,
-    float64 ≤ DBL_MAX). Called at VarDecl-init, AssignStmt, and ReturnStmt
-    via emitExpr.
-  * widen::convert handles var-to-var conversions per the spec:
+    literal ranges. Int literal at float dest must be exactly representable
+    in the float's significand. Float literal at int dest must be integer-
+    valued and in range.
+  * widen::convert handles var-to-var conversions:
       - signed → strictly larger signed (sext)
       - unsigned → strictly larger unsigned (zext)
       - unsigned → strictly larger signed (zext, value-preserving)
-      - bool → any integer (zext from i1)
+      - bool → any integer (zext from i1) / any float (uitofp from i1)
       - float → strictly larger float (fpext)
-    Rejects (with v1-shape error messages):
+      - int → float when the int type's range fits the float's significand
+        (sitofp / uitofp). int8/int16/uint8/uint16 → float32; up to int32/
+        uint32 → float64; int64/uint64 → no silent float.
+    Rejects (sentence-shaped messages):
       - any same-or-narrower target ("Cannot implicitly narrow ...")
       - signed → unsigned ("(signed → unsigned)")
       - unsigned → same-width signed ("(unsigned to same-width signed)")
-      - cross-family int↔float (plain "use an explicit type conversion")
-  * Error messages match v1 shape: `Integer literal N does not fit in 'T'.`
-    and `Cannot implicitly narrow 'X' to 'Y'; use an explicit type conversion.`
-  * codegen's SymTab now carries slids_type alongside llvm_type so widen
-    has the typed source for ident-load conversions.
+      - int → float when not value-preserving ("Cannot implicitly convert ...")
+      - float → int: never silent ("Cannot implicitly convert ...")
+  * widen::commonType — "smallest type large enough to hold either operand".
+    Used by codegen's binary-op emitter for arith / bitwise / comparison.
+    Returns false when no type fits (uint64 + any signed; int64 + float64).
+  * widen::intLiteralFits / floatLiteralFits — silent variants of the
+    literal checks. Used by codegen's literal-flex rule (try-fit-into-other-
+    operand-type first; fall back to default literal type when not).
+  * codegen handles binary-op shapes:
+      - arith / bitwise / comparison: commonType → emit at common → convert
+        result to dest_type. Comparison result is bool, converted to dest.
+      - shift: LHS dictates result type; RHS resized to LHS width via
+        trunc/zext (LLVM's same-operand-width requirement).
+      - logical (&& || ^^): each operand → bool independently; result bool.
+      - literal + literal int/char: compile-time fold via tryFoldIntBinary,
+        produces an untyped literal text that flexes to the surrounding target.
+  * codegen's literal-flex uses defaultLiteralType for the literal's
+    fallback type (int32 by magnitude → int64 → uint64; bool/char/float as-is).
+  * Source attribution is plumbed: every widen call takes (file_id, tok)
+    and threads into diagnostic::report.
+  * codegen's SymTab carries slids_type alongside llvm_type so widen has
+    the typed source for ident-load conversions.
   * Still TODO:
       - explicit type conversion syntax `(Type=expr)` not yet parsed
+      - explicit cast syntax `<Type^>` (Phase 4)
       - widen at function-call arg sites (no params yet)
-      - widen at binary-op operand sites (no binary ops yet)
-      - integer-literal flex defaults (int / int64 / uint64 by value); right
-        now literals carry only their text and the dest type drives the check
   * call statements: exactly one argument
     - zero-arg calls not parsed
     - multi-arg calls not parsed
@@ -143,8 +160,9 @@ WIDENING + LITERAL RANGE CHECKING (widen.h / widen.cpp)
     - function signatures are name + bare `()` only — no params, no overloads
     - no duplicate-declaration check (same name twice silently dedup'd by
       codegen skipping FunctionDecl nodes; will need real symbol resolution)
-  * statement-level: only var-decl, assign, call, return
-    - no if/else, no for/while, no block, no compound assignment
+  * statement-level: var-decl, assign, augmented-assign (desugared to assign),
+    call, return
+    - no if/else, no for/while, no block
 
 DESUGAR
   * identity-copy from parse -> ast; no canonicalization
@@ -162,13 +180,18 @@ CODEGEN
   * llvmTypeFor handles all primitives + <T>[] (lowers to ptr); class /
     struct / enum / alias not yet
   * bool lowers to i1 (per redesign-memory intent; v1 uses i32 for bool)
-  * return value not type-checked against function return type
+  * return value coerced to fn_return_type via emitExpr's widen path;
+    non-widenable returns produce a widen diagnostic at the return stmt
   * target triple hard-coded to x86_64-pc-linux-gnu
 
 ERROR REPORTING
+  * source attribution + caret-sled rendering landed. parse::Node and
+    ast::Node carry (file_id, tok); grammar stamps at construction; desugar
+    propagates; widen / codegen / print all thread the relevant node's
+    position into every diagnostic::report call. Exception: lex's
+    "cannot open root_path" fires before any source is read (no token
+    exists) — falls back to bare `slidsc: error: <msg>`.
   * parser error messages are minimal ("expected '...'"); no suggestions, no notes
-  * codegen errors use (-1, -1) sentinel attribution because parse/ast nodes
-    don't yet carry back-pointers to source tokens
 
 PRINT INTRINSIC (print.h / print.cpp)
   * handles __println / __print with a single arg only:
