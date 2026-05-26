@@ -62,6 +62,7 @@ r_i16_f32= 301.5
 r_u8_f32= 201.5
 r_i32_f64= 100002
 r_u16_f64= 50002.5
+r_bool_f32= 2.5
 cmp_i8_i32= true
 cmp_u32_i32= false
 cmp_i32_f64= true
