@@ -1,7 +1,8 @@
 
 SUBDIRS = \
-	lexer \
-	parser
+	lex \
+	numeric \
+	parse
 
 .PHONY: all clean test negatives positives $(SUBDIRS)
 

@@ -4,6 +4,7 @@ PIPELINE (each stage consumes its predecessor's output, produces its successor's
 
     source text
       => lex      => token::List
+      => numeric  => token::List (literal tokens canonicalized + validated)
       => grammar  => parse::Tree
       => classify => parse::Tree annotated (symbol refs + types)
       => desugar  => ast::Tree
@@ -32,7 +33,19 @@ STAGE FILES (.h / .cpp pairs)
             recursively expands `import X;` at depth-0 file scope into one
             unified token list. Tracks bracket-kind balance ( { [ only.
             Emits kEndOfFile per file, kEndOfInput once at the outermost
-            return. (Done.)
+            return. Numeric literals: strips underscores, emits source-form
+            text per kind (char/int/uint/float); rejects only structural
+            errors (missing digits after 0x / 0b / e). Value parsing,
+            escape interpretation, and overflow live in the numeric stage.
+            (Done; numeric handoff TODO.)
+  numeric   tokens -> tokens. Validates and canonicalizes literal tokens:
+            interprets char escapes ('A' -> 65, '\\n' -> 10); parses hex/
+            binary to decimal (0xFF -> 255, 0b1010 -> 10); canonicalizes
+            float text (%.17g). Detects overflow assuming uint64 / float64
+            storage; more overflow detection happens downstream at target-
+            type fit checks. Classify operates on the canonical-string
+            tokens; desugar is the first stage to materialize typed values
+            on AST nodes. (TODO stub.)
   grammar   tokens -> parse tree. Pure syntax; every identifier is just a
             name. (TODO stub.)
   classify  parse tree -> annotated parse tree. Resolves every identifier

@@ -12,6 +12,7 @@
 #include "grammar.h"
 #include "layout.h"
 #include "lex.h"
+#include "numeric.h"
 #include "optimize.h"
 #include "parse.h"
 #include "token.h"
@@ -40,6 +41,7 @@ int main(int argc, char** argv) {
     ast::Tree ast_tree;
 
     lex::run(in_path, import_paths, tokens, diag);
+    numeric::run(tokens, diag);
     grammar::run(tokens, parse_tree, diag);
     classify::run(parse_tree, diag);
     desugar::run(parse_tree, ast_tree, diag);

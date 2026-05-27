@@ -19,12 +19,24 @@ converting signed integers to unsigned.
 converting 32 or 64 bit integers to float32.
 converting 64 bit integers to float64.
 
-integer literals are flexible type.
+decimal integer literals are flexible type.
 their default type is int,
 unless the value is too big,
 then the type is int64,
 unless the value is too big,
 then the type is uint64.
+
+hex and binary integer literals are flexible type.
+their default type is uint,
+unless the value is too big,
+then the type is uint64,
+
+floating point literals are flexible type.
+their default type is float.
+unless the value is too big.
+then the type is float64.
+floating point literals are silently rounded to match the target type precision.
+3.14 becomes 3.1400001049 for target float32.
 
 integer literals may be silently type converted to floating point if they fit.
 floating point literals may be silently type converted to integer types if the
@@ -93,79 +105,79 @@ int32 main() {
 
     xb = 0;  __println("xb= " + xb);
     xb = 1;  __println("xb= " + xb);
-    //-EXPECT-ERROR: Integer literal -1 does not fit in 'bool'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'bool'.
     // xb = -1;
-    //-EXPECT-ERROR: Integer literal 2 does not fit in 'bool'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'bool'.
     // xb = 2;
 
     xi8 = 127;   __println("xi8= " + xi8);
     xi8 = -128;  __println("xi8= " + xi8);
-    //-EXPECT-ERROR: Integer literal 128 does not fit in 'int8'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'int8'.
     // xi8 = 128;
-    //-EXPECT-ERROR: Integer literal -129 does not fit in 'int8'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'int8'.
     // xi8 = -129;
 
     xi16 = 32_767;   __println("xi16= " + xi16);
     xi16 = -32_768;  __println("xi16= " + xi16);
-    //-EXPECT-ERROR: Integer literal 32768 does not fit in 'int16'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'int16'.
     // xi16 = 32_768;
-    //-EXPECT-ERROR: Integer literal -32769 does not fit in 'int16'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'int16'.
     // xi16 = -32_769;
 
     xi32 = 2_147_483_647;   __println("xi32= " + xi32);
     xi32 = -2_147_483_648;  __println("xi32= " + xi32);
-    //-EXPECT-ERROR: Integer literal 2147483648 does not fit in 'int32'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'int32'.
     // xi32 = 2_147_483_648;
-    //-EXPECT-ERROR: Integer literal -2147483649 does not fit in 'int32'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'int32'.
     // xi32 = -2_147_483_649;
 
     xi64 = 9_223_372_036_854_775_807;   __println("xi64= " + xi64);
     xi64 = -9_223_372_036_854_775_808;  __println("xi64= " + xi64);
-    //-EXPECT-ERROR: Integer literal 9223372036854775808 does not fit in 'int64'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'int64'.
     // xi64 = 9_223_372_036_854_775_808;
-    //-EXPECT-ERROR: Integer literal -9223372036854775809 does not fit in 'int64'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'int64'.
     // xi64 = -9_223_372_036_854_775_809;
 
     xu8 = 0;    __println("xu8= " + xu8);
     xu8 = 255;  __println("xu8= " + xu8);
-    //-EXPECT-ERROR: Integer literal -1 does not fit in 'uint8'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'uint8'.
     // xu8 = -1;
-    //-EXPECT-ERROR: Integer literal 256 does not fit in 'uint8'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'uint8'.
     // xu8 = 256;
 
     xu16 = 0;       __println("xu16= " + xu16);
     xu16 = 65_535;  __println("xu16= " + xu16);
-    //-EXPECT-ERROR: Integer literal -1 does not fit in 'uint16'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'uint16'.
     // xu16 = -1;
-    //-EXPECT-ERROR: Integer literal 65536 does not fit in 'uint16'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'uint16'.
     // xu16 = 65_536;
 
     xu32 = 0;              __println("xu32= " + xu32);
     xu32 = 4_294_967_295;  __println("xu32= " + xu32);
-    //-EXPECT-ERROR: Integer literal -1 does not fit in 'uint32'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'uint32'.
     // xu32 = -1;
-    //-EXPECT-ERROR: Integer literal 4294967296 does not fit in 'uint32'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'uint32'.
     // xu32 = 4_294_967_296;
 
     xu64 = 0;                           __println("xu64= " + xu64);
     xu64 = 18_446_744_073_709_551_615;  __println("xu64= " + xu64);
-    //-EXPECT-ERROR: Integer literal -1 does not fit in 'uint64'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'uint64'.
     // xu64 = -1;
-    //-EXPECT-ERROR: Integer literal 18446744073709551616 does not fit in 'uint64'.
+    //-EXPECT-ERROR: Integer literal overflows uint64.
     // xu64 = 18_446_744_073_709_551_616;
 
     xu = 0;              __println("xu= " + xu);
     xu = 4_294_967_295;  __println("xu= " + xu);
-    //-EXPECT-ERROR: Integer literal -1 does not fit in 'uint'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'uint'.
     // xu = -1;
-    //-EXPECT-ERROR: Integer literal 4294967296 does not fit in 'uint'.
+    //-EXPECT-ERROR: Integer literal does not fit in 'uint'.
     // xu = 4_294_967_296;
 
     xf32 = 1.0;   __println("xf32= " + xf32);
     xf32 = -1.0;  __println("xf32= " + xf32);
-    //-EXPECT-ERROR: Float literal 1e40 does not fit in 'float32'.
+    //-EXPECT-ERROR: Float literal does not fit in 'float32'.
     // xf32 = 1e40;
-    //-EXPECT-ERROR: Float literal -1e40 does not fit in 'float32'.
+    //-EXPECT-ERROR: Float literal does not fit in 'float32'.
     // xf32 = -1e40;
 
     // ===== mixed-type binary expressions =====

@@ -8,6 +8,7 @@ as a widen call-out.
 
 Phase 0 — foundations (largely landed)
   * lex stage + import wrapper
+  * numeric stage — literal validation + canonicalization (TODO)
   * diagnostic sink + source rendering
   * build hygiene (-Wall -Werror -Wswitch-enum)
   * widen primitives table + literal range checks
@@ -184,6 +185,19 @@ DESUGAR
     → canonical, operator-overload dispatch lowering, stringify lowering,
     etc. — slot in as their phases land.
 
+NUMERIC
+  * stage doesn't exist yet. Today lex parses hex/binary via std::stoull
+    (would crash on overflow — no try/catch) and interprets char escapes
+    (5-escape set: \n \t \0 \\ \') to compute the byte value. Both must
+    migrate to numeric: lex stops parsing numerics; numeric does the
+    conversion + overflow detection.
+  * grammar.cpp:129-131 collapses kUintLiteral -> parse::kIntLiteral,
+    dropping the uint flavor that widen.sl's hex/binary default-type chain
+    (uint -> uint64) depends on. Restore the distinction once numeric
+    canonicalizes the text.
+  * AST has kIntLiteral / kFloatLiteral / kCharLiteral / kBoolLiteral;
+    needs kUintLiteral added so the uint flavor survives into widen/codegen.
+
 CLASSIFY
   * no-op; no symbol resolution, no type inference, no overload resolution
 
@@ -211,11 +225,6 @@ ERROR REPORTING
   * parser error messages are minimal ("expected '...'"); no suggestions, no notes
 
 TEST COVERAGE GAPS — features implemented in v2 with no test exercising them
-  * Hex (`0xFF`) and binary (`0b1010`) integer literals. lex.cpp::readNumber
-    handles both, returning kUintLiteral. No test exercises them.
-  * Float literal with exponent (`1e5`, `1.5e-3`). lex parses; codegen
-    normalizes via normalizeFloatLiteral. The only `1e40` use is in widen.sl's
-    `//-EXPECT-ERROR` markers (negative). No positive in-range case.
   * Adjacent string-literal concatenation (`"a" "b"` → `"ab"`).
     parsePrimary's kStringLiteral arm has a while-loop that concatenates
     adjacent tokens. No test uses two adjacent string literals.

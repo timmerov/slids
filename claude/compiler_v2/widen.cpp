@@ -110,14 +110,16 @@ std::string canonicalFloat(int bits) {
 
 void reportIntFit(diagnostic::Sink& diag, std::string const& literal,
                   std::string const& dest_type, int file_id, int tok) {
+    (void)literal;   // n/a: caret-rendered source carries the spelling
     diagnostic::report(diag, {file_id, tok,
-        "Integer literal " + literal + " does not fit in '" + dest_type + "'.", {}});
+        "Integer literal does not fit in '" + dest_type + "'.", {}});
 }
 
 void reportFloatFit(diagnostic::Sink& diag, std::string const& literal,
                     std::string const& dest_type, int file_id, int tok) {
+    (void)literal;
     diagnostic::report(diag, {file_id, tok,
-        "Float literal " + literal + " does not fit in '" + dest_type + "'.", {}});
+        "Float literal does not fit in '" + dest_type + "'.", {}});
 }
 
 int nextTmpId() {

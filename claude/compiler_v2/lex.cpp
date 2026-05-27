@@ -202,24 +202,46 @@ token::Token readString(Stream& s) {
 token::Token readNumber(Stream& s) {
     std::string value;
     if (peek(s) == '0' && (peek2(s) == 'x' || peek2(s) == 'X')) {
+        int prefix_line = s.line, prefix_col = s.col;
         advance(s); advance(s);
         std::string digits;
         while (s.pos < (int)s.source->size() && (isxdigit(peek(s)) || peek(s) == '_'))
             digits += advance(s);
         std::string clean;
         for (char c : digits) if (c != '_') clean += c;
-        uint64_t uval = std::stoull(clean, nullptr, 16);
-        return {token::Kind::kUintLiteral, std::to_string(uval), 0, 0, 0, 0};
+        if (clean.empty()) {
+            setFatal(s, prefix_line, prefix_col, 2, "Hex literal missing digits.");
+            return {token::Kind::kError, "", 0, 0, 0, 0};
+        }
+        try {
+            uint64_t uval = std::stoull(clean, nullptr, 16);
+            return {token::Kind::kUintLiteral, std::to_string(uval), 0, 0, 0, 0};
+        } catch (std::out_of_range const&) {
+            setFatal(s, prefix_line, prefix_col, 2 + (int)digits.size(),
+                "Hex literal overflows uint64.");
+            return {token::Kind::kError, "", 0, 0, 0, 0};
+        }
     }
     if (peek(s) == '0' && (peek2(s) == 'b' || peek2(s) == 'B')) {
+        int prefix_line = s.line, prefix_col = s.col;
         advance(s); advance(s);
         std::string digits;
         while (s.pos < (int)s.source->size() && (peek(s) == '0' || peek(s) == '1' || peek(s) == '_'))
             digits += advance(s);
         std::string clean;
         for (char c : digits) if (c != '_') clean += c;
-        uint64_t uval = std::stoull(clean, nullptr, 2);
-        return {token::Kind::kUintLiteral, std::to_string(uval), 0, 0, 0, 0};
+        if (clean.empty()) {
+            setFatal(s, prefix_line, prefix_col, 2, "Binary literal missing digits.");
+            return {token::Kind::kError, "", 0, 0, 0, 0};
+        }
+        try {
+            uint64_t uval = std::stoull(clean, nullptr, 2);
+            return {token::Kind::kUintLiteral, std::to_string(uval), 0, 0, 0, 0};
+        } catch (std::out_of_range const&) {
+            setFatal(s, prefix_line, prefix_col, 2 + (int)digits.size(),
+                "Binary literal overflows uint64.");
+            return {token::Kind::kError, "", 0, 0, 0, 0};
+        }
     }
     while (s.pos < (int)s.source->size() && (isdigit(peek(s)) || peek(s) == '_'))
         value += advance(s);
