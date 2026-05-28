@@ -8,8 +8,28 @@ as a widen call-out.
 
 Phase 0 — foundations (largely landed)
   * lex stage + import wrapper
-  * numeric stage — literal validation + canonicalization (TODO)
+  * numeric stage — literal validation + canonicalization (mostly landed;
+    int/uint/float/char/bool all flow lex→numeric; items 5 and 7 of the
+    migration still open — see project_v2_numeric_stage memory)
+  * constfold stage — between grammar and classify (TODO; spec in
+    test_v2/parse/widen.sl and test_v2/const/fold.sl):
+      - rule 4 (binary on two literals): widen both to common computational
+        type int64/uint64/float64, perform, assign nominal type by value
+      - rule 3 (unary on literal): widen to computational type, perform;
+        -uint and -bool lowered to -1 * literal then rule 4; ~ on bool error
+      - shift on two literals: rule 4 with shift count >= bitwidth → 0;
+        negative shift count → compile error
+      - algebraic identity simplifications: x+0 → x, x*1 → x, x*0 → 0,
+        x/1 → x, x%1 → 0, x|0 → x, x&0 → 0, x^0 → x, x<<0 → x, x>>0 → x,
+        x|~0 → ~0, x&~0 → x, 0-x → -x
+      - logical with constant: x && false → false, x || true → true,
+        x && true → x, x || false → x, x ^^ false → x, x ^^ true → !x
+        (safe today; needs side-effect check once function calls land)
+      - division/mod by zero (literal divisor) → compile error
+      - every literal gets a nominal type assigned (parse::Node field):
+        bool / char / int8/16/32/64 / uint8/16/32/64 / float32/64 by value
   * diagnostic sink + source rendering
+  * single-source error pipeline (main.cpp early-out between stages)
   * build hygiene (-Wall -Werror -Wswitch-enum)
   * widen primitives table + literal range checks
 
@@ -20,9 +40,7 @@ Phase 1 — expression core
   * calls (zero-arg, one-arg, multi-arg)
   * compound assigns (+=, -=, *=, /=, %=, &=, |=, ^=, <<=, >>=, ||=, &&=)
   * PPID — pre/post-inc/dec via phrases
-  * move literal+literal int fold from codegen → desugar (currently lives in
-    emitBinary; pairs with existing tryFoldUnary; recursive folds for
-    `1+2+3` fall out for free)
+  * (literal+literal int fold moves to constfold per Phase 0)
 
 Phase 2 — declarations + flow
   * var decls (typed init, inferred init, declare-then-assign)
@@ -189,17 +207,50 @@ DESUGAR
     etc. — slot in as their phases land.
 
 NUMERIC
-  * stage doesn't exist yet. Today lex parses hex/binary via std::stoull
-    (would crash on overflow — no try/catch) and interprets char escapes
-    (5-escape set: \n \t \0 \\ \') to compute the byte value. Both must
-    migrate to numeric: lex stops parsing numerics; numeric does the
-    conversion + overflow detection.
-  * grammar.cpp:129-131 collapses kUintLiteral -> parse::kIntLiteral,
-    dropping the uint flavor that widen.sl's hex/binary default-type chain
-    (uint -> uint64) depends on. Restore the distinction once numeric
-    canonicalizes the text.
-  * AST has kIntLiteral / kFloatLiteral / kCharLiteral / kBoolLiteral;
-    needs kUintLiteral added so the uint flavor survives into widen/codegen.
+  * stage landed; handles kIntLiteral, kUintLiteral, kCharLiteral,
+    kFloatLiteral, kBoolLiteral. Per-kind validation + canonicalization with
+    sentence-shaped diagnostics ("Hex literal overflows uint64.", etc.).
+  * lex now emits source-form text per kind; numeric canonicalizes:
+    - kIntLiteral: text in decimal digits → pos checked → overflow / malformed
+    - kUintLiteral: text "0xFF" or "0b1010" → parsed → decimal text out;
+      kIntLiteral whose value > INT64_MAX flips kind to kUintLiteral here
+    - kCharLiteral: in-quotes span → escape interpreted → decimal byte value
+    - kFloatLiteral: source minus underscores → strtod → %.17g canonical
+    - kBoolLiteral: "true"/"false" → "1"/"0"
+  * Still open from the 1-7 migration table:
+    - item 5: widen::checkUintLiteralFits + checkCharLiteralFits for proper
+      diagnostic attribution ("Integer literal" → "Unsigned literal" /
+      "Character literal") at codegen.cpp:496-514 routing sites
+    - item 7: codegen float32 hex bit-pattern emit. `float xf = 3.14;`
+      currently rejected by llc because slidsc emits decimal for float32
+      where llc requires the 16-hex-digit form. Computation: source decimal
+      → double → (float) cast → re-promote to double → uint64 bit pattern →
+      emit as `0x` + 16 hex digits.
+
+NEW SILENT DEFAULTS — from items 3+4+6 (kUintLiteral resurrection)
+  * desugar.cpp tryFoldUnary: `-` on kUintLiteral calls toggleSign on text
+    but doesn't transition kind. Result: kUintLiteral with negative text
+    (semantically incoherent). Per the H-rule (-uint = -1 * uint, becomes
+    signed via mixed widening), should set child->kind = kIntLiteral after
+    toggleSign, plus a magnitude check (parse uint64; if mag > 2^63 →
+    compile error, since negation underflows int64).
+  * codegen.cpp exprType for kUintLiteral unconditionally returns "uint"
+    (uint32). Large kUintLiteral (value > UINT32_MAX) gets typed as uint32
+    — silent narrowing. Should call defaultLiteralType (or share a helper)
+    to pick uint32 vs uint64 by value. Surfaces today only via __println
+    segment-typing (print.cpp routes via exprType); larger surface as
+    expressions land.
+  * codegen.cpp defaultLiteralType parse-failure fallbacks (`return
+    "uint64"` / `return neg ? "int64" : "uint64"`) silently swallow
+    malformed text. Numeric is the precondition guarantor; the fallback
+    arm should be assert(false && "defaultLiteralType: malformed text from
+    numeric") so a numeric bug surfaces as a crash, not a wrong type.
+
+CONSTFOLD
+  * stage doesn't exist yet. Slots between grammar and classify per the
+    project_compiler_redesign 9-stage pipeline. Spec in widen.sl rules
+    1-4, 8-9, plus identity simplifications and division-by-zero detection.
+    See "Phase 0" entry above for the full TODO list.
 
 CLASSIFY
   * no-op; no symbol resolution, no type inference, no overload resolution

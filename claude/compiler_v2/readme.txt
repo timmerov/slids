@@ -3,14 +3,15 @@ compiler_v2 — slids compiler rewrite, in-progress
 PIPELINE (each stage consumes its predecessor's output, produces its successor's input):
 
     source text
-      => lex      => token::List
-      => numeric  => token::List (literal tokens canonicalized + validated)
-      => grammar  => parse::Tree
-      => classify => parse::Tree annotated (symbol refs + types)
-      => desugar  => ast::Tree
-      => optimize => ast::Tree annotated (perf rewrites in place)
-      => layout   => ast::Tree annotated (mangled names + offsets)
-      => codegen  => .ll text
+      => lex       => token::List
+      => numeric   => token::List (literal tokens canonicalized + validated)
+      => grammar   => parse::Tree
+      => constfold => parse::Tree (literal sub-trees collapsed + nominal-typed)
+      => classify  => parse::Tree annotated (symbol refs + types)
+      => desugar   => ast::Tree
+      => optimize  => ast::Tree annotated (perf rewrites in place)
+      => layout    => ast::Tree annotated (mangled names + offsets)
+      => codegen   => .ll text
 
 main.cpp drives the chain per TU and runs `diagnostic::hasErrors(diag)` between
 layout and codegen to short-circuit on errors.
@@ -48,6 +49,17 @@ STAGE FILES (.h / .cpp pairs)
             on AST nodes. (TODO stub.)
   grammar   tokens -> parse tree. Pure syntax; every identifier is just a
             name. (TODO stub.)
+  constfold parse tree -> parse tree. Iteratively folds literal sub-trees:
+            unary on literal (rule 3 + H-rule synthesis for -uint/-bool),
+            binary on two literals (rule 4 — common computational type
+            int64/uint64/float64), shift on two literals (count >= width
+            folds to 0; negative count is a compile error). Also algebraic
+            identity simplifications (x+0 → x, x*0 → 0, x*1 → x, etc.) and
+            division/mod by zero detection (literal divisor → compile error).
+            Every literal gets a nominal type annotated per its value:
+            bool / char / int8/16/32/64 / uint8/16/32/64 / float32/64.
+            Classify then sees a tree where every constant sub-expression
+            has been collapsed to a single typed literal. (TODO stub.)
   classify  parse tree -> annotated parse tree. Resolves every identifier
             to a symbol-table entry; infers every expression's type;
             overload resolution. (TODO stub.)
