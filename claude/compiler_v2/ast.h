@@ -31,6 +31,7 @@ struct Node {
     std::string name;
     std::string text;
     std::string return_type;
+    std::string nominal_type;  // literal nodes: nominal type from constfold
     int file_id = -1;          // source file of the construct
     int tok = -1;              // index into token::List::tokens for error attribution
     std::vector<std::unique_ptr<Node>> children;

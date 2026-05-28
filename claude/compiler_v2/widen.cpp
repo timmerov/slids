@@ -75,21 +75,6 @@ bool intFitsUnsigned(uint64_t mag, bool negative, int bits) {
     return mag <= max_val;
 }
 
-bool intExactlyRepresentableInFloat(uint64_t mag, int float_bits) {
-    int sig = (float_bits == 32) ? 24 : 53;
-    if (sig >= 64) return true;
-    uint64_t max_exact = ((uint64_t)1) << sig;
-    return mag <= max_exact;
-}
-
-bool intTypeFitsInFloat(TypeKind const& ik, int float_bits) {
-    int sig = (float_bits == 32) ? 24 : 53;
-    if (ik.cat == Category::kBool) return true;
-    if (ik.cat == Category::kSignedInt) return ik.bits <= sig + 1;
-    if (ik.cat == Category::kUnsignedInt) return ik.bits <= sig;
-    return false;
-}
-
 std::string canonicalSigned(int bits) {
     if (bits <= 8) return "int8";
     if (bits <= 16) return "int16";
@@ -150,11 +135,10 @@ bool checkIntLiteralFits(std::string const& literal_text,
         return false;
     }
     if (tk.cat == Category::kFloat) {
-        if (!intExactlyRepresentableInFloat(mag, tk.bits)) {
-            reportIntFit(diag, literal_text, dest_type, file_id, tok);
-            return false;
-        }
-        return true;
+        diagnostic::report(diag, {file_id, tok,
+            "Cannot implicitly convert 'int' to '" + dest_type
+            + "'; use an explicit type conversion.", {}});
+        return false;
     }
     if (tk.cat == Category::kBool) {
         if (!negative && (mag == 0 || mag == 1)) return true;
@@ -202,37 +186,11 @@ bool checkFloatLiteralFits(std::string const& literal_text,
         }
         return true;
     }
-    if (v != std::floor(v)) {
-        reportFloatFit(diag, literal_text, dest_type, file_id, tok);
-        return false;
-    }
-    bool negative = (v < 0);
-    double absv = negative ? -v : v;
-    if (absv > (double)UINT64_MAX) {
-        reportFloatFit(diag, literal_text, dest_type, file_id, tok);
-        return false;
-    }
-    uint64_t mag = (uint64_t)absv;
-    if (tk.cat == Category::kBool) {
-        if (!negative && (mag == 0 || mag == 1)) return true;
-        reportFloatFit(diag, literal_text, dest_type, file_id, tok);
-        return false;
-    }
-    if (tk.cat == Category::kSignedInt) {
-        if (!intFitsSigned(mag, negative, tk.bits)) {
-            reportFloatFit(diag, literal_text, dest_type, file_id, tok);
-            return false;
-        }
-        return true;
-    }
-    if (tk.cat == Category::kUnsignedInt) {
-        if (!intFitsUnsigned(mag, negative, tk.bits)) {
-            reportFloatFit(diag, literal_text, dest_type, file_id, tok);
-            return false;
-        }
-        return true;
-    }
-    return true;
+    // float → int-class (bool / signed / unsigned): cross-family, no silent mix.
+    diagnostic::report(diag, {file_id, tok,
+        "Cannot implicitly convert 'float' to '" + dest_type
+        + "'; use an explicit type conversion.", {}});
+    return false;
 }
 
 bool intLiteralFits(std::string const& literal_text, std::string const& dest_type) {
@@ -242,9 +200,7 @@ bool intLiteralFits(std::string const& literal_text, std::string const& dest_typ
     bool negative = false;
     uint64_t mag = 0;
     if (!parseSignedDigits(literal_text, negative, mag)) return false;
-    if (tk.cat == Category::kFloat) {
-        return intExactlyRepresentableInFloat(mag, tk.bits);
-    }
+    if (tk.cat == Category::kFloat) return false;  // no silent int → float
     if (tk.cat == Category::kBool) {
         return !negative && (mag == 0 || mag == 1);
     }
@@ -264,14 +220,7 @@ bool floatLiteralFits(std::string const& literal_text, std::string const& dest_t
         double m = (tk.bits == 32) ? (double)FLT_MAX : DBL_MAX;
         return v <= m && v >= -m;
     }
-    if (v != std::floor(v)) return false;
-    bool negative = (v < 0);
-    double absv = negative ? -v : v;
-    if (absv > (double)UINT64_MAX) return false;
-    uint64_t mag = (uint64_t)absv;
-    if (tk.cat == Category::kBool) return !negative && (mag == 0 || mag == 1);
-    if (tk.cat == Category::kSignedInt) return intFitsSigned(mag, negative, tk.bits);
-    if (tk.cat == Category::kUnsignedInt) return intFitsUnsigned(mag, negative, tk.bits);
+    // no silent float → int-class
     return false;
 }
 
@@ -308,18 +257,6 @@ std::string convert(std::string const& src_val,
             << " to " << dest_ll << "\n";
         return tmp;
     };
-    auto emitSitofp = [&](std::string const& src_ll, std::string const& dest_ll) {
-        std::string tmp = newWidenTmp();
-        out << "  " << tmp << " = sitofp " << src_ll << " " << src_val
-            << " to " << dest_ll << "\n";
-        return tmp;
-    };
-    auto emitUitofp = [&](std::string const& src_ll, std::string const& dest_ll) {
-        std::string tmp = newWidenTmp();
-        out << "  " << tmp << " = uitofp " << src_ll << " " << src_val
-            << " to " << dest_ll << "\n";
-        return tmp;
-    };
     auto narrow = [&]() {
         diagnostic::report(diag, {file_id, tok,
             "Cannot implicitly narrow '" + src_type + "' to '" + dest_type
@@ -343,9 +280,7 @@ std::string convert(std::string const& src_val,
         if (dest_tk.cat == Category::kSignedInt || dest_tk.cat == Category::kUnsignedInt) {
             return emitZext("i1", llvmIntType(dest_tk.bits));
         }
-        if (dest_tk.cat == Category::kFloat) {
-            return emitUitofp("i1", llvmFloatType(dest_tk.bits));
-        }
+        // bool → float is cross-family: no silent mix.
         return convertErrPlain();
     }
 
@@ -377,17 +312,7 @@ std::string convert(std::string const& src_val,
         return narrow();
     }
 
-    if ((src_tk.cat == Category::kSignedInt || src_tk.cat == Category::kUnsignedInt)
-        && dest_tk.cat == Category::kFloat) {
-        if (intTypeFitsInFloat(src_tk, dest_tk.bits)) {
-            if (src_tk.cat == Category::kSignedInt) {
-                return emitSitofp(llvmIntType(src_tk.bits), llvmFloatType(dest_tk.bits));
-            }
-            return emitUitofp(llvmIntType(src_tk.bits), llvmFloatType(dest_tk.bits));
-        }
-        return convertErrPlain();
-    }
-
+    // int-class → float and float → int-class are cross-family: no silent mix.
     return convertErrPlain();
 }
 
@@ -428,16 +353,7 @@ bool commonType(std::string const& t1, std::string const& t2, std::string& out) 
         return true;
     }
 
-    TypeKind const& ik = (k1.cat == Category::kFloat) ? k2 : k1;
-    TypeKind const& fk = (k1.cat == Category::kFloat) ? k1 : k2;
-    int const candidates[] = {32, 64};
-    for (int fb : candidates) {
-        if (fb < fk.bits) continue;
-        if (intTypeFitsInFloat(ik, fb)) {
-            out = canonicalFloat(fb);
-            return true;
-        }
-    }
+    // int-class and float never silently mix.
     return false;
 }
 

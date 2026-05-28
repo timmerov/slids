@@ -153,38 +153,6 @@ std::string defaultLiteralType(ast::Node const& n) {
     __builtin_unreachable();
 }
 
-// Compile-time fold for int-literal + int-literal binary ops. Used to keep
-// `int8 x = 1 + 2` working — the result of a literal+literal op stays an
-// untyped literal that can flex into the surrounding target. Returns false on
-// overflow / unsupported op / non-int spellings so the caller falls back to
-// the typed common-type path.
-bool tryFoldIntBinary(std::string const& op, std::string const& a_text,
-                      std::string const& b_text, std::string& out) {
-    auto parseI64 = [](std::string const& t, int64_t& v) -> bool {
-        if (t.empty()) return false;
-        errno = 0;
-        char* end = nullptr;
-        v = (int64_t)std::strtoll(t.c_str(), &end, 10);
-        if (end == t.c_str() || *end != '\0' || errno == ERANGE) return false;
-        return true;
-    };
-    int64_t a = 0, b = 0;
-    if (!parseI64(a_text, a)) return false;
-    if (!parseI64(b_text, b)) return false;
-    int64_t r = 0;
-    if      (op == "+") r = a + b;
-    else if (op == "-") r = a - b;
-    else if (op == "*") r = a * b;
-    else if (op == "/") { if (b == 0) return false; r = a / b; }
-    else if (op == "%") { if (b == 0) return false; r = a % b; }
-    else if (op == "&") r = a & b;
-    else if (op == "|") r = a | b;
-    else if (op == "^") r = a ^ b;
-    else return false;
-    out = std::to_string(r);
-    return true;
-}
-
 // Truthy coercion: 0-like values (false, 0, 0.0, null ptr) → i1 0; everything
 // else → i1 1.
 std::string emitToBool(std::string const& val, std::string const& slids_type,
@@ -339,24 +307,49 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
     if (op == "<<" || op == ">>") {
         std::string lt = exprType(lhs, syms);
         if (lt.empty()) lt = "int32";
-        if (isFloatType(lt)) {
-            diagnostic::report(diag, {expr.file_id, expr.tok,
-                std::string("Shift '") + op + "' not defined on floating-point type '"
-                + lt + "'.", {}});
-            return "0";
-        }
+
         std::string rt;
         if (isLiteralKind(rhs)) {
-            bool fits = (rhs.kind == ast::Kind::kFloatLiteral)
-                ? widen::floatLiteralFits(rhs.text, lt)
-                : widen::intLiteralFits(literalTextForFit(rhs), lt);
+            // For float lhs, the int literal can't flex into the float type
+            // (no silent mix), so it falls to its default; for int lhs,
+            // attempt the usual literal-flex into lt.
+            bool fits = false;
+            if (!isFloatType(lt)) {
+                fits = (rhs.kind == ast::Kind::kFloatLiteral)
+                    ? widen::floatLiteralFits(rhs.text, lt)
+                    : widen::intLiteralFits(literalTextForFit(rhs), lt);
+            }
             rt = fits ? lt : defaultLiteralType(rhs);
         } else {
             rt = exprType(rhs, syms);
             if (rt.empty()) rt = "int32";
         }
+        // Shift count must be integer-class per fold.sl:82.
+        if (isFloatType(rt)) {
+            diagnostic::report(diag, {expr.file_id, expr.tok,
+                "Shift count must be integer-class; got '" + rt + "'.", {}});
+            return "0";
+        }
+
         std::string lv = emitExpr(lhs, syms, pool, out, diag, lt);
         std::string rv = emitExpr(rhs, syms, pool, out, diag, rt);
+
+        if (isFloatType(lt)) {
+            // Per fold.sl:128-131: `f << r` ≡ `f * (1<<r)`; `f >> r` ≡ `f / (1<<r)`.
+            std::string rllty = llvmTypeFor(rt, expr.file_id, expr.tok, diag);
+            std::string fllty = llvmTypeFor(lt, expr.file_id, expr.tok, diag);
+            std::string pow2 = newTmp("pow2");
+            out << "  " << pow2 << " = shl " << rllty << " 1, " << rv << "\n";
+            std::string pow2f = newTmp("pow2f");
+            out << "  " << pow2f << " = uitofp " << rllty << " " << pow2
+                << " to " << fllty << "\n";
+            std::string tmp = newTmp("bin");
+            char const* instr = (op == "<<") ? "fmul" : "fdiv";
+            out << "  " << tmp << " = " << instr << " " << fllty
+                << " " << lv << ", " << pow2f << "\n";
+            return widen::convert(tmp, lt, dest_type,
+                                  expr.file_id, expr.tok, out, diag);
+        }
 
         widen::TypeKind lk, rk;
         widen::classify(lt, lk);
@@ -381,31 +374,6 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
             << " " << lv << ", " << rv << "\n";
         return widen::convert(tmp, lt, dest_type,
                               expr.file_id, expr.tok, out, diag);
-    }
-
-    // Literal+literal compile-time fold. Int family only (kIntLiteral /
-    // kUintLiteral / kCharLiteral); float operands fall through to the
-    // ordinary binary path. The natural home for this fold is desugar
-    // (paired with tryFoldUnary); recursive folds for `1+2+3` would fall out
-    // for free. Pending — see todo.txt DESUGAR.
-    if (isLiteralKind(lhs) && isLiteralKind(rhs)
-        && (lhs.kind == ast::Kind::kIntLiteral
-            || lhs.kind == ast::Kind::kUintLiteral
-            || lhs.kind == ast::Kind::kCharLiteral)
-        && (rhs.kind == ast::Kind::kIntLiteral
-            || rhs.kind == ast::Kind::kUintLiteral
-            || rhs.kind == ast::Kind::kCharLiteral)) {
-        std::string folded;
-        if (tryFoldIntBinary(op, lhs.text, rhs.text, folded)) {
-            if (op == "==" || op == "!=" || op == "<" || op == "<="
-             || op == ">"  || op == ">=") {
-                // fall through
-            } else {
-                widen::checkIntLiteralFits(folded, dest_type,
-                                           expr.file_id, expr.tok, diag);
-                return folded;
-            }
-        }
     }
 
     auto effectiveType = [&](ast::Node const& self, ast::Node const& other) -> std::string {
@@ -513,57 +481,17 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                      diagnostic::Sink& diag,
                      std::string const& dest_type) {
     switch (expr.kind) {
-        case ast::Kind::kIntLiteral: {
-            widen::checkIntLiteralFits(expr.text, dest_type,
-                                       expr.file_id, expr.tok, diag);
-            widen::TypeKind tk;
-            if (!dest_type.empty() && widen::classify(dest_type, tk)
-                && tk.cat == widen::Category::kFloat) {
-                return expr.text + ".0";
-            }
-            return expr.text;
-        }
-        case ast::Kind::kUintLiteral: {
-            widen::checkIntLiteralFits(expr.text, dest_type,
-                                       expr.file_id, expr.tok, diag);
-            widen::TypeKind tk;
-            if (!dest_type.empty() && widen::classify(dest_type, tk)
-                && tk.cat == widen::Category::kFloat) {
-                return expr.text + ".0";
-            }
-            return expr.text;
-        }
-        case ast::Kind::kCharLiteral: {
-            widen::checkIntLiteralFits(expr.text, dest_type,
-                                       expr.file_id, expr.tok, diag);
-            widen::TypeKind tk;
-            if (!dest_type.empty() && widen::classify(dest_type, tk)
-                && tk.cat == widen::Category::kFloat) {
-                return expr.text + ".0";
-            }
-            return expr.text;
-        }
+        case ast::Kind::kIntLiteral:
+        case ast::Kind::kUintLiteral:
+        case ast::Kind::kCharLiteral:
         case ast::Kind::kBoolLiteral: {
             widen::checkIntLiteralFits(expr.text, dest_type,
                                        expr.file_id, expr.tok, diag);
-            widen::TypeKind tk;
-            if (!dest_type.empty() && widen::classify(dest_type, tk)
-                && tk.cat == widen::Category::kFloat) {
-                return expr.text + ".0";
-            }
             return expr.text;
         }
         case ast::Kind::kFloatLiteral: {
             widen::checkFloatLiteralFits(expr.text, dest_type,
                                          expr.file_id, expr.tok, diag);
-            widen::TypeKind tk;
-            if (!dest_type.empty() && widen::classify(dest_type, tk)
-                && tk.cat != widen::Category::kFloat) {
-                double v = std::strtod(expr.text.c_str(), nullptr);
-                bool neg = (v < 0);
-                uint64_t mag = (uint64_t)(neg ? -v : v);
-                return (neg ? std::string("-") : std::string()) + std::to_string(mag);
-            }
             return normalizeFloatLiteral(expr.text);
         }
         case ast::Kind::kStringLiteral: {

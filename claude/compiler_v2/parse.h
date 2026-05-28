@@ -31,6 +31,7 @@ struct Node {
     std::string name;          // function name, callee name, variable name
     std::string text;          // literal value (string / int as text / char codepoint)
     std::string return_type;   // function return type; reused for VarDecl's declared type
+    std::string nominal_type;  // literal nodes: nominal type assigned by constfold
     int file_id = -1;          // source file of the construct
     int tok = -1;              // index into token::List::tokens for error attribution
     std::vector<std::unique_ptr<Node>> children;

@@ -1,150 +1,178 @@
 /*
-test the built-in primitives.
+test widening of the built-in primitives.
 
-types may be silently widened in many places.
-they follow these rules everywhere.
-including: expressions, type conversion, parameter matching, overload matching, etc.
+these widening rules apply to operations where there are one or two source operands.
+at least one of the operands is strongly typed - a strong operand.
+its type is int8, int16, int32, int64, uint8, uint16, uint32, uint64,
+float, float32, float64.
+char, int, and intptr are treated as strongly typed with their implementation
+dependent types - usually uint8 and int64.
+bool is a strange case. it can be either strong typed or weak typed -
+depending on the situation.
+at most one of the operands is a constant literal - a weak operand.
+widening rules specific to constant literals are found in const/fold.sl.
 
-note: for this document, literal means a literal with a flexible type.
-type conversion (int8=37) will set the type of the literal.
-literals with a set type are treated as non-literals.
-apologies for the confusing language.
-todo: fix this somehow.
+constant literal type review:
+constant literals have a default type determined by kind.
+and a nominal type set in the constant folding stage.
+kind      default  nominal
+integer   int      int 8,16,32,64
+                   uint 1,8,16,32,64
+unsigned  uint     1,8,16,32,64
+float     float    32,64
+the default type is used for inference.
+the nominal type is the default type plus the size.
+the nominal type is used when combined with a strong type.
 
-the widening rules are specific to the following operations:
-1. widen literal to known target type.
-2. literal to inferred type.
-3. unary operation on literal.
-4. binary operations on two literals.
-5. widen non-literal to known target type.
-6. non-literal to inferred type.
-7. unary operation on non-literal.
-8. shift operation on non-literal to known target type.
-9. shift operation on non-literal to unknown or inferred target type.
-10. comparison operations.
-11. binary operations on two non-literals to a known target type.
-12. binary operations on two non-literals to an unknown or inferred target type.
-13. binary operations on literal and non-literal to a known target type.
-14. binary operations on literal and non-literal to a unknown or inferred target type.
-15. logical operations.
+widening rules for complex expressions are chained together.
+for example:
+inferred = const int8 + ~ int32 y; -> unary ~
+inferred = const int8 + int32;     -> binary +
+inferred = int32;                  -> infer type
 
-1. widen literal to known target type.
-literals may be silently widened to any type in which the value fits.
-for examples:
-33_000 may be any of these uint16, uint32, uint64, int32, int64, float32, float64.
--27 may be int8, int16, int32, int64, float32, float64.
-floating point literals are silently rounded to match the target type precision.
-3.14 becomes 3.1400001049 for target float32.
-floating point literals with integer values may be silently converted to integer types
-in which they fit.
+widening rules are implicit silent automatic type conversions.
+explicit type conversions are not required.
 
-2. literal to inferred type.
-the inferred type is the default type of the literal.
-small integer literals -> int32.
-large integer literals -> int64.
-small unsigned literals -> uint32.
-large unsigned literals -> uint64.
-small floating point literals -> float32.
-large floating point literals -> float64.
-bool literals -> bool.
-character literals -> char.
+general catch-all rule:
+it is a compile error if any widening rule fails for any reason.
+cannot be applied.
+cannot be found.
 
-3. unary operation on literal.
-the literal is widened to its computational type.
-integer -> int64,
-unsigned -> uint64,
-float -> float64.
-the operation is performed.
-exception: unary + is a nop.
-exception: bitwise not ~ on bool type is ambiguous.
-these are compile errors.
-exception: unary - is treated as -1 * literal and is handled by rule 4.
+these are the situation-dependent rules:
 
-4. binary operations on two literals.
-the literals are widened to a common computational type: int64, uint64, float64.
-as per rule 1.
-it is a compile error if no common computational type can be found.
+1. single source widening: parameters, expressions, return values,
+overloaded function matching, template matching, etc.
 
-5. widen non-literal to known target type.
+1a. widen a strong operand to a known target type:
+
 signed integers are silently widened to larger signed integers.
 unsigned integers are silently widened to larger unsigned integers.
 unsigned integers are silently widened to a larger unsigned integer,
 then silently reinterpreted as a signed integer of the same larger size.
 floating point numbers are silently widened to larger floating point numbers.
-integer types may be silently converted to floating point if the entire range fits.
-int16 -> float32, int32 -> float64.
+floating point types and integer types never silently mix -
+an explicit type conversion is required.
 
-6. non-literal to inferred type.
-the inferred type is the type of the non-literal.
+1b. widen a weak operand to a known target type:
 
-7. unary operation on non-literal.
+promote the weak operand to strong using its nominal type.
+apply rule 1a.
+
+1c. a strong operand to an inferred or uknown type.
 no widening.
-the result type is the type of the non-literal.
+the result type is the operand's type.
 
-8. shift operation on non-literal to known target type.
-int64 target = int32 lhs << uint8 rhs
+1d. a weak operand to an inferred type.
+no widening.
+the inferred type is the default type of the weak operand.
+
+1e. a weak operand to an unknown type.
+strange case see notes.
+
+2. unary operations: + - ~ !
+
+2a. unary + is a nop.
+no widening.
+the result type is the operand's type.
+
+2b. unary !.
+no widening - all operand types are accepted.
+the result is bool.
+
+2c. unary negation - and ~ on bool to a known target type.
+the operand is widened to the target type.
+
+2d. unary negation - and ~ on bool to an unknown target type.
+strange case see notes.
+
+2e. unary negation - and ~ on a strong type other than bool.
+no widening.
+the result type is the operand's type.
+
+2f. unary operation on a weak type.
+should not happen.
+this should have been reduced in the constant folding stage.
+compiler asserts.
+
+3. shift operations: << >>
+target = lhs << rhs;
 the rhs is not widened - all types are accepted.
-the lhs is widened to the target type according to rule 2.
 
-9. shift operation on non-literal to unknown or inferred target type.
-the rhs is not widened - all types are accepted.
-the result and inferred type is the type of the lhs.
+3a. shift operation with strong lhs to a known target type.
+the rhs is widened to the target type.
 
-10. comparison operations.
+3b. shift operation with weak lhs to a known target type.
+the rhs is widened from its nominal type to the target type.
+
+3c. shift operation with strong lhs to an inferred type.
+no widening.
+the inferred type is the type of the lhs.
+
+3d. shift operation with weak lhs to an inferred type.
+no widening.
+the inferred type is the default type of the lhs.
+
+4. comparison operations: == != <= >= < >
 the result type is bool.
-the operands are widened to a type that will hold both.
-the type of a non-literal lhs is tried first.
-the type of a non-literal rhs is tried second.
-then a common computation type will be used: int64, uint64, float64
-as per rules 1 for literals and 5 for non-literals.
-it is a compile error if no type can be found.
 
-11. binary operations on two non-literals to a known target type.
+4a. comparison operation between two strong operands.
+both operands are widened to the smallest type that will hold both types.
+
+4b. comparison operation between one strong and one weak operand.
+both operands are widened to the smallest type that will hold the
+strong type and the nominal type.
+
+4c. comparison operation between two weak operands.
+should not happen.
+this should have been reduced in the constant folding stage.
+compiler asserts.
+
+5. logical operations: && || ^^
+no widening - all types accepted.
+the result is bool.
+logical operations consume condition-expressions.
+0-like values are false.
+everything else is true.
+
+6. binary operations: + - / % & | ^
+
+6a. binary operations to a known target type.
 both operands are widened to the target type.
-it is a compile error if either cannot be widened to that type.
 
-12. binary operations on two non-literals to an unknown or inferred target type.
-use rule 10.
+6b. binary operations on two strong types to an unknown or inferred type.
+both operands are widened to the smallest type that will hold both types.
+the result type is the widened type.
 
-13. binary operations on literal and non-literal to a known target type.
-both operands are widened to the target type
-as per rules 1 for literals and 5 for non-literals.
-it is a compile error if either cannot be widened to that type.
+6c. binary operations on one strong and one weak types to an unknown or inferred type.
+both operands are widened to the smallest type that will hold the
+strong type and the nominal type.
+the result type is the widened type.
 
-14. binary operations on literal and non-literal to a unknown or inferred target type.
-both operands are widened to the smallest type that will hold both.
-this is the result and inferred type.
+6d. binary operations on two weak types.
+should not happen.
+this should have been reduced in the constant folding stage.
+compiler asserts.
 
-15. logical operations consume condition-expressions.
-no widening of operands needed - any type is accepted.
+notes:
 
-miscellaneous:
+strange cases:
+applies to weak/bool operations with an unknown target type.
+either the operations should have been reduced by constant folding -
+in which case, the compiler should assert.
+or we're in the middle of classification -
+in which case, the classifier needs to determine the type before
+widening rules can be applied.
+this is an error, but not a compile error.
 
-bool is a 1 bit unsigned integer.
-char, float, intptr are specific to the compiler.
-char is typically uint8.
-intptr is typically int64.
-float is typically float32.
-these types should not be assumed by the author.
-they are widened as per the widening rules of their implementation type.
+some operations are invalid on some types.
+x << float, x / 0.
+these are usually handled elsewhere.
 
-operations involving specific literal values that are undefined are compile errors.
-for examples:
-shift by negative value: anything << -1
-shift floating point: 3.14 << anything, anything << 3.14
-divide by zero: x / 0.0
-
-operations may be reduced:
-for examples:
-x * 0 -> 0
-x * 1 -> x
-x + 0 -> x
-x / 1 -> x
-x % 1 -> 0
-x << 64 -> 0
-x || false -> x
-x && true -> x
-x & 0 -> 0
+the numeric value of a literal may be outside the range of its nominal type.
+the type of the numeric value of a literal is its computation type.
+to widen a literal, the numeric value is truncated (or rounded) from its computation type
+directly to the target type.
+the numeric value is not sign or zero extended from the nominal type to the target type.
 */
 
 int32 main() {
@@ -277,17 +305,9 @@ int32 main() {
     int64 r_u32_i8  = bu32 + bi8;   __println("r_u32_i8= "  + r_u32_i8);
     int64 r_u32_i16 = bu32 + bi16;  __println("r_u32_i16= " + r_u32_i16);
 
-    // -- int + float (value-preserving); bool is 1-bit unsigned, fits any float --
-    float32 r_i16_f32  = bi16 + bf32;  __println("r_i16_f32= "  + r_i16_f32);
-    float32 r_u8_f32   = bu8  + bf32;  __println("r_u8_f32= "   + r_u8_f32);
-    float64 r_i32_f64  = bi32 + bf64;  __println("r_i32_f64= "  + r_i32_f64);
-    float64 r_u16_f64  = bu16 + bf64;  __println("r_u16_f64= "  + r_u16_f64);
-    float32 r_bool_f32 = xb   + bf32;  __println("r_bool_f32= " + r_bool_f32);  // bool → float32 via uitofp
-
-    // -- comparison on mixed types - result is bool --
+    // -- comparison on mixed integer-class types - result is bool --
     bool cmp_i8_i32  = bi8  < bi32;    __println("cmp_i8_i32= "  + cmp_i8_i32);
     bool cmp_u32_i32 = bu32 == bi32;   __println("cmp_u32_i32= " + cmp_u32_i32);
-    bool cmp_i32_f64 = bi32 != bf64;   __println("cmp_i32_f64= " + cmp_i32_f64);
 
     // -- shift - lhs dictates result type; rhs any int --
     int8  r_shl_i8  = bi8  << bi32;  __println("r_shl_i8= "  + r_shl_i8);
@@ -301,7 +321,6 @@ int32 main() {
 
     // -- typed + literal - literal fits into type --
     int8    r_i8_lit  = bi8  + 5;    __println("r_i8_lit= "  + r_i8_lit);
-    float32 r_f32_int = bf32 + 3;    __println("r_f32_int= " + r_f32_int);
     float32 r_f32_flt = bf32 + 3.0;  __println("r_f32_flt= " + r_f32_flt);
 
     // -- typed + literal - literal doesn't fit, takes default --
@@ -317,11 +336,25 @@ int32 main() {
     // int64 bad_u64_i8 = xu64 + bi8;
     //-EXPECT-ERROR: No common type for 'uint64' and 'int64'; use an explicit type conversion.
     // int64 bad_u64_i64 = xu64 + xi64;
+
+    // -- negative: int and float never silently mix --
+    //-EXPECT-ERROR: No common type for 'int16' and 'float32'; use an explicit type conversion.
+    // float32 bad_i16_f32 = bi16 + bf32;
+    //-EXPECT-ERROR: No common type for 'uint8' and 'float32'; use an explicit type conversion.
+    // float32 bad_u8_f32 = bu8 + bf32;
+    //-EXPECT-ERROR: No common type for 'int32' and 'float64'; use an explicit type conversion.
+    // float64 bad_i32_f64 = bi32 + bf64;
+    //-EXPECT-ERROR: No common type for 'uint16' and 'float64'; use an explicit type conversion.
+    // float64 bad_u16_f64 = bu16 + bf64;
+    //-EXPECT-ERROR: No common type for 'bool' and 'float32'; use an explicit type conversion.
+    // float32 bad_bool_f32 = xb + bf32;
     //-EXPECT-ERROR: No common type for 'int64' and 'float64'; use an explicit type conversion.
     // float64 bad_i64_f64 = xi64 + bf64;
-
-    // -- negative: common type widens to float64 (int32+float32 → float64), assign narrows --
-    //-EXPECT-ERROR: Cannot implicitly narrow 'float64' to 'float32'; use an explicit type conversion.
+    //-EXPECT-ERROR: No common type for 'int32' and 'float64'; use an explicit type conversion.
+    // bool bad_cmp_i32_f64 = bi32 != bf64;
+    //-EXPECT-ERROR: No common type for 'float32' and 'int32'; use an explicit type conversion.
+    // float32 bad_f32_intlit = bf32 + 3;
+    //-EXPECT-ERROR: No common type for 'int32' and 'float32'; use an explicit type conversion.
     // float32 bad_i32_f32 = bi32 + bf32;
 
     // -- negative: confusing-error (int32+uint32 → int64, assign narrows back to int32) --

@@ -316,17 +316,16 @@ int32 main() {
     bool f32LOr  = f32A || f32B;   __println("f32LOr= "  + f32LOr);
     bool f32LXor = f32A ^^ f32B;   __println("f32LXor= " + f32LXor);
     bool f32LNot = !f32A;          __println("f32LNot= " + f32LNot);
-    // float32 negatives — bitwise and shift not defined on floating-point.
+    // float32 shifts — lhs * (1<<rhs) and lhs / (1<<rhs).
+    float32 f32Shl = f32A << 1;    __println("f32Shl= " + f32Shl);
+    float32 f32Shr = f32A >> 1;    __println("f32Shr= " + f32Shr);
+    // float32 negatives — bitwise not defined on floating-point.
     //-EXPECT-ERROR: Bitwise '&' not defined on floating-point type 'float32'.
     // float32 f32And = f32A & f32B;
     //-EXPECT-ERROR: Bitwise '|' not defined on floating-point type 'float32'.
     // float32 f32Or  = f32A | f32B;
     //-EXPECT-ERROR: Bitwise '^' not defined on floating-point type 'float32'.
     // float32 f32Xor = f32A ^ f32B;
-    //-EXPECT-ERROR: Shift '<<' not defined on floating-point type 'float32'.
-    // float32 f32Shl = f32A << 1;
-    //-EXPECT-ERROR: Shift '>>' not defined on floating-point type 'float32'.
-    // float32 f32Shr = f32A >> 1;
 
     // float64
     float64 f64A = 12.5;
@@ -348,17 +347,16 @@ int32 main() {
     bool f64LOr  = f64A || f64B;   __println("f64LOr= "  + f64LOr);
     bool f64LXor = f64A ^^ f64B;   __println("f64LXor= " + f64LXor);
     bool f64LNot = !f64A;          __println("f64LNot= " + f64LNot);
-    // float64 negatives — bitwise and shift not defined on floating-point.
+    // float64 shifts — lhs * (1<<rhs) and lhs / (1<<rhs).
+    float64 f64Shl = f64A << 1;    __println("f64Shl= " + f64Shl);
+    float64 f64Shr = f64A >> 1;    __println("f64Shr= " + f64Shr);
+    // float64 negatives — bitwise not defined on floating-point.
     //-EXPECT-ERROR: Bitwise '&' not defined on floating-point type 'float64'.
     // float64 f64And = f64A & f64B;
     //-EXPECT-ERROR: Bitwise '|' not defined on floating-point type 'float64'.
     // float64 f64Or  = f64A | f64B;
     //-EXPECT-ERROR: Bitwise '^' not defined on floating-point type 'float64'.
     // float64 f64Xor = f64A ^ f64B;
-    //-EXPECT-ERROR: Shift '<<' not defined on floating-point type 'float64'.
-    // float64 f64Shl = f64A << 1;
-    //-EXPECT-ERROR: Shift '>>' not defined on floating-point type 'float64'.
-    // float64 f64Shr = f64A >> 1;
 
     return 0;
 }

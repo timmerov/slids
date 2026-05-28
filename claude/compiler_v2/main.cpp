@@ -7,6 +7,7 @@
 #include "ast.h"
 #include "classify.h"
 #include "codegen.h"
+#include "constfold.h"
 #include "desugar.h"
 #include "diagnostic.h"
 #include "grammar.h"
@@ -50,6 +51,8 @@ int main(int argc, char** argv) {
     numeric::run(tokens, diag);
     if (diagnostic::hasErrors(diag)) return bail();
     grammar::run(tokens, parse_tree, diag);
+    if (diagnostic::hasErrors(diag)) return bail();
+    constfold::run(parse_tree, diag);
     if (diagnostic::hasErrors(diag)) return bail();
     classify::run(parse_tree, diag);
     if (diagnostic::hasErrors(diag)) return bail();

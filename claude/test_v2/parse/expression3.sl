@@ -46,8 +46,6 @@ int32 main() {
     int32   r_u8_i32  = bu8  + bi32;  __println("r_u8_i32= "  + r_u8_i32);   // narrow unsigned + wider signed
     int64   r_i32_u32 = bi32 + bu32;  __println("r_i32_u32= " + r_i32_u32);  // mixed sign equal width
     int64   r_u32_i8  = bu32 + bi8;   __println("r_u32_i8= "  + r_u32_i8);   // wider unsigned + narrower signed
-    float32 r_i16_f32 = bi16 + bf32;  __println("r_i16_f32= " + r_i16_f32);  // int fits float
-    float64 r_i32_f32 = bi32 + bf32;  __println("r_i32_f32= " + r_i32_f32);  // int bumps to float64
 
     // -- bitwise (int-only common-type) --
     int32 r_u16_or_i16 = bu16 | bi16;  __println("r_u16_or_i16= " + r_u16_or_i16);
@@ -67,8 +65,6 @@ int32 main() {
     int8    r_i8_lit      = bi8  + 5;     __println("r_i8_lit= "      + r_i8_lit);       // literal fits typed
     int     r_u8_big      = bu8  + 1000;  __println("r_u8_big= "      + r_u8_big);       // literal doesn't fit → default + common
     int8    r_ll_fold     = 1 + 2;        __println("r_ll_fold= "     + r_ll_fold);      // literal+literal fold
-    float32 r_f32_int_lit = bf32 + 3;     __println("r_f32_int_lit= " + r_f32_int_lit);  // int literal flexes to float
-    int8    r_f_lit_int   = 3.0;          __println("r_f_lit_int= "   + r_f_lit_int);    // float literal → int (integer-valued)
 
     // -- bool + char edges --
     int32 r_bool_i32 = bb + bi32;      __println("r_bool_i32= " + r_bool_i32);  // bool widens cleanly
@@ -78,9 +74,15 @@ int32 main() {
     //-EXPECT-ERROR: No common type for 'uint64' and 'int8'; use an explicit type conversion.
     // int64 bad_nc = bu64 + bi8;
 
-    // -- negative: common type widens to float64, assign narrows --
-    //-EXPECT-ERROR: Cannot implicitly narrow 'float64' to 'float32'; use an explicit type conversion.
-    // float32 bad_nar = bi32 + bf32;
+    // -- negative: int and float never silently mix --
+    //-EXPECT-ERROR: No common type for 'int16' and 'float32'; use an explicit type conversion.
+    // float32 bad_i16_f32 = bi16 + bf32;
+    //-EXPECT-ERROR: No common type for 'int32' and 'float32'; use an explicit type conversion.
+    // float64 bad_i32_f32 = bi32 + bf32;
+    //-EXPECT-ERROR: No common type for 'float32' and 'int32'; use an explicit type conversion.
+    // float32 bad_f32_intlit = bf32 + 3;
+    //-EXPECT-ERROR: Cannot implicitly convert 'float' to 'int8'; use an explicit type conversion.
+    // int8 bad_fltlit_int = 3.0;
 
     // -- negative: confusing-error (int32+uint32 → int64, assign narrows back to int32) --
     //-EXPECT-ERROR: Cannot implicitly narrow 'int64' to 'int32'; use an explicit type conversion.

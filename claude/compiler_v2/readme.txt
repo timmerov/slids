@@ -49,17 +49,16 @@ STAGE FILES (.h / .cpp pairs)
             on AST nodes. (TODO stub.)
   grammar   tokens -> parse tree. Pure syntax; every identifier is just a
             name. (TODO stub.)
-  constfold parse tree -> parse tree. Iteratively folds literal sub-trees:
-            unary on literal (rule 3 + H-rule synthesis for -uint/-bool),
-            binary on two literals (rule 4 — common computational type
-            int64/uint64/float64), shift on two literals (count >= width
-            folds to 0; negative count is a compile error). Also algebraic
-            identity simplifications (x+0 → x, x*0 → 0, x*1 → x, etc.) and
-            division/mod by zero detection (literal divisor → compile error).
-            Every literal gets a nominal type annotated per its value:
-            bool / char / int8/16/32/64 / uint8/16/32/64 / float32/64.
-            Classify then sees a tree where every constant sub-expression
-            has been collapsed to a single typed literal. (TODO stub.)
+  constfold parse tree -> parse tree. Post-order walker. Assigns
+            nominal_type to every literal per fold.sl:16-23 (bool=uint1,
+            char=uint8, integer/unsigned by smallest-bit-tier, float by
+            float32-round-trip). Folds unary on literal (rules 1a-1f) and
+            binary on two integer-class literals (signed int64 arithmetic
+            for + - * / % & | ^). Rejects div/mod by literal zero and
+            `~float` literal; flips `-uint_lit` kind to kIntLiteral per
+            rule 1d. Pending: float binary fold, shift fold, comparison
+            fold, algebraic identity simplifications, rule-6 overflow-to-
+            unsigned exception.
   classify  parse tree -> annotated parse tree. Resolves every identifier
             to a symbol-table entry; infers every expression's type;
             overload resolution. (TODO stub.)
@@ -82,12 +81,13 @@ PRODUCT FILES (.h / .cpp pairs)
             imported_by }. APIs: add(), openFile(). Deque-backed file table
             so Stream pointers stay stable across imports.
   parse     parse-tree node types + tree storage + build/walk/annotate APIs.
-            Nodes will carry optional resolved-symbol refs + inferred types
-            (populated by classify). (TODO stub.)
+            Nodes carry `nominal_type` for literals (populated by constfold);
+            future: resolved-symbol refs + classified-expression types
+            (populated by classify).
   ast       ast node types (separate set from parse) + tree storage +
-            build/walk/annotate APIs. Nodes will carry mangled names + layout
-            offsets (populated by layout) + back-pointers to parse for
-            source attribution. (TODO stub.)
+            build/walk/annotate APIs. Nodes carry `nominal_type` propagated
+            from parse; future: mangled names + layout offsets (populated by
+            layout) + back-pointers to parse for source attribution.
 
 PLUMBING
 

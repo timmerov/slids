@@ -45,6 +45,7 @@ int32 main() {
     xf32 -= 3.0;          __println("xf32 -= 3.0 → " + xf32);  // 20.0 (fsub)
     xf32 /= 4.0;          __println("xf32 /= 4.0 → " + xf32);  //  5.0 (fdiv)
     xf32 %= 1.5;          __println("xf32 %= 1.5 → " + xf32);  //  0.5 (frem: 5.0 % 1.5)
+    xf32 <<= 1;           __println("xf32 <<= 1 → " + xf32);   //  1.0 (0.5 * (1<<1))
 
     // -- bitwise --
     int32 xbits = 12;  __println("xbits= " + xbits);
@@ -77,10 +78,8 @@ int32 main() {
     int16  xi16n = 2;     __println("xi16n= " + xi16n);
     uint64 xu64n = 3;     __println("xu64n= " + xu64n);
 
-    //-EXPECT-ERROR: Bitwise '&' not defined on floating-point type 'float32'.
+    //-EXPECT-ERROR: No common type for 'float32' and 'int32'; use an explicit type conversion.
     // xf32 &= 7;
-    //-EXPECT-ERROR: Shift '<<' not defined on floating-point type 'float32'.
-    // xf32 <<= 1;
     //-EXPECT-ERROR: Cannot implicitly narrow 'int32' to 'int16'; use an explicit type conversion.
     // xi16n += xi32;
     //-EXPECT-ERROR: Cannot implicitly convert 'int32' to 'bool'; use an explicit type conversion.

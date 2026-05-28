@@ -11,23 +11,24 @@ Phase 0 — foundations (largely landed)
   * numeric stage — literal validation + canonicalization (mostly landed;
     int/uint/float/char/bool all flow lex→numeric; items 5 and 7 of the
     migration still open — see project_v2_numeric_stage memory)
-  * constfold stage — between grammar and classify (TODO; spec in
-    test_v2/parse/widen.sl and test_v2/const/fold.sl):
-      - rule 4 (binary on two literals): widen both to common computational
-        type int64/uint64/float64, perform, assign nominal type by value
-      - rule 3 (unary on literal): widen to computational type, perform;
-        -uint and -bool lowered to -1 * literal then rule 4; ~ on bool error
-      - shift on two literals: rule 4 with shift count >= bitwidth → 0;
-        negative shift count → compile error
-      - algebraic identity simplifications: x+0 → x, x*1 → x, x*0 → 0,
-        x/1 → x, x%1 → 0, x|0 → x, x&0 → 0, x^0 → x, x<<0 → x, x>>0 → x,
-        x|~0 → ~0, x&~0 → x, 0-x → -x
-      - logical with constant: x && false → false, x || true → true,
-        x && true → x, x || false → x, x ^^ false → x, x ^^ true → !x
-        (safe today; needs side-effect check once function calls land)
-      - division/mod by zero (literal divisor) → compile error
-      - every literal gets a nominal type assigned (parse::Node field):
-        bool / char / int8/16/32/64 / uint8/16/32/64 / float32/64 by value
+  * constfold stage — between grammar and classify (partial; spec in
+    test_v2/const/fold.sl):
+      - LANDED: post-order walker; nominal_type assigned to every literal
+        (parse::Node field, propagated to ast::Node) per fold.sl:16-23.
+      - LANDED: unary fold on literal (rules 1a-1f). `~float` rejected;
+        `-uint_lit` flips kind to kIntLiteral per rule 1d.
+      - LANDED: binary fold on two integer-class literals via signed int64
+        arithmetic (+ - * / % & | ^). Mixed int/float operands rejected.
+        Div/mod by literal zero rejected.
+      - PENDING: float binary fold (1.5 + 2.0 etc.).
+      - PENDING: shift fold (5 << 2; count >= width → 0; negative count
+        rejected).
+      - PENDING: comparison fold (literal == literal → kBoolLiteral).
+      - PENDING: algebraic identity simplifications (x+0 → x, x*1 → x, etc.).
+      - PENDING: logical with constant (x && false → false, etc.; needs
+        purity check once function calls / PPID land).
+      - PENDING: rule-6 overflow-to-unsigned exception (result overflows
+        int64 but fits uint64 → kind unsigned).
   * diagnostic sink + source rendering
   * single-source error pipeline (main.cpp early-out between stages)
   * build hygiene (-Wall -Werror -Wswitch-enum)
@@ -40,7 +41,6 @@ Phase 1 — expression core
   * calls (zero-arg, one-arg, multi-arg)
   * compound assigns (+=, -=, *=, /=, %=, &=, |=, ^=, <<=, >>=, ||=, &&=)
   * PPID — pre/post-inc/dec via phrases
-  * (literal+literal int fold moves to constfold per Phase 0)
 
 Phase 2 — declarations + flow
   * var decls (typed init, inferred init, declare-then-assign)
@@ -129,42 +129,44 @@ GRAMMAR
       normalizes `1e40`-style text to `1.0e40` so LLVM accepts the float form
 
 WIDENING + LITERAL RANGE CHECKING (widen.h / widen.cpp)
-  * widen::checkIntLiteralFits / checkFloatLiteralFits enforce per-type
-    literal ranges. Int literal at float dest must be exactly representable
-    in the float's significand. Float literal at int dest must be integer-
-    valued and in range.
+  * No silent int-class ↔ float mixing (fold.sl:68-69 / widen.sl:53-54).
+    Literal checks and convert all reject cross-family with sentence-shaped
+    "Cannot implicitly convert ..." messages.
+  * widen::checkIntLiteralFits — enforces per-type literal ranges; rejects
+    when dest_type is float-kind.
+  * widen::checkFloatLiteralFits — enforces float range; rejects when
+    dest_type is int-class.
   * widen::convert handles var-to-var conversions:
       - signed → strictly larger signed (sext)
       - unsigned → strictly larger unsigned (zext)
       - unsigned → strictly larger signed (zext, value-preserving)
-      - bool → any integer (zext from i1) / any float (uitofp from i1)
+      - bool → any integer (zext from i1); bool stays int-class
       - float → strictly larger float (fpext)
-      - int → float when the int type's range fits the float's significand
-        (sitofp / uitofp). int8/int16/uint8/uint16 → float32; up to int32/
-        uint32 → float64; int64/uint64 → no silent float.
     Rejects (sentence-shaped messages):
       - any same-or-narrower target ("Cannot implicitly narrow ...")
       - signed → unsigned ("(signed → unsigned)")
       - unsigned → same-width signed ("(unsigned to same-width signed)")
-      - int → float when not value-preserving ("Cannot implicitly convert ...")
-      - float → int: never silent ("Cannot implicitly convert ...")
+      - int-class ↔ float ("Cannot implicitly convert ...")
   * widen::commonType — "smallest type large enough to hold either operand".
     Used by codegen's binary-op emitter for arith / bitwise / comparison.
-    Returns false when no type fits (uint64 + any signed; int64 + float64).
+    Returns false on any int-class + float pair, and on uint64+signed where
+    no int64 fits.
   * widen::intLiteralFits / floatLiteralFits — silent variants of the
-    literal checks. Used by codegen's literal-flex rule (try-fit-into-other-
-    operand-type first; fall back to default literal type when not).
+    literal checks; return false for cross-family. Used by codegen's
+    literal-flex rule (try-fit-into-other-operand-type first; fall back to
+    default literal type when not).
   * codegen handles binary-op shapes:
       - arith / bitwise / comparison: commonType → emit at common → convert
         result to dest_type. Comparison result is bool, converted to dest.
         Float arith covers `+ - * / %` (frem for `%`); float bitwise (& | ^)
         rejects sharply: `Bitwise '&' not defined on floating-point type '...'`.
-      - shift: LHS dictates result type; RHS resized to LHS width via
-        trunc/zext (LLVM's same-operand-width requirement). Float LHS
-        rejects sharply: `Shift '<<' not defined on floating-point type '...'`.
+      - shift: LHS dictates result type. Int shift: RHS resized to LHS width
+        via trunc/zext. Float shift: `f << r` lowers to `f * (1<<r)` and
+        `f >> r` to `f / (1<<r)` (pow2 in rhs int width → uitofp → fmul/fdiv).
+        Float rhs (non-integer shift count) rejects sharply.
       - logical (&& || ^^): each operand → bool independently; result bool.
-      - literal + literal int/char: compile-time fold via tryFoldIntBinary,
-        produces an untyped literal text that flexes to the surrounding target.
+      - literal + literal int-class fold runs upstream in constfold; codegen
+        sees a single literal node.
   * codegen's literal-flex uses defaultLiteralType for the literal's
     fallback type (int32 by magnitude → int64 → uint64; bool/char/float as-is).
   * Source attribution is plumbed: every widen call takes (file_id, tok)
@@ -190,18 +192,12 @@ WIDENING + LITERAL RANGE CHECKING (widen.h / widen.cpp)
     - no if/else, no for/while, no block
 
 DESUGAR
-  * copies parse → ast and propagates `(file_id, tok)` per node so codegen
-    errors attribute to source.
-  * tryFoldUnary — constant-folds `+ - ~ !` applied to a literal operand.
-    `+`/`-`/`~` walk the literal text (stripLeadingPlus / toggleSign /
-    foldBitNotIntText); `!` produces a fresh kBoolLiteral. Fresh nodes inherit
-    the unary expr's (file_id, tok).
+  * copies parse → ast and propagates `(file_id, tok)` and `nominal_type`
+    per node so downstream stages have source attribution + literal types.
   * tryDesugarAugAssign — rewrites `lhs op= rhs;` → `lhs = lhs op rhs;`.
     Lvalue is a bare ident today; complex lvalues (when arrays / fields land)
     need a bind-to-tmp step here to avoid double-eval.
-  * Binary literal+literal fold currently lives in codegen (tryFoldIntBinary
-    inside emitBinary) — the natural home is desugar (paired with
-    tryFoldUnary; recursive folds for `1+2+3` fall out for free). Pending.
+  * Unary + binary literal folds now live in constfold (upstream).
   * Other canonicalization not yet here: PPID lowering, for-loop shapes
     → canonical, operator-overload dispatch lowering, stringify lowering,
     etc. — slot in as their phases land.
@@ -227,30 +223,28 @@ NUMERIC
       → double → (float) cast → re-promote to double → uint64 bit pattern →
       emit as `0x` + 16 hex digits.
 
-NEW SILENT DEFAULTS — from items 3+4+6 (kUintLiteral resurrection)
-  * desugar.cpp tryFoldUnary: `-` on kUintLiteral calls toggleSign on text
-    but doesn't transition kind. Result: kUintLiteral with negative text
-    (semantically incoherent). Per the H-rule (-uint = -1 * uint, becomes
-    signed via mixed widening), should set child->kind = kIntLiteral after
-    toggleSign, plus a magnitude check (parse uint64; if mag > 2^63 →
-    compile error, since negation underflows int64).
+SILENT DEFAULTS — open
   * codegen.cpp exprType for kUintLiteral unconditionally returns "uint"
     (uint32). Large kUintLiteral (value > UINT32_MAX) gets typed as uint32
-    — silent narrowing. Should call defaultLiteralType (or share a helper)
-    to pick uint32 vs uint64 by value. Surfaces today only via __println
-    segment-typing (print.cpp routes via exprType); larger surface as
-    expressions land.
+    — silent narrowing. Should consult node.nominal_type (populated by
+    constfold) to pick uint8/16/32/64 by value. Same gap for kIntLiteral,
+    kCharLiteral, kBoolLiteral, kFloatLiteral — all return the kind's
+    default rather than the per-value nominal.
   * codegen.cpp defaultLiteralType parse-failure fallbacks (`return
     "uint64"` / `return neg ? "int64" : "uint64"`) silently swallow
     malformed text. Numeric is the precondition guarantor; the fallback
     arm should be assert(false && "defaultLiteralType: malformed text from
     numeric") so a numeric bug surfaces as a crash, not a wrong type.
+  * codegen.cpp empty-type fallbacks to "int"/"int32" at emitLogical (lty,
+    rty), emitUnary `!` operand_type, shift lt/rt, and effectiveType. Per
+    spec these are "strange cases" (widen.sl:158-165) that classify should
+    have prevented; either build classify to determine type up front or
+    convert to sharp diagnostics. Coupled with the silent-default sweep.
 
 CONSTFOLD
-  * stage doesn't exist yet. Slots between grammar and classify per the
-    project_compiler_redesign 9-stage pipeline. Spec in widen.sl rules
-    1-4, 8-9, plus identity simplifications and division-by-zero detection.
-    See "Phase 0" entry above for the full TODO list.
+  * Stage exists (compiler_v2/constfold.{h,cpp}); wired between grammar
+    and classify in main.cpp. Spec in test_v2/const/fold.sl. See the
+    "Phase 0" entry above for landed vs pending breakdown.
 
 CLASSIFY
   * no-op; no symbol resolution, no type inference, no overload resolution
