@@ -149,33 +149,38 @@ void skipWhitespaceAndComments(Stream& s) {
 }
 
 token::Token readCharLiteral(Stream& s) {
+    int open_line = s.line, open_col = s.col, open_pos = s.pos;
     advance(s); // consume opening '
-    int value = 0;
-    if (peek(s) == '\\') {
-        advance(s);
-        char esc = advance(s);
-        switch (esc) {
-            case 'n':  value = '\n'; break;
-            case 't':  value = '\t'; break;
-            case '0':  value = '\0'; break;
-            case '\\': value = '\\'; break;
-            case '\'': value = '\''; break;
-            default:
-                setFatal(s, s.line, s.col, 1,
-                    std::string("unknown escape sequence: '\\") + esc + "'");
-                return {token::Kind::kError, "", 0, 0, 0, 0};
+    std::string content;
+    while (s.pos < (int)s.source->size()
+           && peek(s) != '\'' && peek(s) != '\n') {
+        if (peek(s) == '\\') {
+            content += advance(s);   // backslash
+            if (s.pos < (int)s.source->size() && peek(s) != '\n') {
+                content += advance(s);   // escaped char
+            }
+            continue;
         }
-    } else {
-        value = (unsigned char)advance(s);
+        content += advance(s);
     }
-    if (peek(s) == '\'') advance(s);
-    return {token::Kind::kCharLiteral, std::to_string(value), 0, 0, 0, 0};
+    if (peek(s) != '\'') {
+        int line_end = open_pos;
+        while (line_end < (int)s.source->size()
+               && (*s.source)[line_end] != '\n') ++line_end;
+        setFatal(s, open_line, open_col, line_end - open_pos,
+                 "Unterminated character literal.");
+        return {token::Kind::kError, "", 0, 0, 0, 0};
+    }
+    advance(s); // consume closing '
+    return {token::Kind::kCharLiteral, content, 0, 0, 0, 0};
 }
 
 token::Token readString(Stream& s) {
+    int open_line = s.line, open_col = s.col, open_pos = s.pos;
     advance(s);
     std::string value;
     while (s.pos < (int)s.source->size() && peek(s) != '"') {
+        if (peek(s) == '\n') break;   // bare newline → unterminated (escaped \<newline> handled below)
         char c = advance(s);
         if (c == '\\') {
             char esc = advance(s);
@@ -195,7 +200,15 @@ token::Token readString(Stream& s) {
             value += c;
         }
     }
-    if (peek(s) == '"') advance(s);
+    if (peek(s) != '"') {
+        int line_end = open_pos;
+        while (line_end < (int)s.source->size()
+               && (*s.source)[line_end] != '\n') ++line_end;
+        setFatal(s, open_line, open_col, line_end - open_pos,
+                 "Unterminated string literal.");
+        return {token::Kind::kError, "", 0, 0, 0, 0};
+    }
+    advance(s);
     return {token::Kind::kStringLiteral, value, 0, 0, 0, 0};
 }
 
@@ -203,45 +216,37 @@ token::Token readNumber(Stream& s) {
     std::string value;
     if (peek(s) == '0' && (peek2(s) == 'x' || peek2(s) == 'X')) {
         int prefix_line = s.line, prefix_col = s.col;
-        advance(s); advance(s);
+        std::string text;
+        text += advance(s);   // '0'
+        text += advance(s);   // 'x' or 'X'
         std::string digits;
-        while (s.pos < (int)s.source->size() && (isxdigit(peek(s)) || peek(s) == '_'))
-            digits += advance(s);
-        std::string clean;
-        for (char c : digits) if (c != '_') clean += c;
-        if (clean.empty()) {
+        while (s.pos < (int)s.source->size() && (isxdigit(peek(s)) || peek(s) == '_')) {
+            char ch = advance(s);
+            if (ch != '_') digits += ch;
+        }
+        if (digits.empty()) {
             setFatal(s, prefix_line, prefix_col, 2, "Hex literal missing digits.");
             return {token::Kind::kError, "", 0, 0, 0, 0};
         }
-        try {
-            uint64_t uval = std::stoull(clean, nullptr, 16);
-            return {token::Kind::kUintLiteral, std::to_string(uval), 0, 0, 0, 0};
-        } catch (std::out_of_range const&) {
-            setFatal(s, prefix_line, prefix_col, 2 + (int)digits.size(),
-                "Hex literal overflows uint64.");
-            return {token::Kind::kError, "", 0, 0, 0, 0};
-        }
+        text += digits;
+        return {token::Kind::kUintLiteral, text, 0, 0, 0, 0};
     }
     if (peek(s) == '0' && (peek2(s) == 'b' || peek2(s) == 'B')) {
         int prefix_line = s.line, prefix_col = s.col;
-        advance(s); advance(s);
+        std::string text;
+        text += advance(s);   // '0'
+        text += advance(s);   // 'b' or 'B'
         std::string digits;
-        while (s.pos < (int)s.source->size() && (peek(s) == '0' || peek(s) == '1' || peek(s) == '_'))
-            digits += advance(s);
-        std::string clean;
-        for (char c : digits) if (c != '_') clean += c;
-        if (clean.empty()) {
+        while (s.pos < (int)s.source->size() && (peek(s) == '0' || peek(s) == '1' || peek(s) == '_')) {
+            char ch = advance(s);
+            if (ch != '_') digits += ch;
+        }
+        if (digits.empty()) {
             setFatal(s, prefix_line, prefix_col, 2, "Binary literal missing digits.");
             return {token::Kind::kError, "", 0, 0, 0, 0};
         }
-        try {
-            uint64_t uval = std::stoull(clean, nullptr, 2);
-            return {token::Kind::kUintLiteral, std::to_string(uval), 0, 0, 0, 0};
-        } catch (std::out_of_range const&) {
-            setFatal(s, prefix_line, prefix_col, 2 + (int)digits.size(),
-                "Binary literal overflows uint64.");
-            return {token::Kind::kError, "", 0, 0, 0, 0};
-        }
+        text += digits;
+        return {token::Kind::kUintLiteral, text, 0, 0, 0, 0};
     }
     while (s.pos < (int)s.source->size() && (isdigit(peek(s)) || peek(s) == '_'))
         value += advance(s);

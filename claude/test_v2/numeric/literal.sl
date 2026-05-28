@@ -90,8 +90,14 @@ int32 main() {
     //-EXPECT-ERROR: malformed exponent: expected a digit
     // float bad3 = 1e-;
 
-    //-EXPECT-ERROR: unknown escape sequence: '\q'
+    //-EXPECT-ERROR: Unknown escape sequence: '\q'.
     // char bad_esc = '\q';
+    //-EXPECT-ERROR: Empty character literal.
+    // char bad_empty = '';
+    //-EXPECT-ERROR: Character literal must be a single byte.
+    // char bad_multi = 'AB';
+    //-EXPECT-ERROR: Character literal must be a single byte.
+    // char bad_esc_multi = '\tA';
 
     //-EXPECT-ERROR: Hex literal missing digits.
     // uint bad_hex_empty = 0x;

@@ -83,6 +83,7 @@ std::string newLabel(char const* tag) {
 
 bool isLiteralKind(ast::Node const& n) {
     return n.kind == ast::Kind::kIntLiteral
+        || n.kind == ast::Kind::kUintLiteral
         || n.kind == ast::Kind::kCharLiteral
         || n.kind == ast::Kind::kBoolLiteral
         || n.kind == ast::Kind::kFloatLiteral;
@@ -117,6 +118,17 @@ std::string defaultLiteralType(ast::Node const& n) {
             }
             if (mag <= (uint64_t)INT32_MAX) return "int32";
             if (mag <= (uint64_t)INT64_MAX) return "int64";
+            return "uint64";
+        }
+        case ast::Kind::kUintLiteral: {
+            std::string const& s = n.text;
+            errno = 0;
+            char* end = nullptr;
+            uint64_t mag = std::strtoull(s.c_str(), &end, 10);
+            if (s.empty() || end == s.c_str() || *end != '\0' || errno == ERANGE) {
+                return "uint64";
+            }
+            if (mag <= (uint64_t)UINT32_MAX) return "uint32";
             return "uint64";
         }
         case ast::Kind::kCharLiteral:  return "char";
@@ -371,9 +383,18 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
                               expr.file_id, expr.tok, out, diag);
     }
 
+    // Literal+literal compile-time fold. Int family only (kIntLiteral /
+    // kUintLiteral / kCharLiteral); float operands fall through to the
+    // ordinary binary path. The natural home for this fold is desugar
+    // (paired with tryFoldUnary); recursive folds for `1+2+3` would fall out
+    // for free. Pending — see todo.txt DESUGAR.
     if (isLiteralKind(lhs) && isLiteralKind(rhs)
-        && (lhs.kind == ast::Kind::kIntLiteral || lhs.kind == ast::Kind::kCharLiteral)
-        && (rhs.kind == ast::Kind::kIntLiteral || rhs.kind == ast::Kind::kCharLiteral)) {
+        && (lhs.kind == ast::Kind::kIntLiteral
+            || lhs.kind == ast::Kind::kUintLiteral
+            || lhs.kind == ast::Kind::kCharLiteral)
+        && (rhs.kind == ast::Kind::kIntLiteral
+            || rhs.kind == ast::Kind::kUintLiteral
+            || rhs.kind == ast::Kind::kCharLiteral)) {
         std::string folded;
         if (tryFoldIntBinary(op, lhs.text, rhs.text, folded)) {
             if (op == "==" || op == "!=" || op == "<" || op == "<="
@@ -493,6 +514,16 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                      std::string const& dest_type) {
     switch (expr.kind) {
         case ast::Kind::kIntLiteral: {
+            widen::checkIntLiteralFits(expr.text, dest_type,
+                                       expr.file_id, expr.tok, diag);
+            widen::TypeKind tk;
+            if (!dest_type.empty() && widen::classify(dest_type, tk)
+                && tk.cat == widen::Category::kFloat) {
+                return expr.text + ".0";
+            }
+            return expr.text;
+        }
+        case ast::Kind::kUintLiteral: {
             widen::checkIntLiteralFits(expr.text, dest_type,
                                        expr.file_id, expr.tok, diag);
             widen::TypeKind tk;
@@ -630,6 +661,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kFunctionDecl:
         case ast::Kind::kStringLiteral:
         case ast::Kind::kIntLiteral:
+        case ast::Kind::kUintLiteral:
         case ast::Kind::kCharLiteral:
         case ast::Kind::kBoolLiteral:
         case ast::Kind::kFloatLiteral:
@@ -661,6 +693,7 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
 std::string exprType(ast::Node const& expr, SymTab const& syms) {
     switch (expr.kind) {
         case ast::Kind::kIntLiteral:    return "int";
+        case ast::Kind::kUintLiteral:   return "uint";
         case ast::Kind::kCharLiteral:   return "char";
         case ast::Kind::kBoolLiteral:   return "bool";
         case ast::Kind::kFloatLiteral:  return "float";

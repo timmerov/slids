@@ -17,6 +17,7 @@ enum class Kind {
     kReturnStmt,
     kStringLiteral,
     kIntLiteral,
+    kUintLiteral,
     kCharLiteral,
     kBoolLiteral,
     kFloatLiteral,

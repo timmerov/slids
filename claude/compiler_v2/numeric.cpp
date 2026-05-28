@@ -1,6 +1,7 @@
 #include "numeric.h"
 
 #include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -19,10 +20,15 @@ void reportAt(diagnostic::Sink& diag, int file_id, int tok_index,
 }
 
 // kIntLiteral: text is decimal digits (lex stripped underscores). Parse as
-// uint64; reject overflow. Text unchanged on success.
+// uint64; reject overflow; reject trailing garbage. Text unchanged on success.
 bool handleInt(token::Token& t, int tok_index, diagnostic::Sink& diag) {
     try {
-        (void)std::stoull(t.text, nullptr, 10);
+        std::size_t pos = 0;
+        (void)std::stoull(t.text, &pos, 10);
+        if (pos != t.text.size()) {
+            reportAt(diag, t.file_id, tok_index, "Integer literal malformed.");
+            return false;
+        }
         return true;
     } catch (std::out_of_range const&) {
         reportAt(diag, t.file_id, tok_index, "Integer literal overflows uint64.");
@@ -33,8 +39,84 @@ bool handleInt(token::Token& t, int tok_index, diagnostic::Sink& diag) {
     }
 }
 
+// kCharLiteral: text is the in-quotes content (escapes intact, e.g. "A" or
+// "\\n" or "\\'" or "\\q" or "" or "AB"). Interpret escape if present;
+// validate exactly one byte; rewrite text to decimal value on success.
+bool handleChar(token::Token& t, int tok_index, diagnostic::Sink& diag) {
+    std::string const& src = t.text;
+    if (src.empty()) {
+        reportAt(diag, t.file_id, tok_index, "Empty character literal.");
+        return false;
+    }
+    int value = 0;
+    int consumed = 0;
+    if (src[0] == '\\') {
+        if (src.size() < 2) {
+            reportAt(diag, t.file_id, tok_index, "Character literal trailing backslash.");
+            return false;
+        }
+        switch (src[1]) {
+            case 'n':  value = '\n'; break;
+            case 't':  value = '\t'; break;
+            case '0':  value = '\0'; break;
+            case '\\': value = '\\'; break;
+            case '\'': value = '\''; break;
+            default:
+                reportAt(diag, t.file_id, tok_index,
+                    std::string("Unknown escape sequence: '\\") + src[1] + "'.");
+                return false;
+        }
+        consumed = 2;
+    } else {
+        value = (unsigned char)src[0];
+        consumed = 1;
+    }
+    if ((int)src.size() > consumed) {
+        reportAt(diag, t.file_id, tok_index, "Character literal must be a single byte.");
+        return false;
+    }
+    t.text = std::to_string(value);
+    return true;
+}
+
+// kUintLiteral: text is source-form "0xFFF" or "0b1010" (lex preserves the
+// prefix; underscores already stripped). Parse per prefix; reject overflow;
+// rewrite text to decimal on success.
+bool handleUint(token::Token& t, int tok_index, diagnostic::Sink& diag) {
+    bool is_hex = (t.text.size() >= 2 && t.text[0] == '0'
+                   && (t.text[1] == 'x' || t.text[1] == 'X'));
+    bool is_bin = (t.text.size() >= 2 && t.text[0] == '0'
+                   && (t.text[1] == 'b' || t.text[1] == 'B'));
+    int base = is_hex ? 16 : (is_bin ? 2 : 0);
+    char const* kind_word = is_hex ? "Hex" : "Binary";
+    if (base == 0) {
+        reportAt(diag, t.file_id, tok_index, "Uint literal malformed.");
+        return false;
+    }
+    std::string digits = t.text.substr(2);
+    try {
+        std::size_t pos = 0;
+        uint64_t uval = std::stoull(digits, &pos, base);
+        if (pos != digits.size()) {
+            reportAt(diag, t.file_id, tok_index,
+                std::string(kind_word) + " literal malformed.");
+            return false;
+        }
+        t.text = std::to_string(uval);
+        return true;
+    } catch (std::out_of_range const&) {
+        reportAt(diag, t.file_id, tok_index,
+            std::string(kind_word) + " literal overflows uint64.");
+        return false;
+    } catch (std::invalid_argument const&) {
+        reportAt(diag, t.file_id, tok_index,
+            std::string(kind_word) + " literal malformed.");
+        return false;
+    }
+}
+
 // kFloatLiteral: text is source-form minus underscores. Parse as double;
-// reject overflow; canonicalize to %.17g on success.
+// reject overflow; reject trailing garbage; canonicalize to %.17g on success.
 bool handleFloat(token::Token& t, int tok_index, diagnostic::Sink& diag) {
     errno = 0;
     char* end = nullptr;
@@ -43,7 +125,7 @@ bool handleFloat(token::Token& t, int tok_index, diagnostic::Sink& diag) {
         reportAt(diag, t.file_id, tok_index, "Float literal overflows float64.");
         return false;
     }
-    if (end == t.text.c_str()) {
+    if (end == t.text.c_str() || *end != '\0') {
         reportAt(diag, t.file_id, tok_index, "Float literal malformed.");
         return false;
     }
@@ -66,9 +148,10 @@ void run(token::List& tokens, diagnostic::Sink& diag) {
                 if (!handleFloat(t, i, diag)) return;
                 break;
             case token::Kind::kUintLiteral:
+                if (!handleUint(t, i, diag)) return;
+                break;
             case token::Kind::kCharLiteral:
-                // Validated by lex today (interim). Migration to this stage
-                // lands per the numeric-stage TODO in todo.txt.
+                if (!handleChar(t, i, diag)) return;
                 break;
             case token::Kind::kStringLiteral:
             case token::Kind::kIdentifier:

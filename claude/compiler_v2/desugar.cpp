@@ -27,6 +27,7 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kReturnStmt:    return ast::Kind::kReturnStmt;
         case parse::Kind::kStringLiteral: return ast::Kind::kStringLiteral;
         case parse::Kind::kIntLiteral:    return ast::Kind::kIntLiteral;
+        case parse::Kind::kUintLiteral:   return ast::Kind::kUintLiteral;
         case parse::Kind::kCharLiteral:   return ast::Kind::kCharLiteral;
         case parse::Kind::kBoolLiteral:   return ast::Kind::kBoolLiteral;
         case parse::Kind::kFloatLiteral:  return ast::Kind::kFloatLiteral;
@@ -110,6 +111,7 @@ std::unique_ptr<ast::Node> tryFoldUnary(ast::Node& node) {
     if (op == "+") {
         bool numeric =
                operand.kind == ast::Kind::kIntLiteral
+            || operand.kind == ast::Kind::kUintLiteral
             || operand.kind == ast::Kind::kCharLiteral
             || operand.kind == ast::Kind::kFloatLiteral;
         if (!numeric) return nullptr;
@@ -120,6 +122,7 @@ std::unique_ptr<ast::Node> tryFoldUnary(ast::Node& node) {
     if (op == "-") {
         bool numeric =
                operand.kind == ast::Kind::kIntLiteral
+            || operand.kind == ast::Kind::kUintLiteral
             || operand.kind == ast::Kind::kCharLiteral
             || operand.kind == ast::Kind::kFloatLiteral;
         if (!numeric) return nullptr;
@@ -130,6 +133,7 @@ std::unique_ptr<ast::Node> tryFoldUnary(ast::Node& node) {
     if (op == "~") {
         bool intish =
                operand.kind == ast::Kind::kIntLiteral
+            || operand.kind == ast::Kind::kUintLiteral
             || operand.kind == ast::Kind::kCharLiteral;
         if (!intish) return nullptr;
         auto child = std::move(node.children[0]);
@@ -140,6 +144,7 @@ std::unique_ptr<ast::Node> tryFoldUnary(ast::Node& node) {
     if (op == "!") {
         bool result;
         if (operand.kind == ast::Kind::kIntLiteral
+         || operand.kind == ast::Kind::kUintLiteral
          || operand.kind == ast::Kind::kCharLiteral) {
             result = isZeroIntText(operand.text);
         } else if (operand.kind == ast::Kind::kFloatLiteral) {

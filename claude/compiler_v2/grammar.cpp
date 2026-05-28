@@ -126,9 +126,14 @@ struct Parser {
             }
             return node;
         }
-        if (t.kind == token::Kind::kIntLiteral
-            || t.kind == token::Kind::kUintLiteral) {
+        if (t.kind == token::Kind::kIntLiteral) {
             auto node = newNodeHere(parse::Kind::kIntLiteral);
+            node->text = t.text;
+            advance();
+            return node;
+        }
+        if (t.kind == token::Kind::kUintLiteral) {
+            auto node = newNodeHere(parse::Kind::kUintLiteral);
             node->text = t.text;
             advance();
             return node;

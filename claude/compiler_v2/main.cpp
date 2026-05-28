@@ -40,26 +40,30 @@ int main(int argc, char** argv) {
     parse::Tree parse_tree;
     ast::Tree ast_tree;
 
-    lex::run(in_path, import_paths, tokens, diag);
-    numeric::run(tokens, diag);
-    grammar::run(tokens, parse_tree, diag);
-    classify::run(parse_tree, diag);
-    desugar::run(parse_tree, ast_tree, diag);
-    optimize::run(ast_tree, diag);
-    layout::run(ast_tree, diag);
-
-    if (diagnostic::hasErrors(diag)) {
+    auto bail = [&]() {
         diagnostic::render(tokens, diag, std::cerr);
         return 1;
-    }
+    };
+
+    lex::run(in_path, import_paths, tokens, diag);
+    if (diagnostic::hasErrors(diag)) return bail();
+    numeric::run(tokens, diag);
+    if (diagnostic::hasErrors(diag)) return bail();
+    grammar::run(tokens, parse_tree, diag);
+    if (diagnostic::hasErrors(diag)) return bail();
+    classify::run(parse_tree, diag);
+    if (diagnostic::hasErrors(diag)) return bail();
+    desugar::run(parse_tree, ast_tree, diag);
+    if (diagnostic::hasErrors(diag)) return bail();
+    optimize::run(ast_tree, diag);
+    if (diagnostic::hasErrors(diag)) return bail();
+    layout::run(ast_tree, diag);
+    if (diagnostic::hasErrors(diag)) return bail();
 
     std::ostringstream codegen_buf;
     codegen::run(ast_tree, codegen_buf, diag);
 
-    if (diagnostic::hasErrors(diag)) {
-        diagnostic::render(tokens, diag, std::cerr);
-        return 1;
-    }
+    if (diagnostic::hasErrors(diag)) return bail();
 
     if (out_path.empty()) {
         std::cout << codegen_buf.str();

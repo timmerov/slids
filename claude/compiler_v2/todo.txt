@@ -20,6 +20,9 @@ Phase 1 — expression core
   * calls (zero-arg, one-arg, multi-arg)
   * compound assigns (+=, -=, *=, /=, %=, &=, |=, ^=, <<=, >>=, ||=, &&=)
   * PPID — pre/post-inc/dec via phrases
+  * move literal+literal int fold from codegen → desugar (currently lives in
+    emitBinary; pairs with existing tryFoldUnary; recursive folds for
+    `1+2+3` fall out for free)
 
 Phase 2 — declarations + flow
   * var decls (typed init, inferred init, declare-then-assign)
