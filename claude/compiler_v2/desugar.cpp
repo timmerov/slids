@@ -145,18 +145,17 @@ std::unique_ptr<ast::Node> tryFoldUnary(ast::Node& node) {
         bool result;
         if (operand.kind == ast::Kind::kIntLiteral
          || operand.kind == ast::Kind::kUintLiteral
-         || operand.kind == ast::Kind::kCharLiteral) {
+         || operand.kind == ast::Kind::kCharLiteral
+         || operand.kind == ast::Kind::kBoolLiteral) {
             result = isZeroIntText(operand.text);
         } else if (operand.kind == ast::Kind::kFloatLiteral) {
             result = isZeroFloatText(operand.text);
-        } else if (operand.kind == ast::Kind::kBoolLiteral) {
-            result = (operand.text == "false");
         } else {
             return nullptr;
         }
         auto out = std::make_unique<ast::Node>();
         out->kind = ast::Kind::kBoolLiteral;
-        out->text = result ? "true" : "false";
+        out->text = result ? "1" : "0";
         out->file_id = node.file_id;
         out->tok = node.tok;
         return out;

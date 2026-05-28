@@ -1,5 +1,6 @@
 
 SUBDIRS = \
+	constfold \
 	lex \
 	numeric \
 	parse

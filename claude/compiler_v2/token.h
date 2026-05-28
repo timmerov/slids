@@ -12,6 +12,7 @@ enum class Kind {
     kUintLiteral,    // hex/binary integer — infers uint/uint64
     kCharLiteral,
     kFloatLiteral,
+    kBoolLiteral,    // true / false
     kStringLiteral,
 
     // identifiers and keywords
@@ -21,7 +22,7 @@ enum class Kind {
     kChar, kIntptr,
     kFloat, kFloat32, kFloat64,
     kBool, kVoid,
-    kReturn, kTrue, kFalse,
+    kReturn,
     kIf, kElse, kWhile, kFor, kBreak, kContinue,
     kEnum, kSwitch, kCase, kDefault,
     kNew, kDelete, kNullptr, kSelf, kImport, kVirtual,

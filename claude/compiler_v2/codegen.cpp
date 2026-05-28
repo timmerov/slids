@@ -544,15 +544,14 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             return expr.text;
         }
         case ast::Kind::kBoolLiteral: {
-            std::string v = (expr.text == "true") ? "1" : "0";
-            widen::checkIntLiteralFits(v, dest_type,
+            widen::checkIntLiteralFits(expr.text, dest_type,
                                        expr.file_id, expr.tok, diag);
             widen::TypeKind tk;
             if (!dest_type.empty() && widen::classify(dest_type, tk)
                 && tk.cat == widen::Category::kFloat) {
-                return v + ".0";
+                return expr.text + ".0";
             }
-            return v;
+            return expr.text;
         }
         case ast::Kind::kFloatLiteral: {
             widen::checkFloatLiteralFits(expr.text, dest_type,

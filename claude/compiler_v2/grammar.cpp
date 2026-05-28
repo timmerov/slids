@@ -150,9 +150,9 @@ struct Parser {
             advance();
             return node;
         }
-        if (t.kind == token::Kind::kTrue || t.kind == token::Kind::kFalse) {
+        if (t.kind == token::Kind::kBoolLiteral) {
             auto node = newNodeHere(parse::Kind::kBoolLiteral);
-            node->text = (t.kind == token::Kind::kTrue) ? "true" : "false";
+            node->text = t.text;
             advance();
             return node;
         }

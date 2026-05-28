@@ -39,6 +39,15 @@ bool handleInt(token::Token& t, int tok_index, diagnostic::Sink& diag) {
     }
 }
 
+// kBoolLiteral: lex emits text "true" or "false". Canonicalize to "1" or "0"
+// so codegen reads the value directly without a string compare.
+bool handleBool(token::Token& t, int tok_index, diagnostic::Sink& diag) {
+    if (t.text == "true")       { t.text = "1"; return true; }
+    if (t.text == "false")      { t.text = "0"; return true; }
+    reportAt(diag, t.file_id, tok_index, "Bool literal malformed.");
+    return false;
+}
+
 // kCharLiteral: text is the in-quotes content (escapes intact, e.g. "A" or
 // "\\n" or "\\'" or "\\q" or "" or "AB"). Interpret escape if present;
 // validate exactly one byte; rewrite text to decimal value on success.
@@ -153,6 +162,9 @@ void run(token::List& tokens, diagnostic::Sink& diag) {
             case token::Kind::kCharLiteral:
                 if (!handleChar(t, i, diag)) return;
                 break;
+            case token::Kind::kBoolLiteral:
+                if (!handleBool(t, i, diag)) return;
+                break;
             case token::Kind::kStringLiteral:
             case token::Kind::kIdentifier:
             case token::Kind::kInt:
@@ -173,8 +185,6 @@ void run(token::List& tokens, diagnostic::Sink& diag) {
             case token::Kind::kBool:
             case token::Kind::kVoid:
             case token::Kind::kReturn:
-            case token::Kind::kTrue:
-            case token::Kind::kFalse:
             case token::Kind::kIf:
             case token::Kind::kElse:
             case token::Kind::kWhile:
