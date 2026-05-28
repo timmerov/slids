@@ -19,6 +19,7 @@ ensure no overflow.
 
 for int:
 ensure no overflow.
+integers larger the 1<<63 change type to uint.
 
 for floats:
 convert to standard ieee notation for 64 bits.

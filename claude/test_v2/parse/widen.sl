@@ -1,10 +1,71 @@
 /*
 test the built-in primitives.
 
-number widening rules when the target type is known:
-these rules apply everywhere widening can happen.
-including but not limited to: expressions, literals, parameters, variables, etc.
+types may be silently widened in many places.
+they follow these rules everywhere.
+including: expressions, type conversion, parameter matching, overload matching, etc.
 
+note: for this document, literal means a literal with a flexible type.
+type conversion (int8=37) will set the type of the literal.
+literals with a set type are treated as non-literals.
+apologies for the confusing language.
+todo: fix this somehow.
+
+the widening rules are specific to the following operations:
+1. widen literal to known target type.
+2. literal to inferred type.
+3. unary operation on literal.
+4. binary operations on two literals.
+5. widen non-literal to known target type.
+6. non-literal to inferred type.
+7. unary operation on non-literal.
+8. shift operation on non-literal to known target type.
+9. shift operation on non-literal to unknown or inferred target type.
+10. comparison operations.
+11. binary operations on two non-literals to a known target type.
+12. binary operations on two non-literals to an unknown or inferred target type.
+13. binary operations on literal and non-literal to a known target type.
+14. binary operations on literal and non-literal to a unknown or inferred target type.
+15. logical operations.
+
+1. widen literal to known target type.
+literals may be silently widened to any type in which the value fits.
+for examples:
+33_000 may be any of these uint16, uint32, uint64, int32, int64, float32, float64.
+-27 may be int8, int16, int32, int64, float32, float64.
+floating point literals are silently rounded to match the target type precision.
+3.14 becomes 3.1400001049 for target float32.
+floating point literals with integer values may be silently converted to integer types
+in which they fit.
+
+2. literal to inferred type.
+the inferred type is the default type of the literal.
+small integer literals -> int32.
+large integer literals -> int64.
+small unsigned literals -> uint32.
+large unsigned literals -> uint64.
+small floating point literals -> float32.
+large floating point literals -> float64.
+bool literals -> bool.
+character literals -> char.
+
+3. unary operation on literal.
+the literal is widened to its computational type.
+integer -> int64,
+unsigned -> uint64,
+float -> float64.
+the operation is performed.
+exception: unary + is a nop.
+exception: bitwise not ~ on bool type is ambiguous.
+these are compile errors.
+exception: unary - is treated as -1 * literal and is handled by rule 4.
+
+4. binary operations on two literals.
+the literals are widened to a common computational type: int64, uint64, float64.
+as per rule 1.
+it is a compile error if no common computational type can be found.
+
+5. widen non-literal to known target type.
 signed integers are silently widened to larger signed integers.
 unsigned integers are silently widened to larger unsigned integers.
 unsigned integers are silently widened to a larger unsigned integer,
@@ -13,75 +74,77 @@ floating point numbers are silently widened to larger floating point numbers.
 integer types may be silently converted to floating point if the entire range fits.
 int16 -> float32, int32 -> float64.
 
-losing information without an explicit type conversion is a compile error:
-truncating to a smaller number type - integer and floating point.
-converting signed integers to unsigned.
-converting 32 or 64 bit integers to float32.
-converting 64 bit integers to float64.
+6. non-literal to inferred type.
+the inferred type is the type of the non-literal.
 
-decimal integer literals are flexible type.
-their default type is int,
-unless the value is too big,
-then the type is int64,
-unless the value is too big,
-then the type is uint64.
+7. unary operation on non-literal.
+no widening.
+the result type is the type of the non-literal.
 
-hex and binary integer literals are flexible type.
-their default type is uint,
-unless the value is too big,
-then the type is uint64,
+8. shift operation on non-literal to known target type.
+int64 target = int32 lhs << uint8 rhs
+the rhs is not widened - all types are accepted.
+the lhs is widened to the target type according to rule 2.
 
-floating point literals are flexible type.
-their default type is float.
-unless the value is too big.
-then the type is float64.
-floating point literals are silently rounded to match the target type precision.
-3.14 becomes 3.1400001049 for target float32.
+9. shift operation on non-literal to unknown or inferred target type.
+the rhs is not widened - all types are accepted.
+the result and inferred type is the type of the lhs.
 
-integer literals may be silently type converted to floating point if they fit.
-floating point literals may be silently type converted to integer types if the
-value is an integer and they fit.
+10. comparison operations.
+the result type is bool.
+the operands are widened to a type that will hold both.
+the type of a non-literal lhs is tried first.
+the type of a non-literal rhs is tried second.
+then a common computation type will be used: int64, uint64, float64
+as per rules 1 for literals and 5 for non-literals.
+it is a compile error if no type can be found.
+
+11. binary operations on two non-literals to a known target type.
+both operands are widened to the target type.
+it is a compile error if either cannot be widened to that type.
+
+12. binary operations on two non-literals to an unknown or inferred target type.
+use rule 10.
+
+13. binary operations on literal and non-literal to a known target type.
+both operands are widened to the target type
+as per rules 1 for literals and 5 for non-literals.
+it is a compile error if either cannot be widened to that type.
+
+14. binary operations on literal and non-literal to a unknown or inferred target type.
+both operands are widened to the smallest type that will hold both.
+this is the result and inferred type.
+
+15. logical operations consume condition-expressions.
+no widening of operands needed - any type is accepted.
+
+miscellaneous:
 
 bool is a 1 bit unsigned integer.
-true and false are number literals with values 1 and 0.
-
-char, intptr, float, are types that depends on the compiler and/or the operating system.
+char, float, intptr are specific to the compiler.
 char is typically uint8.
 intptr is typically int64.
 float is typically float32.
-maybe these are configurable in the compiler.
-maybe not.
-the author should not make assumptions.
-bool, char, intptr, float follow the rules that apply to their implementation type.
+these types should not be assumed by the author.
+they are widened as per the widening rules of their implementation type.
 
-some binary operations have special widening rules:
-shift operations << >> do not need the rhs to be widened - all types are accepted.
-the result of the shift operation is the type of the lhs.
-logical operations && || ^^ consume condition-expression - all types are accepted, no widening needed.
-logical operations (generally) produce bool - no explicit conversion needed.
+operations involving specific literal values that are undefined are compile errors.
+for examples:
+shift by negative value: anything << -1
+shift floating point: 3.14 << anything, anything << 3.14
+divide by zero: x / 0.0
 
-the next sections apply to the remaining ordinary binary opertions: + - * / % & | ^ == != >= <= > <
-
-binary widening rules for two typed numbers:
-the result type is the smallest type large enough to hold either operand.
-the operation is then applied using the result type.
-uint32 + int32 -> int64 + int64 -> int64
-it is a compile error if no such type exists.
-
-binary operations between typed number and literal number:
-if a number literal fits into the type, then the result is the type.
-otherwise the number literal assumes its default type- int32, int64, uint64;
-and normal binary widening rules are applied.
-
-binary operations (includes the special cases) between two literal numbers:
-if the numbers need to be widened in order to perform the operation,
-then each literal assumes its default type.
-and normal widening rules (including special cases) apply.
-do the operation to create new untyped literal number.
-
-note: this may produce a confusing error message:
-    int32 = int32 + uint32;
-rhs is widened to int64 which can't be silently truncated to int32.
+operations may be reduced:
+for examples:
+x * 0 -> 0
+x * 1 -> x
+x + 0 -> x
+x / 1 -> x
+x % 1 -> 0
+x << 64 -> 0
+x || false -> x
+x && true -> x
+x & 0 -> 0
 */
 
 int32 main() {
