@@ -57,7 +57,8 @@ STAGE FILES (.h / .cpp pairs)
             aug-assign, 0/1/N-arg call, return); expressions across the
             full C precedence ladder (literals + ident, unary `! ~ + -`,
             full binary set arith/bitwise/shift/comparison/logical,
-            parens). Stamps (file_id, tok) on every node for source
+            parens, postfix-call on a bare ident). Stamps (file_id, tok)
+            on every node for source
             attribution. No identifier resolution, no scope tracking,
             no type inference, no literal folding — all deferred to
             later stages. Errors are single-shot ("expected '...'") with
@@ -74,12 +75,13 @@ STAGE FILES (.h / .cpp pairs)
             order); pass 2 walks function bodies. Validates declared /
             return / parameter type spellings (widen::isKnownType).
             Caches lvalue type on AugAssignStmts (s.return_type) and
-            return type + param_types on CallStmts so downstream stages
-            don't have to re-walk the entry table. Sharp diagnostics at
-            the source: wrong-kind entry (assign to function / assign
-            to constant / call a variable), duplicate decls, return-type
-            mismatch, parameter-type mismatch, duplicate definition,
-            arity mismatch, multi-arg print intrinsic. Multi-source
+            return type + param_types on CallStmts/CallExprs (one shared
+            resolveUserCall) so downstream stages don't have to re-walk the
+            entry table. Sharp diagnostics at the source: wrong-kind entry
+            (assign to function / assign to constant / call a variable),
+            duplicate decls, return-type mismatch, parameter-type mismatch,
+            duplicate definition, arity mismatch, multi-arg print intrinsic,
+            print intrinsic used as an expression. Multi-source
             notes point at prior decls. Owns the "what does this name
             refer to" decision; types are not resolve's job.
   constfold parse tree -> parse tree. Iterative post-order walker.
@@ -117,8 +119,10 @@ STAGE FILES (.h / .cpp pairs)
             the source: non-coercible operands for ! && || ^^, non-numeric
             shift sides, bitwise on float, no-common-type binaries.
             Per-arg type inference at call sites uses the resolved
-            callee's param_types (cached on the kCallStmt by resolve) as
-            context. Future: overload resolution when multiple Function
+            callee's param_types (cached on the kCallStmt/kCallExpr by
+            resolve) as context. A kCallExpr's inferred_type is the
+            callee's return type; a void return used as a value is rejected
+            here. Future: overload resolution when multiple Function
             entries share a name.
   desugar   parse tree -> ast (separate node-type set). Today: identity
             copy that propagates every annotation classify and constfold
@@ -140,10 +144,12 @@ STAGE FILES (.h / .cpp pairs)
             by parse::Tree::entries index; every ident / lvalue node carries
             its resolved_entry_id, so codegen does no string-keyed lookup.
             Function definitions emit param allocas + stores from %arg.N
-            into named registers; call statements emit `call <ret> @name(
-            <typed args>)` using the classify-stamped return_type and
-            param_types from the resolved Function entry. Mangled names
-            and field offsets land with layout.
+            into named registers; calls emit `call <ret> @name(<typed
+            args>)` via one shared emitCall using the classify-stamped
+            return_type and param_types — the statement form discards the
+            result register, the expression form (kCallExpr) widens it into
+            the destination type. Mangled names and field offsets land with
+            layout.
 
 PRODUCT FILES (.h / .cpp pairs)
 
@@ -160,8 +166,8 @@ PRODUCT FILES (.h / .cpp pairs)
             carets at the ident rather than the const/type keyword),
             is_const (kVarDeclStmt: declared with leading `const`),
             params (kFunctionDef/Decl: ordered kParam children),
-            param_types (kCallStmt: cached resolved-fn param-type strings
-            driving each arg's emit dest_type). Owns the symbol table:
+            param_types (kCallStmt/kCallExpr: cached resolved-fn param-type
+            strings driving each arg's emit dest_type). Owns the symbol table:
             Entry vector + frame stack + pushFrame / popFrame / addEntry /
             findInLiveScopes / findInFrame / entryType APIs that resolve
             calls. Function entries carry param_types alongside their

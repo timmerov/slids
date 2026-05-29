@@ -582,6 +582,19 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     for (auto const& s : fn.children) {
         emitStmt(*s, syms, pool, fn.return_type, out, diag);
     }
+    // A void function that falls through its body needs an implicit `ret void`
+    // terminator — without it the block is unterminated and llc rejects the IR.
+    // A non-void function without a trailing return is rejected by classify, so
+    // reaching here non-void means that check regressed; assert rather than
+    // emit an unterminated block. The guard also means an explicit trailing
+    // return won't double-terminate once bare `return;` is supported.
+    bool ends_in_return = !fn.children.empty()
+        && fn.children.back()->kind == ast::Kind::kReturnStmt;
+    if (!ends_in_return) {
+        assert(fn.return_type == "void"
+            && "emitFunction: non-void function reached codegen without a trailing return");
+        out << "  ret void\n";
+    }
     out << "}\n";
 }
 

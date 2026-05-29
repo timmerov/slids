@@ -416,6 +416,14 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             return;
         }
         case parse::Kind::kReturnStmt: {
+            // A void function returning a value would emit `ret void <val>`
+            // (invalid IR). Reject at the `return`. (Non-literal values would
+            // otherwise slip past the literal-fit check into codegen.)
+            if (fn_return_type == "void" && !s.children.empty()) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "A void function cannot return a value.", {}});
+                return;
+            }
             for (auto& ch : s.children) {
                 if (ch) inferExpr(tree, *ch, fn_return_type, diag);
             }
@@ -446,6 +454,18 @@ void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
     // walk stmts and infer types using resolved_entry_id stamped upstream.
     for (auto& ch : fn.children) {
         if (ch) classifyStmt(tree, *ch, fn.return_type, diag);
+    }
+    // A non-void function must end with a return statement, else codegen
+    // would emit an unterminated block. This is the "last statement is a
+    // return" heuristic, not full reachability (see todo: revisit non-void
+    // function returns). void bodies fall through to an implicit `ret void`.
+    if (fn.return_type != "void") {
+        bool ends_in_return = !fn.children.empty()
+            && fn.children.back()->kind == parse::Kind::kReturnStmt;
+        if (!ends_in_return) {
+            diagnostic::report(diag, {fn.file_id, fn.name_tok,
+                "Function '" + fn.name + "' must end with a return statement.", {}});
+        }
     }
 }
 

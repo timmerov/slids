@@ -26,8 +26,10 @@ PIPELINE — current shape
   classify is narrowed to type inference + (Phase 3) overload resolution.
   Stamps inferred_type / op_type, rejects no-common-type binaries,
   non-coercible operands for `! && || ^^`, non-numeric shift sides,
-  bitwise on float. Reads entries via resolved_entry_id but never
-  mutates the symbol table or pushes frames.
+  bitwise on float. Also owns return correctness: a non-void function must
+  end with a return statement, and a void function cannot return a value.
+  Reads entries via resolved_entry_id but never mutates the symbol table
+  or pushes frames.
 
 Phase 0 — foundations (largely landed)
   * lex stage + import wrapper
@@ -91,7 +93,10 @@ Phase 1 — expression core
     LocalVar in body frame; arity + per-arg type check via param-type
     context; decl/def signature match (return + param types)          LANDED
   * PPID — pre/post-inc/dec via phrases                               OPEN
-  * call-as-expression — capture/use a call's return value            OPEN
+  * call-as-expression — kCallExpr via parsePostfix on a bare ident;
+    shared resolveUserCall (resolve) + emitCall (codegen) with kCallStmt;
+    return value widens into context like an ident read; void-return and
+    print-intrinsic-as-expr rejected with caret on the callee          LANDED
 
 Phase 2 — declarations + flow
   * var decls (typed init, inferred init, declare-then-assign)
@@ -176,9 +181,10 @@ GRAMMAR
     + bare identifier + unary `! ~ + -` + full binary set (arith / bitwise /
     shift / comparison / logical) with C precedence + parenthesized grouping.
     - unary `+ - ~ !` on literals fold at desugar
-    - no postfix ops (field access, indexing, call-through, `^` deref);
-      slot into parsePostfix as their phases land
-    - no function calls inside expressions
+    - postfix-call on a bare identifier lands (kCallExpr), so function
+      calls work inside expressions. Field access, indexing, call-through
+      ((fnptr)(args)), `^` deref still slot into parsePostfix as their
+      phases land
     - no `<Type^>` or `(Type=expr)` casts
     - float literals must be lossless decimal (no hex form yet, no inexact
       values like 1.1 which would require LLVM hex encoding); codegen
@@ -241,7 +247,11 @@ WIDENING + LITERAL RANGE CHECKING (widen.h / widen.cpp)
         the resolved function's param_types drives emitExpr / widen::convert.
   * call statements: 0 / 1 / N arguments parsed; print intrinsics still
     restricted to 1 argument (rejected at classify).
-  * call-as-expression not yet — calls only at statement position.
+  * call-as-expression: a bare-ident call (kCallExpr) is usable as a value
+    — var-decl init, call arg, return, binary operand. The statement form
+    discards the result; the expression form widens it into the destination
+    type. void return used as a value, and a print intrinsic in expression
+    position, are both rejected.
   * top-level: function definitions and function declarations.
     - imports work (lex-time wrapper expands them; grammar accepts declarations
       from imported .slh files)
@@ -423,11 +433,13 @@ CODEGEN
     param, emit alloca + store from `%arg.N` into a named register, then
     register the alloca in SymTab[param.resolved_entry_id] so the body
     reads/writes the param like any local.
-  * kCallStmt emit (after print::tryEmitCall declines): emit each arg via
-    emitExpr(arg, dest_type=stmt.param_types[i]) so widen::convert handles
-    arg-side narrowing/widening; emit `call <ret_llty> @<name>(...)` using
-    stmt.return_type. Non-void returns prefix with a discard `%call.N =`
-    register; arity is asserted (classify guaranteed it).
+  * kCallStmt / kCallExpr emit (after print::tryEmitCall declines for the
+    statement form): one shared emitCall emits each arg via
+    emitExpr(arg, dest_type=param_types[i]) so widen::convert handles arg-side
+    narrowing/widening, then `call <ret_llty> @<name>(...)` using return_type.
+    The statement form discards the result register; the expression form
+    returns it and widens into the destination type. Arity is asserted
+    (classify guaranteed it).
   * emitToBool handles numeric (icmp/fcmp vs 0) and pointer (icmp ne ptr,
     null) so char[] coerces truthy; non-numeric non-pointer types rejected
     upstream at classify.
@@ -440,6 +452,19 @@ CODEGEN
   * bool lowers to i1 (per redesign-memory intent; v1 uses i32 for bool)
   * return value coerced to fn_return_type via emitExpr's widen path;
     non-widenable returns produce a widen diagnostic at the return stmt
+  * return correctness (classify): a non-void function must end with a return
+    statement (classifyFunctionBody — caret at the function name) and a void
+    function cannot return a value (kReturnStmt arm — caret at `return`).
+    Together these close the unterminated-block / `ret void <val>` invalid-IR
+    holes. A void body that falls through gets an implicit `ret void` in
+    emitFunction; codegen asserts a non-void function arrived with a trailing
+    return (classify guaranteed it).
+  * REVISIT non-void function returns: "last statement is a return" is a
+    heuristic, not reachability. Once Phase 2 control flow lands it will
+    wrongly reject a body whose every path returns (switch with all cases
+    returning; if/else where both arms return) and needs real reachability
+    analysis. Bare `return;` (no expr — parseReturnStmt requires one today) is
+    also unbuilt, so void functions can't return early.
   * target triple hard-coded to x86_64-pc-linux-gnu
 
 ERROR REPORTING

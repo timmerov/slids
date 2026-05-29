@@ -6,7 +6,9 @@ scope per Phase 1 plan (todo.txt):
   * classify: Function entries carry ordered param types; arity + per-arg type
     check at every call site; param-as-LocalVar entries seeded in the body frame
   * codegen: param allocas + stores at function entry; `call <ret> @name(args)`
-  * calls are statement-form only; return values are not yet used in expressions
+  * calls work as statements (result discarded) and as expressions (kCallExpr:
+    var-decl init, call arg, return, binary operand); the expression form
+    widens its return value into the destination type
   * single-TU only — cross-TU calls (callee.slh + callee.sl) defer to a later landing
 
 per-arg literal-flex: a literal arg flexes into its corresponding param type
@@ -53,6 +55,23 @@ int32 takes_int32(int32 v) {
     return 0;
 }
 
+// value-returning helpers (no side-effect print) — exercise calls used as
+// expressions: their return value is the thing under test.
+int32 sum(int32 a, int32 b) {
+    return a + b;
+}
+
+int32 doubled(int32 x) {
+    return sum(x, x);          // call in return position
+}
+
+// void function — its body falls through, exercising the implicit `ret void`
+// terminator; called as a statement below, and the target of the
+// void-as-value negative case.
+void greet() {
+    __println("greet");
+}
+
 int32 main() {
     helper();              // zero-arg
     add(2, 3);             // two-arg
@@ -61,6 +80,19 @@ int32 main() {
     takes_int64(100);      // literal '100' flexes to int64 param
     int32 x = 7;
     takes_int64(x);        // int32 widens to int64 param
+
+    greet();               // void statement-form call (implicit ret void)
+
+    // call as expression (kCallExpr)
+    int32 s = sum(2, 3);             // call as var-decl init
+    __println("s= " + s);
+    int32 n = sum(sum(1, 2), 4);     // nested call as arg
+    __println("n= " + n);
+    int64 w = sum(10, 20);           // int32 return widens to int64 init
+    __println("w= " + w);
+    int32 e = sum(40, 1) + sum(1, 1);  // calls as binary operands
+    __println("e= " + e);
+    __println("d= " + doubled(21));  // call (return-position result) as print arg
 
     //-EXPECT-ERROR: expects 2 arguments, got 1
     //add(1);
@@ -82,5 +114,24 @@ int32 main() {
     //int32 v = 0;
     //v();
 
+    //-EXPECT-ERROR: returns no value and cannot be used as an expression
+    //int32 nv = greet();
+
+    //-EXPECT-ERROR: '__println' cannot be used as an expression
+    //int32 pv = __println("x");
+
     return 0;
 }
+
+// file-scope negatives — whole function definitions, so they can't sit inside
+// main (no nested functions yet).
+
+//-EXPECT-ERROR: must end with a return statement
+//int32 falls_through() {
+//    __println("no return here");
+//}
+
+//-EXPECT-ERROR: A void function cannot return a value
+//void returns_value() {
+//    return 0;
+//}
