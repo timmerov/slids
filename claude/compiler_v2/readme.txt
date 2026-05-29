@@ -53,12 +53,16 @@ STAGE FILES (.h / .cpp pairs)
             nominal_type to every literal per fold.sl:16-23 (bool=uint1,
             char=uint8, integer/unsigned by smallest-bit-tier, float by
             float32-round-trip). Folds unary on literal (rules 1a-1f) and
-            binary on two integer-class literals (signed int64 arithmetic
-            for + - * / % & | ^). Rejects div/mod by literal zero and
-            `~float` literal; flips `-uint_lit` kind to kIntLiteral per
-            rule 1d. Pending: float binary fold, shift fold, comparison
-            fold, algebraic identity simplifications, rule-6 overflow-to-
-            unsigned exception.
+            binary on two literals across all op families: int arith /
+            bitwise (signed int64 with rule-6 overflow-to-uint64), int
+            shifts (count >= width → 0; uint64 reinterpret to avoid UB),
+            int comparisons (int64 path with uint64 fallback), float
+            arith / shift / comparison (double + %.17g canonical text;
+            pow2 mul/div lowering for float shifts). Rejects div/mod by
+            literal zero, `~float`, float `& | ^`, shift with float rhs
+            or negative count. Pending: algebraic identity simplifications
+            and logical-with-constant (both deferred until purity tracking
+            lands with PPID / function calls).
   classify  parse tree -> annotated parse tree. Resolves every identifier
             to a symbol-table entry (parse::Entry; LocalVar + Function kinds
             today); infers every expression's type (parse::Node::inferred_type)
@@ -80,10 +84,10 @@ STAGE FILES (.h / .cpp pairs)
   layout    ast -> ast in place. LLVM mangled names, field offsets, struct
             sizes, vtable layouts. (TODO stub.)
   codegen   ast -> .ll text. Reads inferred_type / op_type stamped by
-            classify (no longer derives or recomputes types). String-keyed
-            SymTab lookups for ident loads remain today; resolved_entry_id
-            is present on every ident but not yet consumed (deferred
-            refactor). Mangled names and field offsets land with layout.
+            classify (no longer derives or recomputes types). SymTab keyed
+            by parse::Tree::entries index; every ident / lvalue node carries
+            its resolved_entry_id, so codegen does no string-keyed lookup.
+            Mangled names and field offsets land with layout.
 
 PRODUCT FILES (.h / .cpp pairs)
 

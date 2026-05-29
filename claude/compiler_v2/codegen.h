@@ -16,7 +16,9 @@ struct VarInfo {
     std::string slids_type;    // e.g. "char", "int32", "char[]" — for widening checks
 };
 
-using SymTab = std::map<std::string, VarInfo>;
+// Keyed by parse::Tree::entries index — every ident / lvalue node carries its
+// resolved_entry_id pre-stamped by classify, so codegen does no string lookup.
+using SymTab = std::map<int, VarInfo>;
 
 // Emits LLVM IR for an expression, returning the value name (register or
 // literal). dest_type drives literal range checks and var-to-var widening.

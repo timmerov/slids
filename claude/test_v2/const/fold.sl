@@ -150,5 +150,49 @@ exception: if the result overflows int64 but not uint64 then the kind is unsigne
 */
 
 int32 main() {
+    // D1 — float binary fold (+ - * / %)
+    __println("f_add= " + (1.5 + 2.5));               // 4
+    __println("f_sub= " + (10.0 - 0.5));              // 9.5
+    __println("f_mul= " + (4.0 * 2.5));               // 10
+    __println("f_div= " + (7.0 / 2.0));               // 3.5
+    __println("f_mod= " + (7.5 % 2.0));               // 1.5
+    __println("f_nest= " + (1.0 + 2.0 * 3.0));        // 7  (precedence)
+
+    // D2 — shift fold, int lhs
+    __println("sh_int_l= "    + (1 << 10));           // 1024
+    __println("sh_int_r= "    + (1024 >> 4));         // 64
+    __println("sh_int_neg= "  + (-8 >> 1));           // -4  (arithmetic >>)
+    __println("sh_int_wide= " + (1 << 63));           // -9223372036854775808 (sign bit)
+    __println("sh_int_huge= " + (1 << 70));           // 0   (count >= width folds to 0)
+
+    // D2 — shift fold, float lhs (pow2 mul/div path)
+    __println("sh_flt_l= " + (2.5 << 3));             // 20  (2.5 * 8)
+    __println("sh_flt_r= " + (16.0 >> 2));            // 4   (16.0 / 4)
+
+    // D3 — comparison fold, int
+    __println("c_eq_t= " + (5 == 5));                 // true
+    __println("c_eq_f= " + (5 == 6));                 // false
+    __println("c_ne= "   + (5 != 6));                 // true
+    __println("c_lt= "   + (5 < 6));                  // true
+    __println("c_le= "   + (5 <= 5));                 // true
+    __println("c_gt= "   + (6 > 5));                  // true
+    __println("c_ge= "   + (5 >= 5));                 // true
+    __println("c_neg= "  + (-1 < 1));                 // true (signed)
+
+    // D3 — comparison fold, float
+    __println("cf_eq= " + (1.5 == 1.5));              // true
+    __println("cf_lt= " + (1.5 < 2.5));               // true
+    __println("cf_ge= " + (3.0 >= 2.999));            // true
+
+    // D4 — rule-6 overflow-to-unsigned
+    // INT64_MAX + 1 overflows int64 but fits uint64.
+    __println("ov_add= " + (9223372036854775807 + 1));  // 9223372036854775808
+    // INT64_MIN - 1 also overflows; uint64 wrap holds it.
+    __println("ov_sub= " + (-9223372036854775808 - 1)); // 9223372036854775807
+    // Multiplication overflow.
+    __println("ov_mul= " + (4611686018427387904 * 2)); // 9223372036854775808
+    // INT64_MIN / -1 — mathematically INT64_MAX+1; flips to uint64.
+    __println("ov_div= " + (-9223372036854775808 / -1)); // 9223372036854775808
+
     return 0;
 }

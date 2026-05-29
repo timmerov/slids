@@ -267,9 +267,265 @@ std::unique_ptr<parse::Node> tryFoldUnary(parse::Node& node, diagnostic::Sink& d
     return nullptr;
 }
 
-// Binary fold for two integer-class literals. Mirrors v1's tryFoldIntBinary
-// (signed int64 arithmetic), plus div/mod-by-zero rejection and int↔float
-// mixing rejection.
+bool parseI64(std::string const& t, int64_t& v) {
+    if (t.empty()) return false;
+    errno = 0;
+    char* end = nullptr;
+    v = static_cast<int64_t>(std::strtoll(t.c_str(), &end, 10));
+    if (end == t.c_str() || *end != '\0' || errno == ERANGE) return false;
+    return true;
+}
+
+bool parseU64(std::string const& t, uint64_t& v) {
+    if (t.empty()) return false;
+    if (t[0] == '-') return false;
+    errno = 0;
+    char* end = nullptr;
+    v = std::strtoull(t.c_str(), &end, 10);
+    if (end == t.c_str() || *end != '\0' || errno == ERANGE) return false;
+    return true;
+}
+
+bool parseDouble(std::string const& t, double& v) {
+    if (t.empty()) return false;
+    errno = 0;
+    char* end = nullptr;
+    v = std::strtod(t.c_str(), &end);
+    if (end == t.c_str() || *end != '\0' || errno == ERANGE) return false;
+    return std::isfinite(v);
+}
+
+std::unique_ptr<parse::Node> makeLitAt(parse::Node const& src, parse::Kind kind,
+                                        std::string text) {
+    auto out = std::make_unique<parse::Node>();
+    out->kind = kind;
+    out->text = std::move(text);
+    out->file_id = src.file_id;
+    out->tok = src.tok;
+    return out;
+}
+
+std::string floatToText(double v) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.17g", v);
+    return buf;
+}
+
+// D1 + D3 float arm. Returns kFloatLiteral for arith, kBoolLiteral for cmp.
+std::unique_ptr<parse::Node> tryFoldFloatBinary(parse::Node& node,
+                                                 parse::Node& lhs, parse::Node& rhs,
+                                                 std::string const& op, bool is_cmp,
+                                                 diagnostic::Sink& diag) {
+    double a, b;
+    if (!parseDouble(lhs.text, a) || !parseDouble(rhs.text, b)) return nullptr;
+
+    if (is_cmp) {
+        bool r;
+        if      (op == "==") r = (a == b);
+        else if (op == "!=") r = (a != b);
+        else if (op == "<")  r = (a <  b);
+        else if (op == "<=") r = (a <= b);
+        else if (op == ">")  r = (a >  b);
+        else /*  >= */       r = (a >= b);
+        return makeLitAt(node, parse::Kind::kBoolLiteral, r ? "1" : "0");
+    }
+
+    if (op == "&" || op == "|" || op == "^") {
+        diagnostic::report(diag, {node.file_id, node.tok,
+            "Bitwise '" + op + "' not defined on floating-point literal.", {}});
+        return nullptr;
+    }
+
+    double r;
+    if      (op == "+") r = a + b;
+    else if (op == "-") r = a - b;
+    else if (op == "*") r = a * b;
+    else if (op == "/") {
+        if (b == 0.0) {
+            diagnostic::report(diag, {node.file_id, node.tok,
+                "Division by zero.", {}});
+            return nullptr;
+        }
+        r = a / b;
+    }
+    else if (op == "%") {
+        if (b == 0.0) {
+            diagnostic::report(diag, {node.file_id, node.tok,
+                "Modulo by zero.", {}});
+            return nullptr;
+        }
+        r = std::fmod(a, b);
+    }
+    else return nullptr;
+
+    if (!std::isfinite(r)) {
+        diagnostic::report(diag, {node.file_id, node.tok,
+            "Floating-point overflow in folded expression.", {}});
+        return nullptr;
+    }
+    return makeLitAt(node, parse::Kind::kFloatLiteral, floatToText(r));
+}
+
+// D2 shift fold. Dispatches on lhs kind: float lhs lowers to pow2 mul/div;
+// int lhs shifts at int64 width. Caller has already verified both operands
+// are literals.
+std::unique_ptr<parse::Node> tryFoldShift(parse::Node& node,
+                                          parse::Node& lhs, parse::Node& rhs,
+                                          std::string const& op,
+                                          diagnostic::Sink& diag) {
+    if (rhs.kind == parse::Kind::kFloatLiteral) {
+        diagnostic::report(diag, {node.file_id, node.tok,
+            "Shift count must be integer-class.", {}});
+        return nullptr;
+    }
+    bool count_neg = false;
+    uint64_t count_mag = 0;
+    if (!parseSignedDigits(rhs.text, count_neg, count_mag)) return nullptr;
+    if (count_neg) {
+        diagnostic::report(diag, {node.file_id, node.tok,
+            "Shift count is negative.", {}});
+        return nullptr;
+    }
+
+    if (lhs.kind == parse::Kind::kFloatLiteral) {
+        double v;
+        if (!parseDouble(lhs.text, v)) return nullptr;
+        // Pow2 must fit uint64 to scale precisely.
+        if (count_mag >= 64) return nullptr;
+        double pow2 = static_cast<double>(1ULL << count_mag);
+        double r = (op == "<<") ? v * pow2 : v / pow2;
+        if (!std::isfinite(r)) {
+            diagnostic::report(diag, {node.file_id, node.tok,
+                "Floating-point overflow in folded shift.", {}});
+            return nullptr;
+        }
+        return makeLitAt(node, parse::Kind::kFloatLiteral, floatToText(r));
+    }
+
+    // Int lhs: count >= 64 folds to 0 per spec.
+    if (count_mag >= 64) {
+        return makeLitAt(node, parse::Kind::kIntLiteral, "0");
+    }
+    int count = static_cast<int>(count_mag);
+    bool lhs_neg = false;
+    uint64_t lhs_mag = 0;
+    if (!parseSignedDigits(lhs.text, lhs_neg, lhs_mag)) return nullptr;
+    bool lhs_unsigned = (lhs.kind == parse::Kind::kUintLiteral
+                      || lhs.kind == parse::Kind::kCharLiteral
+                      || lhs.kind == parse::Kind::kBoolLiteral);
+
+    if (op == "<<") {
+        // Compute in uint64 to avoid signed-overflow UB; reinterpret per kind.
+        uint64_t v = lhs_neg ? (0ULL - lhs_mag) : lhs_mag;
+        uint64_t r = v << count;
+        if (lhs_unsigned) {
+            return makeLitAt(node, parse::Kind::kUintLiteral, std::to_string(r));
+        }
+        return makeLitAt(node, parse::Kind::kIntLiteral,
+                         std::to_string(static_cast<int64_t>(r)));
+    }
+    // >>
+    if (lhs_unsigned) {
+        uint64_t r = lhs_mag >> count;
+        return makeLitAt(node, parse::Kind::kUintLiteral, std::to_string(r));
+    }
+    int64_t sv = lhs_neg ? -static_cast<int64_t>(lhs_mag)
+                         :  static_cast<int64_t>(lhs_mag);
+    int64_t r = sv >> count;  // arithmetic right shift (C++20-defined)
+    return makeLitAt(node, parse::Kind::kIntLiteral, std::to_string(r));
+}
+
+// D3 int-class comparison fold.
+std::unique_ptr<parse::Node> foldIntCompare(parse::Node& node,
+                                            parse::Node& lhs, parse::Node& rhs,
+                                            std::string const& op) {
+    int64_t a, b;
+    bool r;
+    if (parseI64(lhs.text, a) && parseI64(rhs.text, b)) {
+        if      (op == "==") r = (a == b);
+        else if (op == "!=") r = (a != b);
+        else if (op == "<")  r = (a <  b);
+        else if (op == "<=") r = (a <= b);
+        else if (op == ">")  r = (a >  b);
+        else /*  >= */       r = (a >= b);
+        return makeLitAt(node, parse::Kind::kBoolLiteral, r ? "1" : "0");
+    }
+    // One side overflows int64. Per fold.sl widening: only foldable if both
+    // are non-negative (then compare in uint64); cross-sign skips.
+    uint64_t ua, ub;
+    if (!parseU64(lhs.text, ua) || !parseU64(rhs.text, ub)) return nullptr;
+    if      (op == "==") r = (ua == ub);
+    else if (op == "!=") r = (ua != ub);
+    else if (op == "<")  r = (ua <  ub);
+    else if (op == "<=") r = (ua <= ub);
+    else if (op == ">")  r = (ua >  ub);
+    else /*  >= */       r = (ua >= ub);
+    return makeLitAt(node, parse::Kind::kBoolLiteral, r ? "1" : "0");
+}
+
+// D4 — int-class arith with rule-6 overflow-to-unsigned exception. Result
+// is kIntLiteral when the int64 path succeeds, kUintLiteral when int64
+// overflows but uint64 holds it.
+std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
+                                                  parse::Node& lhs, parse::Node& rhs,
+                                                  std::string const& op,
+                                                  diagnostic::Sink& diag) {
+    int64_t a, b;
+    if (!parseI64(lhs.text, a) || !parseI64(rhs.text, b)) return nullptr;
+
+    if (op == "/" || op == "%") {
+        if (b == 0) {
+            diagnostic::report(diag, {node.file_id, node.tok,
+                (op == "/" ? "Division by zero." : "Modulo by zero."), {}});
+            return nullptr;
+        }
+        // INT64_MIN / -1 overflows int64 → uint64 holds the magnitude.
+        if (a == INT64_MIN && b == -1) {
+            if (op == "/") {
+                return makeLitAt(node, parse::Kind::kUintLiteral,
+                                 std::to_string(static_cast<uint64_t>(INT64_MAX) + 1ULL));
+            }
+            // INT64_MIN % -1 = 0 mathematically.
+            return makeLitAt(node, parse::Kind::kIntLiteral, "0");
+        }
+        int64_t r = (op == "/") ? (a / b) : (a % b);
+        return makeLitAt(node, parse::Kind::kIntLiteral, std::to_string(r));
+    }
+
+    if (op == "&" || op == "|" || op == "^") {
+        int64_t r;
+        if      (op == "&") r = a & b;
+        else if (op == "|") r = a | b;
+        else /*    ^   */   r = a ^ b;
+        return makeLitAt(node, parse::Kind::kIntLiteral, std::to_string(r));
+    }
+
+    // + - * with rule-6 overflow detection.
+    int64_t r;
+    bool overflow;
+    if      (op == "+") overflow = __builtin_add_overflow(a, b, &r);
+    else if (op == "-") overflow = __builtin_sub_overflow(a, b, &r);
+    else if (op == "*") overflow = __builtin_mul_overflow(a, b, &r);
+    else return nullptr;
+
+    if (!overflow) {
+        return makeLitAt(node, parse::Kind::kIntLiteral, std::to_string(r));
+    }
+    // Retry in uint64; if it also overflows, leave unfolded (catch-all surfaces).
+    uint64_t ua = static_cast<uint64_t>(a);
+    uint64_t ub = static_cast<uint64_t>(b);
+    uint64_t ur;
+    bool u_overflow;
+    if      (op == "+") u_overflow = __builtin_add_overflow(ua, ub, &ur);
+    else if (op == "-") u_overflow = __builtin_sub_overflow(ua, ub, &ur);
+    else /*    *   */   u_overflow = __builtin_mul_overflow(ua, ub, &ur);
+    if (u_overflow) return nullptr;
+    return makeLitAt(node, parse::Kind::kUintLiteral, std::to_string(ur));
+}
+
+// Binary fold dispatcher. Both operands must be literals; per-shape arms
+// handle int-class vs float separately, plus the shift carve-out where
+// the lhs/rhs kinds don't have to match.
 std::unique_ptr<parse::Node> tryFoldBinary(parse::Node& node, diagnostic::Sink& diag) {
     if (node.kind != parse::Kind::kBinaryExpr) return nullptr;
     assert(node.children.size() == 2
@@ -279,6 +535,15 @@ std::unique_ptr<parse::Node> tryFoldBinary(parse::Node& node, diagnostic::Sink& 
     std::string const& op = node.text;
 
     if (!isLiteral(lhs) || !isLiteral(rhs)) return nullptr;
+
+    // Shifts pre-empt the same-family check: float-lhs / int-rhs is the
+    // normal shape per spec rule 4.
+    if (op == "<<" || op == ">>") {
+        return tryFoldShift(node, lhs, rhs, op, diag);
+    }
+
+    // Logical short-circuit folds need purity tracking (PPID / calls). Defer.
+    if (op == "&&" || op == "||" || op == "^^") return nullptr;
 
     bool lhs_float = lhs.kind == parse::Kind::kFloatLiteral;
     bool rhs_float = rhs.kind == parse::Kind::kFloatLiteral;
@@ -291,53 +556,16 @@ std::unique_ptr<parse::Node> tryFoldBinary(parse::Node& node, diagnostic::Sink& 
         return nullptr;
     }
 
-    // Float fold deferred — codegen handles float-literal expressions today.
-    if (lhs_float) return nullptr;
+    bool is_cmp = (op == "==" || op == "!=" || op == "<"
+                || op == "<=" || op == ">"  || op == ">=");
 
-    // Integer-class fold: signed int64 arithmetic (v1 parity). Logicals stay
-    // for codegen; shifts and comparisons stay too (not in v1's fold scope).
-    auto parseI64 = [](std::string const& t, int64_t& v) -> bool {
-        if (t.empty()) return false;
-        errno = 0;
-        char* end = nullptr;
-        v = (int64_t)std::strtoll(t.c_str(), &end, 10);
-        if (end == t.c_str() || *end != '\0' || errno == ERANGE) return false;
-        return true;
-    };
-    int64_t a = 0, b = 0;
-    if (!parseI64(lhs.text, a)) return nullptr;
-    if (!parseI64(rhs.text, b)) return nullptr;
-    int64_t r = 0;
-    if      (op == "+") r = a + b;
-    else if (op == "-") r = a - b;
-    else if (op == "*") r = a * b;
-    else if (op == "/") {
-        if (b == 0) {
-            diagnostic::report(diag, {node.file_id, node.tok,
-                "Division by zero.", {}});
-            return nullptr;
-        }
-        r = a / b;
+    if (lhs_float) {
+        return tryFoldFloatBinary(node, lhs, rhs, op, is_cmp, diag);
     }
-    else if (op == "%") {
-        if (b == 0) {
-            diagnostic::report(diag, {node.file_id, node.tok,
-                "Modulo by zero.", {}});
-            return nullptr;
-        }
-        r = a % b;
+    if (is_cmp) {
+        return foldIntCompare(node, lhs, rhs, op);
     }
-    else if (op == "&") r = a & b;
-    else if (op == "|") r = a | b;
-    else if (op == "^") r = a ^ b;
-    else return nullptr;
-
-    auto out = std::make_unique<parse::Node>();
-    out->kind = parse::Kind::kIntLiteral;
-    out->text = std::to_string(r);
-    out->file_id = node.file_id;
-    out->tok = node.tok;
-    return out;
+    return foldIntArithBitwise(node, lhs, rhs, op, diag);
 }
 
 void walk(std::unique_ptr<parse::Node>& slot, diagnostic::Sink& diag) {

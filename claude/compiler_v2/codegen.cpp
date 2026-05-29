@@ -387,12 +387,11 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             return std::string("@.str_") + std::to_string(id);
         }
         case ast::Kind::kIdentExpr: {
-            auto it = syms.find(expr.name);
-            if (it == syms.end()) {
-                diagnostic::report(diag, {expr.file_id, expr.tok,
-                    "codegen: unknown variable '" + expr.name + "'", {}});
-                return "0";
-            }
+            assert(expr.resolved_entry_id >= 0
+                && "emitExpr kIdentExpr: classify did not stamp resolved_entry_id");
+            auto it = syms.find(expr.resolved_entry_id);
+            assert(it != syms.end()
+                && "emitExpr kIdentExpr: entry not in SymTab (alloca never emitted?)");
             std::string tmp = newTmp("ld");
             out << "  " << tmp << " = load " << it->second.llvm_type
                 << ", ptr " << it->second.alloca_name << "\n";
@@ -427,11 +426,13 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
               std::ostream& out, diagnostic::Sink& diag) {
     switch (stmt.kind) {
         case ast::Kind::kVarDeclStmt: {
+            assert(stmt.resolved_entry_id >= 0
+                && "kVarDeclStmt: classify did not stamp resolved_entry_id");
             std::string llty = llvmTypeFor(stmt.return_type,
                                            stmt.file_id, stmt.tok, diag);
             std::string regname = std::string("%") + stmt.name;
             out << "  " << regname << " = alloca " << llty << "\n";
-            syms[stmt.name] = {regname, llty, stmt.return_type};
+            syms[stmt.resolved_entry_id] = {regname, llty, stmt.return_type};
             if (!stmt.children.empty()) {
                 std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
                                            stmt.return_type);
@@ -441,12 +442,11 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             return;
         }
         case ast::Kind::kAssignStmt: {
-            auto it = syms.find(stmt.name);
-            if (it == syms.end()) {
-                diagnostic::report(diag, {stmt.file_id, stmt.tok,
-                    "codegen: unknown variable '" + stmt.name + "'", {}});
-                return;
-            }
+            assert(stmt.resolved_entry_id >= 0
+                && "kAssignStmt: classify did not stamp resolved_entry_id");
+            auto it = syms.find(stmt.resolved_entry_id);
+            assert(it != syms.end()
+                && "kAssignStmt: entry not in SymTab (alloca never emitted?)");
             std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
                                        it->second.slids_type);
             out << "  store " << it->second.llvm_type << " " << val

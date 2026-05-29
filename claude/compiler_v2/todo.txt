@@ -11,7 +11,7 @@ Phase 0 — foundations (largely landed)
   * numeric stage — literal validation + canonicalization (mostly landed;
     int/uint/float/char/bool all flow lex→numeric; items 5 and 7 of the
     migration still open — see project_v2_numeric_stage memory)
-  * constfold stage — between grammar and classify (partial; spec in
+  * constfold stage — between grammar and classify (spec in
     test_v2/const/fold.sl):
       - LANDED: post-order walker; nominal_type assigned to every literal
         (parse::Node field, propagated to ast::Node) per fold.sl:16-23.
@@ -20,15 +20,25 @@ Phase 0 — foundations (largely landed)
       - LANDED: binary fold on two integer-class literals via signed int64
         arithmetic (+ - * / % & | ^). Mixed int/float operands rejected.
         Div/mod by literal zero rejected.
-      - PENDING: float binary fold (1.5 + 2.0 etc.).
-      - PENDING: shift fold (5 << 2; count >= width → 0; negative count
-        rejected).
-      - PENDING: comparison fold (literal == literal → kBoolLiteral).
+      - LANDED (D1): float binary fold (`+ - * / %` via double + fmod;
+        canonical text via %.17g). Float `& | ^` rejected sharply.
+      - LANDED (D2): shift fold. Int lhs shifts at int64 width with
+        count >= 64 → 0 per spec; `<<` reinterprets via uint64 to avoid
+        signed-overflow UB; `>>` arithmetic for signed lhs, logical for
+        unsigned. Float lhs lowers via the pow2 mul/div path per spec
+        rule 4. Negative count rejected; float rhs rejected.
+      - LANDED (D3): comparison fold (`== != < <= > >=`). Float arm uses
+        double compare; int arm tries int64 first, falls back to uint64
+        when both non-negative (cross-sign mixed-with-too-big stays
+        unfolded for classify to handle). Result kind kBoolLiteral.
+      - LANDED (D4): rule-6 overflow-to-unsigned exception. `+ - *` use
+        __builtin_*_overflow on int64; on signed overflow retry in uint64
+        and emit kUintLiteral. INT64_MIN / -1 also flips to uint64.
       - PENDING: algebraic identity simplifications (x+0 → x, x*1 → x, etc.).
-      - PENDING: logical with constant (x && false → false, etc.; needs
-        purity check once function calls / PPID land).
-      - PENDING: rule-6 overflow-to-unsigned exception (result overflows
-        int64 but fits uint64 → kind unsigned).
+        Needs purity tracking — defer until PPID / function calls land so
+        the `x*0` / `x&0` / `x||true` cases can gate on isPure(operand).
+      - PENDING: logical with constant (x && false → false, etc.).
+        Same purity gate as above.
   * diagnostic sink + source rendering
   * single-source error pipeline (main.cpp early-out between stages)
   * build hygiene (-Wall -Werror -Wswitch-enum)
@@ -308,9 +318,10 @@ CODEGEN
   * Reads node.inferred_type / op_type stamped by classify. exprType deleted;
     so are codegen's defaultLiteralType, isLiteralKind, literalTextForFit
     helpers and the effectiveType lambda in emitBinary.
-  * Still string-keyed via SymTab[name] for ident loads. resolved_entry_id
-    is present on the ast node but codegen doesn't yet consult it for
-    lookup (deferred — bigger refactor).
+  * SymTab now keyed by parse::Tree::entries index. kVarDeclStmt registers
+    at stmt.resolved_entry_id; kAssignStmt / kIdentExpr look up the same
+    way. No string-keyed lookup remains. "unknown variable" diagnostics
+    became asserts (classify guarantees resolution before codegen runs).
   * widen::commonType call from emitBinary is gone; codegen reads op_type
     from the stamped node instead.
   * emitToBool handles numeric (icmp/fcmp vs 0) and pointer (icmp ne ptr,
