@@ -194,5 +194,13 @@ int32 main() {
     // INT64_MIN / -1 — mathematically INT64_MAX+1; flips to uint64.
     __println("ov_div= " + (-9223372036854775808 / -1)); // 9223372036854775808
 
+    // Item 7 — lossy float32 literals must emit via hex bit-pattern so llc
+    // accepts them. 3.14 in float32 is 3.1400001049... ; printf %g rounds
+    // back to "3.14" at default precision.
+    float xf_pi   = 3.14;
+    float xf_tenth = 0.1;
+    __println("xf_pi= "    + xf_pi);     // 3.14
+    __println("xf_tenth= " + xf_tenth);  // 0.1
+
     return 0;
 }

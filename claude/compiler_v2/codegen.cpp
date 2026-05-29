@@ -3,7 +3,9 @@
 #include <cassert>
 #include <cerrno>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ostream>
 #include <sstream>
 #include <string>
@@ -60,6 +62,31 @@ std::string normalizeFloatLiteral(std::string const& text) {
     if (e == std::string::npos) out += ".0";
     else out.insert(e, ".0");
     return out;
+}
+
+// LLVM textual float32 literals must be exact at float32 precision. Decimal
+// text only works for values whose decimal form parses back to the same
+// float32 bit pattern (e.g. "4.0", "0.5"). Lossy values (3.14, 0.1, etc.)
+// require the hex bit-pattern form: 0x followed by 16 hex digits encoding
+// the float32-rounded value padded to double precision. Computation per
+// fold.sl:66-67 / todo.txt item 7:
+//   source decimal -> double -> (float) cast -> re-promote to double
+//   -> uint64 bit pattern -> "0x" + 16 hex digits.
+std::string float32HexLiteral(std::string const& text) {
+    errno = 0;
+    char* end = nullptr;
+    double d = std::strtod(text.c_str(), &end);
+    assert(end != text.c_str() && *end == '\0' && errno != ERANGE
+        && "float32HexLiteral: malformed text from numeric");
+    float f = static_cast<float>(d);
+    double back = static_cast<double>(f);
+    static_assert(sizeof(uint64_t) == sizeof(double), "double must be 64 bits");
+    uint64_t bits;
+    std::memcpy(&bits, &back, sizeof(bits));
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "0x%016llX",
+                  static_cast<unsigned long long>(bits));
+    return buf;
 }
 
 std::string newTmp(char const* tag) {
@@ -380,6 +407,9 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kFloatLiteral: {
             widen::checkFloatLiteralFits(expr.text, dest_type,
                                          expr.file_id, expr.tok, diag);
+            if (dest_type == "float" || dest_type == "float32") {
+                return float32HexLiteral(expr.text);
+            }
             return normalizeFloatLiteral(expr.text);
         }
         case ast::Kind::kStringLiteral: {

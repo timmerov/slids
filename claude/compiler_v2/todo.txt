@@ -277,11 +277,12 @@ NUMERIC
     - item 5: widen::checkUintLiteralFits + checkCharLiteralFits for proper
       diagnostic attribution ("Integer literal" → "Unsigned literal" /
       "Character literal") at codegen's literal-emit routing sites
-    - item 7: codegen float32 hex bit-pattern emit. `float xf = 3.14;`
-      currently rejected by llc because slidsc emits decimal for float32
-      where llc requires the 16-hex-digit form. Computation: source decimal
-      → double → (float) cast → re-promote to double → uint64 bit pattern →
-      emit as `0x` + 16 hex digits.
+  * LANDED from the 1-7 migration table:
+    - item 7: codegen float32 hex bit-pattern emit via float32HexLiteral
+      helper. `float xf = 3.14;` now compiles (3.14 lossy in float32 ->
+      0x4048F5C300000000-shaped hex form). Dispatched in emitExpr's
+      kFloatLiteral arm when dest_type is "float" / "float32"; float64
+      keeps the decimal path. Test in fold.sl (xf_pi / xf_tenth).
 
 SILENT DEFAULTS — closed
   * classify defaultLiteralType parse-failure fallbacks (int + uint arms)

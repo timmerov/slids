@@ -44,9 +44,11 @@ STAGE FILES (.h / .cpp pairs)
             binary -> decimal (0xFF -> 255, 0b1010 -> 10); float text via
             %.17g; bool "true"/"false" -> "1"/"0". Overflow assumes uint64
             / float64 storage; kIntLiteral whose value > INT64_MAX flips
-            kind to kUintLiteral here. Two open items remain on the
-            migration table (proper attribution for uint/char literal-fit
-            errors; float32 hex bit-pattern emit at codegen).
+            kind to kUintLiteral here. Codegen's float32-emit path now
+            uses the hex bit-pattern form (item 7 landed) so lossy values
+            like `3.14` reach llc successfully. One open item remains on
+            the migration table — proper attribution for uint/char
+            literal-fit errors.
   grammar   tokens -> parse tree. Pure syntax; every identifier is just a
             name string. Hand-written recursive descent. Parses: types
             (built-in primitives + T[]); function defs/decls with typed

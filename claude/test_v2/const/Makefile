@@ -7,6 +7,7 @@ BIN_DIR   = ../../bin
 BUILD_DIR = ../../build/test_v2/lexer
 
 SAMPLES = \
+	constant \
 	fold
 
 .PHONY: all clean negatives positives $(SAMPLES)
