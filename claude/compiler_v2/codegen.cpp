@@ -48,9 +48,9 @@ std::string llvmTypeFor(std::string const& slids_type,
     if (slids_type == "void")    return "void";
     if (slids_type.size() >= 2 && slids_type.substr(slids_type.size() - 2) == "[]")
         return "ptr";
-    diagnostic::report(diag, {file_id, tok,
-        "codegen: unknown type '" + slids_type + "'", {}});
-    return "i32";
+    (void)file_id; (void)tok; (void)diag;
+    assert(false && "llvmTypeFor: classify let through an unknown type");
+    __builtin_unreachable();
 }
 
 std::string normalizeFloatLiteral(std::string const& text) {
@@ -81,78 +81,6 @@ std::string newLabel(char const* tag) {
     return std::string(tag) + "_" + std::to_string(n++);
 }
 
-bool isLiteralKind(ast::Node const& n) {
-    return n.kind == ast::Kind::kIntLiteral
-        || n.kind == ast::Kind::kUintLiteral
-        || n.kind == ast::Kind::kCharLiteral
-        || n.kind == ast::Kind::kBoolLiteral
-        || n.kind == ast::Kind::kFloatLiteral;
-}
-
-// Text to pass to widen::intLiteralFits / floatLiteralFits. Bool spelled
-// "true"/"false" → integer "1"/"0"; everything else passes through.
-std::string literalTextForFit(ast::Node const& n) {
-    if (n.kind == ast::Kind::kBoolLiteral) return (n.text == "true") ? "1" : "0";
-    return n.text;
-}
-
-// Default type a literal assumes when it can't flex into a partner type, per
-// the widen.sl rules: int / int64 / uint64 by magnitude for ints; bool/char/
-// float for the others.
-std::string defaultLiteralType(ast::Node const& n) {
-    switch (n.kind) {
-        case ast::Kind::kIntLiteral: {
-            std::string const& s = n.text;
-            bool neg = !s.empty() && s[0] == '-';
-            std::string mag_str = neg ? s.substr(1) : s;
-            errno = 0;
-            char* end = nullptr;
-            uint64_t mag = std::strtoull(mag_str.c_str(), &end, 10);
-            if (mag_str.empty() || end == mag_str.c_str() || *end != '\0'
-                || errno == ERANGE) {
-                return neg ? "int64" : "uint64";
-            }
-            if (neg) {
-                if (mag <= (uint64_t)INT32_MAX + 1) return "int32";
-                return "int64";
-            }
-            if (mag <= (uint64_t)INT32_MAX) return "int32";
-            if (mag <= (uint64_t)INT64_MAX) return "int64";
-            return "uint64";
-        }
-        case ast::Kind::kUintLiteral: {
-            std::string const& s = n.text;
-            errno = 0;
-            char* end = nullptr;
-            uint64_t mag = std::strtoull(s.c_str(), &end, 10);
-            if (s.empty() || end == s.c_str() || *end != '\0' || errno == ERANGE) {
-                return "uint64";
-            }
-            if (mag <= (uint64_t)UINT32_MAX) return "uint32";
-            return "uint64";
-        }
-        case ast::Kind::kCharLiteral:  return "char";
-        case ast::Kind::kBoolLiteral:  return "bool";
-        case ast::Kind::kFloatLiteral: return "float32";
-        case ast::Kind::kStringLiteral:
-        case ast::Kind::kIdentExpr:
-        case ast::Kind::kUnaryExpr:
-        case ast::Kind::kBinaryExpr:
-        case ast::Kind::kProgram:
-        case ast::Kind::kFunctionDef:
-        case ast::Kind::kFunctionDecl:
-        case ast::Kind::kVarDeclStmt:
-        case ast::Kind::kAssignStmt:
-        case ast::Kind::kAugAssignStmt:
-        case ast::Kind::kCallStmt:
-        case ast::Kind::kReturnStmt:
-            assert(false && "defaultLiteralType: not a literal kind");
-            __builtin_unreachable();
-    }
-    assert(false && "defaultLiteralType: unhandled ast::Kind");
-    __builtin_unreachable();
-}
-
 // Truthy coercion: 0-like values (false, 0, 0.0, null ptr) → i1 0; everything
 // else → i1 1.
 std::string emitToBool(std::string const& val, std::string const& slids_type,
@@ -163,6 +91,11 @@ std::string emitToBool(std::string const& val, std::string const& slids_type,
         std::string tmp = newTmp("tob");
         out << "  " << tmp << " = fcmp une " << llty << " "
             << val << ", 0.0\n";
+        return tmp;
+    }
+    if (slids_type.size() >= 2 && slids_type.substr(slids_type.size() - 2) == "[]") {
+        std::string tmp = newTmp("tob");
+        out << "  " << tmp << " = icmp ne ptr " << val << ", null\n";
         return tmp;
     }
     std::string llty;
@@ -192,8 +125,8 @@ std::string emitLogical(ast::Node const& expr, SymTab const& syms,
     std::string result_ptr = newTmp("sc");
     out << "  " << result_ptr << " = alloca i1\n";
 
-    std::string lty = exprType(lhs, syms);
-    if (lty.empty()) lty = "int";
+    std::string const& lty = lhs.inferred_type;
+    assert(!lty.empty() && "emitLogical: lhs missing inferred_type");
     std::string lv = emitExpr(lhs, syms, pool, out, diag, lty);
     std::string left_bool = emitToBool(lv, lty, out);
 
@@ -219,8 +152,8 @@ std::string emitLogical(ast::Node const& expr, SymTab const& syms,
     }
 
     out << eval_right << ":\n";
-    std::string rty = exprType(rhs, syms);
-    if (rty.empty()) rty = "int";
+    std::string const& rty = rhs.inferred_type;
+    assert(!rty.empty() && "emitLogical: rhs missing inferred_type");
     std::string rv = emitExpr(rhs, syms, pool, out, diag, rty);
     std::string right_bool = emitToBool(rv, rty, out);
 
@@ -270,8 +203,8 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
         return tmp;
     }
     if (op == "!") {
-        std::string operand_type = exprType(operand, syms);
-        if (operand_type.empty()) operand_type = "int";
+        std::string const& operand_type = operand.inferred_type;
+        assert(!operand_type.empty() && "emitUnary '!': operand missing inferred_type");
         std::string v = emitExpr(operand, syms, pool, out, diag, operand_type);
         std::string llty = llvmTypeFor(operand_type, expr.file_id, expr.tok, diag);
         std::string tmp = newTmp("lnot");
@@ -305,31 +238,11 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
     }
 
     if (op == "<<" || op == ">>") {
-        std::string lt = exprType(lhs, syms);
-        if (lt.empty()) lt = "int32";
-
-        std::string rt;
-        if (isLiteralKind(rhs)) {
-            // For float lhs, the int literal can't flex into the float type
-            // (no silent mix), so it falls to its default; for int lhs,
-            // attempt the usual literal-flex into lt.
-            bool fits = false;
-            if (!isFloatType(lt)) {
-                fits = (rhs.kind == ast::Kind::kFloatLiteral)
-                    ? widen::floatLiteralFits(rhs.text, lt)
-                    : widen::intLiteralFits(literalTextForFit(rhs), lt);
-            }
-            rt = fits ? lt : defaultLiteralType(rhs);
-        } else {
-            rt = exprType(rhs, syms);
-            if (rt.empty()) rt = "int32";
-        }
-        // Shift count must be integer-class per fold.sl:82.
-        if (isFloatType(rt)) {
-            diagnostic::report(diag, {expr.file_id, expr.tok,
-                "Shift count must be integer-class; got '" + rt + "'.", {}});
-            return "0";
-        }
+        std::string const& lt = lhs.inferred_type;
+        std::string const& rt = rhs.inferred_type;
+        assert(!lt.empty() && "emitBinary shift: lhs missing inferred_type");
+        assert(!rt.empty() && "emitBinary shift: rhs missing inferred_type");
+        // Classify already rejected non-integer rhs; nothing to recheck here.
 
         std::string lv = emitExpr(lhs, syms, pool, out, diag, lt);
         std::string rv = emitExpr(rhs, syms, pool, out, diag, rt);
@@ -376,33 +289,8 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
                               expr.file_id, expr.tok, out, diag);
     }
 
-    auto effectiveType = [&](ast::Node const& self, ast::Node const& other) -> std::string {
-        if (!isLiteralKind(self)) {
-            std::string t = exprType(self, syms);
-            return t.empty() ? std::string("int32") : t;
-        }
-        if (!isLiteralKind(other)) {
-            std::string other_ty = exprType(other, syms);
-            if (!other_ty.empty()) {
-                bool fits = (self.kind == ast::Kind::kFloatLiteral)
-                    ? widen::floatLiteralFits(self.text, other_ty)
-                    : widen::intLiteralFits(literalTextForFit(self), other_ty);
-                if (fits) return other_ty;
-            }
-        }
-        return defaultLiteralType(self);
-    };
-
-    std::string lt = effectiveType(lhs, rhs);
-    std::string rt = effectiveType(rhs, lhs);
-
-    std::string opty;
-    if (!widen::commonType(lt, rt, opty)) {
-        diagnostic::report(diag, {expr.file_id, expr.tok,
-            "No common type for '" + lt + "' and '" + rt
-            + "'; use an explicit type conversion.", {}});
-        return "0";
-    }
+    std::string const& opty = expr.op_type;
+    assert(!opty.empty() && "emitBinary: BinaryExpr missing op_type");
 
     std::string lv = emitExpr(lhs, syms, pool, out, diag, opty);
     std::string rv = emitExpr(rhs, syms, pool, out, diag, opty);
@@ -616,56 +504,6 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
 }
 
 }  // namespace
-
-std::string exprType(ast::Node const& expr, SymTab const& syms) {
-    switch (expr.kind) {
-        case ast::Kind::kIntLiteral:    return "int";
-        case ast::Kind::kUintLiteral:   return "uint";
-        case ast::Kind::kCharLiteral:   return "char";
-        case ast::Kind::kBoolLiteral:   return "bool";
-        case ast::Kind::kFloatLiteral:  return "float";
-        case ast::Kind::kStringLiteral: return "char[]";
-        case ast::Kind::kIdentExpr: {
-            auto it = syms.find(expr.name);
-            if (it == syms.end()) return "";
-            return it->second.slids_type;
-        }
-        case ast::Kind::kUnaryExpr: {
-            assert(expr.children.size() == 1
-                && "exprType: UnaryExpr needs 1 child");
-            std::string const& op = expr.text;
-            if (op == "!") return "bool";
-            if (op == "+" || op == "-" || op == "~") {
-                return exprType(*expr.children[0], syms);
-            }
-            assert(false && "exprType: unhandled unary op");
-            __builtin_unreachable();
-        }
-        case ast::Kind::kBinaryExpr: {
-            assert(expr.children.size() == 2
-                && "exprType: BinaryExpr needs 2 children");
-            std::string const& op = expr.text;
-            if (op == "==" || op == "!=" || op == "<" || op == "<="
-             || op == ">"  || op == ">="
-             || op == "&&" || op == "||" || op == "^^") return "bool";
-            std::string lt = exprType(*expr.children[0], syms);
-            if (!lt.empty()) return lt;
-            return exprType(*expr.children[1], syms);
-        }
-        case ast::Kind::kProgram:
-        case ast::Kind::kFunctionDef:
-        case ast::Kind::kFunctionDecl:
-        case ast::Kind::kVarDeclStmt:
-        case ast::Kind::kAssignStmt:
-        case ast::Kind::kAugAssignStmt:
-        case ast::Kind::kCallStmt:
-        case ast::Kind::kReturnStmt:
-            assert(false && "exprType: called on a statement-kind node");
-            __builtin_unreachable();
-    }
-    assert(false && "exprType: unhandled ast::Kind");
-    __builtin_unreachable();
-}
 
 void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     strings::Pool pool;

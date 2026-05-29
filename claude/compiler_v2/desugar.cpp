@@ -39,6 +39,7 @@ ast::Kind toAstKind(parse::Kind k) {
 // Rewrite `lhs op= rhs;` into `lhs = lhs op rhs;`. Only fires when `node` is
 // a kAugAssignStmt. Lvalue is a bare ident today — when complex lvalues land
 // (`arr[f()] += 1`), bind the lhs to a tmp here to avoid double-evaluation.
+// Classify stamped: node.return_type = lvalue type, node.inferred_type = opty.
 std::unique_ptr<ast::Node> tryDesugarAugAssign(ast::Node& node) {
     if (node.kind != ast::Kind::kAugAssignStmt) return nullptr;
     assert(node.children.size() == 1
@@ -47,12 +48,16 @@ std::unique_ptr<ast::Node> tryDesugarAugAssign(ast::Node& node) {
     auto lhs_ref = std::make_unique<ast::Node>();
     lhs_ref->kind = ast::Kind::kIdentExpr;
     lhs_ref->name = node.name;
+    lhs_ref->inferred_type = node.return_type;
+    lhs_ref->resolved_entry_id = node.resolved_entry_id;
     lhs_ref->file_id = node.file_id;
     lhs_ref->tok = node.tok;
 
     auto binop = std::make_unique<ast::Node>();
     binop->kind = ast::Kind::kBinaryExpr;
     binop->text = node.text;
+    binop->inferred_type = node.inferred_type;
+    binop->op_type = node.op_type;
     binop->file_id = node.file_id;
     binop->tok = node.tok;
     binop->children.push_back(std::move(lhs_ref));
@@ -61,6 +66,7 @@ std::unique_ptr<ast::Node> tryDesugarAugAssign(ast::Node& node) {
     auto out = std::make_unique<ast::Node>();
     out->kind = ast::Kind::kAssignStmt;
     out->name = std::move(node.name);
+    out->resolved_entry_id = node.resolved_entry_id;
     out->file_id = node.file_id;
     out->tok = node.tok;
     out->children.push_back(std::move(binop));
@@ -74,8 +80,11 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p) {
     node->text = p.text;
     node->return_type = p.return_type;
     node->nominal_type = p.nominal_type;
+    node->inferred_type = p.inferred_type;
+    node->op_type = p.op_type;
     node->file_id = p.file_id;
     node->tok = p.tok;
+    node->resolved_entry_id = p.resolved_entry_id;
     for (auto const& c : p.children) {
         node->children.push_back(copyNode(*c));
     }

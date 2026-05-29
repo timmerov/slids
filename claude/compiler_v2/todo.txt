@@ -35,12 +35,16 @@ Phase 0 — foundations (largely landed)
   * widen primitives table + literal range checks
 
 Phase 1 — expression core
-  * unary operators (!, ~, full -)
-  * binary operators (arithmetic, comparison, bitwise, logical, shift)
-  * parenthesized expressions, precedence + associativity
-  * calls (zero-arg, one-arg, multi-arg)
-  * compound assigns (+=, -=, *=, /=, %=, &=, |=, ^=, <<=, >>=, ||=, &&=)
-  * PPID — pre/post-inc/dec via phrases
+  * unary operators (!, ~, full -)                                    LANDED
+  * binary operators (arithmetic, comparison, bitwise, logical, shift) LANDED
+  * parenthesized expressions, precedence + associativity              LANDED
+  * compound assigns (+=, -=, *=, /=, %=, &=, |=, ^=, <<=, >>=, ||=, &&=) LANDED
+  * classify symbol resolution (LocalVar / Function entries; live-scope
+    walk; decl+def binding at program scope)                          LANDED
+  * classify type inference (inferred_type + op_type on every expr node;
+    literal-flex into context; commonType ownership at classify)      LANDED
+  * calls (zero-arg, multi-arg)                                       OPEN
+  * PPID — pre/post-inc/dec via phrases                               OPEN
 
 Phase 2 — declarations + flow
   * var decls (typed init, inferred init, declare-then-assign)
@@ -148,27 +152,32 @@ WIDENING + LITERAL RANGE CHECKING (widen.h / widen.cpp)
       - unsigned → same-width signed ("(unsigned to same-width signed)")
       - int-class ↔ float ("Cannot implicitly convert ...")
   * widen::commonType — "smallest type large enough to hold either operand".
-    Used by codegen's binary-op emitter for arith / bitwise / comparison.
-    Returns false on any int-class + float pair, and on uint64+signed where
-    no int64 fits.
+    Called from classify only (3 sites: inferExpr binary arith/bitwise/cmp,
+    classifyStmt AugAssign arith). Codegen reads expr.op_type. Returns false
+    on any int-class + float pair, and on uint64+signed where no int64 fits.
   * widen::intLiteralFits / floatLiteralFits — silent variants of the
-    literal checks; return false for cross-family. Used by codegen's
-    literal-flex rule (try-fit-into-other-operand-type first; fall back to
-    default literal type when not).
-  * codegen handles binary-op shapes:
-      - arith / bitwise / comparison: commonType → emit at common → convert
+    literal checks; return false for cross-family. Called from classify's
+    literalFitsContext when deciding the literal-flex (try-fit-into-context-
+    type first; fall back to defaultLiteralType when not).
+  * widen::isKnownType — true for primitives + void + recursive T[]. classify
+    calls requireKnownType on every declared/return type spelling so unknown
+    spellings produce a sharp diagnostic before codegen ever sees them.
+  * codegen handles binary-op shapes (reads expr.op_type, expr.inferred_type
+    pre-stamped by classify):
+      - arith / bitwise / comparison: emit at expr.op_type → widen::convert
         result to dest_type. Comparison result is bool, converted to dest.
         Float arith covers `+ - * / %` (frem for `%`); float bitwise (& | ^)
-        rejects sharply: `Bitwise '&' not defined on floating-point type '...'`.
+        rejected upstream at classify.
       - shift: LHS dictates result type. Int shift: RHS resized to LHS width
         via trunc/zext. Float shift: `f << r` lowers to `f * (1<<r)` and
         `f >> r` to `f / (1<<r)` (pow2 in rhs int width → uitofp → fmul/fdiv).
-        Float rhs (non-integer shift count) rejects sharply.
+        Non-int rhs and non-numeric lhs rejected upstream at classify.
       - logical (&& || ^^): each operand → bool independently; result bool.
+        Non-coercible operands (void) rejected upstream at classify.
       - literal + literal int-class fold runs upstream in constfold; codegen
         sees a single literal node.
-  * codegen's literal-flex uses defaultLiteralType for the literal's
-    fallback type (int32 by magnitude → int64 → uint64; bool/char/float as-is).
+  * codegen's emitToBool handles numeric (icmp/fcmp against 0) and pointer
+    (icmp ne ptr X, null) so char[] coerces truthy.
   * Source attribution is plumbed: every widen call takes (file_id, tok)
     and threads into diagnostic::report.
   * codegen's SymTab carries slids_type alongside llvm_type so widen has
@@ -185,16 +194,20 @@ WIDENING + LITERAL RANGE CHECKING (widen.h / widen.cpp)
       from imported .slh files)
     - no classes, namespaces, enums, aliases, globals
     - function signatures are name + bare `()` only — no params, no overloads
-    - no duplicate-declaration check (same name twice silently dedup'd by
-      codegen skipping FunctionDecl nodes; will need real symbol resolution)
+    - duplicate-declaration check landed at classify: decl+def at program
+      scope bind to one entry, def+def + signature-mismatch report with a
+      multi-source note pointing at the prior decl
   * statement-level: var-decl, assign, augmented-assign (desugared to assign),
     call, return
     - no if/else, no for/while, no block
 
 DESUGAR
-  * copies parse → ast and propagates `(file_id, tok)` and `nominal_type`
-    per node so downstream stages have source attribution + literal types.
+  * copies parse → ast and propagates per node: `(file_id, tok)`,
+    `nominal_type`, `inferred_type`, `op_type`, `resolved_entry_id`.
   * tryDesugarAugAssign — rewrites `lhs op= rhs;` → `lhs = lhs op rhs;`.
+    Synthesized lhs_ref inherits the aug-assign's resolved_entry_id +
+    return_type (= lvalue type, stamped by classify); synthesized binop
+    inherits inferred_type + op_type (stamped by classify per-op).
     Lvalue is a bare ident today; complex lvalues (when arrays / fields land)
     need a bind-to-tmp step here to avoid double-eval.
   * Unary + binary literal folds now live in constfold (upstream).
@@ -216,30 +229,26 @@ NUMERIC
   * Still open from the 1-7 migration table:
     - item 5: widen::checkUintLiteralFits + checkCharLiteralFits for proper
       diagnostic attribution ("Integer literal" → "Unsigned literal" /
-      "Character literal") at codegen.cpp:496-514 routing sites
+      "Character literal") at codegen's literal-emit routing sites
     - item 7: codegen float32 hex bit-pattern emit. `float xf = 3.14;`
       currently rejected by llc because slidsc emits decimal for float32
       where llc requires the 16-hex-digit form. Computation: source decimal
       → double → (float) cast → re-promote to double → uint64 bit pattern →
       emit as `0x` + 16 hex digits.
 
-SILENT DEFAULTS — open
-  * codegen.cpp exprType for kUintLiteral unconditionally returns "uint"
-    (uint32). Large kUintLiteral (value > UINT32_MAX) gets typed as uint32
-    — silent narrowing. Should consult node.nominal_type (populated by
-    constfold) to pick uint8/16/32/64 by value. Same gap for kIntLiteral,
-    kCharLiteral, kBoolLiteral, kFloatLiteral — all return the kind's
-    default rather than the per-value nominal.
-  * codegen.cpp defaultLiteralType parse-failure fallbacks (`return
-    "uint64"` / `return neg ? "int64" : "uint64"`) silently swallow
-    malformed text. Numeric is the precondition guarantor; the fallback
-    arm should be assert(false && "defaultLiteralType: malformed text from
-    numeric") so a numeric bug surfaces as a crash, not a wrong type.
-  * codegen.cpp empty-type fallbacks to "int"/"int32" at emitLogical (lty,
-    rty), emitUnary `!` operand_type, shift lt/rt, and effectiveType. Per
-    spec these are "strange cases" (widen.sl:158-165) that classify should
-    have prevented; either build classify to determine type up front or
-    convert to sharp diagnostics. Coupled with the silent-default sweep.
+SILENT DEFAULTS — closed
+  * classify defaultLiteralType parse-failure fallbacks (int + uint arms)
+    are now asserts ("malformed text from numeric") — numeric is the
+    precondition guarantor; reaching the fallback indicates a numeric bug.
+  * codegen llvmTypeFor unknown-type "fallback" → assert. Classify rejects
+    unknown type spellings at decl sites via widen::isKnownType, so reaching
+    llvmTypeFor with an unknown type would be a classify bug.
+  * codegen's per-kind exprType defaults ("int"/"uint"/etc. regardless of
+    value) are gone with exprType itself. classify stamps inferred_type from
+    context-or-nominal; codegen reads it.
+  * codegen's empty-type fallbacks at emitLogical / emitUnary `!` / shift /
+    effectiveType are gone — all those sites now read node.inferred_type and
+    assert it's non-empty (classify always stamps).
 
 CONSTFOLD
   * Stage exists (compiler_v2/constfold.{h,cpp}); wired between grammar
@@ -247,17 +256,72 @@ CONSTFOLD
     "Phase 0" entry above for landed vs pending breakdown.
 
 CLASSIFY
-  * no-op; no symbol resolution, no type inference, no overload resolution
+  * Symbol table lives in parse (Entry vector + frame stack + pushFrame /
+    popFrame / addEntry / findInLiveScopes / findInFrame / entryType APIs).
+    Two entry kinds today: kFunction, kLocalVar. Function entries carry a
+    `defined` flag so decl+def at program scope binds to one entry.
+  * Pass 1 walks the Program children, adds Function entries at the program
+    frame. Decl+def pair binds; def+def is duplicate; signature (return
+    type) mismatch rejects. All three error families carry a multi-source
+    note pointing at the prior decl.
+  * Pass 2 walks each FunctionDef body in a fresh frame:
+    - kVarDeclStmt adds a LocalVar (rejects duplicate in same frame)
+    - kAssignStmt / kAugAssignStmt resolve lvalue via live-scope walk and
+      require a LocalVar entry (assigning to a Function rejects sharply)
+    - kCallStmt non-print resolves callee and requires a Function entry
+      (calling a LocalVar rejects sharply)
+    - kIdentExpr resolves via live-scope walk, stamps resolved_entry_id +
+      inferred_type from entry's declared type
+  * inferExpr stamps inferred_type on every expression node + op_type on
+    every binary. Per-kind:
+    - literals: flex to context_type if widen::intLiteralFits /
+      floatLiteralFits accept, else defaultLiteralType
+    - kIdentExpr: parse::entryType(resolved_entry_id)
+    - kUnaryExpr '!': bool; rejects non-coercible operand (void, etc.)
+    - kUnaryExpr + - ~: operand's inferred_type (context propagates)
+    - kBinaryExpr arith/bitwise: commonType(lhs, rhs) → opty; bitwise on
+      float rejects sharply; inferred_type = op_type = opty
+    - kBinaryExpr comparison: same commonType walk; op_type = opty;
+      inferred_type = bool
+    - kBinaryExpr shift: op_type = lhs.inferred_type; rejects non-numeric
+      lhs and non-int-class rhs
+    - kBinaryExpr logical (&& || ^^): op_type = bool; rejects non-coercible
+      operand on either side
+  * AugAssign mirrors the same per-op dispatch and stamps s.inferred_type +
+    s.op_type + s.return_type (= lvalue type) for desugar to read.
+  * Type-spelling validation: requireKnownType (via widen::isKnownType) runs
+    on every VarDecl declared type and every function return type before
+    they enter the symbol table.
+  * Print intrinsic special case: __println / __print arg's `+` chain is
+    treated as concatenation, not arith. inferPrintArg walks the chain and
+    infers each leaf in isolation (no commonType across segments). Contained
+    to two short blocks in classify; print.cpp just reads seg->inferred_type.
+  * Overload resolution unimplemented — no overloads to resolve today.
+  * Helpers (isCoercibleToBool, isIntegerClass, isNumericType, isPtrLikeType,
+    isFloatType) live inline; consolidate into widen if a second caller
+    appears.
 
 OPTIMIZE / LAYOUT
   * no-op; no perf rewrites, no name mangling, no field-offset computation
 
 CODEGEN
+  * Reads node.inferred_type / op_type stamped by classify. exprType deleted;
+    so are codegen's defaultLiteralType, isLiteralKind, literalTextForFit
+    helpers and the effectiveType lambda in emitBinary.
+  * Still string-keyed via SymTab[name] for ident loads. resolved_entry_id
+    is present on the ast node but codegen doesn't yet consult it for
+    lookup (deferred — bigger refactor).
+  * widen::commonType call from emitBinary is gone; codegen reads op_type
+    from the stamped node instead.
+  * emitToBool handles numeric (icmp/fcmp vs 0) and pointer (icmp ne ptr,
+    null) so char[] coerces truthy; non-numeric non-pointer types rejected
+    upstream at classify.
   * VarDecl alloca'd at use site, not at function entry (works for now since
     no control flow; will matter once if/for show up)
   * AssignStmt: only direct identifier lvalues (no field, no index)
-  * llvmTypeFor handles all primitives + <T>[] (lowers to ptr); class /
-    struct / enum / alias not yet
+  * llvmTypeFor handles all primitives + <T>[] (lowers to ptr); unknown
+    spellings assert (classify caught them); class / struct / enum / alias
+    not yet
   * bool lowers to i1 (per redesign-memory intent; v1 uses i32 for bool)
   * return value coerced to fn_return_type via emitExpr's widen path;
     non-widenable returns produce a widen diagnostic at the return stmt
@@ -270,6 +334,12 @@ ERROR REPORTING
     position into every diagnostic::report call. Exception: lex's
     "cannot open root_path" fires before any source is read (no token
     exists) — falls back to bare `slidsc: error: <msg>`.
+  * Multi-source notes are now in use: classify attaches a note pointing at
+    the prior declaration for var-decl duplicates, function decl-after-decl
+    signature mismatches, function def+def duplicates, and the wrong-kind
+    entry cases (assign to a function / call a variable). diagnostic::Record
+    carries the notes vector; render walks each note's (file_id, tok) the
+    same way it does the primary diagnostic.
   * parser error messages are minimal ("expected '...'"); no suggestions, no notes
 
 TEST COVERAGE GAPS — features implemented in v2 with no test exercising them
@@ -282,15 +352,17 @@ TEST COVERAGE GAPS — features implemented in v2 with no test exercising them
     short-circuit from full evaluation today.
 
 PRINT INTRINSIC (print.h / print.cpp)
-  * handles __println / __print with a single arg only:
-    - string literal  -> printf(@.str_N)
-    - bare identifier -> load + printf("%s\n", val); assumes the ident's
-                         llvm-type is `ptr` (i.e. char[]); other types
-                         produce a printf("%s", non-ptr) at runtime which
-                         will misinterpret the value
-  * no `+` concat chains
-  * no slice / non-literal segments
-  * no multi-arg
-  * shares strings::Pool with the rest of codegen; depends on codegen::SymTab
-    via codegen.h. To delete: remove print.* + the two call sites in
-    codegen.cpp + the SRCS entry in Makefile.
+  * handles __println / __print with a single arg, which may be a left-leaning
+    `+` chain. flattenPlusChain walks the chain and per-segment dispatches by
+    seg->inferred_type (stamped by classify's inferPrintArg in isolation):
+    - string literal  -> printf(@.str_N) with the literal text inlined
+    - bool            -> select i1 v, "true", "false" → %s
+    - float           -> fpext to double, %g
+    - char[]          -> %s
+    - integer-class   -> %d / %u / %lld / %llu (zext/sext to i32 for sub-32)
+  * no slice / non-literal-string segments (no string-typed locals yet)
+  * no multi-arg call form (single arg only)
+  * shares strings::Pool with the rest of codegen; reads seg->inferred_type
+    (no codegen::exprType dependency). To delete: remove print.* + the two
+    call sites in codegen.cpp + the SRCS entry in Makefile + classify's
+    inferPrintArg + isPrintIntrinsic dispatch in kCallStmt.

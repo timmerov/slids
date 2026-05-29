@@ -18,11 +18,6 @@ struct VarInfo {
 
 using SymTab = std::map<std::string, VarInfo>;
 
-// Derive the slids type an expression produces. Walks the node tree using
-// the sym table for identifier lookups; literal kinds resolve to their
-// natural defaults; unary/binary ops dispatch on op text.
-std::string exprType(ast::Node const& expr, SymTab const& syms);
-
 // Emits LLVM IR for an expression, returning the value name (register or
 // literal). dest_type drives literal range checks and var-to-var widening.
 // Exposed so print.cpp can drive per-segment value emission.

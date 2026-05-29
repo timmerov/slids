@@ -1,5 +1,6 @@
 #include "print.h"
 
+#include <cassert>
 #include <ostream>
 #include <string>
 #include <vector>
@@ -79,7 +80,8 @@ bool tryEmitCall(ast::Node const& call, codegen::SymTab const& syms,
             fmt += escapePct(seg->text);
             continue;
         }
-        std::string sty = codegen::exprType(*seg, syms);
+        std::string const& sty = seg->inferred_type;
+        assert(!sty.empty() && "print: segment missing inferred_type");
 
         if (sty == "bool") {
             std::string v = codegen::emitExpr(*seg, syms, pool, out, diag, sty);

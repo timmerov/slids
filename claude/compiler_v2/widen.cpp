@@ -357,4 +357,20 @@ bool commonType(std::string const& t1, std::string const& t2, std::string& out) 
     return false;
 }
 
+bool isKnownType(std::string const& t) {
+    static char const* const kPrimitives[] = {
+        "bool", "char",
+        "int", "int8", "int16", "int32", "int64",
+        "uint", "uint8", "uint16", "uint32", "uint64",
+        "intptr",
+        "float", "float32", "float64",
+        "void",
+    };
+    for (auto p : kPrimitives) if (t == p) return true;
+    if (t.size() >= 2 && t.substr(t.size() - 2) == "[]") {
+        return isKnownType(t.substr(0, t.size() - 2));
+    }
+    return false;
+}
+
 }  // namespace widen

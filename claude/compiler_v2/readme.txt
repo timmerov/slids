@@ -60,8 +60,16 @@ STAGE FILES (.h / .cpp pairs)
             fold, algebraic identity simplifications, rule-6 overflow-to-
             unsigned exception.
   classify  parse tree -> annotated parse tree. Resolves every identifier
-            to a symbol-table entry; infers every expression's type;
-            overload resolution. (TODO stub.)
+            to a symbol-table entry (parse::Entry; LocalVar + Function kinds
+            today); infers every expression's type (parse::Node::inferred_type)
+            and every binary's computational type (parse::Node::op_type).
+            Validates declared/return type spellings (widen::isKnownType).
+            Sharp rejections at the source: wrong-kind entry (assign to
+            function / call a variable), non-coercible operands for ! && || ^^,
+            non-numeric shift sides, bitwise on float, no-common-type binaries,
+            duplicate decls, signature mismatch. Multi-source notes point at
+            the prior decl for the duplicate / mismatch families. Overload
+            resolution unimplemented (no overloads today).
   desugar   parse tree -> ast (separate node-type set). Collapses syntactic
             variants (for-loop shapes, receiver shapes, PPID, stringify,
             operator dispatch) into canonical forms. AST nodes hold back-
@@ -71,8 +79,11 @@ STAGE FILES (.h / .cpp pairs)
             (TODO stub.)
   layout    ast -> ast in place. LLVM mangled names, field offsets, struct
             sizes, vtable layouts. (TODO stub.)
-  codegen   ast -> .ll text. No string-keyed lookups; consumes symbol
-            references + pre-computed mangled names. (TODO stub.)
+  codegen   ast -> .ll text. Reads inferred_type / op_type stamped by
+            classify (no longer derives or recomputes types). String-keyed
+            SymTab lookups for ident loads remain today; resolved_entry_id
+            is present on every ident but not yet consumed (deferred
+            refactor). Mangled names and field offsets land with layout.
 
 PRODUCT FILES (.h / .cpp pairs)
 
@@ -81,12 +92,17 @@ PRODUCT FILES (.h / .cpp pairs)
             imported_by }. APIs: add(), openFile(). Deque-backed file table
             so Stream pointers stay stable across imports.
   parse     parse-tree node types + tree storage + build/walk/annotate APIs.
-            Nodes carry `nominal_type` for literals (populated by constfold);
-            future: resolved-symbol refs + classified-expression types
-            (populated by classify).
+            Nodes carry: nominal_type (literals, populated by constfold),
+            inferred_type + op_type (expressions, populated by classify),
+            resolved_entry_id (idents / lvalues / callees, populated by
+            classify). Owns the symbol table: Entry vector + frame stack +
+            pushFrame / popFrame / addEntry / findInLiveScopes / findInFrame /
+            entryType APIs that classify calls. Stage-vs-product rule:
+            classify makes decisions, parse owns storage and lookup.
   ast       ast node types (separate set from parse) + tree storage +
-            build/walk/annotate APIs. Nodes carry `nominal_type` propagated
-            from parse; future: mangled names + layout offsets (populated by
+            build/walk/annotate APIs. Nodes carry nominal_type +
+            inferred_type + op_type + resolved_entry_id propagated from
+            parse; future: mangled names + layout offsets (populated by
             layout) + back-pointers to parse for source attribution.
 
 PLUMBING
