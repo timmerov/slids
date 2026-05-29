@@ -84,11 +84,11 @@ int32 main() {
     int  c5 = '\\';            __println("c5= " + c5);
     int  c6 = '\'';            __println("c6= " + c6);
 
-    //-EXPECT-ERROR: malformed exponent: expected a digit
+    //-EXPECT-ERROR: Malformed exponent: expected a digit
     // float bad1 = 1e;
-    //-EXPECT-ERROR: malformed exponent: expected a digit
+    //-EXPECT-ERROR: Malformed exponent: expected a digit
     // float bad2 = 1e+;
-    //-EXPECT-ERROR: malformed exponent: expected a digit
+    //-EXPECT-ERROR: Malformed exponent: expected a digit
     // float bad3 = 1e-;
 
     //-EXPECT-ERROR: Unknown escape sequence: '\q'.

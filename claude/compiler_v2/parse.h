@@ -38,7 +38,9 @@ struct Node {
     std::string op_type;         // classify: binary's computational type (commonType / shift LHS)
     int file_id = -1;            // source file of the construct
     int tok = -1;                // index into token::List::tokens for error attribution
+    int name_tok = -1;           // ident token for named constructs (VarDecl, FunctionDef/Decl, Param)
     int resolved_entry_id = -1;  // classify: ident / lhs / callee -> Tree::entries index
+    bool is_const = false;       // kVarDeclStmt: declared with leading `const`
     std::vector<std::unique_ptr<Node>> children;
     std::vector<std::unique_ptr<Node>> params;   // kFunctionDef/Decl: kParam nodes
     std::vector<std::string> param_types;        // kCallStmt: classify-cached resolved fn's param types
@@ -47,17 +49,21 @@ struct Node {
 enum class EntryKind {
     kFunction,
     kLocalVar,
+    kConst,
 };
 
 struct Entry {
     EntryKind kind;
     std::string name;
-    std::string slids_type;       // LocalVar: declared type; Function: return type
+    std::string slids_type;       // LocalVar / Const: declared type; Function: return type
     std::vector<std::string> param_types;  // Function only
     int parent_frame_id = -1;
     int file_id = -1;
     int tok = -1;
     bool defined = false;         // Function: true once a body has been seen
+    // kConst — filled by constfold; substitution at use sites reads these.
+    std::string literal_text;     // canonical-precision text at declared type
+    Kind literal_kind = Kind::kProgram;  // sentinel; valid after constfold capture
 };
 
 struct Tree {

@@ -193,6 +193,11 @@ bool checkFloatLiteralFits(std::string const& literal_text,
     return false;
 }
 
+// Silent variant — returns false on any parse failure / overflow / disallowed
+// conversion without reporting. Callers decide whether to fire a diagnostic
+// (typically the loud variant checkIntLiteralFits does, while literal-flex
+// callers in classify/constfold treat false as "doesn't fit; fall back to
+// defaultLiteralType / partner type"). user notified, accepts state.
 bool intLiteralFits(std::string const& literal_text, std::string const& dest_type) {
     if (dest_type.empty()) return true;
     TypeKind tk;

@@ -16,6 +16,7 @@
 #include "numeric.h"
 #include "optimize.h"
 #include "parse.h"
+#include "resolve.h"
 #include "token.h"
 
 int main(int argc, char** argv) {
@@ -51,6 +52,8 @@ int main(int argc, char** argv) {
     numeric::run(tokens, diag);
     if (diagnostic::hasErrors(diag)) return bail();
     grammar::run(tokens, parse_tree, diag);
+    if (diagnostic::hasErrors(diag)) return bail();
+    resolve::run(parse_tree, diag);
     if (diagnostic::hasErrors(diag)) return bail();
     constfold::run(parse_tree, diag);
     if (diagnostic::hasErrors(diag)) return bail();

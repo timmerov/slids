@@ -100,11 +100,11 @@ void renderBlock(token::List const& tokens, int file_id, int tok,
     if (loc.length <= 1) {
         os << '^';
     } else if (loc.length == 2) {
-        os << "^\\";
+        os << "^^";
     } else {
         os << '^';
         for (int i = 0; i < loc.length - 2; i++) os << '-';
-        os << '\\';
+        os << '^';
     }
     os << cReset() << "\n";
     for (int ln = loc.line + 1; ln <= last; ln++)

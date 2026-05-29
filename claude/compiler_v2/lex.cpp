@@ -91,7 +91,7 @@ void skipWhitespaceAndComments(Stream& s) {
                         if (match) {
                             std::string pair = {c, e};
                             setFatal(s, s.line, s.col + 1, 1,
-                                "escaped newline breaking comment token " + pair);
+                                "Escaped newline breaking comment token '" + pair + "'.");
                             return;
                         }
                     }
@@ -111,7 +111,7 @@ void skipWhitespaceAndComments(Stream& s) {
         }
         if (c == '*' && d == '/') {
             if (depth == 0) {
-                setFatal(s, s.line, s.col, 2, "unmatched */");
+                setFatal(s, s.line, s.col, 2, "Unmatched '*/'.");
                 return;
             }
             depth--;
@@ -128,7 +128,7 @@ void skipWhitespaceAndComments(Stream& s) {
                 if (p < (int)s.source->size() && (*s.source)[p] == '\n') {
                     if (p != s.pos + 1) {
                         setFatal(s, s.line, s.col, 1,
-                            "whitespace between line-continuation \\ and newline");
+                            "Whitespace between line-continuation '\\' and newline.");
                         return;
                     }
                     advance(s); advance(s);
@@ -145,7 +145,7 @@ void skipWhitespaceAndComments(Stream& s) {
         }
         break;
     }
-    if (depth > 0) setFatal(s, s.line, s.col, 1, "unterminated block comment");
+    if (depth > 0) setFatal(s, s.line, s.col, 1, "Unterminated block comment.");
 }
 
 token::Token readCharLiteral(Stream& s) {
@@ -193,7 +193,7 @@ token::Token readString(Stream& s) {
                 case '\n': break;   // intentional n/a: line continuation in string literal — consume \-newline, contribute nothing
                 default:
                     setFatal(s, s.line, s.col, 1,
-                        std::string("unknown escape sequence: '\\") + esc + "'");
+                        std::string("Unknown escape sequence: '\\") + esc + "'.");
                     return {token::Kind::kError, "", 0, 0, 0, 0};
             }
         } else {
@@ -266,7 +266,7 @@ token::Token readNumber(Stream& s) {
         clean += advance(s);
         if (peek(s) == '+' || peek(s) == '-') clean += advance(s);
         if (!isdigit(peek(s))) {
-            setFatal(s, s.line, s.col, 1, "malformed exponent: expected a digit");
+            setFatal(s, s.line, s.col, 1, "Malformed exponent: expected a digit.");
             return {token::Kind::kError, clean, 0, 0, 0, 0};
         }
         while (s.pos < (int)s.source->size() && (isdigit(peek(s)) || peek(s) == '_')) {
@@ -487,7 +487,7 @@ token::Token next(Stream& s) {
                 break;
             default:
                 setFatal(s, sl, sc, 1,
-                    std::string("unexpected character: '") + c + "'");
+                    std::string("Unexpected character: '") + c + "'.");
                 return errorToken(s);
         }
     }
@@ -553,7 +553,7 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
             if (depth != 0) {
                 char open_char = openCharFor(brackets.back().first);
                 reportAt(diag, file_id, brackets.back().second,
-                    std::string("unterminated '") + open_char + "'");
+                    std::string("Unterminated '") + open_char + "'.");
                 fatal = true;
                 return false;
             }
@@ -579,7 +579,7 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
                     char want = closeCharFor(t.kind);
                     if (brackets.empty()) {
                         int idx = addAndIndex(out, t);
-                        reportAt(diag, file_id, idx, std::string("unmatched '") + want + "'");
+                        reportAt(diag, file_id, idx, std::string("Unmatched '") + want + "'.");
                         fatal = true;
                         return false;
                     }
@@ -589,8 +589,8 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
                         char open_char = openCharFor(close_char);
                         diagnostic::report(diag, {
                             file_id, idx,
-                            std::string("mismatched bracket: expected '") + close_char
-                                + "', got '" + want + "'",
+                            std::string("Mismatched bracket: expected '") + close_char
+                                + "', got '" + want + "'.",
                             {{file_id, brackets.back().second,
                               std::string("'") + open_char + "' opened here"}}
                         });
@@ -643,7 +643,7 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
                     if (found_path.empty()) {
                         int idx = addAndIndex(out, saved_ident);
                         reportAt(diag, file_id, idx,
-                            "cannot find '" + header + "' on the import path");
+                            "Cannot find '" + header + "' on the import path.");
                         fatal = true;
                         return false;
                     }
@@ -655,7 +655,7 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
                     if (!f.is_open()) {
                         int idx = addAndIndex(out, saved_ident);
                         reportAt(diag, file_id, idx,
-                            "cannot open '" + found_path + "'");
+                            "Cannot open '" + found_path + "'.");
                         fatal = true;
                         return false;
                     }
@@ -696,7 +696,10 @@ void run(std::string const& root_path,
          token::List& out, diagnostic::Sink& diag) {
     std::ifstream f(root_path);
     if (!f.is_open()) {
-        diagnostic::report(diag, {-1, -1, "cannot open '" + root_path + "'", {}});
+        // {-1, -1} attribution: fires before any source is read, so no token
+        // exists. Renderer falls back to bare "slidsc: error: <msg>".
+        // user notified, accepts state.
+        diagnostic::report(diag, {-1, -1, "Cannot open '" + root_path + "'.", {}});
         return;
     }
     std::stringstream buf;

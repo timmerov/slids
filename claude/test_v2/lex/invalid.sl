@@ -2,13 +2,13 @@
 ensure the lexer rejects invalid characters.
 */
 
-//-EXPECT-ERROR: unexpected character: '@'
+//-EXPECT-ERROR: Unexpected character: '@'
 // @
 
-//-EXPECT-ERROR: unexpected character: '$'
+//-EXPECT-ERROR: Unexpected character: '$'
 // $
 
-//-EXPECT-ERROR: unexpected character: '`'
+//-EXPECT-ERROR: Unexpected character: '`'
 // `
 
 //-EXPECT-ERROR: Unterminated character literal.
@@ -23,7 +23,7 @@ int32 main() {
     char[] str;
     str = "Hello \0\t\n\\\" World!";
 
-    //-EXPECT-ERROR: unknown escape sequence: '\q'
+    //-EXPECT-ERROR: Unknown escape sequence: '\q'
     // str = "Hello [\\]q World!";
 
     __println("Hello, World!");

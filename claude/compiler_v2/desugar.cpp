@@ -85,7 +85,9 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p) {
     node->op_type = p.op_type;
     node->file_id = p.file_id;
     node->tok = p.tok;
+    node->name_tok = p.name_tok;
     node->resolved_entry_id = p.resolved_entry_id;
+    node->is_const = p.is_const;
     node->param_types = p.param_types;
     for (auto const& c : p.children) {
         node->children.push_back(copyNode(*c));

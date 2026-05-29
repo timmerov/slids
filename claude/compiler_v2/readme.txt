@@ -52,61 +52,74 @@ STAGE FILES (.h / .cpp pairs)
   grammar   tokens -> parse tree. Pure syntax; every identifier is just a
             name string. Hand-written recursive descent. Parses: types
             (built-in primitives + T[]); function defs/decls with typed
-            param lists; statements (var-decl, assign, aug-assign, 0/1/N-
-            arg call, return); expressions across the full C precedence
-            ladder (literals + ident, unary `! ~ + -`, full binary set
-            arith/bitwise/shift/comparison/logical, parens). Stamps
-            (file_id, tok) on every node for source attribution. No
-            identifier resolution, no scope tracking, no type inference,
-            no literal folding — all deferred to later stages. Errors are
-            single-shot ("expected '...'") with caret at the offending
-            token; sets fatal + early-returns up the call chain.
+            param lists; var-decls with optional leading `const` (file
+            scope or function scope); statements (var-decl, assign,
+            aug-assign, 0/1/N-arg call, return); expressions across the
+            full C precedence ladder (literals + ident, unary `! ~ + -`,
+            full binary set arith/bitwise/shift/comparison/logical,
+            parens). Stamps (file_id, tok) on every node for source
+            attribution. No identifier resolution, no scope tracking,
+            no type inference, no literal folding — all deferred to
+            later stages. Errors are single-shot ("expected '...'") with
+            caret at the offending token; sets fatal + early-returns
+            up the call chain.
   resolve   parse tree -> annotated parse tree. Builds the symbol table
             (parse::Entry vector on parse::Tree) and resolves every
             identifier-use to a resolved_entry_id. Pushes/pops frames at
             scope-opening nodes (program, function-body today; block /
-            class / namespace as Phase 2+ land). Two passes per scope to
-            preserve forward-decl semantics (collect decls, then walk
-            bodies). Substitutes kIdentExpr -> literal node in place
-            when the resolved entry is kConst, so downstream constfold
-            sees the literal already. Sharp diagnostics at the source:
-            wrong-kind entry (assign to function / call a variable),
-            duplicate decls, signature mismatch, multi-source notes
-            pointing at prior decls. Owns the bool "this name resolves
-            to X" decision; types are not resolve's job. (Planned
-            restructure — today its responsibilities live in classify;
-            the split lets constfold consume named constants.)
-  constfold parse tree -> parse tree. Post-order walker. Assigns
-            nominal_type to every literal per fold.sl:16-23 (bool=uint1,
-            char=uint8, integer/unsigned by smallest-bit-tier, float by
-            float32-round-trip). Folds unary on literal (rules 1a-1f) and
-            binary on two literals across all op families: int arith /
-            bitwise (signed int64 with rule-6 overflow-to-uint64), int
-            shifts (count >= width → 0; uint64 reinterpret to avoid UB),
-            int comparisons (int64 path with uint64 fallback), float
-            arith / shift / comparison (double + %.17g canonical text;
-            pow2 mul/div lowering for float shifts). Rejects div/mod by
-            literal zero, `~float`, float `& | ^`, shift with float rhs
-            or negative count. Pending: algebraic identity simplifications
-            and logical-with-constant (both deferred until purity tracking
-            lands with PPID / function calls).
-  classify  parse tree -> annotated parse tree. Designed scope: type
-            inference + overload resolution. Reads resolved_entry_id +
-            entry data stamped by resolve; never builds entries or pushes
-            frames itself. Infers every expression's inferred_type and
-            every binary's op_type (computational type). Validates
-            declared / return / parameter type spellings (widen::isKnownType).
-            Sharp rejections at the source: non-coercible operands for
-            ! && || ^^, non-numeric shift sides, bitwise on float,
-            no-common-type binaries, arity mismatch against the resolved
-            callee's param_types, multi-arg print intrinsic. Future:
-            overload resolution (when multiple Function entries share a
-            name, picks one by arg types).
-
-            (Today's reality — pending the resolve split: classify still
-            owns the symbol-resolution job too. The split is documented in
-            the pipeline so future restructuring lands against the design,
-            not against the current code.)
+            class / namespace as Phase 2+ land). Pass 1a collects
+            program-scope entries (Functions + Consts) without walking
+            init expressions; pass 1b walks file-scope const init rhs
+            (so globals can reference each other regardless of decl
+            order); pass 2 walks function bodies. Validates declared /
+            return / parameter type spellings (widen::isKnownType).
+            Caches lvalue type on AugAssignStmts (s.return_type) and
+            return type + param_types on CallStmts so downstream stages
+            don't have to re-walk the entry table. Sharp diagnostics at
+            the source: wrong-kind entry (assign to function / assign
+            to constant / call a variable), duplicate decls, return-type
+            mismatch, parameter-type mismatch, duplicate definition,
+            arity mismatch, multi-arg print intrinsic. Multi-source
+            notes point at prior decls. Owns the "what does this name
+            refer to" decision; types are not resolve's job.
+  constfold parse tree -> parse tree. Iterative post-order walker.
+            Assigns nominal_type to every literal per fold.sl:16-23
+            (bool=uint1, char=uint8, integer/unsigned by smallest-bit-
+            tier, float by float32-round-trip). Folds unary on literal
+            (rules 1a-1f) and binary on two literals across all op
+            families: int arith / bitwise (signed int64 with rule-6
+            overflow-to-uint64), int shifts (count >= width → 0; uint64
+            reinterpret to avoid UB), int comparisons (int64 path with
+            uint64 fallback), float arith / shift / comparison (double
+            + %.17g canonical text; pow2 mul/div lowering for float
+            shifts). Substitutes kIdentExpr -> literal node in place
+            when the resolved entry is a kConst with a captured value.
+            Captures const-decl values back onto kConst entries when
+            the rhs folds to a single literal — floats round through
+            the declared type for precision capture (3.14 -> float32
+            stored as 3.1400001049...); ints/bools/chars store rhs text
+            verbatim with range validation against declared type.
+            Iterates to a fixpoint; any kConst whose rhs never folded
+            errors with "Initializer for 'X' is not a constant
+            expression." (consolidated into one diagnostic with notes
+            for additional affected entries when a cycle spans several
+            consts). Rejects div/mod by literal zero,
+            `~float`, float `& | ^`, shift with float rhs or negative
+            count, constants whose value doesn't fit declared type.
+            Pending: algebraic identity simplifications and logical-
+            with-constant (both deferred until purity tracking lands
+            with PPID).
+  classify  parse tree -> annotated parse tree. Type inference and
+            (Phase 3) overload resolution. Reads resolved_entry_id + entry
+            data stamped by resolve; never builds entries or pushes frames
+            itself. Infers every expression's inferred_type and every
+            binary's op_type (computational type). Sharp rejections at
+            the source: non-coercible operands for ! && || ^^, non-numeric
+            shift sides, bitwise on float, no-common-type binaries.
+            Per-arg type inference at call sites uses the resolved
+            callee's param_types (cached on the kCallStmt by resolve) as
+            context. Future: overload resolution when multiple Function
+            entries share a name.
   desugar   parse tree -> ast (separate node-type set). Today: identity
             copy that propagates every annotation classify and constfold
             stamped (nominal_type, inferred_type, op_type, resolved_entry_id,
@@ -142,14 +155,20 @@ PRODUCT FILES (.h / .cpp pairs)
             Nodes carry: nominal_type (literals, populated by constfold),
             inferred_type + op_type (expressions, populated by classify),
             resolved_entry_id (idents / lvalues / callees, populated by
-            resolve), params (kFunctionDef/Decl: ordered kParam children),
+            resolve), name_tok (ident token of named constructs — VarDecl,
+            FunctionDef/Decl, Param; populated by grammar so entry.tok
+            carets at the ident rather than the const/type keyword),
+            is_const (kVarDeclStmt: declared with leading `const`),
+            params (kFunctionDef/Decl: ordered kParam children),
             param_types (kCallStmt: cached resolved-fn param-type strings
             driving each arg's emit dest_type). Owns the symbol table:
             Entry vector + frame stack + pushFrame / popFrame / addEntry /
             findInLiveScopes / findInFrame / entryType APIs that resolve
             calls. Function entries carry param_types alongside their
-            return type. Stage-vs-product rule: stages make decisions,
-            parse owns storage and lookup.
+            return type; kConst entries carry literal_text + literal_kind
+            (filled by constfold; read by constfold at substitution sites).
+            Stage-vs-product rule: stages make decisions, parse owns
+            storage and lookup.
   ast       ast node types (separate set from parse) + tree storage +
             build/walk/annotate APIs. Nodes carry nominal_type +
             inferred_type + op_type + resolved_entry_id + params +
@@ -167,7 +186,10 @@ PLUMBING
                      shape), Sink (vector of records). APIs: report(),
                      hasErrors(), render(). render() walks the unified
                      token::List to look up source line/col/length and the
-                     file registry for path + context lines + caret +
-                     imported-by chain. Color-gated on isatty + NO_COLOR.
+                     file registry for path + context lines + caret-sled +
+                     imported-by chain. Caret-sled is bracketed at both
+                     ends: length 1 → `^`; length 2 → `^^`; length N → `^---^`
+                     (v1-style). Color-gated on isatty + NO_COLOR. Messages
+                     are sentence-shaped throughout: capital + period.
   Makefile        -std=c++17 -Wall -Wextra -Werror -Wswitch-enum.
                   Builds to ../bin/slidsc. Objects in ../build/compiler_v2/.

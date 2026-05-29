@@ -37,7 +37,9 @@ struct Node {
     std::string op_type;         // binary's computational type from classify
     int file_id = -1;            // source file of the construct
     int tok = -1;                // index into token::List::tokens for error attribution
+    int name_tok = -1;           // ident token for named constructs
     int resolved_entry_id = -1;  // ident / lhs / callee -> parse::Tree::entries index
+    bool is_const = false;       // kVarDeclStmt: declared with leading `const`
     std::vector<std::unique_ptr<Node>> children;
     std::vector<std::unique_ptr<Node>> params;   // kFunctionDef/Decl: kParam nodes
     std::vector<std::string> param_types;        // kCallStmt: resolved fn's param types

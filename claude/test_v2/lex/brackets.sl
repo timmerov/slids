@@ -6,40 +6,40 @@ the file itself lexes clean — all error cases are //-prefixed and
 get uncommented one at a time by the runner.
 */
 
-//-EXPECT-ERROR: mismatched bracket: expected ')', got '}'
+//-EXPECT-ERROR: Mismatched bracket: expected ')', got '}'
 // ( }
 
-//-EXPECT-ERROR: mismatched bracket: expected ')', got ']'
+//-EXPECT-ERROR: Mismatched bracket: expected ')', got ']'
 // ( ]
 
-//-EXPECT-ERROR: mismatched bracket: expected '}', got ')'
+//-EXPECT-ERROR: Mismatched bracket: expected '}', got ')'
 // { )
 
-//-EXPECT-ERROR: mismatched bracket: expected '}', got ']'
+//-EXPECT-ERROR: Mismatched bracket: expected '}', got ']'
 // { ]
 
-//-EXPECT-ERROR: mismatched bracket: expected ']', got ')'
+//-EXPECT-ERROR: Mismatched bracket: expected ']', got ')'
 // [ )
 
-//-EXPECT-ERROR: mismatched bracket: expected ']', got '}'
+//-EXPECT-ERROR: Mismatched bracket: expected ']', got '}'
 // [ }
 
-//-EXPECT-ERROR: unmatched ')'
+//-EXPECT-ERROR: Unmatched ')'
 // )
 
-//-EXPECT-ERROR: unmatched '}'
+//-EXPECT-ERROR: Unmatched '}'
 // }
 
-//-EXPECT-ERROR: unmatched ']'
+//-EXPECT-ERROR: Unmatched ']'
 // ]
 
-//-EXPECT-ERROR: unterminated '('
+//-EXPECT-ERROR: Unterminated '('
 // (
 
-//-EXPECT-ERROR: unterminated '{'
+//-EXPECT-ERROR: Unterminated '{'
 // {
 
-//-EXPECT-ERROR: unterminated '['
+//-EXPECT-ERROR: Unterminated '['
 // [
 
 int32 main() {

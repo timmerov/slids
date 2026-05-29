@@ -72,7 +72,7 @@ struct Parser {
 
     bool expect(token::Kind kind, char const* name) {
         if (peek().kind != kind) {
-            error(std::string("expected '") + name + "'");
+            error(std::string("Expected '") + name + "'.");
             return false;
         }
         advance();
@@ -100,7 +100,7 @@ struct Parser {
     std::string parseType() {
         char const* name = primitiveNameFor(peek().kind);
         if (!name) {
-            error("expected type");
+            error("Expected type.");
             return "";
         }
         std::string type = name;
@@ -169,7 +169,7 @@ struct Parser {
             if (!expect(token::Kind::kRParen, ")")) return nullptr;
             return inner;
         }
-        error("expected expression");
+        error("Expected expression.");
         return nullptr;
     }
 
@@ -381,22 +381,33 @@ struct Parser {
     std::unique_ptr<parse::Node> parseVarDeclStmt() {
         int stmt_file = peek().file_id;
         int stmt_tok = pos;
+        bool is_const = false;
+        if (peek().kind == token::Kind::kConst) {
+            is_const = true;
+            advance();
+        }
         std::string type = parseType();
         if (fatal) return nullptr;
         if (peek().kind != token::Kind::kIdentifier) {
-            error("expected variable name");
+            error("Expected variable name.");
             return nullptr;
         }
         std::string name = peek().text;
+        int name_tok = pos;
         advance();
         auto node = newNodeAt(parse::Kind::kVarDeclStmt, stmt_file, stmt_tok);
         node->name = std::move(name);
+        node->name_tok = name_tok;
         node->return_type = std::move(type);
+        node->is_const = is_const;
         if (peek().kind == token::Kind::kEquals) {
             advance();
             auto init = parseExpr();
             if (!init) return nullptr;
             node->children.push_back(std::move(init));
+        } else if (is_const) {
+            error("Constant declaration requires an initializer.");
+            return nullptr;
         }
         if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
         return node;
@@ -470,7 +481,7 @@ struct Parser {
                 continue;
             }
             if (peek().kind != token::Kind::kRParen) {
-                error("expected ',' or ')' in argument list");
+                error("Expected ',' or ')' in argument list.");
                 return nullptr;
             }
         }
@@ -494,16 +505,17 @@ struct Parser {
     std::unique_ptr<parse::Node> parseStmt() {
         token::Token const& t = peek();
         if (t.kind == token::Kind::kReturn) return parseReturnStmt();
+        if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
         if (isTypeStart(t.kind)) return parseVarDeclStmt();
         if (t.kind == token::Kind::kIdentifier) {
             token::Kind next = peekKind(1);
             if (next == token::Kind::kEquals) return parseAssignStmt();
             if (next == token::Kind::kLParen) return parseCallStmt();
             if (augAssignOp(next) != nullptr) return parseAugAssignStmt();
-            error("expected '=' or '(' after identifier");
+            error("Expected '=' or '(' after identifier.");
             return nullptr;
         }
-        error("expected statement");
+        error("Expected statement.");
         return nullptr;
     }
 
@@ -513,15 +525,17 @@ struct Parser {
         std::string ret_type = parseType();
         if (fatal) return nullptr;
         if (peek().kind != token::Kind::kIdentifier) {
-            error("expected function name");
+            error("Expected function name.");
             return nullptr;
         }
         std::string name = peek().text;
+        int name_tok = pos;
         advance();
         if (!expect(token::Kind::kLParen, "(")) return nullptr;
 
         auto node = newNodeAt(parse::Kind::kFunctionDef, fn_file, fn_tok);
         node->name = std::move(name);
+        node->name_tok = name_tok;
         node->return_type = std::move(ret_type);
 
         while (peek().kind != token::Kind::kRParen) {
@@ -530,13 +544,15 @@ struct Parser {
             std::string p_type = parseType();
             if (fatal) return nullptr;
             if (peek().kind != token::Kind::kIdentifier) {
-                error("expected parameter name");
+                error("Expected parameter name.");
                 return nullptr;
             }
             std::string p_name = peek().text;
+            int p_name_tok = pos;
             advance();
             auto p = newNodeAt(parse::Kind::kParam, p_file, p_tok);
             p->name = std::move(p_name);
+            p->name_tok = p_name_tok;
             p->return_type = std::move(p_type);
             node->params.push_back(std::move(p));
             if (peek().kind == token::Kind::kComma) {
@@ -544,7 +560,7 @@ struct Parser {
                 continue;
             }
             if (peek().kind != token::Kind::kRParen) {
-                error("expected ',' or ')' in parameter list");
+                error("Expected ',' or ')' in parameter list.");
                 return nullptr;
             }
         }
@@ -560,7 +576,7 @@ struct Parser {
         while (!fatal && peek().kind != token::Kind::kRBrace) {
             if (peek().kind == token::Kind::kEndOfFile
                 || peek().kind == token::Kind::kEndOfInput) {
-                error("expected '}'");
+                error("Expected '}'.");
                 return nullptr;
             }
             auto stmt = parseStmt();
@@ -577,9 +593,16 @@ struct Parser {
         while (!fatal) {
             while (peek().kind == token::Kind::kEndOfFile) advance();
             if (peek().kind == token::Kind::kEndOfInput) break;
-            auto fn = parseFunctionDef();
-            if (!fn) return;
-            prog->children.push_back(std::move(fn));
+            // Top-level dispatch: `const` -> file-scope const decl; else
+            // assume function def/decl.
+            std::unique_ptr<parse::Node> child;
+            if (peek().kind == token::Kind::kConst) {
+                child = parseVarDeclStmt();
+            } else {
+                child = parseFunctionDef();
+            }
+            if (!child) return;
+            prog->children.push_back(std::move(child));
         }
         if (!fatal) out.nodes.push_back(std::move(prog));
     }

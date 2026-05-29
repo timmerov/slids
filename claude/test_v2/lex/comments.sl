@@ -6,23 +6,23 @@ the file itself lexes clean — all error cases are //-prefixed and
 get uncommented one at a time by the runner.
 */
 
-//-EXPECT-ERROR: unmatched [*][/]
+//-EXPECT-ERROR: Unmatched '[*][/]'
 // [*][/]
 
-//-EXPECT-ERROR: unterminated block comment
+//-EXPECT-ERROR: Unterminated block comment
 // [/][*]
 
-//-EXPECT-ERROR: whitespace between line-continuation \ and newline
+//-EXPECT-ERROR: Whitespace between line-continuation '\' and newline
 //// trailing [\\][   ]
 //   continuation
 
-//-EXPECT-ERROR: escaped newline breaking comment token [/][/]
+//-EXPECT-ERROR: Escaped newline breaking comment token '[/][/]'
 // [/][\\][\n][/]
 
-//-EXPECT-ERROR: escaped newline breaking comment token [/][*]
+//-EXPECT-ERROR: Escaped newline breaking comment token '[/][*]'
 // [/][\\][\n][*]
 
-//-EXPECT-ERROR: escaped newline breaking comment token [*][/]
+//-EXPECT-ERROR: Escaped newline breaking comment token '[*][/]'
 // [*][\\][\n][/]
 
 int32 main() {

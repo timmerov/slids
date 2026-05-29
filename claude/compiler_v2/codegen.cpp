@@ -244,9 +244,9 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
         }
         return tmp;
     }
-    diagnostic::report(diag, {expr.file_id, expr.tok,
-        "codegen: unary operator '" + op + "' not yet supported", {}});
-    return "0";
+    (void)diag;
+    assert(false && "emitUnary: grammar produced an unknown unary op");
+    __builtin_unreachable();
 }
 
 std::string emitBinary(ast::Node const& expr, SymTab const& syms,
@@ -367,21 +367,9 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
         else if (op == "|") instr = "or";
         else if (op == "^") instr = "xor";
     }
-    if (instr.empty()) {
-        // Today this fires only for float + bitwise (& | ^) — every int op is
-        // mapped above, and every float arith op is mapped after `%` landed.
-        if (flt) {
-            diagnostic::report(diag, {expr.file_id, expr.tok,
-                std::string("Bitwise '") + op + "' not defined on floating-point type '"
-                + opty + "'.", {}});
-        } else {
-            // Defensive: future ops (slid-typed, pointer-typed) would land here.
-            diagnostic::report(diag, {expr.file_id, expr.tok,
-                "codegen: binary operator '" + op + "' on '" + opty
-                + "' not yet supported", {}});
-        }
-        return "0";
-    }
+    assert(!instr.empty()
+        && "emitBinary: no instruction mapped — classify should have rejected "
+           "(float bitwise) or covered (all int ops, all float arith)");
     std::string tmp = newTmp("bin");
     out << "  " << tmp << " = " << instr << " " << llty
         << " " << lv << ", " << rv << "\n";
@@ -441,9 +429,8 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kCallStmt:
         case ast::Kind::kReturnStmt:
         case ast::Kind::kParam:
-            diagnostic::report(diag, {expr.file_id, expr.tok,
-                "codegen: not an expression", {}});
-            return "0";
+            assert(false && "emitExpr: reached statement-kind node");
+            __builtin_unreachable();
     }
     assert(false && "emitExpr: unhandled ast::Kind");
     __builtin_unreachable();
@@ -457,6 +444,9 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
               std::ostream& out, diagnostic::Sink& diag) {
     switch (stmt.kind) {
         case ast::Kind::kVarDeclStmt: {
+            // Consts are substituted away by constfold and have no runtime
+            // representation. Skip the alloca + store entirely.
+            if (stmt.is_const) return;
             assert(stmt.resolved_entry_id >= 0
                 && "kVarDeclStmt: classify did not stamp resolved_entry_id");
             std::string llty = llvmTypeFor(stmt.return_type,
@@ -521,8 +511,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             return;
         }
         case ast::Kind::kAugAssignStmt:
-            diagnostic::report(diag, {stmt.file_id, stmt.tok,
-                "codegen: kAugAssignStmt survived desugar", {}});
+            assert(false && "emitStmt: AugAssign survived desugar");
             return;
         case ast::Kind::kProgram:
         case ast::Kind::kFunctionDef:
@@ -537,8 +526,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kUnaryExpr:
         case ast::Kind::kBinaryExpr:
         case ast::Kind::kParam:
-            diagnostic::report(diag, {stmt.file_id, stmt.tok,
-                "codegen: unexpected node kind in statement position", {}});
+            assert(false && "emitStmt: reached non-statement node kind");
             return;
     }
     assert(false && "emitStmt: unhandled ast::Kind");
@@ -590,9 +578,13 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
                 emitFunction(*fn, pool, body, diag);
             } else if (fn->kind == ast::Kind::kFunctionDecl) {
                 // intentional n/a: declarations carry no body to emit
+            } else if (fn->kind == ast::Kind::kVarDeclStmt && fn->is_const) {
+                // intentional n/a: file-scope const has no runtime form;
+                // constfold substituted every use to a literal.
             } else {
-                diagnostic::report(diag, {fn->file_id, fn->tok,
-                    "codegen: unexpected node at program scope", {}});
+                assert(false
+                    && "codegen run: unexpected node kind at program scope "
+                       "(resolve should have rejected)");
             }
         }
     }

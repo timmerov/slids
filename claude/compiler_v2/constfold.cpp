@@ -12,6 +12,7 @@
 
 #include "diagnostic.h"
 #include "parse.h"
+#include "widen.h"
 
 namespace constfold {
 
@@ -54,7 +55,7 @@ std::string nominalForInt(uint64_t mag, bool negative) {
         if (mag <= 32768ULL) return "int16";
         if (mag <= (uint64_t)INT32_MAX + 1ULL) return "int32";
         if (mag <= (uint64_t)INT64_MAX + 1ULL) return "int64";
-        return "";  // overflow; downstream catches via catch-all
+        return "";  // overflow — widen::checkIntLiteralFits reports at codegen.
     }
     if (mag <= (uint64_t)INT8_MAX) return "int8";
     if (mag <= 255ULL) return "uint8";
@@ -85,6 +86,11 @@ std::string nominalForFloat(std::string const& text) {
 }
 
 // Assign nominal_type to a literal node (no-op for non-literals).
+// Negative-int overflow (magnitude > INT64_MAX+1) leaves nominal_type empty
+// and is reported downstream by widen::checkIntLiteralFits at the literal-
+// emit site as "Integer literal does not fit in 'int64'." — uniform with how
+// other overflowing literal/dest pairs are reported. user notified, accepts
+// state.
 void assignNominal(parse::Node& n) {
     if (!n.nominal_type.empty()) return;  // already assigned (e.g. by a prior fold)
     switch (n.kind) {
@@ -569,18 +575,108 @@ std::unique_ptr<parse::Node> tryFoldBinary(parse::Node& node, diagnostic::Sink& 
     return foldIntArithBitwise(node, lhs, rhs, op, diag);
 }
 
-void walk(std::unique_ptr<parse::Node>& slot, diagnostic::Sink& diag) {
+// Substitute a kIdentExpr that resolves to a kConst with a captured value.
+// Returns true when the slot was rewritten.
+bool trySubstituteConst(std::unique_ptr<parse::Node>& slot, parse::Tree& tree) {
+    if (slot->kind != parse::Kind::kIdentExpr) return false;
+    if (slot->resolved_entry_id < 0) return false;
+    parse::Entry const& entry = tree.entries[slot->resolved_entry_id];
+    if (entry.kind != parse::EntryKind::kConst) return false;
+    if (entry.literal_text.empty()) return false;
+    int file_id = slot->file_id;
+    int tok = slot->tok;
+    auto lit = std::make_unique<parse::Node>();
+    lit->kind = entry.literal_kind;
+    lit->text = entry.literal_text;
+    lit->file_id = file_id;
+    lit->tok = tok;
+    slot = std::move(lit);
+    return true;
+}
+
+// When a const decl's rhs has folded to a single literal, capture the value
+// on the entry. Floats round-trip through the declared type for precision
+// capture (3.14 -> float32 stored value ~ 3.1400001049). Ints/bools/chars
+// store the literal text verbatim; range validation against the declared
+// type runs here so out-of-range constants reject sharply rather than
+// silently narrowing.
+bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& diag) {
+    if (!decl.is_const) return false;
+    if (decl.resolved_entry_id < 0) return false;
+    parse::Entry& entry = tree.entries[decl.resolved_entry_id];
+    if (entry.kind != parse::EntryKind::kConst) return false;
+    if (!entry.literal_text.empty()) return false;  // already captured
+    if (decl.children.empty()) return false;        // grammar should have rejected
+    parse::Node const& rhs = *decl.children[0];
+    if (!isLiteral(rhs)) return false;              // not yet folded
+
+    std::string const& declared = entry.slids_type;
+
+    if (rhs.kind == parse::Kind::kFloatLiteral) {
+        if (!widen::floatLiteralFits(rhs.text, declared)) {
+            diagnostic::report(diag, {decl.file_id, decl.tok,
+                "Constant '" + entry.name + "' value '" + rhs.text
+                + "' does not fit declared type '" + declared + "'.", {}});
+            return false;
+        }
+        double d;
+        if (!parseDouble(rhs.text, d)) return false;
+        double captured;
+        if (declared == "float" || declared == "float32") {
+            // Round through float32 to capture the actual storage value.
+            float f = static_cast<float>(d);
+            captured = static_cast<double>(f);
+        } else {
+            // float64 — no rounding.
+            captured = d;
+        }
+        entry.literal_text = floatToText(captured);
+        entry.literal_kind = parse::Kind::kFloatLiteral;
+        return true;
+    }
+
+    // Integer-class literal. Range check against the declared type, then
+    // store verbatim with the literal's own kind. Bool's text was already
+    // canonicalized by numeric to "1"/"0".
+    std::string text_for_fit = rhs.text;
+    if (rhs.kind == parse::Kind::kBoolLiteral) {
+        // numeric canonicalizes bool to "1"/"0" already; pass through.
+    }
+    if (!widen::intLiteralFits(text_for_fit, declared)) {
+        diagnostic::report(diag, {decl.file_id, decl.tok,
+            "Constant '" + entry.name + "' value '" + rhs.text
+            + "' does not fit declared type '" + declared + "'.", {}});
+        return false;
+    }
+    entry.literal_text = rhs.text;
+    entry.literal_kind = rhs.kind;
+    return true;
+}
+
+void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
+          bool& changed, diagnostic::Sink& diag) {
     if (!slot) return;
     for (auto& c : slot->children) {
-        walk(c, diag);
+        walk(c, tree, changed, diag);
     }
     if (slot->kind == parse::Kind::kUnaryExpr) {
         if (auto folded = tryFoldUnary(*slot, diag)) {
             slot = std::move(folded);
+            changed = true;
         }
     } else if (slot->kind == parse::Kind::kBinaryExpr) {
         if (auto folded = tryFoldBinary(*slot, diag)) {
             slot = std::move(folded);
+            changed = true;
+        }
+    } else if (slot->kind == parse::Kind::kIdentExpr) {
+        if (trySubstituteConst(slot, tree)) {
+            changed = true;
+        }
+    }
+    if (slot->kind == parse::Kind::kVarDeclStmt) {
+        if (tryCaptureConst(*slot, tree, diag)) {
+            changed = true;
         }
     }
     assignNominal(*slot);
@@ -589,8 +685,31 @@ void walk(std::unique_ptr<parse::Node>& slot, diagnostic::Sink& diag) {
 }  // namespace
 
 void run(parse::Tree& tree, diagnostic::Sink& diag) {
-    for (auto& n : tree.nodes) {
-        walk(n, diag);
+    // Iterate to a fixpoint: each round may substitute kConst idents
+    // (exposing new literal-only sub-trees that the binary/unary folders
+    // can then collapse) and capture const-decl values from now-folded
+    // rhs expressions. Convergence is guaranteed because each round only
+    // adds substitutions / captures; never removes them.
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (auto& n : tree.nodes) {
+            walk(n, tree, changed, diag);
+        }
+    }
+    // Fixpoint check: any kConst whose rhs never folded is unresolvable
+    // (cyclic or refers to a non-constant). Emit ONE diagnostic at the
+    // first unfolded entry — a cycle of N consts becomes one error block
+    // rather than N. Caret lands at the ident via entry.tok (grammar
+    // captured the ident's tok in name_tok; resolve stamped it on the
+    // entry at creation time).
+    for (parse::Entry const& entry : tree.entries) {
+        if (entry.kind != parse::EntryKind::kConst) continue;
+        if (!entry.literal_text.empty()) continue;
+        diagnostic::report(diag, {entry.file_id, entry.tok,
+            "Initializer for '" + entry.name + "' is not a constant expression.",
+            {}});
+        return;
     }
 }
 
