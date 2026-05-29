@@ -1,10 +1,10 @@
 
 SUBDIRS = \
-	call \
-	const \
+	constfold \
+	expression \
+	function \
 	lex \
-	numeric \
-	parse
+	misc
 
 .PHONY: all clean test negatives positives $(SUBDIRS)
 

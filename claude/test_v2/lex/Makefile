@@ -4,13 +4,14 @@ CXX       = g++
 LLCFLAGS  = --filetype=obj --relocation-model=pic
 
 BIN_DIR   = ../../bin
-BUILD_DIR = ../../build/test_v2/lexer
+BUILD_DIR = ../../build/test_v2/lex
 
 SAMPLES = \
 	brackets \
 	comments \
 	importer \
-	invalid
+	invalid \
+	literal
 
 .PHONY: all clean negatives positives $(SAMPLES)
 

@@ -4,10 +4,9 @@ CXX       = g++
 LLCFLAGS  = --filetype=obj --relocation-model=pic
 
 BIN_DIR   = ../../bin
-BUILD_DIR = ../../build/test_v2/parser
+BUILD_DIR = ../../build/test_v2/misc
 
 SAMPLES = \
-	expression1 expression2 expression3 expression4 expression5 \
 	hello \
 	widen
 
