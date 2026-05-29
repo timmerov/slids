@@ -6,6 +6,36 @@ Each phase adds primitives the next phase depends on. widen.cpp threads through
 every conversion site as features land; treat each new expr/decl/assign site
 as a widen call-out.
 
+PLANNED PIPELINE RESTRUCTURE — resolve split
+
+  Today's pipeline runs: grammar -> constfold -> classify. The classify
+  stage owns both symbol resolution AND type inference. Named constants
+  (`const T NAME = const_expr;`, Phase 4) need their values visible to
+  constfold so `MAX * 2` folds when MAX is a const — which means symbol
+  resolution must precede constfold. The plan is to split classify into
+  two stages:
+
+    grammar -> resolve -> constfold -> classify -> desugar -> ...
+
+  resolve owns: parse::Entry vector population, frame push/pop, ident
+  resolution (resolved_entry_id stamping), const-substitution (rewrite
+  kIdentExpr -> literal in place when the entry is kConst), wrong-kind
+  diagnostics (assign-to-function, call-a-variable), duplicate-decl and
+  signature-mismatch detection. Two passes per scope (collect decls
+  then walk bodies) so forward references work.
+
+  classify (post-restructure) narrows to type inference + (Phase 3)
+  overload resolution. Stamps inferred_type / op_type, validates type
+  spellings, rejects no-common-type binaries, non-coercible operands
+  for `! && || ^^`, non-numeric shift sides, bitwise on float, arity
+  mismatch, multi-arg print intrinsic. Reads entries via resolved_entry_id
+  but never mutates the symbol table.
+
+  Status: not yet split. Land alongside Phase 4 constants, or as a
+  separate pre-Phase-4 restructure. Tests already in place don't change
+  shape — diagnostics moving between resolve and classify produce the
+  same error text at the same source location.
+
 Phase 0 — foundations (largely landed)
   * lex stage + import wrapper
   * numeric stage — literal validation + canonicalization (mostly landed;
@@ -272,16 +302,39 @@ CONSTFOLD
     and classify in main.cpp. Spec in test_v2/const/fold.sl. See the
     "Phase 0" entry above for landed vs pending breakdown.
 
+RESOLVE (planned — symbol-resolution split off classify; see top of file)
+  * Stage doesn't yet exist as a separate .cpp; the responsibilities
+    listed here live in classify today.
+  * Owns: Entry vector population, frame push/pop discipline, ident
+    resolution + resolved_entry_id stamping, const-substitution
+    (kIdentExpr -> literal in place when entry is kConst, lands with
+    Phase 4 constants), wrong-kind diagnostics (assign-to-function,
+    call-a-variable), duplicate-decl + signature-mismatch detection
+    with multi-source notes.
+  * Two passes per scope to preserve forward references. Frames are
+    transient state cleared at end of stage.
+  * After the split, classify reads resolved_entry_id but never mutates
+    the entry table.
+
 CLASSIFY
   * Symbol table lives in parse (Entry vector + frame stack + pushFrame /
     popFrame / addEntry / findInLiveScopes / findInFrame / entryType APIs).
-    Two entry kinds today: kFunction, kLocalVar. Function entries carry a
-    `defined` flag so decl+def at program scope binds to one entry.
+    Two entry kinds today: kFunction, kLocalVar. Function entries carry
+    `param_types` (ordered) and a `defined` flag so decl+def at program
+    scope binds to one entry.
+  * NOTE: today's classify still owns the items listed under the planned
+    RESOLVE stage above. The bullets below describe the merged stage as
+    implemented; once resolve splits off, the symbol-resolution bullets
+    move there and classify shrinks to type inference + overload resolution.
   * Pass 1 walks the Program children, adds Function entries at the program
-    frame. Decl+def pair binds; def+def is duplicate; signature (return
-    type) mismatch rejects. All three error families carry a multi-source
-    note pointing at the prior decl.
+    frame. Decl+def pair binds; def+def is duplicate; signature mismatch
+    rejects on either return type OR param types. All four error families
+    (return mismatch, param mismatch, def+def, var-decl dup) carry a multi-
+    source note pointing at the prior decl.
   * Pass 2 walks each FunctionDef body in a fresh frame:
+    - Each kParam is seeded as a LocalVar entry in the body frame; the
+      kParam node gets resolved_entry_id stamped so codegen can find its
+      alloca via SymTab. Duplicate param names rejected.
     - kVarDeclStmt adds a LocalVar (rejects duplicate in same frame)
     - kAssignStmt / kAugAssignStmt resolve lvalue via live-scope walk and
       require a LocalVar entry (assigning to a Function rejects sharply)
@@ -310,12 +363,14 @@ CLASSIFY
   * AugAssign mirrors the same per-op dispatch and stamps s.inferred_type +
     s.op_type + s.return_type (= lvalue type) for desugar to read.
   * Type-spelling validation: requireKnownType (via widen::isKnownType) runs
-    on every VarDecl declared type and every function return type before
-    they enter the symbol table.
+    on every VarDecl declared type, every function return type, and every
+    function parameter type before they enter the symbol table.
   * Print intrinsic special case: __println / __print arg's `+` chain is
     treated as concatenation, not arith. inferPrintArg walks the chain and
     infers each leaf in isolation (no commonType across segments). Contained
     to two short blocks in classify; print.cpp just reads seg->inferred_type.
+    Multi-arg print (e.g. `__println(a, b)`) is rejected sharply:
+    "'__println' takes exactly one argument."
   * Overload resolution unimplemented — no overloads to resolve today.
   * Helpers (isCoercibleToBool, isIntegerClass, isNumericType, isPtrLikeType,
     isFloatType) live inline; consolidate into widen if a second caller
@@ -334,6 +389,15 @@ CODEGEN
     became asserts (classify guarantees resolution before codegen runs).
   * widen::commonType call from emitBinary is gone; codegen reads op_type
     from the stamped node instead.
+  * Function definitions emit typed params in the `define` line; for each
+    param, emit alloca + store from `%arg.N` into a named register, then
+    register the alloca in SymTab[param.resolved_entry_id] so the body
+    reads/writes the param like any local.
+  * kCallStmt emit (after print::tryEmitCall declines): emit each arg via
+    emitExpr(arg, dest_type=stmt.param_types[i]) so widen::convert handles
+    arg-side narrowing/widening; emit `call <ret_llty> @<name>(...)` using
+    stmt.return_type. Non-void returns prefix with a discard `%call.N =`
+    register; arity is asserted (classify guaranteed it).
   * emitToBool handles numeric (icmp/fcmp vs 0) and pointer (icmp ne ptr,
     null) so char[] coerces truthy; non-numeric non-pointer types rejected
     upstream at classify.
