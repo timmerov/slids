@@ -24,6 +24,7 @@ enum class Kind {
     kIdentExpr,
     kUnaryExpr,
     kBinaryExpr,
+    kParam,
 };
 
 struct Node {
@@ -38,6 +39,8 @@ struct Node {
     int tok = -1;                // index into token::List::tokens for error attribution
     int resolved_entry_id = -1;  // ident / lhs / callee -> parse::Tree::entries index
     std::vector<std::unique_ptr<Node>> children;
+    std::vector<std::unique_ptr<Node>> params;   // kFunctionDef/Decl: kParam nodes
+    std::vector<std::string> param_types;        // kCallStmt: resolved fn's param types
 };
 
 struct Tree {

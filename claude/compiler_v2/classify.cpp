@@ -119,6 +119,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kReturnStmt:
+        case parse::Kind::kParam:
             assert(false && "defaultLiteralType: not a literal kind");
             __builtin_unreachable();
     }
@@ -302,6 +303,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kReturnStmt:
+        case parse::Kind::kParam:
             assert(false && "inferExpr: not an expression kind");
             return;
     }
@@ -454,16 +456,44 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         }
         case parse::Kind::kCallStmt: {
             if (isPrintIntrinsic(s.name)) {
+                if (s.children.size() != 1) {
+                    diagnostic::report(diag, {s.file_id, s.tok,
+                        "'" + s.name + "' takes exactly one argument.", {}});
+                }
                 for (auto& ch : s.children) {
                     if (ch) inferPrintArg(tree, *ch, diag);
                 }
-            } else {
-                resolveCallTarget(tree, s, diag);
-                // No parameter types yet, so arg has no context.
+                return;
+            }
+            if (!resolveCallTarget(tree, s, diag)) {
+                // Still walk args so any errors inside them are reported.
                 for (auto& ch : s.children) {
                     if (ch) inferExpr(tree, *ch, "", diag);
                 }
+                return;
             }
+            parse::Entry const& entry = tree.entries[s.resolved_entry_id];
+            if (s.children.size() != entry.param_types.size()) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "Function '" + s.name + "' expects "
+                    + std::to_string(entry.param_types.size())
+                    + " arguments, got "
+                    + std::to_string(s.children.size()) + ".", {}});
+                // Walk args with no context so internal errors still report.
+                for (auto& ch : s.children) {
+                    if (ch) inferExpr(tree, *ch, "", diag);
+                }
+                return;
+            }
+            for (size_t i = 0; i < s.children.size(); i++) {
+                if (s.children[i]) {
+                    inferExpr(tree, *s.children[i], entry.param_types[i], diag);
+                }
+            }
+            // Stamp for codegen: return type drives the call's `call <ret>` slot;
+            // param_types drive each arg's emit dest_type.
+            s.return_type = entry.slids_type;
+            s.param_types = entry.param_types;
             return;
         }
         case parse::Kind::kReturnStmt: {
@@ -484,6 +514,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kIdentExpr:
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
+        case parse::Kind::kParam:
             assert(false && "classifyStmt: not a statement kind");
             return;
     }
@@ -492,6 +523,26 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
 void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
                           diagnostic::Sink& diag) {
     parse::pushFrame(tree);
+    // Params become LocalVar entries seeded into the body frame. Their type
+    // spellings were already validated in pass 1 via requireKnownType.
+    for (auto& p : fn.params) {
+        if (!p) continue;
+        int existing = parse::findInFrame(tree, parse::currentFrameId(tree), p->name);
+        if (existing >= 0) {
+            parse::Entry const& prev = tree.entries[existing];
+            diagnostic::report(diag, {p->file_id, p->tok,
+                "Duplicate parameter name '" + p->name + "'.",
+                {{prev.file_id, prev.tok, "first declared here"}}});
+            continue;
+        }
+        parse::Entry e;
+        e.kind = parse::EntryKind::kLocalVar;
+        e.name = p->name;
+        e.slids_type = p->return_type;
+        e.file_id = p->file_id;
+        e.tok = p->tok;
+        p->resolved_entry_id = parse::addEntry(tree, std::move(e));
+    }
     for (auto& ch : fn.children) {
         if (ch) classifyStmt(tree, *ch, fn.return_type, diag);
     }
@@ -521,6 +572,12 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             continue;
         }
         requireKnownType(ch->return_type, ch->file_id, ch->tok, "Return", diag);
+        std::vector<std::string> param_types;
+        for (auto& p : ch->params) {
+            if (!p) continue;
+            requireKnownType(p->return_type, p->file_id, p->tok, "Parameter", diag);
+            param_types.push_back(p->return_type);
+        }
         bool is_def = (ch->kind == parse::Kind::kFunctionDef);
         int existing = parse::findInFrame(tree, parse::currentFrameId(tree), ch->name);
         if (existing >= 0) {
@@ -530,6 +587,12 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
                     "Return type '" + ch->return_type
                     + "' does not match earlier declaration's '"
                     + prev.slids_type + "'.",
+                    {{prev.file_id, prev.tok, "first declared here"}}});
+                continue;
+            }
+            if (prev.param_types != param_types) {
+                diagnostic::report(diag, {ch->file_id, ch->tok,
+                    "Parameter types do not match earlier declaration.",
                     {{prev.file_id, prev.tok, "first declared here"}}});
                 continue;
             }
@@ -547,6 +610,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         e.kind = parse::EntryKind::kFunction;
         e.name = ch->name;
         e.slids_type = ch->return_type;
+        e.param_types = std::move(param_types);
         e.file_id = ch->file_id;
         e.tok = ch->tok;
         e.defined = is_def;

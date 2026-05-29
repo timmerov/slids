@@ -1,5 +1,6 @@
 
 SUBDIRS = \
+	call \
 	const \
 	lex \
 	numeric \

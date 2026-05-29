@@ -25,6 +25,7 @@ enum class Kind {
     kIdentExpr,
     kUnaryExpr,    // text = op ("+", "-", "!", "~"); children[0] = operand
     kBinaryExpr,   // text = op (e.g. "+", "<<", "&&"); children[0] = lhs, [1] = rhs
+    kParam,        // function parameter; name = ident, return_type = declared type
 };
 
 struct Node {
@@ -39,6 +40,8 @@ struct Node {
     int tok = -1;                // index into token::List::tokens for error attribution
     int resolved_entry_id = -1;  // classify: ident / lhs / callee -> Tree::entries index
     std::vector<std::unique_ptr<Node>> children;
+    std::vector<std::unique_ptr<Node>> params;   // kFunctionDef/Decl: kParam nodes
+    std::vector<std::string> param_types;        // kCallStmt: classify-cached resolved fn's param types
 };
 
 enum class EntryKind {
@@ -50,6 +53,7 @@ struct Entry {
     EntryKind kind;
     std::string name;
     std::string slids_type;       // LocalVar: declared type; Function: return type
+    std::vector<std::string> param_types;  // Function only
     int parent_frame_id = -1;
     int file_id = -1;
     int tok = -1;

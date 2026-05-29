@@ -459,13 +459,23 @@ struct Parser {
         std::string callee = peek().text;
         advance();   // ident
         advance();   // (  (caller verified via lookahead)
-        auto arg = parseExpr();
-        if (!arg) return nullptr;
-        if (!expect(token::Kind::kRParen, ")")) return nullptr;
-        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
         auto node = newNodeAt(parse::Kind::kCallStmt, stmt_file, stmt_tok);
         node->name = std::move(callee);
-        node->children.push_back(std::move(arg));
+        while (peek().kind != token::Kind::kRParen) {
+            auto arg = parseExpr();
+            if (!arg) return nullptr;
+            node->children.push_back(std::move(arg));
+            if (peek().kind == token::Kind::kComma) {
+                advance();
+                continue;
+            }
+            if (peek().kind != token::Kind::kRParen) {
+                error("expected ',' or ')' in argument list");
+                return nullptr;
+            }
+        }
+        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
         return node;
     }
 
@@ -509,11 +519,36 @@ struct Parser {
         std::string name = peek().text;
         advance();
         if (!expect(token::Kind::kLParen, "(")) return nullptr;
-        if (!expect(token::Kind::kRParen, ")")) return nullptr;
 
         auto node = newNodeAt(parse::Kind::kFunctionDef, fn_file, fn_tok);
         node->name = std::move(name);
         node->return_type = std::move(ret_type);
+
+        while (peek().kind != token::Kind::kRParen) {
+            int p_file = peek().file_id;
+            int p_tok = pos;
+            std::string p_type = parseType();
+            if (fatal) return nullptr;
+            if (peek().kind != token::Kind::kIdentifier) {
+                error("expected parameter name");
+                return nullptr;
+            }
+            std::string p_name = peek().text;
+            advance();
+            auto p = newNodeAt(parse::Kind::kParam, p_file, p_tok);
+            p->name = std::move(p_name);
+            p->return_type = std::move(p_type);
+            node->params.push_back(std::move(p));
+            if (peek().kind == token::Kind::kComma) {
+                advance();
+                continue;
+            }
+            if (peek().kind != token::Kind::kRParen) {
+                error("expected ',' or ')' in parameter list");
+                return nullptr;
+            }
+        }
+        if (!expect(token::Kind::kRParen, ")")) return nullptr;
 
         if (peek().kind == token::Kind::kSemicolon) {
             advance();

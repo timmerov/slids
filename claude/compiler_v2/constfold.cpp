@@ -125,6 +125,7 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kIdentExpr:
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
+        case parse::Kind::kParam:
             return;  // non-literal: no nominal type
     }
 }

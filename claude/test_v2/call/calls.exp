@@ -1,0 +1,8 @@
+helper
+add= 5
+i= 7
+f= 3.5
+b= true
+callee
+v64= 100
+v64= 7

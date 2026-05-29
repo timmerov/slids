@@ -410,6 +410,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kAugAssignStmt:
         case ast::Kind::kCallStmt:
         case ast::Kind::kReturnStmt:
+        case ast::Kind::kParam:
             diagnostic::report(diag, {expr.file_id, expr.tok,
                 "codegen: not an expression", {}});
             return "0";
@@ -453,12 +454,34 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 << ", ptr " << it->second.alloca_name << "\n";
             return;
         }
-        case ast::Kind::kCallStmt:
-            if (!print::tryEmitCall(stmt, syms, pool, out, diag)) {
-                diagnostic::report(diag, {stmt.file_id, stmt.tok,
-                    "codegen: unknown call '" + stmt.name + "'", {}});
+        case ast::Kind::kCallStmt: {
+            if (print::tryEmitCall(stmt, syms, pool, out, diag)) return;
+            // Classify stamped return_type + param_types on the call node.
+            assert(stmt.children.size() == stmt.param_types.size()
+                && "kCallStmt: arity should have been verified by classify");
+            std::vector<std::pair<std::string, std::string>> arg_vals;
+            arg_vals.reserve(stmt.children.size());
+            for (size_t i = 0; i < stmt.children.size(); i++) {
+                ast::Node const& arg = *stmt.children[i];
+                std::string const& dest = stmt.param_types[i];
+                std::string val = emitExpr(arg, syms, pool, out, diag, dest);
+                std::string llty = llvmTypeFor(dest, arg.file_id, arg.tok, diag);
+                arg_vals.push_back({llty, std::move(val)});
             }
+            std::string ret_llty = llvmTypeFor(stmt.return_type,
+                                               stmt.file_id, stmt.tok, diag);
+            out << "  ";
+            if (stmt.return_type != "void") {
+                out << newTmp("call") << " = ";
+            }
+            out << "call " << ret_llty << " @" << stmt.name << "(";
+            for (size_t i = 0; i < arg_vals.size(); i++) {
+                if (i > 0) out << ", ";
+                out << arg_vals[i].first << " " << arg_vals[i].second;
+            }
+            out << ")\n";
             return;
+        }
         case ast::Kind::kReturnStmt: {
             std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
                                        fn_return_type);
@@ -483,6 +506,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kIdentExpr:
         case ast::Kind::kUnaryExpr:
         case ast::Kind::kBinaryExpr:
+        case ast::Kind::kParam:
             diagnostic::report(diag, {stmt.file_id, stmt.tok,
                 "codegen: unexpected node kind in statement position", {}});
             return;
@@ -495,8 +519,28 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
                   std::ostream& out, diagnostic::Sink& diag) {
     std::string ret_llty = llvmTypeFor(fn.return_type,
                                        fn.file_id, fn.tok, diag);
-    out << "define " << ret_llty << " @" << fn.name << "() {\n";
+    out << "define " << ret_llty << " @" << fn.name << "(";
+    for (size_t i = 0; i < fn.params.size(); i++) {
+        ast::Node const& p = *fn.params[i];
+        if (i > 0) out << ", ";
+        std::string p_llty = llvmTypeFor(p.return_type, p.file_id, p.tok, diag);
+        out << p_llty << " %arg." << i;
+    }
+    out << ") {\n";
+
     SymTab syms;
+    // Alloca + store-in each param so the body can read/write it like a local.
+    // Register under the param's resolved_entry_id (stamped by classify's
+    // body-frame seeding).
+    for (size_t i = 0; i < fn.params.size(); i++) {
+        ast::Node const& p = *fn.params[i];
+        std::string p_llty = llvmTypeFor(p.return_type, p.file_id, p.tok, diag);
+        std::string regname = std::string("%") + p.name;
+        out << "  " << regname << " = alloca " << p_llty << "\n";
+        out << "  store " << p_llty << " %arg." << i
+            << ", ptr " << regname << "\n";
+        syms[p.resolved_entry_id] = {regname, p_llty, p.return_type};
+    }
     for (auto const& s : fn.children) {
         emitStmt(*s, syms, pool, fn.return_type, out, diag);
     }

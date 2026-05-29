@@ -31,6 +31,7 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kIdentExpr:     return ast::Kind::kIdentExpr;
         case parse::Kind::kUnaryExpr:     return ast::Kind::kUnaryExpr;
         case parse::Kind::kBinaryExpr:    return ast::Kind::kBinaryExpr;
+        case parse::Kind::kParam:         return ast::Kind::kParam;
     }
     assert(false && "toAstKind: unhandled parse::Kind");
     __builtin_unreachable();
@@ -85,8 +86,12 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p) {
     node->file_id = p.file_id;
     node->tok = p.tok;
     node->resolved_entry_id = p.resolved_entry_id;
+    node->param_types = p.param_types;
     for (auto const& c : p.children) {
         node->children.push_back(copyNode(*c));
+    }
+    for (auto const& pp : p.params) {
+        node->params.push_back(copyNode(*pp));
     }
     if (auto rewritten = tryDesugarAugAssign(*node)) return rewritten;
     return node;

@@ -87,7 +87,11 @@ STAGE FILES (.h / .cpp pairs)
             classify (no longer derives or recomputes types). SymTab keyed
             by parse::Tree::entries index; every ident / lvalue node carries
             its resolved_entry_id, so codegen does no string-keyed lookup.
-            Mangled names and field offsets land with layout.
+            Function definitions emit param allocas + stores from %arg.N
+            into named registers; call statements emit `call <ret> @name(
+            <typed args>)` using the classify-stamped return_type and
+            param_types from the resolved Function entry. Mangled names
+            and field offsets land with layout.
 
 PRODUCT FILES (.h / .cpp pairs)
 

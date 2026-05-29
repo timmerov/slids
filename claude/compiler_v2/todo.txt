@@ -53,8 +53,11 @@ Phase 1 — expression core
     walk; decl+def binding at program scope)                          LANDED
   * classify type inference (inferred_type + op_type on every expr node;
     literal-flex into context; commonType ownership at classify)      LANDED
-  * calls (zero-arg, multi-arg)                                       OPEN
+  * calls — typed params, 0/1/N-arg statement-form calls; param-as-
+    LocalVar in body frame; arity + per-arg type check via param-type
+    context; decl/def signature match (return + param types)          LANDED
   * PPID — pre/post-inc/dec via phrases                               OPEN
+  * call-as-expression — capture/use a call's return value            OPEN
 
 Phase 2 — declarations + flow
   * var decls (typed init, inferred init, declare-then-assign)
@@ -129,7 +132,9 @@ GRAMMAR
     Table-driven via kPrimitives in grammar.cpp.
     - no other array shapes (T[N], multi-dim, etc.)
     - no class / struct / enum / alias type names yet
-  * parameter lists not parsed (only bare `()`)
+  * parameter lists: `(<type> <name>, ...)` parses; stored on the
+    FunctionDef/Decl node as `params` (kParam children) so signatures
+    survive into classify and codegen.
   * expression parsing: literal leaves (string, int, char, bool, float)
     + bare identifier + unary `! ~ + -` + full binary set (arith / bitwise /
     shift / comparison / logical) with C precedence + parenthesized grouping.
@@ -195,18 +200,20 @@ WIDENING + LITERAL RANGE CHECKING (widen.h / widen.cpp)
   * Still TODO:
       - explicit type conversion syntax `(Type=expr)` not yet parsed
       - explicit cast syntax `<Type^>` (Phase 4)
-      - widen at function-call arg sites (no params yet)
-  * call statements: exactly one argument
-    - zero-arg calls not parsed
-    - multi-arg calls not parsed
-  * top-level: only function definitions and function declarations
+      - widen at function-call arg sites: landed; per-arg dest_type from
+        the resolved function's param_types drives emitExpr / widen::convert.
+  * call statements: 0 / 1 / N arguments parsed; print intrinsics still
+    restricted to 1 argument (rejected at classify).
+  * call-as-expression not yet — calls only at statement position.
+  * top-level: function definitions and function declarations.
     - imports work (lex-time wrapper expands them; grammar accepts declarations
       from imported .slh files)
     - no classes, namespaces, enums, aliases, globals
-    - function signatures are name + bare `()` only — no params, no overloads
+    - function signatures: typed params; no overloads (Phase 3) or defaults.
     - duplicate-declaration check landed at classify: decl+def at program
-      scope bind to one entry, def+def + signature-mismatch report with a
-      multi-source note pointing at the prior decl
+      scope bind to one entry, def+def + signature-mismatch (return type
+      AND param types) report with a multi-source note pointing at the
+      prior decl
   * statement-level: var-decl, assign, augmented-assign (desugared to assign),
     call, return
     - no if/else, no for/while, no block
@@ -278,8 +285,11 @@ CLASSIFY
     - kVarDeclStmt adds a LocalVar (rejects duplicate in same frame)
     - kAssignStmt / kAugAssignStmt resolve lvalue via live-scope walk and
       require a LocalVar entry (assigning to a Function rejects sharply)
-    - kCallStmt non-print resolves callee and requires a Function entry
-      (calling a LocalVar rejects sharply)
+    - kCallStmt non-print resolves callee, requires a Function entry,
+      validates arity against the entry's param_types, infers each arg
+      with the corresponding param_type as context (so literals flex
+      and idents widen via widen::convert at codegen). Stamps
+      stmt.return_type + stmt.param_types so codegen has both.
     - kIdentExpr resolves via live-scope walk, stamps resolved_entry_id +
       inferred_type from entry's declared type
   * inferExpr stamps inferred_type on every expression node + op_type on
@@ -372,7 +382,9 @@ PRINT INTRINSIC (print.h / print.cpp)
     - char[]          -> %s
     - integer-class   -> %d / %u / %lld / %llu (zext/sext to i32 for sub-32)
   * no slice / non-literal-string segments (no string-typed locals yet)
-  * no multi-arg call form (single arg only)
+  * single-arg only — classify rejects multi-arg `__println(a, b)` with
+    "'__println' takes exactly one argument." Multi-segment output uses
+    the `+` concat chain inside the single arg.
   * shares strings::Pool with the rest of codegen; reads seg->inferred_type
     (no codegen::exprType dependency). To delete: remove print.* + the two
     call sites in codegen.cpp + the SRCS entry in Makefile + classify's
