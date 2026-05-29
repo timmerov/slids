@@ -455,6 +455,8 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kBinaryExpr:
             return emitBinary(expr, syms, pool, out, diag, dest_type);
         case ast::Kind::kCallExpr: {
+            assert(expr.return_type != "void"
+                && "emitExpr kCallExpr: classify should have rejected void call-as-value");
             std::string r = emitCall(expr, syms, pool, out, diag);
             return widen::convert(r, expr.return_type, dest_type,
                                   expr.file_id, expr.tok, out, diag);
