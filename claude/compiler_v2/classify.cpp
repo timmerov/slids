@@ -105,6 +105,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kCallStmt:
+        case parse::Kind::kCallExpr:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kParam:
             assert(false && "defaultLiteralType: not a literal kind");
@@ -177,6 +178,26 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             assert(e.resolved_entry_id >= 0
                 && "inferExpr kIdentExpr: resolve did not stamp resolved_entry_id");
             e.inferred_type = parse::entryType(tree, e.resolved_entry_id);
+            return;
+        }
+        case parse::Kind::kCallExpr: {
+            // resolve stamped return_type + param_types (and already rejected
+            // print intrinsics in expression position). A call yields its
+            // return type; widening into `context` happens at codegen, like an
+            // ident read. Reject a void return used where a value is wanted.
+            if (e.return_type == "void") {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "Function '" + e.name + "' returns no value and cannot be "
+                    "used as an expression.", {}});
+            }
+            e.inferred_type = e.return_type;
+            for (size_t i = 0; i < e.children.size(); i++) {
+                if (!e.children[i]) continue;
+                std::string const& dest = (i < e.param_types.size())
+                    ? e.param_types[i]
+                    : std::string();
+                inferExpr(tree, *e.children[i], dest, diag);
+            }
             return;
         }
         case parse::Kind::kUnaryExpr: {
@@ -412,6 +433,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kIdentExpr:
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
+        case parse::Kind::kCallExpr:
         case parse::Kind::kParam:
             assert(false && "classifyStmt: not a statement kind");
             return;

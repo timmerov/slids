@@ -173,9 +173,17 @@ struct Parser {
         return nullptr;
     }
 
-    // Passthrough today. Field access, indexing, postfix-call, postfix-^/^^,
-    // postfix-++/-- all slot in here as their phases land.
+    // Field access, indexing, postfix-^/^^, postfix-++/-- all slot in here as
+    // their phases land. Today: postfix-call on a bare identifier.
     std::unique_ptr<parse::Node> parsePostfix(std::unique_ptr<parse::Node> base) {
+        if (base->kind == parse::Kind::kIdentExpr
+            && peek().kind == token::Kind::kLParen) {
+            auto node = newNodeAt(parse::Kind::kCallExpr, base->file_id, base->tok);
+            node->name = std::move(base->name);
+            advance();   // (
+            if (!parseCallArgs(*node)) return nullptr;
+            return node;
+        }
         return base;
     }
 
@@ -464,6 +472,26 @@ struct Parser {
         return node;
     }
 
+    // Parses arguments into node->children, starting just past the '(' and
+    // consuming the closing ')'. Shared by statement-form (parseCallStmt) and
+    // expression-form (parsePostfix) calls. Returns false on error.
+    bool parseCallArgs(parse::Node& node) {
+        while (peek().kind != token::Kind::kRParen) {
+            auto arg = parseExpr();
+            if (!arg) return false;
+            node.children.push_back(std::move(arg));
+            if (peek().kind == token::Kind::kComma) {
+                advance();
+                continue;
+            }
+            if (peek().kind != token::Kind::kRParen) {
+                error("Expected ',' or ')' in argument list.");
+                return false;
+            }
+        }
+        return expect(token::Kind::kRParen, ")");
+    }
+
     std::unique_ptr<parse::Node> parseCallStmt() {
         int stmt_file = peek().file_id;
         int stmt_tok = pos;
@@ -472,20 +500,7 @@ struct Parser {
         advance();   // (  (caller verified via lookahead)
         auto node = newNodeAt(parse::Kind::kCallStmt, stmt_file, stmt_tok);
         node->name = std::move(callee);
-        while (peek().kind != token::Kind::kRParen) {
-            auto arg = parseExpr();
-            if (!arg) return nullptr;
-            node->children.push_back(std::move(arg));
-            if (peek().kind == token::Kind::kComma) {
-                advance();
-                continue;
-            }
-            if (peek().kind != token::Kind::kRParen) {
-                error("Expected ',' or ')' in argument list.");
-                return nullptr;
-            }
-        }
-        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+        if (!parseCallArgs(*node)) return nullptr;
         if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
         return node;
     }

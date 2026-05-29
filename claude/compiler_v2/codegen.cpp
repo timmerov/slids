@@ -377,6 +377,40 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
                           expr.file_id, expr.tok, out, diag);
 }
 
+// Emit a user-function call (statement or expression form). classify stamped
+// return_type + param_types on the node. Returns the result register, or ""
+// for a void return. The caller decides whether to use, widen, or drop it.
+std::string emitCall(ast::Node const& call, SymTab const& syms,
+                     strings::Pool& pool, std::ostream& out,
+                     diagnostic::Sink& diag) {
+    assert(call.children.size() == call.param_types.size()
+        && "emitCall: arity should have been verified by classify");
+    std::vector<std::pair<std::string, std::string>> arg_vals;
+    arg_vals.reserve(call.children.size());
+    for (size_t i = 0; i < call.children.size(); i++) {
+        ast::Node const& arg = *call.children[i];
+        std::string const& dest = call.param_types[i];
+        std::string val = emitExpr(arg, syms, pool, out, diag, dest);
+        std::string llty = llvmTypeFor(dest, arg.file_id, arg.tok, diag);
+        arg_vals.push_back({llty, std::move(val)});
+    }
+    std::string ret_llty = llvmTypeFor(call.return_type,
+                                       call.file_id, call.tok, diag);
+    std::string result;
+    out << "  ";
+    if (call.return_type != "void") {
+        result = newTmp("call");
+        out << result << " = ";
+    }
+    out << "call " << ret_llty << " @" << call.name << "(";
+    for (size_t i = 0; i < arg_vals.size(); i++) {
+        if (i > 0) out << ", ";
+        out << arg_vals[i].first << " " << arg_vals[i].second;
+    }
+    out << ")\n";
+    return result;
+}
+
 }  // namespace
 
 std::string emitExpr(ast::Node const& expr, SymTab const& syms,
@@ -420,6 +454,11 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             return emitUnary(expr, syms, pool, out, diag, dest_type);
         case ast::Kind::kBinaryExpr:
             return emitBinary(expr, syms, pool, out, diag, dest_type);
+        case ast::Kind::kCallExpr: {
+            std::string r = emitCall(expr, syms, pool, out, diag);
+            return widen::convert(r, expr.return_type, dest_type,
+                                  expr.file_id, expr.tok, out, diag);
+        }
         case ast::Kind::kProgram:
         case ast::Kind::kFunctionDef:
         case ast::Kind::kFunctionDecl:
@@ -476,30 +515,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         }
         case ast::Kind::kCallStmt: {
             if (print::tryEmitCall(stmt, syms, pool, out, diag)) return;
-            // Classify stamped return_type + param_types on the call node.
-            assert(stmt.children.size() == stmt.param_types.size()
-                && "kCallStmt: arity should have been verified by classify");
-            std::vector<std::pair<std::string, std::string>> arg_vals;
-            arg_vals.reserve(stmt.children.size());
-            for (size_t i = 0; i < stmt.children.size(); i++) {
-                ast::Node const& arg = *stmt.children[i];
-                std::string const& dest = stmt.param_types[i];
-                std::string val = emitExpr(arg, syms, pool, out, diag, dest);
-                std::string llty = llvmTypeFor(dest, arg.file_id, arg.tok, diag);
-                arg_vals.push_back({llty, std::move(val)});
-            }
-            std::string ret_llty = llvmTypeFor(stmt.return_type,
-                                               stmt.file_id, stmt.tok, diag);
-            out << "  ";
-            if (stmt.return_type != "void") {
-                out << newTmp("call") << " = ";
-            }
-            out << "call " << ret_llty << " @" << stmt.name << "(";
-            for (size_t i = 0; i < arg_vals.size(); i++) {
-                if (i > 0) out << ", ";
-                out << arg_vals[i].first << " " << arg_vals[i].second;
-            }
-            out << ")\n";
+            // Statement form discards the result register.
+            emitCall(stmt, syms, pool, out, diag);
             return;
         }
         case ast::Kind::kReturnStmt: {
@@ -525,6 +542,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kIdentExpr:
         case ast::Kind::kUnaryExpr:
         case ast::Kind::kBinaryExpr:
+        case ast::Kind::kCallExpr:
         case ast::Kind::kParam:
             assert(false && "emitStmt: reached non-statement node kind");
             return;

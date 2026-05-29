@@ -28,6 +28,9 @@ void requireKnownType(std::string const& t, int file_id, int tok,
         "Unknown type '" + t + "'.", {}});
 }
 
+void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag);
+void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
+
 void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
     switch (e.kind) {
         case parse::Kind::kIdentExpr: {
@@ -38,6 +41,18 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
                 return;
             }
             e.resolved_entry_id = id;
+            return;
+        }
+        case parse::Kind::kCallExpr: {
+            if (isPrintIntrinsic(e.name)) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "'" + e.name + "' cannot be used as an expression.", {}});
+                for (auto& ch : e.children) {
+                    if (ch) resolveExpr(tree, *ch, diag);
+                }
+                return;
+            }
+            resolveUserCall(tree, e, diag);
             return;
         }
         case parse::Kind::kUnaryExpr:
@@ -111,6 +126,28 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
     return true;
 }
 
+// User-function call (statement or expression form): resolve the target,
+// check arity against the entry's param list, and cache return + param types
+// for downstream stages. Then recurse into the argument expressions.
+void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+    if (resolveCallTarget(tree, s, diag)) {
+        parse::Entry const& entry = tree.entries[s.resolved_entry_id];
+        if (s.children.size() != entry.param_types.size()) {
+            diagnostic::report(diag, {s.file_id, s.tok,
+                "Function '" + s.name + "' expects "
+                + std::to_string(entry.param_types.size())
+                + " arguments, got "
+                + std::to_string(s.children.size()) + ".", {}});
+        } else {
+            s.return_type = entry.slids_type;
+            s.param_types = entry.param_types;
+        }
+    }
+    for (auto& ch : s.children) {
+        if (ch) resolveExpr(tree, *ch, diag);
+    }
+}
+
 void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     switch (s.kind) {
         case parse::Kind::kVarDeclStmt: {
@@ -165,22 +202,11 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
                     diagnostic::report(diag, {s.file_id, s.tok,
                         "'" + s.name + "' takes exactly one argument.", {}});
                 }
-            } else if (resolveCallTarget(tree, s, diag)) {
-                parse::Entry const& entry = tree.entries[s.resolved_entry_id];
-                if (s.children.size() != entry.param_types.size()) {
-                    diagnostic::report(diag, {s.file_id, s.tok,
-                        "Function '" + s.name + "' expects "
-                        + std::to_string(entry.param_types.size())
-                        + " arguments, got "
-                        + std::to_string(s.children.size()) + ".", {}});
-                } else {
-                    // Cache return type + param types for codegen.
-                    s.return_type = entry.slids_type;
-                    s.param_types = entry.param_types;
+                for (auto& ch : s.children) {
+                    if (ch) resolveExpr(tree, *ch, diag);
                 }
-            }
-            for (auto& ch : s.children) {
-                if (ch) resolveExpr(tree, *ch, diag);
+            } else {
+                resolveUserCall(tree, s, diag);
             }
             return;
         }
@@ -202,6 +228,7 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
         case parse::Kind::kIdentExpr:
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
+        case parse::Kind::kCallExpr:
         case parse::Kind::kParam:
             assert(false && "resolveStmt: not a statement kind");
             return;

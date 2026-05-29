@@ -15,6 +15,7 @@ enum class Kind {
     kAssignStmt,
     kAugAssignStmt,  // name = lhs, text = op (e.g. "+", "&&"); children[0] = rhs
     kCallStmt,
+    kCallExpr,     // value-producing call; name = callee, children = args
     kReturnStmt,
     kStringLiteral,
     kIntLiteral,
@@ -43,7 +44,7 @@ struct Node {
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
     std::vector<std::unique_ptr<Node>> children;
     std::vector<std::unique_ptr<Node>> params;   // kFunctionDef/Decl: kParam nodes
-    std::vector<std::string> param_types;        // kCallStmt: classify-cached resolved fn's param types
+    std::vector<std::string> param_types;        // kCallStmt/kCallExpr: classify-cached resolved fn's param types
 };
 
 enum class EntryKind {

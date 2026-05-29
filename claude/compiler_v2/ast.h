@@ -14,6 +14,7 @@ enum class Kind {
     kAssignStmt,
     kAugAssignStmt,
     kCallStmt,
+    kCallExpr,
     kReturnStmt,
     kStringLiteral,
     kIntLiteral,
@@ -42,7 +43,7 @@ struct Node {
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
     std::vector<std::unique_ptr<Node>> children;
     std::vector<std::unique_ptr<Node>> params;   // kFunctionDef/Decl: kParam nodes
-    std::vector<std::string> param_types;        // kCallStmt: resolved fn's param types
+    std::vector<std::string> param_types;        // kCallStmt/kCallExpr: resolved fn's param types
 };
 
 struct Tree {
