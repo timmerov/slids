@@ -448,7 +448,9 @@ RESOLVE
     binds; def+def is duplicate; signature mismatch rejects on either
     return type OR param types. All five error families (return mismatch,
     param mismatch, def+def, var-decl dup, const dup) carry a multi-
-    source note pointing at the prior decl.
+    source note pointing at the prior decl. Namespaces register in their own
+    pass (pass 1a-ns) before functions/consts; inline qualified members and
+    bare aliases each get a later pass once the namespace frames exist.
   * Pass 1b walks each file-scope const's init expression to resolve
     ident references. By then every program-scope entry is in the table,
     so globals can reference each other regardless of decl order.
