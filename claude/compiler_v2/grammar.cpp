@@ -118,6 +118,37 @@ struct Parser {
         return type;
     }
 
+    // Parse a (possibly qualified) name at the current token. Fills `segments`
+    // with each `:`-separated identifier and `toks` with each segment's token
+    // index (for per-segment carets); sets `global` for a leading `::`.
+    // `Space:Nested:kFour` -> {Space, Nested, kFour}; `::kBest` -> global, {kBest}.
+    bool parseQualifiedName(std::vector<std::string>& segments,
+                            std::vector<int>& toks, bool& global) {
+        global = false;
+        if (peek().kind == token::Kind::kColonColon) {
+            global = true;
+            advance();
+        }
+        if (peek().kind != token::Kind::kIdentifier) {
+            error("Expected a name.");
+            return false;
+        }
+        segments.push_back(peek().text);
+        toks.push_back(pos);
+        advance();
+        while (peek().kind == token::Kind::kColon) {
+            advance();
+            if (peek().kind != token::Kind::kIdentifier) {
+                error("Expected a name after ':'.");
+                return false;
+            }
+            segments.push_back(peek().text);
+            toks.push_back(pos);
+            advance();
+        }
+        return true;
+    }
+
     std::unique_ptr<parse::Node> parsePrimary() {
         token::Token const& t = peek();
         if (t.kind == token::Kind::kStringLiteral) {
@@ -161,10 +192,22 @@ struct Parser {
             advance();
             return node;
         }
-        if (t.kind == token::Kind::kIdentifier) {
-            auto node = newNodeHere(parse::Kind::kIdentExpr);
-            node->name = t.text;
-            advance();
+        if (t.kind == token::Kind::kIdentifier
+            || t.kind == token::Kind::kColonColon) {
+            int name_file = t.file_id;
+            int start_tok = pos;
+            std::vector<std::string> segs;
+            std::vector<int> toks;
+            bool global = false;
+            if (!parseQualifiedName(segs, toks, global)) return nullptr;
+            auto node = newNodeAt(parse::Kind::kIdentExpr, name_file, start_tok);
+            node->name = segs.back();
+            node->name_tok = toks.back();
+            segs.pop_back();
+            toks.pop_back();
+            node->qualifier = std::move(segs);
+            node->qualifier_toks = std::move(toks);
+            node->global_qualified = global;
             return node;
         }
         if (t.kind == token::Kind::kLParen) {
@@ -185,6 +228,10 @@ struct Parser {
             && peek().kind == token::Kind::kLParen) {
             auto node = newNodeAt(parse::Kind::kCallExpr, base->file_id, base->tok);
             node->name = std::move(base->name);
+            node->name_tok = base->name_tok;
+            node->qualifier = std::move(base->qualifier);
+            node->qualifier_toks = std::move(base->qualifier_toks);
+            node->global_qualified = base->global_qualified;
             advance();   // (
             if (!parseCallArgs(*node)) return nullptr;
             base = std::move(node);
@@ -424,16 +471,25 @@ struct Parser {
         }
         std::string type = parseType();
         if (fatal) return nullptr;
-        if (peek().kind != token::Kind::kIdentifier) {
+        if (peek().kind != token::Kind::kIdentifier
+            && peek().kind != token::Kind::kColonColon) {
             error("Expected variable name.");
             return nullptr;
         }
-        std::string name = peek().text;
-        int name_tok = pos;
-        advance();
+        // The declared name may be qualified: `const int Space:kSix = 6;`
+        // defines a member of an existing namespace by qualified name.
+        std::vector<std::string> segs;
+        std::vector<int> toks;
+        bool global = false;
+        if (!parseQualifiedName(segs, toks, global)) return nullptr;
         auto node = newNodeAt(parse::Kind::kVarDeclStmt, stmt_file, stmt_tok);
-        node->name = std::move(name);
-        node->name_tok = name_tok;
+        node->name = segs.back();
+        node->name_tok = toks.back();
+        segs.pop_back();
+        toks.pop_back();
+        node->qualifier = std::move(segs);
+        node->qualifier_toks = std::move(toks);
+        node->global_qualified = global;
         node->return_type = std::move(type);
         node->is_const = is_const;
         if (peek().kind == token::Kind::kEquals) {
@@ -449,19 +505,63 @@ struct Parser {
         return node;
     }
 
-    std::unique_ptr<parse::Node> parseAssignStmt() {
+    // A statement led by a (possibly qualified) name: `name = expr;`,
+    // `name op= expr;`, or `name(args);`. The name may be qualified
+    // (`Space:foo()`, `Space:kX = 1`) or carry a leading `::`. The single parser
+    // for all three forms — qualified and bare alike — so the qualifier fields
+    // ride through to resolve identically wherever a name leads a statement.
+    std::unique_ptr<parse::Node> parseNameLedStmt() {
         int stmt_file = peek().file_id;
         int stmt_tok = pos;
-        std::string name = peek().text;
-        advance();   // ident
-        advance();   // =  (caller verified via lookahead)
-        auto expr = parseExpr();
-        if (!expr) return nullptr;
-        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
-        auto node = newNodeAt(parse::Kind::kAssignStmt, stmt_file, stmt_tok);
-        node->name = std::move(name);
-        node->children.push_back(std::move(expr));
-        return node;
+        std::vector<std::string> segs;
+        std::vector<int> toks;
+        bool global = false;
+        if (!parseQualifiedName(segs, toks, global)) return nullptr;
+        std::string name = segs.back();
+        int name_tok = toks.back();
+        segs.pop_back();
+        toks.pop_back();
+
+        auto stamp = [&](parse::Node& n) {
+            n.name = std::move(name);
+            n.name_tok = name_tok;
+            n.qualifier = std::move(segs);
+            n.qualifier_toks = std::move(toks);
+            n.global_qualified = global;
+        };
+
+        token::Kind next = peek().kind;
+        if (next == token::Kind::kLParen) {
+            advance();   // (
+            auto node = newNodeAt(parse::Kind::kCallStmt, stmt_file, stmt_tok);
+            stamp(*node);
+            if (!parseCallArgs(*node)) return nullptr;
+            if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+            return node;
+        }
+        if (next == token::Kind::kEquals) {
+            advance();   // =
+            auto expr = parseExpr();
+            if (!expr) return nullptr;
+            if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+            auto node = newNodeAt(parse::Kind::kAssignStmt, stmt_file, stmt_tok);
+            stamp(*node);
+            node->children.push_back(std::move(expr));
+            return node;
+        }
+        if (char const* op = augAssignOp(next)) {
+            advance();   // op=
+            auto expr = parseExpr();
+            if (!expr) return nullptr;
+            if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+            auto node = newNodeAt(parse::Kind::kAugAssignStmt, stmt_file, stmt_tok);
+            stamp(*node);
+            node->text = op;
+            node->children.push_back(std::move(expr));
+            return node;
+        }
+        error("Expected '=' or '(' after a name.");
+        return nullptr;
     }
 
     // Map an augmented-assign token kind to its op string. Returns nullptr
@@ -483,25 +583,8 @@ struct Parser {
         return nullptr;
     }
 
-    std::unique_ptr<parse::Node> parseAugAssignStmt() {
-        int stmt_file = peek().file_id;
-        int stmt_tok = pos;
-        std::string name = peek().text;
-        advance();   // ident
-        char const* op = augAssignOp(peek().kind);
-        advance();   // op= (caller verified via lookahead + augAssignOp)
-        auto expr = parseExpr();
-        if (!expr) return nullptr;
-        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
-        auto node = newNodeAt(parse::Kind::kAugAssignStmt, stmt_file, stmt_tok);
-        node->name = std::move(name);
-        node->text = op;
-        node->children.push_back(std::move(expr));
-        return node;
-    }
-
     // Parses arguments into node->children, starting just past the '(' and
-    // consuming the closing ')'. Shared by statement-form (parseCallStmt) and
+    // consuming the closing ')'. Shared by statement-form (parseNameLedStmt) and
     // expression-form (parsePostfix) calls. Returns false on error.
     bool parseCallArgs(parse::Node& node) {
         while (peek().kind != token::Kind::kRParen) {
@@ -518,19 +601,6 @@ struct Parser {
             }
         }
         return expect(token::Kind::kRParen, ")");
-    }
-
-    std::unique_ptr<parse::Node> parseCallStmt() {
-        int stmt_file = peek().file_id;
-        int stmt_tok = pos;
-        std::string callee = peek().text;
-        advance();   // ident
-        advance();   // (  (caller verified via lookahead)
-        auto node = newNodeAt(parse::Kind::kCallStmt, stmt_file, stmt_tok);
-        node->name = std::move(callee);
-        if (!parseCallArgs(*node)) return nullptr;
-        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
-        return node;
     }
 
     std::unique_ptr<parse::Node> parseReturnStmt() {
@@ -592,26 +662,74 @@ struct Parser {
         return stmt;
     }
 
-    // alias Name = Type;  (the value form; bare `alias Ns;` defers to namespaces)
+    // Two forms:
+    //   value:  alias Name = Type;   (return_type = target spelling)
+    //   bare:   alias Ns;            (return_type empty; qualifier/global mark the
+    //                                 namespace whose members to import unqualified)
     std::unique_ptr<parse::Node> parseAliasDecl() {
         int stmt_file = peek().file_id;
         int stmt_tok = pos;
         advance();   // alias
-        if (peek().kind != token::Kind::kIdentifier) {
+        if (peek().kind != token::Kind::kIdentifier
+            && peek().kind != token::Kind::kColonColon) {
             error("Expected an alias name after 'alias'.");
             return nullptr;
         }
+        std::vector<std::string> segs;
+        std::vector<int> toks;
+        bool global = false;
+        if (!parseQualifiedName(segs, toks, global)) return nullptr;
+        auto node = newNodeAt(parse::Kind::kAliasDecl, stmt_file, stmt_tok);
+        node->name = segs.back();
+        node->name_tok = toks.back();
+        segs.pop_back();
+        toks.pop_back();
+        node->qualifier = std::move(segs);
+        node->qualifier_toks = std::move(toks);
+        node->global_qualified = global;
+        if (peek().kind == token::Kind::kEquals) {
+            advance();   // =
+            std::string target = parseType();
+            if (fatal) return nullptr;
+            node->return_type = std::move(target);
+        }
+        // else: bare import form — return_type left empty.
+        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+        return node;
+    }
+
+    // A namespace member: const, nested namespace, or member function.
+    std::unique_ptr<parse::Node> parseNamespaceMember() {
+        token::Token const& t = peek();
+        if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
+        if (t.kind == token::Kind::kAlias) return parseAliasDecl();
+        if (t.kind == token::Kind::kIdentifier
+            && peekKind(1) == token::Kind::kLBrace) return parseNamespaceDecl();
+        return parseFunctionDef();
+    }
+
+    // Name { members } — open or reopen a namespace. No trailing semicolon.
+    std::unique_ptr<parse::Node> parseNamespaceDecl() {
+        int ns_file = peek().file_id;
+        int ns_tok = pos;
         std::string name = peek().text;
         int name_tok = pos;
-        advance();
-        if (!expect(token::Kind::kEquals, "=")) return nullptr;
-        std::string target = parseType();
-        if (fatal) return nullptr;
-        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
-        auto node = newNodeAt(parse::Kind::kAliasDecl, stmt_file, stmt_tok);
+        advance();   // name
+        if (!expect(token::Kind::kLBrace, "{")) return nullptr;
+        auto node = newNodeAt(parse::Kind::kNamespaceDecl, ns_file, ns_tok);
         node->name = std::move(name);
         node->name_tok = name_tok;
-        node->return_type = std::move(target);
+        while (!fatal && peek().kind != token::Kind::kRBrace) {
+            if (peek().kind == token::Kind::kEndOfFile
+                || peek().kind == token::Kind::kEndOfInput) {
+                error("Expected '}'.");
+                return nullptr;
+            }
+            auto m = parseNamespaceMember();
+            if (!m) return nullptr;
+            node->children.push_back(std::move(m));
+        }
+        if (!expect(token::Kind::kRBrace, "}")) return nullptr;
         return node;
     }
 
@@ -625,17 +743,17 @@ struct Parser {
             || t.kind == token::Kind::kMinusMinus) return parseIncDecStmt();
         if (t.kind == token::Kind::kIdentifier) {
             token::Kind next = peekKind(1);
-            if (next == token::Kind::kEquals) return parseAssignStmt();
-            if (next == token::Kind::kLParen) return parseCallStmt();
+            if (next == token::Kind::kLBrace) return parseNamespaceDecl();
             if (next == token::Kind::kPlusPlus
                 || next == token::Kind::kMinusMinus) return parseIncDecStmt();
-            if (augAssignOp(next) != nullptr) return parseAugAssignStmt();
             // `<ident> <ident>` is a declaration with an identifier type
             // (alias / class / enum), e.g. `Integer x = 42;`.
             if (next == token::Kind::kIdentifier) return parseVarDeclStmt();
-            error("Expected '=' or '(' after identifier.");
-            return nullptr;
+            // ident, `ident:...` (qualified) -> assign / aug-assign / call.
+            return parseNameLedStmt();
         }
+        // A leading `::` is a global-qualified name leading a call / assign.
+        if (t.kind == token::Kind::kColonColon) return parseNameLedStmt();
         error("Expected statement.");
         return nullptr;
     }
@@ -721,6 +839,9 @@ struct Parser {
                 child = parseVarDeclStmt();
             } else if (peek().kind == token::Kind::kAlias) {
                 child = parseAliasDecl();
+            } else if (peek().kind == token::Kind::kIdentifier
+                       && peekKind(1) == token::Kind::kLBrace) {
+                child = parseNamespaceDecl();
             } else {
                 child = parseFunctionDef();
             }

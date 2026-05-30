@@ -108,6 +108,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kCallExpr:
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
+        case parse::Kind::kNamespaceDecl:
         case parse::Kind::kPreIncExpr:
         case parse::Kind::kPostIncExpr:
         case parse::Kind::kReturnStmt:
@@ -129,6 +130,10 @@ bool literalFitsContext(parse::Node const& lit, std::string const& context_type)
 
 void inferExpr(parse::Tree& tree, parse::Node& e,
                std::string const& context, diagnostic::Sink& diag);
+void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
+                          diagnostic::Sink& diag);
+void classifyNamespace(parse::Tree& tree, parse::Node& node,
+                       diagnostic::Sink& diag);
 
 // Walk a left-leaning '+' chain in a print-intrinsic argument. Each leaf
 // segment infers in isolation — '+' here is print's concatenation marker,
@@ -325,6 +330,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kCallStmt:
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
+        case parse::Kind::kNamespaceDecl:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kParam:
             assert(false && "inferExpr: not an expression kind");
@@ -461,6 +467,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kAliasDecl:
             // resolve substituted the alias away; nothing to type here.
             return;
+        case parse::Kind::kNamespaceDecl:
+            classifyNamespace(tree, s, diag);
+            return;
         case parse::Kind::kProgram:
         case parse::Kind::kFunctionDef:
         case parse::Kind::kFunctionDecl:
@@ -503,6 +512,25 @@ void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
     }
 }
 
+// Type-infer a namespace's members: const inits in their declared-type context,
+// member function bodies, and nested namespaces. Mirrors classify::run's
+// file-scope handling, recursing through the namespace structure.
+void classifyNamespace(parse::Tree& tree, parse::Node& node,
+                       diagnostic::Sink& diag) {
+    for (auto& m : node.children) {
+        if (!m) continue;
+        if (m->kind == parse::Kind::kNamespaceDecl) {
+            classifyNamespace(tree, *m, diag);
+        } else if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
+            for (auto& init : m->children) {
+                if (init) inferExpr(tree, *init, m->return_type, diag);
+            }
+        } else if (m->kind == parse::Kind::kFunctionDef) {
+            classifyFunctionBody(tree, *m, diag);
+        }
+    }
+}
+
 }  // namespace
 
 void run(parse::Tree& tree, diagnostic::Sink& diag) {
@@ -519,6 +547,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         if (!ch) continue;
         if (ch->kind == parse::Kind::kFunctionDef) {
             classifyFunctionBody(tree, *ch, diag);
+        } else if (ch->kind == parse::Kind::kNamespaceDecl) {
+            classifyNamespace(tree, *ch, diag);
         } else if (ch->kind == parse::Kind::kVarDeclStmt && ch->is_const) {
             // Type-infer top-level const init in its declared type's context.
             for (auto& init : ch->children) {

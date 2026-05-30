@@ -72,6 +72,13 @@ void greet() {
     __println("greet");
 }
 
+/*
+function declared but not defined.
+valid in a header.
+compile error in a source file.
+*/
+//int declared_not_used();
+
 int32 main() {
     helper();              // zero-arg
     add(2, 3);             // two-arg

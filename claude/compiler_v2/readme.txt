@@ -52,11 +52,15 @@ STAGE FILES (.h / .cpp pairs)
   grammar   tokens -> parse tree. Pure syntax; every identifier is just a
             name string. Hand-written recursive descent. Parses: types
             (built-in primitives, an identifier type name, + T[] of either);
-            `alias Name = type;` decls; function defs/decls with typed
+            `alias Name = type;` + bare `alias Ns;` decls; namespace decls
+            (`Name { members }`) and inline qualified member decls
+            (`const int Space:kSix = 6;`); function defs/decls with typed
             param lists; var-decls with optional leading `const` (file
             scope or function scope); statements (var-decl incl. the
             `<ident> <ident>` typed-decl shape, assign, aug-assign, alias,
-            0/1/N-arg call, bare inc/dec, return); expressions
+            namespace decl, 0/1/N-arg call possibly qualified, bare inc/dec,
+            return — a qualified name leading a statement routes through one
+            parseNameLedStmt); expressions
             across the full C precedence ladder (literals + ident, unary
             `! ~ + -`, prefix/postfix ++/--, full binary set
             arith/bitwise/shift/comparison/logical, parens, postfix-call on
@@ -71,7 +75,7 @@ STAGE FILES (.h / .cpp pairs)
             (parse::Entry vector on parse::Tree) and resolves every
             identifier-use to a resolved_entry_id. Pushes/pops frames at
             scope-opening nodes (program, function-body today; block /
-            class / namespace as Phase 2+ land). Pass 1a collects
+            class as Phase 2+ land). Pass 1a collects
             program-scope entries (Functions + Consts) without walking
             init expressions; pass 1b walks file-scope const init rhs
             (so globals can reference each other regardless of decl
@@ -82,16 +86,29 @@ STAGE FILES (.h / .cpp pairs)
             declared / return / parameter spelling in place before validating
             it (widen::isKnownType) — so downstream stages see only underlying
             types and aliases never reach the ast.
+            Owns namespaces: a kNamespace entry has a persistent frame
+            identity that reopens reuse; members ride the enclosing lexical
+            lifetime, tagged by owning namespace. Bare lookup walks the open-
+            namespace chain (siblings + enclosing namespaces + `alias Ns;`
+            imports) then the lexical scope — qualifiers always optional, `::`
+            names the global root and only defeats a shadow. Qualified names
+            (`A:B:C`, leading `::`) resolve through one shared chain walker
+            (refs, inline member decls, bare aliases word identically), each
+            diagnostic careting the offending segment.
             Caches lvalue type on AugAssignStmts (s.return_type) and
             return type + param_types on CallStmts/CallExprs (one shared
             resolveUserCall) so downstream stages don't have to re-walk the
             entry table. Sharp diagnostics at the source: wrong-kind entry
-            (assign to function / assign to constant / call a variable),
+            (assign / call use allowlists: only a local var is assignable,
+            only a function is callable — every other kind reports
+            type/constant/namespace/function and never slips through),
             duplicate decls, return-type mismatch, parameter-type mismatch,
             duplicate definition, arity mismatch, multi-arg print intrinsic,
-            print intrinsic used as an expression. Multi-source
-            notes point at prior decls. Owns the "what does this name
-            refer to" decision; types are not resolve's job.
+            print intrinsic used as an expression, needs-qualifier /
+            not-visible-from-scope / has-no-member / is-not-a-namespace for
+            namespace access. Multi-source notes point at prior decls. Owns
+            the "what does this name refer to" decision; types are not
+            resolve's job.
   constfold parse tree -> parse tree. Iterative post-order walker.
             Assigns nominal_type to every literal per fold.sl:16-23
             (bool=uint1, char=uint8, integer/unsigned by smallest-bit-
@@ -140,7 +157,10 @@ STAGE FILES (.h / .cpp pairs)
             synthesized IdentExpr + BinaryExpr inheriting the aug-assign's
             classify-stamped types so codegen sees the rewrite as if it
             were classified directly. (2) PPID: a post-copy pass extracts
-            ++/-- per phrase, replacing each with a read. Statement-level
+            ++/-- per phrase, replacing each with a read; also drops parse-
+            only nodes (alias, namespace) and hoists namespace member
+            functions to program scope with entry-id-derived symbols (no
+            cached canonical-name strings). Statement-level
             bumps splice as sibling kExprStmt bump-statements around the
             statement (post AFTER the store -- the statement is the phrase);
             a bump inside a sub-phrase (call args, && / || rhs) stays in a

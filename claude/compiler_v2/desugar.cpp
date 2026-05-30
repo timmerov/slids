@@ -27,6 +27,10 @@ ast::Kind toAstKind(parse::Kind k) {
             // Consumed by resolve (types substituted); never copied to the ast.
             assert(false && "toAstKind: alias should be dropped before copy");
             __builtin_unreachable();
+        case parse::Kind::kNamespaceDecl:
+            // Consumed by resolve; members are hoisted, the wrapper dropped.
+            assert(false && "toAstKind: namespace should be dropped before copy");
+            __builtin_unreachable();
         case parse::Kind::kReturnStmt:    return ast::Kind::kReturnStmt;
         case parse::Kind::kStringLiteral: return ast::Kind::kStringLiteral;
         case parse::Kind::kIntLiteral:    return ast::Kind::kIntLiteral;
@@ -82,7 +86,21 @@ std::unique_ptr<ast::Node> tryDesugarAugAssign(ast::Node& node) {
     return out;
 }
 
-std::unique_ptr<ast::Node> copyNode(parse::Node const& p) {
+// The LLVM symbol for a function reference. File-scope functions keep their bare
+// name; a namespace member is disambiguated by its entry id (computed identically
+// at the definition and every call site from the same resolved_entry_id — never
+// stored as a canonical-name string). Two namespaces may both define `foo`; this
+// keeps their symbols distinct without a scope-path string.
+std::string functionSymbol(parse::Node const& p, parse::Tree const& tree) {
+    if (p.resolved_entry_id < 0) return p.name;
+    parse::Entry const& e = tree.entries[p.resolved_entry_id];
+    if (e.kind != parse::EntryKind::kFunction || e.owner_ns_frame < 0) {
+        return p.name;
+    }
+    return e.name + "." + std::to_string(p.resolved_entry_id);
+}
+
+std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tree) {
     auto node = std::make_unique<ast::Node>();
     node->kind = toAstKind(p.kind);
     node->name = p.name;
@@ -97,15 +115,54 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p) {
     node->resolved_entry_id = p.resolved_entry_id;
     node->is_const = p.is_const;
     node->param_types = p.param_types;
+    // Function definitions and calls (including qualified `Space:bar()`) resolve
+    // to their entry-id-derived symbol; the qualifier is dropped (ast carries no
+    // qualifier — a flat symbol replaces it).
+    if (p.kind == parse::Kind::kFunctionDef
+     || p.kind == parse::Kind::kFunctionDecl
+     || p.kind == parse::Kind::kCallExpr
+     || p.kind == parse::Kind::kCallStmt) {
+        node->name = functionSymbol(p, tree);
+    }
     for (auto const& c : p.children) {
-        if (c->kind == parse::Kind::kAliasDecl) continue;  // alias is resolve-only
-        node->children.push_back(copyNode(*c));
+        if (c->kind == parse::Kind::kAliasDecl) continue;      // resolve-only
+        if (c->kind == parse::Kind::kNamespaceDecl) continue;  // members hoisted
+        node->children.push_back(copyNode(*c, tree));
     }
     for (auto const& pp : p.params) {
-        node->params.push_back(copyNode(*pp));
+        node->params.push_back(copyNode(*pp, tree));
     }
     if (auto rewritten = tryDesugarAugAssign(*node)) return rewritten;
     return node;
+}
+
+// Collect a namespace's member function definitions (recursing into nested
+// namespaces) so they can be hoisted to program scope.
+void collectNamespaceFunctions(parse::Node const& ns,
+                               std::vector<parse::Node const*>& fns) {
+    for (auto const& m : ns.children) {
+        if (!m) continue;
+        if (m->kind == parse::Kind::kFunctionDef) {
+            fns.push_back(m.get());
+        } else if (m->kind == parse::Kind::kNamespaceDecl) {
+            collectNamespaceFunctions(*m, fns);
+        }
+    }
+}
+
+// Find the outermost namespace decls reachable from `node`: at file scope and
+// inside function bodies (a namespace may be opened in either). Nesting is left
+// to collectNamespaceFunctions, so this does not descend into namespaces.
+void findTopNamespaces(parse::Node const& node,
+                       std::vector<parse::Node const*>& out) {
+    for (auto const& c : node.children) {
+        if (!c) continue;
+        if (c->kind == parse::Kind::kNamespaceDecl) {
+            out.push_back(c.get());
+        } else if (c->kind == parse::Kind::kFunctionDef) {
+            findTopNamespaces(*c, out);
+        }
+    }
 }
 
 // ---- PPID lowering -------------------------------------------------------
@@ -228,7 +285,23 @@ void lowerStatementPPID(ast::Node& stmt,
 void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
     (void)diag;
     for (auto const& n : in.nodes) {
-        out.nodes.push_back(copyNode(*n));
+        out.nodes.push_back(copyNode(*n, in));
+    }
+    // Hoist namespace member functions to program scope as plain (symbol-renamed)
+    // functions; the namespace wrappers were dropped by copyNode. Member consts
+    // were substituted away by constfold and need no runtime form.
+    for (std::size_t i = 0; i < in.nodes.size(); i++) {
+        if (!in.nodes[i] || in.nodes[i]->kind != parse::Kind::kProgram) continue;
+        ast::Node* prog = out.nodes[i].get();
+        std::vector<parse::Node const*> nss;
+        findTopNamespaces(*in.nodes[i], nss);
+        for (parse::Node const* ns : nss) {
+            std::vector<parse::Node const*> fns;
+            collectNamespaceFunctions(*ns, fns);
+            for (parse::Node const* f : fns) {
+                prog->children.push_back(copyNode(*f, in));
+            }
+        }
     }
     // PPID lowering: walk each function body's statements, extract ++/--, and
     // splice statement-level pre/post bumps as sibling statements around each

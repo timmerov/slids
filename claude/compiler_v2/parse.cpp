@@ -20,6 +20,10 @@ void popFrame(Tree& t) {
     t.frame_id_stack.pop_back();
 }
 
+int allocFrameId(Tree& t) {
+    return t.next_frame_id++;
+}
+
 int currentFrameId(Tree const& t) {
     assert(!t.frame_id_stack.empty() && "currentFrameId: no frame");
     return t.frame_id_stack.back();
@@ -43,6 +47,10 @@ int findInLiveScopes(Tree const& t, std::string const& name) {
 int findInFrame(Tree const& t, int frame_id, std::string const& name) {
     for (int idx : t.live_entry_ids) {
         Entry const& e = t.entries[idx];
+        // Namespace members share their enclosing frame's lifetime but are not
+        // lexical occupants of it (they're reached by qualifier / open-ns chain);
+        // a lexical dup check must skip them.
+        if (e.owner_ns_frame >= 0) continue;
         if (e.parent_frame_id == frame_id && e.name == name) return idx;
     }
     return -1;

@@ -136,12 +136,30 @@ Phase 4 — types beyond primitives
     (cycle-detected, `[]` rides along), resolveDeclType rewrites every declared
     type in place then validates. desugar drops kAliasDecl (parse-only). Defers:
     type-label preservation (`x:Integer` for ##type / enum distinct type),
-    the bare `alias Ns;` unqualify form (namespaces), function-rename
-    `alias Fn = LongName;`, and templated `alias X<...> = T;`.
+    function-rename `alias Fn = LongName;`, and templated `alias X<...> = T;`.
+    The bare `alias Ns;` unqualify form LANDED with namespaces (below).
   * constants — LANDED (file-scope + function-scope; kConst entries with
     captured values; constfold substitution + iteration + fixpoint check;
     sharp diagnostics for assign-to-const, range overflow, missing init,
     duplicate decl, cyclic / non-foldable rhs)
+  * namespaces — LANDED (pulled forward from Phase 8). `Name { members }`
+    opened/reopened at file or function-body scope; members are consts,
+    functions, and nested namespaces. kNamespace entry with a persistent
+    frame identity (reopens reuse it); members ride the enclosing lexical
+    lifetime tagged by owning namespace (so a member added in a local reopen
+    dies when that scope exits while the namespace persists). Bare lookup
+    walks the open-namespace chain (siblings + enclosing namespaces +
+    `alias Ns;` imports) then the lexical scope — qualifiers always optional,
+    `::` names the global root and only defeats a shadow. Qualified access
+    `A:B:C` and leading `::`; inline qualified member decls
+    (`const int Space:kSix = 6;`); bare `alias Ns;` / `alias A:B;` import.
+    Statement-position qualified call/assign route through parseNameLedStmt.
+    desugar hoists member functions to program scope with entry-id-derived
+    symbols (no cached canonical names) and drops the namespace wrapper.
+    Diagnostics: needs-qualifier, not-visible-from-scope, has-no-member,
+    is-not-a-namespace — each carets the offending segment; wrong-kind
+    assign/call use allowlists. Defers: nested-block scope lifetime (rides
+    Phase 2), cross-TU namespaces + `.slh` propagation (Phase 8).
   * enums
 
 Phase 5 — classes
@@ -173,7 +191,8 @@ Phase 7 — class advanced
   * `instantiation` statement / unnamed instances (`Type(args);`, `Type;`)
 
 Phase 8 — namespaces + cross-TU
-  * namespaces (`Name {}`)
+  * namespaces (`Name {}`)  — single-TU core LANDED early (see Phase 4);
+    Phase 8 adds only the cross-TU pieces below.
   * .slh → .sl propagation (header → consumer, transitive impl-load)
   * C interop (`= import`, `import {}`)
   * globals (lazy ctor/dtor, sentinel + ensure widget, dtor walker, `global;`)
@@ -182,6 +201,22 @@ Phase 9 — templates
   * template functions
   * template classes (plain, derived, with nested members)
   * post-compile-pre-link stage (`--instantiate` aggregation)
+
+
+PRIORITY BUGS
+
+  * Declared-but-never-defined function reaches llc as a cryptic error.
+    A function declaration with no matching definition — both plain file-scope
+    (`int foo();` then `foo()`) and namespace member (`Space { int foo(); }`
+    then `Space:foo()`) — emits a `declare`/call with no `define`, so codegen
+    produces IR that llc rejects with `use of undefined value '@foo'`
+    (or `@foo.<id>` for a namespace member). slidsc must catch this itself:
+    a kFunction entry that is referenced (called) but never `defined` should
+    be a sharp slidsc-side diagnostic at the call site (or at the orphan
+    declaration), not an llc-level failure. Pre-existing (not namespace-
+    specific; the namespace path inherits it via the entry-id symbol), surfaced
+    by the namespace silent-defaults audit. Violates "compiler must never emit
+    invalid LL".
 
 
 KNOWN GAPS — current state
@@ -194,8 +229,15 @@ GRAMMAR
     - no other array shapes (T[N], multi-dim, etc.)
     - identifier types resolve only to aliases today; class / struct / enum
       type names land with their phases
-    - `alias Name = type;` parses (top level + parseStmt); `<ident> <ident>`
+    - `alias Name = type;` (value) and bare `alias Ns;` / `alias A:B;`
+      (namespace import) parse (top level + parseStmt); `<ident> <ident>`
       is a typed decl
+    - namespaces: `Name { members }` at file / function-body scope; a
+      qualified name (`A:B:C`, leading `::`) parses wherever a name leads
+      an expr or statement, and as an inline member-decl LHS
+      (`const int Space:kSix = 6;`). parseQualifiedName fills qualifier +
+      qualifier_toks + global_qualified; parseNameLedStmt handles
+      statement-position qualified call / assign / aug-assign.
   * parameter lists: `(<type> <name>, ...)` parses; stored on the
     FunctionDef/Decl node as `params` (kParam children) so signatures
     survive into classify and codegen.
@@ -281,14 +323,18 @@ WIDENING + LITERAL RANGE CHECKING (widen.h / widen.cpp)
   * top-level: function definitions, function declarations, and `alias` decls.
     - imports work (lex-time wrapper expands them; grammar accepts declarations
       from imported .slh files)
-    - no classes, namespaces, enums, globals
+    - also: namespace decls (`Name {}`) + inline qualified const members
+      (`const int Space:kSix = 6;`) + bare `alias Ns;` import
+    - no classes, enums, globals
     - function signatures: typed params; no overloads (Phase 3) or defaults.
     - duplicate-declaration check landed at classify: decl+def at program
       scope bind to one entry, def+def + signature-mismatch (return type
       AND param types) report with a multi-source note pointing at the
       prior decl
   * statement-level: var-decl, assign, augmented-assign (desugared to assign),
-    call, return
+    call, return, namespace decl. assign / aug-assign / call may lead with a
+    qualified name (`Space:foo()`, `Space:kX = 1`, `::foo()`) via the single
+    parseNameLedStmt.
     - no if/else, no for/while, no block
 
 DESUGAR
@@ -309,6 +355,14 @@ DESUGAR
     statement-level bumps as sibling kExprStmt bump-statements around the
     statement (post after the store). Synthesized kSeqExpr / kBumpExpr are
     never re-walked (asserted in lowerInPhrase).
+  * Namespaces: copyNode drops kNamespaceDecl wrappers and renames each
+    function (def + call) to functionSymbol() — bare name for a file-scope
+    function, `name.<entry_id>` for a namespace member, computed identically at
+    def and every call site from resolved_entry_id (no cached canonical
+    strings). A post-copy pass hoists member functions to program scope so the
+    back end sees a flat function list; member consts were folded away upstream.
+    The qualifier / qualifier_toks / global_qualified fields are resolve-only
+    and not copied to the ast.
   * Other canonicalization not yet here: for-loop shapes → canonical,
     operator-overload dispatch lowering, stringify lowering, etc. — slot in
     as their phases land.
@@ -379,10 +433,15 @@ CONSTFOLD
 RESOLVE
   * Symbol table lives in parse (Entry vector + frame stack + pushFrame /
     popFrame / addEntry / findInLiveScopes / findInFrame / entryType APIs).
-    Three entry kinds today: kFunction, kLocalVar, kConst. Function
-    entries carry `param_types` (ordered) and a `defined` flag so decl+def
-    at program scope binds to one entry. kConst entries carry
-    literal_text + literal_kind (filled by constfold).
+    Five entry kinds today: kFunction, kLocalVar, kConst, kAlias, kNamespace.
+    Function entries carry `param_types` (ordered) and a `defined` flag so
+    decl+def at program scope binds to one entry. kConst entries carry
+    literal_text + literal_kind (filled by constfold). kNamespace entries
+    carry a persistent ns_frame_id identity; members of any namespace carry
+    owner_ns_frame (the namespace they belong to) while living at their
+    lexical frame for lifetime. Wrong-kind assign/call are allowlists (only
+    kLocalVar assignable, only kFunction callable). Qualified access walks
+    one shared segment resolver that carets the offending segment.
   * Pass 1a collects program-scope entries (Functions + file-scope Consts)
     WITHOUT walking init expressions, validating return + param + const
     type spellings via requireKnownType. For functions: decl+def pair
@@ -402,13 +461,15 @@ RESOLVE
       into init expression to resolve ident references. Const decls
       without an initializer are rejected at grammar.
     - kAssignStmt / kAugAssignStmt resolve lvalue via live-scope walk and
-      require a LocalVar entry. Function entries reject as "Cannot assign
-      to function 'X'."; Const entries reject as "Cannot assign to
-      constant 'X'." Each carries a multi-source note.
-      AugAssign caches s.return_type = lvalue type for desugar.
-    - kCallStmt non-print resolves callee, requires a Function entry,
-      validates arity against the entry's param_types. Stamps
-      stmt.return_type + stmt.param_types so codegen has both.
+      require a LocalVar entry (allowlist — every other kind rejects as
+      "Cannot assign to function/constant/namespace/type 'X'."; a qualified
+      lvalue resolves through the namespace chain). Each carries a multi-
+      source note. AugAssign caches s.return_type = lvalue type for desugar.
+    - kCallStmt non-print resolves callee (bare or qualified), requires a
+      Function entry (allowlist — non-function kinds reject; a bare name that
+      is a namespace member reports "needs a namespace qualifier"), validates
+      arity against the entry's param_types. Stamps stmt.return_type +
+      stmt.param_types so codegen has both.
     - kCallStmt print intrinsic: rejects multi-arg (`__println(a, b)`).
     - kReturnStmt recurses into expr.
     - resolveExpr walks every expression node, stamping resolved_entry_id
