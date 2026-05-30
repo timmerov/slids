@@ -98,12 +98,17 @@ struct Parser {
     }
 
     std::string parseType() {
-        char const* name = primitiveNameFor(peek().kind);
-        if (!name) {
+        std::string type;
+        if (char const* name = primitiveNameFor(peek().kind)) {
+            type = name;
+        } else if (peek().kind == token::Kind::kIdentifier) {
+            // An identifier type name (alias / class / enum); resolve validates
+            // and substitutes the spelling downstream.
+            type = peek().text;
+        } else {
             error("Expected type.");
             return "";
         }
-        std::string type = name;
         advance();
         if (peek().kind == token::Kind::kLBracket) {
             advance();
@@ -587,10 +592,34 @@ struct Parser {
         return stmt;
     }
 
+    // alias Name = Type;  (the value form; bare `alias Ns;` defers to namespaces)
+    std::unique_ptr<parse::Node> parseAliasDecl() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
+        advance();   // alias
+        if (peek().kind != token::Kind::kIdentifier) {
+            error("Expected an alias name after 'alias'.");
+            return nullptr;
+        }
+        std::string name = peek().text;
+        int name_tok = pos;
+        advance();
+        if (!expect(token::Kind::kEquals, "=")) return nullptr;
+        std::string target = parseType();
+        if (fatal) return nullptr;
+        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+        auto node = newNodeAt(parse::Kind::kAliasDecl, stmt_file, stmt_tok);
+        node->name = std::move(name);
+        node->name_tok = name_tok;
+        node->return_type = std::move(target);
+        return node;
+    }
+
     std::unique_ptr<parse::Node> parseStmt() {
         token::Token const& t = peek();
         if (t.kind == token::Kind::kReturn) return parseReturnStmt();
         if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
+        if (t.kind == token::Kind::kAlias) return parseAliasDecl();
         if (isTypeStart(t.kind)) return parseVarDeclStmt();
         if (t.kind == token::Kind::kPlusPlus
             || t.kind == token::Kind::kMinusMinus) return parseIncDecStmt();
@@ -601,6 +630,9 @@ struct Parser {
             if (next == token::Kind::kPlusPlus
                 || next == token::Kind::kMinusMinus) return parseIncDecStmt();
             if (augAssignOp(next) != nullptr) return parseAugAssignStmt();
+            // `<ident> <ident>` is a declaration with an identifier type
+            // (alias / class / enum), e.g. `Integer x = 42;`.
+            if (next == token::Kind::kIdentifier) return parseVarDeclStmt();
             error("Expected '=' or '(' after identifier.");
             return nullptr;
         }
@@ -687,6 +719,8 @@ struct Parser {
             std::unique_ptr<parse::Node> child;
             if (peek().kind == token::Kind::kConst) {
                 child = parseVarDeclStmt();
+            } else if (peek().kind == token::Kind::kAlias) {
+                child = parseAliasDecl();
             } else {
                 child = parseFunctionDef();
             }

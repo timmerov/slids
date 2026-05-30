@@ -51,10 +51,12 @@ STAGE FILES (.h / .cpp pairs)
             literal-fit errors.
   grammar   tokens -> parse tree. Pure syntax; every identifier is just a
             name string. Hand-written recursive descent. Parses: types
-            (built-in primitives + T[]); function defs/decls with typed
+            (built-in primitives, an identifier type name, + T[] of either);
+            `alias Name = type;` decls; function defs/decls with typed
             param lists; var-decls with optional leading `const` (file
-            scope or function scope); statements (var-decl, assign,
-            aug-assign, 0/1/N-arg call, bare inc/dec, return); expressions
+            scope or function scope); statements (var-decl incl. the
+            `<ident> <ident>` typed-decl shape, assign, aug-assign, alias,
+            0/1/N-arg call, bare inc/dec, return); expressions
             across the full C precedence ladder (literals + ident, unary
             `! ~ + -`, prefix/postfix ++/--, full binary set
             arith/bitwise/shift/comparison/logical, parens, postfix-call on
@@ -73,8 +75,13 @@ STAGE FILES (.h / .cpp pairs)
             program-scope entries (Functions + Consts) without walking
             init expressions; pass 1b walks file-scope const init rhs
             (so globals can reference each other regardless of decl
-            order); pass 2 walks function bodies. Validates declared /
-            return / parameter type spellings (widen::isKnownType).
+            order); pass 2 walks function bodies. Owns type aliases: a
+            pass-1a-alias pre-sweep registers file-scope `alias` decls as
+            kAlias entries; resolveTypeSpelling substitutes an alias chain to
+            its underlying (cycle-detected), and resolveDeclType rewrites every
+            declared / return / parameter spelling in place before validating
+            it (widen::isKnownType) — so downstream stages see only underlying
+            types and aliases never reach the ast.
             Caches lvalue type on AugAssignStmts (s.return_type) and
             return type + param_types on CallStmts/CallExprs (one shared
             resolveUserCall) so downstream stages don't have to re-walk the
@@ -109,9 +116,9 @@ STAGE FILES (.h / .cpp pairs)
             consts). Rejects div/mod by literal zero,
             `~float`, float `& | ^`, shift with float rhs or negative
             count, constants whose value doesn't fit declared type.
-            Pending: algebraic identity simplifications and logical-
-            with-constant (both deferred until purity tracking lands
-            with PPID).
+            Algebraic identities (x+0 -> x) are NOT done here -- they emit
+            a non-literal, breaking the literal->literal contract; scalar
+            cases are LLVM's job (see optimize).
   classify  parse tree -> annotated parse tree. Type inference and
             (Phase 3) overload resolution. Reads resolved_entry_id + entry
             data stamped by resolve; never builds entries or pushes frames

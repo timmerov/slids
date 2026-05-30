@@ -17,6 +17,7 @@ enum class Kind {
     kCallStmt,
     kCallExpr,     // value-producing call; name = callee, children = args
     kExprStmt,     // expression evaluated for effect, value discarded; children[0] = expr
+    kAliasDecl,    // alias Name = Type; name = alias, return_type = target spelling
     kReturnStmt,
     kStringLiteral,
     kIntLiteral,
@@ -54,6 +55,7 @@ enum class EntryKind {
     kFunction,
     kLocalVar,
     kConst,
+    kAlias,        // type alias; slids_type = target spelling (may be another alias)
 };
 
 struct Entry {

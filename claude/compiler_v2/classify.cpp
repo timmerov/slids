@@ -107,6 +107,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kCallStmt:
         case parse::Kind::kCallExpr:
         case parse::Kind::kExprStmt:
+        case parse::Kind::kAliasDecl:
         case parse::Kind::kPreIncExpr:
         case parse::Kind::kPostIncExpr:
         case parse::Kind::kReturnStmt:
@@ -323,6 +324,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kExprStmt:
+        case parse::Kind::kAliasDecl:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kParam:
             assert(false && "inferExpr: not an expression kind");
@@ -456,6 +458,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             return;
         }
+        case parse::Kind::kAliasDecl:
+            // resolve substituted the alias away; nothing to type here.
+            return;
         case parse::Kind::kProgram:
         case parse::Kind::kFunctionDef:
         case parse::Kind::kFunctionDecl:

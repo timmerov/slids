@@ -7,7 +7,9 @@ BIN_DIR   = ../../bin
 BUILD_DIR = ../../build/test_v2/misc
 
 SAMPLES = \
+	alias \
 	hello \
+	namespace \
 	widen
 
 .PHONY: all clean negatives positives $(SAMPLES)

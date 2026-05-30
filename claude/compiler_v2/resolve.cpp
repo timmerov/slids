@@ -1,6 +1,7 @@
 #include "resolve.h"
 
 #include <cassert>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,6 +29,66 @@ void requireKnownType(std::string const& t, int file_id, int tok,
         "Unknown type '" + t + "'.", {}});
 }
 
+// Substitute a type-alias spelling to its underlying type, following chains
+// (`alias A = B; alias B = int` → `int`) and detecting cycles. The `[]` suffix
+// rides along. A spelling that isn't an alias entry is returned unchanged.
+std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
+                                std::set<std::string>& visiting, bool& cyclic,
+                                int file_id, int tok, diagnostic::Sink& diag) {
+    std::string base = spelling;
+    std::string suffix;
+    while (base.size() >= 2 && base.compare(base.size() - 2, 2, "[]") == 0) {
+        suffix += "[]";
+        base.resize(base.size() - 2);
+    }
+    int id = parse::findInLiveScopes(tree, base);
+    if (id < 0 || tree.entries[id].kind != parse::EntryKind::kAlias) {
+        return spelling;
+    }
+    if (visiting.count(base)) {
+        cyclic = true;
+        diagnostic::report(diag, {file_id, tok,
+            "Type alias '" + base + "' is part of a cycle.", {}});
+        return base;
+    }
+    visiting.insert(base);
+    std::string resolved = resolveTypeSpelling(
+        tree, tree.entries[id].slids_type, visiting, cyclic, file_id, tok, diag);
+    visiting.erase(base);
+    return resolved + suffix;
+}
+
+// Rewrite a declared type spelling in place to its underlying type, then
+// require the result to be a known type. A cycle has already been reported, so
+// skip the redundant "Unknown type" that the broken chain would otherwise emit.
+void resolveDeclType(parse::Tree& tree, std::string& spelling,
+                     int file_id, int tok, diagnostic::Sink& diag) {
+    std::set<std::string> visiting;
+    bool cyclic = false;
+    spelling = resolveTypeSpelling(tree, spelling, visiting, cyclic,
+                                   file_id, tok, diag);
+    if (!cyclic) requireKnownType(spelling, file_id, tok, diag);
+}
+
+// Register `alias Name = Type;` as a kAlias entry in the current frame.
+void registerAlias(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+    int existing = parse::findInFrame(tree, parse::currentFrameId(tree), s.name);
+    if (existing >= 0) {
+        parse::Entry const& prev = tree.entries[existing];
+        diagnostic::report(diag, {s.file_id, s.name_tok,
+            "Duplicate declaration of '" + s.name + "'.",
+            {{prev.file_id, prev.tok, "first declared here"}}});
+        return;
+    }
+    parse::Entry e;
+    e.kind = parse::EntryKind::kAlias;
+    e.name = s.name;
+    e.slids_type = s.return_type;   // target spelling; resolved at use
+    e.file_id = s.file_id;
+    e.tok = s.name_tok;
+    s.resolved_entry_id = parse::addEntry(tree, std::move(e));
+}
+
 void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag);
 void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
 
@@ -38,6 +99,13 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
             if (id < 0) {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Unresolved identifier '" + e.name + "'.", {}});
+                return;
+            }
+            if (tree.entries[id].kind == parse::EntryKind::kAlias) {
+                parse::Entry const& a = tree.entries[id];
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "'" + e.name + "' is a type, not a value.",
+                    {{a.file_id, a.tok, "alias declared here"}}});
                 return;
             }
             e.resolved_entry_id = id;
@@ -101,6 +169,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kExprStmt:
+        case parse::Kind::kAliasDecl:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kParam:
             assert(false && "resolveExpr: not an expression kind");
@@ -143,9 +212,12 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
     }
     parse::Entry const& entry = tree.entries[id];
     if (entry.kind != parse::EntryKind::kFunction) {
+        char const* what = entry.kind == parse::EntryKind::kAlias ? "type"
+                         : entry.kind == parse::EntryKind::kConst ? "constant"
+                         : "variable";
         diagnostic::report(diag, {s.file_id, s.tok,
-            "'" + s.name + "' is a variable, not a function.",
-            {{entry.file_id, entry.tok, "variable declared here"}}});
+            "'" + s.name + "' is a " + what + ", not a function.",
+            {{entry.file_id, entry.tok, std::string(what) + " declared here"}}});
         return false;
     }
     s.resolved_entry_id = id;
@@ -181,7 +253,7 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             // pre-pass (resolveFunctionBody). If resolved_entry_id is set,
             // entry already exists; skip creation and dup-check.
             if (s.resolved_entry_id < 0) {
-                requireKnownType(s.return_type, s.file_id, s.tok, diag);
+                resolveDeclType(tree, s.return_type, s.file_id, s.tok, diag);
                 int existing = parse::findInFrame(tree, parse::currentFrameId(tree), s.name);
                 if (existing >= 0) {
                     parse::Entry const& prev = tree.entries[existing];
@@ -234,6 +306,13 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             } else {
                 resolveUserCall(tree, s, diag);
             }
+            return;
+        }
+        case parse::Kind::kAliasDecl: {
+            // Function-scope alias: register in the body frame, then validate
+            // the target (forward refs within a body aren't pre-scanned).
+            registerAlias(tree, s, diag);
+            resolveDeclType(tree, s.return_type, s.file_id, s.tok, diag);
             return;
         }
         case parse::Kind::kExprStmt:
@@ -296,7 +375,7 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         if (parse::findInFrame(tree, parse::currentFrameId(tree), ch->name) >= 0) {
             continue;  // pre-pass yields to main-pass dup detection
         }
-        requireKnownType(ch->return_type, ch->file_id, ch->tok, diag);
+        resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
         parse::Entry e;
         e.kind = parse::EntryKind::kConst;
         e.name = ch->name;
@@ -325,6 +404,17 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
 
     parse::pushFrame(tree);   // program frame
 
+    // Pass 1a-alias — register all file-scope aliases first, so any decl below
+    // (in any order) can resolve through them, then validate each target.
+    for (auto& ch : program->children) {
+        if (ch && ch->kind == parse::Kind::kAliasDecl) registerAlias(tree, *ch, diag);
+    }
+    for (auto& ch : program->children) {
+        if (ch && ch->kind == parse::Kind::kAliasDecl) {
+            resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
+        }
+    }
+
     // Pass 1a — collect entries at program scope WITHOUT walking init
     // expressions. This lets globals reference each other regardless of
     // declaration order (forward-decl semantics).
@@ -332,11 +422,11 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         if (!ch) continue;
         if (ch->kind == parse::Kind::kFunctionDef
          || ch->kind == parse::Kind::kFunctionDecl) {
-            requireKnownType(ch->return_type, ch->file_id, ch->tok, diag);
+            resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
             std::vector<std::string> param_types;
             for (auto& p : ch->params) {
                 if (!p) continue;
-                requireKnownType(p->return_type, p->file_id, p->tok, diag);
+                resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
                 param_types.push_back(p->return_type);
             }
             bool is_def = (ch->kind == parse::Kind::kFunctionDef);
@@ -379,7 +469,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             continue;
         }
         if (ch->kind == parse::Kind::kVarDeclStmt && ch->is_const) {
-            requireKnownType(ch->return_type, ch->file_id, ch->tok, diag);
+            resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
             int existing = parse::findInFrame(tree, parse::currentFrameId(tree), ch->name);
             if (existing >= 0) {
                 parse::Entry const& prev = tree.entries[existing];
@@ -397,6 +487,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             ch->resolved_entry_id = parse::addEntry(tree, std::move(e));
             continue;
         }
+        if (ch->kind == parse::Kind::kAliasDecl) continue;  // handled above
         // Mutable globals + other top-level shapes not supported today.
         // Grammar rejects them; if one slips through, it's a grammar bug.
         diagnostic::report(diag, {ch->file_id, ch->tok,

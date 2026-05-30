@@ -23,6 +23,10 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kCallStmt:      return ast::Kind::kCallStmt;
         case parse::Kind::kCallExpr:      return ast::Kind::kCallExpr;
         case parse::Kind::kExprStmt:      return ast::Kind::kExprStmt;
+        case parse::Kind::kAliasDecl:
+            // Consumed by resolve (types substituted); never copied to the ast.
+            assert(false && "toAstKind: alias should be dropped before copy");
+            __builtin_unreachable();
         case parse::Kind::kReturnStmt:    return ast::Kind::kReturnStmt;
         case parse::Kind::kStringLiteral: return ast::Kind::kStringLiteral;
         case parse::Kind::kIntLiteral:    return ast::Kind::kIntLiteral;
@@ -94,6 +98,7 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p) {
     node->is_const = p.is_const;
     node->param_types = p.param_types;
     for (auto const& c : p.children) {
+        if (c->kind == parse::Kind::kAliasDecl) continue;  // alias is resolve-only
         node->children.push_back(copyNode(*c));
     }
     for (auto const& pp : p.params) {

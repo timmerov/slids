@@ -70,13 +70,9 @@ Phase 0 — foundations (largely landed)
         a constant expression." Consolidated into one primary diagnostic
         with "also: 'Y'" notes for the rest, so a cycle of N consts
         emits one error block rather than N.
-      - PENDING: algebraic identity simplifications (x+0 → x, x*1 → x, etc.).
-        Needs purity tracking. PPID and call expressions have now landed, so
-        the `x*0` / `x&0` / `x||true` cases that drop an operand must gate on
-        isPure(operand) — a side-effecting operand (a bump, a call) can't be
-        elided. This is now buildable; just unbuilt.
-      - PENDING: logical with constant (x && false → false, etc.).
-        Same purity gate as above.
+      - NOT constfold's job: algebraic identities (x+0 → x, x*1 → x, x*0 → 0,
+        x&&false → false). Those produce a NON-literal from a multi-node expr,
+        which breaks constfold's literal->literal contract. See OPTIMIZE.
   * diagnostic sink + source rendering
   * single-source error pipeline (main.cpp early-out between stages)
   * build hygiene (-Wall -Werror -Wswitch-enum)
@@ -133,7 +129,15 @@ Phase 4 — types beyond primitives
   * iterators (`[]`, arithmetic allowed)
   * memory mgmt (`new T(init)`, `new T[n]`, `delete ptr`)
   * anonymous tuples (`(T1, T2, ...)`)
-  * type aliases (`alias X = T;`, `alias X<...> = T;`)
+  * type aliases — LANDED (value form `alias Name = type;`, file + function
+    scope, transparent). grammar: parseAliasDecl + parseType accepts an
+    identifier type + parseStmt `<ident> <ident>` = typed decl. resolve:
+    kAlias entries (frame-scoped), resolveTypeSpelling substitutes the chain
+    (cycle-detected, `[]` rides along), resolveDeclType rewrites every declared
+    type in place then validates. desugar drops kAliasDecl (parse-only). Defers:
+    type-label preservation (`x:Integer` for ##type / enum distinct type),
+    the bare `alias Ns;` unqualify form (namespaces), function-rename
+    `alias Fn = LongName;`, and templated `alias X<...> = T;`.
   * constants — LANDED (file-scope + function-scope; kConst entries with
     captured values; constfold substitution + iteration + fixpoint check;
     sharp diagnostics for assign-to-const, range overflow, missing init,
@@ -183,10 +187,15 @@ Phase 9 — templates
 KNOWN GAPS — current state
 
 GRAMMAR
-  * <type> recognizes all built-in primitives and <T>[] for any of them.
-    Table-driven via kPrimitives in grammar.cpp.
+  * <type> recognizes all built-in primitives, an identifier type name
+    (resolve validates / substitutes), and <T>[] for either.
+    Table-driven via kPrimitives in grammar.cpp; identifier types via the
+    kIdentifier arm in parseType.
     - no other array shapes (T[N], multi-dim, etc.)
-    - no class / struct / enum / alias type names yet
+    - identifier types resolve only to aliases today; class / struct / enum
+      type names land with their phases
+    - `alias Name = type;` parses (top level + parseStmt); `<ident> <ident>`
+      is a typed decl
   * parameter lists: `(<type> <name>, ...)` parses; stored on the
     FunctionDef/Decl node as `params` (kParam children) so signatures
     survive into classify and codegen.
@@ -269,10 +278,10 @@ WIDENING + LITERAL RANGE CHECKING (widen.h / widen.cpp)
     discards the result; the expression form widens it into the destination
     type. void return used as a value, and a print intrinsic in expression
     position, are both rejected.
-  * top-level: function definitions and function declarations.
+  * top-level: function definitions, function declarations, and `alias` decls.
     - imports work (lex-time wrapper expands them; grammar accepts declarations
       from imported .slh files)
-    - no classes, namespaces, enums, aliases, globals
+    - no classes, namespaces, enums, globals
     - function signatures: typed params; no overloads (Phase 3) or defaults.
     - duplicate-declaration check landed at classify: decl+def at program
       scope bind to one entry, def+def + signature-mismatch (return type
@@ -443,6 +452,12 @@ CLASSIFY
 
 OPTIMIZE / LAYOUT
   * no-op; no perf rewrites, no name mangling, no field-offset computation
+  * Algebraic identities: scalar cases (x+0 → x, x*0 → 0, x&&false → false)
+    are LLVM's job — instcombine already does them and handles purity (won't
+    drop a side-effecting operand) and IEEE float safety. Don't duplicate. The
+    only slids-worth-it version is slid-type / operator-overload identities
+    (`s + Zero` where `+` is a user op and `Zero` is a known identity value) —
+    LLVM sees those as opaque calls. Deferred until operator dispatch lowers.
 
 CODEGEN
   * Reads node.inferred_type / op_type stamped by classify. exprType deleted;
@@ -472,8 +487,8 @@ CODEGEN
     no control flow; will matter once if/for show up)
   * AssignStmt: only direct identifier lvalues (no field, no index)
   * llvmTypeFor handles all primitives + <T>[] (lowers to ptr); unknown
-    spellings assert (classify caught them); class / struct / enum / alias
-    not yet
+    spellings assert (classify caught them). Aliases never reach codegen
+    (resolve substituted them to the underlying); class / struct / enum not yet
   * bool lowers to i1 (per redesign-memory intent; v1 uses i32 for bool)
   * return value coerced to fn_return_type via emitExpr's widen path;
     non-widenable returns produce a widen diagnostic at the return stmt

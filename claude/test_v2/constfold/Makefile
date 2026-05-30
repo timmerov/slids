@@ -8,6 +8,7 @@ BUILD_DIR = ../../build/test_v2/constfold
 
 SAMPLES = \
 	constant \
+	enum \
 	fold
 
 .PHONY: all clean negatives positives $(SAMPLES)
