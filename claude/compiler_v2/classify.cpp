@@ -106,6 +106,9 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kCallExpr:
+        case parse::Kind::kExprStmt:
+        case parse::Kind::kPreIncExpr:
+        case parse::Kind::kPostIncExpr:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kParam:
             assert(false && "defaultLiteralType: not a literal kind");
@@ -198,6 +201,22 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     : std::string();
                 inferExpr(tree, *e.children[i], dest, diag);
             }
+            return;
+        }
+        case parse::Kind::kPreIncExpr:
+        case parse::Kind::kPostIncExpr: {
+            // An inc/dec yields its operand's type. Phase 1: int-class (not
+            // bool) and float scalars step by 1; pointers (element stride) and
+            // everything else are rejected until their phases wire the step.
+            parse::Node& operand = *e.children[0];
+            inferExpr(tree, operand, "", diag);
+            std::string const& ot = operand.inferred_type;
+            if (!ot.empty() && (!isNumericType(ot) || ot == "bool")) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "Operator '" + e.text + "' is not defined on type '"
+                    + ot + "'.", {}});
+            }
+            e.inferred_type = ot;
             return;
         }
         case parse::Kind::kUnaryExpr: {
@@ -303,6 +322,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kCallStmt:
+        case parse::Kind::kExprStmt:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kParam:
             assert(false && "inferExpr: not an expression kind");
@@ -429,6 +449,13 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             return;
         }
+        case parse::Kind::kExprStmt: {
+            // value discarded — infer for its checks (lvalue / numeric) only.
+            for (auto& ch : s.children) {
+                if (ch) inferExpr(tree, *ch, "", diag);
+            }
+            return;
+        }
         case parse::Kind::kProgram:
         case parse::Kind::kFunctionDef:
         case parse::Kind::kFunctionDecl:
@@ -441,6 +468,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kIdentExpr:
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
+        case parse::Kind::kPreIncExpr:
+        case parse::Kind::kPostIncExpr:
         case parse::Kind::kCallExpr:
         case parse::Kind::kParam:
             assert(false && "classifyStmt: not a statement kind");

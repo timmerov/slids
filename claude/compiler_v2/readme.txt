@@ -54,10 +54,11 @@ STAGE FILES (.h / .cpp pairs)
             (built-in primitives + T[]); function defs/decls with typed
             param lists; var-decls with optional leading `const` (file
             scope or function scope); statements (var-decl, assign,
-            aug-assign, 0/1/N-arg call, return); expressions across the
-            full C precedence ladder (literals + ident, unary `! ~ + -`,
-            full binary set arith/bitwise/shift/comparison/logical,
-            parens, postfix-call on a bare ident). Stamps (file_id, tok)
+            aug-assign, 0/1/N-arg call, bare inc/dec, return); expressions
+            across the full C precedence ladder (literals + ident, unary
+            `! ~ + -`, prefix/postfix ++/--, full binary set
+            arith/bitwise/shift/comparison/logical, parens, postfix-call on
+            a bare ident). Stamps (file_id, tok)
             on every node for source
             attribution. No identifier resolution, no scope tracking,
             no type inference, no literal folding — all deferred to
@@ -127,13 +128,19 @@ STAGE FILES (.h / .cpp pairs)
   desugar   parse tree -> ast (separate node-type set). Today: identity
             copy that propagates every annotation classify and constfold
             stamped (nominal_type, inferred_type, op_type, resolved_entry_id,
-            params, param_types, file_id, tok). One real rewrite is live:
-            aug-assign (`lhs op= rhs`) -> `lhs = lhs op rhs`, with the
+            params, param_types, file_id, tok). Two rewrites are live.
+            (1) aug-assign (`lhs op= rhs`) -> `lhs = lhs op rhs`, with the
             synthesized IdentExpr + BinaryExpr inheriting the aug-assign's
             classify-stamped types so codegen sees the rewrite as if it
-            were classified directly. Future canonical-form rewrites
-            (for-loop shapes, receiver shapes, PPID, stringify, operator
-            dispatch) slot in as their phases land.
+            were classified directly. (2) PPID: a post-copy pass extracts
+            ++/-- per phrase, replacing each with a read. Statement-level
+            bumps splice as sibling kExprStmt bump-statements around the
+            statement (post AFTER the store -- the statement is the phrase);
+            a bump inside a sub-phrase (call args, && / || rhs) stays in a
+            synthesized kSeqExpr {pre... value post...} so a short-circuited
+            bump never fires. Future canonical-form rewrites (for-loop
+            shapes, receiver shapes, stringify, operator dispatch) slot in
+            as their phases land.
   optimize  ast -> ast in place. Slids-aware perf rewrites LLVM can't do
             (compound-fuse, NRVO, identity-temp adoption, build-into-target).
             (TODO stub.)

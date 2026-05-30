@@ -15,6 +15,7 @@ enum class Kind {
     kAugAssignStmt,
     kCallStmt,
     kCallExpr,
+    kExprStmt,
     kReturnStmt,
     kStringLiteral,
     kIntLiteral,
@@ -25,6 +26,12 @@ enum class Kind {
     kIdentExpr,
     kUnaryExpr,
     kBinaryExpr,
+    kPreIncExpr,    // survives the parse->ast copy; lowered away by desugar's PPID pass
+    kPostIncExpr,
+    kSeqExpr,       // synthesized by desugar: children evaluated in order; value_index
+                    // names the result child, the rest are bumps run for effect
+    kBumpExpr,      // synthesized by desugar: resolved_entry_id + inferred_type + text
+                    // ("++"/"--") — a `x = x ± 1` effect on a scalar variable
     kParam,
 };
 
@@ -40,6 +47,7 @@ struct Node {
     int tok = -1;                // index into token::List::tokens for error attribution
     int name_tok = -1;           // ident token for named constructs
     int resolved_entry_id = -1;  // ident / lhs / callee -> parse::Tree::entries index
+    int value_index = -1;        // kSeqExpr: which child supplies the result value
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
     std::vector<std::unique_ptr<Node>> children;
     std::vector<std::unique_ptr<Node>> params;   // kFunctionDef/Decl: kParam nodes

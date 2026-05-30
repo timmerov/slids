@@ -16,6 +16,7 @@ enum class Kind {
     kAugAssignStmt,  // name = lhs, text = op (e.g. "+", "&&"); children[0] = rhs
     kCallStmt,
     kCallExpr,     // value-producing call; name = callee, children = args
+    kExprStmt,     // expression evaluated for effect, value discarded; children[0] = expr
     kReturnStmt,
     kStringLiteral,
     kIntLiteral,
@@ -26,6 +27,8 @@ enum class Kind {
     kIdentExpr,
     kUnaryExpr,    // text = op ("+", "-", "!", "~"); children[0] = operand
     kBinaryExpr,   // text = op (e.g. "+", "<<", "&&"); children[0] = lhs, [1] = rhs
+    kPreIncExpr,   // text = op ("++"/"--"); children[0] = operand lvalue
+    kPostIncExpr,  // text = op ("++"/"--"); children[0] = operand lvalue
     kParam,        // function parameter; name = ident, return_type = declared type
 };
 

@@ -182,6 +182,17 @@ struct Parser {
             node->name = std::move(base->name);
             advance();   // (
             if (!parseCallArgs(*node)) return nullptr;
+            base = std::move(node);
+        }
+        if (peek().kind == token::Kind::kPlusPlus
+            || peek().kind == token::Kind::kMinusMinus) {
+            char const* op = peek().kind == token::Kind::kPlusPlus ? "++" : "--";
+            int op_file = peek().file_id;
+            int op_tok = pos;
+            advance();
+            auto node = newNodeAt(parse::Kind::kPostIncExpr, op_file, op_tok);
+            node->text = op;
+            node->children.push_back(std::move(base));
             return node;
         }
         return base;
@@ -189,6 +200,18 @@ struct Parser {
 
     std::unique_ptr<parse::Node> parseUnary() {
         token::Kind k = peek().kind;
+        if (k == token::Kind::kPlusPlus || k == token::Kind::kMinusMinus) {
+            char const* pp = k == token::Kind::kPlusPlus ? "++" : "--";
+            int op_file = peek().file_id;
+            int op_tok = pos;
+            advance();
+            auto operand = parseUnary();
+            if (!operand) return nullptr;
+            auto node = newNodeAt(parse::Kind::kPreIncExpr, op_file, op_tok);
+            node->text = pp;
+            node->children.push_back(std::move(operand));
+            return node;
+        }
         char const* op = nullptr;
         if      (k == token::Kind::kPlus)   op = "+";
         else if (k == token::Kind::kMinus)  op = "-";
@@ -517,15 +540,66 @@ struct Parser {
         return node;
     }
 
+    // A bare inc/dec statement (`++e;` `--e;` `e++;` `e--;`). Build the
+    // inc/dec expression and wrap it in an expression-statement; resolve /
+    // classify check the operand like any inc/dec, and desugar lowers it to a
+    // bump (the discarded value needs no read).
+    std::unique_ptr<parse::Node> parseIncDecStmt() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
+        bool prefix = peek().kind == token::Kind::kPlusPlus
+                   || peek().kind == token::Kind::kMinusMinus;
+        token::Kind opk;
+        int op_tok;
+        std::string name;
+        int name_tok;
+        if (prefix) {
+            opk = peek().kind;
+            op_tok = pos;
+            advance();   // ++ / --
+            if (peek().kind != token::Kind::kIdentifier) {
+                error("Expected a variable after '"
+                      + std::string(opk == token::Kind::kPlusPlus ? "++" : "--")
+                      + "'.");
+                return nullptr;
+            }
+            name = peek().text;
+            name_tok = pos;
+            advance();
+        } else {
+            name = peek().text;
+            name_tok = pos;
+            advance();   // ident
+            opk = peek().kind;
+            op_tok = pos;
+            advance();   // ++ / --
+        }
+        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+        auto operand = newNodeAt(parse::Kind::kIdentExpr, stmt_file, name_tok);
+        operand->name = std::move(name);
+        auto inc = newNodeAt(prefix ? parse::Kind::kPreIncExpr
+                                    : parse::Kind::kPostIncExpr,
+                             stmt_file, op_tok);
+        inc->text = opk == token::Kind::kPlusPlus ? "++" : "--";
+        inc->children.push_back(std::move(operand));
+        auto stmt = newNodeAt(parse::Kind::kExprStmt, stmt_file, stmt_tok);
+        stmt->children.push_back(std::move(inc));
+        return stmt;
+    }
+
     std::unique_ptr<parse::Node> parseStmt() {
         token::Token const& t = peek();
         if (t.kind == token::Kind::kReturn) return parseReturnStmt();
         if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
         if (isTypeStart(t.kind)) return parseVarDeclStmt();
+        if (t.kind == token::Kind::kPlusPlus
+            || t.kind == token::Kind::kMinusMinus) return parseIncDecStmt();
         if (t.kind == token::Kind::kIdentifier) {
             token::Kind next = peekKind(1);
             if (next == token::Kind::kEquals) return parseAssignStmt();
             if (next == token::Kind::kLParen) return parseCallStmt();
+            if (next == token::Kind::kPlusPlus
+                || next == token::Kind::kMinusMinus) return parseIncDecStmt();
             if (augAssignOp(next) != nullptr) return parseAugAssignStmt();
             error("Expected '=' or '(' after identifier.");
             return nullptr;

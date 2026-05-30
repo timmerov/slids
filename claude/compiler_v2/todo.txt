@@ -71,8 +71,10 @@ Phase 0 — foundations (largely landed)
         with "also: 'Y'" notes for the rest, so a cycle of N consts
         emits one error block rather than N.
       - PENDING: algebraic identity simplifications (x+0 → x, x*1 → x, etc.).
-        Needs purity tracking — defer until PPID / function calls land so
-        the `x*0` / `x&0` / `x||true` cases can gate on isPure(operand).
+        Needs purity tracking. PPID and call expressions have now landed, so
+        the `x*0` / `x&0` / `x||true` cases that drop an operand must gate on
+        isPure(operand) — a side-effecting operand (a bump, a call) can't be
+        elided. This is now buildable; just unbuilt.
       - PENDING: logical with constant (x && false → false, etc.).
         Same purity gate as above.
   * diagnostic sink + source rendering
@@ -92,7 +94,18 @@ Phase 1 — expression core
   * calls — typed params, 0/1/N-arg statement-form calls; param-as-
     LocalVar in body frame; arity + per-arg type check via param-type
     context; decl/def signature match (return + param types)          LANDED
-  * PPID — pre/post-inc/dec via phrases                               OPEN
+  * PPID — pre/post-inc/dec via phrases. kPreIncExpr/kPostIncExpr parse
+    nodes (operand must be an lvalue, int/float scalar, not bool); the
+    desugar PPID pass extracts bumps per phrase — statement-level bumps
+    hoist to sibling kExprStmt bump-statements (post AFTER the store, so
+    `a = a++` leaves a one larger: the statement is the phrase, not the
+    rhs), sub-phrases (call args, && / || rhs) keep their bumps in a
+    kSeqExpr {pre... value post...} (value_index = #pre) so a short-
+    circuited bump never fires, a return embeds (no slot after a
+    terminator). Bare `e++;` parses to a kExprStmt and lowers to a lone
+    kBumpExpr. Phase-1 sites only (statement / call-arg / && / ||);
+    conditions, switch, for, tuple slots, and pointer element stride
+    attach with their phases.                                          LANDED
   * call-as-expression — kCallExpr via parsePostfix on a bare ident;
     shared resolveUserCall (resolve) + emitCall (codegen) with kCallStmt;
     return value widens into context like an ident read; void-return and
@@ -185,6 +198,10 @@ GRAMMAR
       calls work inside expressions. Field access, indexing, call-through
       ((fnptr)(args)), `^` deref still slot into parsePostfix as their
       phases land
+    - prefix and postfix ++/-- land (kPreIncExpr / kPostIncExpr); a bare
+      inc/dec statement parses to a kExprStmt. desugar lowers both away
+    - expression statements exist only as kExprStmt for a bare inc/dec
+      today; a general discard-value expression statement is not parsed
     - no `<Type^>` or `(Type=expr)` casts
     - float literals must be lossless decimal (no hex form yet, no inexact
       values like 1.1 which would require LLVM hex encoding); codegen
@@ -275,9 +292,17 @@ DESUGAR
     Lvalue is a bare ident today; complex lvalues (when arrays / fields land)
     need a bind-to-tmp step here to avoid double-eval.
   * Unary + binary literal folds now live in constfold (upstream).
-  * Other canonicalization not yet here: PPID lowering, for-loop shapes
-    → canonical, operator-overload dispatch lowering, stringify lowering,
-    etc. — slot in as their phases land.
+  * PPID lowering — a post-copy pass over each function body. lowerInPhrase
+    extracts ++/-- per phrase (replacing each with a read), collecting
+    statement-level bumps into pre/post lists and recursing sub-phrases
+    (call args, && / || rhs) through lowerPhraseSlot, which wraps a
+    bump-carrying sub-phrase in a kSeqExpr. The body walk splices the
+    statement-level bumps as sibling kExprStmt bump-statements around the
+    statement (post after the store). Synthesized kSeqExpr / kBumpExpr are
+    never re-walked (asserted in lowerInPhrase).
+  * Other canonicalization not yet here: for-loop shapes → canonical,
+    operator-overload dispatch lowering, stringify lowering, etc. — slot in
+    as their phases land.
 
 NUMERIC
   * stage landed; handles kIntLiteral, kUintLiteral, kCharLiteral,

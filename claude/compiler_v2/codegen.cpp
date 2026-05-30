@@ -461,6 +461,47 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             return widen::convert(r, expr.return_type, dest_type,
                                   expr.file_id, expr.tok, out, diag);
         }
+        case ast::Kind::kSeqExpr: {
+            // Children emit in order. The value_index child is the result
+            // (widened into dest_type); the rest are bumps run for effect.
+            assert(expr.value_index >= 0
+                && expr.value_index < static_cast<int>(expr.children.size())
+                && "kSeqExpr: value_index out of range");
+            std::string result;
+            for (size_t i = 0; i < expr.children.size(); i++) {
+                if (static_cast<int>(i) == expr.value_index) {
+                    result = emitExpr(*expr.children[i], syms, pool, out, diag, dest_type);
+                } else {
+                    emitExpr(*expr.children[i], syms, pool, out, diag, "");
+                }
+            }
+            return result;
+        }
+        case ast::Kind::kBumpExpr: {
+            // `x = x ± 1` on a scalar variable; the returned register (the new
+            // value) is discarded by the enclosing seq.
+            assert(expr.resolved_entry_id >= 0 && "kBumpExpr: missing entry");
+            auto it = syms.find(expr.resolved_entry_id);
+            assert(it != syms.end() && "kBumpExpr: entry not in SymTab");
+            std::string const& llty = it->second.llvm_type;
+            bool flt = isFloatType(it->second.slids_type);
+            std::string cur = newTmp("ld");
+            out << "  " << cur << " = load " << llty << ", ptr "
+                << it->second.alloca_name << "\n";
+            std::string nv = newTmp("inc");
+            char const* instr = flt ? (expr.text == "++" ? "fadd" : "fsub")
+                                    : (expr.text == "++" ? "add" : "sub");
+            char const* one = flt ? "1.0" : "1";
+            out << "  " << nv << " = " << instr << " " << llty << " "
+                << cur << ", " << one << "\n";
+            out << "  store " << llty << " " << nv << ", ptr "
+                << it->second.alloca_name << "\n";
+            return nv;
+        }
+        case ast::Kind::kPreIncExpr:
+        case ast::Kind::kPostIncExpr:
+            assert(false && "emitExpr: inc/dec survived desugar's PPID pass");
+            __builtin_unreachable();
         case ast::Kind::kProgram:
         case ast::Kind::kFunctionDef:
         case ast::Kind::kFunctionDecl:
@@ -468,6 +509,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kAssignStmt:
         case ast::Kind::kAugAssignStmt:
         case ast::Kind::kCallStmt:
+        case ast::Kind::kExprStmt:
         case ast::Kind::kReturnStmt:
         case ast::Kind::kParam:
             assert(false && "emitExpr: reached statement-kind node");
@@ -521,6 +563,11 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             emitCall(stmt, syms, pool, out, diag);
             return;
         }
+        case ast::Kind::kExprStmt: {
+            // Evaluate the expression for its side effects; discard the value.
+            emitExpr(*stmt.children[0], syms, pool, out, diag, "");
+            return;
+        }
         case ast::Kind::kReturnStmt: {
             std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
                                        fn_return_type);
@@ -545,6 +592,10 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kUnaryExpr:
         case ast::Kind::kBinaryExpr:
         case ast::Kind::kCallExpr:
+        case ast::Kind::kSeqExpr:
+        case ast::Kind::kBumpExpr:
+        case ast::Kind::kPreIncExpr:
+        case ast::Kind::kPostIncExpr:
         case ast::Kind::kParam:
             assert(false && "emitStmt: reached non-statement node kind");
             return;

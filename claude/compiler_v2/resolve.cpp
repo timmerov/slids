@@ -55,6 +55,31 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
             resolveUserCall(tree, e, diag);
             return;
         }
+        case parse::Kind::kPreIncExpr:
+        case parse::Kind::kPostIncExpr: {
+            // Operand must be an assignable variable. Phase 1: a bare ident
+            // resolving to a LocalVar (no field / index lvalues yet).
+            parse::Node& operand = *e.children[0];
+            if (operand.kind != parse::Kind::kIdentExpr) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "The operand of '" + e.text + "' must be a variable.", {}});
+                return;
+            }
+            resolveExpr(tree, operand, diag);
+            if (operand.resolved_entry_id >= 0) {
+                parse::Entry const& entry = tree.entries[operand.resolved_entry_id];
+                if (entry.kind == parse::EntryKind::kFunction) {
+                    diagnostic::report(diag, {operand.file_id, operand.tok,
+                        "'" + operand.name + "' is a function, not a variable.",
+                        {{entry.file_id, entry.tok, "function declared here"}}});
+                } else if (entry.kind == parse::EntryKind::kConst) {
+                    diagnostic::report(diag, {operand.file_id, operand.tok,
+                        "Constant '" + operand.name + "' cannot be incremented.",
+                        {{entry.file_id, entry.tok, "constant declared here"}}});
+                }
+            }
+            return;
+        }
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
             for (auto& ch : e.children) {
@@ -75,6 +100,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kCallStmt:
+        case parse::Kind::kExprStmt:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kParam:
             assert(false && "resolveExpr: not an expression kind");
@@ -210,6 +236,7 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             }
             return;
         }
+        case parse::Kind::kExprStmt:
         case parse::Kind::kReturnStmt: {
             for (auto& ch : s.children) {
                 if (ch) resolveExpr(tree, *ch, diag);
@@ -228,6 +255,8 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
         case parse::Kind::kIdentExpr:
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
+        case parse::Kind::kPreIncExpr:
+        case parse::Kind::kPostIncExpr:
         case parse::Kind::kCallExpr:
         case parse::Kind::kParam:
             assert(false && "resolveStmt: not a statement kind");

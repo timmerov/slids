@@ -11,7 +11,8 @@ SAMPLES = \
 	inttype \
 	mixedtype \
 	noninttype \
-	order
+	order \
+	ppid
 
 .PHONY: all clean negatives positives $(SAMPLES)
 
