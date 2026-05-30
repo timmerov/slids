@@ -106,7 +106,9 @@ STAGE FILES (.h / .cpp pairs)
             duplicate definition, arity mismatch, multi-arg print intrinsic,
             print intrinsic used as an expression, needs-qualifier /
             not-visible-from-scope / has-no-member / is-not-a-namespace for
-            namespace access. Multi-source notes point at prior decls. Owns
+            namespace access, and (final pass) any function declared but
+            never defined — anywhere, used or not. Multi-source notes point
+            at prior decls. Owns
             the "what does this name refer to" decision; types are not
             resolve's job.
   constfold parse tree -> parse tree. Iterative post-order walker.

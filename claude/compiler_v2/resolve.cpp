@@ -960,6 +960,18 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         resolveNamespaceBodies(tree, *ch, kGlobalFrame, diag);
     }
 
+    // Pass 3 — orphan declarations. A function declared but never defined
+    // (anywhere, used or not) is a compile error: a call to it would emit a
+    // `declare` with no `define` and llc would reject the IR. Caret at the
+    // declaration's name. (Cross-TU `.slh` headers legitimately declare-only;
+    // that distinction defers with the rest of the .slh work.)
+    for (parse::Entry const& e : tree.entries) {
+        if (e.kind == parse::EntryKind::kFunction && !e.defined) {
+            diagnostic::report(diag, {e.file_id, e.tok,
+                "Function '" + e.name + "' is declared but never defined.", {}});
+        }
+    }
+
     parse::popFrame(tree);
 }
 

@@ -65,19 +65,16 @@ int32 doubled(int32 x) {
     return sum(x, x);          // call in return position
 }
 
-// void function — its body falls through, exercising the implicit `ret void`
-// terminator; called as a statement below, and the target of the
-// void-as-value negative case.
-void greet() {
-    __println("greet");
-}
-
 /*
-function declared but not defined.
+orphan function declared but not defined.
 valid in a header.
+presumably it will be defined in a different file.
+or it's a link error.
 compile error in a source file.
+regardless of whether it's used anywhere or not.
 */
-//int declared_not_used();
+//-EXPECT-ERROR: declared but never defined
+//int declared_not_defined();
 
 int32 main() {
     helper();              // zero-arg
@@ -128,6 +125,13 @@ int32 main() {
     //int32 pv = __println("x");
 
     return 0;
+}
+
+// void function — its body falls through, exercising the implicit `ret void`
+// terminator; called as a statement below, and the target of the
+// void-as-value negative case.
+void greet() {
+    __println("greet");
 }
 
 // file-scope negatives — whole function definitions, so they can't sit inside

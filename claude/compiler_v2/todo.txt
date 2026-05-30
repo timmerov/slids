@@ -205,18 +205,19 @@ Phase 9 — templates
 
 PRIORITY BUGS
 
-  * Declared-but-never-defined function reaches llc as a cryptic error.
-    A function declaration with no matching definition — both plain file-scope
-    (`int foo();` then `foo()`) and namespace member (`Space { int foo(); }`
-    then `Space:foo()`) — emits a `declare`/call with no `define`, so codegen
-    produces IR that llc rejects with `use of undefined value '@foo'`
-    (or `@foo.<id>` for a namespace member). slidsc must catch this itself:
-    a kFunction entry that is referenced (called) but never `defined` should
-    be a sharp slidsc-side diagnostic at the call site (or at the orphan
-    declaration), not an llc-level failure. Pre-existing (not namespace-
-    specific; the namespace path inherits it via the entry-id symbol), surfaced
-    by the namespace silent-defaults audit. Violates "compiler must never emit
-    invalid LL".
+  (none open)
+
+  FIXED — Declared-but-never-defined function reaches llc as a cryptic error.
+    A function declaration with no matching definition — plain file-scope
+    (`int foo();`) or namespace member (`Space { int foo(); }`) — used to emit
+    a `declare`/call with no `define`, which llc rejected with `use of
+    undefined value '@foo'`. resolve now has a final pass (Pass 3) that scans
+    every kFunction entry and reports "Function 'X' is declared but never
+    defined." (caret at the declaration's name) for any with `defined ==
+    false` — anywhere, used or not, per test_v2/function/calls.sl. The .slh
+    header carve-out (a header may legitimately declare-only) defers with the
+    rest of the .slh / cross-TU work; today every declared-nowhere-defined
+    function is an error.
 
 
 KNOWN GAPS — current state
@@ -476,6 +477,10 @@ RESOLVE
     - kReturnStmt recurses into expr.
     - resolveExpr walks every expression node, stamping resolved_entry_id
       on every kIdentExpr via findInLiveScopes (unresolved -> diagnostic).
+  * Pass 3 (orphan check): after all bodies, any kFunction entry with
+    `defined == false` is reported "Function 'X' is declared but never
+    defined." (caret at the decl) — declared anywhere, defined nowhere, used
+    or not. .slh declare-only carve-out defers with cross-TU work.
   * Frames are transient state cleared at end of stage; entries persist
     on parse::Tree.
 
