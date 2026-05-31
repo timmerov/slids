@@ -31,6 +31,11 @@ ast::Kind toAstKind(parse::Kind k) {
             // Consumed by resolve; members are hoisted, the wrapper dropped.
             assert(false && "toAstKind: namespace should be dropped before copy");
             __builtin_unreachable();
+        case parse::Kind::kEnumDecl:
+            // Consumed by resolve (lowered to alias+namespace+consts / bare
+            // consts); members folded by constfold. The node is dropped on copy.
+            assert(false && "toAstKind: enum should be dropped before copy");
+            __builtin_unreachable();
         case parse::Kind::kReturnStmt:    return ast::Kind::kReturnStmt;
         case parse::Kind::kStringLiteral: return ast::Kind::kStringLiteral;
         case parse::Kind::kIntLiteral:    return ast::Kind::kIntLiteral;
@@ -127,6 +132,7 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     for (auto const& c : p.children) {
         if (c->kind == parse::Kind::kAliasDecl) continue;      // resolve-only
         if (c->kind == parse::Kind::kNamespaceDecl) continue;  // members hoisted
+        if (c->kind == parse::Kind::kEnumDecl) continue;       // resolve-lowered
         node->children.push_back(copyNode(*c, tree));
     }
     for (auto const& pp : p.params) {

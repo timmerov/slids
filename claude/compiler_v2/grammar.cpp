@@ -698,11 +698,80 @@ struct Parser {
         return node;
     }
 
-    // A namespace member: const, nested namespace, or member function.
+    // enum [type] [Name] ( m1 [= expr], m2, ... );
+    //   type-first, optional, default int. Name optional: present -> a named
+    //   enum (alias + namespace of typed consts); absent -> anonymous (consts
+    //   land in the enclosing scope). Each member is a const-shaped decl so it
+    //   rides the existing const machinery; resolve fills auto-increment values.
+    std::unique_ptr<parse::Node> parseEnumDecl() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
+        advance();   // enum
+        auto node = newNodeAt(parse::Kind::kEnumDecl, stmt_file, stmt_tok);
+        // Optional underlying type. A type precedes the name / `(`; it is a
+        // primitive keyword, or an identifier that is NOT immediately the enum
+        // name followed by `(` and NOT the `(` itself. Distinguish structurally:
+        //   enum (             -> anonymous, default int
+        //   enum Name (        -> named, default int
+        //   enum type (        -> anonymous, explicit type
+        //   enum type Name (   -> named, explicit type
+        std::string underlying = "int";
+        if (isTypeStart(peek().kind)) {
+            underlying = parseType();
+            if (fatal) return nullptr;
+        } else if (peek().kind == token::Kind::kIdentifier
+                   && peekKind(1) == token::Kind::kIdentifier) {
+            // `ident ident (` -> first ident is an (identifier) type spelling.
+            underlying = parseType();
+            if (fatal) return nullptr;
+        }
+        node->return_type = underlying;
+        // Optional name.
+        if (peek().kind == token::Kind::kIdentifier) {
+            node->name = peek().text;
+            node->name_tok = pos;
+            advance();
+        }
+        if (!expect(token::Kind::kLParen, "(")) return nullptr;
+        // Member list: ident [= expr], comma-separated.
+        while (peek().kind != token::Kind::kRParen) {
+            if (peek().kind != token::Kind::kIdentifier) {
+                error("Expected an enum member name.");
+                return nullptr;
+            }
+            auto m = newNodeAt(parse::Kind::kVarDeclStmt, peek().file_id, pos);
+            m->name = peek().text;
+            m->name_tok = pos;
+            m->return_type = underlying;
+            m->is_const = true;
+            advance();
+            if (peek().kind == token::Kind::kEquals) {
+                advance();   // =
+                auto init = parseExpr();
+                if (!init) return nullptr;
+                m->children.push_back(std::move(init));
+            }
+            node->children.push_back(std::move(m));
+            if (peek().kind == token::Kind::kComma) {
+                advance();
+                continue;
+            }
+            if (peek().kind != token::Kind::kRParen) {
+                error("Expected ',' or ')' in enum member list.");
+                return nullptr;
+            }
+        }
+        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+        return node;
+    }
+
+    // A namespace member: const, nested namespace, enum, or member function.
     std::unique_ptr<parse::Node> parseNamespaceMember() {
         token::Token const& t = peek();
         if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();
+        if (t.kind == token::Kind::kEnum) return parseEnumDecl();
         if (t.kind == token::Kind::kIdentifier
             && peekKind(1) == token::Kind::kLBrace) return parseNamespaceDecl();
         return parseFunctionDef();
@@ -738,6 +807,7 @@ struct Parser {
         if (t.kind == token::Kind::kReturn) return parseReturnStmt();
         if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();
+        if (t.kind == token::Kind::kEnum) return parseEnumDecl();
         if (isTypeStart(t.kind)) return parseVarDeclStmt();
         if (t.kind == token::Kind::kPlusPlus
             || t.kind == token::Kind::kMinusMinus) return parseIncDecStmt();
@@ -839,6 +909,8 @@ struct Parser {
                 child = parseVarDeclStmt();
             } else if (peek().kind == token::Kind::kAlias) {
                 child = parseAliasDecl();
+            } else if (peek().kind == token::Kind::kEnum) {
+                child = parseEnumDecl();
             } else if (peek().kind == token::Kind::kIdentifier
                        && peekKind(1) == token::Kind::kLBrace) {
                 child = parseNamespaceDecl();

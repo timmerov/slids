@@ -54,7 +54,8 @@ STAGE FILES (.h / .cpp pairs)
             (built-in primitives, an identifier type name, + T[] of either);
             `alias Name = type;` + bare `alias Ns;` decls; namespace decls
             (`Name { members }`) and inline qualified member decls
-            (`const int Space:kSix = 6;`); function defs/decls with typed
+            (`const int Space:kSix = 6;`); enum decls
+            (`enum [type] [Name] ( m1 [= v], ... )`); function defs/decls with typed
             param lists; var-decls with optional leading `const` (file
             scope or function scope); statements (var-decl incl. the
             `<ident> <ident>` typed-decl shape, assign, aug-assign, alias,
@@ -94,7 +95,19 @@ STAGE FILES (.h / .cpp pairs)
             names the global root and only defeats a shadow. Qualified names
             (`A:B:C`, leading `::`) resolve through one shared chain walker
             (refs, inline member decls, bare aliases word identically), each
-            diagnostic careting the offending segment.
+            diagnostic careting the offending segment. A bare name matching
+            members of two different open namespaces / enums is "ambiguous"
+            (notes at both decls).
+            Owns enums: `enum [type] [Name] ( members )` lowers here (not
+            desugar — members must be kConst by constfold). Named -> a
+            kNamespace whose slids_type carries the underlying (the name
+            doubles as a transparent type alias) + kConst members; anonymous
+            -> bare kConst members in the enclosing frame. Values auto-
+            increment from 0 (int) / 0.0 (float), C rules; an explicit init
+            resets the run. An implicit member is synthesized as
+            clone(last-explicit-init) + offset (constfold folds it), so a
+            non-literal explicit init like `kB = 1 + 2` continues correctly.
+            A file-scope pass-1a-enum runs before namespaces / aliases.
             Caches lvalue type on AugAssignStmts (s.return_type) and
             return type + param_types on CallStmts/CallExprs (one shared
             resolveUserCall) so downstream stages don't have to re-walk the

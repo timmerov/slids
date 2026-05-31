@@ -22,6 +22,11 @@ enum class Kind {
                    // leading namespace segments, global_qualified for `::`
     kNamespaceDecl,// Name { members }; name = namespace, children = member decls.
                    // Consumed by resolve+desugar; never reaches codegen.
+    kEnumDecl,     // enum [type] [Name] ( members ); name = enum (empty =
+                   // anonymous), return_type = underlying type (default int),
+                   // children = kVarDeclStmt members (is_const, optional init).
+                   // Resolve lowers to alias + namespace + consts (named) or
+                   // bare consts (anonymous); desugar drops it.
     kReturnStmt,
     kStringLiteral,
     kIntLiteral,
@@ -73,7 +78,10 @@ enum class EntryKind {
 struct Entry {
     EntryKind kind;
     std::string name;
-    std::string slids_type;       // LocalVar / Const: declared type; Function: return type
+    std::string slids_type;       // LocalVar / Const: declared type; Function:
+                                  // return type; Namespace: empty, or the
+                                  // underlying type when it is an enum's
+                                  // namespace facet (transparent type alias).
     std::vector<std::string> param_types;  // Function only
     int parent_frame_id = -1;
     int file_id = -1;

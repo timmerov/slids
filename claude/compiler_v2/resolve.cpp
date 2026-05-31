@@ -1,6 +1,8 @@
 #include "resolve.h"
 
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <set>
 #include <string>
 #include <utility>
@@ -42,8 +44,22 @@ std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
         base.resize(base.size() - 2);
     }
     int id = parse::findInLiveScopes(tree, base);
-    if (id < 0 || tree.entries[id].kind != parse::EntryKind::kAlias) {
+    // A type alias substitutes to its target. An enum's name doubles as a
+    // namespace AND a transparent type alias to the underlying (carried on the
+    // namespace entry's slids_type); treat that like an alias here. A plain
+    // namespace (empty slids_type) is not a type and falls through unchanged →
+    // requireKnownType then rejects it.
+    bool is_alias = id >= 0 && tree.entries[id].kind == parse::EntryKind::kAlias;
+    bool is_enum_type = id >= 0
+        && tree.entries[id].kind == parse::EntryKind::kNamespace
+        && !tree.entries[id].slids_type.empty();
+    if (!is_alias && !is_enum_type) {
         return spelling;
+    }
+    if (is_enum_type) {
+        // The underlying is already a primitive spelling (validated at decl);
+        // no further chain to chase.
+        return tree.entries[id].slids_type + suffix;
     }
     if (visiting.count(base)) {
         cyclic = true;
@@ -106,18 +122,38 @@ int findMemberLive(parse::Tree const& tree, int ns_frame,
 // then (2) the ordinary lexical scope (locals, params, file-scope entries),
 // innermost first. (1) before (2) means a sibling member shadows an outer name;
 // reaching the shadowed outer needs `::`. Returns entry id or -1.
-int resolveName(parse::Tree const& tree, std::string const& name) {
+// Like resolveName, but reports an open-namespace-import collision: if the name
+// matches distinct members in two different open namespaces (e.g. `alias Bonk1;
+// alias Bonk2;` where both define `kOops`), `other` is set to the second match
+// so the caller can emit an ambiguity diagnostic. Returns the first match (or
+// the lexical match if no namespace match). `other` is -1 when unambiguous.
+int resolveNameDetail(parse::Tree const& tree, std::string const& name,
+                      int& other) {
+    other = -1;
+    int first = -1;
     for (auto it = tree.open_ns_frames.rbegin();
          it != tree.open_ns_frames.rend(); ++it) {
         int id = findMemberLive(tree, *it, name);
-        if (id >= 0) return id;
+        if (id < 0) continue;
+        if (first < 0) {
+            first = id;
+        } else if (id != first) {
+            other = id;
+            return first;
+        }
     }
+    if (first >= 0) return first;
     for (auto it = tree.live_entry_ids.rbegin();
          it != tree.live_entry_ids.rend(); ++it) {
         parse::Entry const& e = tree.entries[*it];
         if (e.name == name && e.owner_ns_frame < 0) return *it;
     }
     return -1;
+}
+
+int resolveName(parse::Tree const& tree, std::string const& name) {
+    int other;
+    return resolveNameDetail(tree, name, other);
 }
 
 // Does any entry exist as a namespace member of the given name? Used to choose
@@ -279,7 +315,8 @@ int findExistingNamespace(parse::Tree const& tree, std::string const& name,
 // with its scope). Members added under the returned frame inherit the current
 // lexical lifetime.
 int openNamespace(parse::Tree& tree, std::string const& name, int name_tok,
-                  int file_id, int parent_ns, diagnostic::Sink& diag) {
+                  int file_id, int parent_ns, diagnostic::Sink& diag,
+                  std::string const& enum_underlying = "") {
     bool collision = false;
     int existing = findExistingNamespace(tree, name, parent_ns, collision);
     if (existing >= 0) return existing;
@@ -294,6 +331,7 @@ int openNamespace(parse::Tree& tree, std::string const& name, int name_tok,
     e.name = name;
     e.ns_frame_id = fid;
     e.owner_ns_frame = (parent_ns == kGlobalFrame) ? -1 : parent_ns;
+    e.slids_type = enum_underlying;   // non-empty → enum (doubles as a type)
     e.file_id = file_id;
     e.tok = name_tok;
     parse::addEntry(tree, std::move(e));
@@ -438,6 +476,142 @@ void resolveInlineQualifiedDecl(parse::Tree& tree, parse::Node& s,
     }
 }
 
+// ---- Enums ------------------------------------------------------------------
+// An enum lowers (at resolve, not desugar — members must be kConst by constfold
+// so `Enum:member` folds) to: a namespace of the members (named enum), which
+// doubles as a transparent type alias to the underlying; or bare consts in the
+// enclosing scope (anonymous enum). Member values auto-increment by 1 (int) or
+// 1.0 (float) from 0, with an explicit literal resetting the running counter
+// (C rules).
+
+bool isFloatUnderlying(std::string const& t) {
+    return t == "float" || t == "float32" || t == "float64";
+}
+
+std::string enumFloatText(double d) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.17g", d);
+    return buf;
+}
+
+// Deep-copy an expression subtree (member init exprs: literals + unary/binary).
+// Needed because an implicit enum member's value is synthesized as
+// `clone(last-explicit-init) + offset`, and the explicit init may be an
+// arbitrary constant expression not yet folded at resolve time.
+std::unique_ptr<parse::Node> cloneExpr(parse::Node const& src) {
+    auto n = std::make_unique<parse::Node>();
+    n->kind = src.kind;
+    n->name = src.name;
+    n->text = src.text;
+    n->return_type = src.return_type;
+    n->file_id = src.file_id;
+    n->tok = src.tok;
+    n->name_tok = src.name_tok;
+    // A qualified reference (`Other:kX`, `::g`) carries its qualifier on these
+    // fields, not in children — drop them and the clone re-resolves as a bare
+    // name. (See feedback_cloner_pos_propagation: cloners must copy every field
+    // resolution depends on.)
+    n->qualifier = src.qualifier;
+    n->qualifier_toks = src.qualifier_toks;
+    n->global_qualified = src.global_qualified;
+    for (auto const& c : src.children) {
+        if (c) n->children.push_back(cloneExpr(*c));
+    }
+    return n;
+}
+
+// Synthesize auto-increment literal inits for members lacking one, then create a
+// kConst entry per member. ns_frame >= 0: named enum (members owned by that
+// namespace). ns_frame < 0: anonymous (members land in the current lexical
+// frame, bare-visible).
+void registerEnumMembers(parse::Tree& tree, parse::Node& node, int ns_frame,
+                         diagnostic::Sink& diag) {
+    bool is_float = isFloatUnderlying(node.return_type);
+    // Auto-increment, C rules. A member with no init takes the previous value
+    // plus one; an explicit init resets the run. Because an explicit init may
+    // be a not-yet-folded expression (`kB = 1 + 2`), we synthesize an implicit
+    // member's value as `clone(anchor) + steps` where `anchor` is the last
+    // explicit init and `steps` counts members since it (constfold then folds
+    // the whole thing). Before any explicit init, the value is just the member
+    // ordinal. The offset literal matches the underlying family so constfold's
+    // no-int/float-mix rule is satisfied.
+    auto makeOffsetLiteral = [&](long long v, int file_id, int tok) {
+        auto lit = std::make_unique<parse::Node>();
+        if (is_float) {
+            lit->kind = parse::Kind::kFloatLiteral;
+            lit->text = enumFloatText(static_cast<double>(v));
+        } else {
+            lit->kind = parse::Kind::kIntLiteral;
+            lit->text = std::to_string(v);
+        }
+        lit->file_id = file_id;
+        lit->tok = tok;
+        return lit;
+    };
+    parse::Node const* anchor = nullptr;  // last explicit init expr
+    int steps = 0;                        // members since the anchor
+    long long ordinal = 0;                // member index (used before any anchor)
+    for (auto& m : node.children) {
+        if (!m) continue;
+        if (!m->children.empty()) {
+            anchor = m->children[0].get();
+            steps = 0;
+        } else if (anchor == nullptr) {
+            m->children.push_back(makeOffsetLiteral(ordinal, m->file_id, m->tok));
+        } else {
+            auto plus = std::make_unique<parse::Node>();
+            plus->kind = parse::Kind::kBinaryExpr;
+            plus->text = "+";
+            plus->file_id = m->file_id;
+            plus->tok = m->tok;
+            plus->children.push_back(cloneExpr(*anchor));
+            plus->children.push_back(makeOffsetLiteral(steps, m->file_id, m->tok));
+            m->children.push_back(std::move(plus));
+        }
+        steps++;
+        ordinal++;
+
+        bool dup = (ns_frame >= 0)
+            ? (findMemberDeclared(tree, ns_frame, m->name) >= 0)
+            : (parse::findInFrame(tree, parse::currentFrameId(tree), m->name) >= 0);
+        if (dup) {
+            diagnostic::report(diag, {m->file_id, m->name_tok,
+                "Duplicate declaration of '" + m->name + "'.", {}});
+            continue;
+        }
+        parse::Entry e;
+        e.kind = parse::EntryKind::kConst;
+        e.name = m->name;
+        e.slids_type = node.return_type;
+        e.file_id = m->file_id;
+        e.tok = m->name_tok;
+        e.owner_ns_frame = (ns_frame >= 0) ? ns_frame : -1;
+        m->resolved_entry_id = parse::addEntry(tree, std::move(e));
+    }
+    // Resolve member init expressions (literals today; an init that references
+    // another const would resolve here once that lands).
+    for (auto& m : node.children) {
+        if (!m) continue;
+        for (auto& init : m->children) {
+            if (init) resolveExpr(tree, *init, diag);
+        }
+    }
+}
+
+void registerEnum(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag) {
+    // Validate the underlying type spelling once (members inherit it).
+    resolveDeclType(tree, node.return_type, node.file_id, node.tok, diag);
+    if (node.name.empty()) {
+        registerEnumMembers(tree, node, -1, diag);   // anonymous → bare consts
+        return;
+    }
+    int ns = openNamespace(tree, node.name, node.name_tok, node.file_id,
+                           kGlobalFrame, diag, node.return_type);
+    if (ns < 0) return;
+    node.resolved_entry_id = ns;
+    registerEnumMembers(tree, node, ns, diag);
+}
+
 void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
     switch (e.kind) {
         case parse::Kind::kIdentExpr: {
@@ -446,7 +620,17 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
                 id = resolveQualifiedRef(tree, e, diag);
                 if (id < 0) return;
             } else {
-                id = resolveName(tree, e.name);
+                int other = -1;
+                id = resolveNameDetail(tree, e.name, other);
+                if (other >= 0) {
+                    parse::Entry const& a = tree.entries[id];
+                    parse::Entry const& b = tree.entries[other];
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Reference to '" + e.name + "' is ambiguous.",
+                        {{a.file_id, a.tok, "could be this one"},
+                         {b.file_id, b.tok, "or this one"}}});
+                    return;
+                }
                 if (id < 0) {
                     if (namespaceMemberExists(tree, e.name)) {
                         diagnostic::report(diag, {e.file_id, e.tok,
@@ -533,6 +717,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
         case parse::Kind::kNamespaceDecl:
+        case parse::Kind::kEnumDecl:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kParam:
             assert(false && "resolveExpr: not an expression kind");
@@ -715,6 +900,12 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             resolveNamespaceBodies(tree, s, kGlobalFrame, diag);
             return;
         }
+        case parse::Kind::kEnumDecl: {
+            // An enum opened in a function body: registers its alias+namespace+
+            // members (named) or bare consts (anonymous) in the current frame.
+            registerEnum(tree, s, diag);
+            return;
+        }
         case parse::Kind::kExprStmt:
         case parse::Kind::kReturnStmt: {
             for (auto& ch : s.children) {
@@ -825,6 +1016,15 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         }
     }
 
+    // Pass 1a-enum — register every file-scope enum (alias + namespace + member
+    // consts, or bare consts for anonymous) before namespaces / bare aliases so
+    // a later `alias EnumName;` import and qualified `Enum:member` both resolve.
+    for (auto& ch : program->children) {
+        if (ch && ch->kind == parse::Kind::kEnumDecl) {
+            registerEnum(tree, *ch, diag);
+        }
+    }
+
     // Pass 1a-ns — register every file-scope namespace and its members'
     // signatures (recursively), across all reopens, before any body or inline
     // qualified member decl. Members live in the global frame (file lifetime).
@@ -911,6 +1111,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         }
         if (ch->kind == parse::Kind::kAliasDecl) continue;     // handled above
         if (ch->kind == parse::Kind::kNamespaceDecl) continue; // handled above
+        if (ch->kind == parse::Kind::kEnumDecl) continue;      // handled above
         // Mutable globals + other top-level shapes not supported today.
         // Grammar rejects them; if one slips through, it's a grammar bug.
         diagnostic::report(diag, {ch->file_id, ch->tok,

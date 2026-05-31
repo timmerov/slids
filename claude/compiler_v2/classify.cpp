@@ -109,6 +109,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
         case parse::Kind::kNamespaceDecl:
+        case parse::Kind::kEnumDecl:
         case parse::Kind::kPreIncExpr:
         case parse::Kind::kPostIncExpr:
         case parse::Kind::kReturnStmt:
@@ -331,6 +332,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
         case parse::Kind::kNamespaceDecl:
+        case parse::Kind::kEnumDecl:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kParam:
             assert(false && "inferExpr: not an expression kind");
@@ -469,6 +471,10 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             return;
         case parse::Kind::kNamespaceDecl:
             classifyNamespace(tree, s, diag);
+            return;
+        case parse::Kind::kEnumDecl:
+            // Enum members were lowered to kConst entries at resolve and folded
+            // by constfold; the enum node carries nothing to type-infer.
             return;
         case parse::Kind::kProgram:
         case parse::Kind::kFunctionDef:

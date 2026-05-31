@@ -130,6 +130,7 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
         case parse::Kind::kNamespaceDecl:
+        case parse::Kind::kEnumDecl:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kStringLiteral:
         case parse::Kind::kIdentExpr:
@@ -709,6 +710,13 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // rather than N. Caret lands at the ident via entry.tok (grammar
     // captured the ident's tok in name_tok; resolve stamped it on the
     // entry at creation time).
+    //
+    // Skip the sweep entirely if folding already reported an error: a capture
+    // that failed its range check (tryCaptureConst) leaves literal_text empty,
+    // and the primary "does not fit declared type" diagnostic already named it
+    // — the cascade "not a constant expression" would be a spurious second
+    // report on the same const.
+    if (diagnostic::hasErrors(diag)) return;
     for (parse::Entry const& entry : tree.entries) {
         if (entry.kind != parse::EntryKind::kConst) continue;
         if (!entry.literal_text.empty()) continue;

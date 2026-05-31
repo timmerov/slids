@@ -135,8 +135,12 @@ Phase 4 — types beyond primitives
     kAlias entries (frame-scoped), resolveTypeSpelling substitutes the chain
     (cycle-detected, `[]` rides along), resolveDeclType rewrites every declared
     type in place then validates. desugar drops kAliasDecl (parse-only). Defers:
-    type-label preservation (`x:Integer` for ##type / enum distinct type),
-    function-rename `alias Fn = LongName;`, and templated `alias X<...> = T;`.
+    - type-label preservation for ##type: `alias Integer = int; Integer x;
+      ##type(x)` should say `Integer`, but resolveDeclType rewrites the
+      spelling to `int` so it says `int` today. (typeof an enum == typeof its
+      alias; same deferral — `Language lang` is `int`, not `Language`.) ##type
+      itself is also unparsed (kHashHash lexes; grammar has no handler).
+    - function-rename `alias Fn = LongName;`, and templated `alias X<...> = T;`.
     The bare `alias Ns;` unqualify form LANDED with namespaces (below).
   * constants — LANDED (file-scope + function-scope; kConst entries with
     captured values; constfold substitution + iteration + fixpoint check;
@@ -160,7 +164,71 @@ Phase 4 — types beyond primitives
     is-not-a-namespace — each carets the offending segment; wrong-kind
     assign/call use allowlists. Defers: nested-block scope lifetime (rides
     Phase 2), cross-TU namespaces + `.slh` propagation (Phase 8).
-  * enums
+  * enums — LANDED. `enum [type] [Name] ( m1 [= v], m2, ... );` type-first,
+    optional type (default int), optional name. Lowered at RESOLVE (not
+    desugar — members must be kConst by constfold so `Enum:member` folds):
+    - named -> a kNamespace whose slids_type carries the underlying (so the
+      name doubles as a transparent type alias: `Language lang` resolves to
+      `int` today; the distinct enum type rides the ##type-label deferral
+      above) + one kConst member per name, owned by that namespace.
+    - anonymous -> bare kConst members in the enclosing lexical frame (file or
+      function), no namespace/alias.
+    Member values auto-increment from 0 by 1 (int) / 1.0 (float), C rules; an
+    explicit init resets the run. An implicit member is synthesized as
+    `clone(last-explicit-init) + offset` (or the ordinal before any explicit) —
+    NOT a peek at the explicit value, because resolve precedes constfold so the
+    explicit init may still be an unfolded expr (`kB = 1 + 2`); constfold folds
+    the synthesized `+`. The offset literal matches the underlying family to
+    satisfy constfold's no-int/float-mix. `cloneExpr` (resolve.cpp) deep-copies
+    the anchor incl. its qualifier fields (a qualified anchor `kA = Other:kX`
+    must survive the clone). Float underlying flows through the const
+    float-capture round-trip. Members register in a file-scope pass-1a-enum
+    (before namespaces/aliases) so a later `alias EnumName;` import + qualified
+    `Enum:member` both resolve; in-function enums register in resolveStmt's
+    kEnumDecl arm. grammar: parseEnumDecl, dispatched at file scope + parseStmt
+    + parseNamespaceMember. constfold / classify / desugar treat kEnumDecl as
+    resolve-consumed (dropped on copy). A non-constant or out-of-range member
+    init is rejected (range via const-capture; non-const via constfold's
+    fixpoint — one report, the double-report cascade was fixed by a hasErrors
+    early-return in constfold's sweep). Negatives in enum.sl: ambiguous bare,
+    needs-qualifier, bool/int8 overflow, dup member, unknown underlying, 2×
+    non-const init.
+    New diagnostic (also used by bare-namespace imports): an ambiguous bare
+    reference across two open namespaces/enums (`alias Bonk1; alias Bonk2;`
+    both defining `kOops`) -> "Reference to 'X' is ambiguous." with notes at
+    both decls (resolveNameDetail). Canon: test_v2/constfold/enum.sl.
+    Defers:
+    - REACH GOAL: drop the enum qualifier in assignment context. When a
+      variable's declared type is an enum, a bare member name on the rhs
+      (`Language best = kRust;` and a following `best = kSlids;`) should
+      resolve against that enum's namespace — an implied `alias Language;`
+      scoped to the statement (or to the variable's lifetime). Today bare
+      `kRust` is "needs a namespace qualifier"; the canon block is commented
+      pending this. Needs type-directed name resolution (the lvalue/assignment
+      target type steering the rhs lookup), which no other feature needs yet.
+    - FILE-SCOPE INIT ORDERING: a file-scope enum member init can't see a
+      file-scope const (or any name) declared elsewhere in the file —
+      `const int kG = 9; enum E ( kA = kG );` -> "Unresolved identifier 'kG'".
+      The same enum inside a function works (kA=9), because by the time bodies
+      resolve, all file-scope entries exist. Cause: run()'s pass-1a-enum
+      registers AND resolves enum member inits before the file-scope const/fn
+      collection pass, so forward (and even backward) file-scope refs aren't in
+      the table yet. Fix: split enum like the inline-qualified-decl pass —
+      register enum names + members (signatures / auto-increment) early, but
+      resolve member INIT expressions in a later pass after all file-scope
+      entries are collected. Pre-existing (original enum landing). No invalid
+      IR (it errors); just over-strict. Deferred.
+    - reopen enums: re-`enum SameName ( ... )` to add members to an existing
+      enum. Member names cannot collide across the openings. Open spec qs
+      (from enum.sl): does the value counter restart at 0 on reopen, and must
+      the first member of a reopening carry an explicit value? Defer until
+      decided. (Namespaces already reopen; enums would reuse openNamespace's
+      find-or-create, but the value-counter continuation across openings is
+      the undecided part.)
+    - enum bool: members must fit the underlying's range (an enum bool with
+      values outside {0,1} is a compile error). Range-fit rides the existing
+      const-capture range check; negative tests deferred.
+    - anonymous-enum default-int coverage test deferred.
 
 Phase 5 — classes
   * class definitions (fields, ctor, dtor, methods)
@@ -206,6 +274,16 @@ Phase 9 — templates
 PRIORITY BUGS
 
   (none open)
+
+  POLISH — constfold's "Initializer for 'X' is not a constant expression."
+    is a blunt catch-all. It fires for a genuinely non-constant init (a runtime
+    var / function call — correct), BUT ALSO for an init that IS constant yet
+    type-mismatched, e.g. `enum E ( kA = "x" )` (a string literal is constant;
+    the real fault is a string in an int enum) and any const whose rhs folds to
+    the wrong family. The message should distinguish "not constant" from "wrong
+    type for this declaration". Pre-existing (constfold fixpoint fallback at the
+    end of run()); enums inherit it. Low priority, no invalid IR — just an
+    imprecise diagnostic.
 
   FIXED — Declared-but-never-defined function reaches llc as a cryptic error.
     A function declaration with no matching definition — plain file-scope
