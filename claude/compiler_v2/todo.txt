@@ -8,24 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * FILE-SCOPE INIT ORDERING — a file-scope enum member init can't see a
-    file-scope const (or any file-scope name): `const int kG = 9;
-    enum E ( kA = kG );` → "Unresolved identifier 'kG'". The same enum inside a
-    function works (kA=9), because by then all file-scope entries exist. Cause:
-    run()'s pass-1a-enum registers AND resolves enum member inits before the
-    file-scope const/fn collection pass, so file-scope refs aren't in the table
-    yet. Fix: split enum like the inline-qualified-decl pass — register enum
-    names + members (signatures / auto-increment) early, resolve member INIT
-    expressions in a later pass after all file-scope entries are collected.
-    No invalid IR (it errors); just over-strict.
-
-  * QUALIFIER GAP — an enum member init can't reference a sibling member bare:
-    `enum E ( kA = 5, kB = kA + 1 )` → "'kA' needs a namespace qualifier". C
-    allows it. Member inits resolve in the enclosing scope, where siblings
-    aren't visible (named-enum members live in the enum's namespace; anonymous
-    aren't registered until their own pass). Would need member inits to resolve
-    against the enum's own (partial) member set, in declaration order.
-
   * ORPHAN-CHECK vs IMPORT FORWARD-DECLS — resolve's Pass 3 errors on any
     function declared-but-never-defined ("Function 'X' is declared but never
     defined.") — but a `.slh` header legitimately declares-only (defined in the

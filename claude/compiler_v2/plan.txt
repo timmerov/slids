@@ -105,9 +105,11 @@ Phase 4 — types beyond primitives
     slids_type carries the underlying (transparent type) + kConst members;
     anonymous → bare kConst members in the enclosing frame. Auto-increment from
     0, C rules (implicit member = clone(last-explicit-init) + offset, folded by
-    constfold). Ambiguous-bare-ref diagnostic. Canon: test_v2/constfold/enum.sl.
-    Deferred enum items (reach-goal drop-qualifier, reopen, FILE-SCOPE INIT
-    ORDERING + QUALIFIER GAP bugs, enum-bool negatives) → todo.txt.
+    constfold). Ambiguous-bare-ref diagnostic. Member inits resolve in a late
+    pass (after all file-scope entries exist) with the enum's own frame open, so
+    a member init can reference a file-scope const or a sibling member bare.
+    Canon: test_v2/constfold/enum.sl. Deferred enum items (reach-goal
+    drop-qualifier, reopen, enum-bool negatives) → todo.txt.
 
 Phase 5 — classes
   * class definitions (fields, ctor, dtor, methods)

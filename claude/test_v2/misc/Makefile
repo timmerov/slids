@@ -8,6 +8,7 @@ BUILD_DIR = ../../build/test_v2/misc
 
 SAMPLES = \
 	alias \
+	bug \
 	hello \
 	namespace \
 	widen

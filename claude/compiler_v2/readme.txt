@@ -82,9 +82,9 @@ STAGE FILES (.h / .cpp pairs)
             scope-opening nodes (program, function-body today; block /
             class as Phase 2+ land). Pass 1a collects
             program-scope entries (Functions + Consts) without walking
-            init expressions; pass 1b walks file-scope const init rhs
-            (so globals can reference each other regardless of decl
-            order); pass 2 walks function bodies. Owns type aliases: a
+            init expressions; pass 1b-enum + pass 1b walk file-scope enum
+            member inits then const init rhs (so globals can reference each
+            other regardless of decl order); pass 2 walks function bodies. Owns type aliases: a
             pass-1a-alias pre-sweep registers file-scope `alias` decls as
             kAlias entries; resolveTypeSpelling substitutes an alias chain to
             its underlying (cycle-detected), and resolveDeclType rewrites every
@@ -111,7 +111,13 @@ STAGE FILES (.h / .cpp pairs)
             resets the run. An implicit member is synthesized as
             clone(last-explicit-init) + offset (constfold folds it), so a
             non-literal explicit init like `kB = 1 + 2` continues correctly.
-            A file-scope pass-1a-enum runs before namespaces / aliases.
+            A file-scope pass-1a-enum REGISTERS names + members (before
+            namespaces / aliases); a separate pass-1b-enum RESOLVES the member
+            INIT expressions later — after every file-scope entry is collected,
+            with the enum's own frame open — so a member init can reference a
+            file-scope const (`enum E ( e = kG )`) or a sibling member bare
+            (`enum E ( a, b = a )`). A block-scope enum registers + resolves in
+            one shot in the body pass (all enclosing entries already exist).
             Caches lvalue type on AugAssignStmts (s.return_type) and
             return type + param_types on CallStmts/CallExprs (one shared
             resolveUserCall) so downstream stages don't have to re-walk the

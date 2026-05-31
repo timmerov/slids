@@ -16,18 +16,18 @@ the enum qualifier may be removed with alias.
 
 enum conceptually/mechanically resolves to a type alias and a namespace.
 
-enum int Demo ( kMix, kTape );
--->
-alias int Demo;
-Demo /*namespace*/ {
-    const Demo /*aliased type*/ kMix = 0;
-    const Demo /*aliased type*/ kTape = 1;
-};
+    enum int Demo ( kMix, kTape );
+    -->
+    alias int Demo;
+    Demo /*namespace*/ {
+        const Demo /*aliased type*/ kMix = 0;
+        const Demo /*aliased type*/ kTape = 1;
+    };
 
-enum ( kBare, kNaked );
--->
-const int kBare = 0;
-const int kNaked = 1;
+    enum ( kBare, kNaked );
+    -->
+    const int kBare = 0;
+    const int kNaked = 1;
 
 future todo:
 re-open enums.
@@ -58,6 +58,50 @@ enum Mapped (
     kBase = Direction:kWest,
     kNext
 );
+
+/*
+a member's explicit init references a file-scope const. the const is visible
+even though the enum registers early — inits resolve in a later pass. forward
+references work too (the const may be declared below the enum).
+*/
+const int kSix = 6;
+enum FromConst (
+    kVal = kSix,    // 6
+    kNextVal        // 7, auto-increment from the const anchor
+);
+enum FwdConst ( kFwd = kEight );
+const int kEight = 8;
+
+/* qualifier gap: a member init references a sibling member bare. */
+enum Sib ( s0, s1 = s0 );
+
+/* the same, inside an expression — the canonical C idiom. */
+enum Arith ( aA = 5, aB = aA + 1 );
+
+/*
+a bare-sibling anchor with a trailing implicit member: c2 continues from c1's
+clone (the third anchor kind, alongside Mapped's qualified ref and FromConst's
+const ref).
+*/
+enum Chain ( c0, c1 = c0, c2 );
+
+/* a plain literal anchor with a trailing implicit member. */
+enum Lit ( l0 = 5, l1 );
+
+/* a wide underlying holds a value beyond int32's range. */
+enum int64 Wide ( wBig = 5000000000 );
+
+/* float member inits referencing a file-scope const, including a forward ref. */
+const float fPi = 3.5;
+enum float FConst ( fA = fPi, fB );
+enum float FFwd ( fF = fLater );
+const float fLater = 9.5;
+
+/* reverse direction: a file-scope const init reads an enum member. */
+const int kFromMember = Direction:kEast;
+
+/* option A: a forward sibling ref resolves (all members register first). */
+enum Fwd2 ( q0 = q1, q1 = 1 );
 
 void foo() {
     enum Language (
@@ -129,6 +173,32 @@ int32 main() {
     __println("kBase = " + Mapped:kBase);
     __println("kNext = " + Mapped:kNext);
 
+    __println("kVal = "     + FromConst:kVal);
+    __println("kNextVal = " + FromConst:kNextVal);
+    __println("kFwd = "     + FwdConst:kFwd);
+
+    /* block-scope sibling ref. */
+    enum BlockSib ( b0, b1 = b0 );
+    __println("b0 = " + BlockSib:b0);
+    __println("b1 = " + BlockSib:b1);
+
+    __println("s0 = "   + Sib:s0);
+    __println("s1 = "   + Sib:s1);
+    __println("aA = "   + Arith:aA);
+    __println("aB = "   + Arith:aB);
+    __println("c0 = "   + Chain:c0);
+    __println("c1 = "   + Chain:c1);
+    __println("c2 = "   + Chain:c2);
+    __println("l0 = "   + Lit:l0);
+    __println("l1 = "   + Lit:l1);
+    __println("wBig = " + Wide:wBig);
+    __println("fA = "   + FConst:fA);
+    __println("fB = "   + FConst:fB);
+    __println("fF = "   + FFwd:fF);
+    __println("kFromMember = " + kFromMember);
+    __println("q0 = "   + Fwd2:q0);
+    __println("q1 = "   + Fwd2:q1);
+
     alias Direction;
     __println("kNorth = " + kNorth);
 
@@ -181,3 +251,8 @@ int underlying. distinguished from the non-constant cases above.
 */
 //-EXPECT-ERROR: has a string initializer, which does not match declared type 'int'
 //enum Stringy ( kA = "x" );
+
+/* a const and an enum member that reference each other — a cycle. */
+//-EXPECT-ERROR: is not a constant expression
+//const int cyc_x = Cyc:ca;
+//enum Cyc ( ca = cyc_x );

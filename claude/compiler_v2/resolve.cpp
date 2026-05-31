@@ -588,14 +588,29 @@ void registerEnumMembers(parse::Tree& tree, parse::Node& node, int ns_frame,
         e.owner_ns_frame = (ns_frame >= 0) ? ns_frame : -1;
         m->resolved_entry_id = parse::addEntry(tree, std::move(e));
     }
-    // Resolve member init expressions (literals today; an init that references
-    // another const would resolve here once that lands).
+}
+
+// Resolve enum member init expressions. Split from registerEnumMembers so a
+// file-scope enum's inits resolve in a later pass — after every file-scope
+// entry is collected — letting a member init reference a file-scope const
+// (`const int kG = 6; enum E ( e = kG );`). At block scope all enclosing-scope
+// entries already exist, so the body pass resolves inits right after register.
+// For a named enum, open its own frame first so a member init can reference a
+// sibling member bare (`enum E ( a, b = a )`); members already exist (registered
+// above). The frame chain still falls back to the enclosing scope, so file-scope
+// refs keep resolving. Anonymous enums need no push — their members are already
+// bare in the enclosing frame.
+void resolveEnumMemberInits(parse::Tree& tree, parse::Node& node,
+                            diagnostic::Sink& diag) {
+    bool named = !node.name.empty() && node.resolved_entry_id >= 0;
+    if (named) tree.open_ns_frames.push_back(node.resolved_entry_id);
     for (auto& m : node.children) {
         if (!m) continue;
         for (auto& init : m->children) {
             if (init) resolveExpr(tree, *init, diag);
         }
     }
+    if (named) tree.open_ns_frames.pop_back();
 }
 
 void registerEnum(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag) {
@@ -903,7 +918,10 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
         case parse::Kind::kEnumDecl: {
             // An enum opened in a function body: registers its alias+namespace+
             // members (named) or bare consts (anonymous) in the current frame.
+            // All enclosing-scope entries already exist here, so resolve the
+            // member inits right away.
             registerEnum(tree, s, diag);
+            resolveEnumMemberInits(tree, s, diag);
             return;
         }
         case parse::Kind::kExprStmt:
@@ -1134,6 +1152,15 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     for (auto& ch : program->children) {
         if (ch && ch->kind == parse::Kind::kAliasDecl && ch->return_type.empty()) {
             resolveBareAlias(tree, *ch, diag);
+        }
+    }
+
+    // Pass 1b-enum — resolve file-scope enum member init expressions now that
+    // every program-scope entry is registered, so a member init can reference a
+    // file-scope const (registration happened early in Pass 1a-enum).
+    for (auto& ch : program->children) {
+        if (ch && ch->kind == parse::Kind::kEnumDecl) {
+            resolveEnumMemberInits(tree, *ch, diag);
         }
     }
 
