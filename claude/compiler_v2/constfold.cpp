@@ -615,9 +615,29 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
     if (!entry.literal_text.empty()) return false;  // already captured
     if (decl.children.empty()) return false;        // grammar should have rejected
     parse::Node const& rhs = *decl.children[0];
-    if (!isLiteral(rhs)) return false;              // not yet folded
 
     std::string const& declared = entry.slids_type;
+
+    // A string literal is a constant, but isLiteral (used below to mean "folded
+    // to a numeric literal") excludes it — so without this branch a string init
+    // would fall through to the fixpoint sweep's blunt "not a constant
+    // expression", mis-attributing a type mismatch as non-constness. Report
+    // precisely instead. (char[] string constants are a real value but their
+    // capture / codegen isn't built yet — an honest "not yet supported", not a
+    // type error.)
+    if (rhs.kind == parse::Kind::kStringLiteral) {
+        if (declared == "char[]") {
+            diagnostic::report(diag, {decl.file_id, decl.tok,
+                "String constants are not yet supported.", {}});
+        } else {
+            diagnostic::report(diag, {decl.file_id, decl.tok,
+                "Constant '" + entry.name + "' has a string initializer, which "
+                "does not match declared type '" + declared + "'.", {}});
+        }
+        return false;
+    }
+
+    if (!isLiteral(rhs)) return false;              // not yet folded
 
     if (rhs.kind == parse::Kind::kFloatLiteral) {
         if (!widen::floatLiteralFits(rhs.text, declared)) {

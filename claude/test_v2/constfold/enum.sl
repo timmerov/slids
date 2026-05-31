@@ -156,3 +156,10 @@ file-scope negative cases — whole enum decls, so they sit outside main
 //    return 0;
 //}
 //int helper() { return 1; }
+
+/*
+a member initialized to a string — a constant, but the wrong type for the
+int underlying. distinguished from the non-constant cases above.
+*/
+//-EXPECT-ERROR: has a string initializer, which does not match declared type 'int'
+//enum Stringy ( kA = "x" );

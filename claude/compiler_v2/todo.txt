@@ -275,28 +275,6 @@ PRIORITY BUGS
 
   (none open)
 
-  POLISH — constfold's "Initializer for 'X' is not a constant expression."
-    is a blunt catch-all. It fires for a genuinely non-constant init (a runtime
-    var / function call — correct), BUT ALSO for an init that IS constant yet
-    type-mismatched, e.g. `enum E ( kA = "x" )` (a string literal is constant;
-    the real fault is a string in an int enum) and any const whose rhs folds to
-    the wrong family. The message should distinguish "not constant" from "wrong
-    type for this declaration". Pre-existing (constfold fixpoint fallback at the
-    end of run()); enums inherit it. Low priority, no invalid IR — just an
-    imprecise diagnostic.
-
-  FIXED — Declared-but-never-defined function reaches llc as a cryptic error.
-    A function declaration with no matching definition — plain file-scope
-    (`int foo();`) or namespace member (`Space { int foo(); }`) — used to emit
-    a `declare`/call with no `define`, which llc rejected with `use of
-    undefined value '@foo'`. resolve now has a final pass (Pass 3) that scans
-    every kFunction entry and reports "Function 'X' is declared but never
-    defined." (caret at the declaration's name) for any with `defined ==
-    false` — anywhere, used or not, per test_v2/function/calls.sl. The .slh
-    header carve-out (a header may legitimately declare-only) defers with the
-    rest of the .slh / cross-TU work; today every declared-nowhere-defined
-    function is an error.
-
 
 KNOWN GAPS — current state
 
