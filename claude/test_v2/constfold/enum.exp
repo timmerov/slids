@@ -1,4 +1,9 @@
+kUnnamed1 = 0
+kUnnamed2 = 1
 kUnnamed3 = 2
+kLocalA = 0
+kLocalC = 2
+local sum = 3
 kNorth = 0
 kWest = 3
 kPi = 3.14

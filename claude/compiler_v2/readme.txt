@@ -1,5 +1,9 @@
 compiler_v2 — slids compiler rewrite, in-progress
 
+(Companion docs: plan.txt = the phase roadmap / main quest; todo.txt = open
+side-quests — bugs, reach goals, deferrals. This file = per-stage current-state
+notes: what each stage does today.)
+
 PIPELINE (each stage consumes its predecessor's output, produces its successor's input):
 
     source text

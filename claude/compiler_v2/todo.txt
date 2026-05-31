@@ -1,686 +1,76 @@
-compiler_v2
+compiler_v2 — TODO (side quests)
 
-PLAN — feature implementation order
-
-Each phase adds primitives the next phase depends on. widen.cpp threads through
-every conversion site as features land; treat each new expr/decl/assign site
-as a widen call-out.
-
-PIPELINE — current shape
-
-    lex -> numeric -> grammar -> resolve -> constfold -> classify
-        -> desugar -> optimize -> layout -> codegen
-
-  resolve owns: parse::Entry vector population, frame push/pop, ident
-  resolution (resolved_entry_id stamping), wrong-kind diagnostics
-  (assign-to-function, call-a-variable), duplicate-decl + signature
-  mismatch + arity-mismatch + multi-arg-print-intrinsic detection,
-  type-spelling validation (widen::isKnownType for declared / return /
-  parameter types). Two passes per scope (collect decls then walk
-  bodies) so forward references between top-level functions work.
-  Caches s.return_type on AugAssignStmts and s.return_type + s.param_types
-  on CallStmts so downstream stages don't have to re-walk the entry table.
-  Substitution of kConst idents to literal nodes will land here when
-  Phase 4 constants are added.
-
-  classify is narrowed to type inference + (Phase 3) overload resolution.
-  Stamps inferred_type / op_type, rejects no-common-type binaries,
-  non-coercible operands for `! && || ^^`, non-numeric shift sides,
-  bitwise on float. Also owns return correctness: a non-void function must
-  end with a return statement, and a void function cannot return a value.
-  Reads entries via resolved_entry_id but never mutates the symbol table
-  or pushes frames.
-
-Phase 0 — foundations (largely landed)
-  * lex stage + import wrapper
-  * numeric stage — literal validation + canonicalization (mostly landed;
-    int/uint/float/char/bool all flow lex→numeric; items 5 and 7 of the
-    migration still open — see project_v2_numeric_stage memory)
-  * constfold stage — between resolve and classify (spec in
-    test_v2/const/fold.sl):
-      - LANDED: post-order walker; nominal_type assigned to every literal
-        (parse::Node field, propagated to ast::Node) per fold.sl:16-23.
-      - LANDED: unary fold on literal (rules 1a-1f). `~float` rejected;
-        `-uint_lit` flips kind to kIntLiteral per rule 1d.
-      - LANDED: binary fold on two integer-class literals via signed int64
-        arithmetic (+ - * / % & | ^). Mixed int/float operands rejected.
-        Div/mod by literal zero rejected.
-      - LANDED (D1): float binary fold (`+ - * / %` via double + fmod;
-        canonical text via %.17g). Float `& | ^` rejected sharply.
-      - LANDED (D2): shift fold. Int lhs shifts at int64 width with
-        count >= 64 → 0 per spec; `<<` reinterprets via uint64 to avoid
-        signed-overflow UB; `>>` arithmetic for signed lhs, logical for
-        unsigned. Float lhs lowers via the pow2 mul/div path per spec
-        rule 4. Negative count rejected; float rhs rejected.
-      - LANDED (D3): comparison fold (`== != < <= > >=`). Float arm uses
-        double compare; int arm tries int64 first, falls back to uint64
-        when both non-negative (cross-sign mixed-with-too-big stays
-        unfolded for classify to handle). Result kind kBoolLiteral.
-      - LANDED (D4): rule-6 overflow-to-unsigned exception. `+ - *` use
-        __builtin_*_overflow on int64; on signed overflow retry in uint64
-        and emit kUintLiteral. INT64_MIN / -1 also flips to uint64.
-      - LANDED (consts): iterative substitution + capture. Each iteration
-        rewrites kIdentExpr -> literal when entry is a kConst with a
-        captured value, and captures const-decl rhs onto the entry once
-        it folds to a literal. Float captures round-trip through declared
-        type for precision (3.14 stored as 3.1400001049 for float32).
-        Int/bool/char captures store rhs text verbatim with widen range
-        validation against declared type. Loops until no change.
-        Fixpoint check: unfolded kConst -> "Initializer for 'X' is not
-        a constant expression." Consolidated into one primary diagnostic
-        with "also: 'Y'" notes for the rest, so a cycle of N consts
-        emits one error block rather than N.
-      - NOT constfold's job: algebraic identities (x+0 → x, x*1 → x, x*0 → 0,
-        x&&false → false). Those produce a NON-literal from a multi-node expr,
-        which breaks constfold's literal->literal contract. See OPTIMIZE.
-  * diagnostic sink + source rendering
-  * single-source error pipeline (main.cpp early-out between stages)
-  * build hygiene (-Wall -Werror -Wswitch-enum)
-  * widen primitives table + literal range checks
-
-Phase 1 — expression core
-  * unary operators (!, ~, full -)                                    LANDED
-  * binary operators (arithmetic, comparison, bitwise, logical, shift) LANDED
-  * parenthesized expressions, precedence + associativity              LANDED
-  * compound assigns (+=, -=, *=, /=, %=, &=, |=, ^=, <<=, >>=, ||=, &&=) LANDED
-  * classify symbol resolution (LocalVar / Function entries; live-scope
-    walk; decl+def binding at program scope)                          LANDED
-  * classify type inference (inferred_type + op_type on every expr node;
-    literal-flex into context; commonType ownership at classify)      LANDED
-  * calls — typed params, 0/1/N-arg statement-form calls; param-as-
-    LocalVar in body frame; arity + per-arg type check via param-type
-    context; decl/def signature match (return + param types)          LANDED
-  * PPID — pre/post-inc/dec via phrases. kPreIncExpr/kPostIncExpr parse
-    nodes (operand must be an lvalue, int/float scalar, not bool); the
-    desugar PPID pass extracts bumps per phrase — statement-level bumps
-    hoist to sibling kExprStmt bump-statements (post AFTER the store, so
-    `a = a++` leaves a one larger: the statement is the phrase, not the
-    rhs), sub-phrases (call args, && / || rhs) keep their bumps in a
-    kSeqExpr {pre... value post...} (value_index = #pre) so a short-
-    circuited bump never fires, a return embeds (no slot after a
-    terminator). Bare `e++;` parses to a kExprStmt and lowers to a lone
-    kBumpExpr. Phase-1 sites only (statement / call-arg / && / ||);
-    conditions, switch, for, tuple slots, and pointer element stride
-    attach with their phases.                                          LANDED
-  * call-as-expression — kCallExpr via parsePostfix on a bare ident;
-    shared resolveUserCall (resolve) + emitCall (codegen) with kCallStmt;
-    return value widens into context like an ident read; void-return and
-    print-intrinsic-as-expr rejected with caret on the callee          LANDED
-
-Phase 2 — declarations + flow
-  * var decls (typed init, inferred init, declare-then-assign)
-  * blocks
-  * if / else, while
-  * for-loop (six shapes desugar to one canonical form)
-  * switch / case
-  * labeled break / continue
-  * return
-
-Phase 3 — functions
-  * definitions: params (typed + inferred), return type
-  * declarations (signature-only)
-  * overload resolution (arity → types → const)
-  * nested functions + capture analysis
-  * method dispatch (`.method()`)
-  * function pointers
-
-Phase 4 — types beyond primitives
-  * pointers (`^` reference, no arithmetic)
-  * iterators (`[]`, arithmetic allowed)
-  * memory mgmt (`new T(init)`, `new T[n]`, `delete ptr`)
-  * anonymous tuples (`(T1, T2, ...)`)
-  * type aliases — LANDED (value form `alias Name = type;`, file + function
-    scope, transparent). grammar: parseAliasDecl + parseType accepts an
-    identifier type + parseStmt `<ident> <ident>` = typed decl. resolve:
-    kAlias entries (frame-scoped), resolveTypeSpelling substitutes the chain
-    (cycle-detected, `[]` rides along), resolveDeclType rewrites every declared
-    type in place then validates. desugar drops kAliasDecl (parse-only). Defers:
-    - type-label preservation for ##type: `alias Integer = int; Integer x;
-      ##type(x)` should say `Integer`, but resolveDeclType rewrites the
-      spelling to `int` so it says `int` today. (typeof an enum == typeof its
-      alias; same deferral — `Language lang` is `int`, not `Language`.) ##type
-      itself is also unparsed (kHashHash lexes; grammar has no handler).
-    - function-rename `alias Fn = LongName;`, and templated `alias X<...> = T;`.
-    The bare `alias Ns;` unqualify form LANDED with namespaces (below).
-  * constants — LANDED (file-scope + function-scope; kConst entries with
-    captured values; constfold substitution + iteration + fixpoint check;
-    sharp diagnostics for assign-to-const, range overflow, missing init,
-    duplicate decl, cyclic / non-foldable rhs)
-  * namespaces — LANDED (pulled forward from Phase 8). `Name { members }`
-    opened/reopened at file or function-body scope; members are consts,
-    functions, and nested namespaces. kNamespace entry with a persistent
-    frame identity (reopens reuse it); members ride the enclosing lexical
-    lifetime tagged by owning namespace (so a member added in a local reopen
-    dies when that scope exits while the namespace persists). Bare lookup
-    walks the open-namespace chain (siblings + enclosing namespaces +
-    `alias Ns;` imports) then the lexical scope — qualifiers always optional,
-    `::` names the global root and only defeats a shadow. Qualified access
-    `A:B:C` and leading `::`; inline qualified member decls
-    (`const int Space:kSix = 6;`); bare `alias Ns;` / `alias A:B;` import.
-    Statement-position qualified call/assign route through parseNameLedStmt.
-    desugar hoists member functions to program scope with entry-id-derived
-    symbols (no cached canonical names) and drops the namespace wrapper.
-    Diagnostics: needs-qualifier, not-visible-from-scope, has-no-member,
-    is-not-a-namespace — each carets the offending segment; wrong-kind
-    assign/call use allowlists. Defers: nested-block scope lifetime (rides
-    Phase 2), cross-TU namespaces + `.slh` propagation (Phase 8).
-  * enums — LANDED. `enum [type] [Name] ( m1 [= v], m2, ... );` type-first,
-    optional type (default int), optional name. Lowered at RESOLVE (not
-    desugar — members must be kConst by constfold so `Enum:member` folds):
-    - named -> a kNamespace whose slids_type carries the underlying (so the
-      name doubles as a transparent type alias: `Language lang` resolves to
-      `int` today; the distinct enum type rides the ##type-label deferral
-      above) + one kConst member per name, owned by that namespace.
-    - anonymous -> bare kConst members in the enclosing lexical frame (file or
-      function), no namespace/alias.
-    Member values auto-increment from 0 by 1 (int) / 1.0 (float), C rules; an
-    explicit init resets the run. An implicit member is synthesized as
-    `clone(last-explicit-init) + offset` (or the ordinal before any explicit) —
-    NOT a peek at the explicit value, because resolve precedes constfold so the
-    explicit init may still be an unfolded expr (`kB = 1 + 2`); constfold folds
-    the synthesized `+`. The offset literal matches the underlying family to
-    satisfy constfold's no-int/float-mix. `cloneExpr` (resolve.cpp) deep-copies
-    the anchor incl. its qualifier fields (a qualified anchor `kA = Other:kX`
-    must survive the clone). Float underlying flows through the const
-    float-capture round-trip. Members register in a file-scope pass-1a-enum
-    (before namespaces/aliases) so a later `alias EnumName;` import + qualified
-    `Enum:member` both resolve; in-function enums register in resolveStmt's
-    kEnumDecl arm. grammar: parseEnumDecl, dispatched at file scope + parseStmt
-    + parseNamespaceMember. constfold / classify / desugar treat kEnumDecl as
-    resolve-consumed (dropped on copy). A non-constant or out-of-range member
-    init is rejected (range via const-capture; non-const via constfold's
-    fixpoint — one report, the double-report cascade was fixed by a hasErrors
-    early-return in constfold's sweep). Negatives in enum.sl: ambiguous bare,
-    needs-qualifier, bool/int8 overflow, dup member, unknown underlying, 2×
-    non-const init.
-    New diagnostic (also used by bare-namespace imports): an ambiguous bare
-    reference across two open namespaces/enums (`alias Bonk1; alias Bonk2;`
-    both defining `kOops`) -> "Reference to 'X' is ambiguous." with notes at
-    both decls (resolveNameDetail). Canon: test_v2/constfold/enum.sl.
-    Defers:
-    - REACH GOAL: drop the enum qualifier in assignment context. When a
-      variable's declared type is an enum, a bare member name on the rhs
-      (`Language best = kRust;` and a following `best = kSlids;`) should
-      resolve against that enum's namespace — an implied `alias Language;`
-      scoped to the statement (or to the variable's lifetime). Today bare
-      `kRust` is "needs a namespace qualifier"; the canon block is commented
-      pending this. Needs type-directed name resolution (the lvalue/assignment
-      target type steering the rhs lookup), which no other feature needs yet.
-    - FILE-SCOPE INIT ORDERING: a file-scope enum member init can't see a
-      file-scope const (or any name) declared elsewhere in the file —
-      `const int kG = 9; enum E ( kA = kG );` -> "Unresolved identifier 'kG'".
-      The same enum inside a function works (kA=9), because by the time bodies
-      resolve, all file-scope entries exist. Cause: run()'s pass-1a-enum
-      registers AND resolves enum member inits before the file-scope const/fn
-      collection pass, so forward (and even backward) file-scope refs aren't in
-      the table yet. Fix: split enum like the inline-qualified-decl pass —
-      register enum names + members (signatures / auto-increment) early, but
-      resolve member INIT expressions in a later pass after all file-scope
-      entries are collected. Pre-existing (original enum landing). No invalid
-      IR (it errors); just over-strict. Deferred.
-    - reopen enums: re-`enum SameName ( ... )` to add members to an existing
-      enum. Member names cannot collide across the openings. Open spec qs
-      (from enum.sl): does the value counter restart at 0 on reopen, and must
-      the first member of a reopening carry an explicit value? Defer until
-      decided. (Namespaces already reopen; enums would reuse openNamespace's
-      find-or-create, but the value-counter continuation across openings is
-      the undecided part.)
-    - enum bool: members must fit the underlying's range (an enum bool with
-      values outside {0,1} is a compile error). Range-fit rides the existing
-      const-capture range check; negative tests deferred.
-    - anonymous-enum default-int coverage test deferred.
-
-Phase 5 — classes
-  * class definitions (fields, ctor, dtor, methods)
-  * inferred field types (`Foo(name = const_expr)`)
-  * operator overloading per slid
-  * move / swap (`<--`, `<-->`)
-  * destructor balance invariant
-  * for-each protocol (op[]+size OR begin/end/next)
-  * stringification operators (`##name`, `##type`, `#`)
-
-Phase 6 — const correctness
-  Threads through phases 3-5; land after classes have the bones.
-  * `const T` qualifier; lvalue carries const, rvalue read is mutable
-  * method-level const (`name(params) const { ... }`); const self
-  * pass-by-ref-to-const default for `T^`/`T[]` params; `mutable` opts out
-  * const-overload matcher (canonical-type strips "const" for match-key)
-  * const→mutable rejection at call sites
-  * write-through-const rejection at every assign-family site
-  * `<const>` cast — the only way to mint a const-value rvalue
-  * goal B (publish-side via transport `.slt` → `.slh`) — design-level only
-
-Phase 7 — class advanced
-  * reopens; incomplete-class semantics
-  * hoisted classes (file-scope hoist across reopens)
-  * derived classes
-  * virtual methods + virtual destructors
-  * inheritance contracts (`= default`, `= delete`)
-  * `instantiation` statement / unnamed instances (`Type(args);`, `Type;`)
-
-Phase 8 — namespaces + cross-TU
-  * namespaces (`Name {}`)  — single-TU core LANDED early (see Phase 4);
-    Phase 8 adds only the cross-TU pieces below.
-  * .slh → .sl propagation (header → consumer, transitive impl-load)
-  * C interop (`= import`, `import {}`)
-  * globals (lazy ctor/dtor, sentinel + ensure widget, dtor walker, `global;`)
-
-Phase 9 — templates
-  * template functions
-  * template classes (plain, derived, with nested members)
-  * post-compile-pre-link stage (`--instantiate` aggregation)
+Outstanding bugs, reach goals, anomalies, and deferred items — things we
+started but didn't finish, found but deferred, or want later but aren't on the
+main plan. Everything here is OPEN; closed/landed items are removed (the main
+quest's progress lives in plan.txt).
 
 
-PRIORITY BUGS
+BUGS (found, deferred)
 
-  (none open)
+  * FILE-SCOPE INIT ORDERING — a file-scope enum member init can't see a
+    file-scope const (or any file-scope name): `const int kG = 9;
+    enum E ( kA = kG );` → "Unresolved identifier 'kG'". The same enum inside a
+    function works (kA=9), because by then all file-scope entries exist. Cause:
+    run()'s pass-1a-enum registers AND resolves enum member inits before the
+    file-scope const/fn collection pass, so file-scope refs aren't in the table
+    yet. Fix: split enum like the inline-qualified-decl pass — register enum
+    names + members (signatures / auto-increment) early, resolve member INIT
+    expressions in a later pass after all file-scope entries are collected.
+    No invalid IR (it errors); just over-strict.
+
+  * QUALIFIER GAP — an enum member init can't reference a sibling member bare:
+    `enum E ( kA = 5, kB = kA + 1 )` → "'kA' needs a namespace qualifier". C
+    allows it. Member inits resolve in the enclosing scope, where siblings
+    aren't visible (named-enum members live in the enum's namespace; anonymous
+    aren't registered until their own pass). Would need member inits to resolve
+    against the enum's own (partial) member set, in declaration order.
+
+  * ORPHAN-CHECK vs IMPORT FORWARD-DECLS — resolve's Pass 3 errors on any
+    function declared-but-never-defined ("Function 'X' is declared but never
+    defined.") — but a `.slh` header legitimately declares-only (defined in the
+    adjacent .sl, or a link error). Today every declared-nowhere-defined
+    function is an error regardless of file. Needs the `.slh` declare-only
+    carve-out; lands with the cross-TU / .slh-propagation work (plan Phase 8).
+    prerequisite: group with general work on import.
 
 
-KNOWN GAPS — current state
+REACH GOALS
 
-GRAMMAR
-  * <type> recognizes all built-in primitives, an identifier type name
-    (resolve validates / substitutes), and <T>[] for either.
-    Table-driven via kPrimitives in grammar.cpp; identifier types via the
-    kIdentifier arm in parseType.
-    - no other array shapes (T[N], multi-dim, etc.)
-    - identifier types resolve only to aliases today; class / struct / enum
-      type names land with their phases
-    - `alias Name = type;` (value) and bare `alias Ns;` / `alias A:B;`
-      (namespace import) parse (top level + parseStmt); `<ident> <ident>`
-      is a typed decl
-    - namespaces: `Name { members }` at file / function-body scope; a
-      qualified name (`A:B:C`, leading `::`) parses wherever a name leads
-      an expr or statement, and as an inline member-decl LHS
-      (`const int Space:kSix = 6;`). parseQualifiedName fills qualifier +
-      qualifier_toks + global_qualified; parseNameLedStmt handles
-      statement-position qualified call / assign / aug-assign.
-  * parameter lists: `(<type> <name>, ...)` parses; stored on the
-    FunctionDef/Decl node as `params` (kParam children) so signatures
-    survive into classify and codegen.
-  * expression parsing: literal leaves (string, int, char, bool, float)
-    + bare identifier + unary `! ~ + -` + full binary set (arith / bitwise /
-    shift / comparison / logical) with C precedence + parenthesized grouping.
-    - unary `+ - ~ !` on literals fold at desugar
-    - postfix-call on a bare identifier lands (kCallExpr), so function
-      calls work inside expressions. Field access, indexing, call-through
-      ((fnptr)(args)), `^` deref still slot into parsePostfix as their
-      phases land
-    - prefix and postfix ++/-- land (kPreIncExpr / kPostIncExpr); a bare
-      inc/dec statement parses to a kExprStmt. desugar lowers both away
-    - expression statements exist only as kExprStmt for a bare inc/dec
-      today; a general discard-value expression statement is not parsed
-    - no `<Type^>` or `(Type=expr)` casts
-    - float literals must be lossless decimal (no hex form yet, no inexact
-      values like 1.1 which would require LLVM hex encoding); codegen
-      normalizes `1e40`-style text to `1.0e40` so LLVM accepts the float form
+  * DROP THE ENUM QUALIFIER IN CONTEXT — when a variable's declared type is an
+    enum, a bare member name on the rhs should resolve against that enum's
+    namespace: `Language best = kRust;` then `best = kSlids;` (an implied
+    `alias Language;` scoped to the statement / variable). Today bare `kRust` is
+    "needs a namespace qualifier"; the canon block in enum.sl is commented
+    pending this. Needs type-directed name resolution (the lvalue/assignment
+    target type steering the rhs lookup) — no other feature needs it yet.
+    prerequisite: lvalues.
 
-WIDENING + LITERAL RANGE CHECKING (widen.h / widen.cpp)
-  * No silent int-class ↔ float mixing (fold.sl:68-69 / widen.sl:53-54).
-    Literal checks and convert all reject cross-family with sentence-shaped
-    "Cannot implicitly convert ..." messages.
-  * widen::checkIntLiteralFits — enforces per-type literal ranges; rejects
-    when dest_type is float-kind.
-  * widen::checkFloatLiteralFits — enforces float range; rejects when
-    dest_type is int-class.
-  * widen::convert handles var-to-var conversions:
-      - signed → strictly larger signed (sext)
-      - unsigned → strictly larger unsigned (zext)
-      - unsigned → strictly larger signed (zext, value-preserving)
-      - bool → any integer (zext from i1); bool stays int-class
-      - float → strictly larger float (fpext)
-    Rejects (sentence-shaped messages):
-      - any same-or-narrower target ("Cannot implicitly narrow ...")
-      - signed → unsigned ("(signed → unsigned)")
-      - unsigned → same-width signed ("(unsigned to same-width signed)")
-      - int-class ↔ float ("Cannot implicitly convert ...")
-  * widen::commonType — "smallest type large enough to hold either operand".
-    Called from classify only (3 sites: inferExpr binary arith/bitwise/cmp,
-    classifyStmt AugAssign arith). Codegen reads expr.op_type. Returns false
-    on any int-class + float pair, and on uint64+signed where no int64 fits.
-  * widen::intLiteralFits / floatLiteralFits — silent variants of the
-    literal checks; return false for cross-family. Called from classify's
-    literalFitsContext when deciding the literal-flex (try-fit-into-context-
-    type first; fall back to defaultLiteralType when not).
-  * widen::isKnownType — true for primitives + void + recursive T[]. classify
-    calls requireKnownType on every declared/return type spelling so unknown
-    spellings produce a sharp diagnostic before codegen ever sees them.
-  * codegen handles binary-op shapes (reads expr.op_type, expr.inferred_type
-    pre-stamped by classify):
-      - arith / bitwise / comparison: emit at expr.op_type → widen::convert
-        result to dest_type. Comparison result is bool, converted to dest.
-        Float arith covers `+ - * / %` (frem for `%`); float bitwise (& | ^)
-        rejected upstream at classify.
-      - shift: LHS dictates result type. Int shift: RHS resized to LHS width
-        via trunc/zext. Float shift: `f << r` lowers to `f * (1<<r)` and
-        `f >> r` to `f / (1<<r)` (pow2 in rhs int width → uitofp → fmul/fdiv).
-        Non-int rhs and non-numeric lhs rejected upstream at classify.
-      - logical (&& || ^^): each operand → bool independently; result bool.
-        Non-coercible operands (void) rejected upstream at classify.
-      - literal + literal int-class fold runs upstream in constfold; codegen
-        sees a single literal node.
-  * codegen's emitToBool handles numeric (icmp/fcmp against 0) and pointer
-    (icmp ne ptr X, null) so char[] coerces truthy.
-  * Source attribution is plumbed: every widen call takes (file_id, tok)
-    and threads into diagnostic::report.
-  * codegen's SymTab carries slids_type alongside llvm_type so widen has
-    the typed source for ident-load conversions.
-  * Still TODO:
-      - explicit type conversion syntax `(Type=expr)` not yet parsed
-      - explicit cast syntax `<Type^>` (Phase 4)
-      - widen at function-call arg sites: landed; per-arg dest_type from
-        the resolved function's param_types drives emitExpr / widen::convert.
-  * call statements: 0 / 1 / N arguments parsed; print intrinsics still
-    restricted to 1 argument (rejected at classify).
-  * call-as-expression: a bare-ident call (kCallExpr) is usable as a value
-    — var-decl init, call arg, return, binary operand. The statement form
-    discards the result; the expression form widens it into the destination
-    type. void return used as a value, and a print intrinsic in expression
-    position, are both rejected.
-  * top-level: function definitions, function declarations, and `alias` decls.
-    - imports work (lex-time wrapper expands them; grammar accepts declarations
-      from imported .slh files)
-    - also: namespace decls (`Name {}`) + inline qualified const members
-      (`const int Space:kSix = 6;`) + bare `alias Ns;` import
-    - no classes, enums, globals
-    - function signatures: typed params; no overloads (Phase 3) or defaults.
-    - duplicate-declaration check landed at classify: decl+def at program
-      scope bind to one entry, def+def + signature-mismatch (return type
-      AND param types) report with a multi-source note pointing at the
-      prior decl
-  * statement-level: var-decl, assign, augmented-assign (desugared to assign),
-    call, return, namespace decl. assign / aug-assign / call may lead with a
-    qualified name (`Space:foo()`, `Space:kX = 1`, `::foo()`) via the single
-    parseNameLedStmt.
-    - no if/else, no for/while, no block
 
-DESUGAR
-  * copies parse → ast and propagates per node: `(file_id, tok)`,
-    `nominal_type`, `inferred_type`, `op_type`, `resolved_entry_id`.
-  * tryDesugarAugAssign — rewrites `lhs op= rhs;` → `lhs = lhs op rhs;`.
-    Synthesized lhs_ref inherits the aug-assign's resolved_entry_id +
-    return_type (= lvalue type, stamped by classify); synthesized binop
-    inherits inferred_type + op_type (stamped by classify per-op).
-    Lvalue is a bare ident today; complex lvalues (when arrays / fields land)
-    need a bind-to-tmp step here to avoid double-eval.
-  * Unary + binary literal folds now live in constfold (upstream).
-  * PPID lowering — a post-copy pass over each function body. lowerInPhrase
-    extracts ++/-- per phrase (replacing each with a read), collecting
-    statement-level bumps into pre/post lists and recursing sub-phrases
-    (call args, && / || rhs) through lowerPhraseSlot, which wraps a
-    bump-carrying sub-phrase in a kSeqExpr. The body walk splices the
-    statement-level bumps as sibling kExprStmt bump-statements around the
-    statement (post after the store). Synthesized kSeqExpr / kBumpExpr are
-    never re-walked (asserted in lowerInPhrase).
-  * Namespaces: copyNode drops kNamespaceDecl wrappers and renames each
-    function (def + call) to functionSymbol() — bare name for a file-scope
-    function, `name.<entry_id>` for a namespace member, computed identically at
-    def and every call site from resolved_entry_id (no cached canonical
-    strings). A post-copy pass hoists member functions to program scope so the
-    back end sees a flat function list; member consts were folded away upstream.
-    The qualifier / qualifier_toks / global_qualified fields are resolve-only
-    and not copied to the ast.
-  * Other canonicalization not yet here: for-loop shapes → canonical,
-    operator-overload dispatch lowering, stringify lowering, etc. — slot in
-    as their phases land.
+DEFERRED FEATURES (later; may not be on the plan)
 
-NUMERIC
-  * stage landed; handles kIntLiteral, kUintLiteral, kCharLiteral,
-    kFloatLiteral, kBoolLiteral. Per-kind validation + canonicalization with
-    sentence-shaped diagnostics ("Hex literal overflows uint64.", etc.).
-  * lex now emits source-form text per kind; numeric canonicalizes:
-    - kIntLiteral: text in decimal digits → pos checked → overflow / malformed
-    - kUintLiteral: text "0xFF" or "0b1010" → parsed → decimal text out;
-      kIntLiteral whose value > INT64_MAX flips kind to kUintLiteral here
-    - kCharLiteral: in-quotes span → escape interpreted → decimal byte value
-    - kFloatLiteral: source minus underscores → strtod → %.17g canonical
-    - kBoolLiteral: "true"/"false" → "1"/"0"
-  * Still open from the 1-7 migration table:
-    - item 5: widen::checkUintLiteralFits + checkCharLiteralFits for proper
-      diagnostic attribution ("Integer literal" → "Unsigned literal" /
-      "Character literal") at codegen's literal-emit routing sites
-  * LANDED from the 1-7 migration table:
-    - item 7: codegen float32 hex bit-pattern emit via float32HexLiteral
-      helper. `float xf = 3.14;` now compiles (3.14 lossy in float32 ->
-      0x4048F5C300000000-shaped hex form). Dispatched in emitExpr's
-      kFloatLiteral arm when dest_type is "float" / "float32"; float64
-      keeps the decimal path. Test in fold.sl (xf_pi / xf_tenth).
+  * REOPEN ENUMS — re-`enum SameName ( ... )` to add members to an existing
+    enum (member names can't collide across openings). Open spec qs: does the
+    value counter restart at 0 on reopen, and must the first member of a
+    reopening carry an explicit value? Defer until decided. (Namespaces already
+    reopen; enums would reuse openNamespace's find-or-create, but the
+    value-counter continuation across openings is the undecided part.)
 
-SILENT DEFAULTS — closed
-  * classify defaultLiteralType parse-failure fallbacks (int + uint arms)
-    are now asserts ("malformed text from numeric") — numeric is the
-    precondition guarantor; reaching the fallback indicates a numeric bug.
-  * codegen llvmTypeFor unknown-type "fallback" → assert. Classify rejects
-    unknown type spellings at decl sites via widen::isKnownType, so reaching
-    llvmTypeFor with an unknown type would be a classify bug.
-  * codegen's per-kind exprType defaults ("int"/"uint"/etc. regardless of
-    value) are gone with exprType itself. classify stamps inferred_type from
-    context-or-nominal; codegen reads it.
-  * codegen's empty-type fallbacks at emitLogical / emitUnary `!` / shift /
-    effectiveType are gone — all those sites now read node.inferred_type and
-    assert it's non-empty (classify always stamps).
-  * codegen's "codegen: ..." debug-message family eliminated (6 sites):
-    emitUnary unknown-op, emitBinary instr-empty (float bitwise / unmapped),
-    emitExpr statement-kind catch-all, emitStmt kAugAssignStmt arm (survived
-    desugar), emitStmt expression-kind catch-all, run() top-level unknown
-    kind — all converted to assert(false) with explanatory messages.
-    Reachable only on a compiler bug; classify / desugar / resolve guarantee
-    the shapes upstream.
+  * ##type — parse `##type(x)` (kHashHash lexes today, but grammar has no
+    handler) AND preserve the declared alias/enum label so it reports the
+    source spelling: `alias Integer = int; Integer x; ##type(x)` should say
+    `Integer`, not `int`; an enum-typed value should say the enum, not its
+    underlying. Today resolveDeclType rewrites the spelling to the underlying,
+    so the label is lost (transparent aliasing).
 
-SILENT DEFAULTS — tagged "user notified, accepts state"
-  Three sites flagged as accepted-state in the source so future audits skip:
-  * lex.cpp:699 — root file open failure with {-1,-1} attribution. No token
-    exists; renderer falls back to `slidsc: error: <msg>`. Tagged inline.
-  * widen.cpp intLiteralFits — silent variant returns false on any
-    parse/overflow/disallowed conversion without reporting; loud variant
-    checkIntLiteralFits is the reporting partner. Tagged inline.
-  * print.cpp segment-dispatch tail — fires `"Print intrinsic does not yet
-    support segments of type 'X'."` for not-yet-implemented segment kinds
-    (pointer / tuple / slid-typed / enum). Tagged inline.
-  * constfold nominalForInt overflow — returns "" for negative literals
-    whose magnitude exceeds INT64_MAX+1. Downstream widen::checkIntLiteralFits
-    reports as `"Integer literal does not fit in 'int64'."` Comment at the
-    return "" site notes the deferral.
+  * ALIAS FUNCTION-RENAME — `alias Fn = LongName;` (use case: importing C
+    functions with ugly names).
 
-CONSTFOLD
-  * Stage exists (compiler_v2/constfold.{h,cpp}); wired between grammar
-    and classify in main.cpp. Spec in test_v2/const/fold.sl. See the
-    "Phase 0" entry above for landed vs pending breakdown.
+  * TEMPLATED ALIAS — `alias X<...> = T;`.
 
-RESOLVE
-  * Symbol table lives in parse (Entry vector + frame stack + pushFrame /
-    popFrame / addEntry / findInLiveScopes / findInFrame / entryType APIs).
-    Five entry kinds today: kFunction, kLocalVar, kConst, kAlias, kNamespace.
-    Function entries carry `param_types` (ordered) and a `defined` flag so
-    decl+def at program scope binds to one entry. kConst entries carry
-    literal_text + literal_kind (filled by constfold). kNamespace entries
-    carry a persistent ns_frame_id identity; members of any namespace carry
-    owner_ns_frame (the namespace they belong to) while living at their
-    lexical frame for lifetime. Wrong-kind assign/call are allowlists (only
-    kLocalVar assignable, only kFunction callable). Qualified access walks
-    one shared segment resolver that carets the offending segment.
-  * Pass 1a collects program-scope entries (Functions + file-scope Consts)
-    WITHOUT walking init expressions, validating return + param + const
-    type spellings via requireKnownType. For functions: decl+def pair
-    binds; def+def is duplicate; signature mismatch rejects on either
-    return type OR param types. All five error families (return mismatch,
-    param mismatch, def+def, var-decl dup, const dup) carry a multi-
-    source note pointing at the prior decl. Namespaces register in their own
-    pass (pass 1a-ns) before functions/consts; inline qualified members and
-    bare aliases each get a later pass once the namespace frames exist.
-  * Pass 1b walks each file-scope const's init expression to resolve
-    ident references. By then every program-scope entry is in the table,
-    so globals can reference each other regardless of decl order.
-  * Pass 2 walks each FunctionDef body in a fresh frame:
-    - Each kParam is seeded as a LocalVar entry in the body frame; the
-      kParam node gets resolved_entry_id stamped so codegen can find its
-      alloca via SymTab. Duplicate param names rejected.
-    - kVarDeclStmt validates type spelling, adds a LocalVar (or kConst
-      when is_const is set; rejects duplicate in same frame); recurses
-      into init expression to resolve ident references. Const decls
-      without an initializer are rejected at grammar.
-    - kAssignStmt / kAugAssignStmt resolve lvalue via live-scope walk and
-      require a LocalVar entry (allowlist — every other kind rejects as
-      "Cannot assign to function/constant/namespace/type 'X'."; a qualified
-      lvalue resolves through the namespace chain). Each carries a multi-
-      source note. AugAssign caches s.return_type = lvalue type for desugar.
-    - kCallStmt non-print resolves callee (bare or qualified), requires a
-      Function entry (allowlist — non-function kinds reject; a bare name that
-      is a namespace member reports "needs a namespace qualifier"), validates
-      arity against the entry's param_types. Stamps stmt.return_type +
-      stmt.param_types so codegen has both.
-    - kCallStmt print intrinsic: rejects multi-arg (`__println(a, b)`).
-    - kReturnStmt recurses into expr.
-    - resolveExpr walks every expression node, stamping resolved_entry_id
-      on every kIdentExpr via findInLiveScopes (unresolved -> diagnostic).
-  * Pass 3 (orphan check): after all bodies, any kFunction entry with
-    `defined == false` is reported "Function 'X' is declared but never
-    defined." (caret at the decl) — declared anywhere, defined nowhere, used
-    or not. .slh declare-only carve-out defers with cross-TU work.
-  * Frames are transient state cleared at end of stage; entries persist
-    on parse::Tree.
 
-CLASSIFY
-  * Reads resolved_entry_id + entry data stamped by resolve; never builds
-    entries, pushes frames, or mutates the symbol table.
-  * inferExpr stamps inferred_type on every expression node + op_type on
-    every binary. Per-kind:
-    - literals: flex to context_type if widen::intLiteralFits /
-      floatLiteralFits accept, else defaultLiteralType
-    - kIdentExpr: parse::entryType(resolved_entry_id) — asserts ID was
-      stamped (resolve guarantees it)
-    - kUnaryExpr '!': bool; rejects non-coercible operand (void, etc.)
-    - kUnaryExpr + - ~: operand's inferred_type (context propagates)
-    - kBinaryExpr arith/bitwise: commonType(lhs, rhs) → opty; bitwise on
-      float rejects sharply; inferred_type = op_type = opty
-    - kBinaryExpr comparison: same commonType walk; op_type = opty;
-      inferred_type = bool
-    - kBinaryExpr shift: op_type = lhs.inferred_type; rejects non-numeric
-      lhs and non-int-class rhs
-    - kBinaryExpr logical (&& || ^^): op_type = bool; rejects non-coercible
-      operand on either side
-  * AugAssign reads s.return_type (cached by resolve = lvalue type), runs
-    per-op dispatch matching the kBinaryExpr shapes, stamps s.inferred_type
-    + s.op_type for desugar to read.
-  * Print intrinsic: __println / __print arg's `+` chain is treated as
-    concatenation, not arith. inferPrintArg walks the chain and infers
-    each leaf in isolation (no commonType across segments). Contained to
-    two short blocks in classify; print.cpp reads seg->inferred_type.
-  * Non-print kCallStmt: arity already validated by resolve; classify
-    infers each arg with stmt.param_types[i] as context (so literals flex
-    and idents widen via widen::convert at codegen).
-  * Overload resolution unimplemented — no overloads to resolve today.
-  * Helpers (isCoercibleToBool, isIntegerClass, isNumericType, isPtrLikeType,
-    isFloatType) live inline; consolidate into widen if a second caller
-    appears.
+DEFERRED TESTS
 
-OPTIMIZE / LAYOUT
-  * no-op; no perf rewrites, no name mangling, no field-offset computation
-  * Algebraic identities: scalar cases (x+0 → x, x*0 → 0, x&&false → false)
-    are LLVM's job — instcombine already does them and handles purity (won't
-    drop a side-effecting operand) and IEEE float safety. Don't duplicate. The
-    only slids-worth-it version is slid-type / operator-overload identities
-    (`s + Zero` where `+` is a user op and `Zero` is a known identity value) —
-    LLVM sees those as opaque calls. Deferred until operator dispatch lowers.
-
-CODEGEN
-  * Reads node.inferred_type / op_type stamped by classify. exprType deleted;
-    so are codegen's defaultLiteralType, isLiteralKind, literalTextForFit
-    helpers and the effectiveType lambda in emitBinary.
-  * SymTab now keyed by parse::Tree::entries index. kVarDeclStmt registers
-    at stmt.resolved_entry_id; kAssignStmt / kIdentExpr look up the same
-    way. No string-keyed lookup remains. "unknown variable" diagnostics
-    became asserts (classify guarantees resolution before codegen runs).
-  * widen::commonType call from emitBinary is gone; codegen reads op_type
-    from the stamped node instead.
-  * Function definitions emit typed params in the `define` line; for each
-    param, emit alloca + store from `%arg.N` into a named register, then
-    register the alloca in SymTab[param.resolved_entry_id] so the body
-    reads/writes the param like any local.
-  * kCallStmt / kCallExpr emit (after print::tryEmitCall declines for the
-    statement form): one shared emitCall emits each arg via
-    emitExpr(arg, dest_type=param_types[i]) so widen::convert handles arg-side
-    narrowing/widening, then `call <ret_llty> @<name>(...)` using return_type.
-    The statement form discards the result register; the expression form
-    returns it and widens into the destination type. Arity is asserted
-    (classify guaranteed it).
-  * emitToBool handles numeric (icmp/fcmp vs 0) and pointer (icmp ne ptr,
-    null) so char[] coerces truthy; non-numeric non-pointer types rejected
-    upstream at classify.
-  * VarDecl alloca'd at use site, not at function entry (works for now since
-    no control flow; will matter once if/for show up)
-  * AssignStmt: only direct identifier lvalues (no field, no index)
-  * llvmTypeFor handles all primitives + <T>[] (lowers to ptr); unknown
-    spellings assert (classify caught them). Aliases never reach codegen
-    (resolve substituted them to the underlying); class / struct / enum not yet
-  * bool lowers to i1 (per redesign-memory intent; v1 uses i32 for bool)
-  * return value coerced to fn_return_type via emitExpr's widen path;
-    non-widenable returns produce a widen diagnostic at the return stmt
-  * return correctness (classify): a non-void function must end with a return
-    statement (classifyFunctionBody — caret at the function name) and a void
-    function cannot return a value (kReturnStmt arm — caret at `return`).
-    Together these close the unterminated-block / `ret void <val>` invalid-IR
-    holes. A void body that falls through gets an implicit `ret void` in
-    emitFunction; codegen asserts a non-void function arrived with a trailing
-    return (classify guaranteed it).
-  * REVISIT non-void function returns: "last statement is a return" is a
-    heuristic, not reachability. Once Phase 2 control flow lands it will
-    wrongly reject a body whose every path returns (switch with all cases
-    returning; if/else where both arms return) and needs real reachability
-    analysis. Bare `return;` (no expr — parseReturnStmt requires one today) is
-    also unbuilt, so void functions can't return early.
-  * target triple hard-coded to x86_64-pc-linux-gnu
-
-ERROR REPORTING
-  * Source attribution + caret-sled rendering landed. parse::Node and
-    ast::Node carry (file_id, tok); grammar stamps at construction; desugar
-    propagates; widen / codegen / print all thread the relevant node's
-    position into every diagnostic::report call. Exception: lex's
-    "Cannot open '<root>'." fires before any source is read (no token
-    exists) — falls back to bare `slidsc: error: <msg>`. Site is tagged
-    "user notified, accepts state."
-  * Caret sled bracketed at both ends, v1-style: length-1 → `^`; length-2
-    → `^^`; length-N → `^---^`.
-  * Multi-source notes are in use: resolve attaches a note pointing at
-    the prior declaration for var-decl duplicates, function decl-after-decl
-    signature mismatches, function def+def duplicates, and the wrong-kind
-    entry cases (assign to a function / assign to a constant / call a
-    variable). diagnostic::Record carries the notes vector; render walks
-    each note's (file_id, tok) the same way it does the primary diagnostic.
-  * Sentence-shaped messages throughout (canon). Capital first letter + period
-    end. Grammar's "Expected X." family, lex's "Cannot find / Unmatched /
-    Mismatched / Unterminated / Unexpected / Unknown / Malformed / Whitespace
-    / Escaped" family, resolve's full set, classify, constfold, widen,
-    numeric, print — all consistent.
-  * Named-construct diagnostics (Duplicate decl, Cannot assign to constant,
-    Unresolved identifier, etc.) caret at the ident token via the new
-    parse::Node::name_tok field (grammar captures the ident position;
-    resolve writes it into entry.tok at creation time so all "first declared
-    here" notes also caret at the ident).
-
-TEST COVERAGE GAPS — features implemented in v2 with no test exercising them
-  * Adjacent string-literal concatenation (`"a" "b"` → `"ab"`).
-    parsePrimary's kStringLiteral arm has a while-loop that concatenates
-    adjacent tokens. No test uses two adjacent string literals.
-  * Logical short-circuit observable verification — deferred until
-    expressions have side effects (call expressions / PPID). emitLogical
-    emits the conditional branches but nothing in any test would distinguish
-    short-circuit from full evaluation today.
-
-PRINT INTRINSIC (print.h / print.cpp)
-  * handles __println / __print with a single arg, which may be a left-leaning
-    `+` chain. flattenPlusChain walks the chain and per-segment dispatches by
-    seg->inferred_type (stamped by classify's inferPrintArg in isolation):
-    - string literal  -> printf(@.str_N) with the literal text inlined
-    - bool            -> select i1 v, "true", "false" → %s
-    - float           -> fpext to double, %g
-    - char[]          -> %s
-    - integer-class   -> %d / %u / %lld / %llu (zext/sext to i32 for sub-32)
-  * no slice / non-literal-string segments (no string-typed locals yet)
-  * single-arg only — classify rejects multi-arg `__println(a, b)` with
-    "'__println' takes exactly one argument." Multi-segment output uses
-    the `+` concat chain inside the single arg.
-  * shares strings::Pool with the rest of codegen; reads seg->inferred_type
-    (no codegen::exprType dependency). To delete: remove print.* + the two
-    call sites in codegen.cpp + the SRCS entry in Makefile + classify's
-    inferPrintArg + isPrintIntrinsic dispatch in kCallStmt.
+  * enum-bool range negatives — an `enum bool` with member values outside
+    {0,1} is a compile error (range-fit rides the existing const-capture check);
+    a negative test for it is not yet written.

@@ -94,9 +94,27 @@ void bar() {
     int fine = Bonk2:kOops;
 }
 
+/*
+anonymous enum in a function: members land as bare consts in the body frame,
+default type int (usable in int arithmetic).
+*/
+int32 anon_local() {
+    enum ( kLocalA, kLocalB, kLocalC );
+    __println("kLocalA = " + kLocalA);
+    __println("kLocalC = " + kLocalC);
+    int sum = kLocalA + kLocalB + kLocalC;   // default int: plain int arithmetic
+    __println("local sum = " + sum);
+    return 0;
+}
+
 int32 main() {
 
+    /* file-scope anonymous enum: all three members, auto-incremented from 0. */
+    __println("kUnnamed1 = " + kUnnamed1);
+    __println("kUnnamed2 = " + kUnnamed2);
     __println("kUnnamed3 = " + kUnnamed3);
+
+    int u = anon_local();
 
     enum float Consts (
         kPi = 3.14,

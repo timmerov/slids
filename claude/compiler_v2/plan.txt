@@ -1,0 +1,155 @@
+compiler_v2 — PLAN (the main quest)
+
+Feature implementation order. Items are open or LANDED; updated as we make
+progress. Outstanding bugs / reach goals / deferred side-quests live in
+todo.txt, not here. Detailed per-stage current-state notes (what each stage
+does today, stage by stage) live in readme.txt.
+
+Each phase adds primitives the next phase depends on. widen.cpp threads through
+every conversion site as features land; treat each new expr/decl/assign site
+as a widen call-out.
+
+PIPELINE — current shape
+
+    lex -> numeric -> grammar -> resolve -> constfold -> classify
+        -> desugar -> optimize -> layout -> codegen
+
+  resolve owns: parse::Entry vector population, frame push/pop, ident
+  resolution (resolved_entry_id stamping), wrong-kind diagnostics
+  (assign-to-function, call-a-variable), duplicate-decl + signature
+  mismatch + arity-mismatch + multi-arg-print-intrinsic detection,
+  type-spelling validation (widen::isKnownType for declared / return /
+  parameter types), namespaces + enums (lowered to entries here), and the
+  orphan-function check (declared-but-never-defined). Two passes per scope
+  (collect decls then walk bodies) so forward references work.
+
+  classify is type inference + (Phase 3) overload resolution. Stamps
+  inferred_type / op_type, rejects no-common-type binaries, non-coercible
+  operands for `! && || ^^`, non-numeric shift sides, bitwise on float, and
+  return correctness (non-void must end in a return; void can't return a
+  value). Reads entries via resolved_entry_id but never mutates the symbol
+  table or pushes frames.
+
+Phase 0 — foundations (LANDED)
+  * lex stage + import wrapper
+  * numeric stage — literal validation + canonicalization (mostly landed;
+    int/uint/float/char/bool all flow lex→numeric; item 5 of the migration —
+    widen check-fn attribution for uint/char literal-fit — still open)
+  * constfold stage — between resolve and classify (spec in
+    test_v2/constfold/fold.sl). LANDED: post-order walker; nominal_type on every
+    literal; unary fold; binary fold across all op families (int arith/bitwise
+    with rule-6 overflow-to-uint64, int shifts, int comparisons, float
+    arith/shift/comparison); named-constant iterative substitution + capture
+    with fixpoint check. NOT constfold's job: algebraic identities (see
+    OPTIMIZE — LLVM's instcombine).
+  * diagnostic sink + source rendering
+  * single-source error pipeline (main.cpp early-out between stages)
+  * build hygiene (-Wall -Werror -Wswitch-enum)
+  * widen primitives table + literal range checks
+
+Phase 1 — expression core (LANDED)
+  * unary operators (!, ~, full -)                                    LANDED
+  * binary operators (arithmetic, comparison, bitwise, logical, shift) LANDED
+  * parenthesized expressions, precedence + associativity              LANDED
+  * compound assigns (+=, -=, *=, /=, %=, &=, |=, ^=, <<=, >>=, ||=, &&=) LANDED
+  * classify symbol resolution (LocalVar / Function entries; live-scope
+    walk; decl+def binding at program scope)                          LANDED
+  * classify type inference (inferred_type + op_type on every expr node;
+    literal-flex into context; commonType ownership at classify)      LANDED
+  * calls — typed params, 0/1/N-arg statement-form calls; param-as-LocalVar
+    in body frame; arity + per-arg type check; decl/def signature match LANDED
+  * PPID — pre/post-inc/dec via phrases (kPreIncExpr/kPostIncExpr → desugar
+    extracts bumps per phrase; statement bumps hoist to sibling bump-stmts,
+    sub-phrases keep them in a kSeqExpr; bare `e++;` lowers to a kBumpExpr) LANDED
+  * call-as-expression — kCallExpr via parsePostfix on a bare ident; shared
+    resolveUserCall + emitCall with kCallStmt; void-return + print-intrinsic-
+    as-expr rejected                                                   LANDED
+
+Phase 2 — declarations + flow   <-- NEXT
+  * var decls (typed init, inferred init, declare-then-assign)
+  * blocks
+  * if / else, while
+  * for-loop (six shapes desugar to one canonical form)
+  * switch / case
+  * labeled break / continue
+  * return
+
+Phase 3 — functions
+  * definitions: params (typed + inferred), return type
+  * declarations (signature-only)
+  * overload resolution (arity → types → const)
+  * nested functions + capture analysis
+  * method dispatch (`.method()`)
+  * function pointers
+
+Phase 4 — types beyond primitives
+  * pointers (`^` reference, no arithmetic)
+  * iterators (`[]`, arithmetic allowed)
+  * memory mgmt (`new T(init)`, `new T[n]`, `delete ptr`)
+  * anonymous tuples (`(T1, T2, ...)`)
+  * type aliases — LANDED (value form `alias Name = type;`, file + function
+    scope, transparent; resolveTypeSpelling substitutes the chain; desugar drops
+    kAliasDecl). Deferred alias items (##type, function-rename, templated) → todo.txt.
+  * constants — LANDED (file + function scope; kConst entries with captured
+    values; constfold substitution + iteration + fixpoint check; sharp
+    diagnostics for assign-to-const, range overflow, missing init, dup, cyclic)
+  * namespaces — LANDED (pulled forward from Phase 8). `Name { members }` open/
+    reopen at file or function-body scope; members are consts, functions, nested
+    namespaces; kNamespace entry with persistent frame identity; open-namespace-
+    chain bare lookup (qualifiers optional, `::` defeats a shadow); qualified
+    `A:B:C` / `::`; inline qualified member decls; bare `alias Ns;` import;
+    desugar hoists member functions with entry-id-derived symbols (no cached
+    canonical names). Cross-TU namespaces + `.slh` propagation → Phase 8.
+  * enums — LANDED. `enum [type] [Name] ( m1 [= v], ... )`, type-first (default
+    int), optional name. Lowered at RESOLVE: named → a kNamespace whose
+    slids_type carries the underlying (transparent type) + kConst members;
+    anonymous → bare kConst members in the enclosing frame. Auto-increment from
+    0, C rules (implicit member = clone(last-explicit-init) + offset, folded by
+    constfold). Ambiguous-bare-ref diagnostic. Canon: test_v2/constfold/enum.sl.
+    Deferred enum items (reach-goal drop-qualifier, reopen, FILE-SCOPE INIT
+    ORDERING + QUALIFIER GAP bugs, enum-bool negatives) → todo.txt.
+
+Phase 5 — classes
+  * class definitions (fields, ctor, dtor, methods)
+  * inferred field types (`Foo(name = const_expr)`)
+  * operator overloading per slid
+  * move / swap (`<--`, `<-->`)
+  * destructor balance invariant
+  * for-each protocol (op[]+size OR begin/end/next)
+  * stringification operators (`##name`, `##type`, `#`)
+
+Phase 6 — const correctness
+  Threads through phases 3-5; land after classes have the bones.
+  * `const T` qualifier; lvalue carries const, rvalue read is mutable
+  * method-level const (`name(params) const { ... }`); const self
+  * pass-by-ref-to-const default for `T^`/`T[]` params; `mutable` opts out
+  * const-overload matcher (canonical-type strips "const" for match-key)
+  * const→mutable rejection at call sites
+  * write-through-const rejection at every assign-family site
+  * `<const>` cast — the only way to mint a const-value rvalue
+  * goal B (publish-side via transport `.slt` → `.slh`) — design-level only
+
+Phase 7 — class advanced
+  * reopens; incomplete-class semantics
+  * hoisted classes (file-scope hoist across reopens)
+  * derived classes
+  * virtual methods + virtual destructors
+  * inheritance contracts (`= default`, `= delete`)
+  * `instantiation` statement / unnamed instances (`Type(args);`, `Type;`)
+
+Phase 8 — namespaces + cross-TU
+  * namespaces (`Name {}`)  — single-TU core LANDED early (see Phase 4);
+    Phase 8 adds only the cross-TU pieces below.
+  * .slh → .sl propagation (header → consumer, transitive impl-load)
+  * C interop (`= import`, `import {}`)
+  * globals (lazy ctor/dtor, sentinel + ensure widget, dtor walker, `global;`)
+
+Phase 9 — templates
+  * template functions
+  * template classes (plain, derived, with nested members)
+  * post-compile-pre-link stage (`--instantiate` aggregation)
+
+
+CURRENT STATE — per-stage implementation notes live in readme.txt (the
+"KNOWN GAPS" detail that used to sit here was a duplicate of readme's
+stage-by-stage descriptions; readme.txt is the maintained source).
