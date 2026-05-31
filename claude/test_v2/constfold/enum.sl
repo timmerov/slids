@@ -103,6 +103,62 @@ const int kFromMember = Direction:kEast;
 /* option A: a forward sibling ref resolves (all members register first). */
 enum Fwd2 ( q0 = q1, q1 = 1 );
 
+/* a valid enum bool: members in range {0,1}. */
+enum bool Flag ( off, on );
+
+/*
+a signed underlying holds a negative explicit value; the implicit member
+auto-increments from the negative anchor.
+*/
+enum int8 Temp ( cold = -5, mild );
+
+/* two explicit inits interspersed — the running counter resets twice. */
+enum Multi ( m0 = 1, m1, m2 = 10, m3 );
+
+/* a char underlying with char-literal member values. */
+enum char Key ( a = 'A', b = 'Z' );
+
+/* an unsigned underlying. */
+enum uint8 U ( u0 = 200, u1 );
+
+/* an aliased underlying type resolves through the alias chain to int8. */
+alias Byte = int8;
+enum Byte Small ( sa = 1, sb );
+
+/* an anonymous enum with an explicit init — bare consts continue from it. */
+enum ( az = 100, bz );
+
+/*
+an enum may be a namespace member. From outside, `Geo:Dir` is a qualified type
+and `Geo:Dir:member` a qualified value. Inside Geo, Dir is bare: a sibling const
+may read a member (Dir:east) and a const may be Dir-typed. An anonymous nested
+enum's members (red/green/blue) become members of Geo itself.
+*/
+Geo {
+    enum Dir ( north, south, east, west );   // 0,1,2,3
+    const int ax = Dir:east;                 // 2 — in-namespace member ref
+    const Dir corner = Dir:west;             // 3 — enum used as a type in Geo
+    enum ( red, green, blue );               // 0,1,2 — members of Geo
+}
+
+/* order-independence: a const member's type names an enum declared below it. */
+Ord {
+    const Mode m = Mode:hi;                  // 1
+    enum Mode ( lo, hi );
+}
+
+/* a qualified type used as a namespace member's type (cross-namespace). */
+Ref {
+    const Geo:Dir d = Geo:Dir:east;          // 2
+}
+
+/* deeper nesting: a 3-segment qualified type + 4-segment qualified value. */
+Outer {
+    Inner {
+        enum Deep ( d0, d1 );
+    }
+}
+
 void foo() {
     enum Language (
         kSlids,
@@ -198,6 +254,38 @@ int32 main() {
     __println("kFromMember = " + kFromMember);
     __println("q0 = "   + Fwd2:q0);
     __println("q1 = "   + Fwd2:q1);
+    __println("off = "  + Flag:off);
+    __println("on = "   + Flag:on);
+    __println("cold = " + Temp:cold);
+    __println("mild = " + Temp:mild);
+    __println("m0 = "   + Multi:m0);
+    __println("m1 = "   + Multi:m1);
+    __println("m2 = "   + Multi:m2);
+    __println("m3 = "   + Multi:m3);
+
+    /* enums as namespace members + qualified type names. */
+    __println("Geo:Dir:north = " + Geo:Dir:north);
+    __println("Geo:Dir:west = "  + Geo:Dir:west);
+    __println("Geo:ax = "        + Geo:ax);
+    __println("Geo:corner = "    + Geo:corner);
+    __println("Geo:red = "       + Geo:red);
+    __println("Geo:blue = "      + Geo:blue);
+    __println("Ord:m = "         + Ord:m);
+    Geo:Dir gx = Geo:Dir:south;   // a qualified type name in a declaration
+    __println("gx = " + gx);
+
+    __println("Key:a = "    + Key:a);
+    __println("Key:b = "    + Key:b);
+    __println("U:u0 = "     + U:u0);
+    __println("U:u1 = "     + U:u1);
+    __println("Small:sa = " + Small:sa);
+    __println("Small:sb = " + Small:sb);
+    __println("az = "       + az);
+    __println("bz = "       + bz);
+    __println("Ref:d = "    + Ref:d);
+    Outer:Inner:Deep dv = Outer:Inner:Deep:d1;   // 3-segment qualified type
+    __println("dv = "       + dv);
+    __println("deep0 = "    + Outer:Inner:Deep:d0);
 
     alias Direction;
     __println("kNorth = " + kNorth);
@@ -217,9 +305,17 @@ file-scope negative cases — whole enum decls, so they sit outside main
 //-EXPECT-ERROR: does not fit declared type 'bool'
 //enum bool TooMany ( kA, kB, kC );
 
+/* an explicit member value falls below the bool range {0,1}. */
+//-EXPECT-ERROR: does not fit declared type 'bool'
+//enum bool Neg ( a = -1 );
+
 /* an explicit value overflows the underlying type. */
 //-EXPECT-ERROR: does not fit declared type 'int8'
 //enum int8 Big ( kFine = 1, kBad = 200 );
+
+/* an explicit float value exceeds the float32 underlying. */
+//-EXPECT-ERROR: does not fit declared type 'float'
+//enum float FBig ( a = 1e40 );
 
 /* two members of one enum collide. */
 //-EXPECT-ERROR: Duplicate declaration of 'kX'
@@ -256,3 +352,23 @@ int underlying. distinguished from the non-constant cases above.
 //-EXPECT-ERROR: is not a constant expression
 //const int cyc_x = Cyc:ca;
 //enum Cyc ( ca = cyc_x );
+
+/* two members of one enum reference each other — a cycle. */
+//-EXPECT-ERROR: is not a constant expression
+//enum Cyc2 ( a = b, b = a );
+
+/* a qualified type whose head is not a namespace. */
+//-EXPECT-ERROR: is not a namespace
+//int32 qNs() { Nope:Dir x = Geo:Dir:north; return 0; }
+
+/* a qualified type with a non-existent intermediate namespace segment. */
+//-EXPECT-ERROR: is not a namespace member of 'Geo'
+//int32 qMember() { Geo:Missing:Dir x = Geo:Dir:north; return 0; }
+
+/* a qualified type whose leaf names a value, not a type. */
+//-EXPECT-ERROR: is not a type in 'Geo'
+//int32 qType() { Geo:ax x = Geo:Dir:north; return 0; }
+
+/* a namespaced enum member referenced bare needs a qualifier. */
+//-EXPECT-ERROR: needs a namespace qualifier
+//int32 qBare() { int z = north; return 0; }

@@ -55,7 +55,10 @@ STAGE FILES (.h / .cpp pairs)
             literal-fit errors.
   grammar   tokens -> parse tree. Pure syntax; every identifier is just a
             name string. Hand-written recursive descent. Parses: types
-            (built-in primitives, an identifier type name, + T[] of either);
+            (built-in primitives, an identifier type name, a namespace-qualified
+            type name `Space:Dir` / `::A:B:T`, + T[] of any); a
+            looksLikeQualifiedTypedDecl lookahead routes `Space:Dir x` to a
+            var-decl (vs `Space:foo()` / `Space:kX = 1`, name-led statements);
             `alias Name = type;` + bare `alias Ns;` decls; namespace decls
             (`Name { members }`) and inline qualified member decls
             (`const int Space:kSix = 6;`); enum decls
@@ -90,7 +93,11 @@ STAGE FILES (.h / .cpp pairs)
             its underlying (cycle-detected), and resolveDeclType rewrites every
             declared / return / parameter spelling in place before validating
             it (widen::isKnownType) — so downstream stages see only underlying
-            types and aliases never reach the ast.
+            types and aliases never reach the ast. A namespace-qualified type
+            spelling (`Space:Dir`) resolves via resolveQualifiedType (the lead
+            segments walk the shared ns chain, the leaf must be a type) before
+            any downstream stage; the cycle-vs-resolution-failure suppression
+            flag is named `reported`.
             Owns namespaces: a kNamespace entry has a persistent frame
             identity that reopens reuse; members ride the enclosing lexical
             lifetime, tagged by owning namespace. Bare lookup walks the open-
@@ -106,7 +113,10 @@ STAGE FILES (.h / .cpp pairs)
             desugar — members must be kConst by constfold). Named -> a
             kNamespace whose slids_type carries the underlying (the name
             doubles as a transparent type alias) + kConst members; anonymous
-            -> bare kConst members in the enclosing frame. Values auto-
+            -> bare kConst members in the enclosing frame. May be declared at
+            file, function, or NAMESPACE scope (registerEnum takes a parent_ns;
+            a named enum becomes a member of its enclosing namespace, an
+            anonymous one's members do). Values auto-
             increment from 0 (int) / 0.0 (float), C rules; an explicit init
             resets the run. An implicit member is synthesized as
             clone(last-explicit-init) + offset (constfold folds it), so a
@@ -117,7 +127,11 @@ STAGE FILES (.h / .cpp pairs)
             with the enum's own frame open — so a member init can reference a
             file-scope const (`enum E ( e = kG )`) or a sibling member bare
             (`enum E ( a, b = a )`). A block-scope enum registers + resolves in
-            one shot in the body pass (all enclosing entries already exist).
+            one shot in the body pass (all enclosing entries already exist). A
+            namespace-member enum registers in registerNamespaceTree (which
+            registers type-introducing members — enums, nested namespaces —
+            before consts/functions, so a member's type may name a sibling enum
+            regardless of order) and resolves inits in resolveNamespaceBodies.
             Caches lvalue type on AugAssignStmts (s.return_type) and
             return type + param_types on CallStmts/CallExprs (one shared
             resolveUserCall) so downstream stages don't have to re-walk the

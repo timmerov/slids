@@ -8,6 +8,18 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
+  * CHAR-ARITH LOSES CHAR-NESS — int-class binary arith folds every operand to
+    signed int64 and emits kIntLiteral, dropping a char operand's kind:
+    `'A' + 1` folds to int 66, not char 'B'. So an auto-incremented char enum
+    member prints numerically: `enum char Key ( a = 'A', b )` gives `b = 66`,
+    while an explicit `b = 'B'` prints `B`. foldIntArithBitwise
+    (constfold.cpp) returns kIntLiteral for every non-overflowing + - *; the
+    UNARY fold already preserves operand kind per rule 1e, binary does not.
+    Fix needs the binary-result type rule for mixed/char operands decided
+    (char+int -> char? slids widen rules would dictate). No invalid IR; just a
+    surprising print. prerequisite: ##type (the char-vs-int result distinction
+    is unobservable until a value can report its own type).
+
   * ORPHAN-CHECK vs IMPORT FORWARD-DECLS — resolve's Pass 3 errors on any
     function declared-but-never-defined ("Function 'X' is declared but never
     defined.") — but a `.slh` header legitimately declares-only (defined in the
@@ -52,7 +64,3 @@ DEFERRED FEATURES (later; may not be on the plan)
 
 
 DEFERRED TESTS
-
-  * enum-bool range negatives — an `enum bool` with member values outside
-    {0,1} is a compile error (range-fit rides the existing const-capture check);
-    a negative test for it is not yet written.

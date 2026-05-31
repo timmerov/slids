@@ -2,12 +2,16 @@
 resolve the bug of the day.
 */
 
-/* should not be compile error. */
-enum EG ( eG1, eG2 = eG1 );
+Space {
+    enum Dir ( n, s );
+    const int a = Dir:n;
+    const Dir b = Dir:s;
+}
 
 int32 main() {
 
-    enum EF ( eF1, eF2 = eF1 );
+    int y = Space:Dir:n;
+    Space:Dir x = Space:Dir:s;
 
     return 0;
 }

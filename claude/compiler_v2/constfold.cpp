@@ -723,6 +723,11 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         for (auto& n : tree.nodes) {
             walk(n, tree, changed, diag);
         }
+        // Stop at the first reported error. A capture that failed its range
+        // check (tryCaptureConst) leaves literal_text empty, so a later round —
+        // triggered by some other node folding — would re-enter and re-report
+        // the same const. One round, one diagnostic.
+        if (diagnostic::hasErrors(diag)) break;
     }
     // Fixpoint check: any kConst whose rhs never folded is unresolvable
     // (cyclic or refers to a non-constant). Emit ONE diagnostic at the

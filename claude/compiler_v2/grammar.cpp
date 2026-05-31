@@ -101,21 +101,49 @@ struct Parser {
         std::string type;
         if (char const* name = primitiveNameFor(peek().kind)) {
             type = name;
-        } else if (peek().kind == token::Kind::kIdentifier) {
-            // An identifier type name (alias / class / enum); resolve validates
-            // and substitutes the spelling downstream.
-            type = peek().text;
+            advance();
+        } else if (peek().kind == token::Kind::kIdentifier
+                   || peek().kind == token::Kind::kColonColon) {
+            // An identifier type name (alias / class / enum), possibly qualified
+            // (`Space:Dir` — a type that is a namespace member). Joined with ':'
+            // into one spelling; resolve walks the chain, validates, and
+            // substitutes to the underlying before any downstream stage.
+            std::vector<std::string> segs;
+            std::vector<int> toks;
+            bool global = false;
+            if (!parseQualifiedName(segs, toks, global)) return "";
+            if (global) type = "::";
+            for (std::size_t i = 0; i < segs.size(); ++i) {
+                if (i > 0) type += ":";
+                type += segs[i];
+            }
         } else {
             error("Expected type.");
             return "";
         }
-        advance();
         if (peek().kind == token::Kind::kLBracket) {
             advance();
             if (!expect(token::Kind::kRBracket, "]")) return "";
             type += "[]";
         }
         return type;
+    }
+
+    // Pure lookahead: do the tokens from the current position form a qualified
+    // name (`A`, `A:B`, `::A:B`) immediately followed by an identifier? That is
+    // a qualified TYPE spelling preceding a variable name (`Space:Dir x`), as
+    // opposed to a name leading a call / assignment (`Space:foo()`,
+    // `Space:kX = 1`). Consumes nothing.
+    bool looksLikeQualifiedTypedDecl() const {
+        int o = 0;
+        if (peekKind(o) == token::Kind::kColonColon) o++;
+        if (peekKind(o) != token::Kind::kIdentifier) return false;
+        o++;
+        while (peekKind(o) == token::Kind::kColon) {
+            if (peekKind(o + 1) != token::Kind::kIdentifier) return false;
+            o += 2;
+        }
+        return peekKind(o) == token::Kind::kIdentifier;
     }
 
     // Parse a (possibly qualified) name at the current token. Fills `segments`
@@ -819,11 +847,18 @@ struct Parser {
             // `<ident> <ident>` is a declaration with an identifier type
             // (alias / class / enum), e.g. `Integer x = 42;`.
             if (next == token::Kind::kIdentifier) return parseVarDeclStmt();
+            // `Space:Dir x` — a qualified type spelling preceding a var name.
+            if (next == token::Kind::kColon
+                && looksLikeQualifiedTypedDecl()) return parseVarDeclStmt();
             // ident, `ident:...` (qualified) -> assign / aug-assign / call.
             return parseNameLedStmt();
         }
-        // A leading `::` is a global-qualified name leading a call / assign.
-        if (t.kind == token::Kind::kColonColon) return parseNameLedStmt();
+        // A leading `::` is a global-qualified name: a typed decl (`::A:T x`) or
+        // a name leading a call / assign.
+        if (t.kind == token::Kind::kColonColon) {
+            if (looksLikeQualifiedTypedDecl()) return parseVarDeclStmt();
+            return parseNameLedStmt();
+        }
         error("Expected statement.");
         return nullptr;
     }

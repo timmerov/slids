@@ -31,17 +31,32 @@ void requireKnownType(std::string const& t, int file_id, int tok,
         "Unknown type '" + t + "'.", {}});
 }
 
+// Resolve a namespace-qualified type spelling (`Space:Dir`) to its underlying.
+std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
+                                 int file_id, int tok, bool& reported,
+                                 diagnostic::Sink& diag);
+
 // Substitute a type-alias spelling to its underlying type, following chains
-// (`alias A = B; alias B = int` → `int`) and detecting cycles. The `[]` suffix
-// rides along. A spelling that isn't an alias entry is returned unchanged.
+// (`alias A = B; alias B = int` → `int`) and detecting cycles. A namespace-
+// qualified spelling (`Space:Dir`) resolves through the namespace chain. The
+// `[]` suffix rides along. A spelling that isn't an alias / enum / qualified
+// type is returned unchanged. `reported` is set when a diagnostic was already
+// emitted (a cycle, or a failed qualified resolution) so the caller skips the
+// redundant "Unknown type".
 std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
-                                std::set<std::string>& visiting, bool& cyclic,
+                                std::set<std::string>& visiting, bool& reported,
                                 int file_id, int tok, diagnostic::Sink& diag) {
     std::string base = spelling;
     std::string suffix;
     while (base.size() >= 2 && base.compare(base.size() - 2, 2, "[]") == 0) {
         suffix += "[]";
         base.resize(base.size() - 2);
+    }
+    if (base.find(':') != std::string::npos) {
+        std::string under =
+            resolveQualifiedType(tree, base, file_id, tok, reported, diag);
+        if (under.empty()) return base + suffix;   // error already reported
+        return under + suffix;
     }
     int id = parse::findInLiveScopes(tree, base);
     // A type alias substitutes to its target. An enum's name doubles as a
@@ -62,14 +77,14 @@ std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
         return tree.entries[id].slids_type + suffix;
     }
     if (visiting.count(base)) {
-        cyclic = true;
+        reported = true;
         diagnostic::report(diag, {file_id, tok,
             "Type alias '" + base + "' is part of a cycle.", {}});
         return base;
     }
     visiting.insert(base);
     std::string resolved = resolveTypeSpelling(
-        tree, tree.entries[id].slids_type, visiting, cyclic, file_id, tok, diag);
+        tree, tree.entries[id].slids_type, visiting, reported, file_id, tok, diag);
     visiting.erase(base);
     return resolved + suffix;
 }
@@ -80,10 +95,10 @@ std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
 void resolveDeclType(parse::Tree& tree, std::string& spelling,
                      int file_id, int tok, diagnostic::Sink& diag) {
     std::set<std::string> visiting;
-    bool cyclic = false;
-    spelling = resolveTypeSpelling(tree, spelling, visiting, cyclic,
+    bool reported = false;
+    spelling = resolveTypeSpelling(tree, spelling, visiting, reported,
                                    file_id, tok, diag);
-    if (!cyclic) requireKnownType(spelling, file_id, tok, diag);
+    if (!reported) requireKnownType(spelling, file_id, tok, diag);
 }
 
 // Register `alias Name = Type;` as a kAlias entry in the current frame.
@@ -274,6 +289,46 @@ bool isQualified(parse::Node const& n) {
     return n.global_qualified || !n.qualifier.empty();
 }
 
+// Resolve a namespace-qualified type spelling (`Space:Dir`, `::A:B:Type`) to its
+// underlying type. The leading segments name a namespace path; the final segment
+// must be a type living there — today an enum (a kNamespace carrying a non-empty
+// slids_type underlying). Returns the underlying, or "" with `reported` set after
+// a diagnostic. Carets land at `tok` (the decl's type position) for every
+// segment, since a type spelling carries no per-segment tokens.
+std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
+                                 int file_id, int tok, bool& reported,
+                                 diagnostic::Sink& diag) {
+    std::vector<std::string> segs;
+    bool global = false;
+    std::size_t i = 0;
+    if (base.size() >= 2 && base[0] == ':' && base[1] == ':') {
+        global = true;
+        i = 2;
+    }
+    std::string cur;
+    for (; i < base.size(); ++i) {
+        if (base[i] == ':') { segs.push_back(cur); cur.clear(); }
+        else cur.push_back(base[i]);
+    }
+    segs.push_back(cur);
+    std::vector<int> toks(segs.size(), tok);
+    // Walk all but the last segment as a namespace path; look the last up there.
+    std::vector<std::string> path(segs.begin(), segs.end() - 1);
+    std::vector<int> ptoks(toks.begin(), toks.end() - 1);
+    int frame = resolveNamespaceSegments(tree, path, ptoks, global, file_id, diag);
+    if (frame < 0) { reported = true; return ""; }
+    int id = findMemberLive(tree, frame, segs.back());
+    if (id < 0 || tree.entries[id].kind != parse::EntryKind::kNamespace
+        || tree.entries[id].slids_type.empty()) {
+        diagnostic::report(diag, {file_id, tok,
+            "'" + segs.back() + "' is not a type in '"
+            + qualPrefixText(segs, global, segs.size() - 1) + "'.", {}});
+        reported = true;
+        return "";
+    }
+    return tree.entries[id].slids_type;
+}
+
 // ---- Namespace registration -------------------------------------------------
 void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
                          diagnostic::Sink& diag);
@@ -281,6 +336,10 @@ void registerNamespaceTree(parse::Tree& tree, parse::Node& node,
                            int parent_ns, diagnostic::Sink& diag);
 void resolveNamespaceBodies(parse::Tree& tree, parse::Node& node,
                             int parent_ns, diagnostic::Sink& diag);
+void registerEnum(parse::Tree& tree, parse::Node& node, int parent_ns,
+                  diagnostic::Sink& diag);
+void resolveEnumMemberInits(parse::Tree& tree, parse::Node& node,
+                            diagnostic::Sink& diag);
 
 // Find an existing namespace named `name` to reopen. For a top-level namespace
 // (parent_ns == global) this is a lexical lookup so a locally-opened namespace
@@ -346,6 +405,10 @@ void registerMemberSignature(parse::Tree& tree, parse::Node& m, int ns_frame,
         registerNamespaceTree(tree, m, ns_frame, diag);
         return;
     }
+    if (m.kind == parse::Kind::kEnumDecl) {
+        registerEnum(tree, m, ns_frame, diag);
+        return;
+    }
     if (m.kind == parse::Kind::kVarDeclStmt && m.is_const) {
         resolveDeclType(tree, m.return_type, m.file_id, m.tok, diag);
         if (findMemberDeclared(tree, ns_frame, m.name) >= 0) {
@@ -390,8 +453,8 @@ void registerMemberSignature(parse::Tree& tree, parse::Node& m, int ns_frame,
         return;
     }
     diagnostic::report(diag, {m.file_id, m.tok,
-        "Only constants, functions, and namespaces may appear in a namespace.",
-        {}});
+        "Only constants, functions, enums, and namespaces may appear in a "
+        "namespace.", {}});
 }
 
 // Register a namespace and all its members' signatures (no bodies). Recurses
@@ -402,8 +465,20 @@ void registerNamespaceTree(parse::Tree& tree, parse::Node& node,
                            parent_ns, diag);
     if (ns < 0) return;
     node.resolved_entry_id = ns;   // stash the ns frame for the body pass
+    // Register type-introducing members (enums, nested namespaces) first, so a
+    // const / function member's type may name a sibling enum regardless of
+    // declaration order — mirrors the file-scope pass ordering.
     for (auto& m : node.children) {
-        if (m) registerMemberSignature(tree, *m, ns, diag);
+        if (m && (m->kind == parse::Kind::kEnumDecl
+                  || m->kind == parse::Kind::kNamespaceDecl)) {
+            registerMemberSignature(tree, *m, ns, diag);
+        }
+    }
+    for (auto& m : node.children) {
+        if (m && m->kind != parse::Kind::kEnumDecl
+              && m->kind != parse::Kind::kNamespaceDecl) {
+            registerMemberSignature(tree, *m, ns, diag);
+        }
     }
 }
 
@@ -419,6 +494,11 @@ void resolveNamespaceBodies(parse::Tree& tree, parse::Node& node,
         if (!m) continue;
         if (m->kind == parse::Kind::kNamespaceDecl) {
             resolveNamespaceBodies(tree, *m, ns, diag);
+        } else if (m->kind == parse::Kind::kEnumDecl) {
+            // The namespace frame is open; resolveEnumMemberInits opens the
+            // enum's own frame on top, so member inits see siblings + the
+            // enclosing namespace's members.
+            resolveEnumMemberInits(tree, *m, diag);
         } else if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
             for (auto& init : m->children) {
                 if (init) resolveExpr(tree, *init, diag);
@@ -613,15 +693,22 @@ void resolveEnumMemberInits(parse::Tree& tree, parse::Node& node,
     if (named) tree.open_ns_frames.pop_back();
 }
 
-void registerEnum(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag) {
+// `parent_ns` is the enclosing namespace frame, or kGlobalFrame for an enum at
+// file or function (lexical) scope. A named enum becomes a namespace member of
+// parent_ns (or a lexical namespace entry at global scope); an anonymous enum's
+// members land as namespace members of parent_ns, or — at lexical scope — as
+// bare consts in the current frame.
+void registerEnum(parse::Tree& tree, parse::Node& node, int parent_ns,
+                  diagnostic::Sink& diag) {
     // Validate the underlying type spelling once (members inherit it).
     resolveDeclType(tree, node.return_type, node.file_id, node.tok, diag);
     if (node.name.empty()) {
-        registerEnumMembers(tree, node, -1, diag);   // anonymous → bare consts
+        int owner = (parent_ns == kGlobalFrame) ? -1 : parent_ns;
+        registerEnumMembers(tree, node, owner, diag);
         return;
     }
     int ns = openNamespace(tree, node.name, node.name_tok, node.file_id,
-                           kGlobalFrame, diag, node.return_type);
+                           parent_ns, diag, node.return_type);
     if (ns < 0) return;
     node.resolved_entry_id = ns;
     registerEnumMembers(tree, node, ns, diag);
@@ -920,7 +1007,7 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             // members (named) or bare consts (anonymous) in the current frame.
             // All enclosing-scope entries already exist here, so resolve the
             // member inits right away.
-            registerEnum(tree, s, diag);
+            registerEnum(tree, s, kGlobalFrame, diag);
             resolveEnumMemberInits(tree, s, diag);
             return;
         }
@@ -1039,7 +1126,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // a later `alias EnumName;` import and qualified `Enum:member` both resolve.
     for (auto& ch : program->children) {
         if (ch && ch->kind == parse::Kind::kEnumDecl) {
-            registerEnum(tree, *ch, diag);
+            registerEnum(tree, *ch, kGlobalFrame, diag);
         }
     }
 

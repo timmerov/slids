@@ -90,6 +90,12 @@ Phase 4 — types beyond primitives
   * type aliases — LANDED (value form `alias Name = type;`, file + function
     scope, transparent; resolveTypeSpelling substitutes the chain; desugar drops
     kAliasDecl). Deferred alias items (##type, function-rename, templated) → todo.txt.
+  * qualified type names — LANDED. A type spelling may be namespace-qualified
+    (`Space:Dir`, `::A:B:T`): grammar's parseType accepts a qualified name and a
+    looksLikeQualifiedTypedDecl lookahead routes `Space:Dir x` to a var-decl;
+    resolveTypeSpelling resolves a `:`-bearing spelling through the shared ns
+    chain walker to the underlying before any downstream stage. Diagnostics:
+    not-a-namespace / not-a-namespace-member / not-a-type-in.
   * constants — LANDED (file + function scope; kConst entries with captured
     values; constfold substitution + iteration + fixpoint check; sharp
     diagnostics for assign-to-const, range overflow, missing init, dup, cyclic)
@@ -99,17 +105,22 @@ Phase 4 — types beyond primitives
     chain bare lookup (qualifiers optional, `::` defeats a shadow); qualified
     `A:B:C` / `::`; inline qualified member decls; bare `alias Ns;` import;
     desugar hoists member functions with entry-id-derived symbols (no cached
-    canonical names). Cross-TU namespaces + `.slh` propagation → Phase 8.
+    canonical names). Members may also be enums (registerNamespaceTree registers
+    type-introducing members first, for order-independence). Cross-TU namespaces
+    + `.slh` propagation → Phase 8.
   * enums — LANDED. `enum [type] [Name] ( m1 [= v], ... )`, type-first (default
     int), optional name. Lowered at RESOLVE: named → a kNamespace whose
     slids_type carries the underlying (transparent type) + kConst members;
-    anonymous → bare kConst members in the enclosing frame. Auto-increment from
-    0, C rules (implicit member = clone(last-explicit-init) + offset, folded by
-    constfold). Ambiguous-bare-ref diagnostic. Member inits resolve in a late
-    pass (after all file-scope entries exist) with the enum's own frame open, so
-    a member init can reference a file-scope const or a sibling member bare.
-    Canon: test_v2/constfold/enum.sl. Deferred enum items (reach-goal
-    drop-qualifier, reopen, enum-bool negatives) → todo.txt.
+    anonymous → bare kConst members in the enclosing frame. May be declared at
+    file, function, or NAMESPACE scope (registerEnum takes a parent_ns; a named
+    enum becomes a member of its enclosing namespace, an anonymous one's members
+    do). Auto-increment from 0, C rules (implicit member =
+    clone(last-explicit-init) + offset, folded by constfold). Ambiguous-bare-ref
+    diagnostic. Member inits resolve in a late pass (after all file-scope entries
+    exist) with the enum's own frame open, so a member init can reference a
+    file-scope const or a sibling member bare. Canon: test_v2/constfold/enum.sl.
+    Deferred enum items (reach-goal drop-qualifier, reopen, char-arith-loses-
+    char-ness) → todo.txt.
 
 Phase 5 — classes
   * class definitions (fields, ctor, dtor, methods)
