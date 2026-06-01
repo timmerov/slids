@@ -65,7 +65,7 @@ Phase 1 — expression core (LANDED)
     resolveUserCall + emitCall with kCallStmt; void-return + print-intrinsic-
     as-expr rejected                                                   LANDED
 
-Phase 2 — declarations + flow   <-- NEXT
+Phase 2 — declarations + flow   <-- IN PROGRESS
   * var decls — typed init + declare-then-assign LANDED; inferred init (no
     type spelling) still open. Definite assignment LANDED: a local read before
     written is an error ("Use of uninitialized variable"); params seeded
@@ -73,12 +73,12 @@ Phase 2 — declarations + flow   <-- NEXT
     errors ("Unused local variable" if never written, else "set but never
     used"); consts + params exempt. Straight-line only — control-flow joins
     attach per-construct as the branches below land. Canon: expression/vardecl.sl.
-  * blocks
-  * if / else, while
-  * for-loop (six shapes desugar to one canonical form)
-  * switch / case
-  * labeled break / continue
-  * return
+  * flow constructs (blocks, if/else, while, for, switch, labeled break/
+    continue) — planned as a 6-session track in plan-flow.txt (the join model +
+    per-construct landing stages; tests in test_v2/flow/). Decisions locked:
+    independent switch cases, unreachable-code detection on, no constant-true
+    loop special-case. NOT yet started.
+  * return — LANDED (kReturnStmt + return-correctness check from Phase 1).
 
 Phase 3 — functions
   * definitions: params (typed + inferred), return type

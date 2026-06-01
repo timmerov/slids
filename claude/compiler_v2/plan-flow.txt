@@ -1,0 +1,156 @@
+compiler_v2 — PLAN: Phase 2 control flow (multi-session)
+
+The flow-control track of Phase 2 (declarations + flow). Var decls + definite
+assignment + the unused-local sweep already LANDED (see plan.txt, and the
+resolve-stage notes in readme.txt). This file plans the remaining flow
+constructs. Dependency-driven ordering: each session's definite-assignment
+"join" increment builds on the prior. Test files live in test_v2/flow/*.sl.
+
+Locked design decisions:
+  1A — switch cases are INDEPENDENT (no C-style fall-through).
+  2A — unreachable-code detection lands now (a stmt after an abrupt sibling).
+  3B — constant-true loops (`while (true)`) get NO special-case; every loop is
+       treated as possibly-zero-iterations. Deferred to the while landing
+       (Session 3): when `while (true)` + return-correctness forces it, revisit;
+       until then a break-only-exit loop in a value-returning fn over-demands a
+       trailing return. Note in todo.txt if a test trips it.
+
+
+THE JOIN MODEL (the load-bearing design; entirely a resolve-stage concern)
+
+  initialized_locals means "definitely assigned on EVERY path reaching this
+  point." A branch splits flow; a merge INTERSECTS the incoming branches — a var
+  is initialized after a join only if initialized on all paths into it.
+  Straight-line (today) is the degenerate one-path case.
+
+  Abrupt completion — the key subtlety is WHICH branches reach the join. A
+  branch that returns/breaks/continues never arrives, so it must not drag the
+  intersection down. Model: a lattice with empty set = bottom and the UNIVERSAL
+  set = top, the "abrupt/unreachable" marker; join = intersection, top is its
+  identity. resolveStmt/resolveBlock return a Completion { Normal, Abrupt }
+  alongside mutating the set:
+    - Normal — falls through, contributes its actual out-set to the join.
+    - Abrupt — return/break/continue, contributes top, skipped in the ∩.
+  after = ∩ contributions; if ALL branches are Abrupt, the construct is Abrupt
+  (after-point unreachable → drives 2A unreachable detection).
+
+  Two things that do NOT join:
+    - read_locals (drives the unused sweep) is a MONOTONIC UNION — a read on any
+      path is a use. No snapshot/restore at branches.
+    - body_locals — declaration tracking. Under blocks, the unused sweep and the
+      init-set save/restore move from per-FUNCTION to per-BLOCK (sweep a block's
+      declared locals at block exit, matching pushFrame/popFrame).
+
+  Data shape (all transient in resolve, no parse::Tree schema change):
+    - enum Completion { Normal, Abrupt } returned by the body walk.
+    - a loop-context stack of { break_accum, continue_accum, label } for
+      break/continue targeting.
+    - set snapshots are plain std::set<int> copies at branch points (id-keyed).
+
+
+SESSION 1 — blocks + the Completion lattice (foundational)
+
+  Infrastructure-heavy, branch-light. Everything below depends on it.
+  * new node: kBlockStmt (parse + ast). Trips -Wswitch-enum across every stage —
+    update all switches in one pass.
+  * grammar: `{ stmts }` -> kBlockStmt; a block is legal anywhere a stmt is.
+  * resolve: push/pop a frame per block. Migrate the DA discipline from
+    per-function to per-block: snapshot/restore initialized_locals at block exit;
+    move the unused-local sweep to block exit (sweep that block's body_locals as
+    they leave scope). SHADOWING decision: recommend REJECT (Duplicate
+    declaration against any enclosing live frame), slids has no let-rebind.
+  * introduce enum Completion { Normal, Abrupt }. A block is Abrupt if any child
+    is Abrupt. 2A lands here: a stmt following an Abrupt sibling -> "Unreachable
+    statement."
+  * codegen: blocks mostly transparent; verify alloca placement for locals in
+    nested scopes.
+  * tests: test_v2/flow/block.sl — nested scope, shadowing rejection (neg),
+    per-block unused sweep, unreachable-after-return (neg).
+  * exit: blocks nest + scope correctly, Completion threads, unreachable fires.
+
+SESSION 2 — if / else (the join)
+
+  The genuinely new analysis; small surface, proves the whole model.
+  * new node: kIfStmt.
+  * classify: condition is a condition-expression (reuse the ! && || coercion
+    check).
+  * resolve — the join: snapshot S at entry; resolve then from S, restore,
+    resolve else from S; after = contrib(then) ∩ contrib(else), abrupt branches
+    contributing top. No-else falls out free (T ∩ S = S, an if-without-else never
+    adds). The if is Abrupt iff both arms are.
+  * codegen: conditional br + merge block (allocas, no phi).
+  * tests: test_v2/flow/if.sl — both-arms-init -> assigned after (pos); one-arm
+    -> use-after is a neg; return-in-one-arm -> other arm's init survives (pos);
+    unreachable-after-both-return (neg).
+  * exit: the ∩-with-top join correct end-to-end.
+
+SESSION 3 — while + break/continue (unlabeled)
+
+  Loops pin the init-set; break/continue exercise Abrupt propagation.
+  * new nodes: kWhileStmt, kBreakStmt, kContinueStmt.
+  * resolve: after = S (body may run zero times); condition reads satisfied by S.
+    Introduce the loop-context stack ({ break_accum, continue_accum });
+    break/continue complete Abrupt and fold into their accumulators. exit_set =
+    S ∩ break_accum (stays S).
+  * 3B: every loop possibly-zero — NO constant-true special-case. Leave a marker:
+    when `while (true)` + return-correctness forces it (likely this session's
+    tests), revisit; note in todo.txt if a test trips it.
+  * codegen: header/body/exit blocks; break->exit, continue->header.
+  * tests: test_v2/flow/while.sl — zero-iteration pin (body init doesn't escape,
+    neg on use-after), break/continue in branches propagate Abrupt, nested loops.
+  * exit: loops + unlabeled break/continue; loop-context stack live.
+
+SESSION 4 — for-loop (desugar-heavy)
+
+  Canonical-form session; RANGE-based only (container for-each is Phase 5).
+  * new node: kForStmt (range `i : 0..N`; NOT C-style — check test/for.sl canon).
+  * desugar — primary landing: the surface shapes -> one canonical loop form;
+    downstream stages see only that. Reuse Session 3's while lowering.
+  * resolve/classify: loop variable scoped to the body, typed from the range.
+  * tests: test_v2/flow/for.sl — range iteration, loop-var scope (neg on
+    use-after-loop), break/continue inside.
+  * exit: for-loops desugar to the canonical form and run.
+
+SESSION 5 — switch / case (1A)
+
+  * new node: kSwitchStmt (+ case labels).
+  * 1A independent cases: each case branches from S, no fall-through. after = ∩
+    of normally-completing cases (abrupt skipped); defaultless switch contributes
+    S (can't add — same shape as no-else).
+  * resolve/classify: case values are constants of the switch type (constfold
+    already folds); duplicate-case detection.
+  * codegen: branch chain or jump table.
+  * tests: test_v2/flow/switch.sl — all-cases-init+default -> assigned after;
+    defaultless -> not; duplicate-case (neg); break semantics.
+  * exit: switch with the independent-case join.
+
+SESSION 6 — labels (labeled break/continue)
+
+  Final flow piece; everything it targets now exists.
+  * grammar: labels on loops/switch; `break label;` / `continue label;`.
+  * resolve: label scope; resolve a label to its enclosing loop/switch via the
+    loop-context stack (now carrying labels); error on unknown/duplicate label.
+  * codegen: branch to the labeled exit/continue block.
+  * tests: test_v2/flow/labels.sl — labeled break from nested loop, labeled
+    continue, unknown-label (neg).
+  * exit: Phase 2 flow complete.
+
+
+CROSS-CUTTING (every session)
+
+  * Build discipline: each new Kind -> update all stage switches in one pass;
+    verify make RC=0 + the g++ relink before running a binary (a failed
+    -Wswitch-enum arm leaves a stale slidsc).
+  * read_locals never joins — monotonic union across all paths; only
+    initialized_locals snapshots/intersects.
+  * Doc cadence: at each session close, mark the plan.txt Phase 2 item LANDED +
+    update the resolve-stage paragraph in readme.txt. The join model gets one
+    memory at Session 2 (when it's real), extended per-construct.
+  * Inferred-init (`x = 42`, no type) is an orphan Phase-2 item NOT on this flow
+    track — grammar + resolve/classify, no flow interaction; slot anywhere.
+
+SEQUENCING
+
+  1->2->3 is strict (lattice -> join -> loop-context). 4 and 5 both depend on 3;
+  4 before 5 only because for-loop desugar is heavier and de-risks the
+  canonical-form approach early. 6 is last (needs loops AND switch to target).
