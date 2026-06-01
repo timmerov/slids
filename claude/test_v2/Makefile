@@ -2,6 +2,7 @@
 SUBDIRS = \
 	constfold \
 	expression \
+	flow \
 	function \
 	lex \
 	misc

@@ -17,6 +17,7 @@ enum class Kind {
     kCallExpr,
     kExprStmt,
     kReturnStmt,
+    kBlockStmt,     // { stmts } — a nested lexical scope; children = statements.
     kStringLiteral,
     kIntLiteral,
     kUintLiteral,

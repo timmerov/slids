@@ -113,6 +113,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kPreIncExpr:
         case parse::Kind::kPostIncExpr:
         case parse::Kind::kReturnStmt:
+        case parse::Kind::kBlockStmt:
         case parse::Kind::kParam:
             assert(false && "defaultLiteralType: not a literal kind");
             __builtin_unreachable();
@@ -334,6 +335,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kNamespaceDecl:
         case parse::Kind::kEnumDecl:
         case parse::Kind::kReturnStmt:
+        case parse::Kind::kBlockStmt:
         case parse::Kind::kParam:
             assert(false && "inferExpr: not an expression kind");
             return;
@@ -476,6 +478,12 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // Enum members were lowered to kConst entries at resolve and folded
             // by constfold; the enum node carries nothing to type-infer.
             return;
+        case parse::Kind::kBlockStmt:
+            // A nested scope: type-infer each contained statement.
+            for (auto& ch : s.children) {
+                if (ch) classifyStmt(tree, *ch, fn_return_type, diag);
+            }
+            return;
         case parse::Kind::kProgram:
         case parse::Kind::kFunctionDef:
         case parse::Kind::kFunctionDecl:
@@ -497,6 +505,19 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
     }
 }
 
+// "Last statement completes by returning" — the trailing-return heuristic. A
+// trailing block satisfies it if ITS last statement does (recurse), so
+// `int f(){ { return 1; } }` passes. Not full reachability (the Completion
+// lattice in Session 2 supersedes this); just enough that a block at the tail
+// doesn't trip the check.
+bool endsInReturn(std::vector<std::unique_ptr<parse::Node>> const& stmts) {
+    if (stmts.empty() || !stmts.back()) return false;
+    parse::Node const& last = *stmts.back();
+    if (last.kind == parse::Kind::kReturnStmt) return true;
+    if (last.kind == parse::Kind::kBlockStmt) return endsInReturn(last.children);
+    return false;
+}
+
 void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
                           diagnostic::Sink& diag) {
     // No frame push — resolve already handled scope discipline. We just
@@ -509,9 +530,7 @@ void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
     // return" heuristic, not full reachability (see todo: revisit non-void
     // function returns). void bodies fall through to an implicit `ret void`.
     if (fn.return_type != "void") {
-        bool ends_in_return = !fn.children.empty()
-            && fn.children.back()->kind == parse::Kind::kReturnStmt;
-        if (!ends_in_return) {
+        if (!endsInReturn(fn.children)) {
             diagnostic::report(diag, {fn.file_id, fn.name_tok,
                 "Function '" + fn.name + "' must end with a return statement.", {}});
         }

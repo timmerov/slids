@@ -830,8 +830,30 @@ struct Parser {
         return node;
     }
 
+    // { stmts } — a nested lexical scope. A bare `{` (no leading ident) is a
+    // block; `ident {` is a namespace decl, dispatched separately in parseStmt.
+    std::unique_ptr<parse::Node> parseBlock() {
+        int blk_file = peek().file_id;
+        int blk_tok = pos;
+        advance();   // {
+        auto node = newNodeAt(parse::Kind::kBlockStmt, blk_file, blk_tok);
+        while (!fatal && peek().kind != token::Kind::kRBrace) {
+            if (peek().kind == token::Kind::kEndOfFile
+                || peek().kind == token::Kind::kEndOfInput) {
+                error("Expected '}'.");
+                return nullptr;
+            }
+            auto stmt = parseStmt();
+            if (!stmt) return nullptr;
+            node->children.push_back(std::move(stmt));
+        }
+        if (!expect(token::Kind::kRBrace, "}")) return nullptr;
+        return node;
+    }
+
     std::unique_ptr<parse::Node> parseStmt() {
         token::Token const& t = peek();
+        if (t.kind == token::Kind::kLBrace) return parseBlock();
         if (t.kind == token::Kind::kReturn) return parseReturnStmt();
         if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();

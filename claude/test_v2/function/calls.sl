@@ -147,3 +147,11 @@ void greet() {
 //void returns_value() {
 //    return 0;
 //}
+
+/* a local may not shadow a parameter — the parameter shares the body's top
+   scope, so a same-named body-top local is a duplicate declaration. */
+//-EXPECT-ERROR: Duplicate declaration of 'x'
+//void shadow_ban(int x) {
+//    int x = 0;
+//    return x;
+//}

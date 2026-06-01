@@ -74,10 +74,13 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     used"); consts + params exempt. Straight-line only — control-flow joins
     attach per-construct as the branches below land. Canon: expression/vardecl.sl.
   * flow constructs (blocks, if/else, while, for, switch, labeled break/
-    continue) — planned as a 6-session track in plan-flow.txt (the join model +
-    per-construct landing stages; tests in test_v2/flow/). Decisions locked:
-    independent switch cases, unreachable-code detection on, no constant-true
-    loop special-case. NOT yet started.
+    continue) — a 6-session track in plan-flow.txt (the join model + per-construct
+    landing stages; tests in test_v2/flow/). Decisions locked: independent switch
+    cases, unreachable-code detection on, no constant-true loop special-case.
+    Session 1 (bare blocks) LANDED: kBlockStmt, per-block scope + DA migration,
+    shadowing allowed, alloca names entry-id-suffixed for shadow safety, trailing-
+    block return-correctness. Sessions 2-6 (if/else + the Completion lattice,
+    while+break/continue, for, switch, labels) not yet started.
   * return — LANDED (kReturnStmt + return-correctness check from Phase 1).
 
 Phase 3 — functions

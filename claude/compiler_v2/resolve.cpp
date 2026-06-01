@@ -341,6 +341,24 @@ void registerEnum(parse::Tree& tree, parse::Node& node, int parent_ns,
 void resolveEnumMemberInits(parse::Tree& tree, parse::Node& node,
                             diagnostic::Sink& diag);
 
+// Report any local in `body_locals` never read: "Unused local variable 'x'." if
+// it was never written (a1 — declared and ignored), else "Local variable 'x'
+// set but never used." (a2 — a value was computed and discarded). Caret at the
+// decl. Gated by the caller on hasErrors so a value-before-init / dup diagnostic
+// isn't trailed by spurious unused reports. Shared by the per-function and
+// per-block scope exits.
+void sweepUnusedLocals(parse::Tree& tree, diagnostic::Sink& diag) {
+    if (diagnostic::hasErrors(diag)) return;
+    for (int id : tree.body_locals) {
+        if (tree.read_locals.count(id) > 0) continue;
+        parse::Entry const& e = tree.entries[id];
+        bool was_set = tree.initialized_locals.count(id) > 0;
+        diagnostic::report(diag, {e.file_id, e.tok,
+            was_set ? "Local variable '" + e.name + "' set but never used."
+                    : "Unused local variable '" + e.name + "'.", {}});
+    }
+}
+
 // Find an existing namespace named `name` to reopen. For a top-level namespace
 // (parent_ns == global) this is a lexical lookup so a locally-opened namespace
 // reopens correctly; for a nested namespace it is a member lookup in the parent.
@@ -833,6 +851,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         case parse::Kind::kNamespaceDecl:
         case parse::Kind::kEnumDecl:
         case parse::Kind::kReturnStmt:
+        case parse::Kind::kBlockStmt:
         case parse::Kind::kParam:
             assert(false && "resolveExpr: not an expression kind");
             return;
@@ -1068,6 +1087,25 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             }
             return;
         }
+        case parse::Kind::kBlockStmt: {
+            // A nested lexical scope. Push a frame so block-local decls live and
+            // die with the block (and may shadow an outer name via the
+            // innermost-first lookup). Definite-assignment state FLOWS THROUGH:
+            // initialized_locals / read_locals are scoped, not isolated — an
+            // assignment or read inside the block affects the enclosing local.
+            // Only body_locals (declaration tracking for the unused sweep) is
+            // block-scoped: save/clear on entry, sweep at block exit, restore.
+            parse::pushFrame(tree);
+            std::vector<int> saved_body_locals = std::move(tree.body_locals);
+            tree.body_locals.clear();
+            for (auto& ch : s.children) {
+                if (ch) resolveStmt(tree, *ch, diag);
+            }
+            sweepUnusedLocals(tree, diag);   // this block's declarations
+            tree.body_locals = std::move(saved_body_locals);
+            parse::popFrame(tree);
+            return;
+        }
         case parse::Kind::kProgram:
         case parse::Kind::kFunctionDef:
         case parse::Kind::kFunctionDecl:
@@ -1147,22 +1185,7 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
     for (auto& ch : fn.children) {
         if (ch) resolveStmt(tree, *ch, diag);
     }
-    // Unused-local sweep. A body-declared local never read is reported at its
-    // declaration: "Unused local variable" if it was never written (a1 —
-    // declared and ignored entirely), else "set but never used" (a2 — a value
-    // was computed and discarded). Skip if the body already errored, so a
-    // value-before-init or dup diagnostic isn't trailed by spurious unused
-    // reports on the same code.
-    if (!diagnostic::hasErrors(diag)) {
-        for (int id : tree.body_locals) {
-            if (tree.read_locals.count(id) > 0) continue;
-            parse::Entry const& e = tree.entries[id];
-            bool was_set = tree.initialized_locals.count(id) > 0;
-            diagnostic::report(diag, {e.file_id, e.tok,
-                was_set ? "Local variable '" + e.name + "' set but never used."
-                        : "Unused local variable '" + e.name + "'.", {}});
-        }
-    }
+    sweepUnusedLocals(tree, diag);   // function-body declarations
     tree.body_locals = std::move(saved_body_locals);
     tree.read_locals = std::move(saved_read);
     tree.initialized_locals = std::move(saved_initialized);

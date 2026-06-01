@@ -29,6 +29,7 @@ enum class Kind {
                    // Resolve lowers to alias + namespace + consts (named) or
                    // bare consts (anonymous); desugar drops it.
     kReturnStmt,
+    kBlockStmt,    // { stmts } — a nested lexical scope; children = statements.
     kStringLiteral,
     kIntLiteral,
     kUintLiteral,

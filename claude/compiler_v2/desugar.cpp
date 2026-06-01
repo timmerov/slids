@@ -37,6 +37,7 @@ ast::Kind toAstKind(parse::Kind k) {
             assert(false && "toAstKind: enum should be dropped before copy");
             __builtin_unreachable();
         case parse::Kind::kReturnStmt:    return ast::Kind::kReturnStmt;
+        case parse::Kind::kBlockStmt:     return ast::Kind::kBlockStmt;
         case parse::Kind::kStringLiteral: return ast::Kind::kStringLiteral;
         case parse::Kind::kIntLiteral:    return ast::Kind::kIntLiteral;
         case parse::Kind::kUintLiteral:   return ast::Kind::kUintLiteral;
@@ -286,6 +287,28 @@ void lowerStatementPPID(ast::Node& stmt,
     }
 }
 
+// Run PPID statement-bump splicing over a statement list, rebuilding it with
+// pre-bumps before / post-bumps after each statement. Recurses into a nested
+// kBlockStmt so bumps inside a block splice within that block, not at the
+// enclosing scope.
+void lowerStatementList(std::vector<std::unique_ptr<ast::Node>>& stmts) {
+    std::vector<std::unique_ptr<ast::Node>> lowered;
+    for (auto& stmt : stmts) {
+        if (!stmt) continue;
+        if (stmt->kind == ast::Kind::kBlockStmt) {
+            lowerStatementList(stmt->children);
+            lowered.push_back(std::move(stmt));
+            continue;
+        }
+        std::vector<std::unique_ptr<ast::Node>> pre, post;
+        lowerStatementPPID(*stmt, pre, post);
+        for (auto& b : pre) lowered.push_back(makeBumpStmt(std::move(b)));
+        lowered.push_back(std::move(stmt));
+        for (auto& b : post) lowered.push_back(makeBumpStmt(std::move(b)));
+    }
+    stmts = std::move(lowered);
+}
+
 }  // namespace
 
 void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
@@ -316,16 +339,7 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
         if (!n || n->kind != ast::Kind::kProgram) continue;
         for (auto& fn : n->children) {
             if (!fn || fn->kind != ast::Kind::kFunctionDef) continue;
-            std::vector<std::unique_ptr<ast::Node>> lowered;
-            for (auto& stmt : fn->children) {
-                if (!stmt) continue;
-                std::vector<std::unique_ptr<ast::Node>> pre, post;
-                lowerStatementPPID(*stmt, pre, post);
-                for (auto& b : pre) lowered.push_back(makeBumpStmt(std::move(b)));
-                lowered.push_back(std::move(stmt));
-                for (auto& b : post) lowered.push_back(makeBumpStmt(std::move(b)));
-            }
-            fn->children = std::move(lowered);
+            lowerStatementList(fn->children);
         }
     }
 }

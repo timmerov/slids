@@ -48,30 +48,64 @@ THE JOIN MODEL (the load-bearing design; entirely a resolve-stage concern)
     - set snapshots are plain std::set<int> copies at branch points (id-keyed).
 
 
-SESSION 1 — blocks + the Completion lattice (foundational)
+SESSION 1 — bare blocks (foundational)   [LANDED]
 
-  Infrastructure-heavy, branch-light. Everything below depends on it.
+  Infrastructure-heavy, branch-light. Everything below depends on it. LANDED;
+  canon test_v2/flow/block.sl (+ .exp). The probe earned its keep — resolve/
+  classify looked clean but codegen had TWO real bugs only `llc` surfaced:
+  (1) alloca register collided on shadowing (`%x` emitted twice) — fixed by
+  suffixing the register with the entry id, `%<name>.<id>`; (2) emitFunction had
+  its OWN trailing-return check that asserted on a trailing block — fixed with an
+  ast-side endsInReturn mirroring classify's.
   * new node: kBlockStmt (parse + ast). Trips -Wswitch-enum across every stage —
     update all switches in one pass.
   * grammar: `{ stmts }` -> kBlockStmt; a block is legal anywhere a stmt is.
   * resolve: push/pop a frame per block. Migrate the DA discipline from
-    per-function to per-block: snapshot/restore initialized_locals at block exit;
-    move the unused-local sweep to block exit (sweep that block's body_locals as
-    they leave scope). SHADOWING decision: recommend REJECT (Duplicate
-    declaration against any enclosing live frame), slids has no let-rebind.
-  * introduce enum Completion { Normal, Abrupt }. A block is Abrupt if any child
-    is Abrupt. 2A lands here: a stmt following an Abrupt sibling -> "Unreachable
-    statement."
-  * codegen: blocks mostly transparent; verify alloca placement for locals in
-    nested scopes.
-  * tests: test_v2/flow/block.sl — nested scope, shadowing rejection (neg),
-    per-block unused sweep, unreachable-after-return (neg).
-  * exit: blocks nest + scope correctly, Completion threads, unreachable fires.
+    per-function to per-block: enclosing initialized_locals + read_locals FLOW
+    THROUGH (an assignment/read inside a block affects the outer local — a block
+    is scoped, not isolated); only body_locals is block-scoped, save/restore it
+    so the unused-local sweep runs at block exit over locals declared in THIS
+    block.
+    SHADOWING (canon): ALLOWED by default — an inner-block local masks an outer
+    name via the innermost-first live-scope walk; the outer entry is restored on
+    pop (standard block scoping). Exceptions, NEITHER reachable in bare blocks:
+    (a) parse ambiguities (type-name-as-variable; class-related, deferred); (b) a
+    body-TOP local shadowing a parameter — already caught, since the param shares
+    the body's top frame so a same-name top-level local is a plain Duplicate
+    declaration (canon negative lives in function/calls.sl, shadow_ban). A
+    NESTED-block local reusing a param name is ALLOWED (B-pure: the param is
+    recoverable outside that block). So Session 1 adds NO new shadow check.
+  * classify: return-correctness recursion — the "last statement is a return"
+    check (classify.cpp) must recurse into a trailing kBlockStmt so
+    `int f(){ { return 1; } }` passes. Minimal: if the last child is a block,
+    check ITS last child (recursively).
+  * codegen: blocks transparent (emit children in order). Alloca register names
+    are `%<name>.<entry_id>` so a shadowing inner local doesn't collide with the
+    outer `%x` (the SymTab is entry-id-keyed; this naming is the shadowing-safety
+    mechanism reused by every later flow construct's body). emitFunction's
+    trailing-return terminator decision uses the same endsInReturn recursion.
+    desugar's PPID statement-bump splicing recurses into a block (lowerStatement-
+    List) so a bump inside a block splices within it, not at function scope.
+  * NOTE: the Completion { Normal, Abrupt } lattice + 2A unreachable-statement
+    detection are SPLIT OUT to Session 2 (if/else), where the join makes them
+    load-bearing. Bare blocks are sequential/single-path; no Completion yet.
+  * tests: test_v2/flow/block.sl — nested scope; shadowing ALLOWED (pos: inner
+    local masks an outer name, outer restored after the block); assignment to an
+    outer var from inside a block, read after (pos: init flows out); per-block
+    unused sweep (pos: a block-local declared-never-read errors at block exit).
+  * exit: blocks nest + scope correctly; per-block unused sweep fires; trailing
+    block satisfies return-correctness.
 
-SESSION 2 — if / else (the join)
+SESSION 2 — if / else (the join) + the Completion lattice
 
-  The genuinely new analysis; small surface, proves the whole model.
+  The genuinely new analysis; small surface, proves the whole model. The
+  Completion { Normal, Abrupt } lattice + 2A unreachable-statement detection
+  land HERE (split out of Session 1) — the join is what makes them load-bearing.
   * new node: kIfStmt.
+  * introduce enum Completion { Normal, Abrupt } returned by the body walk. A
+    block/stmt is Abrupt if it cannot complete normally (a return today; break/
+    continue in Session 3). 2A: a stmt following an Abrupt sibling in a block ->
+    "Unreachable statement." Retrofit the block walk (Session 1) to thread it.
   * classify: condition is a condition-expression (reuse the ! && || coercion
     check).
   * resolve — the join: snapshot S at entry; resolve then from S, restore,
@@ -106,10 +140,19 @@ SESSION 4 — for-loop (desugar-heavy)
   * new node: kForStmt (range `i : 0..N`; NOT C-style — check test/for.sl canon).
   * desugar — primary landing: the surface shapes -> one canonical loop form;
     downstream stages see only that. Reuse Session 3's while lowering.
-  * resolve/classify: loop variable scoped to the body, typed from the range.
-  * tests: test_v2/flow/for.sl — range iteration, loop-var scope (neg on
-    use-after-loop), break/continue inside.
-  * exit: for-loops desugar to the canonical form and run.
+  * resolve/classify: loop variable scoping. LOOP-VAR REUSE RULE: if a local of
+    the loop-var name is ALREADY in scope, the for REASSIGNS it (reuses the
+    existing entry) rather than allocating a fresh loop-local. `int row = 0;
+    for (row : 0..8) { ... }` writes the outer `row`; after the loop it holds the
+    last iterated value, not 0. Only when no such local exists does the for
+    declare a fresh body-scoped loop var (typed from the range). (Fixes the v1.md
+    behavior where for-init always allocated fresh — the chess-sample bug. resolve
+    looks up the name in live scope first; reuse if found, declare if not.) The
+    reused var must be type-compatible with the range element type.
+  * tests: test_v2/flow/for.sl — range iteration; fresh loop-var scope (neg on
+    use-after-loop when no outer exists); REUSE: outer local reassigned by the
+    loop, reads the last value after (pos); break/continue inside.
+  * exit: for-loops desugar to the canonical form and run; loop-var reuse correct.
 
 SESSION 5 — switch / case (1A)
 

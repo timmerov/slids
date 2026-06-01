@@ -511,6 +511,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kCallStmt:
         case ast::Kind::kExprStmt:
         case ast::Kind::kReturnStmt:
+        case ast::Kind::kBlockStmt:
         case ast::Kind::kParam:
             assert(false && "emitExpr: reached statement-kind node");
             __builtin_unreachable();
@@ -534,7 +535,12 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 && "kVarDeclStmt: classify did not stamp resolved_entry_id");
             std::string llty = llvmTypeFor(stmt.return_type,
                                            stmt.file_id, stmt.tok, diag);
-            std::string regname = std::string("%") + stmt.name;
+            // Suffix the alloca register with the entry id so a shadowing inner-
+            // scope local (`int x; { int x; }`) doesn't collide with the outer
+            // `%x` — distinct entries get distinct registers. The id-keyed SymTab
+            // resolves each read to the right one.
+            std::string regname = std::string("%") + stmt.name + "."
+                + std::to_string(stmt.resolved_entry_id);
             out << "  " << regname << " = alloca " << llty << "\n";
             syms[stmt.resolved_entry_id] = {regname, llty, stmt.return_type};
             if (!stmt.children.empty()) {
@@ -576,6 +582,16 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             out << "  ret " << llty << " " << val << "\n";
             return;
         }
+        case ast::Kind::kBlockStmt: {
+            // A nested scope is transparent at codegen: emit its statements in
+            // order. Allocas for block-local vars still emit at their kVarDeclStmt
+            // (the SymTab is entry-id-keyed, so a nested-scope local is reachable
+            // while live without any scope bookkeeping here).
+            for (auto const& ch : stmt.children) {
+                if (ch) emitStmt(*ch, syms, pool, fn_return_type, out, diag);
+            }
+            return;
+        }
         case ast::Kind::kAugAssignStmt:
             assert(false && "emitStmt: AugAssign survived desugar");
             return;
@@ -602,6 +618,17 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
     }
     assert(false && "emitStmt: unhandled ast::Kind");
     __builtin_unreachable();
+}
+
+// "Last statement completes by returning" — a trailing kReturnStmt, or a
+// trailing kBlockStmt whose last statement does (recurse). Mirrors classify's
+// endsInReturn so the codegen terminator decision matches the upstream check.
+bool endsInReturn(std::vector<std::unique_ptr<ast::Node>> const& stmts) {
+    if (stmts.empty() || !stmts.back()) return false;
+    ast::Node const& last = *stmts.back();
+    if (last.kind == ast::Kind::kReturnStmt) return true;
+    if (last.kind == ast::Kind::kBlockStmt) return endsInReturn(last.children);
+    return false;
 }
 
 void emitFunction(ast::Node const& fn, strings::Pool& pool,
@@ -638,10 +665,9 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     // A non-void function without a trailing return is rejected by classify, so
     // reaching here non-void means that check regressed; assert rather than
     // emit an unterminated block. The guard also means an explicit trailing
-    // return won't double-terminate once bare `return;` is supported.
-    bool ends_in_return = !fn.children.empty()
-        && fn.children.back()->kind == ast::Kind::kReturnStmt;
-    if (!ends_in_return) {
+    // return won't double-terminate once bare `return;` is supported. A trailing
+    // block counts if ITS last statement returns (mirrors classify's recursion).
+    if (!endsInReturn(fn.children)) {
         assert(fn.return_type == "void"
             && "emitFunction: non-void function reached codegen without a trailing return");
         out << "  ret void\n";

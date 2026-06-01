@@ -144,7 +144,14 @@ STAGE FILES (.h / .cpp pairs)
             diagnostic isn't trailed by a spurious unused report. Consts and
             params are exempt (consts substituted away; params not in
             body_locals). Straight-line only today — control-flow joins attach
-            per-construct as Phase 2 branches land.
+            per-construct as Phase 2 branches land. A kBlockStmt `{ stmts }` opens
+            a nested frame: initialized_locals + read_locals FLOW THROUGH (scoped,
+            not isolated — an assign/read inside a block affects the enclosing
+            local), only body_locals is save/restored so the unused sweep
+            (shared sweepUnusedLocals) runs per-block at block exit. Shadowing is
+            allowed (inner masks outer via innermost-first lookup, restored on
+            pop). Trailing-return correctness (classify) recurses into a trailing
+            block (endsInReturn).
             Caches lvalue type on AugAssignStmts (s.return_type) and
             return type + param_types on CallStmts/CallExprs (one shared
             resolveUserCall) so downstream stages don't have to re-walk the
@@ -217,7 +224,9 @@ STAGE FILES (.h / .cpp pairs)
             statement (post AFTER the store -- the statement is the phrase);
             a bump inside a sub-phrase (call args, && / || rhs) stays in a
             synthesized kSeqExpr {pre... value post...} so a short-circuited
-            bump never fires. Future canonical-form rewrites (for-loop
+            bump never fires. The statement-bump splice (lowerStatementList)
+            recurses into a kBlockStmt so a bump inside a block splices within
+            that block, not at function scope. Future canonical-form rewrites (for-loop
             shapes, receiver shapes, stringify, operator dispatch) slot in
             as their phases land.
   optimize  ast -> ast in place. Slids-aware perf rewrites LLVM can't do
@@ -234,8 +243,18 @@ STAGE FILES (.h / .cpp pairs)
             args>)` via one shared emitCall using the classify-stamped
             return_type and param_types — the statement form discards the
             result register, the expression form (kCallExpr) widens it into
-            the destination type. Mangled names and field offsets land with
-            layout.
+            the destination type. Local allocas use the register name
+            `%<name>.<entry_id>` — the entry-id suffix is the SHADOWING-SAFETY
+            mechanism: a shadowing inner-scope local (`int x; { int x; }`) gets a
+            distinct register from the outer `%x`, so llc doesn't reject a
+            duplicate local value name. The id-keyed SymTab resolves each read to
+            the right entry, so the suffix is a deterministic local derivation,
+            NOT a cached canonical name (writer and reader agree by entry id; the
+            string is never stored or re-derived elsewhere). Every later flow
+            construct's body reuses this path. A kBlockStmt is transparent (emit
+            children in order); emitFunction's trailing-return terminator decision
+            uses an ast-side endsInReturn that recurses into a trailing block,
+            mirroring classify. Mangled names and field offsets land with layout.
 
 PRODUCT FILES (.h / .cpp pairs)
 
