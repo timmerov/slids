@@ -852,6 +852,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         case parse::Kind::kEnumDecl:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kBlockStmt:
+        case parse::Kind::kIfStmt:
         case parse::Kind::kParam:
             assert(false && "resolveExpr: not an expression kind");
             return;
@@ -946,13 +947,27 @@ void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
     }
 }
 
-void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+// Whether a statement (or statement list) can fall through to its successor.
+// Abrupt = it always transfers control elsewhere (today only `return`; break/
+// continue arrive in Session 3). Drives the if/else join (an abrupt arm doesn't
+// constrain the post-merge init-set) and 2A unreachable-statement detection.
+enum class Completion { Normal, Abrupt };
+
+// Resolve a statement list, threading Completion: once a statement is Abrupt,
+// the next reachable statement is flagged "Unreachable statement." (2A) and the
+// rest of the list is skipped (dead code declares no locals). Returns Abrupt if
+// any statement in the list completes abruptly.
+Completion resolveStmtList(parse::Tree& tree,
+                           std::vector<std::unique_ptr<parse::Node>>& stmts,
+                           diagnostic::Sink& diag);
+
+Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     switch (s.kind) {
         case parse::Kind::kVarDeclStmt: {
             // A qualified name defines a namespace member, not a local.
             if (isQualified(s)) {
                 resolveInlineQualifiedDecl(tree, s, diag);
-                return;
+                return Completion::Normal;
             }
             // Consts in function bodies are pre-created in the forward-decl
             // pre-pass (resolveFunctionBody). If resolved_entry_id is set,
@@ -995,7 +1010,7 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
                        == parse::EntryKind::kLocalVar) {
                 tree.initialized_locals.insert(s.resolved_entry_id);
             }
-            return;
+            return Completion::Normal;
         }
         case parse::Kind::kAssignStmt: {
             resolveAssignTarget(tree, s, diag);
@@ -1008,7 +1023,7 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
                        == parse::EntryKind::kLocalVar) {
                 tree.initialized_locals.insert(s.resolved_entry_id);
             }
-            return;
+            return Completion::Normal;
         }
         case parse::Kind::kAugAssignStmt: {
             if (resolveAssignTarget(tree, s, diag)) {
@@ -1035,7 +1050,7 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             for (auto& ch : s.children) {
                 if (ch) resolveExpr(tree, *ch, diag);
             }
-            return;
+            return Completion::Normal;
         }
         case parse::Kind::kCallStmt: {
             if (isPrintIntrinsic(s.name)) {
@@ -1049,19 +1064,19 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             } else {
                 resolveUserCall(tree, s, diag);
             }
-            return;
+            return Completion::Normal;
         }
         case parse::Kind::kAliasDecl: {
             // Bare `alias Ns;` imports a namespace's members into this scope.
             if (s.return_type.empty()) {
                 resolveBareAlias(tree, s, diag);
-                return;
+                return Completion::Normal;
             }
             // Function-scope value alias: register in the body frame, then
             // validate the target (forward refs within a body aren't pre-scanned).
             registerAlias(tree, s, diag);
             resolveDeclType(tree, s.return_type, s.file_id, s.tok, diag);
-            return;
+            return Completion::Normal;
         }
         case parse::Kind::kNamespaceDecl: {
             // A namespace opened in a function body: register its members
@@ -1069,7 +1084,7 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             // the global namespace — a function body is not itself a namespace.
             registerNamespaceTree(tree, s, kGlobalFrame, diag);
             resolveNamespaceBodies(tree, s, kGlobalFrame, diag);
-            return;
+            return Completion::Normal;
         }
         case parse::Kind::kEnumDecl: {
             // An enum opened in a function body: registers its alias+namespace+
@@ -1078,14 +1093,21 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             // member inits right away.
             registerEnum(tree, s, kGlobalFrame, diag);
             resolveEnumMemberInits(tree, s, diag);
-            return;
+            return Completion::Normal;
         }
-        case parse::Kind::kExprStmt:
+        case parse::Kind::kExprStmt: {
+            for (auto& ch : s.children) {
+                if (ch) resolveExpr(tree, *ch, diag);
+            }
+            return Completion::Normal;
+        }
         case parse::Kind::kReturnStmt: {
             for (auto& ch : s.children) {
                 if (ch) resolveExpr(tree, *ch, diag);
             }
-            return;
+            // A return transfers control out of the function — it never falls
+            // through to its successor.
+            return Completion::Abrupt;
         }
         case parse::Kind::kBlockStmt: {
             // A nested lexical scope. Push a frame so block-local decls live and
@@ -1098,13 +1120,67 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             parse::pushFrame(tree);
             std::vector<int> saved_body_locals = std::move(tree.body_locals);
             tree.body_locals.clear();
-            for (auto& ch : s.children) {
-                if (ch) resolveStmt(tree, *ch, diag);
-            }
+            Completion c = resolveStmtList(tree, s.children, diag);
             sweepUnusedLocals(tree, diag);   // this block's declarations
             tree.body_locals = std::move(saved_body_locals);
             parse::popFrame(tree);
-            return;
+            // A block is Abrupt iff its statement list is.
+            return c;
+        }
+        case parse::Kind::kIfStmt: {
+            // children[0] = condition, [1] = then-block, [2] = optional else.
+            // THE JOIN: snapshot the init-set S, resolve the then-arm from S,
+            // restore S, resolve the else-arm from S; the post-merge set is the
+            // INTERSECTION of the arms' contributions. An abrupt arm (one that
+            // returns) never reaches the merge, so it contributes top (the
+            // universal set) and is skipped from the ∩. A missing else arm
+            // contributes S unchanged (T ∩ S = S — an else-less if never adds an
+            // initialization). read_locals is NOT snapshotted: a read on any path
+            // is a use (monotonic union).
+            assert(s.children.size() >= 2 && "kIfStmt needs condition + then");
+            resolveExpr(tree, *s.children[0], diag);
+            std::set<int> entry = tree.initialized_locals;
+
+            Completion then_c = resolveStmt(tree, *s.children[1], diag);
+            std::set<int> then_out = std::move(tree.initialized_locals);
+
+            tree.initialized_locals = entry;   // restore S for the else arm
+            bool has_else = s.children.size() > 2 && s.children[2];
+            Completion else_c = Completion::Normal;
+            std::set<int> else_out;
+            if (has_else) {
+                else_c = resolveStmt(tree, *s.children[2], diag);
+                else_out = std::move(tree.initialized_locals);
+            } else {
+                else_out = entry;   // no-else: the fall-through path keeps S
+            }
+
+            // Join: ∩ of normally-completing arms; abrupt arms skipped (top).
+            std::set<int> joined;
+            bool then_in = (then_c == Completion::Normal);
+            bool else_in = (else_c == Completion::Normal);
+            if (then_in && else_in) {
+                for (int id : then_out) {
+                    if (else_out.count(id) > 0) joined.insert(id);
+                }
+            } else if (then_in) {
+                joined = std::move(then_out);
+            } else if (else_in) {
+                joined = std::move(else_out);
+            } else {
+                // Both arms abrupt: the merge is unreachable. The init-set is
+                // moot; keep S so an erroneous downstream read still attributes.
+                joined = std::move(entry);
+            }
+            tree.initialized_locals = std::move(joined);
+
+            // The if is Abrupt iff every path through it is — both arms abrupt,
+            // and an else exists (an else-less if always has a fall-through).
+            if (has_else && then_c == Completion::Abrupt
+                && else_c == Completion::Abrupt) {
+                return Completion::Abrupt;
+            }
+            return Completion::Normal;
         }
         case parse::Kind::kProgram:
         case parse::Kind::kFunctionDef:
@@ -1123,8 +1199,33 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
         case parse::Kind::kCallExpr:
         case parse::Kind::kParam:
             assert(false && "resolveStmt: not a statement kind");
-            return;
+            return Completion::Normal;
     }
+    assert(false && "resolveStmt: unhandled parse::Kind");
+    return Completion::Normal;
+}
+
+Completion resolveStmtList(parse::Tree& tree,
+                           std::vector<std::unique_ptr<parse::Node>>& stmts,
+                           diagnostic::Sink& diag) {
+    for (std::size_t i = 0; i < stmts.size(); i++) {
+        if (!stmts[i]) continue;
+        Completion c = resolveStmt(tree, *stmts[i], diag);
+        if (c == Completion::Abrupt) {
+            // 2A: every statement after an abrupt one is unreachable. Flag the
+            // next real statement (if any) once, then stop — dead code declares
+            // no locals (so it can't trip the unused sweep) and resolving it
+            // would only spawn follow-on diagnostics.
+            for (std::size_t j = i + 1; j < stmts.size(); j++) {
+                if (!stmts[j]) continue;
+                diagnostic::report(diag, {stmts[j]->file_id, stmts[j]->tok,
+                    "Unreachable statement.", {}});
+                break;
+            }
+            return Completion::Abrupt;
+        }
+    }
+    return Completion::Normal;
 }
 
 void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
@@ -1182,9 +1283,7 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         e.tok = ch->name_tok;
         ch->resolved_entry_id = parse::addEntry(tree, std::move(e));
     }
-    for (auto& ch : fn.children) {
-        if (ch) resolveStmt(tree, *ch, diag);
-    }
+    resolveStmtList(tree, fn.children, diag);
     sweepUnusedLocals(tree, diag);   // function-body declarations
     tree.body_locals = std::move(saved_body_locals);
     tree.read_locals = std::move(saved_read);

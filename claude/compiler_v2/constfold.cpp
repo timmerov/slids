@@ -133,6 +133,7 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kEnumDecl:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kBlockStmt:
+        case parse::Kind::kIfStmt:
         case parse::Kind::kStringLiteral:
         case parse::Kind::kIdentExpr:
         case parse::Kind::kUnaryExpr:

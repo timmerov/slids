@@ -143,15 +143,27 @@ STAGE FILES (.h / .cpp pairs)
             never used."; gated on hasErrors so a use-before-init or dup
             diagnostic isn't trailed by a spurious unused report. Consts and
             params are exempt (consts substituted away; params not in
-            body_locals). Straight-line only today — control-flow joins attach
-            per-construct as Phase 2 branches land. A kBlockStmt `{ stmts }` opens
+            body_locals). Control-flow joins are modeled by a Completion
+            { Normal, Abrupt } that resolveStmt RETURNS: a return is Abrupt,
+            everything else Normal today (break/continue join in Session 3).
+            resolveStmtList threads it over a statement list — a statement after
+            an Abrupt sibling is "Unreachable statement." (2A) and the dead tail
+            is skipped (it declares no locals); both the function body and every
+            block walk through resolveStmtList. A kBlockStmt `{ stmts }` opens
             a nested frame: initialized_locals + read_locals FLOW THROUGH (scoped,
             not isolated — an assign/read inside a block affects the enclosing
             local), only body_locals is save/restored so the unused sweep
-            (shared sweepUnusedLocals) runs per-block at block exit. Shadowing is
-            allowed (inner masks outer via innermost-first lookup, restored on
-            pop). Trailing-return correctness (classify) recurses into a trailing
-            block (endsInReturn).
+            (shared sweepUnusedLocals) runs per-block at block exit; a block is
+            Abrupt iff its statement list is. Shadowing is allowed (inner masks
+            outer via innermost-first lookup, restored on pop). A kIfStmt joins
+            definite-assignment at the merge: snapshot the init-set S, resolve
+            each arm from S, intersect the arms' out-sets — an Abrupt arm
+            contributes the universal set (dropped from the ∩), a missing else
+            contributes S unchanged (so an else-less if never adds an init); the
+            if is Abrupt iff it has an else and both arms are. read_locals never
+            joins (monotonic union — a read on any path is a use). Trailing-return
+            correctness (classify) recurses into a trailing block and a trailing
+            if/else whose arms both return (endsInReturn / endsInReturnNode).
             Caches lvalue type on AugAssignStmts (s.return_type) and
             return type + param_types on CallStmts/CallExprs (one shared
             resolveUserCall) so downstream stages don't have to re-walk the
@@ -200,8 +212,10 @@ STAGE FILES (.h / .cpp pairs)
             data stamped by resolve; never builds entries or pushes frames
             itself. Infers every expression's inferred_type and every
             binary's op_type (computational type). Sharp rejections at
-            the source: non-coercible operands for ! && || ^^, non-numeric
-            shift sides, bitwise on float, no-common-type binaries.
+            the source: non-coercible operands for ! && || ^^, an if condition
+            not coercible to bool, non-numeric shift sides, bitwise on float,
+            no-common-type binaries. Return-correctness (endsInReturn) recurses
+            into a trailing block and a trailing if/else whose arms both return.
             Per-arg type inference at call sites uses the resolved
             callee's param_types (cached on the kCallStmt/kCallExpr by
             resolve) as context. A kCallExpr's inferred_type is the
@@ -225,8 +239,10 @@ STAGE FILES (.h / .cpp pairs)
             a bump inside a sub-phrase (call args, && / || rhs) stays in a
             synthesized kSeqExpr {pre... value post...} so a short-circuited
             bump never fires. The statement-bump splice (lowerStatementList)
-            recurses into a kBlockStmt so a bump inside a block splices within
-            that block, not at function scope. Future canonical-form rewrites (for-loop
+            recurses into a kBlockStmt and a kIfStmt (lowerIfStmt: the condition
+            is a self-contained phrase whose bumps fire before the branch, and
+            the arms recurse) so a bump inside them splices within that scope,
+            not at function scope. Future canonical-form rewrites (for-loop
             shapes, receiver shapes, stringify, operator dispatch) slot in
             as their phases land.
   optimize  ast -> ast in place. Slids-aware perf rewrites LLVM can't do
@@ -252,9 +268,15 @@ STAGE FILES (.h / .cpp pairs)
             NOT a cached canonical name (writer and reader agree by entry id; the
             string is never stored or re-derived elsewhere). Every later flow
             construct's body reuses this path. A kBlockStmt is transparent (emit
-            children in order); emitFunction's trailing-return terminator decision
-            uses an ast-side endsInReturn that recurses into a trailing block,
-            mirroring classify. Mangled names and field offsets land with layout.
+            children in order). A kIfStmt emits emitToBool on the condition + a
+            conditional br to then/else/merge labels (reusing the short-circuit
+            primitives, no phi); an arm ending in a return emits no br-to-merge,
+            and when every arm returns the merge block is omitted entirely
+            (resolve's 2A guarantees nothing live follows). emitFunction's
+            trailing-return terminator decision uses an ast-side endsInReturn /
+            endsInReturnNode that recurses into a trailing block and a both-arms-
+            return if, mirroring classify. Mangled names and field offsets land
+            with layout.
 
 PRODUCT FILES (.h / .cpp pairs)
 

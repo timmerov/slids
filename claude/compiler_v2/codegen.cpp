@@ -512,6 +512,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kExprStmt:
         case ast::Kind::kReturnStmt:
         case ast::Kind::kBlockStmt:
+        case ast::Kind::kIfStmt:
         case ast::Kind::kParam:
             assert(false && "emitExpr: reached statement-kind node");
             __builtin_unreachable();
@@ -521,6 +522,9 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
 }
 
 namespace {
+
+bool endsInReturn(std::vector<std::unique_ptr<ast::Node>> const& stmts);
+bool endsInReturnNode(ast::Node const& s);
 
 void emitStmt(ast::Node const& stmt, SymTab& syms,
               strings::Pool& pool,
@@ -592,6 +596,47 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             }
             return;
         }
+        case ast::Kind::kIfStmt: {
+            // children[0] = condition, [1] = then-branch, [2] = optional else.
+            // Evaluate the condition, truthy-coerce it, conditional-br to the
+            // then/else (or merge) blocks, emit each arm, br to the merge. No phi:
+            // definite-assignment is tracked via allocas upstream. An arm ending
+            // in a return is already terminated, so it must NOT emit the
+            // br-to-merge (two terminators is invalid IR). If every arm returns
+            // the merge is unreachable AND unterminated, so it is not emitted at
+            // all — resolve's 2A guarantees no live statement follows such an if.
+            assert(stmt.children.size() >= 2 && "kIfStmt needs condition + then");
+            ast::Node const& cond = *stmt.children[0];
+            std::string cv = emitExpr(cond, syms, pool, out, diag,
+                                      cond.inferred_type);
+            std::string cbool = emitToBool(cv, cond.inferred_type, out);
+
+            bool has_else = stmt.children.size() > 2 && stmt.children[2];
+            bool then_falls = !endsInReturn(stmt.children[1]->children);
+            // A missing else is an implicit fall-through path to the merge.
+            bool else_falls = !has_else || !endsInReturnNode(*stmt.children[2]);
+            bool merge_used = then_falls || else_falls;
+
+            std::string then_lbl = newLabel("if_then");
+            std::string else_lbl = has_else ? newLabel("if_else") : std::string();
+            std::string merge_lbl = newLabel("if_end");
+
+            out << "  br i1 " << cbool << ", label %" << then_lbl
+                << ", label %" << (has_else ? else_lbl : merge_lbl) << "\n";
+
+            out << then_lbl << ":\n";
+            emitStmt(*stmt.children[1], syms, pool, fn_return_type, out, diag);
+            if (then_falls) out << "  br label %" << merge_lbl << "\n";
+
+            if (has_else) {
+                out << else_lbl << ":\n";
+                emitStmt(*stmt.children[2], syms, pool, fn_return_type, out, diag);
+                if (else_falls) out << "  br label %" << merge_lbl << "\n";
+            }
+
+            if (merge_used) out << merge_lbl << ":\n";
+            return;
+        }
         case ast::Kind::kAugAssignStmt:
             assert(false && "emitStmt: AugAssign survived desugar");
             return;
@@ -625,9 +670,20 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
 // endsInReturn so the codegen terminator decision matches the upstream check.
 bool endsInReturn(std::vector<std::unique_ptr<ast::Node>> const& stmts) {
     if (stmts.empty() || !stmts.back()) return false;
-    ast::Node const& last = *stmts.back();
-    if (last.kind == ast::Kind::kReturnStmt) return true;
-    if (last.kind == ast::Kind::kBlockStmt) return endsInReturn(last.children);
+    return endsInReturnNode(*stmts.back());
+}
+
+// A single statement guarantees a return: a return, a block whose tail does, or
+// an if/else with an else where both arms do. Mirrors classify's endsInReturn so
+// the codegen terminator decision matches the upstream return-correctness check.
+bool endsInReturnNode(ast::Node const& s) {
+    if (s.kind == ast::Kind::kReturnStmt) return true;
+    if (s.kind == ast::Kind::kBlockStmt) return endsInReturn(s.children);
+    if (s.kind == ast::Kind::kIfStmt && s.children.size() > 2
+        && s.children[2]) {
+        return endsInReturnNode(*s.children[1])
+            && endsInReturnNode(*s.children[2]);
+    }
     return false;
 }
 

@@ -114,6 +114,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kPostIncExpr:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kBlockStmt:
+        case parse::Kind::kIfStmt:
         case parse::Kind::kParam:
             assert(false && "defaultLiteralType: not a literal kind");
             __builtin_unreachable();
@@ -336,6 +337,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kEnumDecl:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kBlockStmt:
+        case parse::Kind::kIfStmt:
         case parse::Kind::kParam:
             assert(false && "inferExpr: not an expression kind");
             return;
@@ -484,6 +486,25 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 if (ch) classifyStmt(tree, *ch, fn_return_type, diag);
             }
             return;
+        case parse::Kind::kIfStmt: {
+            // children[0] = condition, [1] = then-branch, [2] = optional else.
+            // The condition truthy-coerces (same rule as `!`/`&&`/`||`); a void
+            // or other non-value-typed condition is rejected.
+            assert(s.children.size() >= 2 && "kIfStmt needs condition + then");
+            parse::Node& cond = *s.children[0];
+            inferExpr(tree, cond, "", diag);
+            if (!cond.inferred_type.empty()
+                && !isCoercibleToBool(cond.inferred_type)) {
+                diagnostic::report(diag, {cond.file_id, cond.tok,
+                    "An if condition must be a condition expression; type '"
+                    + cond.inferred_type + "' is not.", {}});
+            }
+            classifyStmt(tree, *s.children[1], fn_return_type, diag);
+            if (s.children.size() > 2 && s.children[2]) {
+                classifyStmt(tree, *s.children[2], fn_return_type, diag);
+            }
+            return;
+        }
         case parse::Kind::kProgram:
         case parse::Kind::kFunctionDef:
         case parse::Kind::kFunctionDecl:
@@ -510,11 +531,25 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
 // `int f(){ { return 1; } }` passes. Not full reachability (the Completion
 // lattice in Session 2 supersedes this); just enough that a block at the tail
 // doesn't trip the check.
+bool endsInReturnNode(parse::Node const& s);
+
 bool endsInReturn(std::vector<std::unique_ptr<parse::Node>> const& stmts) {
     if (stmts.empty() || !stmts.back()) return false;
-    parse::Node const& last = *stmts.back();
-    if (last.kind == parse::Kind::kReturnStmt) return true;
-    if (last.kind == parse::Kind::kBlockStmt) return endsInReturn(last.children);
+    return endsInReturnNode(*stmts.back());
+}
+
+// Whether a single statement guarantees control leaves via a return: a return,
+// a block whose last statement does, or an if/else WITH an else where both arms
+// do (an else-less if always has a fall-through path). An `else if` chain works
+// by recursion — the else-branch is itself a kIfStmt.
+bool endsInReturnNode(parse::Node const& s) {
+    if (s.kind == parse::Kind::kReturnStmt) return true;
+    if (s.kind == parse::Kind::kBlockStmt) return endsInReturn(s.children);
+    if (s.kind == parse::Kind::kIfStmt && s.children.size() > 2
+        && s.children[2]) {
+        return endsInReturnNode(*s.children[1])   // then-branch (a block)
+            && endsInReturnNode(*s.children[2]);  // else-branch (block or if)
+    }
     return false;
 }
 

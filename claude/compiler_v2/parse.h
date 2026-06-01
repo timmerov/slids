@@ -30,6 +30,9 @@ enum class Kind {
                    // bare consts (anonymous); desugar drops it.
     kReturnStmt,
     kBlockStmt,    // { stmts } — a nested lexical scope; children = statements.
+    kIfStmt,       // if (cond) then [else else]; children[0] = condition expr,
+                   // [1] = then-branch (kBlockStmt), [2] = optional else-branch
+                   // (kBlockStmt, or kIfStmt for `else if`).
     kStringLiteral,
     kIntLiteral,
     kUintLiteral,

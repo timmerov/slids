@@ -18,6 +18,8 @@ enum class Kind {
     kExprStmt,
     kReturnStmt,
     kBlockStmt,     // { stmts } — a nested lexical scope; children = statements.
+    kIfStmt,        // if (cond) then [else else]; children[0] = condition,
+                    // [1] = then-branch, [2] = optional else-branch.
     kStringLiteral,
     kIntLiteral,
     kUintLiteral,

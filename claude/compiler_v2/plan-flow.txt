@@ -96,7 +96,25 @@ SESSION 1 — bare blocks (foundational)   [LANDED]
   * exit: blocks nest + scope correctly; per-block unused sweep fires; trailing
     block satisfies return-correctness.
 
-SESSION 2 — if / else (the join) + the Completion lattice
+SESSION 2 — if / else (the join) + the Completion lattice   [LANDED]
+
+  LANDED; canon test_v2/flow/ifelse.sl (+ .exp), 8 negatives. kIfStmt
+  (children[0]=cond, [1]=then-block, [2]=optional else = block or nested kIfStmt
+  for `else if`); `if`/`else` already lexed → no lex/token change. resolveStmt
+  now RETURNS Completion; resolveStmtList threads 2A (stmt after an Abrupt
+  sibling → "Unreachable statement.", dead tail skipped) and is used by BOTH the
+  function-body loop and the kBlockStmt arm. The join: snapshot S, resolve each
+  arm from S, ∩ the normally-completing arms (abrupt = top/skipped, no-else = S);
+  if Abrupt iff has-else and both arms Abrupt. classify: condition truthy-coerce
+  (isCoercibleToBool) + endsInReturn split into per-node endsInReturnNode (both-
+  arms-return if satisfies return-correctness). desugar: lowerIfStmt (condition =
+  self-contained phrase, arms recurse). codegen: emitToBool + conditional br +
+  then/else/merge (reuses emitLogical primitives, no phi); arm ending in return
+  emits no br-to-merge, merge block OMITTED when every arm returns (2A guarantees
+  nothing live follows). Audit clean (no silent defaults / mis-attribution /
+  stored canonical names — join is std::set<int>). Deferred-test items in
+  todo.txt: if-condition-type diagnostic + `^`-ref condition (untriggerable until
+  void/`^` values exist).
 
   The genuinely new analysis; small surface, proves the whole model. The
   Completion { Normal, Abrupt } lattice + 2A unreachable-statement detection

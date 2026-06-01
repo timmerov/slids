@@ -25,10 +25,11 @@ PIPELINE — current shape
 
   classify is type inference + (Phase 3) overload resolution. Stamps
   inferred_type / op_type, rejects no-common-type binaries, non-coercible
-  operands for `! && || ^^`, non-numeric shift sides, bitwise on float, and
-  return correctness (non-void must end in a return; void can't return a
-  value). Reads entries via resolved_entry_id but never mutates the symbol
-  table or pushes frames.
+  operands for `! && || ^^`, an if condition not coercible to bool, non-numeric
+  shift sides, bitwise on float, and return correctness (non-void must end in a
+  return — recursing into a trailing block and a both-arms-return if/else; void
+  can't return a value). Reads entries via resolved_entry_id but never mutates
+  the symbol table or pushes frames.
 
 Phase 0 — foundations (LANDED)
   * lex stage + import wrapper
@@ -77,10 +78,15 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     continue) — a 6-session track in plan-flow.txt (the join model + per-construct
     landing stages; tests in test_v2/flow/). Decisions locked: independent switch
     cases, unreachable-code detection on, no constant-true loop special-case.
-    Session 1 (bare blocks) LANDED: kBlockStmt, per-block scope + DA migration,
-    shadowing allowed, alloca names entry-id-suffixed for shadow safety, trailing-
-    block return-correctness. Sessions 2-6 (if/else + the Completion lattice,
-    while+break/continue, for, switch, labels) not yet started.
+    Sessions 1 (bare blocks) + 2 (if/else) LANDED. 1: kBlockStmt, per-block scope
+    + DA migration, shadowing allowed, alloca names entry-id-suffixed for shadow
+    safety, trailing-block return-correctness. 2: kIfStmt + the Completion
+    { Normal, Abrupt } lattice (resolveStmt returns it; resolveStmtList threads
+    2A unreachable-statement detection), the ∩-at-merge definite-assignment join
+    (abrupt arm = top, else-less = S), condition truthy-coercion, codegen
+    conditional-br/merge (merge omitted when both arms return), endsInReturnNode
+    return-correctness. Sessions 3-6 (while+break/continue, for, switch, labels)
+    not yet started.
   * return — LANDED (kReturnStmt + return-correctness check from Phase 1).
 
 Phase 3 — functions

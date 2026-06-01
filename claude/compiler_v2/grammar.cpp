@@ -851,9 +851,48 @@ struct Parser {
         return node;
     }
 
+    // if ( cond ) { then } [ else { else } | else if ... ]. Both branches are
+    // blocks (a nested scope, like every flow body); `else if` recurses so the
+    // else-branch is another kIfStmt. children[0] = condition, [1] = then-block,
+    // [2] = optional else-branch.
+    std::unique_ptr<parse::Node> parseIfStmt() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
+        advance();   // if
+        if (!expect(token::Kind::kLParen, "(")) return nullptr;
+        auto cond = parseExpr();
+        if (!cond) return nullptr;
+        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+        if (peek().kind != token::Kind::kLBrace) {
+            error("Expected '{' after if condition.");
+            return nullptr;
+        }
+        auto then_blk = parseBlock();
+        if (!then_blk) return nullptr;
+        auto node = newNodeAt(parse::Kind::kIfStmt, stmt_file, stmt_tok);
+        node->children.push_back(std::move(cond));
+        node->children.push_back(std::move(then_blk));
+        if (peek().kind == token::Kind::kElse) {
+            advance();   // else
+            std::unique_ptr<parse::Node> else_branch;
+            if (peek().kind == token::Kind::kIf) {
+                else_branch = parseIfStmt();
+            } else if (peek().kind == token::Kind::kLBrace) {
+                else_branch = parseBlock();
+            } else {
+                error("Expected '{' or 'if' after 'else'.");
+                return nullptr;
+            }
+            if (!else_branch) return nullptr;
+            node->children.push_back(std::move(else_branch));
+        }
+        return node;
+    }
+
     std::unique_ptr<parse::Node> parseStmt() {
         token::Token const& t = peek();
         if (t.kind == token::Kind::kLBrace) return parseBlock();
+        if (t.kind == token::Kind::kIf) return parseIfStmt();
         if (t.kind == token::Kind::kReturn) return parseReturnStmt();
         if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();

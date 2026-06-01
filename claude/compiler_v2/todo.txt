@@ -74,3 +74,17 @@ DEFERRED FEATURES (later; may not be on the plan)
 
 
 DEFERRED TESTS
+
+  * IF-CONDITION TYPE DIAGNOSTIC — classify rejects an if condition whose type
+    isn't coercible to bool ("An if condition must be a condition expression;
+    type 'X' is not."), but no constructible expression has such a type yet:
+    numerics + char[] coerce, and a void-typed condition needs a void function,
+    which is unbuildable until bare `return;` lands. The check is defensive and
+    UNTESTED; add a negative once a non-coercible value exists. prerequisite:
+    void functions (bare return) or slid/class values.
+
+  * `^`-REFERENCE CONDITION — isCoercibleToBool (shared with `!`/`&&`/`||`)
+    matches only the `[]` iterator suffix, not `^` references, so `if (ref)`
+    will wrongly error when `^` reference values land (Phase 4). Widen the
+    shared helper then — at the helper, not the if-condition call site.
+    prerequisite: pointers/iterators (Phase 4).

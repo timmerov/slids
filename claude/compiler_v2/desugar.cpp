@@ -38,6 +38,7 @@ ast::Kind toAstKind(parse::Kind k) {
             __builtin_unreachable();
         case parse::Kind::kReturnStmt:    return ast::Kind::kReturnStmt;
         case parse::Kind::kBlockStmt:     return ast::Kind::kBlockStmt;
+        case parse::Kind::kIfStmt:        return ast::Kind::kIfStmt;
         case parse::Kind::kStringLiteral: return ast::Kind::kStringLiteral;
         case parse::Kind::kIntLiteral:    return ast::Kind::kIntLiteral;
         case parse::Kind::kUintLiteral:   return ast::Kind::kUintLiteral;
@@ -287,16 +288,39 @@ void lowerStatementPPID(ast::Node& stmt,
     }
 }
 
+void lowerStatementList(std::vector<std::unique_ptr<ast::Node>>& stmts);
+
+// Lower an if-statement's PPID. The condition is a self-contained phrase: its
+// bumps stay inside a seq and fire as the condition is evaluated, before the
+// branch (like a call argument). The then/else branches are statement lists;
+// an `else if` chain is a nested kIfStmt, recursed structurally.
+void lowerIfStmt(ast::Node& s) {
+    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0]);
+    if (s.children.size() > 1 && s.children[1]) {
+        lowerStatementList(s.children[1]->children);   // then-block
+    }
+    if (s.children.size() > 2 && s.children[2]) {
+        ast::Node& else_branch = *s.children[2];
+        if (else_branch.kind == ast::Kind::kIfStmt) lowerIfStmt(else_branch);
+        else lowerStatementList(else_branch.children);  // else-block
+    }
+}
+
 // Run PPID statement-bump splicing over a statement list, rebuilding it with
 // pre-bumps before / post-bumps after each statement. Recurses into a nested
-// kBlockStmt so bumps inside a block splice within that block, not at the
-// enclosing scope.
+// kBlockStmt / kIfStmt so bumps inside them splice within that scope, not at the
+// enclosing one.
 void lowerStatementList(std::vector<std::unique_ptr<ast::Node>>& stmts) {
     std::vector<std::unique_ptr<ast::Node>> lowered;
     for (auto& stmt : stmts) {
         if (!stmt) continue;
         if (stmt->kind == ast::Kind::kBlockStmt) {
             lowerStatementList(stmt->children);
+            lowered.push_back(std::move(stmt));
+            continue;
+        }
+        if (stmt->kind == ast::Kind::kIfStmt) {
+            lowerIfStmt(*stmt);
             lowered.push_back(std::move(stmt));
             continue;
         }
