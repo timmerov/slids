@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -114,6 +115,19 @@ struct Tree {
     // members are reachable unqualified at the current point (the open-namespace
     // chain plus any `alias Ns;` imports in scope).
     std::vector<int> open_ns_frames;
+    // Transient — valid during resolve's body walk. Entry ids of kLocalVar
+    // entries that are definitely initialized at the current point (params +
+    // any local that a decl-with-init or an assignment has written). Reading a
+    // kLocalVar absent from this set is "use of uninitialized variable".
+    std::set<int> initialized_locals;
+    // Transient — kLocalVar entry ids that have been READ at least once in the
+    // current body (value-position use via resolveExpr). Drives the unused-local
+    // sweep at end of body.
+    std::set<int> read_locals;
+    // Transient — kLocalVar entry ids DECLARED in the current body (not params),
+    // in declaration order. At end of body, any not in read_locals is unused:
+    // "set but never used" if also in initialized_locals, else "unused".
+    std::vector<int> body_locals;
 };
 
 // Symbol-table APIs. All storage + walking lives here; classify only decides

@@ -332,38 +332,53 @@ int32 main() {
     int64 r_ll_big = 3_000_000_000 + 1;    __println("r_ll_big= " + r_ll_big);
 
     // -- negative: no common type --
+    // (each negative reads its local so the type error surfaces ahead of the
+    //  unused-local check, which would otherwise mask it.)
     //-EXPECT-ERROR: No common type for 'uint64' and 'int8'; use an explicit type conversion.
     // int64 bad_u64_i8 = xu64 + bi8;
+    // __println("bad_u64_i8= " + bad_u64_i8);
     //-EXPECT-ERROR: No common type for 'uint64' and 'int64'; use an explicit type conversion.
     // int64 bad_u64_i64 = xu64 + xi64;
+    // __println("bad_u64_i64= " + bad_u64_i64);
 
     // -- negative: int and float never silently mix --
     //-EXPECT-ERROR: No common type for 'int16' and 'float32'; use an explicit type conversion.
     // float32 bad_i16_f32 = bi16 + bf32;
+    // __println("bad_i16_f32= " + bad_i16_f32);
     //-EXPECT-ERROR: No common type for 'uint8' and 'float32'; use an explicit type conversion.
     // float32 bad_u8_f32 = bu8 + bf32;
+    // __println("bad_u8_f32= " + bad_u8_f32);
     //-EXPECT-ERROR: No common type for 'int32' and 'float64'; use an explicit type conversion.
     // float64 bad_i32_f64 = bi32 + bf64;
+    // __println("bad_i32_f64= " + bad_i32_f64);
     //-EXPECT-ERROR: No common type for 'uint16' and 'float64'; use an explicit type conversion.
     // float64 bad_u16_f64 = bu16 + bf64;
+    // __println("bad_u16_f64= " + bad_u16_f64);
     //-EXPECT-ERROR: No common type for 'bool' and 'float32'; use an explicit type conversion.
     // float32 bad_bool_f32 = xb + bf32;
+    // __println("bad_bool_f32= " + bad_bool_f32);
     //-EXPECT-ERROR: No common type for 'int64' and 'float64'; use an explicit type conversion.
     // float64 bad_i64_f64 = xi64 + bf64;
+    // __println("bad_i64_f64= " + bad_i64_f64);
     //-EXPECT-ERROR: No common type for 'int32' and 'float64'; use an explicit type conversion.
     // bool bad_cmp_i32_f64 = bi32 != bf64;
+    // __println("bad_cmp_i32_f64= " + bad_cmp_i32_f64);
     //-EXPECT-ERROR: No common type for 'float32' and 'int32'; use an explicit type conversion.
     // float32 bad_f32_intlit = bf32 + 3;
+    // __println("bad_f32_intlit= " + bad_f32_intlit);
     //-EXPECT-ERROR: No common type for 'int32' and 'float32'; use an explicit type conversion.
     // float32 bad_i32_f32 = bi32 + bf32;
+    // __println("bad_i32_f32= " + bad_i32_f32);
 
     // -- negative: confusing-error (int32+uint32 → int64, assign narrows back to int32) --
     //-EXPECT-ERROR: Cannot implicitly narrow 'int64' to 'int32'; use an explicit type conversion.
     // int32 bad_conf = bi32 + bu32;
+    // __println("bad_conf= " + bad_conf);
 
     // -- negative: comparison literal vs uint64 (literal -1 → int32, no common with uint64) --
     //-EXPECT-ERROR: No common type for 'uint64' and 'int32'; use an explicit type conversion.
     // bool bad_cmp = xu64 == -1;
+    // __println("bad_cmp= " + bad_cmp);
 
     return 0;
 }

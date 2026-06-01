@@ -120,6 +120,7 @@ int32 main() {
 
     //-EXPECT-ERROR: returns no value and cannot be used as an expression
     //int32 nv = greet();
+    //__println("nv= " + nv);
 
     //-EXPECT-ERROR: '__println' cannot be used as an expression
     //int32 pv = __println("x");

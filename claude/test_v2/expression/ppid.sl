@@ -79,11 +79,13 @@ int32 main() {
     bool ct = true;
     bool r1 = (ct && h++);    // rhs reached -> h bumps
     __println("h= " + h);
+    __println("r1= " + r1);
 
     int32 i = 0;
     bool cf = false;
     bool r2 = (cf && i++);    // short-circuited -> i unchanged
     __println("i= " + i);
+    __println("r2= " + r2);
 
     float32 f = 1.0;
     f++;                      // float scalar steps by 1.0

@@ -132,6 +132,19 @@ STAGE FILES (.h / .cpp pairs)
             registers type-introducing members — enums, nested namespaces —
             before consts/functions, so a member's type may name a sibling enum
             regardless of order) and resolves inits in resolveNamespaceBodies.
+            Definite assignment + unused locals: the body walk tracks three
+            per-function entry-id sets (initialized_locals, read_locals,
+            body_locals; all id-keyed, no names). A kLocalVar read before it is
+            written → "Use of uninitialized variable 'x'." (params are seeded
+            initialized; a decl-with-init or assignment marks written; rhs
+            resolves before the mark so `x = x` fires). An end-of-body sweep
+            then reports any body-declared local never read: "Unused local
+            variable 'x'." if never written, else "Local variable 'x' set but
+            never used."; gated on hasErrors so a use-before-init or dup
+            diagnostic isn't trailed by a spurious unused report. Consts and
+            params are exempt (consts substituted away; params not in
+            body_locals). Straight-line only today — control-flow joins attach
+            per-construct as Phase 2 branches land.
             Caches lvalue type on AugAssignStmts (s.return_type) and
             return type + param_types on CallStmts/CallExprs (one shared
             resolveUserCall) so downstream stages don't have to re-walk the

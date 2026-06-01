@@ -4,6 +4,7 @@ kUnnamed3 = 2
 kLocalA = 0
 kLocalC = 2
 local sum = 3
+u = 0
 kNorth = 0
 kWest = 3
 kPi = 3.14

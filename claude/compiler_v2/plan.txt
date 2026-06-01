@@ -66,7 +66,13 @@ Phase 1 — expression core (LANDED)
     as-expr rejected                                                   LANDED
 
 Phase 2 — declarations + flow   <-- NEXT
-  * var decls (typed init, inferred init, declare-then-assign)
+  * var decls — typed init + declare-then-assign LANDED; inferred init (no
+    type spelling) still open. Definite assignment LANDED: a local read before
+    written is an error ("Use of uninitialized variable"); params seeded
+    initialized. Unused-local sweep LANDED: a body-declared local never read
+    errors ("Unused local variable" if never written, else "set but never
+    used"); consts + params exempt. Straight-line only — control-flow joins
+    attach per-construct as the branches below land. Canon: expression/vardecl.sl.
   * blocks
   * if / else, while
   * for-loop (six shapes desugar to one canonical form)

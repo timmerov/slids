@@ -185,13 +185,14 @@ enum Bonk1 ( kOops );
 enum Bonk2 ( kOops );
 alias Bonk1;
 alias Bonk2;
-void bar() {
+int bar() {
     /* compile error: ambiguous */
     //-EXPECT-ERROR: 'kOops' is ambiguous
     //int err = kOops;
 
     int good = Bonk1:kOops;
     int fine = Bonk2:kOops;
+    return good + fine;
 }
 
 /*
@@ -215,6 +216,7 @@ int32 main() {
     __println("kUnnamed3 = " + kUnnamed3);
 
     int u = anon_local();
+    __println("u = " + u);
 
     enum float Consts (
         kPi = 3.14,

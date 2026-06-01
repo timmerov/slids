@@ -756,6 +756,18 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
                     "'" + e.name + "' is a namespace, not a value.", {}});
                 return;
             }
+            // Definite-assignment: reading a local before it is written is a
+            // compile error (a value-before-init footgun). Only kLocalVar is
+            // tracked — consts are substituted away, params are pre-seeded.
+            if (tree.entries[id].kind == parse::EntryKind::kLocalVar) {
+                if (tree.initialized_locals.count(id) == 0) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Use of uninitialized variable '" + e.name + "'.", {}});
+                    return;
+                }
+                // This is a value-position read; record it for the unused sweep.
+                tree.read_locals.insert(id);
+            }
             e.resolved_entry_id = id;
             return;
         }
@@ -943,17 +955,39 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
                     e.file_id = s.file_id;
                     e.tok = s.name_tok;   // caret at the ident, not at 'const'/type
                     s.resolved_entry_id = parse::addEntry(tree, std::move(e));
+                    // Track body-declared locals for the unused sweep. Consts
+                    // are substituted away and never "unused" in this sense.
+                    if (!s.is_const) {
+                        tree.body_locals.push_back(s.resolved_entry_id);
+                    }
                 }
             }
+            // Resolve the initializer (if any) BEFORE marking the local
+            // initialized, so a self-reference reads as uninitialized
+            // (`int x = x;` fires on the rhs). The kLocalVar guard intentionally
+            // skips a kConst target (no definite-assignment tracking — consts
+            // are required-init by grammar and substituted away) and a qualified
+            // namespace-member decl (handled above, never reaches here).
             for (auto& ch : s.children) {
                 if (ch) resolveExpr(tree, *ch, diag);
+            }
+            if (!s.children.empty() && s.resolved_entry_id >= 0
+                && tree.entries[s.resolved_entry_id].kind
+                       == parse::EntryKind::kLocalVar) {
+                tree.initialized_locals.insert(s.resolved_entry_id);
             }
             return;
         }
         case parse::Kind::kAssignStmt: {
             resolveAssignTarget(tree, s, diag);
+            // rhs BEFORE marking, so `x = x;` with x uninitialized still fires.
             for (auto& ch : s.children) {
                 if (ch) resolveExpr(tree, *ch, diag);
+            }
+            if (s.resolved_entry_id >= 0
+                && tree.entries[s.resolved_entry_id].kind
+                       == parse::EntryKind::kLocalVar) {
+                tree.initialized_locals.insert(s.resolved_entry_id);
             }
             return;
         }
@@ -962,6 +996,22 @@ void resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
                 // Cache lvalue type on the stmt so desugar's synthesized
                 // IdentExpr inherits it without re-walking entries.
                 s.return_type = parse::entryType(tree, s.resolved_entry_id);
+                // An aug-assign READS the target before writing it, so it must
+                // already be initialized (`x += 1` on an uninitialized x is an
+                // error). resolveAssignTarget doesn't route through resolveExpr,
+                // so check here, then mark written.
+                int id = s.resolved_entry_id;
+                if (tree.entries[id].kind == parse::EntryKind::kLocalVar
+                    && tree.initialized_locals.count(id) == 0) {
+                    diagnostic::report(diag, {s.file_id, s.name_tok,
+                        "Use of uninitialized variable '" + s.name + "'.", {}});
+                } else if (tree.entries[id].kind
+                               == parse::EntryKind::kLocalVar) {
+                    // An aug-assign reads the target's value (like `x++`), so it
+                    // counts as a use for the unused sweep, then re-writes it.
+                    tree.read_locals.insert(id);
+                    tree.initialized_locals.insert(id);
+                }
             }
             for (auto& ch : s.children) {
                 if (ch) resolveExpr(tree, *ch, diag);
@@ -1045,8 +1095,17 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
     // Bare `alias Ns;` imports inside this body extend the open-namespace chain;
     // restore it on exit so imports don't leak to sibling functions.
     std::size_t open_ns_at_entry = tree.open_ns_frames.size();
+    // Definite-assignment + unused-local state is per-body; clear on entry and
+    // restore on exit so one function's locals don't leak into the next.
+    std::set<int> saved_initialized = std::move(tree.initialized_locals);
+    std::set<int> saved_read = std::move(tree.read_locals);
+    std::vector<int> saved_body_locals = std::move(tree.body_locals);
+    tree.initialized_locals.clear();
+    tree.read_locals.clear();
+    tree.body_locals.clear();
     // Params become LocalVar entries in the body frame. Type spellings were
-    // already validated in pass 1.
+    // already validated in pass 1. A param arrives initialized (the caller
+    // supplied its value), so it is seeded into initialized_locals.
     for (auto& p : fn.params) {
         if (!p) continue;
         int existing = parse::findInFrame(tree, parse::currentFrameId(tree), p->name);
@@ -1064,6 +1123,7 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         e.file_id = p->file_id;
         e.tok = p->name_tok;
         p->resolved_entry_id = parse::addEntry(tree, std::move(e));
+        tree.initialized_locals.insert(p->resolved_entry_id);
     }
     // Forward-decl pre-pass for kConst: pre-create entries so const init
     // expressions can reference later-declared consts in the same body.
@@ -1087,6 +1147,25 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
     for (auto& ch : fn.children) {
         if (ch) resolveStmt(tree, *ch, diag);
     }
+    // Unused-local sweep. A body-declared local never read is reported at its
+    // declaration: "Unused local variable" if it was never written (a1 —
+    // declared and ignored entirely), else "set but never used" (a2 — a value
+    // was computed and discarded). Skip if the body already errored, so a
+    // value-before-init or dup diagnostic isn't trailed by spurious unused
+    // reports on the same code.
+    if (!diagnostic::hasErrors(diag)) {
+        for (int id : tree.body_locals) {
+            if (tree.read_locals.count(id) > 0) continue;
+            parse::Entry const& e = tree.entries[id];
+            bool was_set = tree.initialized_locals.count(id) > 0;
+            diagnostic::report(diag, {e.file_id, e.tok,
+                was_set ? "Local variable '" + e.name + "' set but never used."
+                        : "Unused local variable '" + e.name + "'.", {}});
+        }
+    }
+    tree.body_locals = std::move(saved_body_locals);
+    tree.read_locals = std::move(saved_read);
+    tree.initialized_locals = std::move(saved_initialized);
     tree.open_ns_frames.resize(open_ns_at_entry);
     parse::popFrame(tree);
 }

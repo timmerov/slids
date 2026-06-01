@@ -71,26 +71,35 @@ int32 main() {
     int16 r_char_i8  = bc & bi8;       __println("r_char_i8= "  + r_char_i8);   // char (uint8) vs int8 mixed sign
 
     // -- negative: no common type --
+    // (each negative reads its local so the type error surfaces ahead of the
+    //  unused-local check, which would otherwise mask it.)
     //-EXPECT-ERROR: No common type for 'uint64' and 'int8'; use an explicit type conversion.
     // int64 bad_nc = bu64 + bi8;
+    // __println("bad_nc= " + bad_nc);
 
     // -- negative: int and float never silently mix --
     //-EXPECT-ERROR: No common type for 'int16' and 'float32'; use an explicit type conversion.
     // float32 bad_i16_f32 = bi16 + bf32;
+    // __println("bad_i16_f32= " + bad_i16_f32);
     //-EXPECT-ERROR: No common type for 'int32' and 'float32'; use an explicit type conversion.
     // float64 bad_i32_f32 = bi32 + bf32;
+    // __println("bad_i32_f32= " + bad_i32_f32);
     //-EXPECT-ERROR: No common type for 'float32' and 'int32'; use an explicit type conversion.
     // float32 bad_f32_intlit = bf32 + 3;
+    // __println("bad_f32_intlit= " + bad_f32_intlit);
     //-EXPECT-ERROR: Cannot implicitly convert 'float' to 'int8'; use an explicit type conversion.
     // int8 bad_fltlit_int = 3.0;
+    // __println("bad_fltlit_int= " + bad_fltlit_int);
 
     // -- negative: confusing-error (int32+uint32 → int64, assign narrows back to int32) --
     //-EXPECT-ERROR: Cannot implicitly narrow 'int64' to 'int32'; use an explicit type conversion.
     // int32 bad_conf = bi32 + bu32;
+    // __println("bad_conf= " + bad_conf);
 
     // -- negative: comparison literal vs uint64 (literal -1 → int32, no common with uint64) --
     //-EXPECT-ERROR: No common type for 'uint64' and 'int32'; use an explicit type conversion.
     // bool bad_cmp = bu64 == -1;
+    // __println("bad_cmp= " + bad_cmp);
 
     return 0;
 }

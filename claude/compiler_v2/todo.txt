@@ -20,6 +20,16 @@ BUGS (found, deferred)
     surprising print. prerequisite: ##type (the char-vs-int result distinction
     is unobservable until a value can report its own type).
 
+  * QUALIFIED-TYPE CARET GRANULARITY — a bad segment in a namespace-qualified
+    TYPE spelling (`A:B:C x`) carets at the whole type position, not the
+    offending segment. resolveQualifiedType (resolve.cpp) joins the spelling
+    into a flat string with no per-segment tokens (unlike a kIdentExpr, which
+    carries qualifier_toks), so `toks(segs.size(), tok)` points every segment at
+    the same decl-type token. Attribution is correct file/line (never file_id=0),
+    just coarse. A B-precise caret would need parseType to thread per-segment
+    tokens through the type spelling (or a structured qualified-type node).
+    No invalid IR; diagnostic precision only.
+
   * ORPHAN-CHECK vs IMPORT FORWARD-DECLS — resolve's Pass 3 errors on any
     function declared-but-never-defined ("Function 'X' is declared but never
     defined.") — but a `.slh` header legitimately declares-only (defined in the

@@ -320,12 +320,16 @@ int32 main() {
     float32 f32Shl = f32A << 1;    __println("f32Shl= " + f32Shl);
     float32 f32Shr = f32A >> 1;    __println("f32Shr= " + f32Shr);
     // float32 negatives — bitwise not defined on floating-point.
+    // (each reads its local so the type error surfaces ahead of the unused check.)
     //-EXPECT-ERROR: Bitwise '&' not defined on floating-point type 'float32'.
     // float32 f32And = f32A & f32B;
+    // __println("f32And= " + f32And);
     //-EXPECT-ERROR: Bitwise '|' not defined on floating-point type 'float32'.
     // float32 f32Or  = f32A | f32B;
+    // __println("f32Or= " + f32Or);
     //-EXPECT-ERROR: Bitwise '^' not defined on floating-point type 'float32'.
     // float32 f32Xor = f32A ^ f32B;
+    // __println("f32Xor= " + f32Xor);
 
     // float64
     float64 f64A = 12.5;
@@ -351,12 +355,16 @@ int32 main() {
     float64 f64Shl = f64A << 1;    __println("f64Shl= " + f64Shl);
     float64 f64Shr = f64A >> 1;    __println("f64Shr= " + f64Shr);
     // float64 negatives — bitwise not defined on floating-point.
+    // (each reads its local so the type error surfaces ahead of the unused check.)
     //-EXPECT-ERROR: Bitwise '&' not defined on floating-point type 'float64'.
     // float64 f64And = f64A & f64B;
+    // __println("f64And= " + f64And);
     //-EXPECT-ERROR: Bitwise '|' not defined on floating-point type 'float64'.
     // float64 f64Or  = f64A | f64B;
+    // __println("f64Or= " + f64Or);
     //-EXPECT-ERROR: Bitwise '^' not defined on floating-point type 'float64'.
     // float64 f64Xor = f64A ^ f64B;
+    // __println("f64Xor= " + f64Xor);
 
     return 0;
 }
