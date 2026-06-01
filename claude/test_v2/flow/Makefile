@@ -8,7 +8,12 @@ BUILD_DIR = ../../build/test_v2/misc
 
 SAMPLES = \
 	block \
-	for \
+	forarray \
+	forclass \
+	forenum \
+	forlong \
+	forrange \
+	fortuple \
 	ifelse \
 	return \
 	switch \

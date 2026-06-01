@@ -889,10 +889,75 @@ struct Parser {
         return node;
     }
 
+    // Parse `( [cond] )`. An empty condition is the always-true literal (a slids
+    // convention); numeric already ran, so the post-numeric canonical text "1"
+    // is synthesized directly. Returns the condition node, nullptr on error.
+    std::unique_ptr<parse::Node> parseParenCondition() {
+        if (!expect(token::Kind::kLParen, "(")) return nullptr;
+        std::unique_ptr<parse::Node> cond;
+        if (peek().kind == token::Kind::kRParen) {
+            cond = newNodeHere(parse::Kind::kBoolLiteral);
+            cond->text = "1";
+        } else {
+            cond = parseExpr();
+            if (!cond) return nullptr;
+        }
+        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+        return cond;
+    }
+
+    // Pre-condition  `while ( cond ) { body }`  -> kWhileStmt.
+    // Post-condition `while { body } ( cond ) ;` -> kDoWhileStmt (body runs once).
+    // Dispatched on the token after `while`: '{' opens the post-condition body,
+    // anything else begins the pre-condition '(' clause. Both nodes store
+    // children[0] = condition, [1] = body-block (a nested scope).
+    std::unique_ptr<parse::Node> parseWhileStmt() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
+        advance();   // while
+        if (peek().kind == token::Kind::kLBrace) {
+            auto body = parseBlock();
+            if (!body) return nullptr;
+            auto cond = parseParenCondition();
+            if (!cond) return nullptr;
+            if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+            auto node = newNodeAt(parse::Kind::kDoWhileStmt, stmt_file, stmt_tok);
+            node->children.push_back(std::move(cond));
+            node->children.push_back(std::move(body));
+            return node;
+        }
+        auto cond = parseParenCondition();
+        if (!cond) return nullptr;
+        if (peek().kind != token::Kind::kLBrace) {
+            error("Expected '{' after while condition.");
+            return nullptr;
+        }
+        auto body = parseBlock();
+        if (!body) return nullptr;
+        auto node = newNodeAt(parse::Kind::kWhileStmt, stmt_file, stmt_tok);
+        node->children.push_back(std::move(cond));
+        node->children.push_back(std::move(body));
+        return node;
+    }
+
+    // break; / continue; — a bare keyword statement.
+    std::unique_ptr<parse::Node> parseBreakContinue(parse::Kind kind) {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
+        advance();   // break / continue
+        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+        return newNodeAt(kind, stmt_file, stmt_tok);
+    }
+
     std::unique_ptr<parse::Node> parseStmt() {
         token::Token const& t = peek();
         if (t.kind == token::Kind::kLBrace) return parseBlock();
         if (t.kind == token::Kind::kIf) return parseIfStmt();
+        if (t.kind == token::Kind::kWhile) return parseWhileStmt();
+        if (t.kind == token::Kind::kBreak)
+            return parseBreakContinue(parse::Kind::kBreakStmt);
+        if (t.kind == token::Kind::kContinue)
+            return parseBreakContinue(parse::Kind::kContinueStmt);
         if (t.kind == token::Kind::kReturn) return parseReturnStmt();
         if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();

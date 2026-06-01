@@ -33,6 +33,14 @@ enum class Kind {
     kIfStmt,       // if (cond) then [else else]; children[0] = condition expr,
                    // [1] = then-branch (kBlockStmt), [2] = optional else-branch
                    // (kBlockStmt, or kIfStmt for `else if`).
+    kWhileStmt,    // while (cond) body; children[0] = condition expr,
+                   // [1] = body (kBlockStmt). Pre-condition: body may run zero
+                   // times.
+    kDoWhileStmt,  // post-condition while — slids `while { body } (cond);`.
+                   // children[0] = condition expr, [1] = body (kBlockStmt). Body
+                   // runs at least once; condition tested after each iteration.
+    kBreakStmt,    // break; — exits the nearest enclosing loop.
+    kContinueStmt, // continue; — jumps to the nearest enclosing loop's test.
     kStringLiteral,
     kIntLiteral,
     kUintLiteral,
@@ -132,6 +140,21 @@ struct Tree {
     // in declaration order. At end of body, any not in read_locals is unused:
     // "set but never used" if also in initialized_locals, else "unused".
     std::vector<int> body_locals;
+    // Transient — one frame per enclosing loop during resolve's body walk; empty
+    // outside any loop (a break/continue there is an error). Each frame
+    // accumulates the definite-assignment init-set at every break / continue
+    // targeting that loop, INTERSECTED (a "must" join); `*_seen` distinguishes
+    // "no break/continue yet" (top, the ∩-identity) from "intersected to empty".
+    // A do-while consumes them (body runs once, so its inits escape, but a break
+    // can shrink the after-set and a continue the condition's reachable reads);
+    // a pre-condition while ignores them (after = entry set S regardless).
+    struct LoopFrame {
+        std::set<int> break_init;
+        bool break_seen = false;
+        std::set<int> continue_init;
+        bool continue_seen = false;
+    };
+    std::vector<LoopFrame> loop_stack;
 };
 
 // Symbol-table APIs. All storage + walking lives here; classify only decides

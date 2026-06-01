@@ -39,6 +39,10 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kReturnStmt:    return ast::Kind::kReturnStmt;
         case parse::Kind::kBlockStmt:     return ast::Kind::kBlockStmt;
         case parse::Kind::kIfStmt:        return ast::Kind::kIfStmt;
+        case parse::Kind::kWhileStmt:     return ast::Kind::kWhileStmt;
+        case parse::Kind::kDoWhileStmt:   return ast::Kind::kDoWhileStmt;
+        case parse::Kind::kBreakStmt:     return ast::Kind::kBreakStmt;
+        case parse::Kind::kContinueStmt:  return ast::Kind::kContinueStmt;
         case parse::Kind::kStringLiteral: return ast::Kind::kStringLiteral;
         case parse::Kind::kIntLiteral:    return ast::Kind::kIntLiteral;
         case parse::Kind::kUintLiteral:   return ast::Kind::kUintLiteral;
@@ -306,6 +310,17 @@ void lowerIfStmt(ast::Node& s) {
     }
 }
 
+// Lower a while / do-while loop's PPID. The condition is a self-contained phrase
+// whose bumps fire each time it is tested (re-evaluated per iteration); the body
+// is a statement list. Both kinds share the child layout ([cond, body]), so this
+// serves kWhileStmt and kDoWhileStmt alike.
+void lowerWhileStmt(ast::Node& s) {
+    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0]);
+    if (s.children.size() > 1 && s.children[1]) {
+        lowerStatementList(s.children[1]->children);   // body block
+    }
+}
+
 // Run PPID statement-bump splicing over a statement list, rebuilding it with
 // pre-bumps before / post-bumps after each statement. Recurses into a nested
 // kBlockStmt / kIfStmt so bumps inside them splice within that scope, not at the
@@ -321,6 +336,12 @@ void lowerStatementList(std::vector<std::unique_ptr<ast::Node>>& stmts) {
         }
         if (stmt->kind == ast::Kind::kIfStmt) {
             lowerIfStmt(*stmt);
+            lowered.push_back(std::move(stmt));
+            continue;
+        }
+        if (stmt->kind == ast::Kind::kWhileStmt
+            || stmt->kind == ast::Kind::kDoWhileStmt) {
+            lowerWhileStmt(*stmt);
             lowered.push_back(std::move(stmt));
             continue;
         }

@@ -1,5 +1,6 @@
 /*
-test all flavors of for loops.
+test for over a fixed size array.
+
 */
 
 int32 main() {

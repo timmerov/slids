@@ -1,6 +1,28 @@
 /*
 test if / else chains.
 
+curly brackets around the code clause are required.
+
+    if (cond) {
+    }
+
+else is optional.
+
+    if (cond) {
+    } else {
+    }
+
+an empty condition is always true.
+this is a slids convention that applies everywhere.
+even here where it makes little sense.
+
+    if () {
+    } else {
+        /* unreachable code. */
+    }
+*/
+
+/*
 an if/else splits control flow; definite-assignment INTERSECTS at the merge — a
 local is initialized after the if only if EVERY path reaching the merge
 initialized it. a branch that returns never reaches the merge, so it does not

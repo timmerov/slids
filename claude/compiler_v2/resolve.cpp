@@ -853,6 +853,10 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         case parse::Kind::kReturnStmt:
         case parse::Kind::kBlockStmt:
         case parse::Kind::kIfStmt:
+        case parse::Kind::kWhileStmt:
+        case parse::Kind::kDoWhileStmt:
+        case parse::Kind::kBreakStmt:
+        case parse::Kind::kContinueStmt:
         case parse::Kind::kParam:
             assert(false && "resolveExpr: not an expression kind");
             return;
@@ -948,10 +952,27 @@ void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
 }
 
 // Whether a statement (or statement list) can fall through to its successor.
-// Abrupt = it always transfers control elsewhere (today only `return`; break/
-// continue arrive in Session 3). Drives the if/else join (an abrupt arm doesn't
-// constrain the post-merge init-set) and 2A unreachable-statement detection.
+// Abrupt = it always transfers control elsewhere (return / break / continue).
+// Drives the if/else join (an abrupt arm doesn't constrain the post-merge
+// init-set) and 2A unreachable-statement detection.
 enum class Completion { Normal, Abrupt };
+
+// Intersection of two definite-assignment init-sets (a "must" join).
+std::set<int> intersectInit(std::set<int> const& a, std::set<int> const& b) {
+    std::set<int> out;
+    for (int id : a) {
+        if (b.count(id) > 0) out.insert(id);
+    }
+    return out;
+}
+
+// Fold one break/continue point's init-set into a loop-frame accumulator. The
+// first fold seeds it (top ∩ X = X); later folds intersect. `seen` carries the
+// top sentinel so "no break/continue yet" stays distinct from "intersected to {}".
+void foldLoopExit(std::set<int>& accum, bool& seen, std::set<int> const& cur) {
+    if (!seen) { accum = cur; seen = true; }
+    else        accum = intersectInit(accum, cur);
+}
 
 // Resolve a statement list, threading Completion: once a statement is Abrupt,
 // the next reachable statement is flagged "Unreachable statement." (2A) and the
@@ -1181,6 +1202,85 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 return Completion::Abrupt;
             }
             return Completion::Normal;
+        }
+        case parse::Kind::kWhileStmt: {
+            // children[0] = condition, [1] = body block. Per 3B every pre-
+            // condition loop is possibly-zero: the condition is tested before the
+            // body, so its reads must be satisfied by the entry set S; the body
+            // resolves from S but its inits do NOT escape (the loop may run zero
+            // times), so the post-loop set is S again — regardless of any break
+            // (the zero-iteration exit always contributes S, which dominates the
+            // ∩). A while always completes Normally — it can fall through to its
+            // exit (even an apparent while(true) is treated as possibly-zero; no
+            // constant-true special case). The loop frame is pushed only so a
+            // break/continue has a target + legality; its accumulators are unused.
+            assert(s.children.size() == 2 && "kWhileStmt needs condition + body");
+            resolveExpr(tree, *s.children[0], diag);
+            std::set<int> entry = tree.initialized_locals;
+            tree.loop_stack.push_back({});
+            resolveStmt(tree, *s.children[1], diag);   // body block, from S
+            tree.loop_stack.pop_back();
+            tree.initialized_locals = std::move(entry);   // after = S
+            return Completion::Normal;
+        }
+        case parse::Kind::kDoWhileStmt: {
+            // children[0] = condition, [1] = body block. The body runs AT LEAST
+            // once, so its inits escape — but a break can cut the after-set short
+            // and a continue can reach the condition with fewer inits. Resolve the
+            // body from S (the first iteration's entry, which is also the
+            // must-analysis fixpoint for the back-edge); the body's normal-
+            // completion out-set is B. The condition is tested after a normal
+            // fall-through OR a continue, so its reads must hold on B ∩
+            // continue_accum. The loop exits via the condition (init-set =
+            // cond_in, since the test adds nothing) or via a break, so
+            // after = cond_in ∩ break_accum.
+            assert(s.children.size() == 2 && "kDoWhileStmt needs condition + body");
+            // No S snapshot: the body resolves from the current init-set (= S)
+            // and a do-while never restores S (its inits escape), unlike if/while.
+            tree.loop_stack.push_back({});
+            resolveStmt(tree, *s.children[1], diag);   // body block, from S
+            parse::Tree::LoopFrame lf = std::move(tree.loop_stack.back());
+            tree.loop_stack.pop_back();
+
+            std::set<int> body_out = tree.initialized_locals;       // B
+            std::set<int> cond_in = lf.continue_seen
+                ? intersectInit(body_out, lf.continue_init)         // B ∩ continues
+                : body_out;
+            tree.initialized_locals = cond_in;
+            resolveExpr(tree, *s.children[0], diag);   // condition reads from cond_in
+
+            std::set<int> after = lf.break_seen
+                ? intersectInit(cond_in, lf.break_init)             // ∩ break exits
+                : cond_in;
+            tree.initialized_locals = std::move(after);
+            // Like a pre-condition while, treated as Normal-completing (3B): even
+            // a body that always returns is conservatively assumed to be able to
+            // reach its exit, so a trailing return is still demanded after it.
+            return Completion::Normal;
+        }
+        case parse::Kind::kBreakStmt:
+        case parse::Kind::kContinueStmt: {
+            // A loop exit / restart: legal only inside a loop body, and it
+            // transfers control (Abrupt — a following sibling is unreachable).
+            // Fold the current init-set into the enclosing loop's accumulator so
+            // a do-while can intersect it (a pre-condition while ignores it).
+            if (tree.loop_stack.empty()) {
+                char const* what =
+                    s.kind == parse::Kind::kBreakStmt ? "break" : "continue";
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    std::string("A '") + what
+                        + "' statement must be inside a loop.", {}});
+            } else {
+                parse::Tree::LoopFrame& lf = tree.loop_stack.back();
+                if (s.kind == parse::Kind::kBreakStmt) {
+                    foldLoopExit(lf.break_init, lf.break_seen,
+                                 tree.initialized_locals);
+                } else {
+                    foldLoopExit(lf.continue_init, lf.continue_seen,
+                                 tree.initialized_locals);
+                }
+            }
+            return Completion::Abrupt;
         }
         case parse::Kind::kProgram:
         case parse::Kind::kFunctionDef:

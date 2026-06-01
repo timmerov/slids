@@ -53,6 +53,15 @@ REACH GOALS
 
 DEFERRED FEATURES (later; may not be on the plan)
 
+  * EMPTY CONDITION ON IF/ELSE — an empty condition is always true; this is a
+    slids convention that "applies everywhere" (per test_v2/flow/ifelse.sl's
+    header). Implemented for BOTH while forms via the shared grammar helper
+    parseParenCondition (synthesizes the "1" literal), but NOT yet for if/else —
+    `if () { } else { }` does not parse today. parseIfStmt should call the same
+    parseParenCondition instead of its inline `(` expr `)`; then add a live empty-
+    if positive to ifelse.sl. (Deferred per the "add todo if we need to revisit
+    if-else" instruction when empty-while landed.)
+
   * REOPEN ENUMS — re-`enum SameName ( ... )` to add members to an existing
     enum (member names can't collide across openings). Open spec qs: does the
     value counter restart at 0 on reopen, and must the first member of a

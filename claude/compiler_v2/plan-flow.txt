@@ -136,21 +136,49 @@ SESSION 2 — if / else (the join) + the Completion lattice   [LANDED]
     unreachable-after-both-return (neg).
   * exit: the ∩-with-top join correct end-to-end.
 
-SESSION 3 — while + break/continue (unlabeled)
+SESSION 3 — while + break/continue (unlabeled) + POST-CONDITION while   [LANDED]
 
-  Loops pin the init-set; break/continue exercise Abrupt propagation.
-  * new nodes: kWhileStmt, kBreakStmt, kContinueStmt.
-  * resolve: after = S (body may run zero times); condition reads satisfied by S.
-    Introduce the loop-context stack ({ break_accum, continue_accum });
-    break/continue complete Abrupt and fold into their accumulators. exit_set =
-    S ∩ break_accum (stays S).
-  * 3B: every loop possibly-zero — NO constant-true special-case. Leave a marker:
-    when `while (true)` + return-correctness forces it (likely this session's
-    tests), revisit; note in todo.txt if a test trips it.
-  * codegen: header/body/exit blocks; break->exit, continue->header.
-  * tests: test_v2/flow/while.sl — zero-iteration pin (body init doesn't escape,
-    neg on use-after), break/continue in branches propagate Abrupt, nested loops.
-  * exit: loops + unlabeled break/continue; loop-context stack live.
+  Loops pin the init-set; break/continue exercise Abrupt propagation. Scope grew
+  mid-session: POST-CONDITION while (do-while) landed too (the user pulled it in),
+  which is what made the break/continue accumulators load-bearing — a pre-
+  condition while alone would not have needed them.
+  * new nodes: kWhileStmt, kDoWhileStmt, kBreakStmt, kContinueStmt (all stages,
+    one -Wswitch-enum pass). `while`/`break`/`continue` were already lexed.
+  * grammar: parseWhileStmt dispatches on the token after `while` — '{' -> post-
+    condition (`while { body } (cond);`), else -> pre-condition. Shared
+    parseParenCondition: an EMPTY condition (`while ()` / `while {} ()`) synthesizes
+    the always-true literal "1" (slids convention; if/else still owes this —
+    todo.txt).
+  * resolve: a Tree::loop_stack of LoopFrame { break_init/seen, continue_init/seen }
+    (id-keyed, ∩-folded, top-seeded by `seen`). PRE-condition: after = S (possibly-
+    zero; the zero-iteration exit dominates, so break_accum is ignored). POST-
+    condition: body runs once from S -> body-out B; condition reads checked against
+    B ∩ continue_accum; after = that ∩ break_accum. break/continue: Abrupt, error
+    if loop_stack empty ("A 'break'/'continue' statement must be inside a loop."),
+    fold the current init-set into the enclosing frame.
+  * 3B: every loop possibly-zero — NO constant-true special-case; a loop is never
+    a terminator (Normal), so a function ending in a while/do-while still demands a
+    trailing return (negatives cover it). No test tripped the while(true)+return-
+    correctness corner, so nothing added to todo.txt for it.
+  * codegen: pre = head/body/exit (test-first); post = body/cond/exit (body-first).
+    break->exit, continue->head (pre) / cond (post), via a LoopCtx { header, exit }
+    threaded through emitStmt. Back-edge emitted only if the body falls through
+    (endsTerminated = return/break/continue). TWO codegen bugs in the same class as
+    the v1 loop-alloca overflow were fixed: (1) ALL local allocas hoisted to the
+    entry block (collectVarDecls pre-walk) — a body-local alloca would leak per
+    iteration; (2) emitLogical rewritten from alloca+load to PHI nodes — an &&/|| in
+    a loop condition put its alloca in the re-executed header. Both verified in IR
+    + a 1e6-iteration big_loop runs without overflow.
+  * tests: test_v2/flow/while.sl — pre (counting, zero-iter, break/continue in
+    branches, PPID-in-cond, nested loops, empty cond, && cond, big_loop) + post
+    (body-runs-once, inits-escape, break, continue-to-test, PPID-in-post-cond,
+    empty post-cond, body-local hoist, cond-reads-body-var) + nested-loop
+    break/continue targeting + ||/^^ conditions. 9 negatives: break/continue
+    outside a loop, unreachable-after-break/continue, pre-loop init-doesn't-escape,
+    do-while break-before-assign (after-set ∩) + continue-before-assign (cond reads
+    ∩), while/do-while not satisfying return-correctness.
+  * exit: pre + post while, unlabeled break/continue; the loop-context accumulators
+    are live (do-while consumes them).
 
 SESSION 4 — for-loop (desugar-heavy)
 

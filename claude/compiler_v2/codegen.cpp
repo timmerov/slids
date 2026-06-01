@@ -140,7 +140,15 @@ std::string emitToBool(std::string const& val, std::string const& slids_type,
     return tmp;
 }
 
-// Short-circuit && / || / ^^ borrowed from v1.
+// Logical && / || (short-circuit) and ^^ (full) via phi nodes — NOT alloca. An
+// alloca here would land in the current block, and when the logical is a loop
+// CONDITION that block is the loop header: a fresh stack slot would leak on every
+// iteration (the same class as the loop-body-alloca stack-overflow bug). The phi
+// keeps the value in SSA. For && / ||, the short-circuit edge and the
+// rhs-completion edge are each routed through a dedicated single-predecessor
+// block so the phi's predecessor labels are always known — even when rhs itself
+// emits nested blocks (a nested logical), in which case right_bool is defined in
+// rhs's last block, which dominates the routing block and so the merge edge.
 std::string emitLogical(ast::Node const& expr, SymTab const& syms,
                         strings::Pool& pool, std::ostream& out,
                         diagnostic::Sink& diag) {
@@ -149,55 +157,59 @@ std::string emitLogical(ast::Node const& expr, SymTab const& syms,
     ast::Node const& lhs = *expr.children[0];
     ast::Node const& rhs = *expr.children[1];
 
-    std::string result_ptr = newTmp("sc");
-    out << "  " << result_ptr << " = alloca i1\n";
-
     std::string const& lty = lhs.inferred_type;
     assert(!lty.empty() && "emitLogical: lhs missing inferred_type");
     std::string lv = emitExpr(lhs, syms, pool, out, diag, lty);
     std::string left_bool = emitToBool(lv, lty, out);
 
-    std::string eval_right = newLabel("sc_right");
-    std::string done       = newLabel("sc_done");
-
-    if (op == "&&") {
-        out << "  store i1 0, ptr " << result_ptr << "\n";
-        out << "  br i1 " << left_bool
-            << ", label %" << eval_right
-            << ", label %" << done << "\n";
-    } else if (op == "||") {
-        out << "  store i1 1, ptr " << result_ptr << "\n";
-        out << "  br i1 " << left_bool
-            << ", label %" << done
-            << ", label %" << eval_right << "\n";
-    } else if (op == "^^") {
-        out << "  store i1 0, ptr " << result_ptr << "\n";
-        out << "  br label %" << eval_right << "\n";
-    } else {
-        assert(false && "emitLogical: unhandled logical op");
-        __builtin_unreachable();
-    }
-
-    out << eval_right << ":\n";
     std::string const& rty = rhs.inferred_type;
     assert(!rty.empty() && "emitLogical: rhs missing inferred_type");
+
+    if (op == "^^") {
+        // Logical xor cannot short-circuit (it needs both operands): evaluate
+        // both, xor. Straight-line — no branches, no phi.
+        std::string rv = emitExpr(rhs, syms, pool, out, diag, rty);
+        std::string right_bool = emitToBool(rv, rty, out);
+        std::string res = newTmp("xxor");
+        out << "  " << res << " = xor i1 " << left_bool << ", "
+            << right_bool << "\n";
+        return res;
+    }
+
+    assert((op == "&&" || op == "||") && "emitLogical: unhandled logical op");
+    // && short-circuits to false when left is false; || to true when left true.
+    std::string rhs_lbl   = newLabel("sc_rhs");
+    std::string short_lbl = newLabel("sc_short");
+    std::string rhs_end   = newLabel("sc_rhs_end");
+    std::string done_lbl  = newLabel("sc_done");
+    char const* short_val = (op == "&&") ? "false" : "true";
+
+    if (op == "&&") {
+        out << "  br i1 " << left_bool << ", label %" << rhs_lbl
+            << ", label %" << short_lbl << "\n";
+    } else {
+        out << "  br i1 " << left_bool << ", label %" << short_lbl
+            << ", label %" << rhs_lbl << "\n";
+    }
+
+    // Short-circuit edge: a known-label block carrying the constant result.
+    out << short_lbl << ":\n";
+    out << "  br label %" << done_lbl << "\n";
+
+    // RHS edge: evaluate rhs, then route through a dedicated single-predecessor
+    // block so the phi predecessor is a known label even if rhs emitted blocks.
+    out << rhs_lbl << ":\n";
     std::string rv = emitExpr(rhs, syms, pool, out, diag, rty);
     std::string right_bool = emitToBool(rv, rty, out);
+    out << "  br label %" << rhs_end << "\n";
+    out << rhs_end << ":\n";
+    out << "  br label %" << done_lbl << "\n";
 
-    std::string store_val = right_bool;
-    if (op == "^^") {
-        std::string xor_tmp = newTmp("xxor");
-        out << "  " << xor_tmp << " = xor i1 "
-            << left_bool << ", " << right_bool << "\n";
-        store_val = xor_tmp;
-    }
-    out << "  store i1 " << store_val << ", ptr " << result_ptr << "\n";
-    out << "  br label %" << done << "\n";
-    out << done << ":\n";
-
-    std::string result = newTmp("scv");
-    out << "  " << result << " = load i1, ptr " << result_ptr << "\n";
-    return result;
+    out << done_lbl << ":\n";
+    std::string res = newTmp("scv");
+    out << "  " << res << " = phi i1 [ " << short_val << ", %" << short_lbl
+        << " ], [ " << right_bool << ", %" << rhs_end << " ]\n";
+    return res;
 }
 
 std::string emitUnary(ast::Node const& expr, SymTab const& syms,
@@ -513,6 +525,10 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kReturnStmt:
         case ast::Kind::kBlockStmt:
         case ast::Kind::kIfStmt:
+        case ast::Kind::kWhileStmt:
+        case ast::Kind::kDoWhileStmt:
+        case ast::Kind::kBreakStmt:
+        case ast::Kind::kContinueStmt:
         case ast::Kind::kParam:
             assert(false && "emitExpr: reached statement-kind node");
             __builtin_unreachable();
@@ -525,33 +541,41 @@ namespace {
 
 bool endsInReturn(std::vector<std::unique_ptr<ast::Node>> const& stmts);
 bool endsInReturnNode(ast::Node const& s);
+bool endsTerminated(std::vector<std::unique_ptr<ast::Node>> const& stmts);
+bool endsTerminatedNode(ast::Node const& s);
+
+// The nearest enclosing loop's branch targets, threaded through emitStmt so a
+// break/continue (possibly nested inside if-arms/blocks) reaches the right
+// blocks. nullptr outside any loop (resolve already rejected break/continue
+// there). continue -> header (re-test), break -> exit (after the loop).
+struct LoopCtx {
+    std::string header_label;
+    std::string exit_label;
+};
 
 void emitStmt(ast::Node const& stmt, SymTab& syms,
               strings::Pool& pool,
               std::string const& fn_return_type,
+              LoopCtx const* loop,
               std::ostream& out, diagnostic::Sink& diag) {
     switch (stmt.kind) {
         case ast::Kind::kVarDeclStmt: {
-            // Consts are substituted away by constfold and have no runtime
-            // representation. Skip the alloca + store entirely.
+            // Consts are substituted away by constfold and have no runtime form.
             if (stmt.is_const) return;
             assert(stmt.resolved_entry_id >= 0
                 && "kVarDeclStmt: classify did not stamp resolved_entry_id");
-            std::string llty = llvmTypeFor(stmt.return_type,
-                                           stmt.file_id, stmt.tok, diag);
-            // Suffix the alloca register with the entry id so a shadowing inner-
-            // scope local (`int x; { int x; }`) doesn't collide with the outer
-            // `%x` — distinct entries get distinct registers. The id-keyed SymTab
-            // resolves each read to the right one.
-            std::string regname = std::string("%") + stmt.name + "."
-                + std::to_string(stmt.resolved_entry_id);
-            out << "  " << regname << " = alloca " << llty << "\n";
-            syms[stmt.resolved_entry_id] = {regname, llty, stmt.return_type};
+            // The alloca + SymTab registration were HOISTED to the function entry
+            // block by emitFunction (an alloca emitted here would re-allocate
+            // stack on every pass through an enclosing loop — the v1 stack-
+            // overflow bug). Here we only emit the initializer store, if any.
+            auto it = syms.find(stmt.resolved_entry_id);
+            assert(it != syms.end()
+                && "kVarDeclStmt: alloca not hoisted to entry block");
             if (!stmt.children.empty()) {
                 std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
-                                           stmt.return_type);
-                out << "  store " << llty << " " << val
-                    << ", ptr " << regname << "\n";
+                                           it->second.slids_type);
+                out << "  store " << it->second.llvm_type << " " << val
+                    << ", ptr " << it->second.alloca_name << "\n";
             }
             return;
         }
@@ -588,11 +612,12 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         }
         case ast::Kind::kBlockStmt: {
             // A nested scope is transparent at codegen: emit its statements in
-            // order. Allocas for block-local vars still emit at their kVarDeclStmt
-            // (the SymTab is entry-id-keyed, so a nested-scope local is reachable
-            // while live without any scope bookkeeping here).
+            // order (allocas were hoisted to the entry block; the SymTab is
+            // entry-id-keyed, so a nested-scope local is reachable while live
+            // without any scope bookkeeping here). Thread the loop context so a
+            // break/continue nested in this block reaches the enclosing loop.
             for (auto const& ch : stmt.children) {
-                if (ch) emitStmt(*ch, syms, pool, fn_return_type, out, diag);
+                if (ch) emitStmt(*ch, syms, pool, fn_return_type, loop, out, diag);
             }
             return;
         }
@@ -600,11 +625,12 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             // children[0] = condition, [1] = then-branch, [2] = optional else.
             // Evaluate the condition, truthy-coerce it, conditional-br to the
             // then/else (or merge) blocks, emit each arm, br to the merge. No phi:
-            // definite-assignment is tracked via allocas upstream. An arm ending
-            // in a return is already terminated, so it must NOT emit the
-            // br-to-merge (two terminators is invalid IR). If every arm returns
-            // the merge is unreachable AND unterminated, so it is not emitted at
-            // all — resolve's 2A guarantees no live statement follows such an if.
+            // definite-assignment is tracked via allocas upstream. An arm that
+            // ends in a control transfer (return / break / continue) is already
+            // terminated, so it must NOT emit the br-to-merge (two terminators is
+            // invalid IR). If every arm transfers, the merge is unreachable AND
+            // unterminated, so it is not emitted at all — resolve's 2A guarantees
+            // no live statement follows such an if.
             assert(stmt.children.size() >= 2 && "kIfStmt needs condition + then");
             ast::Node const& cond = *stmt.children[0];
             std::string cv = emitExpr(cond, syms, pool, out, diag,
@@ -612,9 +638,9 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             std::string cbool = emitToBool(cv, cond.inferred_type, out);
 
             bool has_else = stmt.children.size() > 2 && stmt.children[2];
-            bool then_falls = !endsInReturn(stmt.children[1]->children);
+            bool then_falls = !endsTerminated(stmt.children[1]->children);
             // A missing else is an implicit fall-through path to the merge.
-            bool else_falls = !has_else || !endsInReturnNode(*stmt.children[2]);
+            bool else_falls = !has_else || !endsTerminatedNode(*stmt.children[2]);
             bool merge_used = then_falls || else_falls;
 
             std::string then_lbl = newLabel("if_then");
@@ -625,16 +651,85 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 << ", label %" << (has_else ? else_lbl : merge_lbl) << "\n";
 
             out << then_lbl << ":\n";
-            emitStmt(*stmt.children[1], syms, pool, fn_return_type, out, diag);
+            emitStmt(*stmt.children[1], syms, pool, fn_return_type, loop, out, diag);
             if (then_falls) out << "  br label %" << merge_lbl << "\n";
 
             if (has_else) {
                 out << else_lbl << ":\n";
-                emitStmt(*stmt.children[2], syms, pool, fn_return_type, out, diag);
+                emitStmt(*stmt.children[2], syms, pool, fn_return_type, loop, out, diag);
                 if (else_falls) out << "  br label %" << merge_lbl << "\n";
             }
 
             if (merge_used) out << merge_lbl << ":\n";
+            return;
+        }
+        case ast::Kind::kWhileStmt: {
+            // children[0] = condition, [1] = body block. header tests the
+            // condition and branches to body or exit; the body branches back to
+            // header (continue target), break branches to exit. The back-edge is
+            // emitted only if the body can fall through (doesn't end in a control
+            // transfer), else it would double-terminate the body's last block.
+            assert(stmt.children.size() == 2 && "kWhileStmt needs condition + body");
+            std::string head_lbl = newLabel("while_head");
+            std::string body_lbl = newLabel("while_body");
+            std::string exit_lbl = newLabel("while_exit");
+
+            out << "  br label %" << head_lbl << "\n";
+            out << head_lbl << ":\n";
+            ast::Node const& cond = *stmt.children[0];
+            std::string cv = emitExpr(cond, syms, pool, out, diag,
+                                      cond.inferred_type);
+            std::string cbool = emitToBool(cv, cond.inferred_type, out);
+            out << "  br i1 " << cbool << ", label %" << body_lbl
+                << ", label %" << exit_lbl << "\n";
+
+            out << body_lbl << ":\n";
+            LoopCtx ctx{head_lbl, exit_lbl};
+            emitStmt(*stmt.children[1], syms, pool, fn_return_type, &ctx, out, diag);
+            if (!endsTerminated(stmt.children[1]->children)) {
+                out << "  br label %" << head_lbl << "\n";   // back-edge
+            }
+
+            out << exit_lbl << ":\n";
+            return;
+        }
+        case ast::Kind::kDoWhileStmt: {
+            // children[0] = condition, [1] = body. Body-first: enter the body
+            // unconditionally, then test the condition. continue jumps to the
+            // test (cond block), break to exit. The body's back-edge (to cond) is
+            // emitted only if the body can fall through.
+            assert(stmt.children.size() == 2 && "kDoWhileStmt needs condition + body");
+            std::string body_lbl = newLabel("do_body");
+            std::string cond_lbl = newLabel("do_cond");
+            std::string exit_lbl = newLabel("do_exit");
+
+            out << "  br label %" << body_lbl << "\n";
+            out << body_lbl << ":\n";
+            LoopCtx ctx{cond_lbl, exit_lbl};   // continue -> cond, break -> exit
+            emitStmt(*stmt.children[1], syms, pool, fn_return_type, &ctx, out, diag);
+            if (!endsTerminated(stmt.children[1]->children)) {
+                out << "  br label %" << cond_lbl << "\n";
+            }
+
+            out << cond_lbl << ":\n";
+            ast::Node const& cond = *stmt.children[0];
+            std::string cv = emitExpr(cond, syms, pool, out, diag,
+                                      cond.inferred_type);
+            std::string cbool = emitToBool(cv, cond.inferred_type, out);
+            out << "  br i1 " << cbool << ", label %" << body_lbl
+                << ", label %" << exit_lbl << "\n";
+
+            out << exit_lbl << ":\n";
+            return;
+        }
+        case ast::Kind::kBreakStmt: {
+            assert(loop && "kBreakStmt: break outside a loop survived resolve");
+            out << "  br label %" << loop->exit_label << "\n";
+            return;
+        }
+        case ast::Kind::kContinueStmt: {
+            assert(loop && "kContinueStmt: continue outside a loop survived resolve");
+            out << "  br label %" << loop->header_label << "\n";
             return;
         }
         case ast::Kind::kAugAssignStmt:
@@ -687,6 +782,55 @@ bool endsInReturnNode(ast::Node const& s) {
     return false;
 }
 
+// "This statement always transfers control away" — return / break / continue,
+// or a block / both-armed-if whose paths all do. Broader than endsInReturn
+// (which return-correctness needs); this drives the br-emit decisions where a
+// block must NOT emit a fall-through branch after an already-terminated tail (an
+// if-arm's br-to-merge, a while body's back-edge). A while is NOT terminating:
+// it always reaches its own exit, so control falls through to what follows it.
+bool endsTerminated(std::vector<std::unique_ptr<ast::Node>> const& stmts) {
+    if (stmts.empty() || !stmts.back()) return false;
+    return endsTerminatedNode(*stmts.back());
+}
+
+bool endsTerminatedNode(ast::Node const& s) {
+    if (s.kind == ast::Kind::kReturnStmt
+        || s.kind == ast::Kind::kBreakStmt
+        || s.kind == ast::Kind::kContinueStmt) return true;
+    if (s.kind == ast::Kind::kBlockStmt) return endsTerminated(s.children);
+    if (s.kind == ast::Kind::kIfStmt && s.children.size() > 2
+        && s.children[2]) {
+        return endsTerminatedNode(*s.children[1])
+            && endsTerminatedNode(*s.children[2]);
+    }
+    return false;
+}
+
+// Collect every (non-const) local declaration reachable in this function so its
+// alloca can be hoisted to the entry block (see emitFunction). Recurses into the
+// statement-bearing children of compound statements — NOT into condition exprs,
+// which contain no declarations.
+void collectVarDecls(ast::Node const& s, std::vector<ast::Node const*>& out) {
+    if (s.kind == ast::Kind::kVarDeclStmt) {
+        if (!s.is_const) out.push_back(&s);
+        return;
+    }
+    if (s.kind == ast::Kind::kBlockStmt) {
+        for (auto const& ch : s.children) if (ch) collectVarDecls(*ch, out);
+        return;
+    }
+    if (s.kind == ast::Kind::kIfStmt) {
+        if (s.children.size() > 1 && s.children[1]) collectVarDecls(*s.children[1], out);
+        if (s.children.size() > 2 && s.children[2]) collectVarDecls(*s.children[2], out);
+        return;
+    }
+    if (s.kind == ast::Kind::kWhileStmt || s.kind == ast::Kind::kDoWhileStmt) {
+        if (s.children.size() > 1 && s.children[1]) collectVarDecls(*s.children[1], out);
+        return;
+    }
+    // Any other statement kind declares no nested locals.
+}
+
 void emitFunction(ast::Node const& fn, strings::Pool& pool,
                   std::ostream& out, diagnostic::Sink& diag) {
     std::string ret_llty = llvmTypeFor(fn.return_type,
@@ -713,8 +857,26 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
             << ", ptr " << regname << "\n";
         syms[p.resolved_entry_id] = {regname, p_llty, p.return_type};
     }
+    // Hoist every local's alloca into the entry block. An alloca emitted at its
+    // declaration site would re-allocate stack on every pass through an
+    // enclosing loop — unbounded growth → stack overflow (the v1 bug). The entry
+    // block runs exactly once, so each local is allocated exactly once. Every
+    // decl carries a distinct entry id, so the id-suffixed register names never
+    // collide across shadowing/scopes; reads resolve by id via the SymTab, and
+    // the kVarDeclStmt arm emits only the initializer store.
+    std::vector<ast::Node const*> decls;
     for (auto const& s : fn.children) {
-        emitStmt(*s, syms, pool, fn.return_type, out, diag);
+        if (s) collectVarDecls(*s, decls);
+    }
+    for (ast::Node const* d : decls) {
+        std::string llty = llvmTypeFor(d->return_type, d->file_id, d->tok, diag);
+        std::string regname = std::string("%") + d->name + "."
+            + std::to_string(d->resolved_entry_id);
+        out << "  " << regname << " = alloca " << llty << "\n";
+        syms[d->resolved_entry_id] = {regname, llty, d->return_type};
+    }
+    for (auto const& s : fn.children) {
+        emitStmt(*s, syms, pool, fn.return_type, /*loop=*/nullptr, out, diag);
     }
     // A void function that falls through its body needs an implicit `ret void`
     // terminator — without it the block is unterminated and llc rejects the IR.

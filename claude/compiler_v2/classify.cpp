@@ -115,6 +115,10 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kReturnStmt:
         case parse::Kind::kBlockStmt:
         case parse::Kind::kIfStmt:
+        case parse::Kind::kWhileStmt:
+        case parse::Kind::kDoWhileStmt:
+        case parse::Kind::kBreakStmt:
+        case parse::Kind::kContinueStmt:
         case parse::Kind::kParam:
             assert(false && "defaultLiteralType: not a literal kind");
             __builtin_unreachable();
@@ -338,6 +342,10 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kReturnStmt:
         case parse::Kind::kBlockStmt:
         case parse::Kind::kIfStmt:
+        case parse::Kind::kWhileStmt:
+        case parse::Kind::kDoWhileStmt:
+        case parse::Kind::kBreakStmt:
+        case parse::Kind::kContinueStmt:
         case parse::Kind::kParam:
             assert(false && "inferExpr: not an expression kind");
             return;
@@ -505,6 +513,41 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             return;
         }
+        case parse::Kind::kWhileStmt: {
+            // children[0] = condition, [1] = body. Condition truthy-coerces
+            // (same rule as the if condition).
+            assert(s.children.size() == 2 && "kWhileStmt needs condition + body");
+            parse::Node& cond = *s.children[0];
+            inferExpr(tree, cond, "", diag);
+            if (!cond.inferred_type.empty()
+                && !isCoercibleToBool(cond.inferred_type)) {
+                diagnostic::report(diag, {cond.file_id, cond.tok,
+                    "A while condition must be a condition expression; type '"
+                    + cond.inferred_type + "' is not.", {}});
+            }
+            classifyStmt(tree, *s.children[1], fn_return_type, diag);
+            return;
+        }
+        case parse::Kind::kDoWhileStmt: {
+            // children[0] = condition, [1] = body. Same shape as kWhileStmt; the
+            // condition truthy-coerces. (Flow ordering — body-then-test — is a
+            // resolve/codegen concern; type inference is order-independent.)
+            assert(s.children.size() == 2 && "kDoWhileStmt needs condition + body");
+            parse::Node& cond = *s.children[0];
+            inferExpr(tree, cond, "", diag);
+            if (!cond.inferred_type.empty()
+                && !isCoercibleToBool(cond.inferred_type)) {
+                diagnostic::report(diag, {cond.file_id, cond.tok,
+                    "A while condition must be a condition expression; type '"
+                    + cond.inferred_type + "' is not.", {}});
+            }
+            classifyStmt(tree, *s.children[1], fn_return_type, diag);
+            return;
+        }
+        case parse::Kind::kBreakStmt:
+        case parse::Kind::kContinueStmt:
+            // Nothing to type-infer; resolve handled loop-legality.
+            return;
         case parse::Kind::kProgram:
         case parse::Kind::kFunctionDef:
         case parse::Kind::kFunctionDecl:
