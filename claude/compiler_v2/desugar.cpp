@@ -41,6 +41,7 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kIfStmt:        return ast::Kind::kIfStmt;
         case parse::Kind::kWhileStmt:     return ast::Kind::kWhileStmt;
         case parse::Kind::kDoWhileStmt:   return ast::Kind::kDoWhileStmt;
+        case parse::Kind::kForLongStmt:   return ast::Kind::kForLongStmt;
         case parse::Kind::kBreakStmt:     return ast::Kind::kBreakStmt;
         case parse::Kind::kContinueStmt:  return ast::Kind::kContinueStmt;
         case parse::Kind::kStringLiteral: return ast::Kind::kStringLiteral;
@@ -321,6 +322,26 @@ void lowerWhileStmt(ast::Node& s) {
     }
 }
 
+// Lower a long-for's PPID. children[0]=cond, [1]=update, [2]=body, [3..]=varlist.
+// The varlist initializers run once (lower each as a self-contained phrase); the
+// condition is a phrase re-tested each iteration; update + body are statement
+// lists.
+void lowerForLong(ast::Node& s) {
+    for (std::size_t i = 3; i < s.children.size(); i++) {
+        if (s.children[i] && !s.children[i]->children.empty()
+            && s.children[i]->children[0]) {
+            lowerPhraseSlot(s.children[i]->children[0]);   // varlist init
+        }
+    }
+    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0]);   // cond
+    if (s.children.size() > 1 && s.children[1]) {
+        lowerStatementList(s.children[1]->children);   // update block
+    }
+    if (s.children.size() > 2 && s.children[2]) {
+        lowerStatementList(s.children[2]->children);   // body block
+    }
+}
+
 // Run PPID statement-bump splicing over a statement list, rebuilding it with
 // pre-bumps before / post-bumps after each statement. Recurses into a nested
 // kBlockStmt / kIfStmt so bumps inside them splice within that scope, not at the
@@ -342,6 +363,11 @@ void lowerStatementList(std::vector<std::unique_ptr<ast::Node>>& stmts) {
         if (stmt->kind == ast::Kind::kWhileStmt
             || stmt->kind == ast::Kind::kDoWhileStmt) {
             lowerWhileStmt(*stmt);
+            lowered.push_back(std::move(stmt));
+            continue;
+        }
+        if (stmt->kind == ast::Kind::kForLongStmt) {
+            lowerForLong(*stmt);
             lowered.push_back(std::move(stmt));
             continue;
         }

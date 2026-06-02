@@ -117,6 +117,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kIfStmt:
         case parse::Kind::kWhileStmt:
         case parse::Kind::kDoWhileStmt:
+        case parse::Kind::kForLongStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
         case parse::Kind::kParam:
@@ -344,6 +345,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kIfStmt:
         case parse::Kind::kWhileStmt:
         case parse::Kind::kDoWhileStmt:
+        case parse::Kind::kForLongStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
         case parse::Kind::kParam:
@@ -603,6 +605,24 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     + cond.inferred_type + "' is not.", {}});
             }
             classifyStmt(tree, *s.children[1], fn_return_type, diag);
+            return;
+        }
+        case parse::Kind::kForLongStmt: {
+            // children[0]=cond, [1]=update, [2]=body, [3..]=varlist decls.
+            assert(s.children.size() >= 3 && "kForLongStmt needs cond+update+body");
+            for (std::size_t i = 3; i < s.children.size(); i++) {
+                if (s.children[i]) classifyStmt(tree, *s.children[i], fn_return_type, diag);
+            }
+            parse::Node& cond = *s.children[0];
+            inferExpr(tree, cond, "", diag);
+            if (!cond.inferred_type.empty()
+                && !isCoercibleToBool(cond.inferred_type)) {
+                diagnostic::report(diag, {cond.file_id, cond.tok,
+                    "A for condition must be a condition expression; type '"
+                    + cond.inferred_type + "' is not.", {}});
+            }
+            classifyStmt(tree, *s.children[1], fn_return_type, diag);   // update
+            classifyStmt(tree, *s.children[2], fn_return_type, diag);   // body
             return;
         }
         case parse::Kind::kBreakStmt:

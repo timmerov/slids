@@ -136,6 +136,7 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kIfStmt:
         case parse::Kind::kWhileStmt:
         case parse::Kind::kDoWhileStmt:
+        case parse::Kind::kForLongStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
         case parse::Kind::kStringLiteral:

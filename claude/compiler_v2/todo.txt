@@ -53,6 +53,13 @@ REACH GOALS
 
 DEFERRED FEATURES (later; may not be on the plan)
 
+  * FOR-LONG TYPELESS / REUSE VARLIST — `for (x = 0) ...` (no type spelling):
+    reuse an enclosing-scope `x` if one exists, else declare a fresh inferred-type
+    loop var. Needs inferred-init (the type comes from the initializer). Today the
+    long-for varlist requires explicit types; a typeless entry hits a cryptic
+    parse error (parseType eats the name as a type). On the Session-4 plan
+    (plan-flow.txt) — land with inferred-init.
+
   * CONSTANT-TRUE LOOP -> UNREACHABLE AFTER-CODE — a `while (true)` / `while {} ()`
     with no break never exits, so code after it is unreachable; likewise an empty
     post-condition. NOT flagged today: per 3B there is no constant-true loop

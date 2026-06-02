@@ -98,7 +98,14 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     parseParenCondition); constant-condition unreachable detection (classify,
     post-constfold) — const-true if flags the else, const-false if/while flags
     then/body ("Unreachable statement."); const-true loops + do-while never flagged
-    (3B). Sessions 4-6 (for, switch, labeled break/continue) not yet started.
+    (3B). Session 4 (for) IN PROGRESS — the LONG-FORM for landed
+    (kForLongStmt `for (varlist) (cond) {update} {body}`, the canonical for node
+    that the other for shapes will desugar to): explicit-type varlist, 3 scope
+    frames (for/update/body, body may shadow a for-var), body-then-update DA
+    (update reads body-out ∩ continue_accum), possibly-zero (after = S), update
+    may not break/continue/return, continue -> update in codegen. Deferred:
+    typeless/reuse varlist (needs inferred-init); range/array/enum/tuple/class for
+    shapes (desugar to long-for); Sessions 5-6 (switch, labeled break/continue).
   * return — LANDED (kReturnStmt + return-correctness check from Phase 1).
 
 Phase 3 — functions

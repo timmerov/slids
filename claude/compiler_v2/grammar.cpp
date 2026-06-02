@@ -938,6 +938,68 @@ struct Parser {
         return node;
     }
 
+    // Long-form for: `for ( varlist ) ( cond ) { update } { body }`.
+    // varlist is a comma-separated list of typed var decls (explicit type
+    // required this round; an empty list is allowed). The node stores
+    // children[0] = cond, [1] = update-block, [2] = body-block, [3..] = varlist
+    // decls. The canonical for node — other for shapes desugar to it.
+    std::unique_ptr<parse::Node> parseForStmt() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
+        advance();   // for
+        if (!expect(token::Kind::kLParen, "(")) return nullptr;
+        // varlist: `type name [= expr]`, comma-separated, until ')'.
+        std::vector<std::unique_ptr<parse::Node>> varlist;
+        while (peek().kind != token::Kind::kRParen) {
+            int v_file = peek().file_id;
+            int v_tok = pos;
+            std::string vtype = parseType();
+            if (fatal) return nullptr;
+            if (peek().kind != token::Kind::kIdentifier) {
+                error("Expected a variable name in the for-loop variable list.");
+                return nullptr;
+            }
+            auto decl = newNodeAt(parse::Kind::kVarDeclStmt, v_file, v_tok);
+            decl->name = peek().text;
+            decl->name_tok = pos;
+            decl->return_type = std::move(vtype);
+            advance();   // name
+            if (peek().kind == token::Kind::kEquals) {
+                advance();   // =
+                auto init = parseExpr();
+                if (!init) return nullptr;
+                decl->children.push_back(std::move(init));
+            }
+            varlist.push_back(std::move(decl));
+            if (peek().kind == token::Kind::kComma) { advance(); continue; }
+            if (peek().kind != token::Kind::kRParen) {
+                error("Expected ',' or ')' in the for-loop variable list.");
+                return nullptr;
+            }
+        }
+        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+        auto cond = parseParenCondition();   // `( cond )`, empty -> true
+        if (!cond) return nullptr;
+        if (peek().kind != token::Kind::kLBrace) {
+            error("Expected '{' for the for-loop update clause.");
+            return nullptr;
+        }
+        auto update = parseBlock();
+        if (!update) return nullptr;
+        if (peek().kind != token::Kind::kLBrace) {
+            error("Expected '{' for the for-loop body.");
+            return nullptr;
+        }
+        auto body = parseBlock();
+        if (!body) return nullptr;
+        auto node = newNodeAt(parse::Kind::kForLongStmt, stmt_file, stmt_tok);
+        node->children.push_back(std::move(cond));
+        node->children.push_back(std::move(update));
+        node->children.push_back(std::move(body));
+        for (auto& d : varlist) node->children.push_back(std::move(d));
+        return node;
+    }
+
     // break; / continue; — a bare keyword statement.
     std::unique_ptr<parse::Node> parseBreakContinue(parse::Kind kind) {
         int stmt_file = peek().file_id;
@@ -952,6 +1014,7 @@ struct Parser {
         if (t.kind == token::Kind::kLBrace) return parseBlock();
         if (t.kind == token::Kind::kIf) return parseIfStmt();
         if (t.kind == token::Kind::kWhile) return parseWhileStmt();
+        if (t.kind == token::Kind::kFor) return parseForStmt();
         if (t.kind == token::Kind::kBreak)
             return parseBreakContinue(parse::Kind::kBreakStmt);
         if (t.kind == token::Kind::kContinue)

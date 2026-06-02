@@ -1,32 +1,410 @@
 /*
 test long form for loop.
-
-long for:
+including break, continue, and labels.
 
 for (varlist) (cond) {update} {body}
 
+parentheses and curly brackets around the clauses are required.
+any of the clauses may be empty.
+
 varlist is a comma separated tuple of variable declarations.
-type is infered (when that lands).
-initializers are technically optional.
-the variables in the var list are allocated once, outside the
+variable types may be inferred (when that lands) from the initializer.
+initializers are optional for typed variables.
+fresh variables in the var list are allocated once, outside the
 update and body code blocks.
 
-and empty condition clause is always true.
+an empty condition clause is always true.
 
 the update code block may not continue, break, or return.
 
-the loop body is executed as long as the condition is true.
+long for expands to the following pseudo-code:
+
+    (varlist)
+    WHILE (cond) IS TRUE DO:
+        {body}
+        {update}
+    END-WHILE
 
 variables are re-used from an enclosing scope when possible.
+only an issue when type inference lands.
 
     int x = -1;
     for (x = 0) (x < 10) { ++x; } {
         __println(x);
     }
     __println("x should be 10: " + x);
+
+optional labels follow the closing curly bracket.
+the default name of a for loop is 'for'.
+when labels land.
+
+    for (int x = 0) (x < 10) { ++x; } {
+        __println(x);
+    } :loop;
+
+break and continue may use an optional number or name to break from
+nested for loops.
+when labels land.
+
+    for () (cond1) {} {
+        for () (cond2) {} {
+            if (cond3) {
+                break outer;
+            }
+            if (cond4) {
+                continue inner;
+            }
+            if (cond5) {
+                break 2;
+            }
+            if (cond5) {
+                /* equivalent to naked break; */
+                break 1;
+            }
+        } :inner;
+    } :outer;
+
+break or continue to an undefined label or invalid number is a compile error.
+
+shadowing a loop variable in the code body is valid.
+in other words, there are 3 scope frames: for, update, body.
+
+    for (int x = 0) (x < 10) { ++x; } {
+        int x = 42;
+        __println("prints 42: " + x);
+    }
 */
 
-int32 main() {
+/*
+claude says:
 
+design (explicit-types round; typeless/reuse + labels deferred):
+- node kForLongStmt, children = [cond, update-block, body-block, varlist-decl*].
+  varlist decls are children[3..]; explicit type required each (typeless errors
+  at parse — deferred, needs inferred-init).
+- the other for shapes (range/array/enum/tuple/class) will desugar TO this node;
+  so it is handled NATIVELY in every stage (not lowered to while).
+- 3 scope frames: for-scope (varlist) > {update-frame, body-frame} as siblings.
+  body may shadow a for-var (reuses Session-1 block scoping + entry-id allocas).
+- exec order (per canon pseudo-code): test cond; if true run body then update;
+  repeat. pre-condition / possibly-zero, so post-loop init-set = post-varlist S
+  (like a pre-condition while). continue -> update (then re-test); break -> exit.
+- update clause may not break/continue/return: resolve update with in_for_update
+  + for_update_floor; a break/continue at the update's own level or a return
+  anywhere in the update errors. (a nested loop inside the update gives its own
+  legal break/continue target.)
+- codegen: hoist varlist allocas to entry; init -> head(cond) -> body -> update
+  -> head; LoopCtx{ header=update, exit=exit }.
+*/
+
+/* basic long-for: body runs before update, so the body sees i = 0..n-1. */
+int sum_for(int n) {
+    int s = 0;
+    for (int i = 0) (i < n) { ++i; } {
+        s = s + i;
+    }
+    return s;
+}
+
+/* empty varlist + empty update clause; the body drives everything. */
+int empty_clauses(int n) {
+    int i = 0;
+    int s = 0;
+    for () (i < n) {} {
+        s = s + i;
+        ++i;
+    }
+    return s;
+}
+
+/* an empty condition is always true; break is the only exit. */
+int for_empty_cond(int n) {
+    int i = 0;
+    for (int j = 0) () { ++j; } {
+        if (j >= n) {
+            break;
+        }
+        i = j;
+    }
+    return i;
+}
+
+/* multiple variables in the varlist, updated together. */
+int two_vars(int n) {
+    int sum = 0;
+    for (int i = 0, int j = n) (i < j) { ++i; --j; } {
+        sum = sum + 1;
+    }
+    return sum;
+}
+
+/* continue jumps to the UPDATE (then re-tests) — so the loop variable still
+   advances on a continue. if continue went to the test instead, this would spin
+   forever; terminating + summing the odds proves continue -> update. */
+int for_continue(int n) {
+    int s = 0;
+    for (int i = 0) (i < n) { ++i; } {
+        if (i % 2 == 0) {
+            continue;
+        }
+        s = s + i;
+    }
+    return s;
+}
+
+/* break exits the for immediately. */
+int for_break(int n) {
+    int i = 0;
+    for (int k = 0) (k < 100) { ++k; } {
+        if (k >= n) {
+            break;
+        }
+        i = k;
+    }
+    return i;
+}
+
+/* nested for loops. */
+int for_grid(int rows, int cols) {
+    int total = 0;
+    for (int r = 0) (r < rows) { ++r; } {
+        for (int c = 0) (c < cols) { ++c; } {
+            total = total + 1;
+        }
+    }
+    return total;
+}
+
+/* 3 scope frames: the body declares its own `x` (frame 3) shadowing the for-var
+   `x` (frame 1); the update's `++x` still drives the for-var, so the loop runs n
+   times while the body's x stays 42. */
+int for_shadow(int n) {
+    int sum = 0;
+    for (int x = 0) (x < n) { ++x; } {
+        int x = 42;
+        sum = sum + x;
+    }
+    return sum;
+}
+
+/* a typed for-var may omit its initializer; here `tmp` is written then read in
+   the body (not read in the condition), so it is definitely assigned at use. */
+int for_typed_noinit(int n) {
+    int k = 0;
+    int sum = 0;
+    for (int tmp) (k < n) { ++k; } {
+        tmp = k * 2;
+        sum = sum + tmp;
+    }
+    return sum;
+}
+
+/* body-then-update DA: the update reads `x`, assigned in the body (which runs
+   first each iteration). resolved body-first, so the update sees it. */
+int for_update_reads_body(int n) {
+    int last = 0;
+    for (int x) (last < n) { last = x; } {
+        x = last + 1;
+    }
+    return last;
+}
+
+/* break in an inner for exits only the inner for; the outer continues. */
+int for_nested_break(int rows, int cols) {
+    int count = 0;
+    for (int r = 0) (r < rows) { ++r; } {
+        for (int c = 0) (c < cols) { ++c; } {
+            if (c == 2) {
+                break;
+            }
+            count = count + 1;
+        }
+    }
+    return count;
+}
+
+/* continue in an inner for restarts only the inner for (runs its update). */
+int for_nested_continue(int rows, int cols) {
+    int total = 0;
+    for (int r = 0) (r < rows) { ++r; } {
+        for (int c = 0) (c < cols) { ++c; } {
+            if (c == 1) {
+                continue;
+            }
+            total = total + 1;
+        }
+    }
+    return total;
+}
+
+/* a break inside a loop nested in the UPDATE clause is legal — it targets the
+   nested loop, not the for (the update may not break the for itself). */
+int for_break_in_update(int n) {
+    int sum = 0;
+    for (int i = 0) (i < n) {
+        while (true) {
+            ++i;
+            break;
+        }
+    } {
+        sum = sum + i;
+    }
+    return sum;
+}
+
+/* PPID in the condition: i is post-incremented as the test runs each iteration
+   (the condition is re-evaluated as a phrase). */
+int for_ppid_cond(int n) {
+    int count = 0;
+    for (int i = 0) (i++ < n) {} {
+        count = count + 1;
+    }
+    return count;
+}
+
+/* PPID in a varlist initializer (runs once): i takes j's value, then j bumps. */
+int for_ppid_varinit(int n) {
+    int j = 5;
+    int sum = 0;
+    for (int i = j++) (i < n) { ++i; } {
+        sum = sum + 1;
+    }
+    return sum * 100 + j;
+}
+
+/* && in the for condition lowers to a phi in the loop header. */
+int for_and_cond(int n) {
+    int s = 0;
+    for (int k = 0) (k < n && s < 100) { ++k; } {
+        s = s + k;
+    }
+    return s;
+}
+
+/* an empty body; the update does the work. */
+int for_empty_body(int n) {
+    int c = 0;
+    for (int i = 0) (i < n) { c = c + 1; ++i; } {
+    }
+    return c;
+}
+
+/* a local declared in the update block (its own frame), used there. */
+int for_update_local(int n) {
+    int sum = 0;
+    for (int i = 0) (i < n) { int step = 2; i = i + step; } {
+        sum = sum + i;
+    }
+    return sum;
+}
+
+int32 main() {
+    __println("sum_for(5) = " + sum_for(5));                // 10
+    __println("empty_clauses(4) = " + empty_clauses(4));    // 6
+    __println("for_empty_cond(5) = " + for_empty_cond(5));  // 4
+    __println("two_vars(10) = " + two_vars(10));            // 5
+    __println("for_continue(6) = " + for_continue(6));      // 9
+    __println("for_break(5) = " + for_break(5));            // 4
+    __println("for_grid(3, 4) = " + for_grid(3, 4));        // 12
+    __println("for_shadow(3) = " + for_shadow(3));          // 126
+    __println("for_typed_noinit(3) = " + for_typed_noinit(3));  // 6
+    __println("for_update_reads_body(3) = " + for_update_reads_body(3));    // 3
+    __println("for_nested_break(3, 5) = " + for_nested_break(3, 5));        // 6
+    __println("for_nested_continue(2, 4) = " + for_nested_continue(2, 4));  // 6
+    __println("for_break_in_update(3) = " + for_break_in_update(3));        // 3
+    __println("for_ppid_cond(3) = " + for_ppid_cond(3));                    // 3
+    __println("for_ppid_varinit(8) = " + for_ppid_varinit(8));              // 306
+    __println("for_and_cond(5) = " + for_and_cond(5));                      // 10
+    __println("for_empty_body(4) = " + for_empty_body(4));                  // 4
+    __println("for_update_local(6) = " + for_update_local(6));              // 6
     return 0;
 }
+
+/*
+negatives — one //-block uncommented per run.
+*/
+
+/* the update clause may not break. */
+//-EXPECT-ERROR: A 'break' statement is not allowed in a for-loop update clause.
+//int neg_update_break(int n) {
+//    for (int i = 0) (i < n) { break; } {
+//        __println(i);
+//    }
+//    return 0;
+//}
+
+/* the update clause may not continue. */
+//-EXPECT-ERROR: A 'continue' statement is not allowed in a for-loop update clause.
+//int neg_update_continue(int n) {
+//    for (int i = 0) (i < n) { continue; } {
+//        __println(i);
+//    }
+//    return 0;
+//}
+
+/* the update clause may not return. */
+//-EXPECT-ERROR: A 'return' statement is not allowed in a for-loop update clause.
+//int neg_update_return(int n) {
+//    for (int i = 0) (i < n) { return 0; } {
+//        __println(i);
+//    }
+//    return 0;
+//}
+
+/* a typed for-var with no initializer, read in the condition before it is ever
+   written, is uninitialized. */
+//-EXPECT-ERROR: Use of uninitialized variable 'i'
+//int neg_for_var_uninit(int n) {
+//    for (int i) (i < n) { ++i; } {
+//        __println(i);
+//    }
+//    return 0;
+//}
+
+/* a continue reaches the update before the body assigns x, so the update's read
+   of x is not satisfied on every path to it (body-out ∩ continue_accum drops x). */
+//-EXPECT-ERROR: Use of uninitialized variable 'x'
+//int neg_for_continue_undercut(int n) {
+//    int k = 0;
+//    for (int x) (k < n) { x = x + 1; } {
+//        ++k;
+//        if (k < 0) {
+//            continue;
+//        }
+//        x = 7;
+//    }
+//    return 0;
+//}
+
+/* a for is possibly-zero, so a body-only assignment doesn't initialize r after
+   the loop. */
+//-EXPECT-ERROR: Use of uninitialized variable 'r'
+//int neg_for_init_escape(int n) {
+//    int r;
+//    for (int i = 0) (i < n) { ++i; } {
+//        r = 1;
+//    }
+//    return r;
+//}
+
+/* a for is never a terminator, so a non-void function ending in one needs a
+   trailing return. */
+//-EXPECT-ERROR: must end with a return statement
+//int neg_for_no_return(int n) {
+//    for (int i = 0) (i < n) { ++i; } {
+//        n = n - 1;
+//    }
+//}
+
+/* return is banned transitively in the update — even inside a nested loop. */
+//-EXPECT-ERROR: A 'return' statement is not allowed in a for-loop update clause.
+//int neg_update_nested_return(int n) {
+//    for (int i = 0) (i < n) {
+//        while (true) {
+//            return 0;
+//        }
+//    } {
+//        n = n - 1;
+//    }
+//    return 0;
+//}

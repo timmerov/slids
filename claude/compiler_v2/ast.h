@@ -22,6 +22,8 @@ enum class Kind {
                     // [1] = then-branch, [2] = optional else-branch.
     kWhileStmt,     // while (cond) body; children[0] = condition, [1] = body.
     kDoWhileStmt,   // post-condition while; children[0] = condition, [1] = body.
+    kForLongStmt,   // long-form for; children[0]=cond, [1]=update, [2]=body,
+                    // [3..]=varlist decls. The canonical for node.
     kBreakStmt,     // break;
     kContinueStmt,  // continue;
     kStringLiteral,

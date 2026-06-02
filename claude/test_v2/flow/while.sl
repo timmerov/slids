@@ -14,7 +14,7 @@ post condition while.
     while {
     } (cond);
 
-labels always follow the closing curly bracket.
+optional labels follow the closing curly bracket.
 the default name of a while loop is 'while'.
 
     while (cond) {
@@ -41,6 +41,8 @@ when labels land.
             }
         } :inner;
     } :outer;
+
+break or continue to an undefined label or invalid number is a compile error.
 */
 
 /*

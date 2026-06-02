@@ -195,13 +195,38 @@ SESSION 3 — while + break/continue (unlabeled) + POST-CONDITION while   [LANDE
     negatives spanning bool/int/char/float/folded/substituted/else-if) +
     while.sl (do-const-false + while-true positives confirm no false flag).
 
-SESSION 4 — for-loop (desugar-heavy)
+SESSION 4 — for-loops   [LONG-FORM LANDED; other shapes + reuse pending]
 
-  Canonical-form session; RANGE-based only (container for-each is Phase 5).
-  * new node: kForStmt (range `i : 0..N`; NOT C-style — check test/for.sl canon).
-  * desugar — primary landing: the surface shapes -> one canonical loop form;
-    downstream stages see only that. Reuse Session 3's while lowering.
-  * resolve/classify: loop variable scoping. LOOP-VAR REUSE RULE: if a local of
+  ARCHITECTURE (revised from the original range-only plan): the LONG-FORM for is
+  the CANONICAL for node, and every other for shape (range `i : 0..N`, array,
+  enum, tuple, class for-each) DESUGARS to it. So the long form is handled
+  natively in every stage; the others become a desugar-to-kForLongStmt rewrite.
+
+  LANDED — long-form `for (varlist) (cond) {update} {body}` (kForLongStmt):
+  * node kForLongStmt, children [cond, update-block, body-block, varlist-decl*].
+  * grammar parseForStmt; varlist = comma-separated TYPED decls (explicit type
+    required this round; empty list ok); cond via the shared parseParenCondition
+    (empty -> always-true). 3 scope frames: for-scope (varlist) > sibling
+    {update, body} blocks, so the body may shadow a for-var.
+  * resolve: body-then-update (execution order). cond reads from post-varlist S';
+    body from S' (break/continue target the for); update checked against
+    body-out ∩ continue_accum (sees body-assigned vars, not continue-skipped ones).
+    possibly-zero -> after = S. UPDATE RESTRICTION: no break/continue/return in the
+    update (in_for_update + for_update_floor; a loop nested in the update gives its
+    own legal break/continue target; return is banned transitively).
+  * codegen: varlist init stores once (allocas hoisted); head(cond)/body/update
+    /exit; continue -> update (the loop var advances on continue), break -> exit.
+  * tests: test_v2/flow/forlong.sl — 18 positives (basic, empty clauses/cond,
+    multi-var, continue->update, break, nested, 3-frame shadow, typed-no-init,
+    body-first DA, nested-loop break/continue targeting, break-in-nested-loop-in-
+    update, PPID in cond + varlist-init, && cond, empty body, update-local) + 8
+    negatives (update break/continue/return, transitive return in nested update
+    loop, for-var uninit in cond, continue-undercuts-update-read, possibly-zero
+    escape, return-correctness).
+
+  PENDING (this session's remaining work):
+  * TYPELESS varlist + enclosing-scope REUSE — deferred, needs inferred-init.
+    LOOP-VAR REUSE RULE: if a local of
     the loop-var name is ALREADY in scope, the for REASSIGNS it (reuses the
     existing entry) rather than allocating a fresh loop-local. `int row = 0;
     for (row : 0..8) { ... }` writes the outer `row`; after the loop it holds the

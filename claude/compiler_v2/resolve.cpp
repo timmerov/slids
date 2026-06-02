@@ -855,6 +855,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         case parse::Kind::kIfStmt:
         case parse::Kind::kWhileStmt:
         case parse::Kind::kDoWhileStmt:
+        case parse::Kind::kForLongStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
         case parse::Kind::kParam:
@@ -1123,6 +1124,13 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             return Completion::Normal;
         }
         case parse::Kind::kReturnStmt: {
+            // A long-for's update clause may not return (the spec; it runs at the
+            // tail of each iteration). Banned transitively through the update.
+            if (tree.in_for_update) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "A 'return' statement is not allowed in a for-loop update "
+                    "clause.", {}});
+            }
             for (auto& ch : s.children) {
                 if (ch) resolveExpr(tree, *ch, diag);
             }
@@ -1258,15 +1266,73 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // reach its exit, so a trailing return is still demanded after it.
             return Completion::Normal;
         }
+        case parse::Kind::kForLongStmt: {
+            // children[0]=cond, [1]=update block, [2]=body block, [3..]=varlist.
+            // Three scope frames: a for-scope holds the varlist, with the update
+            // and body as sibling nested blocks (each pushes its own frame, so the
+            // body may shadow a for-var). Pre-condition / possibly-zero, so the
+            // post-loop init-set is the entry set S — body/update inits don't
+            // escape, and the for-vars leave scope (like a pre-condition while).
+            assert(s.children.size() >= 3 && "kForLongStmt needs cond+update+body");
+            std::set<int> entry = tree.initialized_locals;   // S (before varlist)
+            parse::pushFrame(tree);                            // for-scope
+            std::vector<int> saved_body_locals = std::move(tree.body_locals);
+            tree.body_locals.clear();
+            // varlist decls live in the for-scope (explicit type each). S -> S'.
+            for (std::size_t i = 3; i < s.children.size(); i++) {
+                if (s.children[i]) resolveStmt(tree, *s.children[i], diag);
+            }
+            // The condition is tested before the body, so its reads must hold on
+            // the post-varlist set S' (the first iteration's entry, also the
+            // back-edge fixpoint).
+            resolveExpr(tree, *s.children[0], diag);
+            // Body FIRST (execution is body-then-update): break/continue target
+            // the for; continue folds into the loop frame's continue accumulator.
+            tree.loop_stack.push_back({});
+            resolveStmt(tree, *s.children[2], diag);   // body block, from S'
+            parse::Tree::LoopFrame lf = std::move(tree.loop_stack.back());
+            tree.loop_stack.pop_back();
+            // The update runs after the body completes normally OR after a
+            // continue, so its reads must hold on body-out ∩ continue_accum (this
+            // lets the update see body-assigned vars, but not ones a continue
+            // skipped). break_accum is moot — possibly-zero, so after = S anyway.
+            std::set<int> body_out = tree.initialized_locals;
+            if (lf.continue_seen) {
+                tree.initialized_locals = intersectInit(body_out, lf.continue_init);
+            }
+            // Update clause: restricted (no break/continue/return) and NOT a loop
+            // target — resolved with the for's loop frame already popped.
+            bool saved_in_update = tree.in_for_update;
+            int saved_floor = tree.for_update_floor;
+            tree.in_for_update = true;
+            tree.for_update_floor = (int)tree.loop_stack.size();
+            resolveStmt(tree, *s.children[1], diag);   // update block
+            tree.in_for_update = saved_in_update;
+            tree.for_update_floor = saved_floor;
+            // Sweep the for-scope-declared locals (the varlist) for unused.
+            sweepUnusedLocals(tree, diag);
+            tree.body_locals = std::move(saved_body_locals);
+            parse::popFrame(tree);
+            tree.initialized_locals = std::move(entry);   // after = S
+            return Completion::Normal;
+        }
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt: {
             // A loop exit / restart: legal only inside a loop body, and it
             // transfers control (Abrupt — a following sibling is unreachable).
             // Fold the current init-set into the enclosing loop's accumulator so
             // a do-while can intersect it (a pre-condition while ignores it).
-            if (tree.loop_stack.empty()) {
-                char const* what =
-                    s.kind == parse::Kind::kBreakStmt ? "break" : "continue";
+            char const* what =
+                s.kind == parse::Kind::kBreakStmt ? "break" : "continue";
+            if (tree.in_for_update
+                && (int)tree.loop_stack.size() == tree.for_update_floor) {
+                // Directly in a long-for update clause (no nested loop absorbs
+                // it) — the update may not break/continue the for.
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    std::string("A '") + what
+                        + "' statement is not allowed in a for-loop update "
+                          "clause.", {}});
+            } else if (tree.loop_stack.empty()) {
                 diagnostic::report(diag, {s.file_id, s.tok,
                     std::string("A '") + what
                         + "' statement must be inside a loop.", {}});

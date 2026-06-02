@@ -39,6 +39,10 @@ enum class Kind {
     kDoWhileStmt,  // post-condition while — slids `while { body } (cond);`.
                    // children[0] = condition expr, [1] = body (kBlockStmt). Body
                    // runs at least once; condition tested after each iteration.
+    kForLongStmt,  // long-form for — `for (varlist) (cond) {update} {body}`.
+                   // children[0] = condition, [1] = update (kBlockStmt),
+                   // [2] = body (kBlockStmt), [3..] = varlist (kVarDeclStmt each).
+                   // The canonical for node; other for shapes desugar TO this.
     kBreakStmt,    // break; — exits the nearest enclosing loop.
     kContinueStmt, // continue; — jumps to the nearest enclosing loop's test.
     kStringLiteral,
@@ -155,6 +159,14 @@ struct Tree {
         bool continue_seen = false;
     };
     std::vector<LoopFrame> loop_stack;
+    // Transient — set while resolving a long-for's UPDATE clause, which may not
+    // break / continue / return. in_for_update is true throughout the update
+    // subtree (guards return, transitively). for_update_floor is loop_stack.size()
+    // at update entry: a break/continue is illegal when loop_stack hasn't grown
+    // past it (i.e. it targets the for, not a nested loop introduced inside the
+    // update). Both saved/restored around the update walk.
+    bool in_for_update = false;
+    int  for_update_floor = -1;
 };
 
 // Symbol-table APIs. All storage + walking lives here; classify only decides

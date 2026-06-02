@@ -173,12 +173,25 @@ STAGE FILES (.h / .cpp pairs)
             break / continue are Abrupt and legal only inside a loop ("A 'break' /
             'continue' statement must be inside a loop."); each folds the current
             init-set into the enclosing loop-frame's break/continue accumulator
-            (∩, top-seeded via a `seen` flag) — a do-while consumes them, a
-            pre-condition while ignores them (after = S regardless). An empty
-            condition (`if ()` / `while ()` / `while {} ()`) is the always-true
-            literal grammar synthesizes via the shared parseParenCondition (a
-            slids convention "empty = true"). The loop-frame stack
-            (Tree::loop_stack) is transient resolve state, id-keyed like the DA sets.
+            (∩, top-seeded via a `seen` flag) — a do-while / for consume them, a
+            pre-condition while ignores them (after = S regardless). A kForLongStmt
+            (long-form `for (varlist) (cond) {update} {body}`; the canonical for
+            node — other for shapes desugar to it) opens ONE for-scope holding the
+            varlist, with the update and body as sibling nested blocks (3 frames;
+            the body may shadow a for-var). Resolved body-then-update (execution
+            order): cond reads from the post-varlist set S'; the body resolves
+            from S' (break/continue target the for); the update is checked against
+            body-out ∩ continue_accum (so it sees body-assigned vars but not ones
+            a continue skipped). Possibly-zero, so after = S. The update may not
+            break / continue / return — resolved under in_for_update +
+            for_update_floor: a break/continue at the update's own loop-depth or
+            any return in the update errors ("A '<kw>' statement is not allowed in
+            a for-loop update clause."), while a loop nested in the update gives
+            its own legal break/continue target. An empty
+            condition (`if ()` / `while ()` / `while {} ()` / for's `()`) is the
+            always-true literal grammar synthesizes via the shared
+            parseParenCondition (a slids convention "empty = true"). The loop-frame
+            stack (Tree::loop_stack) is transient resolve state, id-keyed like the DA sets.
             Caches lvalue type on AugAssignStmts (s.return_type) and
             return type + param_types on CallStmts/CallExprs (one shared
             resolveUserCall) so downstream stages don't have to re-walk the
@@ -227,7 +240,7 @@ STAGE FILES (.h / .cpp pairs)
             data stamped by resolve; never builds entries or pushes frames
             itself. Infers every expression's inferred_type and every
             binary's op_type (computational type). Sharp rejections at
-            the source: non-coercible operands for ! && || ^^, an if / while
+            the source: non-coercible operands for ! && || ^^, an if / while / for
             condition not coercible to bool, non-numeric shift sides, bitwise on
             float, no-common-type binaries. Return-correctness (endsInReturn) recurses
             into a trailing block and a trailing if/else whose arms both return.
@@ -264,12 +277,13 @@ STAGE FILES (.h / .cpp pairs)
             bump never fires. The statement-bump splice (lowerStatementList)
             recurses into a kBlockStmt, a kIfStmt (lowerIfStmt: the condition is a
             self-contained phrase whose bumps fire before the branch, and the arms
-            recurse), and a kWhileStmt / kDoWhileStmt (lowerWhileStmt: the
-            condition is a phrase re-tested each iteration, the body recurses) so a
-            bump inside them splices within that scope, not at function scope.
-            Future canonical-form rewrites (for-loop
-            shapes, receiver shapes, stringify, operator dispatch) slot in
-            as their phases land.
+            recurse), a kWhileStmt / kDoWhileStmt (lowerWhileStmt: the condition is
+            a phrase re-tested each iteration, the body recurses), and a
+            kForLongStmt (lowerForLong: varlist initializers + condition are
+            phrases, the update + body are statement lists) so a bump inside them
+            splices within that scope, not at function scope. Future canonical-form
+            rewrites (other for shapes desugaring to kForLongStmt, receiver shapes,
+            stringify, operator dispatch) slot in as their phases land.
   optimize  ast -> ast in place. Slids-aware perf rewrites LLVM can't do
             (compound-fuse, NRVO, identity-temp adoption, build-into-target).
             (TODO stub.)
@@ -308,8 +322,11 @@ STAGE FILES (.h / .cpp pairs)
             continue) emits no br-to-merge, and when every arm transfers the merge
             block is omitted entirely (resolve's 2A guarantees nothing live
             follows). A kWhileStmt is head/body/exit (test-first); a kDoWhileStmt
-            is body/cond/exit (body-first, test after); break -> exit, continue ->
-            head (while) / cond (do-while), via a LoopCtx { header, exit } threaded
+            is body/cond/exit (body-first, test after); a kForLongStmt runs the
+            varlist init stores once (allocas hoisted) then head(cond)/body/update
+            /exit (continue -> update, so the loop var still advances on continue).
+            break -> exit, continue -> head (while) / cond (do-while) / update
+            (for), via a LoopCtx { header, exit } threaded
             through emitStmt and read by kBreakStmt / kContinueStmt; the body's
             back-edge is emitted only if it can fall through (endsTerminated).
             endsTerminated / endsTerminatedNode (return + break + continue, and a

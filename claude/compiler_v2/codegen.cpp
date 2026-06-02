@@ -527,6 +527,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kIfStmt:
         case ast::Kind::kWhileStmt:
         case ast::Kind::kDoWhileStmt:
+        case ast::Kind::kForLongStmt:
         case ast::Kind::kBreakStmt:
         case ast::Kind::kContinueStmt:
         case ast::Kind::kParam:
@@ -722,6 +723,49 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             out << exit_lbl << ":\n";
             return;
         }
+        case ast::Kind::kForLongStmt: {
+            // children[0]=cond, [1]=update, [2]=body, [3..]=varlist decls.
+            // Run the varlist init stores once (allocas hoisted), then:
+            // head: test cond -> body or exit; body -> update; update -> head.
+            // continue -> update (then re-test), break -> exit.
+            assert(stmt.children.size() >= 3 && "kForLongStmt needs cond+update+body");
+            for (std::size_t i = 3; i < stmt.children.size(); i++) {
+                if (stmt.children[i]) {
+                    emitStmt(*stmt.children[i], syms, pool, fn_return_type, loop,
+                             out, diag);
+                }
+            }
+            std::string head_lbl = newLabel("for_head");
+            std::string body_lbl = newLabel("for_body");
+            std::string upd_lbl  = newLabel("for_update");
+            std::string exit_lbl = newLabel("for_exit");
+
+            out << "  br label %" << head_lbl << "\n";
+            out << head_lbl << ":\n";
+            ast::Node const& cond = *stmt.children[0];
+            std::string cv = emitExpr(cond, syms, pool, out, diag,
+                                      cond.inferred_type);
+            std::string cbool = emitToBool(cv, cond.inferred_type, out);
+            out << "  br i1 " << cbool << ", label %" << body_lbl
+                << ", label %" << exit_lbl << "\n";
+
+            out << body_lbl << ":\n";
+            LoopCtx ctx{upd_lbl, exit_lbl};   // continue -> update, break -> exit
+            emitStmt(*stmt.children[2], syms, pool, fn_return_type, &ctx, out, diag);
+            if (!endsTerminated(stmt.children[2]->children)) {
+                out << "  br label %" << upd_lbl << "\n";
+            }
+
+            out << upd_lbl << ":\n";
+            // The update can't break/continue/return (resolve-enforced), so it
+            // always falls through back to the head. Pass the enclosing loop ctx
+            // (a nested loop inside the update carries its own).
+            emitStmt(*stmt.children[1], syms, pool, fn_return_type, loop, out, diag);
+            out << "  br label %" << head_lbl << "\n";
+
+            out << exit_lbl << ":\n";
+            return;
+        }
         case ast::Kind::kBreakStmt: {
             assert(loop && "kBreakStmt: break outside a loop survived resolve");
             out << "  br label %" << loop->exit_label << "\n";
@@ -826,6 +870,15 @@ void collectVarDecls(ast::Node const& s, std::vector<ast::Node const*>& out) {
     }
     if (s.kind == ast::Kind::kWhileStmt || s.kind == ast::Kind::kDoWhileStmt) {
         if (s.children.size() > 1 && s.children[1]) collectVarDecls(*s.children[1], out);
+        return;
+    }
+    if (s.kind == ast::Kind::kForLongStmt) {
+        // [0]=cond, [1]=update, [2]=body, [3..]=varlist decls — all hoisted.
+        if (s.children.size() > 1 && s.children[1]) collectVarDecls(*s.children[1], out);
+        if (s.children.size() > 2 && s.children[2]) collectVarDecls(*s.children[2], out);
+        for (std::size_t i = 3; i < s.children.size(); i++) {
+            if (s.children[i]) collectVarDecls(*s.children[i], out);
+        }
         return;
     }
     // Any other statement kind declares no nested locals.
