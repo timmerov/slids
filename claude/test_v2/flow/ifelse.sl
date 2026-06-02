@@ -222,6 +222,27 @@ int ppid_cond(int n) {
     return taken * 1000 + k;
 }
 
+/* an empty condition is always true (the slids convention); the then-arm always
+   runs. with no else there is no dead arm to flag. */
+int always_then() {
+    int r = 0;
+    if () {
+        r = 1;
+    }
+    return r;
+}
+
+/* the else here is dead (empty condition is always true) but EMPTY, so there is
+   nothing to flag — this compiles. */
+int empty_else() {
+    int r = 0;
+    if () {
+        r = 1;
+    } else {
+    }
+    return r;
+}
+
 int32 main() {
     __println("both_arms(5) = " + both_arms(5));        // 10
     __println("both_arms(-5) = " + both_arms(-5));      // 20
@@ -254,6 +275,8 @@ int32 main() {
     __println("compound(-1, 1) = " + compound(-1, 1));  // 110
     __println("ppid_cond(5) = " + ppid_cond(5));    // 1006
     __println("ppid_cond(0) = " + ppid_cond(0));    // 1
+    __println("always_then() = " + always_then());  // 1
+    __println("empty_else() = " + empty_else());    // 1
     return 0;
 }
 
@@ -342,6 +365,102 @@ negatives — one //-block uncommented per run.
 //int neg_arm_set_unused(int n) {
 //    if (n > 0) {
 //        int u = 5;
+//    }
+//    return 0;
+//}
+
+/* a constant-false condition makes the then-arm unreachable. */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_if_false() {
+//    if (false) {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+/* a constant-true condition makes the else-arm unreachable. */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_if_true_else() {
+//    if (true) {
+//    } else {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+/* an empty condition is always true, so a non-empty else is unreachable. */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_if_empty_else() {
+//    if () {
+//    } else {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+/* a const-substituted condition folds to a literal, so the dead arm is found. */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_const_subst() {
+//    const bool DEBUG = false;
+//    if (DEBUG) {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+/* a condition that constfold collapses to a constant drives the detection. */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_folded_false() {
+//    if (1 > 2) {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+/* an integer-zero condition is false -> then-arm unreachable. */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_int_false() {
+//    if (0) {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+/* a nonzero integer condition is true -> else-arm unreachable. */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_int_true_else() {
+//    if (5) {
+//    } else {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+/* a char-zero condition is false -> then-arm unreachable. */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_char_false() {
+//    if ('\0') {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+/* a float-zero condition is false -> then-arm unreachable. */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_float_false() {
+//    if (0.0) {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+/* a constant-true if makes an `else if` chain unreachable (the dead branch is a
+   nested if, not a block — flagged at its `if`). */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_const_else_if(int x) {
+//    if (true) {
+//    } else if (x > 0) {
+//        __println("dead");
 //    }
 //    return 0;
 //}

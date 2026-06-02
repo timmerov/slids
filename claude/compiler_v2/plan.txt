@@ -93,8 +93,12 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     slids convention; grammar-synthesized); ALL local allocas hoisted to the entry
     block (v1 stack-overflow fix) + emitLogical rewritten to phi nodes (was alloca,
     leaked per-iteration in a loop condition); LoopCtx-threaded break/continue
-    codegen; endsTerminated (return/break/continue) for br decisions. Sessions 4-6
-    (for, switch, labeled break/continue) not yet started.
+    codegen; endsTerminated (return/break/continue) for br decisions. Side quests
+    on top of Session 3: empty condition (`if ()` too, via the shared
+    parseParenCondition); constant-condition unreachable detection (classify,
+    post-constfold) — const-true if flags the else, const-false if/while flags
+    then/body ("Unreachable statement."); const-true loops + do-while never flagged
+    (3B). Sessions 4-6 (for, switch, labeled break/continue) not yet started.
   * return — LANDED (kReturnStmt + return-correctness check from Phase 1).
 
 Phase 3 — functions

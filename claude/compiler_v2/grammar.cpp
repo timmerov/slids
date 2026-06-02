@@ -859,10 +859,8 @@ struct Parser {
         int stmt_file = peek().file_id;
         int stmt_tok = pos;
         advance();   // if
-        if (!expect(token::Kind::kLParen, "(")) return nullptr;
-        auto cond = parseExpr();
+        auto cond = parseParenCondition();   // empty `()` -> always-true literal
         if (!cond) return nullptr;
-        if (!expect(token::Kind::kRParen, ")")) return nullptr;
         if (peek().kind != token::Kind::kLBrace) {
             error("Expected '{' after if condition.");
             return nullptr;

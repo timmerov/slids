@@ -180,6 +180,21 @@ SESSION 3 — while + break/continue (unlabeled) + POST-CONDITION while   [LANDE
   * exit: pre + post while, unlabeled break/continue; the loop-context accumulators
     are live (do-while consumes them).
 
+  POST-SESSION-3 SIDE QUESTS (landed on top, not part of the original 6 sessions):
+  * EMPTY CONDITION everywhere — `if ()` now uses the same shared grammar helper
+    parseParenCondition as while (synthesizes the always-true "1" literal). The
+    "empty = true" convention now applies to if + both while forms.
+  * CONSTANT-CONDITION UNREACHABLE — classify (post-constfold, so a folded literal
+    / substituted const / synthesized empty-`()` is visible; resolve's 2A is pre-
+    constfold). constTruth(cond) -> True/False/NotConst; const-true if flags its
+    else, const-false if flags its then, const-false while flags its body
+    ("Unreachable statement." at the dead branch's first stmt; empty branch =
+    nothing to flag). Const-TRUE loops are NOT flagged (3B — the unreachable
+    after-code case is the todo.txt deferral); a do-while is never flagged (body
+    runs once). Tests: ifelse.sl (empty-then/empty-else positives + 7 const-dead
+    negatives spanning bool/int/char/float/folded/substituted/else-if) +
+    while.sl (do-const-false + while-true positives confirm no false flag).
+
 SESSION 4 — for-loop (desugar-heavy)
 
   Canonical-form session; RANGE-based only (container for-each is Phase 5).

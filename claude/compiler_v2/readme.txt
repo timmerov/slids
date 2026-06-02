@@ -175,8 +175,9 @@ STAGE FILES (.h / .cpp pairs)
             init-set into the enclosing loop-frame's break/continue accumulator
             (∩, top-seeded via a `seen` flag) — a do-while consumes them, a
             pre-condition while ignores them (after = S regardless). An empty
-            condition (`while ()` / `while {} ()`) is the always-true literal
-            grammar synthesizes (a slids convention). The loop-frame stack
+            condition (`if ()` / `while ()` / `while {} ()`) is the always-true
+            literal grammar synthesizes via the shared parseParenCondition (a
+            slids convention "empty = true"). The loop-frame stack
             (Tree::loop_stack) is transient resolve state, id-keyed like the DA sets.
             Caches lvalue type on AugAssignStmts (s.return_type) and
             return type + param_types on CallStmts/CallExprs (one shared
@@ -230,6 +231,14 @@ STAGE FILES (.h / .cpp pairs)
             condition not coercible to bool, non-numeric shift sides, bitwise on
             float, no-common-type binaries. Return-correctness (endsInReturn) recurses
             into a trailing block and a trailing if/else whose arms both return.
+            Constant-condition unreachable detection (runs HERE, post-constfold, so
+            a folded literal / substituted const / synthesized empty-`()` is
+            visible — vs resolve's 2A which is pre-constfold): constTruth folds the
+            condition to True/False/NotConst; a const-true if flags its else dead,
+            a const-false if flags its then, a const-false while flags its body —
+            "Unreachable statement." at the dead branch's first statement (empty
+            branch = nothing to flag). A const-TRUE loop is NOT flagged (3B); a
+            do-while is never flagged (its body always runs once).
             Per-arg type inference at call sites uses the resolved
             callee's param_types (cached on the kCallStmt/kCallExpr by
             resolve) as context. A kCallExpr's inferred_type is the

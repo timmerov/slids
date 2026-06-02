@@ -53,14 +53,13 @@ REACH GOALS
 
 DEFERRED FEATURES (later; may not be on the plan)
 
-  * EMPTY CONDITION ON IF/ELSE — an empty condition is always true; this is a
-    slids convention that "applies everywhere" (per test_v2/flow/ifelse.sl's
-    header). Implemented for BOTH while forms via the shared grammar helper
-    parseParenCondition (synthesizes the "1" literal), but NOT yet for if/else —
-    `if () { } else { }` does not parse today. parseIfStmt should call the same
-    parseParenCondition instead of its inline `(` expr `)`; then add a live empty-
-    if positive to ifelse.sl. (Deferred per the "add todo if we need to revisit
-    if-else" instruction when empty-while landed.)
+  * CONSTANT-TRUE LOOP -> UNREACHABLE AFTER-CODE — a `while (true)` / `while {} ()`
+    with no break never exits, so code after it is unreachable; likewise an empty
+    post-condition. NOT flagged today: per 3B there is no constant-true loop
+    special case (the loop is modeled possibly-zero / always-completing). The
+    constant-condition unreachable check (classify) covers if-true/if-false and
+    while-FALSE bodies, but deliberately skips constant-true loops. Revisit only
+    if 3B is revisited.
 
   * REOPEN ENUMS — re-`enum SameName ( ... )` to add members to an existing
     enum (member names can't collide across openings). Open spec qs: does the

@@ -352,6 +352,52 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
     }
 }
 
+// A condition whose value is known at compile time (constfold ran upstream, so a
+// constant condition is a folded literal — incl. a substituted const or the
+// synthesized empty-`()` true). Drives constant-branch unreachable detection.
+enum class CondConst { True, False, NotConst };
+
+bool literalIsZero(parse::Node const& n) {
+    if (n.kind == parse::Kind::kFloatLiteral) {
+        return std::strtod(n.text.c_str(), nullptr) == 0.0;   // ±0.0
+    }
+    // bool ("1"/"0"), int / uint / char: decimal magnitude (numeric-canonical).
+    errno = 0;
+    char* end = nullptr;
+    long long v = std::strtoll(n.text.c_str(), &end, 10);
+    if (errno == ERANGE) return false;   // doesn't fit -> certainly nonzero
+    return v == 0;
+}
+
+CondConst constTruth(parse::Node const& cond) {
+    if (cond.kind == parse::Kind::kBoolLiteral
+        || cond.kind == parse::Kind::kIntLiteral
+        || cond.kind == parse::Kind::kUintLiteral
+        || cond.kind == parse::Kind::kCharLiteral
+        || cond.kind == parse::Kind::kFloatLiteral) {
+        return literalIsZero(cond) ? CondConst::False : CondConst::True;
+    }
+    return CondConst::NotConst;
+}
+
+// Report the first statement of an unreachable branch. The branch is a kBlockStmt
+// (then / else / loop body) or, for an `else if`, a nested kIfStmt. An empty
+// block has nothing to flag.
+void reportUnreachableBranch(parse::Node const& branch, diagnostic::Sink& diag) {
+    if (branch.kind == parse::Kind::kBlockStmt) {
+        for (auto const& ch : branch.children) {
+            if (ch) {
+                diagnostic::report(diag, {ch->file_id, ch->tok,
+                    "Unreachable statement.", {}});
+                return;
+            }
+        }
+        return;   // empty block: nothing unreachable
+    }
+    diagnostic::report(diag, {branch.file_id, branch.tok,
+        "Unreachable statement.", {}});   // else-if chain
+}
+
 void classifyStmt(parse::Tree& tree, parse::Node& s,
                   std::string const& fn_return_type,
                   diagnostic::Sink& diag) {
@@ -507,8 +553,17 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     "An if condition must be a condition expression; type '"
                     + cond.inferred_type + "' is not.", {}});
             }
+            // Constant condition -> the opposite branch is dead: a const-true if
+            // never enters the else, a const-false if never enters the then.
+            bool has_else = s.children.size() > 2 && s.children[2];
+            CondConst c = constTruth(cond);
+            if (c == CondConst::True && has_else) {
+                reportUnreachableBranch(*s.children[2], diag);
+            } else if (c == CondConst::False) {
+                reportUnreachableBranch(*s.children[1], diag);
+            }
             classifyStmt(tree, *s.children[1], fn_return_type, diag);
-            if (s.children.size() > 2 && s.children[2]) {
+            if (has_else) {
                 classifyStmt(tree, *s.children[2], fn_return_type, diag);
             }
             return;
@@ -524,6 +579,12 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 diagnostic::report(diag, {cond.file_id, cond.tok,
                     "A while condition must be a condition expression; type '"
                     + cond.inferred_type + "' is not.", {}});
+            }
+            // A constant-false pre-condition never runs the body. A constant-true
+            // loop is NOT flagged: per 3B there is no constant-true loop special
+            // case (the body is reachable; an unreachable after-loop is deferred).
+            if (constTruth(cond) == CondConst::False) {
+                reportUnreachableBranch(*s.children[1], diag);
             }
             classifyStmt(tree, *s.children[1], fn_return_type, diag);
             return;

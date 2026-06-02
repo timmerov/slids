@@ -352,6 +352,29 @@ int do_empty_cond(int n) {
     return i;
 }
 
+/* a do-while body always runs once, so a constant-FALSE condition does NOT make
+   it unreachable — this compiles and runs the body once. */
+int do_const_false(int n) {
+    int r = 0;
+    while {
+        r = n + 1;
+    } (false);
+    return r;
+}
+
+/* an explicit while(true) is NOT flagged (3B: no constant-true loop special
+   case); the body is reachable, break is the only exit. */
+int while_true(int n) {
+    int i = 0;
+    while (true) {
+        if (i >= n) {
+            break;
+        }
+        i = i + 1;
+    }
+    return i;
+}
+
 int32 main() {
     __println("sum_to(5) = " + sum_to(5));      // 15
     __println("sum_to(0) = " + sum_to(0));      // 0
@@ -374,6 +397,8 @@ int32 main() {
     __println("do_break(0) = " + do_break(0));  // 1
     __println("do_continue(5) = " + do_continue(5));    // 9
     __println("do_countdown(3) = " + do_countdown(3));  // 39
+    __println("do_const_false(5) = " + do_const_false(5));  // 6
+    __println("while_true(4) = " + while_true(4));  // 4
     __println("nested_break(3, 5) = " + nested_break(3, 5));    // 6
     __println("nested_continue(2, 3) = " + nested_continue(2, 3));  // 4
     __println("break_in_block(10) = " + break_in_block(10));    // 3
@@ -485,4 +510,14 @@ negatives — one //-block uncommented per run.
 //    while {
 //        n = n - 1;
 //    } (n > 0);
+//}
+
+/* a constant-false condition makes the body unreachable. (a constant-TRUE loop
+   is NOT flagged — 3B has no constant-true loop special case.) */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_while_false() {
+//    while (false) {
+//        __println("dead");
+//    }
+//    return 0;
 //}
