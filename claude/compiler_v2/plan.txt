@@ -103,9 +103,15 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     that the other for shapes will desugar to): explicit-type varlist, 3 scope
     frames (for/update/body, body may shadow a for-var), body-then-update DA
     (update reads body-out ∩ continue_accum), possibly-zero (after = S), update
-    may not break/continue/return, continue -> update in codegen. Deferred:
-    typeless/reuse varlist (needs inferred-init); range/array/enum/tuple/class for
-    shapes (desugar to long-for); Sessions 5-6 (switch, labeled break/continue).
+    may not break/continue/return, continue -> update in codegen. The RANGED for
+    also landed (`for (var : start .. [cmp] end [op step]) {body}`, cmp
+    `< <= > >= !=` default `<`, op `+ - * / << >>` default `+1`, operands are
+    unary-expressions): desugars in the grammar to a kForLongStmt with synthesized
+    `_$end`/`_$step`; explicit-type var; empty-range compile error ("Invalid
+    range." on `..`) when start+end are constant and start-cmp-end is false; no
+    infinite-loop guard (todo.txt). Deferred: typeless/reuse varlist (needs
+    inferred-init); array/enum/tuple/class for shapes (desugar to long-for);
+    Sessions 5-6 (switch, labeled break/continue).
   * return — LANDED (kReturnStmt + return-correctness check from Phase 1).
 
 Phase 3 — functions

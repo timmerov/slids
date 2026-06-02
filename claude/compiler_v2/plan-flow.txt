@@ -195,7 +195,7 @@ SESSION 3 — while + break/continue (unlabeled) + POST-CONDITION while   [LANDE
     negatives spanning bool/int/char/float/folded/substituted/else-if) +
     while.sl (do-const-false + while-true positives confirm no false flag).
 
-SESSION 4 — for-loops   [LONG-FORM LANDED; other shapes + reuse pending]
+SESSION 4 — for-loops   [LONG-FORM + RANGED LANDED; other shapes + reuse pending]
 
   ARCHITECTURE (revised from the original range-only plan): the LONG-FORM for is
   the CANONICAL for node, and every other for shape (range `i : 0..N`, array,
@@ -223,6 +223,23 @@ SESSION 4 — for-loops   [LONG-FORM LANDED; other shapes + reuse pending]
     negatives (update break/continue/return, transitive return in nested update
     loop, for-var uninit in cond, continue-undercuts-update-read, possibly-zero
     escape, return-correctness).
+
+  LANDED — ranged `for (var : start .. [cmp] end [op step]) {body}` (first shape):
+  * grammar dispatches on the token after the first `type var`: ':' -> ranged,
+    else -> long-form varlist. Ranged DESUGARS in the grammar to a kForLongStmt
+    (synthesized `_$end`/`_$step` hidden vars + cond `var cmp _$end` + update
+    `var = var op step`), tagged with the `..` token (Node::range_dotdot_tok).
+    cmp `< <= > >= !=` default `<`; op `+ - * / << >>` default `+1`; operands
+    (start/end/step) are unary-expressions (parens for compound, no binary eaten).
+    Explicit-type var this round.
+  * classify EMPTY-RANGE check (ranged-for only, gated on range_dotdot_tok): if
+    start + end fold to literals and `start cmp end` is false -> "Invalid range."
+    caret on the `..` (rangeFirstTestFalse compares the two literals, int/float).
+    NO infinite-loop guard (deferred — todo.txt literal-fold check).
+  * tests: test_v2/flow/forrange.sl — 21 positives (all cmp/op variants incl.
+    `/ >> << *`, descending, parens, variable/call/unary/PPID operands, float +
+    char ranges, nested, break/continue, boundary) + 7 negatives (empty range via
+    `< > != <= >=`, boundary, float).
 
   PENDING (this session's remaining work):
   * TYPELESS varlist + enclosing-scope REUSE — deferred, needs inferred-init.

@@ -67,8 +67,16 @@ STAGE FILES (.h / .cpp pairs)
             scope or function scope); statements (var-decl incl. the
             `<ident> <ident>` typed-decl shape, assign, aug-assign, alias,
             namespace decl, 0/1/N-arg call possibly qualified, bare inc/dec,
-            return — a qualified name leading a statement routes through one
-            parseNameLedStmt); expressions
+            return, if/else, while + post-condition do-while, the long-form for
+            and the RANGED for — a qualified name leading a statement routes
+            through one parseNameLedStmt); the two for forms dispatch on the token
+            after the first `type var`: ':' opens the ranged form
+            (`for (var : start .. [cmp] end [op step]) {body}`, cmp `< <= > >= !=`
+            default `<`, op `+ - * / << >>` default `+1`, operands are
+            unary-expressions), which DESUGARS in the grammar to a kForLongStmt
+            (synthesizing hidden `_$end` / `_$step` vars + the cond/update,
+            tagged with the `..` token); anything else is the long form's
+            varlist. expressions
             across the full C precedence ladder (literals + ident, unary
             `! ~ + -`, prefix/postfix ++/--, full binary set
             arith/bitwise/shift/comparison/logical, parens, postfix-call on
@@ -251,7 +259,12 @@ STAGE FILES (.h / .cpp pairs)
             a const-false if flags its then, a const-false while flags its body —
             "Unreachable statement." at the dead branch's first statement (empty
             branch = nothing to flag). A const-TRUE loop is NOT flagged (3B); a
-            do-while is never flagged (its body always runs once).
+            do-while is never flagged (its body always runs once). Empty-range
+            check (ranged-for only, gated on range_dotdot_tok): if a ranged-for's
+            start and end both fold to literals and `start cmp end` is false, the
+            body can never run -> "Invalid range." caret on the `..`
+            (rangeFirstTestFalse compares the two literals; no infinite-loop check
+            — deferred, todo.txt).
             Per-arg type inference at call sites uses the resolved
             callee's param_types (cached on the kCallStmt/kCallExpr by
             resolve) as context. A kCallExpr's inferred_type is the

@@ -324,6 +324,13 @@ struct Parser {
         return node;
     }
 
+    std::unique_ptr<parse::Node> makeIdent(std::string name, int file, int tok) {
+        auto node = newNodeAt(parse::Kind::kIdentExpr, file, tok);
+        node->name = std::move(name);
+        node->name_tok = tok;
+        return node;
+    }
+
     std::unique_ptr<parse::Node> parseMulDiv() {
         auto left = parseUnary();
         if (!left) return nullptr;
@@ -938,46 +945,11 @@ struct Parser {
         return node;
     }
 
-    // Long-form for: `for ( varlist ) ( cond ) { update } { body }`.
-    // varlist is a comma-separated list of typed var decls (explicit type
-    // required this round; an empty list is allowed). The node stores
-    // children[0] = cond, [1] = update-block, [2] = body-block, [3..] = varlist
-    // decls. The canonical for node — other for shapes desugar to it.
-    std::unique_ptr<parse::Node> parseForStmt() {
-        int stmt_file = peek().file_id;
-        int stmt_tok = pos;
-        advance();   // for
-        if (!expect(token::Kind::kLParen, "(")) return nullptr;
-        // varlist: `type name [= expr]`, comma-separated, until ')'.
-        std::vector<std::unique_ptr<parse::Node>> varlist;
-        while (peek().kind != token::Kind::kRParen) {
-            int v_file = peek().file_id;
-            int v_tok = pos;
-            std::string vtype = parseType();
-            if (fatal) return nullptr;
-            if (peek().kind != token::Kind::kIdentifier) {
-                error("Expected a variable name in the for-loop variable list.");
-                return nullptr;
-            }
-            auto decl = newNodeAt(parse::Kind::kVarDeclStmt, v_file, v_tok);
-            decl->name = peek().text;
-            decl->name_tok = pos;
-            decl->return_type = std::move(vtype);
-            advance();   // name
-            if (peek().kind == token::Kind::kEquals) {
-                advance();   // =
-                auto init = parseExpr();
-                if (!init) return nullptr;
-                decl->children.push_back(std::move(init));
-            }
-            varlist.push_back(std::move(decl));
-            if (peek().kind == token::Kind::kComma) { advance(); continue; }
-            if (peek().kind != token::Kind::kRParen) {
-                error("Expected ',' or ')' in the for-loop variable list.");
-                return nullptr;
-            }
-        }
-        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+    // Build a long-for's `( cond ) { update } { body }` tail and assemble the
+    // node from an already-parsed varlist. children[0]=cond, [1]=update-block,
+    // [2]=body-block, [3..]=varlist decls.
+    std::unique_ptr<parse::Node> finishLongFor(int stmt_file, int stmt_tok,
+            std::vector<std::unique_ptr<parse::Node>> varlist) {
         auto cond = parseParenCondition();   // `( cond )`, empty -> true
         if (!cond) return nullptr;
         if (peek().kind != token::Kind::kLBrace) {
@@ -998,6 +970,163 @@ struct Parser {
         node->children.push_back(std::move(body));
         for (auto& d : varlist) node->children.push_back(std::move(d));
         return node;
+    }
+
+    // Ranged-for: `for (type var : start .. [cmp] end [op step]) {body}`.
+    // Desugars (at parse) to a kForLongStmt — the canonical for node — tagged
+    // with the `..` token for the empty-range "Invalid range." check. The loop
+    // var has an explicit type this round; `_$end` / `_$step` are synthesized
+    // hidden vars (`$` is not a legal identifier char, so they can't collide).
+    std::unique_ptr<parse::Node> parseRangeFor(int stmt_file, int stmt_tok,
+            std::string vtype, std::string vname, int v_file, int v_tok,
+            int vname_tok) {
+        advance();   // :
+        auto start = parseUnary();
+        if (!start) return nullptr;
+        if (peek().kind != token::Kind::kDotDot) {
+            error("Expected '..' in the for-loop range.");
+            return nullptr;
+        }
+        int dotdot_tok = pos;
+        advance();   // ..
+        std::string cmp = "<";
+        token::Kind ck = peek().kind;
+        if      (ck == token::Kind::kLt)    { cmp = "<";  advance(); }
+        else if (ck == token::Kind::kLtEq)  { cmp = "<="; advance(); }
+        else if (ck == token::Kind::kGt)    { cmp = ">";  advance(); }
+        else if (ck == token::Kind::kGtEq)  { cmp = ">="; advance(); }
+        else if (ck == token::Kind::kNotEq) { cmp = "!="; advance(); }
+        auto end = parseUnary();
+        if (!end) return nullptr;
+        std::string op;
+        token::Kind ok = peek().kind;
+        if      (ok == token::Kind::kPlus)   op = "+";
+        else if (ok == token::Kind::kMinus)  op = "-";
+        else if (ok == token::Kind::kStar)   op = "*";
+        else if (ok == token::Kind::kSlash)  op = "/";
+        else if (ok == token::Kind::kLShift) op = "<<";
+        else if (ok == token::Kind::kRShift) op = ">>";
+        std::unique_ptr<parse::Node> step;
+        if (!op.empty()) {
+            advance();   // op
+            step = parseUnary();
+            if (!step) return nullptr;
+        }
+        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+        if (peek().kind != token::Kind::kLBrace) {
+            error("Expected '{' for the for-loop body.");
+            return nullptr;
+        }
+        auto body = parseBlock();
+        if (!body) return nullptr;
+
+        // varlist: [ type var = start, type _$end = end, (type _$step = step) ]
+        std::vector<std::unique_ptr<parse::Node>> varlist;
+        auto vd = newNodeAt(parse::Kind::kVarDeclStmt, v_file, v_tok);
+        vd->name = vname; vd->name_tok = vname_tok; vd->return_type = vtype;
+        vd->children.push_back(std::move(start));
+        varlist.push_back(std::move(vd));
+
+        auto ed = newNodeAt(parse::Kind::kVarDeclStmt, v_file, dotdot_tok);
+        ed->name = "_$end"; ed->name_tok = dotdot_tok; ed->return_type = vtype;
+        ed->children.push_back(std::move(end));
+        varlist.push_back(std::move(ed));
+
+        std::unique_ptr<parse::Node> step_val;
+        if (step) {
+            auto sd = newNodeAt(parse::Kind::kVarDeclStmt, v_file, dotdot_tok);
+            sd->name = "_$step"; sd->name_tok = dotdot_tok; sd->return_type = vtype;
+            sd->children.push_back(std::move(step));
+            varlist.push_back(std::move(sd));
+            step_val = makeIdent("_$step", v_file, dotdot_tok);
+        } else {
+            op = "+";   // default step is +1
+            auto one = newNodeAt(parse::Kind::kIntLiteral, v_file, dotdot_tok);
+            one->text = "1";
+            step_val = std::move(one);
+        }
+
+        // cond: `var cmp _$end`
+        auto cond = makeBinary(cmp, makeIdent(vname, v_file, vname_tok),
+                               makeIdent("_$end", v_file, dotdot_tok),
+                               v_file, dotdot_tok);
+        // update: `{ var = var op step_val }`
+        auto rhs = makeBinary(op, makeIdent(vname, v_file, vname_tok),
+                              std::move(step_val), v_file, dotdot_tok);
+        auto assign = newNodeAt(parse::Kind::kAssignStmt, v_file, vname_tok);
+        assign->name = vname; assign->name_tok = vname_tok;
+        assign->children.push_back(std::move(rhs));
+        auto update = newNodeAt(parse::Kind::kBlockStmt, v_file, dotdot_tok);
+        update->children.push_back(std::move(assign));
+
+        auto node = newNodeAt(parse::Kind::kForLongStmt, stmt_file, stmt_tok);
+        node->children.push_back(std::move(cond));     // [0]
+        node->children.push_back(std::move(update));   // [1]
+        node->children.push_back(std::move(body));     // [2]
+        for (auto& d : varlist) node->children.push_back(std::move(d));  // [3..]
+        node->range_dotdot_tok = dotdot_tok;
+        return node;
+    }
+
+    // for — dispatches between the colon (ranged) form and the long form on the
+    // token after the first `type var`: ':' opens a range, anything else makes
+    // that decl varlist[0] of a long-for. An empty `()` is an empty-varlist long
+    // form. Explicit var types required this round.
+    std::unique_ptr<parse::Node> parseForStmt() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
+        advance();   // for
+        if (!expect(token::Kind::kLParen, "(")) return nullptr;
+        if (peek().kind == token::Kind::kRParen) {
+            advance();   // )  — empty varlist long-for
+            return finishLongFor(stmt_file, stmt_tok, {});
+        }
+        // First decl's `type name`.
+        int v_file = peek().file_id;
+        int v_tok = pos;
+        std::string vtype = parseType();
+        if (fatal) return nullptr;
+        if (peek().kind != token::Kind::kIdentifier) {
+            error("Expected a variable name in the for-loop.");
+            return nullptr;
+        }
+        std::string vname = peek().text;
+        int vname_tok = pos;
+        advance();   // name
+        if (peek().kind == token::Kind::kColon) {
+            return parseRangeFor(stmt_file, stmt_tok, std::move(vtype),
+                                 std::move(vname), v_file, v_tok, vname_tok);
+        }
+        // Long form: varlist[0] is the decl just parsed; gather any more.
+        std::vector<std::unique_ptr<parse::Node>> varlist;
+        while (true) {
+            auto decl = newNodeAt(parse::Kind::kVarDeclStmt, v_file, v_tok);
+            decl->name = vname;
+            decl->name_tok = vname_tok;
+            decl->return_type = std::move(vtype);
+            if (peek().kind == token::Kind::kEquals) {
+                advance();   // =
+                auto init = parseExpr();
+                if (!init) return nullptr;
+                decl->children.push_back(std::move(init));
+            }
+            varlist.push_back(std::move(decl));
+            if (peek().kind != token::Kind::kComma) break;
+            advance();   // ,
+            v_file = peek().file_id;
+            v_tok = pos;
+            vtype = parseType();
+            if (fatal) return nullptr;
+            if (peek().kind != token::Kind::kIdentifier) {
+                error("Expected a variable name in the for-loop variable list.");
+                return nullptr;
+            }
+            vname = peek().text;
+            vname_tok = pos;
+            advance();   // name
+        }
+        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+        return finishLongFor(stmt_file, stmt_tok, std::move(varlist));
     }
 
     // break; / continue; — a bare keyword statement.

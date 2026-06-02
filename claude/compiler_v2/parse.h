@@ -71,6 +71,9 @@ struct Node {
     int tok = -1;                // index into token::List::tokens for error attribution
     int name_tok = -1;           // ident token for named constructs (VarDecl, FunctionDef/Decl, Param)
     int resolved_entry_id = -1;  // classify: ident / lhs / callee -> Tree::entries index
+    int range_dotdot_tok = -1;   // kForLongStmt synthesized from a ranged-for: the
+                                 // `..` token (>= 0 marks range-derived; the caret
+                                 // for the "Invalid range." empty-range check)
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
     // Qualified name (ident / call / inline decl / bare alias): leading namespace
     // segments before `name`. `Space:Nested:kFour` -> qualifier {Space, Nested},

@@ -400,6 +400,45 @@ void reportUnreachableBranch(parse::Node const& branch, diagnostic::Sink& diag) 
         "Unreachable statement.", {}});   // else-if chain
 }
 
+// `a cmp b` for the ranged-for empty-range check. Unknown cmp -> true (don't flag).
+template <typename T>
+bool applyCmp(T a, T b, std::string const& cmp) {
+    if (cmp == "<")  return a < b;
+    if (cmp == "<=") return a <= b;
+    if (cmp == ">")  return a > b;
+    if (cmp == ">=") return a >= b;
+    if (cmp == "!=") return a != b;
+    return true;
+}
+
+// Empty-range check for a ranged-for: both bounds constant (folded literals) and
+// `start cmp end` FALSE means the loop body can never run. Non-literal bounds ->
+// not decidable -> not an error.
+bool rangeFirstTestFalse(parse::Node const& start, parse::Node const& end,
+                         std::string const& cmp) {
+    auto isLit = [](parse::Node const& n) {
+        return n.kind == parse::Kind::kBoolLiteral
+            || n.kind == parse::Kind::kIntLiteral
+            || n.kind == parse::Kind::kUintLiteral
+            || n.kind == parse::Kind::kCharLiteral
+            || n.kind == parse::Kind::kFloatLiteral;
+    };
+    if (!isLit(start) || !isLit(end)) return false;
+    if (start.kind == parse::Kind::kFloatLiteral
+        || end.kind == parse::Kind::kFloatLiteral) {
+        double a = std::strtod(start.text.c_str(), nullptr);
+        double b = std::strtod(end.text.c_str(), nullptr);
+        return !applyCmp(a, b, cmp);
+    }
+    errno = 0;
+    long long a = std::strtoll(start.text.c_str(), nullptr, 10);
+    if (errno == ERANGE) return false;
+    errno = 0;
+    long long b = std::strtoll(end.text.c_str(), nullptr, 10);
+    if (errno == ERANGE) return false;
+    return !applyCmp(a, b, cmp);
+}
+
 void classifyStmt(parse::Tree& tree, parse::Node& s,
                   std::string const& fn_return_type,
                   diagnostic::Sink& diag) {
@@ -623,6 +662,18 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             classifyStmt(tree, *s.children[1], fn_return_type, diag);   // update
             classifyStmt(tree, *s.children[2], fn_return_type, diag);   // body
+            // Ranged-for empty-range check: children[3] = loop var (init = start),
+            // [4] = _$end (init = end); cond.text = cmp. Both bounds constant and
+            // `start cmp end` false -> the body never runs -> "Invalid range." at
+            // the `..`. (Ranged-for only — gated on range_dotdot_tok.)
+            if (s.range_dotdot_tok >= 0 && s.children.size() >= 5
+                && !s.children[3]->children.empty()
+                && !s.children[4]->children.empty()
+                && rangeFirstTestFalse(*s.children[3]->children[0],
+                                       *s.children[4]->children[0], cond.text)) {
+                diagnostic::report(diag, {s.file_id, s.range_dotdot_tok,
+                    "Invalid range.", {}});
+            }
             return;
         }
         case parse::Kind::kBreakStmt:
