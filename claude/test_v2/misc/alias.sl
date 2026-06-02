@@ -21,6 +21,8 @@ alias Integer = int;
 alias Float = float;
 alias Whole = Integer;        // chained to another alias
 
+enum Dir ( kNorth, kSouth, kEast, kWest );
+
 int32 doubled(Integer n) {    // alias in param + return position
     return n + n;
 }
@@ -39,6 +41,9 @@ int32 main() {
     Integer w;               // declare-then-assign through an alias type
     w = doubled(20);
     __println(##type(w) + " " + ##name(w) + " = " + w);
+
+    Dir d = Dir:kNorth;
+    __println(##type(d) + " " + ##name(d) + " = " + d);
 
     //-EXPECT-ERROR: Unknown type 'Bogus'
     //Bogus q;
