@@ -67,16 +67,17 @@ STAGE FILES (.h / .cpp pairs)
             scope or function scope); statements (var-decl incl. the
             `<ident> <ident>` typed-decl shape, assign, aug-assign, alias,
             namespace decl, 0/1/N-arg call possibly qualified, bare inc/dec,
-            return, if/else, while + post-condition do-while, the long-form for
-            and the RANGED for — a qualified name leading a statement routes
-            through one parseNameLedStmt); the two for forms dispatch on the token
-            after the first `type var`: ':' opens the ranged form
-            (`for (var : start .. [cmp] end [op step]) {body}`, cmp `< <= > >= !=`
-            default `<`, op `+ - * / << >>` default `+1`, operands are
-            unary-expressions), which DESUGARS in the grammar to a kForLongStmt
-            (synthesizing hidden `_$end` / `_$step` vars + the cond/update,
-            tagged with the `..` token); anything else is the long form's
-            varlist. expressions
+            return, if/else, while + post-condition do-while, the long-form for,
+            the RANGED for, and the ENUM for — a qualified name leading a statement
+            routes through one parseNameLedStmt); the for forms dispatch on what
+            follows the first `type var`: ':' then an operand, then '..' -> ranged
+            form (`for (var : start .. [cmp] end [op step]) {body}`, cmp
+            `< <= > >= !=` default `<`, op `+ - * / << >>` default `+1`, operands
+            are unary-expressions), DESUGARED in the grammar to a kForLongStmt
+            (hidden `_$end` / `_$step` vars + cond/update, tagged with the `..`
+            token); ':' then a bare identifier -> ENUM form (`for (var : Enum)
+            {body}`) parsed as a kForEnumStmt (resolve lowers it, below); anything
+            else after the first `type var` is the long form's varlist. expressions
             across the full C precedence ladder (literals + ident, unary
             `! ~ + -`, prefix/postfix ++/--, full binary set
             arith/bitwise/shift/comparison/logical, parens, postfix-call on
@@ -195,7 +196,16 @@ STAGE FILES (.h / .cpp pairs)
             for_update_floor: a break/continue at the update's own loop-depth or
             any return in the update errors ("A '<kw>' statement is not allowed in
             a for-loop update clause."), while a loop nested in the update gives
-            its own legal break/continue target. An empty
+            its own legal break/continue target. A kForEnumStmt (`for (var : Enum)
+            {body}`) is REWRITTEN IN PLACE here into a kForLongStmt over the enum's
+            first..last DEFINED members: resolve the enum-ref (must be a kNamespace
+            with an underlying type), find the first/last kConst members by id
+            (definition) order in its ns_frame, and synthesize
+            `for (T var = Enum:first) (var <= _$end = Enum:last) { var = var + 1; }
+            {body}` (members referenced by qualified name → normal resolve/constfold
+            fills their values), tagged range-derived so a descending/empty enum
+            (first > last) trips the empty-range "Invalid range." check on the enum
+            name; then resolved through the for-long path. An empty
             condition (`if ()` / `while ()` / `while {} ()` / for's `()`) is the
             always-true literal grammar synthesizes via the shared
             parseParenCondition (a slids convention "empty = true"). The loop-frame

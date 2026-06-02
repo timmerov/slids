@@ -979,14 +979,8 @@ struct Parser {
     // hidden vars (`$` is not a legal identifier char, so they can't collide).
     std::unique_ptr<parse::Node> parseRangeFor(int stmt_file, int stmt_tok,
             std::string vtype, std::string vname, int v_file, int v_tok,
-            int vname_tok) {
-        advance();   // :
-        auto start = parseUnary();
-        if (!start) return nullptr;
-        if (peek().kind != token::Kind::kDotDot) {
-            error("Expected '..' in the for-loop range.");
-            return nullptr;
-        }
+            int vname_tok, std::unique_ptr<parse::Node> start) {
+        // `start` is the operand before `..`, already parsed by the caller.
         int dotdot_tok = pos;
         advance();   // ..
         std::string cmp = "<";
@@ -1068,6 +1062,32 @@ struct Parser {
         return node;
     }
 
+    // for-enum: `for (var : Enum) {body}`. `enum_ref` is the operand after ':'
+    // (must be a bare/qualified identifier — the enum name). Builds a kForEnumStmt
+    // {loop-var decl, enum-ref, body}; resolve lowers it once the enum is known.
+    std::unique_ptr<parse::Node> parseEnumFor(int stmt_file, int stmt_tok,
+            std::string vtype, std::string vname, int v_file, int v_tok,
+            int vname_tok, std::unique_ptr<parse::Node> enum_ref) {
+        if (enum_ref->kind != parse::Kind::kIdentExpr) {
+            error("Expected an enum name or a range after ':'.");
+            return nullptr;
+        }
+        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+        if (peek().kind != token::Kind::kLBrace) {
+            error("Expected '{' for the for-loop body.");
+            return nullptr;
+        }
+        auto body = parseBlock();
+        if (!body) return nullptr;
+        auto vd = newNodeAt(parse::Kind::kVarDeclStmt, v_file, v_tok);
+        vd->name = vname; vd->name_tok = vname_tok; vd->return_type = vtype;
+        auto node = newNodeAt(parse::Kind::kForEnumStmt, stmt_file, stmt_tok);
+        node->children.push_back(std::move(vd));        // [0] loop-var decl
+        node->children.push_back(std::move(enum_ref));  // [1] enum-ref
+        node->children.push_back(std::move(body));      // [2] body
+        return node;
+    }
+
     // for — dispatches between the colon (ranged) form and the long form on the
     // token after the first `type var`: ':' opens a range, anything else makes
     // that decl varlist[0] of a long-for. An empty `()` is an empty-varlist long
@@ -1094,8 +1114,17 @@ struct Parser {
         int vname_tok = pos;
         advance();   // name
         if (peek().kind == token::Kind::kColon) {
-            return parseRangeFor(stmt_file, stmt_tok, std::move(vtype),
-                                 std::move(vname), v_file, v_tok, vname_tok);
+            advance();   // :
+            auto operand = parseUnary();   // start (range) or the enum name
+            if (!operand) return nullptr;
+            if (peek().kind == token::Kind::kDotDot) {
+                return parseRangeFor(stmt_file, stmt_tok, std::move(vtype),
+                                     std::move(vname), v_file, v_tok, vname_tok,
+                                     std::move(operand));
+            }
+            return parseEnumFor(stmt_file, stmt_tok, std::move(vtype),
+                                std::move(vname), v_file, v_tok, vname_tok,
+                                std::move(operand));
         }
         // Long form: varlist[0] is the decl just parsed; gather any more.
         std::vector<std::unique_ptr<parse::Node>> varlist;

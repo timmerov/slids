@@ -42,6 +42,10 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kWhileStmt:     return ast::Kind::kWhileStmt;
         case parse::Kind::kDoWhileStmt:   return ast::Kind::kDoWhileStmt;
         case parse::Kind::kForLongStmt:   return ast::Kind::kForLongStmt;
+        case parse::Kind::kForEnumStmt:
+            // Rewritten to a kForLongStmt during resolve; never copied to the ast.
+            assert(false && "toAstKind: kForEnumStmt should be lowered in resolve");
+            __builtin_unreachable();
         case parse::Kind::kBreakStmt:     return ast::Kind::kBreakStmt;
         case parse::Kind::kContinueStmt:  return ast::Kind::kContinueStmt;
         case parse::Kind::kStringLiteral: return ast::Kind::kStringLiteral;

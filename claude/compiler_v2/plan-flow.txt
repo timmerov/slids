@@ -195,7 +195,7 @@ SESSION 3 — while + break/continue (unlabeled) + POST-CONDITION while   [LANDE
     negatives spanning bool/int/char/float/folded/substituted/else-if) +
     while.sl (do-const-false + while-true positives confirm no false flag).
 
-SESSION 4 — for-loops   [LONG-FORM + RANGED LANDED; other shapes + reuse pending]
+SESSION 4 — for-loops   [LONG-FORM + RANGED + ENUM LANDED; reuse + array/tuple/class pending]
 
   ARCHITECTURE (revised from the original range-only plan): the LONG-FORM for is
   the CANONICAL for node, and every other for shape (range `i : 0..N`, array,
@@ -240,6 +240,23 @@ SESSION 4 — for-loops   [LONG-FORM + RANGED LANDED; other shapes + reuse pendi
     `/ >> << *`, descending, parens, variable/call/unary/PPID operands, float +
     char ranges, nested, break/continue, boundary) + 7 negatives (empty range via
     `< > != <= >=`, boundary, float).
+
+  LANDED — enum `for (var : Enum) {body}` (second shape):
+  * grammar: the ':' branch parses an operand; '..' -> ranged, a bare identifier ->
+    parseEnumFor building a kForEnumStmt {loop-var, enum-ref, body}.
+  * resolve REWRITES it in place to a kForLongStmt over the enum's first..last
+    DEFINED members (first/last kConst by id order in the enum's ns_frame),
+    referenced by qualified name (`Enum:first` / `Enum:last`) so resolve/constfold
+    fill the values; cond `var <= _$end`, update `var = var + 1`; tagged range-
+    derived so a descending/empty enum (first > last) trips the empty-range
+    "Invalid range." check (caret on the enum name). Value-based, no contiguousness
+    check. Errors: unknown enum / not-an-enum / no-members. Never survives resolve,
+    so downstream stages carry assert-unreachable cases only.
+  * tests: test_v2/flow/forenum.sl — 13 positives (count/sum members, int + enum +
+    char loop-var types, non-zero-start, non-contiguous (value-based, hits non-
+    members), single-member, negative-valued, namespace-qualified enum, nested,
+    break/continue, empty body) + 4 negatives (descending->Invalid range, not-an-
+    enum, unknown enum, zero-member enum).
 
   PENDING (this session's remaining work):
   * TYPELESS varlist + enclosing-scope REUSE — deferred, needs inferred-init.

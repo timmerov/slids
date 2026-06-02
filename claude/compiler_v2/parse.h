@@ -43,6 +43,10 @@ enum class Kind {
                    // children[0] = condition, [1] = update (kBlockStmt),
                    // [2] = body (kBlockStmt), [3..] = varlist (kVarDeclStmt each).
                    // The canonical for node; other for shapes desugar TO this.
+    kForEnumStmt,  // `for (var : Enum) {body}`. children[0] = loop-var decl,
+                   // [1] = enum-ref (kIdentExpr), [2] = body. resolve rewrites it
+                   // in place into a kForLongStmt over the enum's first..last
+                   // members; never survives to constfold/classify/codegen.
     kBreakStmt,    // break; — exits the nearest enclosing loop.
     kContinueStmt, // continue; — jumps to the nearest enclosing loop's test.
     kStringLiteral,

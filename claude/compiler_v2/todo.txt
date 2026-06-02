@@ -53,15 +53,21 @@ REACH GOALS
 
 DEFERRED FEATURES (later; may not be on the plan)
 
-  * FOR TYPELESS / REUSE LOOP VAR — `for (x = 0) ...` (long form) and
-    `for (x : 0..10)` (ranged) with no type spelling: reuse an enclosing-scope `x`
-    if one exists, else declare a fresh inferred-type loop var (type from the
-    initializer / range element). Needs inferred-init. Today BOTH for forms
-    require an explicit var type; a typeless entry hits a cryptic parse error
-    (parseType eats the name as a type). The reuse rule (`int row = 0;
-    for (row : 0..8)` writes the outer row, holding the last value after) fixes
-    the v1.md chess-sample bug. On the Session-4 plan (plan-flow.txt) — land with
-    inferred-init.
+  * FOR TYPELESS / REUSE LOOP VAR — a typeless loop var in any for form:
+    `for (x = 0) ...` (long), `for (x : 0..10)` (ranged), `for (x : Enum)` (enum).
+    Reuse an enclosing-scope `x` if one exists, else declare a fresh inferred-type
+    loop var (type from the initializer / range element / enum). Needs inferred-
+    init. Today all for forms require an explicit var type; a typeless entry hits
+    a cryptic parse error (parseType eats the name as a type). The reuse rule
+    (`int row = 0; for (row : 0..8)` writes the outer row, holding the last value
+    after) fixes the v1.md chess-sample bug. On the Session-4 plan (plan-flow.txt)
+    — land with inferred-init.
+
+  * FOR-ARRAY / FOR-TUPLE / FOR-CLASS — the remaining colon-form for shapes,
+    blocked on the underlying types: arrays + anon-tuples (Phase 4) and classes
+    with the for-each protocol op[]/size or begin/end/next (Phase 5). Each
+    desugars to a kForLongStmt over an index (like v1's _finishIter). Not landable
+    until those types exist.
 
   * RANGED-FOR LITERAL-FOLD LOOP-FOREVER CHECK — a ranged-for `for (var : start ..
     cmp end op step)` whose start/end/step are ALL integer literals can be checked

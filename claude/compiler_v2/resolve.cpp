@@ -856,6 +856,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         case parse::Kind::kWhileStmt:
         case parse::Kind::kDoWhileStmt:
         case parse::Kind::kForLongStmt:
+        case parse::Kind::kForEnumStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
         case parse::Kind::kParam:
@@ -1315,6 +1316,131 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             parse::popFrame(tree);
             tree.initialized_locals = std::move(entry);   // after = S
             return Completion::Normal;
+        }
+        case parse::Kind::kForEnumStmt: {
+            // children[0]=loop-var decl, [1]=enum-ref, [2]=body. Rewrite IN PLACE
+            // into a kForLongStmt over the enum's first..last defined members,
+            // then resolve that (so the whole for-long pipeline is reused). The
+            // first/last kConst members are referenced by qualified name, so the
+            // normal resolve+constfold path fills their values; an empty/descending
+            // enum (first > last) then trips the empty-range check ("Invalid
+            // range." on the enum name, via range_dotdot_tok).
+            assert(s.children.size() == 3 && "kForEnumStmt needs var+enum+body");
+            parse::Node& enum_ref = *s.children[1];
+            int enum_id = isQualified(enum_ref)
+                ? resolveQualifiedRef(tree, enum_ref, diag)
+                : resolveName(tree, enum_ref.name);
+            if (enum_id < 0) {
+                if (!isQualified(enum_ref)) {
+                    diagnostic::report(diag, {enum_ref.file_id, enum_ref.tok,
+                        "Unknown enum '" + enum_ref.name + "'.", {}});
+                }
+                return Completion::Normal;
+            }
+            // An enum is a kNamespace carrying an underlying type (transparent).
+            if (tree.entries[enum_id].kind != parse::EntryKind::kNamespace
+                || tree.entries[enum_id].slids_type.empty()) {
+                parse::Entry const& bad = tree.entries[enum_id];
+                diagnostic::report(diag, {enum_ref.file_id, enum_ref.tok,
+                    "'" + enum_ref.name + "' is not an enum.",
+                    {{bad.file_id, bad.tok, "declared here"}}});
+                return Completion::Normal;
+            }
+            int member_frame = tree.entries[enum_id].ns_frame_id;
+            int first = -1, last = -1;
+            for (std::size_t i = 0; i < tree.entries.size(); i++) {
+                parse::Entry const& m = tree.entries[i];
+                if (m.kind == parse::EntryKind::kConst
+                    && m.owner_ns_frame == member_frame) {
+                    if (first < 0) first = (int)i;
+                    last = (int)i;
+                }
+            }
+            if (first < 0) {
+                diagnostic::report(diag, {enum_ref.file_id, enum_ref.tok,
+                    "Enum '" + enum_ref.name + "' has no members to iterate.", {}});
+                return Completion::Normal;
+            }
+            // Capture enum-ref shape before we rebuild s.children.
+            std::vector<std::string> en_qual = enum_ref.qualifier;
+            std::vector<int> en_qtoks = enum_ref.qualifier_toks;
+            std::string en_name = enum_ref.name;
+            bool en_global = enum_ref.global_qualified;
+            int en_file = enum_ref.file_id;
+            int en_tok = enum_ref.tok;
+            int en_nametok = enum_ref.name_tok >= 0 ? enum_ref.name_tok : enum_ref.tok;
+
+            auto ident = [&](std::string nm, int tok) {
+                auto n = std::make_unique<parse::Node>();
+                n->kind = parse::Kind::kIdentExpr;
+                n->name = std::move(nm);
+                n->file_id = en_file; n->tok = tok; n->name_tok = tok;
+                return n;
+            };
+            // A qualified ref `<enum-path>:member` to a first/last member.
+            auto memberRef = [&](int mid) {
+                auto r = ident(tree.entries[mid].name, en_tok);
+                r->qualifier = en_qual;
+                r->qualifier.push_back(en_name);
+                r->qualifier_toks = en_qtoks;
+                r->qualifier_toks.push_back(en_nametok);
+                r->global_qualified = en_global;
+                return r;
+            };
+
+            // Reuse the loop-var decl; init it to the first member.
+            std::unique_ptr<parse::Node> var_decl = std::move(s.children[0]);
+            std::string var_name = var_decl->name;
+            std::string var_type = var_decl->return_type;
+            int var_tok = var_decl->name_tok;
+            var_decl->children.push_back(memberRef(first));
+            // _$end = last member.
+            auto end_decl = std::make_unique<parse::Node>();
+            end_decl->kind = parse::Kind::kVarDeclStmt;
+            end_decl->name = "_$end";
+            end_decl->return_type = var_type;
+            end_decl->file_id = en_file;
+            end_decl->tok = en_tok;
+            end_decl->name_tok = en_tok;
+            end_decl->children.push_back(memberRef(last));
+            // cond: var <= _$end
+            auto cond = std::make_unique<parse::Node>();
+            cond->kind = parse::Kind::kBinaryExpr;
+            cond->text = "<=";
+            cond->file_id = en_file; cond->tok = en_tok;
+            cond->children.push_back(ident(var_name, var_tok));
+            cond->children.push_back(ident("_$end", en_tok));
+            // update: { var = var + 1 }
+            auto one = std::make_unique<parse::Node>();
+            one->kind = parse::Kind::kIntLiteral; one->text = "1";
+            one->file_id = en_file; one->tok = en_tok;
+            auto add = std::make_unique<parse::Node>();
+            add->kind = parse::Kind::kBinaryExpr; add->text = "+";
+            add->file_id = en_file; add->tok = en_tok;
+            add->children.push_back(ident(var_name, var_tok));
+            add->children.push_back(std::move(one));
+            auto assign = std::make_unique<parse::Node>();
+            assign->kind = parse::Kind::kAssignStmt;
+            assign->name = var_name; assign->name_tok = var_tok;
+            assign->file_id = en_file; assign->tok = var_tok;
+            assign->children.push_back(std::move(add));
+            auto update = std::make_unique<parse::Node>();
+            update->kind = parse::Kind::kBlockStmt;
+            update->file_id = en_file; update->tok = en_tok;
+            update->children.push_back(std::move(assign));
+
+            std::unique_ptr<parse::Node> body = std::move(s.children[2]);
+
+            // Rebuild s as a kForLongStmt and resolve it through that path.
+            s.kind = parse::Kind::kForLongStmt;
+            s.range_dotdot_tok = en_tok;   // empty-range caret on the enum name
+            s.children.clear();
+            s.children.push_back(std::move(cond));       // [0]
+            s.children.push_back(std::move(update));     // [1]
+            s.children.push_back(std::move(body));       // [2]
+            s.children.push_back(std::move(var_decl));   // [3]
+            s.children.push_back(std::move(end_decl));   // [4]
+            return resolveStmt(tree, s, diag);
         }
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt: {

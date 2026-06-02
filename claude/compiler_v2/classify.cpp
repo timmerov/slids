@@ -118,6 +118,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kWhileStmt:
         case parse::Kind::kDoWhileStmt:
         case parse::Kind::kForLongStmt:
+        case parse::Kind::kForEnumStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
         case parse::Kind::kParam:
@@ -346,6 +347,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kWhileStmt:
         case parse::Kind::kDoWhileStmt:
         case parse::Kind::kForLongStmt:
+        case parse::Kind::kForEnumStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
         case parse::Kind::kParam:
@@ -679,6 +681,10 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
             // Nothing to type-infer; resolve handled loop-legality.
+            return;
+        case parse::Kind::kForEnumStmt:
+            // Lowered to a kForLongStmt during resolve; never reaches classify.
+            assert(false && "classifyStmt: kForEnumStmt survived resolve");
             return;
         case parse::Kind::kProgram:
         case parse::Kind::kFunctionDef:
