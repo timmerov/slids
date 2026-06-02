@@ -2,3 +2,4 @@ Integer x = 42
 Float y = 3.14
 Whole z = 7
 Integer w = 40
+Dir d = 0

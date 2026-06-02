@@ -692,6 +692,10 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
 void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
           bool& changed, diagnostic::Sink& diag) {
     if (!slot) return;
+    // ##type is a compile-time type query — it never evaluates its operand, so
+    // leave the operand subtree un-folded and un-substituted. Folding a const
+    // operand to a bare literal would erase its declared (const-qualified) type.
+    if (slot->kind == parse::Kind::kStringifyType) return;
     for (auto& c : slot->children) {
         walk(c, tree, changed, diag);
     }

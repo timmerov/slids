@@ -217,8 +217,22 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             assert(e.children.size() == 1 && "kStringifyType needs 1 operand");
             parse::Node& operand = *e.children[0];
             inferExpr(tree, operand, "", diag);
-            e.text = operand.alias_label.empty() ? operand.inferred_type
-                                                 : operand.alias_label;
+            // A DIRECT reference to a const reports its const-qualified declared
+            // type (alias label if it had one). Reading a const inside any larger
+            // expression strips const — the simplified no-pointer rule — so only a
+            // bare const ident takes the qualifier; everything else reports its
+            // (already const-free) inferred type or alias label.
+            if (operand.kind == parse::Kind::kIdentExpr
+                && operand.resolved_entry_id >= 0
+                && tree.entries[operand.resolved_entry_id].kind
+                       == parse::EntryKind::kConst) {
+                parse::Entry const& ce = tree.entries[operand.resolved_entry_id];
+                e.text = "const "
+                    + (ce.alias_label.empty() ? ce.slids_type : ce.alias_label);
+            } else {
+                e.text = operand.alias_label.empty() ? operand.inferred_type
+                                                     : operand.alias_label;
+            }
             e.children.clear();
             e.kind = parse::Kind::kStringLiteral;
             e.inferred_type = "char[]";

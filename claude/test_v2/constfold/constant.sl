@@ -7,6 +7,26 @@ and add constants to the frames.
 we must be able to fold the rhs constant expression.
 then we must be able to use the named constant
 to fold other constant expressions.
+
+what is the type of a constant?
+
+constants with an explicit type are that const type.
+
+    const int8 kFortyTwo = 42;
+
+type of kFortyTwo is "const int8".
+
+constants without an explicit type infer their type from the rhs const-expression.
+that type may be numeric literal.
+
+    const kForty = kFortyTwo - 2;
+    const kSeventeen = 17;
+
+the type of kForty is "const int8".
+the type of kSeventeen is "const int" but under the hood it is a numeric literal
+with nominal type int8.
+kForty follows the widening rules for strong types.
+kSeventeen follows the widening rules for weak types.
 */
 
 const float kPi = 2.14 + 1.0;
@@ -19,8 +39,8 @@ const int kNegSeven = -7;
 int32 foo() {
     const float kTau = 2.0 * kPi;
     const int kForty = kFortyTwo - 2;
-    __println("kTau = " + kTau);
-    __println("kForty = " + kForty);
+    __println(##type(kTau) + " kTau = " + kTau);
+    __println(##type(kForty) + " kForty = " + kForty);
     return 0;
 }
 
@@ -81,29 +101,29 @@ int32 main() {
 
     const float kPi2 = kPi / 2.0;
     const int kFortyFour = kFortyTwo + 2;
-    __println("kPi2 = " + kPi2);
-    __println("kFortyFour = " + kFortyFour);
+    __println(##type(kPi2) + " kPi2 = " + kPi2);
+    __println(##type(kFortyFour) + " kFortyFour = " + kFortyFour);
 
     /* compile error — cyclic const dependency (kThree → kOne → kThree) */
 
     const int kThree = kOne + kTwo;
     const int kTwo = kOne * 2;
     const int kOne = 3*3 - 2*2*2;
-    __println("kThree = " + kThree);
+    __println(##type(kThree) + " kThree = " + kThree);
 
     /* additional positives — broader kind coverage from file scope */
 
-    __println("kPlanck = " + kPlanck);
-    __println("kAlive = " + kAlive);
-    __println("kStar = " + kStar);
-    __println("kNegSeven = " + kNegSeven);
+    __println(##type(kPlanck) + " kPlanck = " + kPlanck);
+    __println(##type(kAlive) + " kAlive = " + kAlive);
+    __println(##type(kStar) + " kStar = " + kStar);
+    __println(##type(kNegSeven) + " kNegSeven = " + kNegSeven);
 
     /* forward ref within function body — kSum sees kA and kB declared later */
 
     const int kSum = kA + kB;
     const int kA = 10;
     const int kB = 20;
-    __println("kSum = " + kSum);
+    __println(##type(kSum) + " kSum = " + kSum);
 
     return 0;
 }
