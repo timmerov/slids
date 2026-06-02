@@ -96,11 +96,19 @@ DEFERRED FEATURES (later; may not be on the plan)
     value-counter continuation across openings is the undecided part.)
 
   * ##type — parse `##type(x)` (kHashHash lexes today, but grammar has no
-    handler) AND preserve the declared alias/enum label so it reports the
-    source spelling: `alias Integer = int; Integer x; ##type(x)` should say
-    `Integer`, not `int`; an enum-typed value should say the enum, not its
-    underlying. Today resolveDeclType rewrites the spelling to the underlying,
-    so the label is lost (transparent aliasing).
+    handler). TWO parts, split:
+    (a) MINIMAL — pulled forward as the test instrument for inferred types:
+        parse `##type(expr)` as a primary, resolve the operand, codegen its
+        resolved type as a `char[]` string literal (v1 StringifyExpr ->
+        StringLiteralExpr). Enough to assert `x = 42; ##type(x)` -> "int" in
+        inferred-init tests. LAND THIS FIRST (before inferred-init).
+    (b) DEFERRED — preserve the declared alias/enum label so it reports the
+        source spelling: `alias Integer = int; Integer x; ##type(x)` should say
+        `Integer`, not `int`; an enum-typed value should say the enum, not its
+        underlying. Today resolveDeclType rewrites the spelling to the underlying,
+        so the label is lost (transparent aliasing). Not needed for inferred
+        primitives. (Full v1 stringify set — 7 `##` macros + the `#` 5-tuple —
+        is a Phase-5 item; see [[reference_stringify]].)
 
   * ALIAS FUNCTION-RENAME — `alias Fn = LongName;` (use case: importing C
     functions with ugly names).

@@ -10,6 +10,7 @@ SAMPLES = \
 	alias \
 	bug \
 	hello \
+	macros \
 	namespace \
 	widen
 

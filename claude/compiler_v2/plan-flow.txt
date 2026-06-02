@@ -310,7 +310,10 @@ CROSS-CUTTING (every session)
     update the resolve-stage paragraph in readme.txt. The join model gets one
     memory at Session 2 (when it's real), extended per-construct.
   * Inferred-init (`x = 42`, no type) is an orphan Phase-2 item NOT on this flow
-    track — grammar + resolve/classify, no flow interaction; slot anywhere.
+    track — grammar + resolve/classify, no flow interaction. NEXT UP (resume
+    point): preceded by a minimal `##type(x)` test instrument, then inferred-init
+    (which also unlocks the for-loop typeless/reuse loop var — Session-4 remainder).
+    See plan.txt (Phase 2 var-decl line) + todo.txt (##type item).
 
 SEQUENCING
 

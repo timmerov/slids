@@ -68,7 +68,14 @@ Phase 1 — expression core (LANDED)
 
 Phase 2 — declarations + flow   <-- IN PROGRESS
   * var decls — typed init + declare-then-assign LANDED; inferred init (no
-    type spelling) still open. Definite assignment LANDED: a local read before
+    type spelling) still open — NEXT UP (resume point). inferred-init = `x = expr`
+    with no type → reuse an in-scope `x` else declare a fresh local typed from the
+    initializer; SAME mechanism unlocks the for-loop typeless/reuse loop var
+    (Session-4 remainder + the v1 chess-sample reuse fix). Design crux: who stamps
+    entry.slids_type when there's no spelling (classify write-back vs a pre-pass) —
+    resolve creates entries before classify infers. PRECEDED by a minimal
+    `##type(x)` (test instrument — assert the inferred type as a char[]; see
+    todo.txt + [[reference_stringify]]). Definite assignment LANDED: a local read before
     written is an error ("Use of uninitialized variable"); params seeded
     initialized. Unused-local sweep LANDED: a body-declared local never read
     errors ("Unused local variable" if never written, else "set but never

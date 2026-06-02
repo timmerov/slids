@@ -8,6 +8,7 @@ BUILD_DIR = ../../build/test_v2/expression
 
 SAMPLES = \
 	augment \
+	inferred \
 	inttype \
 	mixedtype \
 	noninttype \
