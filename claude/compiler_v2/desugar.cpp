@@ -59,6 +59,10 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kBinaryExpr:    return ast::Kind::kBinaryExpr;
         case parse::Kind::kPreIncExpr:    return ast::Kind::kPreIncExpr;
         case parse::Kind::kPostIncExpr:   return ast::Kind::kPostIncExpr;
+        case parse::Kind::kStringifyType:
+            // Rewritten to a kStringLiteral during classify; never copied.
+            assert(false && "toAstKind: kStringifyType should be lowered in classify");
+            __builtin_unreachable();
         case parse::Kind::kParam:         return ast::Kind::kParam;
     }
     assert(false && "toAstKind: unhandled parse::Kind");

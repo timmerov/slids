@@ -1,0 +1,12 @@
+macros.sl
+34
+main
+a+b
+obj.field[2]
+int
+int64
+bool
+int
+n+1
+char[]
+char[]

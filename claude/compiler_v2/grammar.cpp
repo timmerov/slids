@@ -1,5 +1,6 @@
 #include "grammar.h"
 
+#include <ctime>
 #include <memory>
 #include <string>
 #include <utility>
@@ -50,6 +51,10 @@ struct Parser {
     diagnostic::Sink& diag;
     int pos = 0;
     bool fatal = false;
+    std::string current_func = {};   // enclosing function name, for ##func
+    std::string clock_date = {};     // ##date / ##time text, captured once per
+    std::string clock_time = {};     // compile (this .sl's compile, not slidsc's)
+    bool clock_captured = false;
 
     token::Token const& peek() const { return tokens.tokens[pos]; }
 
@@ -68,6 +73,37 @@ struct Parser {
         fatal = true;
         token::Token const& t = peek();
         diagnostic::report(diag, {t.file_id, pos, msg, {}});
+    }
+
+    // Report at an explicit token (caret precision when the offender is not the
+    // current position — e.g. an already-consumed macro name).
+    void errorAt(int tok, std::string const& msg) {
+        if (fatal) return;
+        fatal = true;
+        diagnostic::report(diag, {tokens.tokens[tok].file_id, tok, msg, {}});
+    }
+
+    // ##date / ##time expand to the moment THIS .sl is compiled, captured once so
+    // every macro in the file agrees. Format matches v1: "Mmm DD YYYY" (space-
+    // padded day) and "HH:MM:SS".
+    void captureClock() {
+        if (clock_captured) return;
+        clock_captured = true;
+        std::time_t now = std::time(nullptr);
+        std::tm tm_buf{};
+        localtime_r(&now, &tm_buf);
+        char date_buf[32] = {0};
+        char time_buf[32] = {0};
+        std::strftime(date_buf, sizeof(date_buf), "%b %e %Y", &tm_buf);
+        std::strftime(time_buf, sizeof(time_buf), "%H:%M:%S", &tm_buf);
+        clock_date = date_buf;
+        clock_time = time_buf;
+    }
+
+    // Filename without its directory — ##file is the short name (no path).
+    static std::string baseName(std::string const& path) {
+        auto slash = path.find_last_of('/');
+        return slash == std::string::npos ? path : path.substr(slash + 1);
     }
 
     bool expect(token::Kind kind, char const* name) {
@@ -244,6 +280,79 @@ struct Parser {
             if (!inner) return nullptr;
             if (!expect(token::Kind::kRParen, ")")) return nullptr;
             return inner;
+        }
+        if (t.kind == token::Kind::kHashHash) {
+            // Compile-time stringify macros. All but ##type resolve to a string
+            // literal right here; ##type needs the operand's inferred type, so it
+            // becomes a kStringifyType that classify lowers. The node is stamped
+            // at the ## token — ##file / ##line carry the call-site location.
+            int hh_file = t.file_id;
+            int hh_tok = pos;
+            int hh_line = t.line;
+            advance();   // ##
+            if (peek().kind != token::Kind::kIdentifier) {
+                error("Expected a macro name after '##'.");
+                return nullptr;
+            }
+            std::string kw = peek().text;
+            int kw_tok = pos;
+            advance();
+            if (kw == "type") {
+                if (!expect(token::Kind::kLParen, "(")) return nullptr;
+                auto operand = parseExpr();
+                if (!operand) return nullptr;
+                if (!expect(token::Kind::kRParen, ")")) return nullptr;
+                auto node = newNodeAt(parse::Kind::kStringifyType, hh_file, hh_tok);
+                node->children.push_back(std::move(operand));
+                return node;
+            }
+            if (kw == "name") {
+                // ##name reproduces its argument's lexed text verbatim — the
+                // content is NOT parsed or type-checked. Scan to the matching ')'
+                // by bracket depth and concatenate the token values (whitespace
+                // already dropped by the lexer).
+                if (!expect(token::Kind::kLParen, "(")) return nullptr;
+                std::string text;
+                int depth = 1;
+                while (peek().kind != token::Kind::kEndOfFile
+                       && peek().kind != token::Kind::kEndOfInput) {
+                    token::Kind k = peek().kind;
+                    if (k == token::Kind::kLParen || k == token::Kind::kLBracket
+                        || k == token::Kind::kLBrace) {
+                        depth++;
+                    } else if (k == token::Kind::kRParen
+                               || k == token::Kind::kRBracket
+                               || k == token::Kind::kRBrace) {
+                        if (--depth == 0) break;
+                    }
+                    text += peek().text;
+                    advance();
+                }
+                if (!expect(token::Kind::kRParen, ")")) return nullptr;
+                auto node = newNodeAt(parse::Kind::kStringLiteral, hh_file, hh_tok);
+                node->text = std::move(text);
+                return node;
+            }
+            if (kw == "file" || kw == "line" || kw == "func"
+                || kw == "date" || kw == "time") {
+                auto node = newNodeAt(parse::Kind::kStringLiteral, hh_file, hh_tok);
+                if (kw == "file") {
+                    node->text = baseName(tokens.files[hh_file].path);
+                } else if (kw == "line") {
+                    node->text = std::to_string(hh_line);
+                } else if (kw == "func") {
+                    node->text = current_func;
+                } else if (kw == "date") {
+                    captureClock();
+                    node->text = clock_date;
+                } else {  // time
+                    captureClock();
+                    node->text = clock_time;
+                }
+                return node;
+            }
+            errorAt(kw_tok, "Unknown '##' macro '" + kw + "'.");
+            return nullptr;
         }
         error("Expected expression.");
         return nullptr;
@@ -1262,6 +1371,8 @@ struct Parser {
         }
         if (!expect(token::Kind::kLBrace, "{")) return nullptr;
 
+        std::string saved_func = current_func;
+        current_func = node->name;   // ##func in the body names this function
         while (!fatal && peek().kind != token::Kind::kRBrace) {
             if (peek().kind == token::Kind::kEndOfFile
                 || peek().kind == token::Kind::kEndOfInput) {
@@ -1273,6 +1384,7 @@ struct Parser {
             node->children.push_back(std::move(stmt));
         }
         if (!expect(token::Kind::kRBrace, "}")) return nullptr;
+        current_func = std::move(saved_func);
         return node;
     }
 

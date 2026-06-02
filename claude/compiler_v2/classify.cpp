@@ -112,6 +112,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kEnumDecl:
         case parse::Kind::kPreIncExpr:
         case parse::Kind::kPostIncExpr:
+        case parse::Kind::kStringifyType:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kBlockStmt:
         case parse::Kind::kIfStmt:
@@ -189,6 +190,18 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             return;
         }
         case parse::Kind::kStringLiteral: {
+            e.inferred_type = "char[]";
+            return;
+        }
+        case parse::Kind::kStringifyType: {
+            // ##type(expr): infer the operand's type, then BECOME a string
+            // literal holding that type name. Lowered in place here so every
+            // downstream stage only ever sees a kStringLiteral.
+            assert(e.children.size() == 1 && "kStringifyType needs 1 operand");
+            inferExpr(tree, *e.children[0], "", diag);
+            e.text = e.children[0]->inferred_type;
+            e.children.clear();
+            e.kind = parse::Kind::kStringLiteral;
             e.inferred_type = "char[]";
             return;
         }
@@ -700,6 +713,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kBinaryExpr:
         case parse::Kind::kPreIncExpr:
         case parse::Kind::kPostIncExpr:
+        case parse::Kind::kStringifyType:
         case parse::Kind::kCallExpr:
         case parse::Kind::kParam:
             assert(false && "classifyStmt: not a statement kind");

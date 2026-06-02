@@ -60,6 +60,10 @@ enum class Kind {
     kBinaryExpr,   // text = op (e.g. "+", "<<", "&&"); children[0] = lhs, [1] = rhs
     kPreIncExpr,   // text = op ("++"/"--"); children[0] = operand lvalue
     kPostIncExpr,  // text = op ("++"/"--"); children[0] = operand lvalue
+    kStringifyType,// ##type(expr) — children[0] = operand expression. classify
+                   // infers the operand's type and rewrites this node in place
+                   // to a kStringLiteral holding the type name; never survives
+                   // classify. (The other ## macros are kStringLiteral at parse.)
     kParam,        // function parameter; name = ident, return_type = declared type
 };
 

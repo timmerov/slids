@@ -828,6 +828,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         }
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
+        case parse::Kind::kStringifyType:   // resolve the ##type operand
             for (auto& ch : e.children) {
                 if (ch) resolveExpr(tree, *ch, diag);
             }
@@ -1488,6 +1489,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         case parse::Kind::kBinaryExpr:
         case parse::Kind::kPreIncExpr:
         case parse::Kind::kPostIncExpr:
+        case parse::Kind::kStringifyType:
         case parse::Kind::kCallExpr:
         case parse::Kind::kParam:
             assert(false && "resolveStmt: not a statement kind");
