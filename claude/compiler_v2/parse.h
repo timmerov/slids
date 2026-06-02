@@ -75,6 +75,11 @@ struct Node {
     std::string nominal_type;    // literal nodes: nominal type assigned by constfold
     std::string inferred_type;   // classify: expression nodes' in-context type
     std::string op_type;         // classify: binary's computational type (commonType / shift LHS)
+    std::string alias_label;     // classify: the alias/enum NAME this expr carries as
+                                 // a label (else empty). inferred_type/op_type stay
+                                 // the erased underlying for width math + codegen;
+                                 // this parallel label is what ##type reports. Sticky
+                                 // alias+alias / alias+literal, dropped on a mismatch.
     int file_id = -1;            // source file of the construct
     int tok = -1;                // index into token::List::tokens for error attribution
     int name_tok = -1;           // ident token for named constructs (VarDecl, FunctionDef/Decl, Param)
@@ -110,6 +115,10 @@ struct Entry {
                                   // return type; Namespace: empty, or the
                                   // underlying type when it is an enum's
                                   // namespace facet (transparent type alias).
+    std::string alias_label;      // LocalVar / param: the as-declared alias/enum
+                                  // spelling when the declared type was a named
+                                  // type (else empty). slids_type holds the erased
+                                  // underlying; this is what ##type(var) reports.
     std::vector<std::string> param_types;  // Function only
     int parent_frame_id = -1;
     int file_id = -1;

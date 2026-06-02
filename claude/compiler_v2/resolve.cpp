@@ -997,6 +997,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // pre-pass (resolveFunctionBody). If resolved_entry_id is set,
             // entry already exists; skip creation and dup-check.
             if (s.resolved_entry_id < 0) {
+                std::string declared = s.return_type;   // pre-erasure spelling
                 resolveDeclType(tree, s.return_type, s.file_id, s.tok, diag);
                 int existing = parse::findInFrame(tree, parse::currentFrameId(tree), s.name);
                 if (existing >= 0) {
@@ -1010,6 +1011,9 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                                         : parse::EntryKind::kLocalVar;
                     e.name = s.name;
                     e.slids_type = s.return_type;
+                    // A named type (alias / enum / qualified) erased to a different
+                    // underlying — keep the as-declared spelling as the ##type label.
+                    if (declared != s.return_type) e.alias_label = declared;
                     e.file_id = s.file_id;
                     e.tok = s.name_tok;   // caret at the ident, not at 'const'/type
                     s.resolved_entry_id = parse::addEntry(tree, std::move(e));
@@ -1553,6 +1557,7 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         e.kind = parse::EntryKind::kLocalVar;
         e.name = p->name;
         e.slids_type = p->return_type;
+        e.alias_label = p->alias_label;   // alias/enum spelling captured in pass 1
         e.file_id = p->file_id;
         e.tok = p->name_tok;
         p->resolved_entry_id = parse::addEntry(tree, std::move(e));
@@ -1645,7 +1650,9 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             std::vector<std::string> param_types;
             for (auto& p : ch->params) {
                 if (!p) continue;
+                std::string declared = p->return_type;   // pre-erasure spelling
                 resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
+                if (declared != p->return_type) p->alias_label = declared;
                 param_types.push_back(p->return_type);
             }
             bool is_def = (ch->kind == parse::Kind::kFunctionDef);

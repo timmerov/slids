@@ -1,7 +1,11 @@
 /*
 test aliases.
 
-alias Name = type;
+    alias Name = type;
+
+##type returns the alias.
+    Name x;
+    ##type(x);
 
 todo:
 
@@ -11,10 +15,6 @@ drop qualifiers:
 rename functions:
     alias Fn = LongOrWrongFunctionName;
 use case is importing c functions with stupid names.
-
-##type returns the alias.
-Name x;
-##type(x);
 */
 
 alias Integer = int;
@@ -28,17 +28,17 @@ int32 doubled(Integer n) {    // alias in param + return position
 int32 main() {
 
     Integer x = 42;
-    __println("x = " + x);
+    __println(##type(x) + " " + ##name(x) + " = " + x);
 
     Float y = 3.14;
-    __println("y = " + y);
+    __println(##type(y) + " " + ##name(y) + " = " + y);
 
     Whole z = 7;              // Whole -> Integer -> int
-    __println("z = " + z);
+    __println(##type(z) + " " + ##name(z) + " = " + z);
 
     Integer w;               // declare-then-assign through an alias type
     w = doubled(20);
-    __println("w = " + w);
+    __println(##type(w) + " " + ##name(w) + " = " + w);
 
     //-EXPECT-ERROR: Unknown type 'Bogus'
     //Bogus q;

@@ -158,6 +158,21 @@ void inferPrintArg(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
     inferExpr(tree, e, "", diag);
 }
 
+// Alias-label propagation for an arith/bitwise binary. An alias is sticky against
+// itself or a const literal (which flexes into the named partner), and drops to
+// its underlying (empty label) against any other typed operand:
+//   Integer + Integer -> Integer;  Integer + 1 -> Integer;  Integer + int -> int.
+std::string binaryLabel(parse::Node const& lhs, parse::Node const& rhs) {
+    bool lhs_lit = isLiteralKind(lhs.kind);
+    bool rhs_lit = isLiteralKind(rhs.kind);
+    if (!lhs.alias_label.empty()
+        && (rhs_lit || lhs.alias_label == rhs.alias_label)) {
+        return lhs.alias_label;
+    }
+    if (!rhs.alias_label.empty() && lhs_lit) return rhs.alias_label;
+    return "";
+}
+
 // Literal-flex preamble for non-shift binaries: when one operand is a literal
 // and the other is not, try-flex the literal into the partner's type.
 void flexBinaryOperands(parse::Node& lhs, parse::Node& rhs) {
@@ -195,11 +210,15 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         }
         case parse::Kind::kStringifyType: {
             // ##type(expr): infer the operand's type, then BECOME a string
-            // literal holding that type name. Lowered in place here so every
+            // literal holding that type name. An alias/enum-labeled operand
+            // reports its label (the as-declared name); everything else reports
+            // its erased underlying type. Lowered in place here so every
             // downstream stage only ever sees a kStringLiteral.
             assert(e.children.size() == 1 && "kStringifyType needs 1 operand");
-            inferExpr(tree, *e.children[0], "", diag);
-            e.text = e.children[0]->inferred_type;
+            parse::Node& operand = *e.children[0];
+            inferExpr(tree, operand, "", diag);
+            e.text = operand.alias_label.empty() ? operand.inferred_type
+                                                 : operand.alias_label;
             e.children.clear();
             e.kind = parse::Kind::kStringLiteral;
             e.inferred_type = "char[]";
@@ -209,6 +228,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             assert(e.resolved_entry_id >= 0
                 && "inferExpr kIdentExpr: resolve did not stamp resolved_entry_id");
             e.inferred_type = parse::entryType(tree, e.resolved_entry_id);
+            e.alias_label = tree.entries[e.resolved_entry_id].alias_label;
             return;
         }
         case parse::Kind::kCallExpr: {
@@ -263,6 +283,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             } else {  // + - ~
                 inferExpr(tree, operand, context, diag);
                 e.inferred_type = operand.inferred_type;
+                e.alias_label = operand.alias_label;   // a unary keeps the label
             }
             return;
         }
@@ -311,6 +332,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 }
                 e.inferred_type = lhs.inferred_type;
                 e.op_type = lhs.inferred_type;
+                e.alias_label = lhs.alias_label;   // a shift keeps the lhs label
                 return;
             }
 
@@ -341,6 +363,9 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                         || op == "<=" || op == ">"  || op == ">=");
             e.inferred_type = is_cmp ? std::string("bool") : opty;
             e.op_type = opty;
+            // A comparison yields bool (no label); an arith/bitwise result keeps
+            // an alias label only when both sides agree (or a literal flexes in).
+            if (!is_cmp) e.alias_label = binaryLabel(lhs, rhs);
             return;
         }
         case parse::Kind::kProgram:

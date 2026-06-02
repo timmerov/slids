@@ -1,4 +1,4 @@
-x = 42
-y = 3.14
-z = 7
-w = 40
+Integer x = 42
+Float y = 3.14
+Whole z = 7
+Integer w = 40
