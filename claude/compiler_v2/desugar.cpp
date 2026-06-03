@@ -135,6 +135,7 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     node->tok = p.tok;
     node->name_tok = p.name_tok;
     node->resolved_entry_id = p.resolved_entry_id;
+    node->loop_levels = p.loop_levels;
     node->is_const = p.is_const;
     node->param_types = p.param_types;
     // Function definitions and calls (including qualified `Space:bar()`) resolve

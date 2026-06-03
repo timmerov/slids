@@ -337,16 +337,42 @@ SESSION 5 — switch / case — LANDED (C-style fall-through; labels deferred to
     partial, break-escape + stacked return-correctness).
   * exit: switch with fall-through + the break/continue retargeting + the join.
 
-SESSION 6 — labels (labeled break/continue)
+SESSION 6 — labels (labeled / numbered break+continue) — LANDED. Phase 2 flow COMPLETE.
 
-  Final flow piece; everything it targets now exists.
-  * grammar: labels on loops/switch; `break label;` / `continue label;`.
-  * resolve: label scope; resolve a label to its enclosing loop/switch via the
-    loop-context stack (now carrying labels); error on unknown/duplicate label.
-  * codegen: branch to the labeled exit/continue block.
-  * tests: test_v2/flow/labels.sl — labeled break from nested loop, labeled
-    continue, unknown-label (neg).
-  * exit: Phase 2 flow complete.
+  No new node kinds — labels are FIELDS on existing loop / break / continue nodes
+  (Node.label on loops; break/continue carry the arg in name [named, incl. the
+  for/while keyword default] or text [numbered]; resolve stamps Node.loop_levels
+  = hops outward in the loop/switch context stack to the resolved target).
+  * grammar: parseOptionalLabel parses `:name` right after a loop body (for a
+    do-while, between the body `}` and the `(cond)`; for pre-while / long-for /
+    ranged-for / enum-for, after the body, with a required `;` when present).
+    Labels go on LOOPS ONLY this round — a `:name` after a switch is a parse
+    error ("Expected statement."). break/continue parse an optional arg: an
+    integer (Nth loop) or a name (identifier, OR the `for`/`while` keyword token).
+  * resolve: each loop frame (LoopFrame) carries its name (explicit label or the
+    keyword default for/while; switches have none). The break/continue arm
+    resolves the target by flavor — NAMED (nearest matching loop, innermost wins /
+    shadowing allowed), NUMBERED (Nth loop outward, SKIPPING switch frames; N>=1),
+    NAKED (break -> nearest loop OR switch; continue -> nearest loop, switch
+    transparent) — folds the init-set into the TARGET frame's accumulator and
+    stamps loop_levels. The for-update floor check stays FIRST, so NO flavor of
+    break/continue is allowed directly in an update clause. Errors: count <1 /
+    exceeds nesting (caret on the count literal), no-enclosing-loop-labeled,
+    inside-loop-or-switch.
+  * codegen: LoopCtx is a linked list (outer); break/continue walk loop_levels
+    hops (asserted in range) to the target frame's exit (break) / header
+    (continue). A switch's swctx inherits the enclosing loop's header so a
+    continue passing through still re-tests the right loop.
+  * tests: test_v2/flow/label.sl — 20 positives (named/numbered break, for/while
+    default-keyword targeting, numbered/named continue, break/continue-in-switch
+    targeting the loop, shadowing, do-while/ranged/enum/long-for labels, break
+    2/3, nested-switch skip, do-while DA, unused label) + 7 negatives (count <1 /
+    exceeds, unknown label, break-while-no-while, numbered/named break+continue in
+    a for-update, label-on-switch). Conservative limit + named-switch break
+    deferred (todo.txt).
+  * exit: Phase 2 flow COMPLETE (blocks, if/else, while+do-while, for [long/ranged/
+    enum/typeless-reuse], switch, labels). Remaining flow: container-for shapes
+    (array/tuple/class), blocked on Phase 4/5 types.
 
 
 CROSS-CUTTING (every session)

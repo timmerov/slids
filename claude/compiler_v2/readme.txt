@@ -90,7 +90,13 @@ STAGE FILES (.h / .cpp pairs)
             qualified enum-member label (`case Dir:N:`) resolves its trailing `:`
             as the terminator, not a qualifier (parseQualifiedNameCaseLabel scans
             the maximal `:`-chain and rewinds one segment when the terminator is
-            missing). expressions
+            missing). A loop carries an optional `:label` (parseOptionalLabel)
+            right after its body `}` — for a do-while between the body and the
+            `(cond)`, elsewhere with a required trailing `;`; labels are on loops
+            only (a `:name` after a switch is a parse error). break / continue take
+            an optional argument — an integer (stored in `text`, the Nth loop) or a
+            name (in `name` — an identifier, or the `for`/`while` keyword default).
+            expressions
             across the full C precedence ladder (literals + ident, unary
             `! ~ + -`, prefix/postfix ++/--, full binary set
             arith/bitwise/shift/comparison/logical, parens, postfix-call on
@@ -223,11 +229,20 @@ STAGE FILES (.h / .cpp pairs)
             (post-condition, `while { body } (cond);`) runs the body once so its
             inits DO escape: resolve the body from S, check the condition's reads
             against body-out ∩ continue_accum, and set after = that ∩ break_accum.
-            break / continue are Abrupt and legal only inside a loop ("A 'break' /
-            'continue' statement must be inside a loop."); each folds the current
-            init-set into the enclosing loop-frame's break/continue accumulator
-            (∩, top-seeded via a `seen` flag) — a do-while / for consume them, a
-            pre-condition while ignores them (after = S regardless). A kForLongStmt
+            break / continue are Abrupt; each resolves a TARGET frame by its
+            argument — NAMED (`break name;` → nearest loop whose label matches; the
+            label is the explicit `:name` or the keyword default for/while; switches
+            carry none; innermost wins, shadowing allowed), NUMBERED (`break N;` →
+            the Nth enclosing LOOP outward, SKIPPING switch frames; N>=1), or naked
+            (break → nearest loop OR switch; continue → nearest loop, switches
+            transparent) — and folds the current init-set into THAT frame's
+            break/continue accumulator (∩, top-seeded via a `seen` flag; a do-while
+            / for consume them, a pre-condition while ignores them). It stamps
+            Node.loop_levels = hops outward to the target for codegen. NO flavor of
+            break/continue is allowed directly in a for-update clause (the
+            in_for_update + for_update_floor guard fires first). Errors: count <1 /
+            exceeds nesting (caret on the count literal), no enclosing loop labeled
+            <name>, inside-a-loop[-or-switch]. A kForLongStmt
             (long-form `for (varlist) (cond) {update} {body}`; the canonical for
             node — other for shapes desugar to it) opens ONE for-scope holding the
             varlist, with the update and body as sibling nested blocks (3 frames;
@@ -463,8 +478,11 @@ STAGE FILES (.h / .cpp pairs)
             varlist init stores once (allocas hoisted) then head(cond)/body/update
             /exit (continue -> update, so the loop var still advances on continue).
             break -> exit, continue -> head (while) / cond (do-while) / update
-            (for), via a LoopCtx { header, exit } threaded
-            through emitStmt and read by kBreakStmt / kContinueStmt; the body's
+            (for), via a LoopCtx { header, exit, outer } LINKED LIST threaded
+            through emitStmt; kBreakStmt / kContinueStmt walk Node.loop_levels
+            `outer` hops (resolve-stamped, asserted in range) to the target frame
+            and branch to its exit (break) / header (continue) — so a labeled /
+            numbered break reaches a non-innermost loop. The body's
             back-edge is emitted only if it can fall through (endsTerminated).
             A kSwitchStmt lowers to an `llvm switch` on the scrutinee dispatching
             to one block per clause (source order, default's block = the switch

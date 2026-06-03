@@ -555,6 +555,8 @@ bool containsBreak(ast::Node const& s);
 struct LoopCtx {
     std::string header_label;
     std::string exit_label;
+    LoopCtx const* outer = nullptr;   // enclosing loop/switch — a labeled/numbered
+                                      // break/continue walks `loop_levels` hops out
 };
 
 void emitStmt(ast::Node const& stmt, SymTab& syms,
@@ -688,7 +690,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 << ", label %" << exit_lbl << "\n";
 
             out << body_lbl << ":\n";
-            LoopCtx ctx{head_lbl, exit_lbl};
+            LoopCtx ctx{head_lbl, exit_lbl, loop};
             emitStmt(*stmt.children[1], syms, pool, fn_return_type, &ctx, out, diag);
             if (!endsTerminated(stmt.children[1]->children)) {
                 out << "  br label %" << head_lbl << "\n";   // back-edge
@@ -709,7 +711,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
 
             out << "  br label %" << body_lbl << "\n";
             out << body_lbl << ":\n";
-            LoopCtx ctx{cond_lbl, exit_lbl};   // continue -> cond, break -> exit
+            LoopCtx ctx{cond_lbl, exit_lbl, loop};   // continue -> cond, break -> exit
             emitStmt(*stmt.children[1], syms, pool, fn_return_type, &ctx, out, diag);
             if (!endsTerminated(stmt.children[1]->children)) {
                 out << "  br label %" << cond_lbl << "\n";
@@ -753,7 +755,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 << ", label %" << exit_lbl << "\n";
 
             out << body_lbl << ":\n";
-            LoopCtx ctx{upd_lbl, exit_lbl};   // continue -> update, break -> exit
+            LoopCtx ctx{upd_lbl, exit_lbl, loop};   // continue -> update, break -> exit
             emitStmt(*stmt.children[2], syms, pool, fn_return_type, &ctx, out, diag);
             if (!endsTerminated(stmt.children[2]->children)) {
                 out << "  br label %" << upd_lbl << "\n";
@@ -771,12 +773,23 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         }
         case ast::Kind::kBreakStmt: {
             assert(loop && "kBreakStmt: break outside a loop survived resolve");
-            out << "  br label %" << loop->exit_label << "\n";
+            // resolve stamped loop_levels = hops outward to the target frame.
+            LoopCtx const* t = loop;
+            for (int i = 0; i < stmt.loop_levels; i++) {
+                assert(t->outer && "loop_levels exceeds the loop/switch context depth");
+                t = t->outer;
+            }
+            out << "  br label %" << t->exit_label << "\n";
             return;
         }
         case ast::Kind::kContinueStmt: {
             assert(loop && "kContinueStmt: continue outside a loop survived resolve");
-            out << "  br label %" << loop->header_label << "\n";
+            LoopCtx const* t = loop;
+            for (int i = 0; i < stmt.loop_levels; i++) {
+                assert(t->outer && "loop_levels exceeds the loop/switch context depth");
+                t = t->outer;
+            }
+            out << "  br label %" << t->header_label << "\n";
             return;
         }
         case ast::Kind::kSwitchStmt: {
@@ -822,7 +835,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             for (std::size_t k = 0; k < n; k++) {
                 ast::Node const& body = *stmt.children[k + 1]->children[1];
                 out << blk[k] << ":\n";
-                LoopCtx swctx{loop ? loop->header_label : std::string(), exit_lbl};
+                LoopCtx swctx{loop ? loop->header_label : std::string(), exit_lbl,
+                              loop};
                 emitStmt(body, syms, pool, fn_return_type, &swctx, out, diag);
                 if (containsBreak(body)) exit_reachable = true;
                 if (!endsTerminated(body.children)) {

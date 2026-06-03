@@ -98,6 +98,14 @@ struct Node {
     int range_dotdot_tok = -1;   // kForLongStmt synthesized from a ranged-for: the
                                  // `..` token (>= 0 marks range-derived; the caret
                                  // for the "Invalid range." empty-range check)
+    // A loop's explicit `:label` (empty = the keyword default for/while), parsed
+    // after the body. On a kBreakStmt/kContinueStmt: `text` holds a numbered
+    // argument (digits), `name` a named argument (label, incl. the for/while
+    // keyword); both empty = naked. resolve stamps loop_levels = hops outward in
+    // the loop/switch context stack to the resolved target (0 = innermost),
+    // consumed by codegen; -1 until resolved.
+    std::string label;
+    int loop_levels = -1;
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
     // Qualified name (ident / call / inline decl / bare alias): leading namespace
     // segments before `name`. `Space:Nested:kFour` -> qualifier {Space, Nested},
@@ -195,6 +203,10 @@ struct Tree {
         bool continue_seen = false;
         bool is_switch = false;   // a switch frame: a break target, but transparent
                                   // to continue (continue skips it to the nearest loop)
+        std::string name;         // loop frame: its label (explicit `:name` or the
+                                  // keyword default for/while); empty for switches.
+                                  // Named break/continue match this; numbered count
+                                  // loop frames (is_switch=false) outward.
     };
     std::vector<LoopFrame> loop_stack;
     // Transient — set while resolving a long-for's UPDATE clause, which may not

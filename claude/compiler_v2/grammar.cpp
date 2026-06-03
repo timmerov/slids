@@ -1097,6 +1097,22 @@ struct Parser {
     }
 
     // Pre-condition  `while ( cond ) { body }`  -> kWhileStmt.
+    // A loop's optional `:label` after its body (labels go on loops only this
+    // round — never a switch). Returns the label name, or "" if none. The
+    // label name is a plain identifier (the for/while keyword DEFAULT names are
+    // only for referencing in break/continue, not for declaring).
+    std::string parseOptionalLabel() {
+        if (peek().kind != token::Kind::kColon) return "";
+        advance();   // :
+        if (peek().kind != token::Kind::kIdentifier) {
+            error("Expected a label name after ':'.");
+            return "";
+        }
+        std::string name = peek().text;
+        advance();   // name
+        return name;
+    }
+
     // Post-condition `while { body } ( cond ) ;` -> kDoWhileStmt (body runs once).
     // Dispatched on the token after `while`: '{' opens the post-condition body,
     // anything else begins the pre-condition '(' clause. Both nodes store
@@ -1108,12 +1124,15 @@ struct Parser {
         if (peek().kind == token::Kind::kLBrace) {
             auto body = parseBlock();
             if (!body) return nullptr;
+            std::string label = parseOptionalLabel();   // between `}` and `(cond)`
+            if (fatal) return nullptr;
             auto cond = parseParenCondition();
             if (!cond) return nullptr;
             if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
             auto node = newNodeAt(parse::Kind::kDoWhileStmt, stmt_file, stmt_tok);
             node->children.push_back(std::move(cond));
             node->children.push_back(std::move(body));
+            node->label = std::move(label);
             return node;
         }
         auto cond = parseParenCondition();
@@ -1127,6 +1146,11 @@ struct Parser {
         auto node = newNodeAt(parse::Kind::kWhileStmt, stmt_file, stmt_tok);
         node->children.push_back(std::move(cond));
         node->children.push_back(std::move(body));
+        node->label = parseOptionalLabel();              // after the body `}`
+        if (fatal) return nullptr;
+        if (!node->label.empty() && !expect(token::Kind::kSemicolon, ";")) {
+            return nullptr;
+        }
         return node;
     }
 
@@ -1154,6 +1178,11 @@ struct Parser {
         node->children.push_back(std::move(update));
         node->children.push_back(std::move(body));
         for (auto& d : varlist) node->children.push_back(std::move(d));
+        node->label = parseOptionalLabel();              // after the body `}`
+        if (fatal) return nullptr;
+        if (!node->label.empty() && !expect(token::Kind::kSemicolon, ";")) {
+            return nullptr;
+        }
         return node;
     }
 
@@ -1198,6 +1227,11 @@ struct Parser {
         }
         auto body = parseBlock();
         if (!body) return nullptr;
+        std::string label = parseOptionalLabel();        // after the body `}`
+        if (fatal) return nullptr;
+        if (!label.empty() && !expect(token::Kind::kSemicolon, ";")) {
+            return nullptr;
+        }
 
         // varlist: [ type var = start, type _$end = end, (type _$step = step) ]
         std::vector<std::unique_ptr<parse::Node>> varlist;
@@ -1244,6 +1278,7 @@ struct Parser {
         node->children.push_back(std::move(body));     // [2]
         for (auto& d : varlist) node->children.push_back(std::move(d));  // [3..]
         node->range_dotdot_tok = dotdot_tok;
+        node->label = std::move(label);
         return node;
     }
 
@@ -1264,12 +1299,18 @@ struct Parser {
         }
         auto body = parseBlock();
         if (!body) return nullptr;
+        std::string label = parseOptionalLabel();        // after the body `}`
+        if (fatal) return nullptr;
+        if (!label.empty() && !expect(token::Kind::kSemicolon, ";")) {
+            return nullptr;
+        }
         auto vd = newNodeAt(parse::Kind::kVarDeclStmt, v_file, v_tok);
         vd->name = vname; vd->name_tok = vname_tok; vd->return_type = vtype;
         auto node = newNodeAt(parse::Kind::kForEnumStmt, stmt_file, stmt_tok);
         node->children.push_back(std::move(vd));        // [0] loop-var decl
         node->children.push_back(std::move(enum_ref));  // [1] enum-ref
         node->children.push_back(std::move(body));      // [2] body
+        node->label = std::move(label);
         return node;
     }
 
@@ -1330,13 +1371,27 @@ struct Parser {
         return finishLongFor(stmt_file, stmt_tok, std::move(varlist));
     }
 
-    // break; / continue; — a bare keyword statement.
+    // break / continue, with an optional argument: an integer (the Nth enclosing
+    // loop, stored in `text`) or a name (a loop label, stored in `name` — incl.
+    // the `for` / `while` keyword default names). No argument = naked.
     std::unique_ptr<parse::Node> parseBreakContinue(parse::Kind kind) {
         int stmt_file = peek().file_id;
         int stmt_tok = pos;
         advance();   // break / continue
+        auto node = newNodeAt(kind, stmt_file, stmt_tok);
+        token::Kind k = peek().kind;
+        if (k == token::Kind::kIntLiteral) {
+            node->text = peek().text;        // numbered
+            node->name_tok = pos;            // the count token (for the caret)
+            advance();
+        } else if (k == token::Kind::kIdentifier
+                   || k == token::Kind::kFor || k == token::Kind::kWhile) {
+            node->name = peek().text;        // named (label or for/while default)
+            node->name_tok = pos;
+            advance();
+        }
         if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
-        return newNodeAt(kind, stmt_file, stmt_tok);
+        return node;
     }
 
     // One `case const-expr:` / `default:` clause. children[0] = label const-expr

@@ -76,9 +76,11 @@ DEFERRED FEATURES (later; may not be on the plan)
     both. Canon: switch.sl neg_stacked_terminator pins the current behavior.
 
   * NAMED-SWITCH BREAK (`break someswitch;`) — breaking a non-innermost switch by
-    its name. switch.sl marks it "distant future, low utility"; out of the
-    Session-6 labels scope (which covers loop labels + numbered/named break of
-    LOOPS, not switch naming). Needs switch blocks to carry a label.
+    its name. switch.sl marks it "distant future, low utility". Session 6 (labels)
+    LANDED loop labels + numbered/named break of LOOPS only; switch naming was
+    deliberately left out. Needs switch blocks to carry a label (Node.label +
+    parse the `:name` after a switch body, currently a parse error) and the
+    numbered/named resolver to consider switch frames as named targets.
 
   * FOR-ARRAY / FOR-TUPLE / FOR-CLASS — the remaining colon-form for shapes,
     blocked on the underlying types: arrays + anon-tuples (Phase 4) and classes

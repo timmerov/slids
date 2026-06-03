@@ -60,6 +60,9 @@ struct Node {
     int name_tok = -1;           // ident token for named constructs
     int resolved_entry_id = -1;  // ident / lhs / callee -> parse::Tree::entries index
     int value_index = -1;        // kSeqExpr: which child supplies the result value
+    int loop_levels = -1;        // kBreakStmt/kContinueStmt: hops outward in the
+                                 // loop/switch context stack to the resolved target
+                                 // (0 = innermost), stamped by resolve.
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
     std::vector<std::unique_ptr<Node>> children;
     std::vector<std::unique_ptr<Node>> params;   // kFunctionDef/Decl: kParam nodes

@@ -1315,6 +1315,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             resolveExpr(tree, *s.children[0], diag);
             std::set<int> entry = tree.initialized_locals;
             tree.loop_stack.push_back({});
+            tree.loop_stack.back().name = s.label.empty() ? "while" : s.label;
             resolveStmt(tree, *s.children[1], diag);   // body block, from S
             tree.loop_stack.pop_back();
             tree.initialized_locals = std::move(entry);   // after = S
@@ -1335,6 +1336,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // No S snapshot: the body resolves from the current init-set (= S)
             // and a do-while never restores S (its inits escape), unlike if/while.
             tree.loop_stack.push_back({});
+            tree.loop_stack.back().name = s.label.empty() ? "while" : s.label;
             resolveStmt(tree, *s.children[1], diag);   // body block, from S
             parse::Tree::LoopFrame lf = std::move(tree.loop_stack.back());
             tree.loop_stack.pop_back();
@@ -1448,6 +1450,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // Body FIRST (execution is body-then-update): break/continue target
             // the for; continue folds into the loop frame's continue accumulator.
             tree.loop_stack.push_back({});
+            tree.loop_stack.back().name = s.label.empty() ? "for" : s.label;
             resolveStmt(tree, *s.children[2], diag);   // body block, from S'
             parse::Tree::LoopFrame lf = std::move(tree.loop_stack.back());
             tree.loop_stack.pop_back();
@@ -1602,45 +1605,89 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         }
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt: {
-            // A loop exit / restart: legal only inside a loop body, and it
-            // transfers control (Abrupt — a following sibling is unreachable).
-            // Fold the current init-set into the enclosing loop's accumulator so
-            // a do-while can intersect it (a pre-condition while ignores it).
-            char const* what =
-                s.kind == parse::Kind::kBreakStmt ? "break" : "continue";
+            // A loop/switch exit / loop restart: transfers control (Abrupt). The
+            // target depends on the argument — named (s.name), numbered (s.text),
+            // or naked. The current init-set folds into the TARGET frame's
+            // accumulator (so a do-while / for can intersect it), and the node is
+            // stamped with the hops to the target for codegen.
+            bool is_break = (s.kind == parse::Kind::kBreakStmt);
+            char const* what = is_break ? "break" : "continue";
+            // No break/continue of ANY flavor directly in a long-for update clause
+            // (a loop/switch nested in the update absorbs its own and raises the
+            // stack above the floor, so this only fires at the update's own level).
             if (tree.in_for_update
                 && (int)tree.loop_stack.size() == tree.for_update_floor) {
-                // Directly in a long-for update clause (no nested loop absorbs
-                // it) — the update may not break/continue the for.
                 diagnostic::report(diag, {s.file_id, s.tok,
                     std::string("A '") + what
                         + "' statement is not allowed in a for-loop update "
                           "clause.", {}});
-            } else if (s.kind == parse::Kind::kBreakStmt) {
-                // break targets the nearest enclosing loop OR switch.
-                if (tree.loop_stack.empty()) {
+                return Completion::Abrupt;
+            }
+            int n = (int)tree.loop_stack.size();
+            int target = -1;
+            if (!s.name.empty()) {
+                // NAMED: the nearest enclosing LOOP whose name matches (switches
+                // carry no name); innermost match wins.
+                for (int t = n - 1; t >= 0; --t) {
+                    if (!tree.loop_stack[t].is_switch
+                        && tree.loop_stack[t].name == s.name) {
+                        target = t;
+                        break;
+                    }
+                }
+                if (target < 0) {
+                    diagnostic::report(diag, {s.file_id, s.name_tok,
+                        "No enclosing loop labeled '" + s.name + "'.", {}});
+                    return Completion::Abrupt;
+                }
+            } else if (!s.text.empty()) {
+                // NUMBERED: the Nth enclosing LOOP outward, skipping switches.
+                long count = std::strtol(s.text.c_str(), nullptr, 10);
+                if (count < 1) {
+                    diagnostic::report(diag, {s.file_id, s.name_tok,
+                        std::string(is_break ? "Break" : "Continue")
+                            + " count must be at least 1.", {}});
+                    return Completion::Abrupt;
+                }
+                long seen = 0;
+                for (int t = n - 1; t >= 0; --t) {
+                    if (tree.loop_stack[t].is_switch) continue;
+                    if (++seen == count) { target = t; break; }
+                }
+                if (target < 0) {
+                    diagnostic::report(diag, {s.file_id, s.name_tok,
+                        std::string(is_break ? "Break" : "Continue")
+                            + " count exceeds the enclosing loop nesting.", {}});
+                    return Completion::Abrupt;
+                }
+            } else if (is_break) {
+                // NAKED break: the nearest enclosing loop OR switch.
+                if (n == 0) {
                     diagnostic::report(diag, {s.file_id, s.tok,
                         "A 'break' statement must be inside a loop or switch.",
                         {}});
-                } else {
-                    parse::Tree::LoopFrame& lf = tree.loop_stack.back();
-                    foldLoopExit(lf.break_init, lf.break_seen,
-                                 tree.initialized_locals);
+                    return Completion::Abrupt;
                 }
+                target = n - 1;
             } else {
-                // continue targets the nearest enclosing LOOP — switch frames are
-                // transparent to it (a switch is a break target only).
-                int t = (int)tree.loop_stack.size() - 1;
-                while (t >= 0 && tree.loop_stack[t].is_switch) --t;
-                if (t < 0) {
+                // NAKED continue: the nearest enclosing LOOP (switch transparent).
+                for (int t = n - 1; t >= 0; --t) {
+                    if (!tree.loop_stack[t].is_switch) { target = t; break; }
+                }
+                if (target < 0) {
                     diagnostic::report(diag, {s.file_id, s.tok,
                         "A 'continue' statement must be inside a loop.", {}});
-                } else {
-                    foldLoopExit(tree.loop_stack[t].continue_init,
-                                 tree.loop_stack[t].continue_seen,
-                                 tree.initialized_locals);
+                    return Completion::Abrupt;
                 }
             }
+            parse::Tree::LoopFrame& lf = tree.loop_stack[target];
+            if (is_break) {
+                foldLoopExit(lf.break_init, lf.break_seen, tree.initialized_locals);
+            } else {
+                foldLoopExit(lf.continue_init, lf.continue_seen,
+                             tree.initialized_locals);
+            }
+            s.loop_levels = (n - 1) - target;   // hops outward for codegen
             return Completion::Abrupt;
         }
         case parse::Kind::kSwitchStmt: {

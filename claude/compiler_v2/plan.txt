@@ -142,8 +142,12 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     parse), default singular + anywhere, naked break exits the switch / naked
     continue skips it to the enclosing loop, exhaustive switch is a
     return-terminator (containsBreak agreed across classify+codegen), lowered to
-    an `llvm switch`. Deferred: Session 6 (labeled + numbered break/continue;
-    named-switch-break is distant-future per switch.sl).
+    an `llvm switch`. Session 6 (labels) LANDED — loop labels (`:name` after the
+    body; default keyword names for/while), numbered (`break N;` Nth loop, skipping
+    switches) + named (`break name;`) break/continue, resolved to a hop count and
+    walked over a LoopCtx linked list in codegen; no break/continue of any flavor
+    in a for-update; labels on loops only (named-switch-break distant-future).
+    Phase 2 FLOW COMPLETE; only the container-for shapes remain (Phase 4/5).
   * return — LANDED (kReturnStmt + return-correctness check from Phase 1).
 
 Phase 3 — functions
