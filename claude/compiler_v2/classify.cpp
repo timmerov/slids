@@ -26,6 +26,17 @@ bool isLiteralKind(parse::Kind k) {
         || k == parse::Kind::kFloatLiteral;
 }
 
+// The preferred user-facing spelling for an inferred-from-literal type: the
+// 32-bit defaults read as int / uint / float (their narrow preferred names), so
+// `a = 42` infers `int` (matching an explicitly-typed sibling's ##type), not the
+// internal `int32`. Other widths pass through unchanged.
+std::string preferredSpelling(std::string const& t) {
+    if (t == "int32")   return "int";
+    if (t == "uint32")  return "uint";
+    if (t == "float32") return "float";
+    return t;
+}
+
 bool isFloatType(std::string const& t) {
     return t == "float" || t == "float32" || t == "float64";
 }
@@ -500,6 +511,29 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kVarDeclStmt: {
             if (!s.children.empty()) {
                 inferExpr(tree, *s.children[0], s.return_type, diag);
+                // Inferred-init: a typeless decl (empty return_type, promoted from
+                // an assign in resolve) takes the rhs type. A literal-inferred type
+                // normalizes to its preferred spelling (int32->int, ...); a typed
+                // rhs keeps its spelling. Copy any alias label, then WRITE BACK the
+                // entry — the one deliberate symbol-table mutation in classify, so
+                // later reads resolve to the inferred type.
+                if (s.return_type.empty() && s.resolved_entry_id >= 0) {
+                    parse::Node& rhs = *s.children[0];
+                    // Invariant: a typeable rhs yields a non-empty inferred type.
+                    // An un-typeable one (namespace/type-as-value, no-common-type,
+                    // void call) reports a diagnostic first and main short-circuits
+                    // before codegen — so an empty type here only ever coexists
+                    // with an already-reported error (don't abort on that path).
+                    assert((diagnostic::hasErrors(diag)
+                            || !rhs.inferred_type.empty())
+                        && "inferred-init: a typeable rhs must yield a type");
+                    std::string t = isLiteralKind(rhs.kind)
+                        ? preferredSpelling(rhs.inferred_type)
+                        : rhs.inferred_type;
+                    s.return_type = t;
+                    tree.entries[s.resolved_entry_id].slids_type = t;
+                    tree.entries[s.resolved_entry_id].alias_label = rhs.alias_label;
+                }
             }
             return;
         }
@@ -522,6 +556,14 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             assert(s.children.size() == 1 && "AugAssignStmt needs 1 rhs child");
             parse::Node& rhs = *s.children[0];
             std::string const& op = s.text;
+            // Refresh the lvalue type from the entry: an inferred-init local was
+            // still untyped when resolve cached s.return_type here, but classify
+            // stamped it when it ran the (promoted) decl above. desugar reads
+            // s.return_type, so update it in place. For an ordinary local this is
+            // the same value resolve already cached.
+            if (s.resolved_entry_id >= 0) {
+                s.return_type = parse::entryType(tree, s.resolved_entry_id);
+            }
             std::string const& lvalue_type = s.return_type;
 
             if (op == "<<" || op == ">>") {

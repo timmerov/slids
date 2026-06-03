@@ -2,6 +2,7 @@ const float kTau = 6.28
 const int kForty = 40
 const float kPi2 = 1.57
 const int kFortyFour = 44
+kFortyTwo+2 : int
 const int kThree = 3
 const float64 kPlanck = 6.626
 const bool kAlive = true

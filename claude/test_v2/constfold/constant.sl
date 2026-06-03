@@ -104,6 +104,9 @@ int32 main() {
     __println(##type(kPi2) + " kPi2 = " + kPi2);
     __println(##type(kFortyFour) + " kFortyFour = " + kFortyFour);
 
+    /* a const read inside an expression strips const -> the bare underlying. */
+    __println("kFortyTwo+2 : " + ##type(kFortyTwo + 2));   // int (const dropped)
+
     /* compile error — cyclic const dependency (kThree → kOne → kThree) */
 
     const int kThree = kOne + kTwo;

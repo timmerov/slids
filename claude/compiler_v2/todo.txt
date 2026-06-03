@@ -95,20 +95,39 @@ DEFERRED FEATURES (later; may not be on the plan)
     reopen; enums would reuse openNamespace's find-or-create, but the
     value-counter continuation across openings is the undecided part.)
 
-  * ##type — parse `##type(x)` (kHashHash lexes today, but grammar has no
-    handler). TWO parts, split:
-    (a) MINIMAL — pulled forward as the test instrument for inferred types:
-        parse `##type(expr)` as a primary, resolve the operand, codegen its
-        resolved type as a `char[]` string literal (v1 StringifyExpr ->
-        StringLiteralExpr). Enough to assert `x = 42; ##type(x)` -> "int" in
-        inferred-init tests. LAND THIS FIRST (before inferred-init).
-    (b) DEFERRED — preserve the declared alias/enum label so it reports the
-        source spelling: `alias Integer = int; Integer x; ##type(x)` should say
-        `Integer`, not `int`; an enum-typed value should say the enum, not its
-        underlying. Today resolveDeclType rewrites the spelling to the underlying,
-        so the label is lost (transparent aliasing). Not needed for inferred
-        primitives. (Full v1 stringify set — 7 `##` macros + the `#` 5-tuple —
-        is a Phase-5 item; see [[reference_stringify]].)
+  * ##type — LANDED: the 7-macro set + `##type(x)`; the alias-label channel (an
+    alias/enum-typed VARIABLE reports the source spelling — `Integer x` ->
+    `Integer`, `Dir d` -> `Dir` — via a parallel alias_label, not un-erase); and
+    the const qualifier (`const int8 a` -> `const int8`; a const read inside any
+    expression STRIPS const). See [[reference_stringify]]. OPEN: the enum-MEMBER
+    label (next item), and the `#` 5-tuple (Phase 5, blocked on tuples + `^`).
+
+  * ENUM MEMBER LABEL — `##type(Dir:kNorth)` should be `const Dir`, not the
+    current `const int`. A named-enum member's kConst entry is typed with the
+    bare underlying and carries no alias_label (registerEnumMembers, resolve.cpp:
+    `e.slids_type = node.return_type`; e.alias_label never set), so `##type` of a
+    bare member gets the const qualifier right (the member IS a const) but reports
+    the underlying `int`, not the enum name. A VARIABLE of the enum type already
+    works (`Dir d` captures alias_label "Dir" at its decl, via resolveDeclType
+    erasure). The bare-reference mechanism is one line: stamp
+    `e.alias_label = node.name` for a named enum (anonymous enum -> no name -> no
+    label), matching the desugaring `enum Dir (kNorth)` -> `Dir { const Dir
+    kNorth = 0; }`.
+    consequences: the one-line stamp also turns ON enum-label PROPAGATION through
+    the existing binaryLabel rule — `Dir:kNorth + 1` would then carry "Dir"
+    (alias+literal -> alias, C-style "enum + offset stays the enum"). That forces
+    the named-type binary-RESULT rule to be decided: is `kNorth + kSouth` a Dir? a
+    Dir-typed loop var stepping past the last member? It is the SAME binary-result
+    rule the CHAR-ARITH-LOSES-CHAR-NESS bug needs. Also couples with DROP-THE-ENUM-
+    QUALIFIER (a Dir-typed lvalue steering bare-member lookup) and with const-strip
+    (would `##type(Dir:kNorth + 1)` keep "Dir"?).
+    prerequisite: alias-label channel (LANDED) + a decided binary-result
+    label-propagation rule for named types (shared with char-arith). That decision
+    is the real gate — not the one-line stamp.
+    schedule: land grouped with the CHAR-ARITH-LOSES-CHAR-NESS fix + the enum-label
+    propagation decision (one binary-result rule serves all three); sequenced AFTER
+    inferred-init (current focus), BEFORE Phase 5 classes. The bare-reference stamp
+    alone is small and could land sooner once the propagation rule is settled.
 
   * ALIAS FUNCTION-RENAME — `alias Fn = LongName;` (use case: importing C
     functions with ugly names).

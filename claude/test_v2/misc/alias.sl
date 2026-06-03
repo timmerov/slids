@@ -45,6 +45,16 @@ int32 main() {
     Dir d = Dir:kNorth;
     __println(##type(d) + " " + ##name(d) + " = " + d);
 
+    /* propagation: alias + same alias -> alias; + int -> drops to underlying;
+       + literal -> alias (flexes in); a comparison -> bool. */
+    Integer p = 10;
+    Integer q = 20;
+    int     m = 5;
+    __println("p+q : " + ##type(p + q));      // Integer
+    __println("p+m : " + ##type(p + m));      // int  (alias dropped)
+    __println("p+1 : " + ##type(p + 1));      // Integer
+    __println("p<q : " + ##type(p < q));      // bool
+
     //-EXPECT-ERROR: Unknown type 'Bogus'
     //Bogus q;
 

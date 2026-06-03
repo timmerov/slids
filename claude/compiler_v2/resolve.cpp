@@ -1041,6 +1041,27 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             return Completion::Normal;
         }
         case parse::Kind::kAssignStmt: {
+            // Inferred-init: a typeless assign to an UNDECLARED bare name declares
+            // a fresh local whose type classify infers from the rhs (write-back).
+            // A reassign (target already a local) and a wrong-kind target (const /
+            // function / ...) both fall through to resolveAssignTarget below.
+            if (!isQualified(s) && resolveName(tree, s.name) < 0) {
+                parse::Entry e;
+                e.kind = parse::EntryKind::kLocalVar;
+                e.name = s.name;
+                e.slids_type = "";          // classify stamps it from the rhs
+                e.file_id = s.file_id;
+                e.tok = s.name_tok;
+                s.resolved_entry_id = parse::addEntry(tree, std::move(e));
+                tree.body_locals.push_back(s.resolved_entry_id);
+                s.kind = parse::Kind::kVarDeclStmt;   // alloca + classify infer
+                // rhs BEFORE marking initialized, so `x = x` reads x uninitialized.
+                for (auto& ch : s.children) {
+                    if (ch) resolveExpr(tree, *ch, diag);
+                }
+                tree.initialized_locals.insert(s.resolved_entry_id);
+                return Completion::Normal;
+            }
             resolveAssignTarget(tree, s, diag);
             // rhs BEFORE marking, so `x = x;` with x uninitialized still fires.
             for (auto& ch : s.children) {
