@@ -15,6 +15,10 @@ these are the values at the site where #x is used.
 
     (##file, ##line, ##type(x), ##name(x), ^x)
 
+macros and aliases.
+##type of an type alias returns the underlying type.
+##type of an function alias returns the underlying function name.
+
 notes:
 date and time are the time the .sl file is compiled.
 not the date and time slidsc is compiled. v1 bug.
@@ -64,5 +68,35 @@ int32 main() {
     __println(##type(today));           // char[]
     __println(##type(now));             // char[]
 
+    alias Integer = int;
+    alias Whole   = Integer;     // chained alias -> fully resolved
+    enum Status ( ok );
+    __println("Integer type = " + ##type(Integer));   // int  (alias name -> underlying)
+    __println("Whole type = " + ##type(Whole));        // int  (chain resolved)
+    __println("Status type = " + ##type(Status));      // int  (enum name -> underlying)
+
+    // a namespace-qualified type name resolves the same way; a qualified VALUE
+    // keeps the value path (its const-qualified type).
+    Geo { enum Dir ( kN ); const int kSize = 3; }
+    __println("Geo:Dir type = " + ##type(Geo:Dir));    // int        (qualified enum type)
+    __println("Geo:kSize type = " + ##type(Geo:kSize)); // const int  (qualified value)
+
     return 0;
 }
+
+/*
+##type of a bare name that is neither a value nor a type (alias/enum) is rejected.
+*/
+
+//-EXPECT-ERROR: 'Splat' is not a value or an alias
+//int32 neg_undefined() {
+//    __println(##type(Splat));
+//    return 0;
+//}
+
+//-EXPECT-ERROR: 'Ns' is a namespace, not a value or an alias
+//Ns { const int kX = 1; }
+//int32 neg_namespace() {
+//    __println(##type(Ns));
+//    return 0;
+//}

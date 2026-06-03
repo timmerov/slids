@@ -226,6 +226,17 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // its erased underlying type. Lowered in place here so every
             // downstream stage only ever sees a kStringLiteral.
             assert(e.children.size() == 1 && "kStringifyType needs 1 operand");
+            // Type-name operand: resolve stamped the underlying type on return_type
+            // (`##type(Integer)` -> `int`). Emit it directly; the operand is a type,
+            // not a value, so skip inferExpr.
+            if (!e.return_type.empty()) {
+                e.text = e.return_type;
+                e.return_type.clear();
+                e.children.clear();
+                e.kind = parse::Kind::kStringLiteral;
+                e.inferred_type = "char[]";
+                return;
+            }
             parse::Node& operand = *e.children[0];
             inferExpr(tree, operand, "", diag);
             // A DIRECT reference to a const reports its const-qualified declared

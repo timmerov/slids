@@ -681,6 +681,10 @@ void registerEnumMembers(parse::Tree& tree, parse::Node& node, int ns_frame,
         e.kind = parse::EntryKind::kConst;
         e.name = m->name;
         e.slids_type = node.return_type;
+        // A named enum's members carry the enum name as their type label (the
+        // member's type is `Enum`, not the bare underlying) so ##type reports
+        // `const Enum`. Anonymous enum -> no name -> no label (bare `const int`).
+        e.alias_label = node.name;
         e.file_id = m->file_id;
         e.tok = m->name_tok;
         e.owner_ns_frame = (ns_frame >= 0) ? ns_frame : -1;
@@ -828,11 +832,64 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         }
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
-        case parse::Kind::kStringifyType:   // resolve the ##type operand
             for (auto& ch : e.children) {
                 if (ch) resolveExpr(tree, *ch, diag);
             }
             return;
+        case parse::Kind::kStringifyType: {
+            // ##type's operand is either a VALUE (resolve it; classify reports its
+            // labeled type) or a TYPE NAME — an alias or an enum's transparent type
+            // facet, bare OR namespace-qualified — in which case ##type reports the
+            // UNDERLYING (stamped on return_type for classify). A name that is
+            // neither (a namespace, a function, undefined) is rejected here. A
+            // non-ident operand is a value expression.
+            parse::Node& operand = *e.children[0];
+            if (operand.kind != parse::Kind::kIdentExpr) {
+                for (auto& ch : e.children) {
+                    if (ch) resolveExpr(tree, *ch, diag);
+                }
+                return;
+            }
+            bool qualified = isQualified(operand);
+            int id = qualified ? resolveQualifiedRef(tree, operand, diag)
+                               : resolveName(tree, operand.name);
+            if (id >= 0) {
+                parse::EntryKind k = tree.entries[id].kind;
+                bool is_type = (k == parse::EntryKind::kAlias)
+                    || (k == parse::EntryKind::kNamespace
+                        && !tree.entries[id].slids_type.empty());   // enum facet
+                if (is_type) {
+                    // Reconstruct the (possibly qualified) spelling for the chain /
+                    // namespace type resolver.
+                    std::string spelling = operand.global_qualified ? "::" : "";
+                    for (auto const& seg : operand.qualifier) spelling += seg + ":";
+                    spelling += operand.name;
+                    std::set<std::string> visiting;
+                    bool reported = false;
+                    e.return_type = resolveTypeSpelling(tree, spelling, visiting,
+                        reported, operand.file_id, operand.tok, diag);
+                    return;
+                }
+                if (k == parse::EntryKind::kLocalVar
+                    || k == parse::EntryKind::kConst) {
+                    if (qualified) operand.resolved_entry_id = id;  // already resolved
+                    else resolveExpr(tree, operand, diag);          // DA + read-mark
+                    return;
+                }
+                char const* what = (k == parse::EntryKind::kFunction)
+                    ? "function" : "namespace";
+                diagnostic::report(diag, {operand.file_id, operand.tok,
+                    "'" + operand.name + "' is a " + what
+                        + ", not a value or an alias.", {}});
+                return;
+            }
+            // qualified: resolveQualifiedRef already reported the resolution error.
+            if (!qualified) {
+                diagnostic::report(diag, {operand.file_id, operand.tok,
+                    "'" + operand.name + "' is not a value or an alias.", {}});
+            }
+            return;
+        }
         case parse::Kind::kStringLiteral:
         case parse::Kind::kIntLiteral:
         case parse::Kind::kUintLiteral:

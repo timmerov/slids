@@ -11,8 +11,14 @@ if no name is specified, the enum constants are declared in the enclosing scope.
 
 the fully qualified name must be used.
 
-todo: land aliases.
+    enum int Demo ( kMix, kTape );
+    int x = Demo:kMix;
+
 the enum qualifier may be removed with alias.
+
+    enum int Demo ( kMix, kTape );
+    alias int Demo;
+    int x = kMix;
 
 enum conceptually/mechanically resolves to a type alias and a namespace.
 
@@ -28,6 +34,11 @@ enum conceptually/mechanically resolves to a type alias and a namespace.
     -->
     const int kBare = 0;
     const int kNaked = 1;
+
+    u2 = Demo:kTape;
+    ##type(u2)          returns "Demo"
+    ##type(Demo)        returns "int"
+    ##type(Demo:kMix)   returns "const Demo"
 
 future todo:
 re-open enums.
@@ -210,6 +221,11 @@ int32 anon_local() {
 
 int32 main() {
 
+    abc = Bonk1:kOops;
+    __println(##type(abc));
+    __println(##type(Bonk1));
+    __println(##type(Bonk1:kOops));
+
     /* file-scope anonymous enum: all three members, auto-incremented from 0. */
     __println("kUnnamed1 = " + kUnnamed1);
     __println("kUnnamed2 = " + kUnnamed2);
@@ -288,6 +304,14 @@ int32 main() {
     Outer:Inner:Deep dv = Outer:Inner:Deep:d1;   // 3-segment qualified type
     __println("dv = "       + dv);
     __println("deep0 = "    + Outer:Inner:Deep:d0);
+
+    /* ##type — enum NAME -> underlying; MEMBER -> const <Enum>; a var inferred
+       from a member keeps the enum label; an anonymous member has no label. */
+    __println("##type(Direction) = " + ##type(Direction));
+    __println("##type(Direction:kNorth) = " + ##type(Direction:kNorth));
+    d2 = Direction:kEast;
+    __println("##type(d2) = " + ##type(d2) + ", d2 = " + d2);
+    __println("##type(kUnnamed1) = " + ##type(kUnnamed1));
 
     alias Direction;
     __println("kNorth = " + kNorth);

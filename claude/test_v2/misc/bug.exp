@@ -1,0 +1,6 @@
+const Demo Demo:a = a
+const Demo Demo:b = 98
+const Demo Demo:c = 99
+Demo a = a
+Demo b = 98
+Demo c = 99

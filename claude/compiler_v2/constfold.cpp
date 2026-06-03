@@ -651,6 +651,7 @@ bool trySubstituteConst(std::unique_ptr<parse::Node>& slot, parse::Tree& tree) {
     lit->file_id = file_id;
     lit->tok = tok;
     lit->strong_type = entry.const_strong_type;   // strong const -> strong literal
+    lit->alias_label = entry.alias_label;         // carry the const's type label
     slot = std::move(lit);
     return true;
 }

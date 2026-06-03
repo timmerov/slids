@@ -1,5 +1,5 @@
 macros.sl
-34
+38
 main
 a+b
 obj.field[2]
@@ -10,3 +10,8 @@ int
 n+1
 char[]
 char[]
+Integer type = int
+Whole type = int
+Status type = int
+Geo:Dir type = int
+Geo:kSize type = const int

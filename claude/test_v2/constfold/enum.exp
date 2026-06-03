@@ -1,3 +1,6 @@
+Bonk1
+int
+const Bonk1
 kUnnamed1 = 0
 kUnnamed2 = 1
 kUnnamed3 = 2
@@ -59,4 +62,8 @@ bz = 101
 Ref:d = 2
 dv = 1
 deep0 = 0
+##type(Direction) = int
+##type(Direction:kNorth) = const Direction
+##type(d2) = Direction, d2 = 2
+##type(kUnnamed1) = const int
 kNorth = 0
