@@ -1,6 +1,0 @@
-program:
-  functions:
-    function main() -> int32  file=global2.sl tok=6
-  globals:
-    global <unnamed> static  file=global2.sl tok=0
-      field leader_ int = <expr>

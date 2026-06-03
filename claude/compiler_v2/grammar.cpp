@@ -182,6 +182,33 @@ struct Parser {
         return peekKind(o) == token::Kind::kIdentifier;
     }
 
+    // Parse a for-varlist variable head: an optional type then the variable
+    // name. The decl is TYPELESS (vtype left empty -> inferred from the
+    // initializer, or a reuse of an enclosing local) when the leading tokens
+    // are neither a primitive type-start nor a qualified typed-decl shape
+    // (`Ident Ident` / `Ident:Ident... Ident`); then the leading identifier is
+    // the variable name. Consumes the type (if any) and the name; never the
+    // trailing ':' / '=' / ',' / ')'. Returns false on a diagnosed error.
+    bool parseForVarHead(std::string& vtype, std::string& vname,
+                         int& v_file, int& v_tok, int& vname_tok) {
+        v_file = peek().file_id;
+        v_tok = pos;
+        if (isTypeStart(peek().kind) || looksLikeQualifiedTypedDecl()) {
+            vtype = parseType();
+            if (fatal) return false;
+        } else {
+            vtype.clear();   // typeless: the next identifier IS the name
+        }
+        if (peek().kind != token::Kind::kIdentifier) {
+            error("Expected a variable name in the for-loop.");
+            return false;
+        }
+        vname = peek().text;
+        vname_tok = pos;
+        advance();   // name
+        return true;
+    }
+
     // Parse a (possibly qualified) name at the current token. Fills `segments`
     // with each `:`-separated identifier and `toks` with each segment's token
     // index (for per-segment carets); sets `global` for a leading `::`.
@@ -1205,10 +1232,11 @@ struct Parser {
         return node;
     }
 
-    // for — dispatches between the colon (ranged) form and the long form on the
-    // token after the first `type var`: ':' opens a range, anything else makes
-    // that decl varlist[0] of a long-for. An empty `()` is an empty-varlist long
-    // form. Explicit var types required this round.
+    // for — dispatches between the colon (ranged/enum) form and the long form on
+    // the token after the first `[type] var`: ':' opens a range or enum,
+    // anything else makes that decl varlist[0] of a long-for. An empty `()` is an
+    // empty-varlist long form. A var type is optional (parseForVarHead); a
+    // typeless var is inferred from its initializer or reuses an enclosing local.
     std::unique_ptr<parse::Node> parseForStmt() {
         int stmt_file = peek().file_id;
         int stmt_tok = pos;
@@ -1218,18 +1246,12 @@ struct Parser {
             advance();   // )  — empty varlist long-for
             return finishLongFor(stmt_file, stmt_tok, {});
         }
-        // First decl's `type name`.
-        int v_file = peek().file_id;
-        int v_tok = pos;
-        std::string vtype = parseType();
-        if (fatal) return nullptr;
-        if (peek().kind != token::Kind::kIdentifier) {
-            error("Expected a variable name in the for-loop.");
+        // First decl's `[type] name` (type optional — typeless infers / reuses).
+        int v_file, v_tok, vname_tok;
+        std::string vtype, vname;
+        if (!parseForVarHead(vtype, vname, v_file, v_tok, vname_tok)) {
             return nullptr;
         }
-        std::string vname = peek().text;
-        int vname_tok = pos;
-        advance();   // name
         if (peek().kind == token::Kind::kColon) {
             advance();   // :
             auto operand = parseUnary();   // start (range) or the enum name
@@ -1259,17 +1281,9 @@ struct Parser {
             varlist.push_back(std::move(decl));
             if (peek().kind != token::Kind::kComma) break;
             advance();   // ,
-            v_file = peek().file_id;
-            v_tok = pos;
-            vtype = parseType();
-            if (fatal) return nullptr;
-            if (peek().kind != token::Kind::kIdentifier) {
-                error("Expected a variable name in the for-loop variable list.");
+            if (!parseForVarHead(vtype, vname, v_file, v_tok, vname_tok)) {
                 return nullptr;
             }
-            vname = peek().text;
-            vname_tok = pos;
-            advance();   // name
         }
         if (!expect(token::Kind::kRParen, ")")) return nullptr;
         return finishLongFor(stmt_file, stmt_tok, std::move(varlist));

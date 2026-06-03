@@ -1,6 +1,0 @@
-program:
-  functions:
-    function add(a int32, b int32) -> int32  file=reference2.sl tok=1
-    function increment(mutable p int^) -> void  file=reference2.sl tok=17
-    function swap(mutable a int^, mutable b int^) -> void  file=reference2.sl tok=35
-    function main() -> int32  file=reference2.sl tok=67

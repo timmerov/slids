@@ -759,7 +759,31 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kForLongStmt: {
             // children[0]=cond, [1]=update, [2]=body, [3..]=varlist decls.
             assert(s.children.size() >= 3 && "kForLongStmt needs cond+update+body");
-            for (std::size_t i = 3; i < s.children.size(); i++) {
+            // The loop var [3] is classified first so a typeless (inferred) loop
+            // var has its type stamped before the rest of the varlist. For a
+            // ranged/enum for, the synthesized `_$end`/`_$step` (children[4..])
+            // share the loop var's type per the desugar spec — when they are
+            // typeless (the loop var was inferred), give them the loop var's
+            // resolved type as context so their bounds flex into it, matching an
+            // explicitly-typed range (where parse already stamped the type).
+            if (s.children.size() > 3 && s.children[3]) {
+                classifyStmt(tree, *s.children[3], fn_return_type, diag);
+            }
+            if (s.range_dotdot_tok >= 0 && s.children.size() > 3 && s.children[3]
+                && s.children[3]->resolved_entry_id >= 0) {
+                std::string lv = parse::entryType(tree, s.children[3]->resolved_entry_id);
+                for (std::size_t i = 4; i < s.children.size(); i++) {
+                    if (s.children[i]
+                        && s.children[i]->kind == parse::Kind::kVarDeclStmt
+                        && s.children[i]->return_type.empty()
+                        && s.children[i]->resolved_entry_id >= 0
+                        && !lv.empty()) {
+                        s.children[i]->return_type = lv;
+                        tree.entries[s.children[i]->resolved_entry_id].slids_type = lv;
+                    }
+                }
+            }
+            for (std::size_t i = 4; i < s.children.size(); i++) {
                 if (s.children[i]) classifyStmt(tree, *s.children[i], fn_return_type, diag);
             }
             parse::Node& cond = *s.children[0];

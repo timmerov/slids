@@ -1,3 +1,0 @@
-program:
-  functions:
-    function main() -> int32  file=primes1.sl tok=1

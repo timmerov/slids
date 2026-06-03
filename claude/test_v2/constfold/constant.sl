@@ -34,6 +34,7 @@ const int kFortyTwo = 6 * 7;
 const float64 kPlanck = 6.626;
 const bool kAlive = true;
 const char kStar = '*';
+const char kBeta = 'A' + 1;      // char arithmetic stays char -> 'B'
 const int kNegSeven = -7;
 const int8 kByte = 5;
 
@@ -132,6 +133,7 @@ int32 main() {
     __println(##type(kPlanck) + " kPlanck = " + kPlanck);
     __println(##type(kAlive) + " kAlive = " + kAlive);
     __println(##type(kStar) + " kStar = " + kStar);
+    __println(##type(kBeta) + " kBeta = " + kBeta);
     __println(##type(kNegSeven) + " kNegSeven = " + kNegSeven);
 
     /* forward ref within function body — kSum sees kA and kB declared later */

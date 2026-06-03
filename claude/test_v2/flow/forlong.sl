@@ -298,6 +298,89 @@ int for_update_local(int n) {
     return sum;
 }
 
+/* a typeless loop var with an initializer — its type is inferred from the init
+   (here int from `0`); behaves exactly like the explicit `for (int i = 0)`. */
+int for_typeless(int n) {
+    int s = 0;
+    for (i = 0) (i < n) { ++i; } {
+        s = s + i;
+    }
+    return s;
+}
+
+/* a typeless loop var whose name is ALREADY in scope reuses that local rather
+   than declaring a fresh one. The varlist init runs once unconditionally, so the
+   reused `x` is observable after the loop, holding the last iterated value. */
+int for_reuse(int n) {
+    int x = -1;
+    for (x = 0) (x < n) { ++x; } {
+    }
+    return x;
+}
+
+/* a typeless loop var with NO initializer reuses the enclosing local without
+   re-initializing it (a no-op slot); `x` keeps its current value as the loop
+   starts. body-then-update sees x = 0..n-1. */
+int for_noinit_reuse(int n) {
+    int x = 0;
+    int s = 0;
+    for (x) (x < n) { ++x; } {
+        s = s + x;
+    }
+    return s;
+}
+
+/* a mixed varlist: a typeless var (inferred) beside an explicitly-typed one. */
+int for_typeless_mixed(int n) {
+    int sum = 0;
+    for (i = 0, int j = n) (i < j) { ++i; --j; } {
+        sum = sum + 1;
+    }
+    return sum;
+}
+
+/* two typeless vars in one varlist, each inferred from its own initializer. */
+int for_two_typeless(int n) {
+    int sum = 0;
+    for (i = 0, j = n) (i < j) { ++i; --j; } {
+        sum = sum + 1;
+    }
+    return sum;
+}
+
+/* a typeless fresh for-var (frame 1) shadowed by a body-local `x` (frame 3); the
+   update's `++x` drives the for-var while the body's x stays 42. */
+int for_typeless_shadow(int n) {
+    int sum = 0;
+    for (x = 0) (x < n) { ++x; } {
+        int x = 42;
+        sum = sum + x;
+    }
+    return sum;
+}
+
+/* PPID in a typeless varlist initializer (runs once): i takes j's value, then j
+   bumps; i's type is inferred from the init expression. */
+int for_typeless_ppid(int n) {
+    int j = 5;
+    int sum = 0;
+    for (i = j++) (i < n) { ++i; } {
+        sum = sum + 1;
+    }
+    return sum * 100 + j;
+}
+
+/* nested typeless fors. */
+int for_typeless_nested(int rows, int cols) {
+    int total = 0;
+    for (r = 0) (r < rows) { ++r; } {
+        for (c = 0) (c < cols) { ++c; } {
+            total = total + 1;
+        }
+    }
+    return total;
+}
+
 int32 main() {
     __println("sum_for(5) = " + sum_for(5));                // 10
     __println("empty_clauses(4) = " + empty_clauses(4));    // 6
@@ -317,6 +400,14 @@ int32 main() {
     __println("for_and_cond(5) = " + for_and_cond(5));                      // 10
     __println("for_empty_body(4) = " + for_empty_body(4));                  // 4
     __println("for_update_local(6) = " + for_update_local(6));              // 6
+    __println("for_typeless(5) = " + for_typeless(5));                      // 10
+    __println("for_reuse(4) = " + for_reuse(4));                            // 4
+    __println("for_noinit_reuse(4) = " + for_noinit_reuse(4));              // 6
+    __println("for_typeless_mixed(10) = " + for_typeless_mixed(10));        // 5
+    __println("for_two_typeless(10) = " + for_two_typeless(10));            // 5
+    __println("for_typeless_shadow(3) = " + for_typeless_shadow(3));        // 126
+    __println("for_typeless_ppid(8) = " + for_typeless_ppid(8));            // 306
+    __println("for_typeless_nested(3, 4) = " + for_typeless_nested(3, 4));  // 12
     return 0;
 }
 
@@ -407,4 +498,55 @@ negatives — one //-block uncommented per run.
 //        n = n - 1;
 //    }
 //    return 0;
+//}
+
+/* a typeless for-var with no initializer and no enclosing local to reuse has no
+   type to infer. */
+//-EXPECT-ERROR: Cannot infer the type of 'k'; it has no initializer.
+//int neg_typeless_undeclared(int n) {
+//    for (k) (k < n) { ++k; } {
+//        __println(k);
+//    }
+//    return 0;
+//}
+
+/* a typeless no-init for-var whose name resolves to a constant cannot be reused
+   as a loop variable. */
+//-EXPECT-ERROR: Cannot use constant 'c' as a loop variable.
+//int neg_typeless_const(int n) {
+//    const int c = 5;
+//    for (c) (n > 0) { } {
+//        __println(c);
+//    }
+//    return 0;
+//}
+
+/* likewise a function name. */
+//-EXPECT-ERROR: Cannot use function 'g' as a loop variable.
+//int neg_typeless_function(int n) {
+//    for (g) (n > 0) { } {
+//        n = n - 1;
+//    }
+//    return 0;
+//}
+//int g() { return 1; }
+
+/* a typeless WITH-init for-var that reuses a constant is an assignment to a
+   const. */
+//-EXPECT-ERROR: Cannot assign to constant 'c'.
+//int neg_typeless_reuse_const(int n) {
+//    const int c = 5;
+//    for (c = 0) (c < n) { } {
+//        __println(c);
+//    }
+//    return 0;
+//}
+
+/* a fresh typeless for-var leaves scope at the end of the loop, so a read after
+   the loop is unresolved (no enclosing local of that name exists). */
+//-EXPECT-ERROR: Unresolved identifier 'i'.
+//int neg_typeless_fresh_escape(int n) {
+//    for (i = 0) (i < n) { ++i; } {
+//    }
+//    return i;
 //}

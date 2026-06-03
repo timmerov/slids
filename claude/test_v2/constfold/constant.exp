@@ -7,6 +7,7 @@ const int kThree = 3
 const float64 kPlanck = 6.626
 const bool kAlive = true
 const char kStar = *
+const char kBeta = B
 const int kNegSeven = -7
 const int kSum = 30
 const int kInferInt = 40

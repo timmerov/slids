@@ -1361,14 +1361,84 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // post-loop init-set is the entry set S — body/update inits don't
             // escape, and the for-vars leave scope (like a pre-condition while).
             assert(s.children.size() >= 3 && "kForLongStmt needs cond+update+body");
-            std::set<int> entry = tree.initialized_locals;   // S (before varlist)
             parse::pushFrame(tree);                            // for-scope
             std::vector<int> saved_body_locals = std::move(tree.body_locals);
             tree.body_locals.clear();
-            // varlist decls live in the for-scope (explicit type each). S -> S'.
+            // varlist decls live in the for-scope (explicit type) OR reuse an
+            // enclosing local (typeless). The varlist initializers run once
+            // unconditionally before the first test, so their inits escape the
+            // loop (after = S', captured below) — distinct from the possibly-zero
+            // body/update, whose inits don't escape. A fresh for-var leaves scope
+            // but its id is unique, so its presence in S' is inert. S -> S'.
             for (std::size_t i = 3; i < s.children.size(); i++) {
-                if (s.children[i]) resolveStmt(tree, *s.children[i], diag);
+                if (!s.children[i]) continue;
+                parse::Node& d = *s.children[i];
+                // A typeless varlist decl (no explicit type) either REUSES an
+                // enclosing local of the same name or declares a fresh inferred
+                // local. WITH an initializer, both route through the kAssignStmt
+                // path: an in-scope name reassigns it (reuse — no fresh alloca,
+                // observable after); an unknown name becomes a fresh inferred-init
+                // local (classify types it from the rhs). WITHOUT an initializer
+                // there is nothing to infer, so the name must already be a
+                // reassignable local — reuse it as the loop var (a no-op slot);
+                // otherwise it is an error.
+                if (d.kind == parse::Kind::kVarDeclStmt && !d.is_const
+                    && d.return_type.empty() && !isQualified(d)) {
+                    if (!d.children.empty()) {
+                        d.kind = parse::Kind::kAssignStmt;
+                        resolveStmt(tree, d, diag);
+                        continue;
+                    }
+                    int existing = resolveName(tree, d.name);
+                    if (existing >= 0) {
+                        parse::Entry const& prev = tree.entries[existing];
+                        if (prev.kind == parse::EntryKind::kLocalVar) {
+                            d.kind = parse::Kind::kBlockStmt;   // no-op reuse slot
+                            d.children.clear();
+                            continue;
+                        }
+                        // The name resolves but is not a reassignable local, so it
+                        // cannot be reused as a loop variable (mirrors
+                        // resolveAssignTarget's wrong-kind wording). The name still
+                        // resolves, so the cond/update/body reads don't cascade.
+                        char const* what =
+                              prev.kind == parse::EntryKind::kAlias     ? "type"
+                            : prev.kind == parse::EntryKind::kConst     ? "constant"
+                            : prev.kind == parse::EntryKind::kNamespace ? "namespace"
+                            : prev.kind == parse::EntryKind::kFunction  ? "function"
+                            : "variable";
+                        diagnostic::report(diag, {d.file_id, d.name_tok,
+                            "Cannot use " + std::string(what) + " '" + d.name
+                                + "' as a loop variable.",
+                            {{prev.file_id, prev.tok,
+                              std::string(what) + " declared here"}}});
+                        d.kind = parse::Kind::kBlockStmt;   // neutralize the slot
+                        d.children.clear();
+                        continue;
+                    }
+                    // Truly undeclared typeless name with no initializer: nothing
+                    // to infer from.
+                    diagnostic::report(diag, {d.file_id, d.name_tok,
+                        "Cannot infer the type of '" + d.name
+                            + "'; it has no initializer.", {}});
+                    // Register a placeholder local so the cond/update/body reads
+                    // of this name resolve (suppressing cascade "unresolved" /
+                    // "uninitialized" errors); main bails after resolve, so the
+                    // empty type is never consumed downstream.
+                    parse::Entry e;
+                    e.kind = parse::EntryKind::kLocalVar;
+                    e.name = d.name;
+                    e.file_id = d.file_id;
+                    e.tok = d.name_tok;
+                    d.resolved_entry_id = parse::addEntry(tree, std::move(e));
+                    tree.initialized_locals.insert(d.resolved_entry_id);
+                    d.kind = parse::Kind::kBlockStmt;   // neutralize the slot
+                    d.children.clear();
+                    continue;
+                }
+                resolveStmt(tree, d, diag);
             }
+            std::set<int> after_varlist = tree.initialized_locals;   // S'
             // The condition is tested before the body, so its reads must hold on
             // the post-varlist set S' (the first iteration's entry, also the
             // back-edge fixpoint).
@@ -1400,7 +1470,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             sweepUnusedLocals(tree, diag);
             tree.body_locals = std::move(saved_body_locals);
             parse::popFrame(tree);
-            tree.initialized_locals = std::move(entry);   // after = S
+            tree.initialized_locals = std::move(after_varlist);   // after = S'
             return Completion::Normal;
         }
         case parse::Kind::kForEnumStmt: {

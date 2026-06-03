@@ -1,0 +1,27 @@
+== test01: multi-pre extract ==
+a=7 x=14
+== test02: mixed pre/post ==
+b=7 y=12
+== test03: if-cond pre ==
+c=1
+== test04: if-cond post ==
+d=1
+== test05: while-cond post ==
+e=1
+e=2
+e=3
+after-while e=4
+== test06: && short-circuits right ==
+g=100
+== test07: || short-circuits right ==
+h=1
+i=100
+== test08: per-arg flush ==
+take_two a=5 b=6
+== test09: switch scrutinee post ==
+k=1
+== test10: long-for init slot ==
+m=1 n=0
+== test11: compound-assign single-eval slid LHS ==
+arr[0]=11 arr[1]=20 arr[2]=30
+p offset=1

@@ -1,7 +1,0 @@
-program:
-  classes:
-    class This  file=cast.sl tok=0
-    class That  file=cast.sl tok=5
-    class Outer : This  file=cast.sl tok=12
-  functions:
-    function main() -> int32  file=cast.sl tok=18

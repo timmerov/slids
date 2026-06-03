@@ -1,9 +1,0 @@
-program:
-  classes:
-    class Counter  file=reference3.sl tok=0
-      field value_ int32 = <expr>
-      method increment() -> void
-      method getValue() -> int32
-  functions:
-    function incrementTwice(mutable c Counter^) -> void  file=reference3.sl tok=29
-    function main() -> int32  file=reference3.sl tok=53

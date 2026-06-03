@@ -1,0 +1,175 @@
+== test01: for default name break ==
+for i=0
+after-if i=0
+for i=1
+after-for
+== test02: for default name continue ==
+for ic=0
+body ic=0
+for ic=1
+for ic=2
+body ic=2
+after-for
+== test03: while default name break ==
+while n=0
+while n=1
+after-while n=1
+== test04: while default name continue ==
+while m=1
+body m=1
+while m=2
+while m=3
+body m=3
+after-while
+== test05: bottom-while default name break ==
+bw b=0
+bw b=1
+after-bw b=2
+== test06: switch default name break ==
+case 2
+after-switch
+== test07: nested fors, inner default vs outer label ==
+outer o=0
+  inner j=0
+  after-if j=0
+  inner j=1
+after-inner o=0
+outer o=1
+  inner j=0
+  after-if j=0
+  inner j=1
+after-inner o=1
+outer o=2
+  inner j=0
+  after-if j=0
+  inner j=1
+after-inner o=2
+after-outer
+== test08: nested fors, inner break to outer label ==
+outer oo=0
+  inner jj=0
+  after-if jj=0
+  inner jj=1
+  after-if jj=1
+  inner jj=2
+  after-if jj=2
+outer oo=1
+  inner jj=0
+  after-if jj=0
+  inner jj=1
+after-outer
+== test09: for-tuple default name break ==
+t=10
+t=20
+after-for-tuple
+== test10: switch inside for, break switch only kills switch ==
+k=0
+  case 0
+after-switch k=0
+k=1
+  case 1
+after-switch k=1
+after-for
+== test11: naked break in for ==
+for p=0
+after-if p=0
+for p=1
+after-for
+== test12: naked continue in for ==
+for q=0
+body q=0
+for q=1
+for q=2
+body q=2
+after-for
+== test13: naked break in switch inside for ==
+r=0
+  case 0
+after-switch r=0
+r=1
+  case 1
+after-switch r=1
+after-for
+== test14: naked break in while ==
+while s=0
+while s=1
+after-while s=1
+== test15: naked continue in while ==
+while u=1
+body u=1
+while u=2
+while u=3
+body u=3
+after-while
+== test16: break 1 in switch in for exits the for ==
+for v=0
+after-switch v=0
+for v=1
+  case 1, break 1
+after-for
+== test17: continue 1 in switch in for skips iteration ==
+for w=0
+after-switch w=0
+for w=1
+  case 1, continue 1
+for w=2
+after-switch w=2
+after-for
+== test18: break 2 counts loops only, ignores switch ==
+outer x=0
+  inner y=0
+  after-switch y=0
+  inner y=1
+    case 1, break 2
+after-outer
+== test19: continue 2 counts loops only, ignores switch ==
+outer xa=0
+  inner ya=0
+  after-switch ya=0
+  inner ya=1
+    case 1, continue 2
+outer xa=1
+  inner ya=0
+  after-switch ya=0
+  inner ya=1
+    case 1, continue 2
+after-outer
+== test21: naked break in bottom-while ==
+bw bb=1
+body bb=1
+bw bb=2
+after-bw bb=2
+== test22: naked continue in bottom-while ==
+bw cc=1
+body cc=1
+bw cc=2
+bw cc=3
+body cc=3
+bw cc=4
+body cc=4
+after-bw cc=4
+== test23: bottom-while with explicit name, break by name ==
+bw dd=1
+body dd=1
+bw dd=2
+after-bw dd=2
+== test24: switch in bottom-while, break 1 exits the while ==
+bw ee=1
+after-switch ee=1
+bw ee=2
+  case 2, break 1
+after-bw ee=2
+== test25: switch in bottom-while, continue 1 advances the while ==
+bw ff=1
+after-switch ff=1
+bw ff=2
+  case 2, continue 1
+bw ff=3
+after-switch ff=3
+bw ff=4
+after-switch ff=4
+after-bw ff=4
+== test20: nested switches, outer named ==
+outer case 1
+  inner case 2, break outer_sw
+after-outer-switch

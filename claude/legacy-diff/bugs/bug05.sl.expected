@@ -1,4 +1,0 @@
-program:
-  functions:
-    function getGreeting() -> (const char)[]  file=bug05.sl tok=6
-    function main() -> int32  file=bug05.sl tok=15

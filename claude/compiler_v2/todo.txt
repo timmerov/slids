@@ -8,17 +8,31 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * CHAR-ARITH LOSES CHAR-NESS — int-class binary arith folds every operand to
-    signed int64 and emits kIntLiteral, dropping a char operand's kind:
-    `'A' + 1` folds to int 66, not char 'B'. So an auto-incremented char enum
-    member prints numerically: `enum char Key ( a = 'A', b )` gives `b = 66`,
-    while an explicit `b = 'B'` prints `B`. foldIntArithBitwise
-    (constfold.cpp) returns kIntLiteral for every non-overflowing + - *; the
-    UNARY fold already preserves operand kind per rule 1e, binary does not.
-    Fix needs the binary-result type rule for mixed/char operands decided
-    (char+int -> char? slids widen rules would dictate). No invalid IR; just a
-    surprising print. prerequisite: ##type (the char-vs-int result distinction
-    is unobservable until a value can report its own type).
+  * CHAR-ARITH LOSES CHAR-NESS (const/enum case FIXED; bare-expr case OPEN) —
+    int-class binary arith folds operands and emits kIntLiteral, dropping a char
+    operand's kind: `'A' + 1` folds to int 66, not char 'B'. The CONST / ENUM
+    manifestation is FIXED: tryCaptureConst now stamps a const's literal_kind from
+    its DECLARED type (literalKindForType), not the folded initializer — so
+    `const char x = 65` prints 'A', an `enum char` member stays char through its
+    auto-incremented (int-folded) value, `enum bool` members print true/false, and
+    inferred locals from them inherit it. Canon: misc/bug.sl, constfold/enum.sl
+    (Flag), constfold/constant.sl (kBeta).
+    STILL OPEN — the DESIGN DECISION: is a char LITERAL strong (sticky, like a char
+    variable) or weak (promotes)? Today it's WEAK and INCONSISTENT with values:
+    `##type('A')`=char but `##type('A' + 1)`=int32 (two weak literals -> common
+    Type(char,int) -> int), whereas a strong char VARIABLE sticks — `##type(c+1)`
+    =char (the int literal flexes into the char), `##type(c+n)`=int32 (char + int
+    var drops). So a bare `'A' + 1` prints/types as int while `c + 1` stays char;
+    each path is internally consistent (weak literal promotes; strong value sticks)
+    but the surface diverges. This lives in BOTH stages: classify's commonType
+    promotes two weak literals, AND foldIntArithBitwise emits kIntLiteral. To make
+    `'A' + literal -> char` (match the variable), a char literal must ANCHOR like a
+    strong char in a bare binary (the partner literal flexes in) — classify's flex
+    + the fold's result-kind both then follow; but it must still flex into context
+    (`int x = 'A'` -> 65). If instead char literals stay weak (C-style promotion),
+    `'A' + 1 -> int` is correct and nothing here needs fixing. The const/enum case
+    is already settled — a DECLARED char re-imposes the strong type (the fix above).
+    Overlaps the strong_type / flex machinery and the named-type binary-result rule.
 
   * QUALIFIED-TYPE CARET GRANULARITY — a bad segment in a namespace-qualified
     TYPE spelling (`A:B:C x`) carets at the whole type position, not the
@@ -52,16 +66,6 @@ REACH GOALS
 
 
 DEFERRED FEATURES (later; may not be on the plan)
-
-  * FOR TYPELESS / REUSE LOOP VAR — a typeless loop var in any for form:
-    `for (x = 0) ...` (long), `for (x : 0..10)` (ranged), `for (x : Enum)` (enum).
-    Reuse an enclosing-scope `x` if one exists, else declare a fresh inferred-type
-    loop var (type from the initializer / range element / enum). Needs inferred-
-    init. Today all for forms require an explicit var type; a typeless entry hits
-    a cryptic parse error (parseType eats the name as a type). The reuse rule
-    (`int row = 0; for (row : 0..8)` writes the outer row, holding the last value
-    after) fixes the v1.md chess-sample bug. On the Session-4 plan (plan-flow.txt)
-    — land with inferred-init.
 
   * FOR-ARRAY / FOR-TUPLE / FOR-CLASS — the remaining colon-form for shapes,
     blocked on the underlying types: arrays + anon-tuples (Phase 4) and classes
@@ -99,8 +103,11 @@ DEFERRED FEATURES (later; may not be on the plan)
     alias/enum-typed VARIABLE reports the source spelling — `Integer x` ->
     `Integer`, `Dir d` -> `Dir` — via a parallel alias_label, not un-erase); and
     the const qualifier (`const int8 a` -> `const int8`; a const read inside any
-    expression STRIPS const). See [[reference_stringify]]. OPEN: the enum-MEMBER
-    label (next item), and the `#` 5-tuple (Phase 5, blocked on tuples + `^`).
+    expression STRIPS const). A bare/qualified TYPE NAME operand (alias / enum /
+    qualified enum type) resolves to its underlying, and an enum MEMBER reports
+    `const Enum` — both LANDED. See [[reference_stringify]]. OPEN: an aliased-
+    FUNCTION `##type(Fn)` (waits on function aliases), and the `#` 5-tuple
+    (Phase 5, blocked on tuples + `^`).
 
   * STRONG-CONST WIDENING ENFORCEMENT — a strong const should widen-within-family
     (not flex) when used in a runtime context; today strong_type is consumed ONLY

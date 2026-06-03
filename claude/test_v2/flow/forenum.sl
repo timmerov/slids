@@ -177,6 +177,43 @@ int nested_enum() {
     return total;
 }
 
+/* a typeless enum loop var — its type is inferred from the first member, so it
+   takes the enum type (Color). */
+int count_typeless() {
+    int c = 0;
+    for (x : Color) {
+        c = c + 1;
+    }
+    return c;
+}
+
+/* sum the member values through a typeless loop var. */
+int sum_typeless() {
+    int s = 0;
+    for (x : Color) {
+        s = s + x;
+    }
+    return s;
+}
+
+/* a typeless loop var over a char-underlying enum infers char. */
+int letters_typeless() {
+    int n = 0;
+    for (ch : Letter) {
+        n = n + 1;
+    }
+    return n;
+}
+
+/* a typeless loop var over a namespace-qualified enum. */
+int dir_typeless() {
+    int c = 0;
+    for (d : Space:Dir) {
+        c = c + 1;
+    }
+    return c;
+}
+
 int32 main() {
     __println("count_colors() = " + count_colors());    // 3
     __println("sum_colors() = " + sum_colors());        // 3
@@ -191,6 +228,10 @@ int32 main() {
     __println("sum_neg() = " + sum_neg());              // -3
     __println("count_dir() = " + count_dir());          // 4
     __println("count_letters() = " + count_letters());  // 4
+    __println("count_typeless() = " + count_typeless());    // 3
+    __println("sum_typeless() = " + sum_typeless());        // 3
+    __println("letters_typeless() = " + letters_typeless());  // 4
+    __println("dir_typeless() = " + dir_typeless());        // 4
     return 0;
 }
 
@@ -202,6 +243,15 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Invalid range.
 //int neg_enum_descending() {
 //    for (Down d : Down) {
+//        __println(d);
+//    }
+//    return 0;
+//}
+
+/* a typeless loop var over a descending enum is flagged the same way. */
+//-EXPECT-ERROR: Invalid range.
+//int neg_enum_typeless_descending() {
+//    for (d : Down) {
 //        __println(d);
 //    }
 //    return 0;

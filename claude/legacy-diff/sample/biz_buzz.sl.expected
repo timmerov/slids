@@ -1,3 +1,0 @@
-program:
-  functions:
-    function main() -> int32  file=biz_buzz.sl tok=1

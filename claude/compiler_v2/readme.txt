@@ -71,15 +71,18 @@ STAGE FILES (.h / .cpp pairs)
             namespace decl, 0/1/N-arg call possibly qualified, bare inc/dec,
             return, if/else, while + post-condition do-while, the long-form for,
             the RANGED for, and the ENUM for — a qualified name leading a statement
-            routes through one parseNameLedStmt); the for forms dispatch on what
-            follows the first `type var`: ':' then an operand, then '..' -> ranged
-            form (`for (var : start .. [cmp] end [op step]) {body}`, cmp
-            `< <= > >= !=` default `<`, op `+ - * / << >>` default `+1`, operands
-            are unary-expressions), DESUGARED in the grammar to a kForLongStmt
-            (hidden `_$end` / `_$step` vars + cond/update, tagged with the `..`
-            token); ':' then a bare identifier -> ENUM form (`for (var : Enum)
-            {body}`) parsed as a kForEnumStmt (resolve lowers it, below); anything
-            else after the first `type var` is the long form's varlist. expressions
+            routes through one parseNameLedStmt); each for varlist head is parsed
+            by parseForVarHead as `[type] name` — the var TYPE is optional, and a
+            TYPELESS var (the lead is neither a primitive type-start nor a qualified
+            typed-decl shape) is inferred / reused at resolve. The for forms then
+            dispatch on what follows the `[type] var`: ':' then an operand, then
+            '..' -> ranged form (`for (var : start .. [cmp] end [op step]) {body}`,
+            cmp `< <= > >= !=` default `<`, op `+ - * / << >>` default `+1`,
+            operands are unary-expressions), DESUGARED in the grammar to a
+            kForLongStmt (hidden `_$end` / `_$step` vars + cond/update, tagged with
+            the `..` token); ':' then a bare identifier -> ENUM form (`for (var :
+            Enum) {body}`) parsed as a kForEnumStmt (resolve lowers it, below);
+            anything else is the long form's varlist. expressions
             across the full C precedence ladder (literals + ident, unary
             `! ~ + -`, prefix/postfix ++/--, full binary set
             arith/bitwise/shift/comparison/logical, parens, postfix-call on
@@ -118,6 +121,19 @@ STAGE FILES (.h / .cpp pairs)
             segments walk the shared ns chain, the leaf must be a type) before
             any downstream stage; the cycle-vs-resolution-failure suppression
             flag is named `reported`.
+            Owns the `##type` operand dispatch: the kStringifyType arm looks up
+            the operand (resolveName for a bare name / resolveQualifiedRef for a
+            qualified one — both return the entry for ANY kind, erroring only on
+            a missing name) and branches on entry kind. A TYPE-NAME operand (a
+            kAlias, or an enum's kNamespace type facet) runs through
+            resolveTypeSpelling and is stamped on return_type (so `##type(Integer)`
+            / `##type(Space:Dir)` -> the underlying); a VALUE operand (kConst /
+            kLocalVar) takes the value path; neither is rejected ("'X' is not a
+            value or an alias." undefined / "'X' is a <namespace|function>, not a
+            value or an alias."). registerEnumMembers also stamps each NAMED-enum
+            member's alias_label with the enum name (an anonymous enum has no name
+            -> no label -> bare `const int`), so `##type(Enum:member)` reads
+            `const Enum`.
             Owns namespaces: a kNamespace entry has a persistent frame
             identity that reopens reuse; members ride the enclosing lexical
             lifetime, tagged by owning namespace. Bare lookup walks the open-
@@ -207,11 +223,20 @@ STAGE FILES (.h / .cpp pairs)
             (long-form `for (varlist) (cond) {update} {body}`; the canonical for
             node — other for shapes desugar to it) opens ONE for-scope holding the
             varlist, with the update and body as sibling nested blocks (3 frames;
-            the body may shadow a for-var). Resolved body-then-update (execution
-            order): cond reads from the post-varlist set S'; the body resolves
-            from S' (break/continue target the for); the update is checked against
-            body-out ∩ continue_accum (so it sees body-assigned vars but not ones
-            a continue skipped). Possibly-zero, so after = S. The update may not
+            the body may shadow a for-var). A TYPELESS varlist decl (empty
+            return_type) is intercepted: WITH an init it becomes a kAssignStmt
+            (reuse an enclosing local, else fresh inferred-init); with NO init it
+            reuses an in-scope local as a no-op slot, errors "Cannot use <kind>
+            '<x>' as a loop variable." if the name resolves to a non-local, or
+            "Cannot infer the type of '<x>'; it has no initializer." (+ placeholder
+            entry to stop a read cascade) if undeclared. Resolved body-then-update
+            (execution order): cond reads from the post-varlist set S'; the body
+            resolves from S' (break/continue target the for); the update is checked
+            against body-out ∩ continue_accum (so it sees body-assigned vars but not
+            ones a continue skipped). after = S' (the varlist inits run once
+            unconditionally, so they ESCAPE — a reused enclosing var is observable
+            after the loop; the possibly-zero body/update inits do not escape). The
+            update may not
             break / continue / return — resolved under in_for_update +
             for_update_floor: a break/continue at the update's own loop-depth or
             any return in the update errors ("A '<kw>' statement is not allowed in
@@ -268,11 +293,18 @@ STAGE FILES (.h / .cpp pairs)
             propagate strength through arith/bitwise folds (a strong/typed-const
             operand makes the result strong + takes its type, both-strong uses
             widen::commonType, a bool/comparison result is weak); trySubstituteConst
-            stamps strong_type onto a substituted literal from entry.const_strong_type;
+            stamps strong_type onto a substituted literal from entry.const_strong_type
+            AND carries entry.alias_label onto it (so a const's type label survives
+            substitution — needed for the inferred-var case);
             tryCaptureConst infers a typeless const's type (a strong rhs takes its
             type, a bare-literal rhs is WEAK -> weakDefaultType preferred spelling
             with the narrowest nominal kept under the hood) and marks explicit-typed
-            consts strong. The capture range-check says "inferred type" for a
+            consts strong, and stamps the captured value's literal_kind from the
+            DECLARED type via literalKindForType (char -> kCharLiteral, bool ->
+            kBoolLiteral, float* -> kFloatLiteral, uint* -> kUintLiteral, else
+            kIntLiteral) rather than the folded initializer's kind — so char/bool
+            consts and `enum char`/`enum bool` members keep their declared kind.
+            The capture range-check says "inferred type" for a
             typeless const, "declared type" for an explicit one. walk() returns
             early on a kStringifyType node so the ##type operand subtree is
             fold-EXEMPT (a const under ##type is not substituted to a literal before
@@ -305,7 +337,9 @@ STAGE FILES (.h / .cpp pairs)
             text is the operand's resolved type — alias_label ?: inferred_type, plus
             the const qualifier (a kIdentExpr operand resolving to a kConst -> "const
             " + (alias_label ?: slids_type); a const read inside a larger expression
-            strips const). alias_label propagation: an ident reads its entry's label;
+            strips const). The lowering SHORT-CIRCUITS when resolve already stamped
+            return_type (a bare/qualified TYPE-NAME operand): it emits that
+            underlying spelling and skips inferExpr. alias_label propagation: an ident reads its entry's label;
             unary/shift pass it through; arith uses a sticky binaryLabel rule
             (alias+same-alias or alias+const-literal keeps the label, any mismatch
             drops it); a comparison clears it — inferred_type/op_type/slids_type stay
@@ -321,12 +355,16 @@ STAGE FILES (.h / .cpp pairs)
             a const-false if flags its then, a const-false while flags its body —
             "Unreachable statement." at the dead branch's first statement (empty
             branch = nothing to flag). A const-TRUE loop is NOT flagged (3B); a
-            do-while is never flagged (its body always runs once). Empty-range
-            check (ranged-for only, gated on range_dotdot_tok): if a ranged-for's
-            start and end both fold to literals and `start cmp end` is false, the
-            body can never run -> "Invalid range." caret on the `..`
-            (rangeFirstTestFalse compares the two literals; no infinite-loop check
-            — deferred, todo.txt).
+            do-while is never flagged (its body always runs once). A kForLongStmt
+            classifies its loop var (children[3]) FIRST so a typeless one is typed
+            before the rest; for a ranged/enum for (range_dotdot_tok set) the
+            loop-var type is then stamped onto any typeless `_$end`/`_$step`
+            (children[4..]) so their bounds flex into it — matching an
+            explicitly-typed range. Empty-range check (ranged-for only, gated on
+            range_dotdot_tok): if a ranged-for's start and end both fold to literals
+            and `start cmp end` is false, the body can never run -> "Invalid range."
+            caret on the `..` (rangeFirstTestFalse compares the two literals; no
+            infinite-loop check — deferred, todo.txt).
             Per-arg type inference at call sites uses the resolved
             callee's param_types (cached on the kCallStmt/kCallExpr by
             resolve) as context. A kCallExpr's inferred_type is the

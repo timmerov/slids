@@ -11,3 +11,7 @@ count_solo() = 1
 sum_neg() = -3
 count_dir() = 4
 count_letters() = 4
+count_typeless() = 3
+sum_typeless() = 3
+letters_typeless() = 4
+dir_typeless() = 4

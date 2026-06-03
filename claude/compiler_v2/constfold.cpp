@@ -662,6 +662,19 @@ bool trySubstituteConst(std::unique_ptr<parse::Node>& slot, parse::Tree& tree) {
 // store the literal text verbatim; range validation against the declared
 // type runs here so out-of-range constants reject sharply rather than
 // silently narrowing.
+// The literal-node kind that represents a value of the given (resolved) type.
+// A const's stored value takes its DECLARED type's kind, not the initializer's:
+// `const char x = 65` prints as a char, `const bool b = 1` as `true`, and an
+// `enum char` member keeps char through its auto-incremented (int-folded) value.
+parse::Kind literalKindForType(std::string const& t) {
+    if (t == "char") return parse::Kind::kCharLiteral;
+    if (t == "bool") return parse::Kind::kBoolLiteral;
+    if (t == "float" || t == "float32" || t == "float64")
+        return parse::Kind::kFloatLiteral;
+    if (t.compare(0, 4, "uint") == 0) return parse::Kind::kUintLiteral;
+    return parse::Kind::kIntLiteral;
+}
+
 bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& diag) {
     if (!decl.is_const) return false;
     if (decl.resolved_entry_id < 0) return false;
@@ -749,7 +762,10 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
         return false;
     }
     entry.literal_text = rhs.text;
-    entry.literal_kind = rhs.kind;
+    // The stored value takes the const's DECLARED type's kind, not the folded
+    // initializer's — so a char const stays char (incl. an enum char member
+    // whose auto-increment folded to an int literal), a bool prints true/false.
+    entry.literal_kind = literalKindForType(declared);
     return true;
 }
 

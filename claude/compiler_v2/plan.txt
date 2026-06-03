@@ -80,8 +80,8 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     kAugAssignStmt arm RE-READS entryType into s.return_type (resolve cached it
     empty before the inferred decl was stamped). Canon: expression/inferred.sl.
     The for-loop typeless/reuse loop var (Session-4 remainder + the v1 chess-sample
-    reuse fix) now UNBLOCKED — SHARES this mechanism, not yet wired into the for
-    forms. Definite assignment LANDED: a local read before
+    reuse fix) is now WIRED IN on this mechanism (see the flow item below).
+    Definite assignment LANDED: a local read before
     written is an error ("Use of uninitialized variable"); params seeded
     initialized. Unused-local sweep LANDED: a body-declared local never read
     errors ("Unused local variable" if never written, else "set but never
@@ -126,9 +126,15 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     {body}`): a kForEnumStmt that resolve rewrites in place into a kForLongStmt
     over the enum's first..last DEFINED members (members referenced by qualified
     name; value-based, no contiguousness check); a descending/empty enum reuses
-    the empty-range "Invalid range." check. Deferred: typeless/reuse loop var
-    (needs inferred-init); array/tuple/class for shapes (need arrays/tuples/
-    classes — not in v2 yet); Sessions 5-6 (switch, labeled break/continue).
+    the empty-range "Invalid range." check. The TYPELESS / REUSE loop var landed
+    across all three live forms (parseForVarHead disambiguates `[type] name` vs a
+    bare typeless name; resolve's varlist loop routes a typeless+init decl through
+    the kAssignStmt path = reuse-an-enclosing-local or fresh inferred, a typeless
+    no-init decl reuses-or-errors, and the after-set is S' so a reused var is
+    observable after; classify propagates the loop-var type onto a typeless ranged
+    `_$end`/`_$step`; reuse requires a compatible type, else the normal assignment
+    conversion rejects it). Deferred: array/tuple/class for shapes (need arrays/
+    tuples/classes — not in v2 yet); Sessions 5-6 (switch, labeled break/continue).
   * return — LANDED (kReturnStmt + return-correctness check from Phase 1).
 
 Phase 3 — functions
@@ -183,9 +189,14 @@ Phase 4 — types beyond primitives
     clone(last-explicit-init) + offset, folded by constfold). Ambiguous-bare-ref
     diagnostic. Member inits resolve in a late pass (after all file-scope entries
     exist) with the enum's own frame open, so a member init can reference a
-    file-scope const or a sibling member bare. Canon: test_v2/constfold/enum.sl.
-    Deferred enum items (reach-goal drop-qualifier, reopen, char-arith-loses-
-    char-ness) → todo.txt.
+    file-scope const or a sibling member bare. A named enum's members carry the
+    enum name as a `##type` label (registerEnumMembers stamps each member's
+    alias_label; anonymous enums have no name -> bare `const int`), and a const's
+    stored value takes its DECLARED type's literal kind (tryCaptureConst →
+    literalKindForType), so char/bool consts and `enum char`/`enum bool` members
+    print as their declared type rather than the int-folded initializer. Canon:
+    test_v2/constfold/enum.sl. Deferred enum items (reach-goal drop-qualifier,
+    reopen, char-arith-loses-char-ness bare-expr case) → todo.txt.
 
 Phase 5 — classes
   * class definitions (fields, ctor, dtor, methods)
@@ -200,8 +211,18 @@ Phase 5 — classes
     kStringifyType Kind that classify lowers to a kStringLiteral). ##type reports
     an alias/enum-VARIABLE label (parallel alias_label channel) + the const
     qualifier (a bare const ident -> `const <T>`, expression-read strips const).
-    The `#x` 5-tuple REMAINS (Phase 5, blocked on tuples + `^`); enum-MEMBER label
-    deferred (todo.txt). Canon: test_v2/misc/macros.sl, alias.sl.
+    ##type also resolves a bare/qualified TYPE NAME to its underlying — an alias
+    (chain fully resolved), an enum name, or a qualified enum type (`Space:Dir`)
+    -> the underlying spelling (`##type(Integer)` -> `int`, `##type(E)` -> `int`,
+    `##type(Space:Dir)` -> `int`), DISTINCT from a VALUE of that type which keeps
+    its label (`Integer x; ##type(x)` -> `Integer`). resolve's kStringifyType arm
+    dispatches on the operand entry kind (a TYPE -> resolveTypeSpelling onto
+    return_type; a VALUE -> the value path; neither -> a diagnostic), classify
+    short-circuits when return_type is stamped. An enum MEMBER reports
+    `const Enum` (`##type(Dir:kNorth)` -> `const Dir`, via each named-enum
+    member's alias_label). The `#x` 5-tuple REMAINS (Phase 5, blocked on tuples
+    + `^`); aliased-FUNCTION `##type(Fn)` waits on function aliases (todo.txt).
+    Canon: test_v2/misc/macros.sl, alias.sl, constfold/enum.sl.
 
 Phase 6 — const correctness
   Threads through phases 3-5; land after classes have the bones.

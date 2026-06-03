@@ -1,8 +1,0 @@
-program:
-  classes:
-    class main.0.Class  file=bug17.sl tok=73
-      field x_  = <expr>
-  functions:
-    function fortytwo() -> int  file=bug17.sl tok=1
-    function dump(tuple (char[],char[],char[],char[],int^)^) -> void  file=bug17.sl tok=15
-    function main() -> int32  file=bug17.sl tok=69

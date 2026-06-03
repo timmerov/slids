@@ -1,6 +1,0 @@
-program:
-  classes:
-    class Cell  file=array.sl tok=0
-      field v_ int = <expr>
-  functions:
-    function main() -> int32  file=array.sl tok=10

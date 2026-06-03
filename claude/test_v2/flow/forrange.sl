@@ -258,6 +258,63 @@ int ppid_operand(int n) {
     return c * 10 + n;
 }
 
+/* a typeless ranged loop var — its type is inferred from `start` (int here). */
+int range_typeless(int n) {
+    int s = 0;
+    for (i : 0..n) {
+        s = s + i;
+    }
+    return s;
+}
+
+/* a typeless ranged loop var whose name is already in scope reuses that local;
+   after the loop it holds the last iterated value (n - here the loop stops once
+   row reaches n, so row == n). */
+int range_typeless_reuse(int n) {
+    int row = 99;
+    for (row : 0..n) {
+    }
+    return row;
+}
+
+/* a typeless char range — the loop var infers `char` from the start literal, so
+   the synthesized `var = var + step` stays char. */
+int range_typeless_char() {
+    int c = 0;
+    for (ch : 'a'..'e') {
+        c = c + 1;
+    }
+    return c;
+}
+
+/* typeless with an inclusive `<=` bound. */
+int range_typeless_incl(int n) {
+    int s = 0;
+    for (i : 0..<=n) {
+        s = s + i;
+    }
+    return s;
+}
+
+/* typeless with an `op step` clause (end = n, step = *3). */
+int range_typeless_step(int n) {
+    int c = 0;
+    for (i : 1..<=n*3) {
+        c = c + 1;
+    }
+    return c;
+}
+
+/* typeless over int64 bounds — the loop var infers int64 from `start`, and the
+   synthesized `_$end` takes the loop var's type (matching an explicit range). */
+int range_typeless_wide(int64 lo, int64 hi) {
+    int c = 0;
+    for (i : lo..hi) {
+        c = c + 1;
+    }
+    return c;
+}
+
 int32 main() {
     __println("sum_range(5) = " + sum_range(5));        // 10
     __println("sum_incl(5) = " + sum_incl(5));          // 15
@@ -280,6 +337,12 @@ int32 main() {
     __println("call_operand() = " + call_operand());    // 10
     __println("nested_range(3, 4) = " + nested_range(3, 4));        // 12
     __println("ppid_operand(5) = " + ppid_operand(5));  // 56
+    __println("range_typeless(5) = " + range_typeless(5));              // 10
+    __println("range_typeless_reuse(7) = " + range_typeless_reuse(7));  // 7
+    __println("range_typeless_char() = " + range_typeless_char());      // 4
+    __println("range_typeless_incl(5) = " + range_typeless_incl(5));    // 15
+    __println("range_typeless_step(27) = " + range_typeless_step(27));  // 4
+    __println("range_typeless_wide(2, 7) = " + range_typeless_wide(2, 7));  // 5
     return 0;
 }
 
@@ -346,6 +409,25 @@ negatives — one //-block uncommented per run.
 //int neg_range_float() {
 //    for (float f : 0.0..-1.0) {
 //        __println(f);
+//    }
+//    return 0;
+//}
+
+/* a typeless empty range is flagged the same as an explicit one. */
+//-EXPECT-ERROR: Invalid range.
+//int neg_range_typeless_empty() {
+//    for (i : 5..0) {
+//        __println(i);
+//    }
+//    return 0;
+//}
+
+/* a typeless loop var infers int from `start`, so an int64 bound narrows — same
+   rejection as the explicit `for (int i : 0..hi)`. */
+//-EXPECT-ERROR: Cannot implicitly narrow 'int64' to 'int'; use an explicit type conversion.
+//int neg_range_typeless_narrow(int64 hi) {
+//    for (i : 0..hi) {
+//        __println(i);
 //    }
 //    return 0;
 //}

@@ -1,8 +1,0 @@
-program:
-  classes:
-    class Counter  file=ranges.sl tok=791
-      field n_ int = <expr>
-      method next_5() -> int
-      method next_2() -> int
-  functions:
-    function main() -> int32  file=ranges.sl tok=1

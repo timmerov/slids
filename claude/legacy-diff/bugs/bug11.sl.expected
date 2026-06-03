@@ -1,4 +1,0 @@
-program:
-  functions:
-    function foo() -> int  file=bug11.sl tok=1
-    function main() -> int32  file=bug11.sl tok=11

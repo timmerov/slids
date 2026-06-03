@@ -1,0 +1,88 @@
+for long form: (0,10) (1,9) (2,8) (3,7) (4,6)
+for ctor.dtor: before
+Simple:ctor
+Simple:dtor
+for ctor.dtor: after
+for range: 0 1 2 3 4 5 6 7 8 9
+for tuple: 1 1 2 3 5 8
+for string literal: H e l l o
+for fixed-size array: 1 1 2 3 5 8
+for enum: 0 1 2 3
+begin tuple block
+Simple:ctor
+Simple:ctor
+Simple:ctor
+Simple:ctor
+Simple:dtor
+Simple:dtor
+tuple declared
+iterate by value: begin
+Simple:ctor
+iterate by value: loop
+iterate by value: loop
+Simple:dtor
+iterate by value: end
+iterate by reference.
+iterate by reference.
+end tuple block
+Simple:dtor
+Simple:dtor
+after tuple block
+Simple[3] begin: expect 3 ctor/dtor
+Simple:ctor
+Simple:ctor
+Simple:ctor
+Simple:dtor
+Simple:dtor
+Simple:dtor
+Simple[3] end: expect 3 ctor/dtor
+Simple:ctor
+Simple:ctor
+Simple:ctor
+iterate Simple array by value: begin: expect 1 ctor/dtor
+Simple:ctor
+array of slid: iterate by value.
+array of slid: iterate by value.
+array of slid: iterate by value.
+Simple:dtor
+iterate Simple array by value: end: expect 1 ctor/dtor
+iterate Simple array by reference: begin: expect 0 ctor/dtor
+array of slid: iterate by reference.
+array of slid: iterate by reference.
+array of slid: iterate by reference.
+iterate Simple array by value: end: expect 0 ctor/dtor
+Simple:dtor
+Simple:dtor
+Simple:dtor
+iterate Simple tuple by value: begin: expect 3 ctor/dtor
+Simple:ctor
+Simple:ctor
+Simple:ctor
+tuple-literal of slid: iterate by value.
+tuple-literal of slid: iterate by value.
+Simple:dtor
+Simple:dtor
+Simple:dtor
+iterate Simple tuple by value: end: expect 3 ctor/dtor
+iterate Simple tuple by reference: begin: expect 2 ctor/dtor
+Simple:ctor
+Simple:ctor
+tuple-literal of slid: iterate by reference.
+tuple-literal of slid: iterate by reference.
+Simple:dtor
+Simple:dtor
+iterate Simple tuple by reference: begin: expect 2 ctor/dtor
+for container by reference: 17 18 19 20 21
+for container by value: 13 17 19
+for container by value: 13 17 19
+for container by reference: 13 17 19
+for good-by-value, bad-by-ref: 0 0 0
+for bad-by-value, good-by-ref: 200 201 202
+reuse range: 3
+shadow typed: 99
+reuse tuple: 30
+reuse string: C
+reuse array: 30
+reuse enum: 4
+reuse class by-value: 19
+reuse find-and-break: row=2 col=1

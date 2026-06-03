@@ -195,7 +195,7 @@ SESSION 3 — while + break/continue (unlabeled) + POST-CONDITION while   [LANDE
     negatives spanning bool/int/char/float/folded/substituted/else-if) +
     while.sl (do-const-false + while-true positives confirm no false flag).
 
-SESSION 4 — for-loops   [LONG-FORM + RANGED + ENUM LANDED; reuse + array/tuple/class pending]
+SESSION 4 — for-loops   [LONG-FORM + RANGED + ENUM + TYPELESS/REUSE LANDED; array/tuple/class pending]
 
   ARCHITECTURE (revised from the original range-only plan): the LONG-FORM for is
   the CANONICAL for node, and every other for shape (range `i : 0..N`, array,
@@ -258,22 +258,42 @@ SESSION 4 — for-loops   [LONG-FORM + RANGED + ENUM LANDED; reuse + array/tuple
     break/continue, empty body) + 4 negatives (descending->Invalid range, not-an-
     enum, unknown enum, zero-member enum).
 
-  PENDING (this session's remaining work):
-  * TYPELESS varlist + enclosing-scope REUSE — inferred-init has LANDED (plan.txt
-    Phase 2), so the mechanism now EXISTS; what remains is wiring it into the for
-    varlist forms (the for shapes still require an explicit var type today).
-    LOOP-VAR REUSE RULE: if a local of
-    the loop-var name is ALREADY in scope, the for REASSIGNS it (reuses the
-    existing entry) rather than allocating a fresh loop-local. `int row = 0;
-    for (row : 0..8) { ... }` writes the outer `row`; after the loop it holds the
-    last iterated value, not 0. Only when no such local exists does the for
-    declare a fresh body-scoped loop var (typed from the range). (Fixes the v1.md
-    behavior where for-init always allocated fresh — the chess-sample bug. resolve
-    looks up the name in live scope first; reuse if found, declare if not.) The
-    reused var must be type-compatible with the range element type.
-  * tests: test_v2/flow/for.sl — range iteration; fresh loop-var scope (neg on
-    use-after-loop when no outer exists); REUSE: outer local reassigned by the
-    loop, reads the last value after (pos); break/continue inside.
+  LANDED — TYPELESS varlist + enclosing-scope REUSE (rides inferred-init):
+  * grammar: parseForVarHead parses `[type] name` for every varlist entry (first +
+    each comma) and both colon-form heads. TYPELESS when the lead is neither a
+    primitive type-start nor a qualified typed-decl shape (isTypeStart ||
+    looksLikeQualifiedTypedDecl) — then the lead identifier is the var name,
+    return_type left empty. ('A:B name' vs typeless 'name : range/enum' disambiguate
+    structurally, no naming-convention pivot.)
+  * resolve: the for-varlist loop intercepts a typeless decl (empty return_type,
+    non-const, unqualified). WITH init -> reclassified kAssignStmt, routed through
+    the existing kAssignStmt path: an in-scope name REASSIGNS the enclosing local
+    (reuse — no fresh alloca), an unknown name becomes a fresh inferred-init local.
+    NO init -> reuse an in-scope local as a no-op slot (neutralized to an empty
+    block); a name that resolves to a non-local errors ("Cannot use <kind> 'x' as
+    a loop variable."), a truly-undeclared name errors ("Cannot infer the type of
+    'x'; it has no initializer." + a placeholder entry so the cond/update/body
+    reads don't cascade). The after-set is S' (post-varlist, captured before the
+    body) — the varlist inits run once unconditionally so they ESCAPE, making a
+    reused var observable after the loop (the v1.md chess-sample reuse fix); a fresh
+    for-var is in S' but out of scope (inert, ids unique). LOOP-VAR REUSE RULE: a
+    local of the loop-var name already in scope is REASSIGNED, not freshly
+    allocated. `int row = -1; for (row = 0)(row<n){++row;}{}` leaves row == n.
+  * classify: a ranged/enum for (range_dotdot_tok set) with a typeless (inferred)
+    loop var stamps the loop var's resolved type onto the synthesized typeless
+    `_$end`/`_$step` (children[4..]) before classifying them, so their bounds flex
+    into it — matching an explicitly-typed range. Reuse type-compat is option A:
+    the normal assignment conversion rejects an incompatible reuse (e.g. an int
+    `row` over a `0.0..1.0` range -> "Cannot implicitly convert 'float' to 'int'").
+  * codegen / desugar: NO change — a reused varlist slot is a kAssignStmt (stores
+    into the existing alloca, collectVarDecls skips it) and a fresh one a
+    kVarDeclStmt (hoisted alloca); both already flow through.
+  * tests: added to the natural homes — forlong.sl (typeless fresh / reuse /
+    no-init reuse / mixed varlist / shadow / PPID; negatives: no-init undeclared,
+    no-init wrong-kind const+function, reuse-const, fresh loop-var use-after-loop),
+    forrange.sl (typeless range / reuse / char / cmp+step; negatives: empty range,
+    int64-narrowing), forenum.sl (typeless count/sum / char / qualified; negative:
+    descending). REUSE: outer local reassigned, reads the last value after.
   * exit: for-loops desugar to the canonical form and run; loop-var reuse correct.
 
 SESSION 5 — switch / case (1A)

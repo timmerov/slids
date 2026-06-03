@@ -1,6 +1,0 @@
-program:
-  classes:
-    class Record  file=bug04.sl tok=0
-      field name_ char[16]
-  functions:
-    function main() -> int32  file=bug04.sl tok=11

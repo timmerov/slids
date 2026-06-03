@@ -1,6 +1,0 @@
-program:
-  classes:
-    class Simple  file=bug06.sl tok=0
-      method op+(sa Simple^, sb Simple^)
-  functions:
-    function main() -> int32  file=bug06.sl tok=24

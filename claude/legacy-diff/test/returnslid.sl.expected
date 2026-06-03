@@ -1,9 +1,0 @@
-program:
-  classes:
-    class Simple  file=returnslid.sl tok=0
-      field x_ int
-      field y_ int
-      field z_ int
-      method clone() -> Simple
-  functions:
-    function main() -> int32  file=returnslid.sl tok=28

@@ -1,7 +1,0 @@
-program:
-  classes:
-    class Speaker  file=constructor.sl tok=0
-      ctor
-      dtor
-  functions:
-    function main() -> int32  file=constructor.sl tok=26

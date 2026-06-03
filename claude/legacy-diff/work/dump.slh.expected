@@ -1,6 +1,0 @@
-program:
-  functions:
-    function dump<T>(tuple (char[],char[],char[],char[],T^)^) -> void  file=dump.slh tok=28
-    function dump<T>(tuple (char[],char[],char[],char[],T^)^, expected char[]) -> void  file=dump.slh tok=42
-  type_alias_templates:
-    type_alias_template DumpTuple<T> = (char[],char[],char[],char[],T^)  file=dump.slh tok=1
