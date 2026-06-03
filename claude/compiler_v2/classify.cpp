@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
+#include <map>
 #include <string>
 
 #include "diagnostic.h"
@@ -133,6 +134,8 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kForEnumStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
+        case parse::Kind::kSwitchStmt:
+        case parse::Kind::kCaseClause:
         case parse::Kind::kParam:
             assert(false && "defaultLiteralType: not a literal kind");
             __builtin_unreachable();
@@ -424,6 +427,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kForEnumStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
+        case parse::Kind::kSwitchStmt:
+        case parse::Kind::kCaseClause:
         case parse::Kind::kParam:
             assert(false && "inferExpr: not an expression kind");
             return;
@@ -814,6 +819,78 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kContinueStmt:
             // Nothing to type-infer; resolve handled loop-legality.
             return;
+        case parse::Kind::kSwitchStmt: {
+            // children[0] = scrutinee, [1..] = kCaseClause. The scrutinee must be
+            // integer-class; each case label must be a unique integer constant
+            // (constfold folded them to literals); default is singular.
+            assert(!s.children.empty() && "kSwitchStmt needs a scrutinee");
+            parse::Node& scrut = *s.children[0];
+            inferExpr(tree, scrut, "", diag);
+            std::string const& st = scrut.inferred_type;
+            if (!st.empty() && !isIntegerClass(st)) {
+                diagnostic::report(diag, {scrut.file_id, scrut.tok,
+                    "A switch value must be integer-class; got '" + st + "'.",
+                    {}});
+            }
+            std::map<long long, parse::Node const*> seen;   // value -> first label
+            int default_tok = -1;
+            for (std::size_t i = 1; i < s.children.size(); i++) {
+                parse::Node& clause = *s.children[i];
+                if (clause.children[0]) {
+                    parse::Node& label = *clause.children[0];
+                    inferExpr(tree, label, st, diag);
+                    if (!isLiteralKind(label.kind)) {
+                        diagnostic::report(diag, {label.file_id, label.tok,
+                            "A case label must be a constant.", {}});
+                    } else if (label.kind == parse::Kind::kFloatLiteral
+                               || (!label.inferred_type.empty()
+                                   && !isIntegerClass(label.inferred_type))) {
+                        diagnostic::report(diag, {label.file_id, label.tok,
+                            "A case label must be an integer constant.", {}});
+                    } else if (!st.empty() && !literalFitsContext(label, st)) {
+                        // An out-of-range / sign-mismatched label can never match
+                        // and would emit a truncated `iN <oob>` constant — reject
+                        // it here rather than emit invalid/misleading IR.
+                        diagnostic::report(diag, {label.file_id, label.tok,
+                            "Case label '" + label.text
+                                + "' is out of range for switch type '" + st
+                                + "'.", {}});
+                    } else {
+                        // Dedup by numeric value (so 'a' and 97 collide). Parse
+                        // the full 64-bit range: a uint64 above INT64_MAX is read
+                        // via strtoull and reinterpreted, so distinct values stay
+                        // distinct (no false duplicate from signed overflow).
+                        errno = 0;
+                        long long v = std::strtoll(label.text.c_str(), nullptr, 10);
+                        if (errno == ERANGE) {
+                            v = static_cast<long long>(
+                                std::strtoull(label.text.c_str(), nullptr, 10));
+                        }
+                        auto ins = seen.emplace(v, &label);
+                        if (!ins.second) {
+                            parse::Node const* first = ins.first->second;
+                            diagnostic::report(diag, {label.file_id, label.tok,
+                                "Duplicate case label '" + label.text + "'.",
+                                {{first->file_id, first->tok, "first case here"}}});
+                        }
+                    }
+                } else {
+                    if (default_tok >= 0) {
+                        diagnostic::report(diag, {clause.file_id, clause.tok,
+                            "A switch may have only one default clause.",
+                            {{s.children[0]->file_id, default_tok,
+                              "first default here"}}});
+                    }
+                    default_tok = clause.tok;
+                }
+                classifyStmt(tree, *clause.children[1], fn_return_type, diag);
+            }
+            return;
+        }
+        case parse::Kind::kCaseClause:
+            // Handled inline by the kSwitchStmt arm above; never classified alone.
+            assert(false && "classifyStmt: kCaseClause outside a switch");
+            return;
         case parse::Kind::kForEnumStmt:
             // Lowered to a kForLongStmt during resolve; never reaches classify.
             assert(false && "classifyStmt: kForEnumStmt survived resolve");
@@ -847,6 +924,22 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
 // doesn't trip the check.
 bool endsInReturnNode(parse::Node const& s);
 
+// Whether a `break` targeting THIS switch/loop appears in `s` — a break not
+// captured by a nested loop/switch. A switch clause containing such a break can
+// escape to after the switch, so the switch is NOT a return-terminator even if
+// the clause's last statement returns. Mirrors codegen's containsBreak so the
+// two stages agree on return-correctness.
+bool containsBreak(parse::Node const& s) {
+    if (s.kind == parse::Kind::kBreakStmt) return true;
+    if (s.kind == parse::Kind::kWhileStmt || s.kind == parse::Kind::kDoWhileStmt
+        || s.kind == parse::Kind::kForLongStmt || s.kind == parse::Kind::kForEnumStmt
+        || s.kind == parse::Kind::kSwitchStmt) {
+        return false;   // a nested loop/switch captures its own breaks
+    }
+    for (auto const& ch : s.children) if (ch && containsBreak(*ch)) return true;
+    return false;
+}
+
 bool endsInReturn(std::vector<std::unique_ptr<parse::Node>> const& stmts) {
     if (stmts.empty() || !stmts.back()) return false;
     return endsInReturnNode(*stmts.back());
@@ -863,6 +956,22 @@ bool endsInReturnNode(parse::Node const& s) {
         && s.children[2]) {
         return endsInReturnNode(*s.children[1])   // then-branch (a block)
             && endsInReturnNode(*s.children[2]);  // else-branch (block or if)
+    }
+    // A switch is a return-terminator iff it has a default AND every clause body
+    // ends in a return (so no break / fall-out reaches past the switch). A
+    // fall-through clause with an empty body is conservatively not a terminator
+    // (demands a trailing return — the same over-demand as loops).
+    if (s.kind == parse::Kind::kSwitchStmt) {
+        bool has_default = false;
+        for (std::size_t i = 1; i < s.children.size(); i++) {
+            parse::Node const& clause = *s.children[i];
+            if (!clause.children[0]) has_default = true;
+            if (!endsInReturnNode(*clause.children[1])
+                || containsBreak(*clause.children[1])) {
+                return false;   // an escaping break reaches past the switch
+            }
+        }
+        return has_default;
     }
     return false;
 }

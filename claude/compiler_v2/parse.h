@@ -47,8 +47,14 @@ enum class Kind {
                    // [1] = enum-ref (kIdentExpr), [2] = body. resolve rewrites it
                    // in place into a kForLongStmt over the enum's first..last
                    // members; never survives to constfold/classify/codegen.
-    kBreakStmt,    // break; — exits the nearest enclosing loop.
-    kContinueStmt, // continue; — jumps to the nearest enclosing loop's test.
+    kBreakStmt,    // break; — exits the nearest enclosing loop OR switch.
+    kContinueStmt, // continue; — jumps to the nearest enclosing loop's test
+                   // (switch frames are transparent to continue).
+    kSwitchStmt,   // switch (value) { case C: ... default: ... }. children[0] =
+                   // scrutinee expr, [1..] = kCaseClause (source order).
+    kCaseClause,   // one case/default clause of a switch. children[0] = label
+                   // const-expr (nullptr => the `default` clause), [1] = body
+                   // (kBlockStmt; fall-through links it to the next clause).
     kStringLiteral,
     kIntLiteral,
     kUintLiteral,
@@ -187,6 +193,8 @@ struct Tree {
         bool break_seen = false;
         std::set<int> continue_init;
         bool continue_seen = false;
+        bool is_switch = false;   // a switch frame: a break target, but transparent
+                                  // to continue (continue skips it to the nearest loop)
     };
     std::vector<LoopFrame> loop_stack;
     // Transient — set while resolving a long-for's UPDATE clause, which may not

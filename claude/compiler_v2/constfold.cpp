@@ -140,6 +140,8 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kForEnumStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
+        case parse::Kind::kSwitchStmt:
+        case parse::Kind::kCaseClause:
         case parse::Kind::kStringLiteral:
         case parse::Kind::kIdentExpr:
         case parse::Kind::kUnaryExpr:

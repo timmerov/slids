@@ -89,8 +89,10 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     attach per-construct as the branches below land. Canon: expression/vardecl.sl.
   * flow constructs (blocks, if/else, while, for, switch, labeled break/
     continue) — a 6-session track in plan-flow.txt (the join model + per-construct
-    landing stages; tests in test_v2/flow/). Decisions locked: independent switch
-    cases, unreachable-code detection on, no constant-true loop special-case.
+    landing stages; tests in test_v2/flow/). Decisions locked: switch cases
+    FALL THROUGH C-style (the original "independent cases" plan was wrong — canon
+    in switch.sl/slids_reference.md), unreachable-code detection on, no
+    constant-true loop special-case.
     Sessions 1 (bare blocks) + 2 (if/else) + 3 (while + do-while + break/continue)
     LANDED. 1: kBlockStmt, per-block scope + DA migration, shadowing allowed,
     alloca names entry-id-suffixed for shadow safety, trailing-block return-
@@ -134,7 +136,14 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     observable after; classify propagates the loop-var type onto a typeless ranged
     `_$end`/`_$step`; reuse requires a compatible type, else the normal assignment
     conversion rejects it). Deferred: array/tuple/class for shapes (need arrays/
-    tuples/classes — not in v2 yet); Sessions 5-6 (switch, labeled break/continue).
+    tuples/classes — not in v2 yet). Session 5 (switch) LANDED — kSwitchStmt +
+    kCaseClause, C-style FALL-THROUGH, integer-class scrutinee, unique in-range
+    integer-constant labels (incl. qualified `case Dir:N:` via a terminator-aware
+    parse), default singular + anywhere, naked break exits the switch / naked
+    continue skips it to the enclosing loop, exhaustive switch is a
+    return-terminator (containsBreak agreed across classify+codegen), lowered to
+    an `llvm switch`. Deferred: Session 6 (labeled + numbered break/continue;
+    named-switch-break is distant-future per switch.sl).
   * return — LANDED (kReturnStmt + return-correctness check from Phase 1).
 
 Phase 3 — functions

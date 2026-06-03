@@ -15,6 +15,7 @@ SAMPLES = \
 	forrange \
 	fortuple \
 	ifelse \
+	label \
 	return \
 	switch \
 	while

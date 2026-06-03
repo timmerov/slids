@@ -7,7 +7,9 @@ constructs. Dependency-driven ordering: each session's definite-assignment
 "join" increment builds on the prior. Test files live in test_v2/flow/*.sl.
 
 Locked design decisions:
-  1A — switch cases are INDEPENDENT (no C-style fall-through).
+  1A — SUPERSEDED by canon. switch.sl + slids_reference.md specify C-style
+       FALL-THROUGH (a clause with no break falls into the next); landed that
+       way. The original "independent cases" plan was wrong.
   2A — unreachable-code detection lands now (a stmt after an abrupt sibling).
   3B — constant-true loops (`while (true)`) get NO special-case; every loop is
        treated as possibly-zero-iterations. Deferred to the while landing
@@ -296,18 +298,44 @@ SESSION 4 — for-loops   [LONG-FORM + RANGED + ENUM + TYPELESS/REUSE LANDED; ar
     descending). REUSE: outer local reassigned, reads the last value after.
   * exit: for-loops desugar to the canonical form and run; loop-var reuse correct.
 
-SESSION 5 — switch / case (1A)
+SESSION 5 — switch / case — LANDED (C-style fall-through; labels deferred to S6)
 
-  * new node: kSwitchStmt (+ case labels).
-  * 1A independent cases: each case branches from S, no fall-through. after = ∩
-    of normally-completing cases (abrupt skipped); defaultless switch contributes
-    S (can't add — same shape as no-else).
-  * resolve/classify: case values are constants of the switch type (constfold
-    already folds); duplicate-case detection.
-  * codegen: branch chain or jump table.
-  * tests: test_v2/flow/switch.sl — all-cases-init+default -> assigned after;
-    defaultless -> not; duplicate-case (neg); break semantics.
-  * exit: switch with the independent-case join.
+  * new kinds kSwitchStmt (children[0]=scrutinee, [1..]=clause) + kCaseClause
+    (children[0]=label const-expr, null=default; [1]=body block). One
+    -Wswitch-enum pass across all 10 stages.
+  * grammar: parseSwitchStmt — value REQUIRED (`switch ()` errors), body may be
+    empty, default singular + anywhere, trailing break optional. QUALIFIED
+    enum-member labels (`case Dir:N:`) parse via parseQualifiedNameCaseLabel — a
+    terminator-aware scan that rewinds one segment if the maximal `:`-chain isn't
+    followed by the terminator `:` (solves the v1 `:`-collision for keyword-,
+    brace-, AND identifier-led bodies, gated by the `case_label_` flag).
+  * resolve: LoopFrame.is_switch — break targets the nearest loop OR switch,
+    continue skips switch frames to the nearest loop ("break must be inside a
+    loop or switch"). FALL-THROUGH: each clause body resolves from S (direct
+    match is the weakest entry); after = ∩ over exit paths {break points,
+    bottom-fall, default-less ⇒ S}; an exhaustive switch (default + every clause
+    returns, no escaping break) is Abrupt.
+  * classify: scrutinee must be integer-class (float rejected); each case label
+    must be an integer constant that FITS the scrutinee type (literalFitsContext
+    — an out-of-range/sign-mismatched label is rejected, never emitted as a
+    truncated `iN` constant); unique labels (value-dedup, full-64-bit, so 'a'==97
+    and 1+2==3 collide, with a "first case here" note); default singular.
+    endsInReturnNode: a switch is a return-terminator iff default + every clause
+    returns AND no clause has an escaping break (containsBreak — mirrored in
+    codegen so the two stages agree).
+  * codegen: an `llvm switch` dispatches to per-clause blocks (source order) that
+    fall through via `br` unless terminated; naked break -> exit; default's block
+    is the switch instr default (exit when none); `unreachable` emitted in the
+    exit block only when no path reaches it (containsBreak + bottom-fall +
+    no-default reachability). copyNode preserves a null label slot.
+  * tests: test_v2/flow/switch.sl — ~30 positives (basic/fall-through/stacked/
+    default-anywhere/naked-break-vs-continue/nested/char-bool-enum-uint-int64
+    scrutinees/qualified + anon-enum + named-const + boundary labels/PPID
+    scrutinee/DA/empty-body/expr-scrutinee) + 14 negatives (empty value, dup
+    case [+xkind +folded], dup default, float scrutinee, non-const / float /
+    out-of-range label, continue-no-loop, unreachable-after, DA default-less +
+    partial, break-escape + stacked return-correctness).
+  * exit: switch with fall-through + the break/continue retargeting + the join.
 
 SESSION 6 — labels (labeled break/continue)
 

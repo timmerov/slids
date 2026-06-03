@@ -82,7 +82,15 @@ STAGE FILES (.h / .cpp pairs)
             kForLongStmt (hidden `_$end` / `_$step` vars + cond/update, tagged with
             the `..` token); ':' then a bare identifier -> ENUM form (`for (var :
             Enum) {body}`) parsed as a kForEnumStmt (resolve lowers it, below);
-            anything else is the long form's varlist. expressions
+            anything else is the long form's varlist. parseSwitchStmt parses
+            `switch (value) { (case const-expr | default) : stmts ... }` into a
+            kSwitchStmt (children[0]=scrutinee, [1..]=kCaseClause, label null =
+            default); the value is required and each clause body is an implicit
+            block. A case label is parsed under the `case_label_` flag so a
+            qualified enum-member label (`case Dir:N:`) resolves its trailing `:`
+            as the terminator, not a qualifier (parseQualifiedNameCaseLabel scans
+            the maximal `:`-chain and rewinds one segment when the terminator is
+            missing). expressions
             across the full C precedence ladder (literals + ident, unary
             `! ~ + -`, prefix/postfix ++/--, full binary set
             arith/bitwise/shift/comparison/logical, parens, postfix-call on
@@ -250,7 +258,15 @@ STAGE FILES (.h / .cpp pairs)
             {body}` (members referenced by qualified name → normal resolve/constfold
             fills their values), tagged range-derived so a descending/empty enum
             (first > last) trips the empty-range "Invalid range." check on the enum
-            name; then resolved through the for-long path. An empty
+            name; then resolved through the for-long path. A kSwitchStmt resolves
+            the scrutinee, then each clause body from the entry set S (any case can
+            be matched directly, so direct entry is the weakest join input) under a
+            loop_stack frame with is_switch=true: naked break targets the nearest
+            loop OR switch, naked continue skips switch frames to the nearest loop
+            ("A 'break' statement must be inside a loop or switch."). The after-set
+            is the ∩ over exit paths (each break point's init-set, the bottom-fall,
+            and — default-less — the no-match path = S); a switch with a default and
+            no normal exit is Abrupt. An empty
             condition (`if ()` / `while ()` / `while {} ()` / for's `()`) is the
             always-true literal grammar synthesizes via the shared
             parseParenCondition (a slids convention "empty = true"). The loop-frame
@@ -364,7 +380,15 @@ STAGE FILES (.h / .cpp pairs)
             range_dotdot_tok): if a ranged-for's start and end both fold to literals
             and `start cmp end` is false, the body can never run -> "Invalid range."
             caret on the `..` (rangeFirstTestFalse compares the two literals; no
-            infinite-loop check — deferred, todo.txt).
+            infinite-loop check — deferred, todo.txt). A kSwitchStmt checks the
+            scrutinee is integer-class (float rejected); each case label must be an
+            integer constant (constfold folded it) that FITS the scrutinee type
+            (literalFitsContext — an out-of-range / sign-mismatched label is
+            rejected, never emitted as a truncated `iN`) and is unique by value
+            (full 64-bit dedup, so 'a'==97 and 1+2==3 collide, with a "first case
+            here" note); default is singular. A switch is a return-terminator
+            (endsInReturnNode) iff it has a default and every clause body returns
+            with no escaping break (containsBreak — the same test codegen uses).
             Per-arg type inference at call sites uses the resolved
             callee's param_types (cached on the kCallStmt/kCallExpr by
             resolve) as context. A kCallExpr's inferred_type is the
@@ -442,6 +466,15 @@ STAGE FILES (.h / .cpp pairs)
             (for), via a LoopCtx { header, exit } threaded
             through emitStmt and read by kBreakStmt / kContinueStmt; the body's
             back-edge is emitted only if it can fall through (endsTerminated).
+            A kSwitchStmt lowers to an `llvm switch` on the scrutinee dispatching
+            to one block per clause (source order, default's block = the switch
+            instr default, or exit when there is no default); each block emits its
+            body then falls through via br to the next clause (or exit) unless
+            terminated, so C-style fall-through is the natural block layout. A
+            clause's LoopCtx inherits the enclosing loop's header (continue passes
+            through) but overrides exit = the switch exit (naked break). The exit
+            block gets an `unreachable` terminator only when nothing reaches it
+            (no escaping break via containsBreak, no bottom-fall, has a default).
             endsTerminated / endsTerminatedNode (return + break + continue, and a
             block / both-armed-if whose paths all do) drive the if-arm and loop-
             back br decisions; a loop is never terminating (it reaches its exit).

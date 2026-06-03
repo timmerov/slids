@@ -530,6 +530,8 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kForLongStmt:
         case ast::Kind::kBreakStmt:
         case ast::Kind::kContinueStmt:
+        case ast::Kind::kSwitchStmt:
+        case ast::Kind::kCaseClause:
         case ast::Kind::kParam:
             assert(false && "emitExpr: reached statement-kind node");
             __builtin_unreachable();
@@ -544,6 +546,7 @@ bool endsInReturn(std::vector<std::unique_ptr<ast::Node>> const& stmts);
 bool endsInReturnNode(ast::Node const& s);
 bool endsTerminated(std::vector<std::unique_ptr<ast::Node>> const& stmts);
 bool endsTerminatedNode(ast::Node const& s);
+bool containsBreak(ast::Node const& s);
 
 // The nearest enclosing loop's branch targets, threaded through emitStmt so a
 // break/continue (possibly nested inside if-arms/blocks) reaches the right
@@ -776,6 +779,65 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             out << "  br label %" << loop->header_label << "\n";
             return;
         }
+        case ast::Kind::kSwitchStmt: {
+            // children[0]=scrutinee, [1..]=kCaseClause. Lower to an `llvm switch`
+            // dispatching to one block per clause (source order) + an exit; blocks
+            // fall through via `br` to the next unless terminated. naked break ->
+            // exit; continue passes through to the enclosing loop (swctx inherits
+            // its header). default's block is the switch instr's default label
+            // (exit when there is no default).
+            assert(!stmt.children.empty() && "kSwitchStmt needs a scrutinee");
+            ast::Node const& scrut = *stmt.children[0];
+            std::string sv = emitExpr(scrut, syms, pool, out, diag,
+                                      scrut.inferred_type);
+            std::string llty = llvmTypeFor(scrut.inferred_type, scrut.file_id,
+                                           scrut.tok, diag);
+            std::size_t n = stmt.children.size() - 1;   // clause count
+            std::string exit_lbl = newLabel("switch_exit");
+            if (n == 0) {                                // empty body: no clauses
+                out << "  br label %" << exit_lbl << "\n";
+                out << exit_lbl << ":\n";
+                return;
+            }
+            std::vector<std::string> blk(n);
+            for (std::size_t k = 0; k < n; k++) blk[k] = newLabel("case");
+            std::string default_lbl = exit_lbl;
+            for (std::size_t k = 0; k < n; k++) {
+                if (!stmt.children[k + 1]->children[0]) {
+                    default_lbl = blk[k];
+                    break;
+                }
+            }
+            out << "  switch " << llty << " " << sv << ", label %" << default_lbl
+                << " [\n";
+            for (std::size_t k = 0; k < n; k++) {
+                ast::Node const& clause = *stmt.children[k + 1];
+                if (clause.children[0]) {
+                    out << "    " << llty << " " << clause.children[0]->text
+                        << ", label %" << blk[k] << "\n";
+                }
+            }
+            out << "  ]\n";
+            bool exit_reachable = (default_lbl == exit_lbl);   // no default clause
+            for (std::size_t k = 0; k < n; k++) {
+                ast::Node const& body = *stmt.children[k + 1]->children[1];
+                out << blk[k] << ":\n";
+                LoopCtx swctx{loop ? loop->header_label : std::string(), exit_lbl};
+                emitStmt(body, syms, pool, fn_return_type, &swctx, out, diag);
+                if (containsBreak(body)) exit_reachable = true;
+                if (!endsTerminated(body.children)) {
+                    std::string next = (k + 1 < n) ? blk[k + 1] : exit_lbl;
+                    out << "  br label %" << next << "\n";
+                    if (k + 1 == n) exit_reachable = true;   // last clause falls out
+                }
+            }
+            out << exit_lbl << ":\n";
+            if (!exit_reachable) out << "  unreachable\n";
+            return;
+        }
+        case ast::Kind::kCaseClause:
+            assert(false && "emitStmt: kCaseClause outside a switch");
+            return;
         case ast::Kind::kAugAssignStmt:
             assert(false && "emitStmt: AugAssign survived desugar");
             return;
@@ -815,6 +877,24 @@ bool endsInReturn(std::vector<std::unique_ptr<ast::Node>> const& stmts) {
 // A single statement guarantees a return: a return, a block whose tail does, or
 // an if/else with an else where both arms do. Mirrors classify's endsInReturn so
 // the codegen terminator decision matches the upstream return-correctness check.
+// Whether a `break` targeting THIS switch/loop appears in `s` — i.e. a break not
+// captured by a nested loop/switch. Used to tell whether a switch clause can
+// escape to after the switch (so it is not a return-terminator, and its exit
+// block is reachable). Does NOT descend into nested capturing constructs.
+bool containsBreak(ast::Node const& s) {
+    if (s.kind == ast::Kind::kBreakStmt) return true;
+    if (s.kind == ast::Kind::kWhileStmt || s.kind == ast::Kind::kDoWhileStmt
+        || s.kind == ast::Kind::kForLongStmt || s.kind == ast::Kind::kSwitchStmt) {
+        return false;   // a nested loop/switch captures its own breaks
+    }
+    for (auto const& ch : s.children) if (ch && containsBreak(*ch)) return true;
+    return false;
+}
+
+// A switch is a return-terminator iff it has a default AND every clause body
+// ends in a return AND no clause has a break that escapes to after the switch.
+bool switchEndsInReturn(ast::Node const& s);
+
 bool endsInReturnNode(ast::Node const& s) {
     if (s.kind == ast::Kind::kReturnStmt) return true;
     if (s.kind == ast::Kind::kBlockStmt) return endsInReturn(s.children);
@@ -823,7 +903,21 @@ bool endsInReturnNode(ast::Node const& s) {
         return endsInReturnNode(*s.children[1])
             && endsInReturnNode(*s.children[2]);
     }
+    if (s.kind == ast::Kind::kSwitchStmt) return switchEndsInReturn(s);
     return false;
+}
+
+bool switchEndsInReturn(ast::Node const& s) {
+    bool has_default = false;
+    for (std::size_t i = 1; i < s.children.size(); i++) {
+        ast::Node const& clause = *s.children[i];
+        if (!clause.children[0]) has_default = true;
+        if (!endsInReturnNode(*clause.children[1])
+            || containsBreak(*clause.children[1])) {
+            return false;
+        }
+    }
+    return has_default;
 }
 
 // "This statement always transfers control away" — return / break / continue,
@@ -847,6 +941,10 @@ bool endsTerminatedNode(ast::Node const& s) {
         return endsTerminatedNode(*s.children[1])
             && endsTerminatedNode(*s.children[2]);
     }
+    // A switch transfers control away iff no path reaches after it: every clause
+    // is a return-terminator (the switchEndsInReturn condition already excludes
+    // escaping breaks and requires a default).
+    if (s.kind == ast::Kind::kSwitchStmt) return switchEndsInReturn(s);
     return false;
 }
 
@@ -878,6 +976,16 @@ void collectVarDecls(ast::Node const& s, std::vector<ast::Node const*>& out) {
         if (s.children.size() > 2 && s.children[2]) collectVarDecls(*s.children[2], out);
         for (std::size_t i = 3; i < s.children.size(); i++) {
             if (s.children[i]) collectVarDecls(*s.children[i], out);
+        }
+        return;
+    }
+    if (s.kind == ast::Kind::kSwitchStmt) {
+        // [0]=scrutinee (no decls), [1..]=clauses; each clause's [1] is its body.
+        for (std::size_t i = 1; i < s.children.size(); i++) {
+            if (s.children[i] && s.children[i]->children.size() > 1
+                && s.children[i]->children[1]) {
+                collectVarDecls(*s.children[i]->children[1], out);
+            }
         }
         return;
     }

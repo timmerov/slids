@@ -51,6 +51,9 @@ struct Parser {
     diagnostic::Sink& diag;
     int pos = 0;
     bool fatal = false;
+    bool case_label_ = false;        // parsing a switch case-label const-expr: a
+                                     // qualified name's trailing `:` is the label
+                                     // terminator, not a qualifier separator
     std::string current_func = {};   // enclosing function name, for ##func
     std::string clock_date = {};     // ##date / ##time text, captured once per
     std::string clock_time = {};     // compile (this .sl's compile, not slidsc's)
@@ -240,6 +243,41 @@ struct Parser {
         return true;
     }
 
+    // A qualified name inside a switch case-label, where the chain's trailing `:`
+    // is the label TERMINATOR, not a qualifier separator. Scans the maximal
+    // `:`-ident chain; if it is NOT followed by the terminator `:`, the chain
+    // over-consumed by one segment (the last ident starts the clause body), so
+    // rewind one. This resolves the v1 `case Dir:N:` ambiguity for every
+    // realistic body (keyword-, brace-, or identifier-led). Consumes through the
+    // last label segment, leaving pos at the terminator `:`.
+    bool parseQualifiedNameCaseLabel(std::vector<std::string>& segments,
+                                     std::vector<int>& toks, bool& global) {
+        global = false;
+        if (peek().kind == token::Kind::kColonColon) { global = true; advance(); }
+        if (peek().kind != token::Kind::kIdentifier) {
+            error("Expected a name.");
+            return false;
+        }
+        segments.push_back(peek().text);
+        toks.push_back(pos);
+        advance();
+        while (peek().kind == token::Kind::kColon
+               && peekKind(1) == token::Kind::kIdentifier) {
+            advance();   // ':'
+            segments.push_back(peek().text);
+            toks.push_back(pos);
+            advance();   // ident
+        }
+        // Over-consumed (no terminator `:` follows) -> the last segment is the
+        // body's first identifier; give it back so the preceding `:` terminates.
+        if (peek().kind != token::Kind::kColon && segments.size() >= 2) {
+            pos -= 2;
+            segments.pop_back();
+            toks.pop_back();
+        }
+        return true;
+    }
+
     std::unique_ptr<parse::Node> parsePrimary() {
         token::Token const& t = peek();
         if (t.kind == token::Kind::kStringLiteral) {
@@ -290,7 +328,10 @@ struct Parser {
             std::vector<std::string> segs;
             std::vector<int> toks;
             bool global = false;
-            if (!parseQualifiedName(segs, toks, global)) return nullptr;
+            bool ok = case_label_
+                ? parseQualifiedNameCaseLabel(segs, toks, global)
+                : parseQualifiedName(segs, toks, global);
+            if (!ok) return nullptr;
             auto node = newNodeAt(parse::Kind::kIdentExpr, name_file, start_tok);
             node->name = segs.back();
             node->name_tok = toks.back();
@@ -1298,12 +1339,77 @@ struct Parser {
         return newNodeAt(kind, stmt_file, stmt_tok);
     }
 
+    // One `case const-expr:` / `default:` clause. children[0] = label const-expr
+    // (nullptr for default), [1] = body kBlockStmt (statements up to the next
+    // case/default/`}`). The body is its own lexical scope; fall-through to the
+    // next clause is a resolve/codegen concern.
+    std::unique_ptr<parse::Node> parseCaseClause() {
+        int clause_file = peek().file_id;
+        int clause_tok = pos;
+        std::unique_ptr<parse::Node> label;
+        if (peek().kind == token::Kind::kCase) {
+            advance();   // case
+            case_label_ = true;
+            label = parseExpr();
+            case_label_ = false;
+            if (!label) return nullptr;
+        } else if (peek().kind == token::Kind::kDefault) {
+            advance();   // default — label stays null
+        } else {
+            error("Expected 'case' or 'default' in the switch body.");
+            return nullptr;
+        }
+        if (!expect(token::Kind::kColon, ":")) return nullptr;
+        auto body = newNodeAt(parse::Kind::kBlockStmt, clause_file, clause_tok);
+        while (peek().kind != token::Kind::kCase
+               && peek().kind != token::Kind::kDefault
+               && peek().kind != token::Kind::kRBrace
+               && peek().kind != token::Kind::kEndOfFile
+               && peek().kind != token::Kind::kEndOfInput) {
+            auto stmt = parseStmt();
+            if (!stmt) return nullptr;
+            body->children.push_back(std::move(stmt));
+        }
+        auto clause = newNodeAt(parse::Kind::kCaseClause, clause_file, clause_tok);
+        clause->children.push_back(std::move(label));   // [0] (null => default)
+        clause->children.push_back(std::move(body));     // [1]
+        return clause;
+    }
+
+    // switch ( value ) { clause* } — value required; clauses are case/default.
+    std::unique_ptr<parse::Node> parseSwitchStmt() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
+        advance();   // switch
+        if (!expect(token::Kind::kLParen, "(")) return nullptr;
+        if (peek().kind == token::Kind::kRParen) {
+            error("A switch value is required.");
+            return nullptr;
+        }
+        auto scrutinee = parseExpr();
+        if (!scrutinee) return nullptr;
+        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+        if (!expect(token::Kind::kLBrace, "{")) return nullptr;
+        auto node = newNodeAt(parse::Kind::kSwitchStmt, stmt_file, stmt_tok);
+        node->children.push_back(std::move(scrutinee));   // [0]
+        while (peek().kind != token::Kind::kRBrace
+               && peek().kind != token::Kind::kEndOfFile
+               && peek().kind != token::Kind::kEndOfInput) {
+            auto clause = parseCaseClause();
+            if (!clause) return nullptr;
+            node->children.push_back(std::move(clause));
+        }
+        if (!expect(token::Kind::kRBrace, "}")) return nullptr;
+        return node;
+    }
+
     std::unique_ptr<parse::Node> parseStmt() {
         token::Token const& t = peek();
         if (t.kind == token::Kind::kLBrace) return parseBlock();
         if (t.kind == token::Kind::kIf) return parseIfStmt();
         if (t.kind == token::Kind::kWhile) return parseWhileStmt();
         if (t.kind == token::Kind::kFor) return parseForStmt();
+        if (t.kind == token::Kind::kSwitch) return parseSwitchStmt();
         if (t.kind == token::Kind::kBreak)
             return parseBreakContinue(parse::Kind::kBreakStmt);
         if (t.kind == token::Kind::kContinue)

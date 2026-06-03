@@ -48,6 +48,8 @@ ast::Kind toAstKind(parse::Kind k) {
             __builtin_unreachable();
         case parse::Kind::kBreakStmt:     return ast::Kind::kBreakStmt;
         case parse::Kind::kContinueStmt:  return ast::Kind::kContinueStmt;
+        case parse::Kind::kSwitchStmt:    return ast::Kind::kSwitchStmt;
+        case parse::Kind::kCaseClause:    return ast::Kind::kCaseClause;
         case parse::Kind::kStringLiteral: return ast::Kind::kStringLiteral;
         case parse::Kind::kIntLiteral:    return ast::Kind::kIntLiteral;
         case parse::Kind::kUintLiteral:   return ast::Kind::kUintLiteral;
@@ -145,6 +147,8 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
         node->name = functionSymbol(p, tree);
     }
     for (auto const& c : p.children) {
+        if (!c) { node->children.push_back(nullptr); continue; }  // preserve a
+                          // null slot (a switch default clause's absent label)
         if (c->kind == parse::Kind::kAliasDecl) continue;      // resolve-only
         if (c->kind == parse::Kind::kNamespaceDecl) continue;  // members hoisted
         if (c->kind == parse::Kind::kEnumDecl) continue;       // resolve-lowered
@@ -350,6 +354,20 @@ void lowerForLong(ast::Node& s) {
     }
 }
 
+// Lower a switch's PPID. children[0] = scrutinee (a self-contained phrase whose
+// bumps fire once as it is evaluated); [1..] = kCaseClause, each [0] = label
+// (a folded constant — no bumps) and [1] = body statement list.
+void lowerSwitchStmt(ast::Node& s) {
+    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0]);
+    for (std::size_t i = 1; i < s.children.size(); i++) {
+        if (!s.children[i]) continue;
+        ast::Node& clause = *s.children[i];
+        if (clause.children.size() > 1 && clause.children[1]) {
+            lowerStatementList(clause.children[1]->children);   // body block
+        }
+    }
+}
+
 // Run PPID statement-bump splicing over a statement list, rebuilding it with
 // pre-bumps before / post-bumps after each statement. Recurses into a nested
 // kBlockStmt / kIfStmt so bumps inside them splice within that scope, not at the
@@ -376,6 +394,11 @@ void lowerStatementList(std::vector<std::unique_ptr<ast::Node>>& stmts) {
         }
         if (stmt->kind == ast::Kind::kForLongStmt) {
             lowerForLong(*stmt);
+            lowered.push_back(std::move(stmt));
+            continue;
+        }
+        if (stmt->kind == ast::Kind::kSwitchStmt) {
+            lowerSwitchStmt(*stmt);
             lowered.push_back(std::move(stmt));
             continue;
         }

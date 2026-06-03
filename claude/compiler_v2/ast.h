@@ -26,6 +26,9 @@ enum class Kind {
                     // [3..]=varlist decls. The canonical for node.
     kBreakStmt,     // break;
     kContinueStmt,  // continue;
+    kSwitchStmt,    // switch (value) { clauses }; children[0]=scrutinee,
+                    // [1..]=kCaseClause (source order).
+    kCaseClause,    // children[0]=label const-expr (null=default), [1]=body block.
     kStringLiteral,
     kIntLiteral,
     kUintLiteral,

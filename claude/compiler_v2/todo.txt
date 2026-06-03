@@ -67,6 +67,19 @@ REACH GOALS
 
 DEFERRED FEATURES (later; may not be on the plan)
 
+  * SWITCH STACKED-EMPTY-BODY TERMINATOR (conservative over-demand) — a switch
+    where a stacked label's body is empty and falls through into a returning
+    clause (`case 3: case 4: return 1; default: return 0;`) is NOT treated as a
+    return-terminator (endsInReturnNode requires every clause body to itself end
+    in a return), so a function ending in it over-demands a trailing return. Same
+    class as the 3B constant-true-loop over-demand; full reachability would fix
+    both. Canon: switch.sl neg_stacked_terminator pins the current behavior.
+
+  * NAMED-SWITCH BREAK (`break someswitch;`) — breaking a non-innermost switch by
+    its name. switch.sl marks it "distant future, low utility"; out of the
+    Session-6 labels scope (which covers loop labels + numbered/named break of
+    LOOPS, not switch naming). Needs switch blocks to carry a label.
+
   * FOR-ARRAY / FOR-TUPLE / FOR-CLASS — the remaining colon-form for shapes,
     blocked on the underlying types: arrays + anon-tuples (Phase 4) and classes
     with the for-each protocol op[]/size or begin/end/next (Phase 5). Each
