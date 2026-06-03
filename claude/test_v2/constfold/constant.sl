@@ -35,6 +35,7 @@ const float64 kPlanck = 6.626;
 const bool kAlive = true;
 const char kStar = '*';
 const int kNegSeven = -7;
+const int8 kByte = 5;
 
 int32 foo() {
     const float kTau = 2.0 * kPi;
@@ -97,6 +98,18 @@ int32 main() {
     //int xVar = 42;
     //const int kFromVar = xVar + 1;
 
+    /* compile errors — typeless const whose STRONG value overflows the inferred
+       type (the diagnostic says "inferred type", not "declared type") */
+
+    //-EXPECT-ERROR: does not fit inferred type 'int8'
+    //const kOver = kByte + 200;
+
+    /* compile errors — typeless const initialized from a non-constant local */
+
+    //-EXPECT-ERROR: Initializer for 'kBad' is not a constant expression
+    //int yVar = 7;
+    //const kBad = yVar + 1;
+
     bar();
 
     const float kPi2 = kPi / 2.0;
@@ -127,6 +140,45 @@ int32 main() {
     const int kA = 10;
     const int kB = 20;
     __println(##type(kSum) + " kSum = " + kSum);
+
+    /* inferred-type constants — the type comes from the rhs const-expression.
+       STRONG when the rhs references a typed const (the inferred const takes that
+       const's type); WEAK when the rhs is a bare literal (a named literal:
+       presents at the preferred spelling, narrowest nominal under the hood).
+       kInferByte and kInferWeak both hold values that fit int8, but the strong
+       one reads 'const int8' and the weak one 'const int'. */
+    const kInferInt  = kFortyTwo - 2;     // strong: kFortyTwo is const int
+    const kInferByte = kByte + 1;         // strong: kByte is const int8
+    const kInferWeak = 17;                // weak:   a bare literal
+    __println(##type(kInferInt)  + " kInferInt = "  + kInferInt);
+    __println(##type(kInferByte) + " kInferByte = " + kInferByte);
+    __println(##type(kInferWeak) + " kInferWeak = " + kInferWeak);
+
+    /* weak literal-kind matrix — a bare-literal const presents the preferred
+       default spelling for its kind. */
+    const kWfloat = 3.5;
+    const kWchar  = 'x';
+    const kWbool  = true;
+    const kWuint  = 0xFF;
+    const kWbig   = 5000000000;
+    __println(##type(kWfloat) + " kWfloat = " + kWfloat);
+    __println(##type(kWchar)  + " kWchar = "  + kWchar);
+    __println(##type(kWbool)  + " kWbool = "  + kWbool);
+    __println(##type(kWuint)  + " kWuint = "  + kWuint);
+    __println(##type(kWbig)   + " kWbig = "   + kWbig);
+
+    /* strong inference variety: strong float; strong+strong (-> common type); a
+       strength chain; and unary on a strong const. */
+    const kSfloat = kPi + 1.0;            // strong: kPi is const float
+    const kSS     = kByte + kFortyTwo;    // strong+strong: int8 + int -> int
+    const kChainA = kByte;                // strong int8 (direct copy)
+    const kChainB = kChainA + 1;          // strong int8 (chained through kChainA)
+    const kNeg    = -kByte;               // strong int8 (unary keeps strength)
+    __println(##type(kSfloat) + " kSfloat = " + kSfloat);
+    __println(##type(kSS)     + " kSS = "     + kSS);
+    __println(##type(kChainA) + " kChainA = " + kChainA);
+    __println(##type(kChainB) + " kChainB = " + kChainB);
+    __println(##type(kNeg)    + " kNeg = "    + kNeg);
 
     return 0;
 }

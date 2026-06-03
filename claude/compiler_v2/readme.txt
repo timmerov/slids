@@ -64,7 +64,9 @@ STAGE FILES (.h / .cpp pairs)
             (`const int Space:kSix = 6;`); enum decls
             (`enum [type] [Name] ( m1 [= v], ... )`); function defs/decls with typed
             param lists; var-decls with optional leading `const` (file
-            scope or function scope); statements (var-decl incl. the
+            scope or function scope) — incl. a TYPELESS const (`const name =
+            expr`, detected by `=` immediately after the name, parseType skipped
+            so constfold infers the type); statements (var-decl incl. the
             `<ident> <ident>` typed-decl shape, assign, aug-assign, alias,
             namespace decl, 0/1/N-arg call possibly qualified, bare inc/dec,
             return, if/else, while + post-condition do-while, the long-form for,
@@ -81,7 +83,11 @@ STAGE FILES (.h / .cpp pairs)
             across the full C precedence ladder (literals + ident, unary
             `! ~ + -`, prefix/postfix ++/--, full binary set
             arith/bitwise/shift/comparison/logical, parens, postfix-call on
-            a bare ident). Stamps (file_id, tok)
+            a bare ident, and the `##` stringify macros in parsePrimary's
+            kHashHash arm — ##file / ##line / ##func / ##name(x) (raw lexed
+            token text, scanned to the matching ')' by bracket depth) /
+            ##date / ##time / ##type(x) (a kStringifyType node, child = the
+            operand, lowered to a kStringLiteral in classify)). Stamps (file_id, tok)
             on every node for source
             attribution. No identifier resolution, no scope tracking,
             no type inference, no literal folding — all deferred to
@@ -102,7 +108,12 @@ STAGE FILES (.h / .cpp pairs)
             its underlying (cycle-detected), and resolveDeclType rewrites every
             declared / return / parameter spelling in place before validating
             it (widen::isKnownType) — so downstream stages see only underlying
-            types and aliases never reach the ast. A namespace-qualified type
+            types and aliases never reach the ast. Whenever resolveDeclType erases
+            a NAMED type to a different underlying (at a local-var decl site or the
+            param pass-1 site), the as-declared alias/enum spelling is stashed in a
+            parallel alias_label channel (parse::Entry.alias_label) for ##type to
+            report — slids_type stays the erased underlying, so codegen never sees
+            a name. A namespace-qualified type
             spelling (`Space:Dir`) resolves via resolveQualifiedType (the lead
             segments walk the shared ns chain, the leaf must be a type) before
             any downstream stage; the cycle-vs-resolution-failure suppression
@@ -146,7 +157,16 @@ STAGE FILES (.h / .cpp pairs)
             body_locals; all id-keyed, no names). A kLocalVar read before it is
             written → "Use of uninitialized variable 'x'." (params are seeded
             initialized; a decl-with-init or assignment marks written; rhs
-            resolves before the mark so `x = x` fires). An end-of-body sweep
+            resolves before the mark so `x = x` fires). INFERRED-INIT promotion:
+            an assign to a truly-undeclared name (!isQualified && resolveName < 0,
+            so a reassign or a wrong-kind target falls through to the normal assign
+            path) creates a fresh kLocalVar with empty slids_type, rewrites the
+            kAssignStmt to a kVarDeclStmt, resolves the rhs (so `x = x` reads x
+            uninitialized), and marks it initialized — the type is left for classify
+            to infer + write back. A TYPELESS const (`const name = expr`, empty
+            declared type) skips resolveDeclType in both the function-body const
+            pre-pass and the main kVarDeclStmt arm (constfold infers the type).
+            An end-of-body sweep
             then reports any body-declared local never read: "Unused local
             variable 'x'." if never written, else "Local variable 'x' set but
             never used."; gated on hasErrors so a use-before-init or dup
@@ -243,6 +263,20 @@ STAGE FILES (.h / .cpp pairs)
             the declared type for precision capture (3.14 -> float32
             stored as 3.1400001049...); ints/bools/chars store rhs text
             verbatim with range validation against declared type.
+            Const strength model (typeless consts): strong_type on nodes /
+            const_strong_type on entries — a combineStrong helper + makeLitAt
+            propagate strength through arith/bitwise folds (a strong/typed-const
+            operand makes the result strong + takes its type, both-strong uses
+            widen::commonType, a bool/comparison result is weak); trySubstituteConst
+            stamps strong_type onto a substituted literal from entry.const_strong_type;
+            tryCaptureConst infers a typeless const's type (a strong rhs takes its
+            type, a bare-literal rhs is WEAK -> weakDefaultType preferred spelling
+            with the narrowest nominal kept under the hood) and marks explicit-typed
+            consts strong. The capture range-check says "inferred type" for a
+            typeless const, "declared type" for an explicit one. walk() returns
+            early on a kStringifyType node so the ##type operand subtree is
+            fold-EXEMPT (a const under ##type is not substituted to a literal before
+            classify reports it).
             Iterates to a fixpoint; any kConst whose rhs never folded
             errors with "Initializer for 'X' is not a constant
             expression." (consolidated into one diagnostic with notes
@@ -256,8 +290,26 @@ STAGE FILES (.h / .cpp pairs)
   classify  parse tree -> annotated parse tree. Type inference and
             (Phase 3) overload resolution. Reads resolved_entry_id + entry
             data stamped by resolve; never builds entries or pushes frames
-            itself. Infers every expression's inferred_type and every
-            binary's op_type (computational type). Sharp rejections at
+            itself, with ONE deliberate symbol-table exception: the inferred-init
+            write-back (below). Infers every expression's inferred_type and every
+            binary's op_type (computational type). INFERRED-INIT write-back: a
+            kVarDeclStmt with empty return_type + !is_const + resolved_entry_id >= 0
+            infers the rhs, NORMALIZES a literal-inferred type to its preferred
+            spelling (preferredSpelling: int32->int, uint32->uint, float32->float;
+            a typed rhs keeps its spelling), copies rhs.alias_label, and WRITES BACK
+            entry.slids_type (assert-guarded on hasErrors || rhs.inferred_type
+            non-empty); gated to !is_const so it doesn't clobber constfold's const
+            inference. A kAugAssignStmt on such a var RE-READS entryType into
+            s.return_type (resolve cached it empty before the decl was stamped).
+            ##type(x) lowering: a kStringifyType node becomes a kStringLiteral whose
+            text is the operand's resolved type — alias_label ?: inferred_type, plus
+            the const qualifier (a kIdentExpr operand resolving to a kConst -> "const
+            " + (alias_label ?: slids_type); a const read inside a larger expression
+            strips const). alias_label propagation: an ident reads its entry's label;
+            unary/shift pass it through; arith uses a sticky binaryLabel rule
+            (alias+same-alias or alias+const-literal keeps the label, any mismatch
+            drops it); a comparison clears it — inferred_type/op_type/slids_type stay
+            the erased underlying so widen/codegen are untouched. Sharp rejections at
             the source: non-coercible operands for ! && || ^^, an if / while / for
             condition not coercible to bool, non-numeric shift sides, bitwise on
             float, no-common-type binaries. Return-correctness (endsInReturn) recurses

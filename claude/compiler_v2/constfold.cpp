@@ -318,6 +318,45 @@ bool parseDouble(std::string const& t, double& v) {
     return std::isfinite(v);
 }
 
+// Strength of a binary result: strong if either operand was strong (a typed
+// const), taking the strong operand's type — or, when both are strong, their
+// common type (widen-within-family). Empty = weak.
+std::string combineStrong(parse::Node const& a, parse::Node const& b) {
+    if (a.strong_type.empty()) return b.strong_type;
+    if (b.strong_type.empty()) return a.strong_type;
+    std::string out;
+    if (widen::commonType(a.strong_type, b.strong_type, out)) return out;
+    // No common type — commonType only fails cross-family (int vs float). For
+    // arith/compare that's pre-empted by tryFoldBinary's no-mix guard, so the
+    // sole path here is the shift carve-out (e.g. float lhs, int rhs), where the
+    // result type is the lhs by definition — taking a.strong_type is correct,
+    // not a silent pick.
+    assert(!a.strong_type.empty() && !b.strong_type.empty()
+        && "combineStrong: fallback expects two strong operands");
+    return a.strong_type;
+}
+
+// The preferred user-facing default type for a WEAK const (a named literal):
+// int/uint/float for the 32-bit defaults, widening only when the magnitude
+// requires it. The narrowest nominal is kept separately (assignNominal).
+std::string weakDefaultType(parse::Node const& lit) {
+    if (lit.kind == parse::Kind::kBoolLiteral)  return "bool";
+    if (lit.kind == parse::Kind::kCharLiteral)  return "char";
+    if (lit.kind == parse::Kind::kFloatLiteral) return "float";
+    bool neg = false;
+    uint64_t mag = 0;
+    if (lit.kind == parse::Kind::kUintLiteral) {
+        if (parseSignedDigits(lit.text, neg, mag) && mag > (uint64_t)UINT32_MAX)
+            return "uint64";
+        return "uint";
+    }
+    if (!parseSignedDigits(lit.text, neg, mag)) return "int";
+    if (neg) return (mag <= (uint64_t)INT32_MAX + 1) ? "int" : "int64";
+    if (mag <= (uint64_t)INT32_MAX) return "int";
+    if (mag <= (uint64_t)INT64_MAX) return "int64";
+    return "uint64";
+}
+
 std::unique_ptr<parse::Node> makeLitAt(parse::Node const& src, parse::Kind kind,
                                         std::string text) {
     auto out = std::make_unique<parse::Node>();
@@ -325,6 +364,11 @@ std::unique_ptr<parse::Node> makeLitAt(parse::Node const& src, parse::Kind kind,
     out->text = std::move(text);
     out->file_id = src.file_id;
     out->tok = src.tok;
+    // Strength rides through arith/bitwise folds (a strong/typed const operand
+    // makes the result strong). A bool result (comparison) is always weak.
+    if (kind != parse::Kind::kBoolLiteral && src.children.size() == 2) {
+        out->strong_type = combineStrong(*src.children[0], *src.children[1]);
+    }
     return out;
 }
 
@@ -606,6 +650,7 @@ bool trySubstituteConst(std::unique_ptr<parse::Node>& slot, parse::Tree& tree) {
     lit->text = entry.literal_text;
     lit->file_id = file_id;
     lit->tok = tok;
+    lit->strong_type = entry.const_strong_type;   // strong const -> strong literal
     slot = std::move(lit);
     return true;
 }
@@ -625,7 +670,25 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
     if (decl.children.empty()) return false;        // grammar should have rejected
     parse::Node const& rhs = *decl.children[0];
 
+    // Typeless const: infer slids_type from the folded rhs before the capture
+    // below range-checks against it. A strong rhs (carried a typed const) takes
+    // that type; a bare literal is WEAK — present the preferred default spelling,
+    // keep the narrowest nominal under the hood.
+    if (entry.slids_type.empty() && isLiteral(rhs)) {
+        entry.slids_type = rhs.strong_type.empty()
+            ? weakDefaultType(rhs) : rhs.strong_type;
+        entry.const_strong_type = rhs.strong_type;   // empty = weak
+    } else if (!decl.return_type.empty()) {
+        // An explicitly-typed const is strong: it carries its declared type when
+        // substituted into another const's rhs.
+        entry.const_strong_type = entry.slids_type;
+    }
+
     std::string const& declared = entry.slids_type;
+    // A typeless const's type was inferred from the rhs, not declared — word the
+    // range-check diagnostics accordingly.
+    char const* type_word =
+        decl.return_type.empty() ? "inferred type" : "declared type";
 
     // A string literal is a constant, but isLiteral (used below to mean "folded
     // to a numeric literal") excludes it — so without this branch a string init
@@ -652,7 +715,7 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
         if (!widen::floatLiteralFits(rhs.text, declared)) {
             diagnostic::report(diag, {decl.file_id, decl.tok,
                 "Constant '" + entry.name + "' value '" + rhs.text
-                + "' does not fit declared type '" + declared + "'.", {}});
+                + "' does not fit " + type_word + " '" + declared + "'.", {}});
             return false;
         }
         double d;
@@ -681,7 +744,7 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
     if (!widen::intLiteralFits(text_for_fit, declared)) {
         diagnostic::report(diag, {decl.file_id, decl.tok,
             "Constant '" + entry.name + "' value '" + rhs.text
-            + "' does not fit declared type '" + declared + "'.", {}});
+            + "' does not fit " + type_word + " '" + declared + "'.", {}});
         return false;
     }
     entry.literal_text = rhs.text;

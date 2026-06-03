@@ -613,8 +613,16 @@ struct Parser {
             is_const = true;
             advance();
         }
-        std::string type = parseType();
-        if (fatal) return nullptr;
+        // Typeless const — `const name = expr;` infers its type from the rhs. The
+        // `=` right after the name disambiguates from `const Type name = ...`.
+        bool typeless = is_const
+            && peek().kind == token::Kind::kIdentifier
+            && peekKind(1) == token::Kind::kEquals;
+        std::string type;
+        if (!typeless) {
+            type = parseType();
+            if (fatal) return nullptr;
+        }
         if (peek().kind != token::Kind::kIdentifier
             && peek().kind != token::Kind::kColonColon) {
             error("Expected variable name.");

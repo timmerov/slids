@@ -129,6 +129,23 @@ DEFERRED FEATURES (later; may not be on the plan)
     inferred-init (current focus), BEFORE Phase 5 classes. The bare-reference stamp
     alone is small and could land sooner once the propagation rule is settled.
 
+  * STRONG-CONST WIDENING ENFORCEMENT — a strong const should widen-within-family
+    (not flex) when used in a runtime context; today strong_type is consumed ONLY
+    by constfold's const inference, so a strong const still substitutes to a
+    flexing literal in non-const use. This is the widening-BEHAVIOR half of
+    inferred-type constants (the type-inference half landed: strong_type on nodes /
+    const_strong_type on entries, combineStrong propagation, weakDefaultType for a
+    bare-literal rhs). prerequisite: classify/codegen consume strong_type at the
+    widen sites.
+
+  * CANONICALSIGNED INT-VS-INT32 SPELLING — widen::commonType's widen branch spells
+    the 32-bit-signed common type "int32" (canonicalSigned), so `const c = <int8
+    const> + <int const>` reports `const int32` while a const carrying its own
+    `int` spelling reports `const int` — an inconsistent spelling. Fix is a one-line
+    policy in canonicalSigned / canonicalUnsigned / canonicalFloat to spell the
+    32-bit defaults int / uint / float, applying uniformly to const inference AND
+    runtime widening. Surfaced by constant.sl's kSS case.
+
   * ALIAS FUNCTION-RENAME — `alias Fn = LongName;` (use case: importing C
     functions with ugly names).
 

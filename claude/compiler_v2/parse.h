@@ -80,6 +80,11 @@ struct Node {
                                  // the erased underlying for width math + codegen;
                                  // this parallel label is what ##type reports. Sticky
                                  // alias+alias / alias+literal, dropped on a mismatch.
+    std::string strong_type;     // constfold: a folded/substituted literal that came
+                                 // from a STRONG (typed) const carries that const's
+                                 // type here (empty = weak literal). Propagated through
+                                 // the fold so an inferred typeless const can tell a
+                                 // strong rhs (takes its type) from a bare-literal rhs.
     int file_id = -1;            // source file of the construct
     int tok = -1;                // index into token::List::tokens for error attribution
     int name_tok = -1;           // ident token for named constructs (VarDecl, FunctionDef/Decl, Param)
@@ -134,6 +139,11 @@ struct Entry {
     // kConst — filled by constfold; substitution at use sites reads these.
     std::string literal_text;     // canonical-precision text at declared type
     Kind literal_kind = Kind::kProgram;  // sentinel; valid after constfold capture
+    std::string const_strong_type;  // kConst: the const's STRONG type (empty = weak,
+                                    // i.e. a named literal). Explicit-typed consts and
+                                    // typeless consts inferred from a strong rhs are
+                                    // strong; a typeless const from a bare literal is
+                                    // weak. Substitution stamps it onto the literal.
 };
 
 struct Tree {

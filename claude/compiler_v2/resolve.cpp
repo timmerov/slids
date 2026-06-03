@@ -998,7 +998,10 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // entry already exists; skip creation and dup-check.
             if (s.resolved_entry_id < 0) {
                 std::string declared = s.return_type;   // pre-erasure spelling
-                resolveDeclType(tree, s.return_type, s.file_id, s.tok, diag);
+                // A typeless const (block scope) defers type inference to constfold.
+                if (!s.return_type.empty()) {
+                    resolveDeclType(tree, s.return_type, s.file_id, s.tok, diag);
+                }
                 int existing = parse::findInFrame(tree, parse::currentFrameId(tree), s.name);
                 if (existing >= 0) {
                     parse::Entry const& prev = tree.entries[existing];
@@ -1594,7 +1597,11 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         if (parse::findInFrame(tree, parse::currentFrameId(tree), ch->name) >= 0) {
             continue;  // pre-pass yields to main-pass dup detection
         }
-        resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
+        // A typeless const has no spelling to validate; constfold infers its
+        // type from the rhs and stamps slids_type later.
+        if (!ch->return_type.empty()) {
+            resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
+        }
         parse::Entry e;
         e.kind = parse::EntryKind::kConst;
         e.name = ch->name;

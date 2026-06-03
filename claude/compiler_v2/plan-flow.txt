@@ -259,7 +259,9 @@ SESSION 4 — for-loops   [LONG-FORM + RANGED + ENUM LANDED; reuse + array/tuple
     enum, unknown enum, zero-member enum).
 
   PENDING (this session's remaining work):
-  * TYPELESS varlist + enclosing-scope REUSE — deferred, needs inferred-init.
+  * TYPELESS varlist + enclosing-scope REUSE — inferred-init has LANDED (plan.txt
+    Phase 2), so the mechanism now EXISTS; what remains is wiring it into the for
+    varlist forms (the for shapes still require an explicit var type today).
     LOOP-VAR REUSE RULE: if a local of
     the loop-var name is ALREADY in scope, the for REASSIGNS it (reuses the
     existing entry) rather than allocating a fresh loop-local. `int row = 0;

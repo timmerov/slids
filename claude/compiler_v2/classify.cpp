@@ -517,7 +517,10 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 // rhs keeps its spelling. Copy any alias label, then WRITE BACK the
                 // entry — the one deliberate symbol-table mutation in classify, so
                 // later reads resolve to the inferred type.
-                if (s.return_type.empty() && s.resolved_entry_id >= 0) {
+                // Typeless CONSTS are inferred by constfold (it folds + captures
+                // and stamps slids_type with strong/weak); don't clobber that here.
+                if (s.return_type.empty() && s.resolved_entry_id >= 0
+                    && !s.is_const) {
                     parse::Node& rhs = *s.children[0];
                     // Invariant: a typeable rhs yields a non-empty inferred type.
                     // An un-typeable one (namespace/type-as-value, no-common-type,
