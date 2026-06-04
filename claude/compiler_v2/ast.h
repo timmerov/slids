@@ -46,6 +46,10 @@ enum class Kind {
     kDerefExpr,     // postfix `lvalue^` — dereference; children[0]=operand.
     kIndexExpr,     // postfix `base[index]` — array subscript; children[0]=base,
                     // [1]=index. `a[x][y]` nests ((a[x])[y]).
+    kCastExpr,      // prefix `<Type^> operand` — pointer reinterpret cast.
+                    // inferred_type = target; children[0]=operand. Codegen emits a
+                    // ptrtoint/inttoptr only at the intptr boundary; ptr↔ptr is a
+                    // no-op (opaque `ptr`).
 
     kSeqExpr,       // synthesized by desugar: children evaluated in order; value_index
                     // names the result child, the rest are bumps run for effect

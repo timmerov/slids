@@ -661,6 +661,21 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             return widen::convert(tmp, expr.inferred_type, dest_type,
                                   expr.file_id, expr.tok, out, diag);
         }
+        case ast::Kind::kCastExpr: {
+            // `<Type^> operand` — reinterpret. Emit the operand at its own type,
+            // convert it to the cast target (a ptrtoint/inttoptr only at the
+            // intptr boundary; ptr↔ptr is a no-op under opaque `ptr`), then flex
+            // into the surrounding dest_type (target → dest is itself a no-op for
+            // a pointer lvalue, or a ptr/intptr bridge).
+            assert(expr.children.size() == 1 && "kCastExpr needs 1 operand");
+            ast::Node const& operand = *expr.children[0];
+            std::string v = emitExpr(operand, syms, pool, out, diag,
+                                     operand.inferred_type);
+            v = widen::convert(v, operand.inferred_type, expr.inferred_type,
+                               expr.file_id, expr.tok, out, diag);
+            return widen::convert(v, expr.inferred_type, dest_type,
+                                  expr.file_id, expr.tok, out, diag);
+        }
         case ast::Kind::kUnaryExpr:
             return emitUnary(expr, syms, pool, out, diag, dest_type);
         case ast::Kind::kBinaryExpr:
@@ -1120,6 +1135,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kAddrOfExpr:
         case ast::Kind::kDerefExpr:
         case ast::Kind::kIndexExpr:
+        case ast::Kind::kCastExpr:
         case ast::Kind::kCallExpr:
         case ast::Kind::kSeqExpr:
         case ast::Kind::kBumpExpr:

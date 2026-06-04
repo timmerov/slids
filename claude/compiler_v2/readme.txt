@@ -98,7 +98,10 @@ STAGE FILES (.h / .cpp pairs)
             name (in `name` — an identifier, or the `for`/`while` keyword default).
             expressions
             across the full C precedence ladder (literals + ident, unary
-            `! ~ + -`, prefix/postfix ++/--, full binary set
+            `! ~ + -`, the `<Type^>` pointer cast (a prefix unary — a leading
+            `<` is unambiguous since binary `<` only sits between operands; the
+            target spelling rides on return_type, the operand is another unary so
+            casts chain right-to-left), prefix/postfix ++/--, full binary set
             arith/bitwise/shift/comparison/logical, parens, postfix-call on
             a bare ident, and the `##` stringify macros in parsePrimary's
             kHashHash arm — ##file / ##line / ##func / ##name(x) (raw lexed
@@ -125,7 +128,11 @@ STAGE FILES (.h / .cpp pairs)
             its underlying (cycle-detected), and resolveDeclType rewrites every
             declared / return / parameter spelling in place before validating
             it (widen::isKnownType) — so downstream stages see only underlying
-            types and aliases never reach the ast. Whenever resolveDeclType erases
+            types and aliases never reach the ast. requireKnownType also rejects
+            `void` with an iterator/array suffix (`void[]`, `void[N]`): void has
+            no stride, so a void pointer must be a reference (`void^`). A
+            kCastExpr's target type runs through the same resolveDeclType, so a
+            cast inherits alias substitution and the void/unknown-type checks. Whenever resolveDeclType erases
             a NAMED type to a different underlying (at a local-var decl site or the
             param pass-1 site), the as-declared alias/enum spelling is stashed in a
             parallel alias_label channel (parse::Entry.alias_label) for ##type to
@@ -415,7 +422,19 @@ STAGE FILES (.h / .cpp pairs)
             callee's param_types (cached on the kCallStmt/kCallExpr by
             resolve) as context. A kCallExpr's inferred_type is the
             callee's return type; a void return used as a value is rejected
-            here. Future: overload resolution when multiple Function
+            here. Pointer-cast rules (Phase 4) live here as two predicates:
+            ptrImplicitOk (a bare assignment may only STRIP info — nullptr->any,
+            any->`void^`/`intptr`, iterator->reference of the same pointee) and
+            ptrExplicitOk (a `<Type^>` cast additionally bridges through a
+            buffer-class pointer [`void^`/`int8^`/`uint8^`] or `intptr`, and
+            reinterprets iterator<->reference of the same pointee; two unrelated
+            non-buffer pointers must chain through `void^`; only `intptr` bridges
+            pointer and integer). checkPtrAssign enforces the implicit rule at
+            EVERY pointer-assignment site — kVarDeclStmt init, kAssignStmt, and
+            kStoreStmt (a references-array element / deref slot) — gated on a
+            pointer being involved (pure-numeric assignments keep the width path).
+            The kCastExpr arm validates the explicit rule and stamps the target.
+            Future: overload resolution when multiple Function
             entries share a name.
   desugar   parse tree -> ast (separate node-type set). Today: identity
             copy that propagates every annotation classify and constfold
@@ -521,7 +540,13 @@ STAGE FILES (.h / .cpp pairs)
             kStoreStmt stores through any lvalue expr (deref / index). Iterator
             arithmetic: `iter ± int` is a signed element GEP, `iter - iter` is
             ptrtoint-diff / elemBytes, `++`/`--` GEP ±1 element. Pointer
-            comparisons icmp the raw pointers (unsigned).
+            comparisons icmp the raw pointers (unsigned). A kCastExpr
+            (`<Type^> x`) emits the operand then widen::convert twice
+            (operand->target->dest); convert's pointer head makes ptr<->ptr a
+            value no-op (opaque `ptr`), ptr->intptr a `ptrtoint`, intptr->ptr an
+            `inttoptr` — and asserts if a pointer ever reaches the SCALAR
+            conversion path (an ungated ptr->non-intptr would store a `ptr` as an
+            integer; classify rejects them, so this guards against a missed gate).
 
 PRODUCT FILES (.h / .cpp pairs)
 

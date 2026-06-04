@@ -202,6 +202,21 @@ Phase 4 — types beyond primitives
     walks 0..len-1, the loop var bound at the body top — by reference [`T^ v`],
     by value [`T v`], or typeless [by value; reuse-an-enclosing-local-or-fresh].
     One-dimensional only; a by-ref var's base type must equal the element type.)
+  * pointer casting (`<Type^> ptr`)                                LANDED
+    (kCastExpr — a prefix-unary reinterpret cast [a leading `<` is unambiguous;
+    operand is another unary so casts chain right-to-left; target on return_type,
+    resolved by resolveDeclType]. Rules in classify: IMPLICIT (bare assignment,
+    `checkPtrAssign` at every var-decl/assign/STORE site) may only strip info —
+    nullptr->any, any->`void^`/`intptr`, iterator->reference same-pointee demote;
+    EXPLICIT (ptrExplicitOk) additionally bridges through a buffer-class pointer
+    [`void^`/`int8^`/`uint8^`] or `intptr` and reinterprets iter<->ref same-pointee;
+    two unrelated non-buffer pointers must chain through `void^`; only `intptr`
+    bridges pointer<->integer. `void[]`/`void[N]` rejected — void has no stride, a
+    void pointer must be `void^`. Codegen: ptr<->ptr no-op, ptr<->intptr ptrtoint/
+    inttoptr; convert asserts on an ungated ptr->scalar. test_v2/pointer/cast.sl.
+    DEFERRED to Phase 6: const-cast surface [`const T^`, `<const>`, `<mutable>`,
+    mutable<->const] — const is not yet a tracked pointer qualifier. Class-
+    hierarchy casts wait on Phase 5.)
   * memory mgmt (`new T(init)`, `new T[n]`, `delete ptr`)
   * anonymous tuples (`(T1, T2, ...)`)
   * type aliases — LANDED (value form `alias Name = type;`, file + function

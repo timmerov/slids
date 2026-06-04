@@ -70,6 +70,88 @@ std::string pointeeType(std::string const& t) {
     return "";
 }
 
+bool isNumericType(std::string const& t);   // defined below
+
+// A buffer-class pointer: a pointer (reference or iterator) whose pointee is a
+// generic byte type — `void`, `int8`, `uint8`. These reinterpret to/from any
+// pointer type; every other pointer pair must reinterpret indirectly (chain
+// through a buffer-class type). `void` is included though it only spells as a
+// reference (`void^`): void has no stride, so `void[]` never reaches here.
+bool isBufferClassPtr(std::string const& t) {
+    std::string p = (t.size() >= 2 && t.substr(t.size() - 2) == "[]")
+                        ? t.substr(0, t.size() - 2)
+                  : (!t.empty() && t.back() == '^') ? t.substr(0, t.size() - 1)
+                                                    : std::string();
+    return p == "void" || p == "int8" || p == "uint8";
+}
+
+// The pointee of a reference / iterator (used below for same-pointee checks).
+std::string castPointee(std::string const& t) {
+    if (!t.empty() && t.back() == '^') return t.substr(0, t.size() - 1);
+    if (t.size() >= 2 && t.substr(t.size() - 2) == "[]")
+        return t.substr(0, t.size() - 2);
+    return "";
+}
+
+// May a value of type `from` be IMPLICITLY assigned to a pointer-or-intptr
+// lvalue of type `to`? Implicit pointer casts only ever STRIP type information
+// (the widening direction): nullptr → any pointer, any pointer → `void^` or
+// `intptr`, and an iterator demoted to a reference of the same pointee. Adding
+// information (`void^`/`intptr` → a typed pointer, reference → iterator) needs
+// an explicit `<Type^>`. Caller gates on either side being pointer-ish.
+bool ptrImplicitOk(std::string const& from, std::string const& to) {
+    if (from == to) return true;
+    if (from == "anyptr") return isPtrLikeType(to);   // nullptr → any pointer
+    if (to == "void^")    return isPtrLikeType(from);  // strip to a void reference
+    if (to == "intptr")   return isPtrLikeType(from);  // strip to an integer
+    // An iterator demotes to a reference of the same pointee (loses arithmetic).
+    if (isReference(to) && isIteratorType(from)
+        && castPointee(to) == castPointee(from)) return true;
+    return false;
+}
+
+// Is `t` a legal cast endpoint — a pointer, or the integer type `intptr`? Only
+// `intptr` bridges pointers and integers; no other integer type may be cast
+// to or from a pointer.
+bool isCastEndpoint(std::string const& t) {
+    return isPtrLikeType(t) || t == "intptr";
+}
+
+// May an EXPLICIT `<to> from` cast reinterpret a value of type `from` as `to`?
+// Both endpoints must be a pointer or `intptr`. A buffer-class pointer (or
+// `intptr`) on either side bridges to any pointer; an iterator and a reference
+// of the same pointee reinterpret either way. Two unrelated non-buffer pointers
+// may not cast directly (the canonical "chain through void^" rule). On failure,
+// `why` is set to a user-facing reason.
+bool ptrExplicitOk(std::string const& from, std::string const& to,
+                   std::string& why) {
+    if (isNumericType(from) && from != "intptr") {
+        why = "only 'intptr' may be cast to or from a pointer";
+        return false;
+    }
+    if (isNumericType(to) && to != "intptr") {
+        why = "only 'intptr' may be cast to or from a pointer";
+        return false;
+    }
+    if (!isCastEndpoint(from)) {
+        why = "a cast operand must be a pointer or 'intptr'";
+        return false;
+    }
+    if (!isCastEndpoint(to)) {
+        why = "a cast target must be a pointer or 'intptr'";
+        return false;
+    }
+    if (from == to) return true;
+    if (from == "anyptr") return true;                 // nullptr → any pointer
+    if (from == "intptr" || to == "intptr") return true;  // pointer ↔ integer
+    if (isBufferClassPtr(from) || isBufferClassPtr(to)) return true;  // buffer ↔ any
+    if (((isReference(from) && isIteratorType(to))
+      || (isIteratorType(from) && isReference(to)))
+        && castPointee(from) == castPointee(to)) return true;  // iterator ↔ reference
+    why = "reinterpret indirectly through 'void^'";
+    return false;
+}
+
 // A fixed-size array type spelling: the first `[` is followed by a digit
 // (`int[5]`, `int[3][5]`), distinct from `int[]` (iterator) and `int^` (ref).
 bool isArrayType(std::string const& t) {
@@ -177,6 +259,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kAddrOfExpr:
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
+        case parse::Kind::kCastExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kBlockStmt:
@@ -380,6 +463,30 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 return;
             }
             e.inferred_type = pointeeType(ot);
+            return;
+        }
+        case parse::Kind::kCastExpr: {
+            // `<Type^> operand` — a pointer reinterpret. resolve resolved the
+            // target onto return_type. Infer the operand with NO context (a cast
+            // reinterprets the operand's own type; it does not flex it), then
+            // check the explicit-cast rules. The cast's type IS the target.
+            assert(e.children.size() == 1 && "kCastExpr needs 1 operand");
+            parse::Node& operand = *e.children[0];
+            inferExpr(tree, operand, "", diag);
+            std::string const& to = e.return_type;
+            // An empty operand type means inferExpr already reported an error;
+            // skip the rule check (it would cascade a second, misleading
+            // diagnostic) but still stamp the target type so downstream stages
+            // see a typed node — the cast's type IS the target regardless.
+            if (!operand.inferred_type.empty()) {
+                std::string why;
+                if (!ptrExplicitOk(operand.inferred_type, to, why)) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Cannot cast '" + operand.inferred_type + "' to '" + to
+                        + "'; " + why + ".", {}});
+                }
+            }
+            e.inferred_type = to;
             return;
         }
         case parse::Kind::kStringifyType: {
@@ -853,6 +960,25 @@ bool rangeFirstTestFalse(parse::Node const& start, parse::Node const& end,
     return !applyCmp(a, b, cmp);
 }
 
+// Enforce the implicit pointer-cast rules at an assignment to a variable
+// (`lvalue = rhs`, or a typed var-decl init). Only fires when a pointer is
+// involved on either side — pure-numeric assignments keep the width-coercion
+// path. An info-adding implicit cast is rejected here; the user must write an
+// explicit `<Type^>` (which then passes this check as a same-typed rhs).
+void checkPtrAssign(std::string const& lvalue_type, parse::Node const& rhs,
+                    diagnostic::Sink& diag) {
+    std::string const& R = rhs.inferred_type;
+    // An empty type on either side rides an already-reported upstream error
+    // (an unresolved name, a void value, ...) — skip silently rather than emit a
+    // misleading second diagnostic. Deliberate, not a missing check.
+    if (R.empty() || lvalue_type.empty()) return;
+    if (!isPtrLikeType(lvalue_type) && !isPtrLikeType(R)) return;  // numeric path
+    if (ptrImplicitOk(R, lvalue_type)) return;
+    diagnostic::report(diag, {rhs.file_id, rhs.tok,
+        "Cannot implicitly cast '" + R + "' to '" + lvalue_type
+        + "'; an explicit cast is required.", {}});
+}
+
 void classifyStmt(parse::Tree& tree, parse::Node& s,
                   std::string const& fn_return_type,
                   diagnostic::Sink& diag) {
@@ -886,6 +1012,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     tree.entries[s.resolved_entry_id].slids_type = t;
                     tree.entries[s.resolved_entry_id].alias_label = rhs.alias_label;
                 }
+                // A typed pointer init obeys the implicit-cast rules (a typeless
+                // init took the rhs type above, so there is nothing to cast).
+                if (!s.return_type.empty()) {
+                    checkPtrAssign(s.return_type, *s.children[0], diag);
+                }
             }
             return;
         }
@@ -898,6 +1029,10 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             for (auto& ch : s.children) {
                 if (ch) inferExpr(tree, *ch, lvalue_type, diag);
+            }
+            // Assigning to a pointer variable obeys the implicit-cast rules.
+            if (!s.children.empty() && s.children[0]) {
+                checkPtrAssign(lvalue_type, *s.children[0], diag);
             }
             return;
         }
@@ -982,12 +1117,18 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             return;
         }
         case parse::Kind::kStoreStmt: {
-            // `lvalue^ = rhs`. Infer the lvalue (a deref -> the pointee type),
-            // then infer the rhs in that context so a literal flexes to it.
+            // `lvalue^ = rhs` (deref) or `arr[i] = rhs` (index). Infer the lvalue
+            // (-> the pointee / element type), then infer the rhs in that context
+            // so a literal flexes to it.
             assert(s.children.size() == 2 && "kStoreStmt needs lvalue + rhs");
             parse::Node& lvalue = *s.children[0];
             inferExpr(tree, lvalue, "", diag);
             inferExpr(tree, *s.children[1], lvalue.inferred_type, diag);
+            // A store into a pointer-typed slot (an element of a references array,
+            // or a deref whose pointee is itself a pointer) obeys the same
+            // implicit-cast rules as a plain assignment — storing an unrelated
+            // pointer here would otherwise reach codegen and emit invalid IR.
+            checkPtrAssign(lvalue.inferred_type, *s.children[1], diag);
             return;
         }
         case parse::Kind::kCallStmt: {
@@ -1272,6 +1413,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kAddrOfExpr:
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
+        case parse::Kind::kCastExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kCallExpr:
         case parse::Kind::kParam:

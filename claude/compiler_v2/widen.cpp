@@ -1,6 +1,7 @@
 #include "widen.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cerrno>
 #include <cfloat>
 #include <climits>
@@ -237,7 +238,42 @@ std::string convert(std::string const& src_val,
                     diagnostic::Sink& diag) {
     if (src_type == dest_type) return src_val;
 
+    // Pointer reinterpretation. Every pointer is LLVM `ptr` and `intptr` is
+    // `i64`, so a pointer↔pointer cast is a value no-op; only the pointer↔intptr
+    // boundary emits an instruction. classify (above) has already approved the
+    // cast — here we just lower it. A pointer-ish spelling is `^`, `[]`, or the
+    // typeless null `anyptr`.
+    auto isPtrish = [](std::string const& t) {
+        return (t.size() >= 2 && t.compare(t.size() - 2, 2, "[]") == 0)
+            || (!t.empty() && t.back() == '^')
+            || t == "anyptr";
+    };
+    bool src_ptr = isPtrish(src_type), dest_ptr = isPtrish(dest_type);
+    if (src_ptr && dest_ptr) return src_val;             // ptr ↔ ptr: no-op
+    if (src_ptr && dest_type == "intptr") {
+        std::string tmp = newWidenTmp();
+        out << "  " << tmp << " = ptrtoint ptr " << src_val << " to i64\n";
+        return tmp;
+    }
+    if (src_type == "intptr" && dest_ptr) {
+        std::string tmp = newWidenTmp();
+        out << "  " << tmp << " = inttoptr i64 " << src_val << " to ptr\n";
+        return tmp;
+    }
+
     TypeKind src_tk, dest_tk;
+    // A pointer source that survives to here has a non-pointer destination. The
+    // only legitimate such case is a discard (dest_type empty / non-scalar — the
+    // classify() below fails and returns the value untouched). A pointer flowing
+    // into a SCALAR destination would silently store a `ptr` as an integer
+    // (invalid LL): classify (cast-target + implicit-assign rules, including
+    // kStoreStmt) rejects every ptr->non-intptr conversion, so this is
+    // unreachable — assert rather than emit bad IR if a gate is ever missed.
+    {
+        TypeKind probe;
+        assert(!(src_ptr && classify(dest_type, probe))
+            && "convert: ungated pointer->scalar conversion reached codegen");
+    }
     if (!classify(src_type, src_tk) || !classify(dest_type, dest_tk)) {
         return src_val;
     }

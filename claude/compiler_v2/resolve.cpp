@@ -53,6 +53,15 @@ int arrayFirstDim(std::string const& t) {
 // unknown name appears.
 void requireKnownType(std::string const& t, int file_id, int tok,
                       diagnostic::Sink& diag) {
+    // `void` has no stride: it may only be a reference (`void^`), never an
+    // iterator (`void[]`) or array (`void[N]`). A bracket directly after `void`
+    // is the only way these spell, so reject them before the known-type check.
+    if (t.size() > 4 && t.compare(0, 4, "void") == 0 && t[4] == '[') {
+        diagnostic::report(diag, {file_id, tok,
+            "A void pointer must be a reference 'void^'; void has no stride and "
+            "cannot be an iterator or array.", {}});
+        return;
+    }
     if (widen::isKnownType(t)) return;
     diagnostic::report(diag, {file_id, tok,
         "Unknown type '" + t + "'.", {}});
@@ -977,6 +986,14 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
                 if (ch) resolveExpr(tree, *ch, diag);
             }
             return;
+        case parse::Kind::kCastExpr: {
+            // `<Type^> operand` — resolve the operand as a read, then substitute
+            // and validate the target type spelling (alias chains, void[] reject,
+            // unknown-type). classify enforces the cast legality rules.
+            if (e.children[0]) resolveExpr(tree, *e.children[0], diag);
+            resolveDeclType(tree, e.return_type, e.file_id, e.tok, diag);
+            return;
+        }
         case parse::Kind::kStringifyType: {
             // ##type's operand is either a VALUE (resolve it; classify reports its
             // labeled type) or a TYPE NAME — an alias or an enum's transparent type
@@ -2158,6 +2175,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         case parse::Kind::kAddrOfExpr:
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
+        case parse::Kind::kCastExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kCallExpr:
         case parse::Kind::kCaseClause:

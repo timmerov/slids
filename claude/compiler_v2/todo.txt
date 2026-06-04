@@ -67,6 +67,21 @@ REACH GOALS
 
 DEFERRED FEATURES (later; may not be on the plan)
 
+  * CONST-POINTER CASTS (Phase 6) — the const-correctness slice of cast.sl is
+    deferred (the A1 landing): `const Type^` (a const-qualified pointer type),
+    the `<const>` / `<mutable>` qualifier-only casts, and the mutable<->const
+    cast direction (implicit mutable->const, explicit const->mutable). v2 models
+    const as an entry KIND, not a tracked TYPE qualifier on pointers, so none of
+    these can be enforced yet. The rules are written + commented in cast.sl's
+    canon block (lines ~21, 43-54, 77-86); land them with Phase 6 when const is
+    a real qualifier. Until then those lines stay commented and untested.
+
+  * CAST-TARGET CARET GRANULARITY — a kCastExpr's whole error (unknown type,
+    void[], rule violation) carets at the `<` token, not the offending type
+    segment, because the target is a flat string (return_type) with no per-
+    segment tokens. Same root cause as QUALIFIED-TYPE CARET GRANULARITY above;
+    a fix there (threading per-segment type tokens) would cover casts too.
+
   * SWITCH STACKED-EMPTY-BODY TERMINATOR (conservative over-demand) — a switch
     where a stacked label's body is empty and falls through into a returning
     clause (`case 3: case 4: return 1; default: return 0;`) is NOT treated as a

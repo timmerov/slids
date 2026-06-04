@@ -78,6 +78,9 @@ enum class Kind {
     kIndexExpr,    // postfix `base[index]` — array subscript, an element lvalue.
                    // children[0] = base (array or a nested kIndexExpr),
                    // [1] = index expr. `a[x][y]` nests: ((a[x])[y]).
+    kCastExpr,     // prefix `<Type^> operand` — pointer reinterpret cast.
+                   // return_type = target type spelling; children[0] = operand.
+                   // The address is unchanged; only the static type changes.
     kStringifyType,// ##type(expr) — children[0] = operand expression. classify
                    // infers the operand's type and rewrites this node in place
                    // to a kStringLiteral holding the type name; never survives

@@ -538,6 +538,25 @@ struct Parser {
             node->children.push_back(std::move(operand));
             return node;
         }
+        // Prefix `<Type^>` is a pointer reinterpret cast. A `<` leading a unary
+        // operand is unambiguous — binary `<` (less-than) only appears in a
+        // comparison, where its right operand never starts with `<`. The cast
+        // binds like a prefix unary (precedence 3), so the operand is another
+        // unary — chained casts `<A^> <void^> x` nest right-to-left.
+        if (k == token::Kind::kLt) {
+            int op_file = peek().file_id;
+            int op_tok = pos;
+            advance();   // <
+            std::string target = parseType();
+            if (target.empty()) return nullptr;
+            if (!expect(token::Kind::kGt, ">")) return nullptr;
+            auto operand = parseUnary();
+            if (!operand) return nullptr;
+            auto node = newNodeAt(parse::Kind::kCastExpr, op_file, op_tok);
+            node->return_type = target;
+            node->children.push_back(std::move(operand));
+            return node;
+        }
         char const* op = nullptr;
         if      (k == token::Kind::kPlus)   op = "+";
         else if (k == token::Kind::kMinus)  op = "-";
