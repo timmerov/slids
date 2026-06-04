@@ -373,7 +373,21 @@ bool isKnownType(std::string const& t) {
     };
     for (auto p : kPrimitives) if (t == p) return true;
     if (t.size() >= 2 && t.substr(t.size() - 2) == "[]") {
-        return isKnownType(t.substr(0, t.size() - 2));
+        return isKnownType(t.substr(0, t.size() - 2));   // iterator
+    }
+    if (!t.empty() && t.back() == '^') {
+        return isKnownType(t.substr(0, t.size() - 1));   // reference
+    }
+    // A fixed-size array dimension `[N]` (N a positive integer): strip and recur.
+    if (!t.empty() && t.back() == ']') {
+        std::size_t lb = t.rfind('[');
+        if (lb != std::string::npos && lb + 1 < t.size() - 1) {
+            bool digits = true;
+            for (std::size_t i = lb + 1; i + 1 < t.size(); i++) {
+                if (t[i] < '0' || t[i] > '9') { digits = false; break; }
+            }
+            if (digits) return isKnownType(t.substr(0, lb));
+        }
     }
     return false;
 }

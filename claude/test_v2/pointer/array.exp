@@ -1,0 +1,11 @@
+arr[0]= 0
+arr[3]= 9
+arr[4]= 16
+arr[2]= 100
+iter^= 9
+twodim[0][0]= 0
+twodim[2][0]= 4
+twodim[0][4]= 4
+twodim[2][4]= 8
+twodim[1][3]= 4
+it2^= 4

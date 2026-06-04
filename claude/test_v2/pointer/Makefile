@@ -8,6 +8,7 @@ BUILD_DIR = ../../build/test_v2/pointer
 
 SAMPLES = \
 	array \
+	cast \
 	iterator \
 	reference
 

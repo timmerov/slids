@@ -135,8 +135,9 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     no-init decl reuses-or-errors, and the after-set is S' so a reused var is
     observable after; classify propagates the loop-var type onto a typeless ranged
     `_$end`/`_$step`; reuse requires a compatible type, else the normal assignment
-    conversion rejects it). Deferred: array/tuple/class for shapes (need arrays/
-    tuples/classes — not in v2 yet). Session 5 (switch) LANDED — kSwitchStmt +
+    conversion rejects it). FOR-ARRAY landed in Phase 4 (`for (var : arr)`, a
+    resolve-stage desugar to kForLongStmt — see Phase 4); for-tuple/for-class
+    still pending tuples/classes. Session 5 (switch) LANDED — kSwitchStmt +
     kCaseClause, C-style FALL-THROUGH, integer-class scrutinee, unique in-range
     integer-constant labels (incl. qualified `case Dir:N:` via a terminator-aware
     parse), default singular + anywhere, naked break exits the switch / naked
@@ -147,7 +148,7 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     switches) + named (`break name;`) break/continue, resolved to a hop count and
     walked over a LoopCtx linked list in codegen; no break/continue of any flavor
     in a for-update; labels on loops only (named-switch-break distant-future).
-    Phase 2 FLOW COMPLETE; only the container-for shapes remain (Phase 4/5).
+    Phase 2 FLOW COMPLETE; for-array landed in Phase 4, for-tuple/class pending.
   * return — LANDED (kReturnStmt + return-correctness check from Phase 1).
 
 Phase 3 — functions
@@ -175,8 +176,32 @@ Phase 3 — functions
   * function aliases, ##type-of-function, templates                out of scope
 
 Phase 4 — types beyond primitives
-  * pointers (`^` reference, no arithmetic)
-  * iterators (`[]`, arithmetic allowed)
+  * references (`T^`, no arithmetic)                                LANDED
+    (kAddrOfExpr `^var` -> reference, kDerefExpr `v^` deref as lvalue+rvalue,
+    kNullptrLiteral -> anyptr; `^` lexes as kBitXor, disambiguated structurally:
+    prefix=address-of, postfix=deref [unless the next token starts a primary,
+    then it's XOR], type-suffix=reference. kStoreStmt is the general lvalue-
+    expression store [`ref^ = v`]. Compare-only `== !=` [v1 rule]; ordering and
+    all arithmetic rejected. Both lower to LLVM `ptr`.)
+  * iterators (`T[]`, additive arithmetic)                          LANDED
+    (`iter^` deref, `iter[i]` subscript, `^arr[i]` -> iterator [operand-driven:
+    var->`^`, indexed->`[]`]; `iter ± int` GEP by element stride, `iter - iter`
+    -> intptr [byte diff / sizeof elem], `++`/`--` step one element; full six
+    comparisons. iterator->reference assignment demotes [v1]. `char[]` from a
+    string literal.)
+  * fixed-size arrays (`T name[N]`, multi-dim)                      LANDED
+    (decl size after the NAME; multi-dim REVERSED — `int[3][5]` is 5 chunks of
+    3 = LLVM `[5 x [3 x i32]]`, leftmost dim innermost; `arr[i]...` subscript
+    [every dimension required] via one reversed-index GEP; `^arr[i]` -> iterator;
+    constant-index [incl. char] bounds-checked; NO initializer lists [tuples
+    out]. Whole-array definite-assignment is a monotonic may-set [a subscript
+    write assigns the array; read-before-any-write errors]; arrays join the
+    unused-local sweep.)
+  * for-array (`for (var : arr)`)                                  LANDED
+    (resolve-stage desugar to kForLongStmt, like for-enum: synth `_$idx$<tok>`
+    walks 0..len-1, the loop var bound at the body top — by reference [`T^ v`],
+    by value [`T v`], or typeless [by value; reuse-an-enclosing-local-or-fresh].
+    One-dimensional only; a by-ref var's base type must equal the element type.)
   * memory mgmt (`new T(init)`, `new T[n]`, `delete ptr`)
   * anonymous tuples (`(T1, T2, ...)`)
   * type aliases — LANDED (value form `alias Name = type;`, file + function

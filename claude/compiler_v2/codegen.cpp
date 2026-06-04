@@ -49,7 +49,27 @@ std::string llvmTypeFor(std::string const& slids_type,
     if (slids_type == "float64") return "double";
     if (slids_type == "void")    return "void";
     if (slids_type.size() >= 2 && slids_type.substr(slids_type.size() - 2) == "[]")
-        return "ptr";
+        return "ptr";   // iterator
+    if (!slids_type.empty() && slids_type.back() == '^') return "ptr";  // reference
+    if (slids_type == "anyptr")  return "ptr";   // nullptr
+    // Fixed-size array: build the LLVM aggregate with nesting REVERSED — the
+    // rightmost declared dim is outermost. int[3][5] -> [5 x [3 x i32]], so the
+    // leftmost (inner) dim varies fastest in memory.
+    {
+        std::size_t lb = slids_type.find('[');
+        if (lb != std::string::npos && lb + 1 < slids_type.size()
+            && slids_type[lb + 1] >= '0' && slids_type[lb + 1] <= '9') {
+            std::string ll = llvmTypeFor(slids_type.substr(0, lb),
+                                         file_id, tok, diag);
+            std::size_t p = lb;
+            while (p < slids_type.size() && slids_type[p] == '[') {
+                std::size_t rb = slids_type.find(']', p);
+                ll = "[" + slids_type.substr(p + 1, rb - p - 1) + " x " + ll + "]";
+                p = rb + 1;
+            }
+            return ll;
+        }
+    }
     (void)file_id; (void)tok; (void)diag;
     assert(false && "llvmTypeFor: classify let through an unknown type");
     __builtin_unreachable();
@@ -103,6 +123,28 @@ bool isUnsignedType(std::string const& t) {
         || t == "uint64" || t == "char";
 }
 
+bool isIteratorType(std::string const& t) {
+    return t.size() >= 2 && t.substr(t.size() - 2) == "[]";
+}
+
+// The element type of an iterator (`int[]` -> `int`) or reference (`int^` ->
+// `int`). Empty otherwise.
+std::string pointeeTypeC(std::string const& t) {
+    if (isIteratorType(t)) return t.substr(0, t.size() - 2);
+    if (!t.empty() && t.back() == '^') return t.substr(0, t.size() - 1);
+    return "";
+}
+
+// Byte size of a scalar element, for iterator element-stride arithmetic.
+int elemBytes(std::string const& t) {
+    widen::TypeKind k;
+    if (widen::classify(t, k)) return k.bits / 8;
+    // Every iterator element today is a scalar, so classify always succeeds.
+    // A non-scalar element (a future slid iterator) needs its layout size here.
+    assert(false && "elemBytes: non-scalar element needs a layout sizeof");
+    __builtin_unreachable();
+}
+
 std::string newLabel(char const* tag) {
     static int n = 0;
     return std::string(tag) + "_" + std::to_string(n++);
@@ -120,7 +162,9 @@ std::string emitToBool(std::string const& val, std::string const& slids_type,
             << val << ", 0.0\n";
         return tmp;
     }
-    if (slids_type.size() >= 2 && slids_type.substr(slids_type.size() - 2) == "[]") {
+    if ((slids_type.size() >= 2 && slids_type.substr(slids_type.size() - 2) == "[]")
+        || (!slids_type.empty() && slids_type.back() == '^')
+        || slids_type == "anyptr") {
         std::string tmp = newTmp("tob");
         out << "  " << tmp << " = icmp ne ptr " << val << ", null\n";
         return tmp;
@@ -331,13 +375,61 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
     std::string const& opty = expr.op_type;
     assert(!opty.empty() && "emitBinary: BinaryExpr missing op_type");
 
+    // Iterator arithmetic: `iter ± int` (GEP by element) and `iter - iter`
+    // (element-count difference). op_type carries the iterator type; the generic
+    // operand emit below would mis-convert the integer operand, so branch first.
+    // (Comparisons keep the generic path — they icmp the raw pointers.)
+    if (isIteratorType(opty) && (op == "+" || op == "-")) {
+        std::string elem = pointeeTypeC(opty);
+        std::string elem_ll = llvmTypeFor(elem, expr.file_id, expr.tok, diag);
+        bool lit = isIteratorType(lhs.inferred_type);
+        bool rit = isIteratorType(rhs.inferred_type);
+        if (op == "-" && lit && rit) {
+            // (a - b) / sizeof(element) -> element count.
+            std::string a = emitExpr(lhs, syms, pool, out, diag,
+                                     lhs.inferred_type);
+            std::string b = emitExpr(rhs, syms, pool, out, diag,
+                                     rhs.inferred_type);
+            std::string ai = newTmp("p2i"), bi = newTmp("p2i");
+            out << "  " << ai << " = ptrtoint ptr " << a << " to i64\n";
+            out << "  " << bi << " = ptrtoint ptr " << b << " to i64\n";
+            std::string byte = newTmp("psub");
+            out << "  " << byte << " = sub i64 " << ai << ", " << bi << "\n";
+            std::string d = newTmp("pdiv");
+            out << "  " << d << " = sdiv i64 " << byte << ", "
+                << elemBytes(elem) << "\n";
+            return widen::convert(d, "intptr", dest_type,
+                                  expr.file_id, expr.tok, out, diag);
+        }
+        // iter ± int: GEP the iterator by (signed) the integer count.
+        ast::Node const& itnode = lit ? lhs : rhs;
+        ast::Node const& intnode = lit ? rhs : lhs;
+        std::string ptr = emitExpr(itnode, syms, pool, out, diag,
+                                   itnode.inferred_type);
+        std::string idx = emitExpr(intnode, syms, pool, out, diag, "int64");
+        if (op == "-") {
+            std::string neg = newTmp("pneg");
+            out << "  " << neg << " = sub i64 0, " << idx << "\n";
+            idx = neg;
+        }
+        std::string gep = newTmp("itadd");
+        out << "  " << gep << " = getelementptr " << elem_ll << ", ptr " << ptr
+            << ", i64 " << idx << "\n";
+        return gep;
+    }
+
     std::string lv = emitExpr(lhs, syms, pool, out, diag, opty);
     std::string rv = emitExpr(rhs, syms, pool, out, diag, opty);
 
     if (op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=") {
         std::string llty = llvmTypeFor(opty, expr.file_id, expr.tok, diag);
         bool flt = isFloatType(opty);
-        bool uns = isUnsignedType(opty) || opty == "bool";
+        // Pointer comparisons (reference / iterator / anyptr) compare addresses
+        // as unsigned.
+        bool ptr_cmp = (!opty.empty() && opty.back() == '^')
+            || (opty.size() >= 2 && opty.substr(opty.size() - 2) == "[]")
+            || opty == "anyptr";
+        bool uns = isUnsignedType(opty) || opty == "bool" || ptr_cmp;
         char const* pred;
         if      (op == "==") pred = flt ? "oeq" : "eq";
         else if (op == "!=") pred = flt ? "one" : "ne";
@@ -431,6 +523,63 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
     return result;
 }
 
+// Compute the address of an array element from a (possibly nested) kIndexExpr.
+// Walks the subscript chain to the base array, then emits ONE getelementptr.
+// The chain is collected outermost-first, which matches the LLVM nesting (outer
+// dim first) — so the source's leftmost (inner) index becomes the LAST GEP
+// index, exactly the reversed-dimension layout.
+std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
+                            strings::Pool& pool, std::ostream& out,
+                            diagnostic::Sink& diag) {
+    std::vector<ast::Node const*> chain;   // outermost .. innermost kIndexExpr
+    ast::Node const* node = &index_expr;
+    while (node->kind == ast::Kind::kIndexExpr) {
+        chain.push_back(node);
+        node = node->children[0].get();
+    }
+    // Iterator base: the base expression is a `ptr` value (the sequence start);
+    // GEP by element type. Iterators are one-dimensional (a single subscript).
+    if (isIteratorType(node->inferred_type)) {
+        std::string ptr = emitExpr(*node, syms, pool, out, diag,
+                                   node->inferred_type);
+        std::string idx = emitExpr(*chain.back()->children[1], syms, pool, out,
+                                   diag, "int64");
+        std::string elem_ll = llvmTypeFor(pointeeTypeC(node->inferred_type),
+                                          node->file_id, node->tok, diag);
+        std::string gep = newTmp("elt");
+        out << "  " << gep << " = getelementptr " << elem_ll << ", ptr " << ptr
+            << ", i64 " << idx << "\n";
+        return gep;
+    }
+    // Fixed-size array base: GEP into the aggregate at its alloca.
+    assert(node->kind == ast::Kind::kIdentExpr && node->resolved_entry_id >= 0
+        && "emitElementAddr: array subscript base must be a variable");
+    auto it = syms.find(node->resolved_entry_id);
+    assert(it != syms.end() && "emitElementAddr: array not in SymTab");
+    // Every dimension must be indexed — a partial index (`grid[0]` on a 2-D
+    // array) would yield a sub-array, which has no scalar value to load/store.
+    int dims = 0;
+    for (char c : it->second.slids_type) if (c == '[') dims++;
+    if ((int)chain.size() != dims) {
+        diagnostic::report(diag, {index_expr.file_id, index_expr.tok,
+            "An array subscript must index every dimension.", {}});
+        return "null";
+    }
+    // Evaluate every index FIRST (each emits its own instructions), then emit
+    // the single GEP line — otherwise an index's loads land mid-GEP.
+    std::vector<std::string> idx_vals;
+    for (ast::Node const* ix : chain) {
+        idx_vals.push_back(
+            emitExpr(*ix->children[1], syms, pool, out, diag, "int64"));
+    }
+    std::string gep = newTmp("elt");
+    out << "  " << gep << " = getelementptr inbounds " << it->second.llvm_type
+        << ", ptr " << it->second.alloca_name << ", i64 0";
+    for (auto const& iv : idx_vals) out << ", i64 " << iv;
+    out << "\n";
+    return gep;
+}
+
 }  // namespace
 
 std::string emitExpr(ast::Node const& expr, SymTab const& syms,
@@ -470,6 +619,48 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             return widen::convert(tmp, it->second.slids_type, dest_type,
                                   expr.file_id, expr.tok, out, diag);
         }
+        case ast::Kind::kNullptrLiteral:
+            // The typeless null; every pointer type is LLVM `ptr`.
+            return "null";
+        case ast::Kind::kAddrOfExpr: {
+            // `^lvalue` — its address (a ptr). For a bare variable that is its
+            // alloca register; for `^arr[i]` it is the element GEP (an iterator).
+            assert(expr.children.size() == 1 && "kAddrOfExpr needs 1 operand");
+            ast::Node const& operand = *expr.children[0];
+            if (operand.kind == ast::Kind::kIndexExpr) {
+                return emitElementAddr(operand, syms, pool, out, diag);
+            }
+            assert(operand.kind == ast::Kind::kIdentExpr
+                && operand.resolved_entry_id >= 0
+                && "kAddrOfExpr: operand must be a resolved variable");
+            auto it = syms.find(operand.resolved_entry_id);
+            assert(it != syms.end() && "kAddrOfExpr: operand not in SymTab");
+            return it->second.alloca_name;
+        }
+        case ast::Kind::kIndexExpr: {
+            // `arr[i]` rvalue: address the element, load it.
+            std::string addr = emitElementAddr(expr, syms, pool, out, diag);
+            std::string llty = llvmTypeFor(expr.inferred_type,
+                                           expr.file_id, expr.tok, diag);
+            std::string tmp = newTmp("idx");
+            out << "  " << tmp << " = load " << llty << ", ptr " << addr << "\n";
+            return widen::convert(tmp, expr.inferred_type, dest_type,
+                                  expr.file_id, expr.tok, out, diag);
+        }
+        case ast::Kind::kDerefExpr: {
+            // `ptr^` rvalue: the operand yields the pointer value (the address);
+            // load the pointee from it.
+            assert(expr.children.size() == 1 && "kDerefExpr needs 1 operand");
+            ast::Node const& operand = *expr.children[0];
+            std::string addr = emitExpr(operand, syms, pool, out, diag,
+                                        operand.inferred_type);
+            std::string llty = llvmTypeFor(expr.inferred_type,
+                                           expr.file_id, expr.tok, diag);
+            std::string tmp = newTmp("deref");
+            out << "  " << tmp << " = load " << llty << ", ptr " << addr << "\n";
+            return widen::convert(tmp, expr.inferred_type, dest_type,
+                                  expr.file_id, expr.tok, out, diag);
+        }
         case ast::Kind::kUnaryExpr:
             return emitUnary(expr, syms, pool, out, diag, dest_type);
         case ast::Kind::kBinaryExpr:
@@ -503,6 +694,22 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             assert(expr.resolved_entry_id >= 0 && "kBumpExpr: missing entry");
             auto it = syms.find(expr.resolved_entry_id);
             assert(it != syms.end() && "kBumpExpr: entry not in SymTab");
+            // An iterator steps by one ELEMENT: load the ptr, GEP ±1, store.
+            if (isIteratorType(it->second.slids_type)) {
+                std::string cur = newTmp("itld");
+                out << "  " << cur << " = load ptr, ptr "
+                    << it->second.alloca_name << "\n";
+                std::string elem_ll = llvmTypeFor(
+                    pointeeTypeC(it->second.slids_type),
+                    expr.file_id, expr.tok, diag);
+                std::string nv = newTmp("itinc");
+                out << "  " << nv << " = getelementptr " << elem_ll << ", ptr "
+                    << cur << ", i64 " << (expr.text == "++" ? "1" : "-1")
+                    << "\n";
+                out << "  store ptr " << nv << ", ptr "
+                    << it->second.alloca_name << "\n";
+                return nv;
+            }
             std::string const& llty = it->second.llvm_type;
             bool flt = isFloatType(it->second.slids_type);
             std::string cur = newTmp("ld");
@@ -528,6 +735,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kVarDeclStmt:
         case ast::Kind::kAssignStmt:
         case ast::Kind::kAugAssignStmt:
+        case ast::Kind::kStoreStmt:
         case ast::Kind::kCallStmt:
         case ast::Kind::kExprStmt:
         case ast::Kind::kReturnStmt:
@@ -603,6 +811,29 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                                        it->second.slids_type);
             out << "  store " << it->second.llvm_type << " " << val
                 << ", ptr " << it->second.alloca_name << "\n";
+            return;
+        }
+        case ast::Kind::kStoreStmt: {
+            // Store through an lvalue expression: `arr[i] = rhs` (index) or
+            // `ref^ = rhs` (deref). Compute the destination address, then store
+            // the rhs flexed to the element/pointee type.
+            assert(stmt.children.size() == 2 && "kStoreStmt needs lvalue + rhs");
+            ast::Node const& lvalue = *stmt.children[0];
+            std::string const& elem = lvalue.inferred_type;
+            std::string addr;
+            if (lvalue.kind == ast::Kind::kIndexExpr) {
+                addr = emitElementAddr(lvalue, syms, pool, out, diag);
+            } else {
+                assert(lvalue.kind == ast::Kind::kDerefExpr
+                    && "kStoreStmt: lvalue must be a deref or index");
+                ast::Node const& ptr_expr = *lvalue.children[0];
+                addr = emitExpr(ptr_expr, syms, pool, out, diag,
+                                ptr_expr.inferred_type);
+            }
+            std::string val = emitExpr(*stmt.children[1], syms, pool, out, diag,
+                                       elem);
+            std::string llty = llvmTypeFor(elem, stmt.file_id, stmt.tok, diag);
+            out << "  store " << llty << " " << val << ", ptr " << addr << "\n";
             return;
         }
         case ast::Kind::kCallStmt: {
@@ -882,9 +1113,13 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kCharLiteral:
         case ast::Kind::kBoolLiteral:
         case ast::Kind::kFloatLiteral:
+        case ast::Kind::kNullptrLiteral:
         case ast::Kind::kIdentExpr:
         case ast::Kind::kUnaryExpr:
         case ast::Kind::kBinaryExpr:
+        case ast::Kind::kAddrOfExpr:
+        case ast::Kind::kDerefExpr:
+        case ast::Kind::kIndexExpr:
         case ast::Kind::kCallExpr:
         case ast::Kind::kSeqExpr:
         case ast::Kind::kBumpExpr:

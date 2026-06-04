@@ -15,6 +15,9 @@ enum class Kind {
     kVarDeclStmt,
     kAssignStmt,
     kAugAssignStmt,  // name = lhs, text = op (e.g. "+", "&&"); children[0] = rhs
+    kStoreStmt,      // store through an lvalue EXPRESSION (not a bare name):
+                     // children[0] = lvalue expr (e.g. kDerefExpr), [1] = rhs.
+                     // Used for `ref^ = v`; future array/field stores route here.
     kCallStmt,
     kCallExpr,     // value-producing call; name = callee, children = args
     kExprStmt,     // expression evaluated for effect, value discarded; children[0] = expr
@@ -61,11 +64,20 @@ enum class Kind {
     kCharLiteral,
     kBoolLiteral,
     kFloatLiteral,
+    kNullptrLiteral,// `nullptr` — a typeless null pointer (internal type
+                    // "anyptr"); coerces to any reference/iterator type.
     kIdentExpr,
     kUnaryExpr,    // text = op ("+", "-", "!", "~"); children[0] = operand
     kBinaryExpr,   // text = op (e.g. "+", "<<", "&&"); children[0] = lhs, [1] = rhs
     kPreIncExpr,   // text = op ("++"/"--"); children[0] = operand lvalue
     kPostIncExpr,  // text = op ("++"/"--"); children[0] = operand lvalue
+    kAddrOfExpr,   // prefix `^lvalue` — address-of; yields a reference (T^).
+                   // children[0] = operand lvalue.
+    kDerefExpr,    // postfix `lvalue^` — dereference; yields the pointee as an
+                   // lvalue. children[0] = operand (a reference/iterator).
+    kIndexExpr,    // postfix `base[index]` — array subscript, an element lvalue.
+                   // children[0] = base (array or a nested kIndexExpr),
+                   // [1] = index expr. `a[x][y]` nests: ((a[x])[y]).
     kStringifyType,// ##type(expr) — children[0] = operand expression. classify
                    // infers the operand's type and rewrites this node in place
                    // to a kStringLiteral holding the type name; never survives
@@ -201,6 +213,13 @@ struct Tree {
     // any local that a decl-with-init or an assignment has written). Reading a
     // kLocalVar absent from this set is "use of uninitialized variable".
     std::set<int> initialized_locals;
+    // Transient — kLocalVar entry ids of ARRAY locals written at least once on
+    // SOME prior path. Whole-array definite-assignment is a may-analysis: an
+    // array can't be fully initialized in one statement (no initializer lists),
+    // and a fill loop's element writes wouldn't survive the must-set's loop
+    // join. So an array read requires only that some earlier subscript write
+    // exists (monotonic, never rolled back) — reading before ANY write errors.
+    std::set<int> assigned_arrays;
     // Transient — kLocalVar entry ids that have been READ at least once in the
     // current body (value-position use via resolveExpr). Drives the unused-local
     // sweep at end of body.

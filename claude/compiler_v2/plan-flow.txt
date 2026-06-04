@@ -197,7 +197,7 @@ SESSION 3 — while + break/continue (unlabeled) + POST-CONDITION while   [LANDE
     negatives spanning bool/int/char/float/folded/substituted/else-if) +
     while.sl (do-const-false + while-true positives confirm no false flag).
 
-SESSION 4 — for-loops   [LONG-FORM + RANGED + ENUM + TYPELESS/REUSE LANDED; array/tuple/class pending]
+SESSION 4 — for-loops   [LONG-FORM + RANGED + ENUM + TYPELESS/REUSE + FOR-ARRAY LANDED; tuple/class pending]
 
   ARCHITECTURE (revised from the original range-only plan): the LONG-FORM for is
   the CANONICAL for node, and every other for shape (range `i : 0..N`, array,
@@ -371,8 +371,10 @@ SESSION 6 — labels (labeled / numbered break+continue) — LANDED. Phase 2 flo
     a for-update, label-on-switch). Conservative limit + named-switch break
     deferred (todo.txt).
   * exit: Phase 2 flow COMPLETE (blocks, if/else, while+do-while, for [long/ranged/
-    enum/typeless-reuse], switch, labels). Remaining flow: container-for shapes
-    (array/tuple/class), blocked on Phase 4/5 types.
+    enum/typeless-reuse], switch, labels). FOR-ARRAY landed once arrays did, in
+    Phase 4 (`for (var : arr)`, a resolve-stage desugar to kForLongStmt — by-ref/
+    by-value/typeless; see plan.txt Phase 4). Remaining container-for: for-tuple
+    and for-class, blocked on tuples/classes (Phase 4/5).
 
 
 CROSS-CUTTING (every session)

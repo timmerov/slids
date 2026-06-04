@@ -20,6 +20,33 @@ bool isPrintIntrinsic(std::string const& name) {
     return name == "__println" || name == "__print";
 }
 
+// A fixed-size array type spelling (`int[5]`, `int[3][5]`): the first `[` is
+// followed by a digit. Distinct from `int[]` (iterator) and `int^` (reference).
+bool isArrayType(std::string const& t) {
+    std::size_t lb = t.find('[');
+    return lb != std::string::npos && lb + 1 < t.size()
+        && t[lb + 1] >= '0' && t[lb + 1] <= '9';
+}
+
+bool isReferenceType(std::string const& t) {
+    return !t.empty() && t.back() == '^';
+}
+
+// The element type after one subscript: strip the leftmost `[N]`. `int[3][5]`
+// -> `int[5]`; `int[5]` -> `int`.
+std::string arrayElementType(std::string const& t) {
+    std::size_t lb = t.find('[');
+    std::size_t rb = t.find(']', lb);
+    return t.substr(0, lb) + t.substr(rb + 1);
+}
+
+// The leftmost (only, for a 1-D array) dimension's size. `int[5]` -> 5.
+int arrayFirstDim(std::string const& t) {
+    std::size_t lb = t.find('[');
+    std::size_t rb = t.find(']', lb);
+    return std::atoi(t.substr(lb + 1, rb - lb - 1).c_str());
+}
+
 // Reject the declared / return / parameter type if it's not a known spelling.
 // Caret points at the construct's own tok (the type-name token's position),
 // which together with surrounding source context tells the user where the
@@ -48,9 +75,42 @@ std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
                                 int file_id, int tok, diagnostic::Sink& diag) {
     std::string base = spelling;
     std::string suffix;
-    while (base.size() >= 2 && base.compare(base.size() - 2, 2, "[]") == 0) {
-        suffix += "[]";
-        base.resize(base.size() - 2);
+    // Strip trailing modifiers so the base type name resolves: `[]` (iterator),
+    // `[N]` (fixed-size array dimension), then a single `^` (reference). They
+    // ride back along on the resolved base. `[N]` dims are peeled right-to-left.
+    auto endsWithArrayDim = [](std::string const& s, std::size_t& open) {
+        if (s.empty() || s.back() != ']') return false;
+        std::size_t lb = s.rfind('[');
+        if (lb == std::string::npos) return false;
+        // [] (iterator) is handled separately; require digits between the brackets.
+        if (lb + 1 >= s.size() - 1) return false;
+        for (std::size_t i = lb + 1; i + 1 < s.size(); i++) {
+            if (s[i] < '0' || s[i] > '9') return false;
+        }
+        open = lb;
+        return true;
+    };
+    bool more = true;
+    while (more) {
+        more = false;
+        if (base.size() >= 2 && base.compare(base.size() - 2, 2, "[]") == 0) {
+            suffix = "[]" + suffix;
+            base.resize(base.size() - 2);
+            more = true;
+            continue;
+        }
+        std::size_t open = 0;
+        if (endsWithArrayDim(base, open)) {
+            suffix = base.substr(open) + suffix;
+            base.resize(open);
+            more = true;
+        }
+    }
+    // A single trailing `^` is the reference modifier (mutually exclusive with
+    // the bracket suffixes at the grammar level).
+    if (!base.empty() && base.back() == '^') {
+        suffix = "^" + suffix;
+        base.pop_back();
     }
     if (base.find(':') != std::string::npos) {
         std::string under =
@@ -352,7 +412,8 @@ void sweepUnusedLocals(parse::Tree& tree, diagnostic::Sink& diag) {
     for (int id : tree.body_locals) {
         if (tree.read_locals.count(id) > 0) continue;
         parse::Entry const& e = tree.entries[id];
-        bool was_set = tree.initialized_locals.count(id) > 0;
+        bool was_set = tree.initialized_locals.count(id) > 0
+                    || tree.assigned_arrays.count(id) > 0;
         diagnostic::report(diag, {e.file_id, e.tok,
             was_set ? "Local variable '" + e.name + "' set but never used."
                     : "Unused local variable '" + e.name + "'.", {}});
@@ -800,7 +861,12 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
             // tracked — consts are substituted away, params are pre-seeded.
             if (tree.entries[id].kind == parse::EntryKind::kLocalVar
                 && !isCaptureLocal(tree, id)) {
-                if (tree.initialized_locals.count(id) == 0) {
+                // Arrays use the monotonic may-set (some prior write); scalars
+                // use the strict must-set.
+                bool array = isArrayType(tree.entries[id].slids_type);
+                bool ok = array ? tree.assigned_arrays.count(id) > 0
+                                : tree.initialized_locals.count(id) > 0;
+                if (!ok) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Use of uninitialized variable '" + e.name + "'.", {}});
                     return;
@@ -851,6 +917,62 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         }
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
+            for (auto& ch : e.children) {
+                if (ch) resolveExpr(tree, *ch, diag);
+            }
+            return;
+        case parse::Kind::kAddrOfExpr: {
+            // `^lvalue` — address-of. A bare variable yields a reference (`T^`);
+            // an indexed element yields an iterator (`T[]`). Walk any subscript
+            // chain (resolving each index as a read) down to the base variable.
+            parse::Node* base = e.children[0].get();
+            while (base->kind == parse::Kind::kIndexExpr) {
+                if (base->children[1]) resolveExpr(tree, *base->children[1], diag);
+                base = base->children[0].get();
+            }
+            if (base->kind != parse::Kind::kIdentExpr) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "The operand of '^' must be a variable or array element.",
+                    {}});
+                return;
+            }
+            int id = isQualified(*base)
+                ? resolveQualifiedRef(tree, *base, diag)
+                : resolveName(tree, base->name);
+            if (id < 0) {
+                if (!isQualified(*base)) {
+                    diagnostic::report(diag, {base->file_id, base->tok,
+                        "Unresolved identifier '" + base->name + "'.", {}});
+                }
+                return;
+            }
+            parse::Entry const& entry = tree.entries[id];
+            if (entry.kind != parse::EntryKind::kLocalVar) {
+                diagnostic::report(diag, {base->file_id, base->tok,
+                    "Cannot take the address of '" + base->name + "'.",
+                    {{entry.file_id, entry.tok, "declared here"}}});
+                return;
+            }
+            base->resolved_entry_id = id;
+            // Taking an address aliases the variable — it may be read or written
+            // through the pointer. Mark it assigned (so the alias is not a
+            // use-before-init) and read (so it is not swept as unused). Arrays
+            // use the monotonic may-set, scalars the strict must-set.
+            if (isArrayType(entry.slids_type)) tree.assigned_arrays.insert(id);
+            else tree.initialized_locals.insert(id);
+            tree.read_locals.insert(id);
+            noteCapture(tree, id);
+            return;
+        }
+        case parse::Kind::kDerefExpr:
+            // `value^` — dereference. The operand is a reference/iterator value;
+            // resolve it normally (read-mark + definite-assignment). classify
+            // verifies it is a pointer type and supplies the pointee type.
+            if (e.children[0]) resolveExpr(tree, *e.children[0], diag);
+            return;
+        case parse::Kind::kIndexExpr:
+            // `base[index]` rvalue read: resolve the base (an array read -> its
+            // definite-assignment is required) and the index expression.
             for (auto& ch : e.children) {
                 if (ch) resolveExpr(tree, *ch, diag);
             }
@@ -915,6 +1037,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         case parse::Kind::kCharLiteral:
         case parse::Kind::kBoolLiteral:
         case parse::Kind::kFloatLiteral:
+        case parse::Kind::kNullptrLiteral:
             return;
         case parse::Kind::kProgram:
         case parse::Kind::kFunctionDef:
@@ -922,6 +1045,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         case parse::Kind::kVarDeclStmt:
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
+        case parse::Kind::kStoreStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
@@ -1100,6 +1224,202 @@ void foldLoopExit(std::set<int>& accum, bool& seen, std::set<int> const& cur) {
 Completion resolveStmtList(parse::Tree& tree,
                            std::vector<std::unique_ptr<parse::Node>>& stmts,
                            diagnostic::Sink& diag);
+Completion resolveStmt(parse::Tree& tree, parse::Node& s,
+                       diagnostic::Sink& diag);
+
+// Lower `for (var : arr) {body}` into the canonical kForLongStmt and resolve
+// that. The array's element type and length come from arr's type. A synthesized
+// index `_$idx$<tok>` walks 0..length-1 (the name is unique per loop so nested
+// for-arrays don't collide). The loop variable is bound at the TOP of the body
+// each iteration — by reference (`int^ v`: `v = ^arr[i]`, the element address),
+// by value (`int v`: `v = arr[i]`), or typeless (by value; reuses an enclosing
+// local or declares a fresh inferred one). Only a one-dimensional array; a
+// by-reference variable's base type must equal the element type.
+Completion rewriteForArray(parse::Tree& tree, parse::Node& s, int arr_id,
+                           diagnostic::Sink& diag) {
+    parse::Node& arr_ref = *s.children[1];
+    parse::Node& var_decl = *s.children[0];
+    std::string arr_type = tree.entries[arr_id].slids_type;
+    std::string elem = arrayElementType(arr_type);
+    int afile = arr_ref.file_id, atok = arr_ref.tok;
+    if (isArrayType(elem)) {
+        diagnostic::report(diag, {afile, atok,
+            "A for-loop over an array requires a one-dimensional array.",
+            {{tree.entries[arr_id].file_id, tree.entries[arr_id].tok,
+              "array declared here"}}});
+        return Completion::Normal;
+    }
+    std::string vtype = var_decl.return_type;
+    std::string vname = var_decl.name;
+    int vfile = var_decl.file_id, vtok = var_decl.name_tok;
+    bool by_ref = isReferenceType(vtype);
+    if (by_ref && vtype.substr(0, vtype.size() - 1) != elem) {
+        diagnostic::report(diag, {vfile, vtok,
+            "Loop variable type '" + vtype
+                + "' does not match the array element type '" + elem + "'.",
+            {}});
+        return Completion::Normal;
+    }
+    int size = arrayFirstDim(arr_type);
+    std::string idxName = "_$idx$" + std::to_string(atok);
+
+    auto ident = [&](std::string const& nm, int tok) {
+        auto n = std::make_unique<parse::Node>();
+        n->kind = parse::Kind::kIdentExpr;
+        n->name = nm; n->file_id = afile; n->tok = tok; n->name_tok = tok;
+        return n;
+    };
+    auto intLit = [&](std::string const& v) {
+        auto n = std::make_unique<parse::Node>();
+        n->kind = parse::Kind::kIntLiteral; n->text = v;
+        n->file_id = afile; n->tok = atok;
+        return n;
+    };
+    auto binary = [&](char const* op, std::unique_ptr<parse::Node> l,
+                      std::unique_ptr<parse::Node> r) {
+        auto n = std::make_unique<parse::Node>();
+        n->kind = parse::Kind::kBinaryExpr; n->text = op;
+        n->file_id = afile; n->tok = atok;
+        n->children.push_back(std::move(l));
+        n->children.push_back(std::move(r));
+        return n;
+    };
+
+    // varlist[0]: intptr _$idx = 0
+    auto idx_decl = std::make_unique<parse::Node>();
+    idx_decl->kind = parse::Kind::kVarDeclStmt;
+    idx_decl->name = idxName; idx_decl->name_tok = atok;
+    idx_decl->return_type = "intptr";
+    idx_decl->file_id = afile; idx_decl->tok = atok;
+    idx_decl->children.push_back(intLit("0"));
+
+    // cond: _$idx < size
+    auto cond = binary("<", ident(idxName, atok), intLit(std::to_string(size)));
+
+    // update: { _$idx = _$idx + 1 }
+    auto upd = std::make_unique<parse::Node>();
+    upd->kind = parse::Kind::kAssignStmt;
+    upd->name = idxName; upd->name_tok = atok;
+    upd->file_id = afile; upd->tok = atok;
+    upd->children.push_back(binary("+", ident(idxName, atok), intLit("1")));
+    auto update = std::make_unique<parse::Node>();
+    update->kind = parse::Kind::kBlockStmt;
+    update->file_id = afile; update->tok = atok;
+    update->children.push_back(std::move(upd));
+
+    // arr[_$idx]. The `arr` child keeps the array's position so an array-specific
+    // error (use-before-init, etc.) carets at `arr`; the kIndexExpr itself takes
+    // the LOOP VARIABLE's position so a binding type/width error (the element
+    // not fitting the declared loop-var type) carets at the loop variable.
+    auto arr_copy = ident(arr_ref.name, atok);
+    arr_copy->qualifier = arr_ref.qualifier;
+    arr_copy->qualifier_toks = arr_ref.qualifier_toks;
+    arr_copy->global_qualified = arr_ref.global_qualified;
+    auto index_expr = std::make_unique<parse::Node>();
+    index_expr->kind = parse::Kind::kIndexExpr;
+    index_expr->file_id = vfile; index_expr->tok = vtok;
+    index_expr->children.push_back(std::move(arr_copy));
+    index_expr->children.push_back(ident(idxName, atok));
+
+    // binding (first body statement)
+    std::unique_ptr<parse::Node> binding;
+    if (vtype.empty()) {
+        // typeless -> by value, reuse-or-fresh: `v = arr[_$idx]`.
+        binding = std::make_unique<parse::Node>();
+        binding->kind = parse::Kind::kAssignStmt;
+        binding->name = vname; binding->name_tok = vtok;
+        binding->file_id = vfile; binding->tok = vtok;
+        binding->children.push_back(std::move(index_expr));
+    } else {
+        // typed -> a fresh per-iteration decl. by-ref binds the element address
+        // (an iterator demoting to the reference); by-value copies the element.
+        std::unique_ptr<parse::Node> init;
+        if (by_ref) {
+            init = std::make_unique<parse::Node>();
+            init->kind = parse::Kind::kAddrOfExpr;
+            init->file_id = afile; init->tok = atok;
+            init->children.push_back(std::move(index_expr));
+        } else {
+            init = std::move(index_expr);
+        }
+        binding = std::make_unique<parse::Node>();
+        binding->kind = parse::Kind::kVarDeclStmt;
+        binding->name = vname; binding->name_tok = vtok;
+        binding->return_type = vtype;
+        binding->file_id = vfile; binding->tok = vtok;
+        binding->children.push_back(std::move(init));
+    }
+
+    // body: { binding; <user body> }
+    std::unique_ptr<parse::Node> user_body = std::move(s.children[2]);
+    auto body = std::make_unique<parse::Node>();
+    body->kind = parse::Kind::kBlockStmt;
+    body->file_id = user_body->file_id; body->tok = user_body->tok;
+    body->children.push_back(std::move(binding));
+    for (auto& st : user_body->children) body->children.push_back(std::move(st));
+
+    // Rebuild s as a kForLongStmt (label rides along on s) and resolve it.
+    s.kind = parse::Kind::kForLongStmt;
+    s.children.clear();
+    s.children.push_back(std::move(cond));      // [0]
+    s.children.push_back(std::move(update));    // [1]
+    s.children.push_back(std::move(body));      // [2]
+    s.children.push_back(std::move(idx_decl));  // [3] varlist
+    return resolveStmt(tree, s, diag);
+}
+
+// Resolve a store lvalue (the target of a kStoreStmt). An index store WRITES
+// its base array — mark it initialized (whole-array definite-assignment; a
+// subscript write assigns the array) but don't require it and don't read-mark
+// it, so a write-only array is still swept as unused — and READS its index
+// expressions. A deref store READS its pointer operand (it must be initialized
+// to store through it).
+void resolveStoreTarget(parse::Tree& tree, parse::Node& lv,
+                        diagnostic::Sink& diag) {
+    if (lv.kind == parse::Kind::kIndexExpr) {
+        if (lv.children[1]) resolveExpr(tree, *lv.children[1], diag);
+        resolveStoreTarget(tree, *lv.children[0], diag);
+        return;
+    }
+    if (lv.kind == parse::Kind::kIdentExpr) {
+        int id = isQualified(lv) ? resolveQualifiedRef(tree, lv, diag)
+                                 : resolveName(tree, lv.name);
+        if (id < 0) {
+            if (!isQualified(lv)) {
+                diagnostic::report(diag, {lv.file_id, lv.tok,
+                    "Cannot assign to undeclared variable '" + lv.name + "'.",
+                    {}});
+            }
+            return;
+        }
+        parse::Entry const& entry = tree.entries[id];
+        if (entry.kind != parse::EntryKind::kLocalVar) {
+            diagnostic::report(diag, {lv.file_id, lv.tok,
+                "Cannot assign to '" + lv.name + "'.",
+                {{entry.file_id, entry.tok, "declared here"}}});
+            return;
+        }
+        lv.resolved_entry_id = id;
+        if (isArrayType(entry.slids_type)) {
+            // An array element store assigns the array (monotonic may-set).
+            tree.assigned_arrays.insert(id);
+        } else {
+            // An iterator base (`it[i] = v`): the pointer value is READ to store
+            // through it, so it must already be initialized — and counts as a
+            // use, not a write (a store-only iterator is still unused).
+            if (!isCaptureLocal(tree, id)
+                && tree.initialized_locals.count(id) == 0) {
+                diagnostic::report(diag, {lv.file_id, lv.tok,
+                    "Use of uninitialized variable '" + lv.name + "'.", {}});
+            } else {
+                tree.read_locals.insert(id);
+            }
+        }
+        return;
+    }
+    // A deref store (`ref^ = v`): the pointer operand is read (must be init).
+    resolveExpr(tree, lv, diag);
+}
 
 Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     switch (s.kind) {
@@ -1220,6 +1540,14 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             }
             return Completion::Normal;
         }
+        case parse::Kind::kStoreStmt:
+            // Store through an lvalue expression: `ref^ = rhs` or `arr[i] = rhs`.
+            // children[0] = lvalue (kDerefExpr / kIndexExpr), [1] = rhs.
+            resolveStoreTarget(tree, *s.children[0], diag);
+            if (s.children.size() > 1 && s.children[1]) {
+                resolveExpr(tree, *s.children[1], diag);
+            }
+            return Completion::Normal;
         case parse::Kind::kCallStmt: {
             if (isPrintIntrinsic(s.name)) {
                 if (s.children.size() != 1) {
@@ -1555,12 +1883,19 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 }
                 return Completion::Normal;
             }
-            // An enum is a kNamespace carrying an underlying type (transparent).
+            // The colon-form also iterates a fixed-size ARRAY local — `for (v :
+            // arr)`. Dispatch on what the name resolved to.
+            if (tree.entries[enum_id].kind == parse::EntryKind::kLocalVar
+                && isArrayType(tree.entries[enum_id].slids_type)) {
+                return rewriteForArray(tree, s, enum_id, diag);
+            }
+            // Otherwise it must be an enum: a kNamespace carrying an underlying
+            // type (transparent).
             if (tree.entries[enum_id].kind != parse::EntryKind::kNamespace
                 || tree.entries[enum_id].slids_type.empty()) {
                 parse::Entry const& bad = tree.entries[enum_id];
                 diagnostic::report(diag, {enum_ref.file_id, enum_ref.tok,
-                    "'" + enum_ref.name + "' is not an enum.",
+                    "'" + enum_ref.name + "' is not an enum or array.",
                     {{bad.file_id, bad.tok, "declared here"}}});
                 return Completion::Normal;
             }
@@ -1814,11 +2149,15 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         case parse::Kind::kCharLiteral:
         case parse::Kind::kBoolLiteral:
         case parse::Kind::kFloatLiteral:
+        case parse::Kind::kNullptrLiteral:
         case parse::Kind::kIdentExpr:
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
         case parse::Kind::kPreIncExpr:
         case parse::Kind::kPostIncExpr:
+        case parse::Kind::kAddrOfExpr:
+        case parse::Kind::kDerefExpr:
+        case parse::Kind::kIndexExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kCallExpr:
         case parse::Kind::kCaseClause:
@@ -1882,6 +2221,7 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
     std::set<int> saved_read = std::move(tree.read_locals);
     std::vector<int> saved_body_locals = std::move(tree.body_locals);
     tree.initialized_locals.clear();
+    tree.assigned_arrays.clear();
     tree.read_locals.clear();
     tree.body_locals.clear();
     // Params become LocalVar entries in the body frame. Type spellings were

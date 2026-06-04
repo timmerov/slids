@@ -44,8 +44,54 @@ bool isFloatType(std::string const& t) {
     return t == "float" || t == "float32" || t == "float64";
 }
 
-bool isPtrLikeType(std::string const& t) {
+// A reference type spelling: `T^`.
+bool isReference(std::string const& t) {
+    return !t.empty() && t.back() == '^';
+}
+
+// An iterator type spelling: `T[]`.
+bool isIteratorType(std::string const& t) {
     return t.size() >= 2 && t.substr(t.size() - 2) == "[]";
+}
+
+// Any pointer: an iterator (`T[]`), a reference (`T^`), or the typeless null
+// (`anyptr`, nullptr's type). Used for truthy-coercion and pointer ops.
+bool isPtrLikeType(std::string const& t) {
+    return (t.size() >= 2 && t.substr(t.size() - 2) == "[]")
+        || isReference(t)
+        || t == "anyptr";
+}
+
+// The pointee type of a reference/iterator; empty for anyptr or a non-pointer.
+std::string pointeeType(std::string const& t) {
+    if (isReference(t)) return t.substr(0, t.size() - 1);
+    if (t.size() >= 2 && t.substr(t.size() - 2) == "[]")
+        return t.substr(0, t.size() - 2);
+    return "";
+}
+
+// A fixed-size array type spelling: the first `[` is followed by a digit
+// (`int[5]`, `int[3][5]`), distinct from `int[]` (iterator) and `int^` (ref).
+bool isArrayType(std::string const& t) {
+    std::size_t lb = t.find('[');
+    return lb != std::string::npos && lb + 1 < t.size()
+        && t[lb + 1] >= '0' && t[lb + 1] <= '9';
+}
+
+// The leftmost (innermost) dimension's size — the dimension one subscript
+// consumes. `int[3][5]` -> 3.
+int arrayFirstDim(std::string const& t) {
+    std::size_t lb = t.find('[');
+    std::size_t rb = t.find(']', lb);
+    return std::atoi(t.substr(lb + 1, rb - lb - 1).c_str());
+}
+
+// The type after one subscript: strip the leftmost `[N]`. `int[3][5]` ->
+// `int[5]`; `int[5]` -> `int`.
+std::string arrayElementType(std::string const& t) {
+    std::size_t lb = t.find('[');
+    std::size_t rb = t.find(']', lb);
+    return t.substr(0, lb) + t.substr(rb + 1);
 }
 
 bool isIntegerClass(std::string const& t) {
@@ -109,6 +155,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kBoolLiteral:  return "bool";
         case parse::Kind::kFloatLiteral: return "float32";
         case parse::Kind::kStringLiteral:
+        case parse::Kind::kNullptrLiteral:
         case parse::Kind::kIdentExpr:
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
@@ -118,6 +165,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kVarDeclStmt:
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
+        case parse::Kind::kStoreStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kCallExpr:
         case parse::Kind::kExprStmt:
@@ -126,6 +174,9 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kEnumDecl:
         case parse::Kind::kPreIncExpr:
         case parse::Kind::kPostIncExpr:
+        case parse::Kind::kAddrOfExpr:
+        case parse::Kind::kDerefExpr:
+        case parse::Kind::kIndexExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kBlockStmt:
@@ -253,6 +304,84 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             e.inferred_type = "char[]";
             return;
         }
+        case parse::Kind::kNullptrLiteral: {
+            // nullptr takes the pointer type in context (`int^ p = nullptr`);
+            // with no pointer context it is the typeless null `anyptr`, which
+            // coerces in comparisons against any pointer.
+            e.inferred_type = isPtrLikeType(context) ? context : "anyptr";
+            return;
+        }
+        case parse::Kind::kAddrOfExpr: {
+            // `^lvalue` -> a pointer to the operand. The category is operand-
+            // driven: a bare variable yields a reference (`T^`); an indexed
+            // array element yields an iterator (`T[]`).
+            assert(e.children.size() == 1 && "kAddrOfExpr needs 1 operand");
+            parse::Node& operand = *e.children[0];
+            inferExpr(tree, operand, "", diag);
+            if (!operand.inferred_type.empty()) {
+                bool indexed = (operand.kind == parse::Kind::kIndexExpr);
+                e.inferred_type = operand.inferred_type + (indexed ? "[]" : "^");
+            }
+            return;
+        }
+        case parse::Kind::kIndexExpr: {
+            // `base[index]` -> an element. The base must be an array; the result
+            // strips one (leftmost) dimension. A constant index is bounds-checked.
+            assert(e.children.size() == 2 && "kIndexExpr needs base + index");
+            parse::Node& base = *e.children[0];
+            parse::Node& index = *e.children[1];
+            inferExpr(tree, base, "", diag);
+            inferExpr(tree, index, "", diag);
+            std::string const& bt = base.inferred_type;
+            bool array = isArrayType(bt);
+            bool iter = isIteratorType(bt);
+            if (!bt.empty() && !array && !iter) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "Cannot subscript a non-array value of type '" + bt + "'.",
+                    {}});
+                return;
+            }
+            if (!index.inferred_type.empty()
+                && !isIntegerClass(index.inferred_type)) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "An array index must be an integer; got '"
+                    + index.inferred_type + "'.", {}});
+            }
+            // A constant integer index is bounds-checked against a fixed-size
+            // array; an iterator has no known length, so no check. char literals
+            // carry their numeric codepoint as text (so a `char` index counts).
+            if (array
+                && (index.kind == parse::Kind::kIntLiteral
+                    || index.kind == parse::Kind::kUintLiteral
+                    || index.kind == parse::Kind::kCharLiteral)) {
+                long idx = std::strtol(index.text.c_str(), nullptr, 10);
+                int dim = arrayFirstDim(bt);
+                if (idx < 0 || idx >= dim) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Array index " + std::to_string(idx)
+                        + " is out of bounds for '" + bt + "'.", {}});
+                }
+            }
+            e.inferred_type = bt.empty() ? std::string()
+                            : array       ? arrayElementType(bt)
+                                          : pointeeType(bt);   // iterator element
+            return;
+        }
+        case parse::Kind::kDerefExpr: {
+            // `value^` -> the pointee. The operand must be a pointer.
+            assert(e.children.size() == 1 && "kDerefExpr needs 1 operand");
+            parse::Node& operand = *e.children[0];
+            inferExpr(tree, operand, "", diag);
+            std::string const& ot = operand.inferred_type;
+            if (!ot.empty() && !isPtrLikeType(ot)) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "Cannot dereference a non-pointer value of type '"
+                    + ot + "'.", {}});
+                return;
+            }
+            e.inferred_type = pointeeType(ot);
+            return;
+        }
         case parse::Kind::kStringifyType: {
             // ##type(expr): infer the operand's type, then BECOME a string
             // literal holding that type name. An alias/enum-labeled operand
@@ -322,7 +451,12 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             parse::Node& operand = *e.children[0];
             inferExpr(tree, operand, "", diag);
             std::string const& ot = operand.inferred_type;
-            if (!ot.empty() && (!isNumericType(ot) || ot == "bool")) {
+            if (isReference(ot)) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "Arithmetic is not allowed on a reference.", {}});
+            } else if (isIteratorType(ot)) {
+                // ok — an iterator steps by one element.
+            } else if (!ot.empty() && (!isNumericType(ot) || ot == "bool")) {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Operator '" + e.text + "' is not defined on type '"
                     + ot + "'.", {}});
@@ -403,6 +537,83 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // then literal-flex, then commonType.
             inferExpr(tree, lhs, "", diag);
             inferExpr(tree, rhs, "", diag);
+
+            // Pointer operands (reference / iterator / nullptr): the six
+            // relational ops compare them (same pointee type required; nullptr
+            // exempt), and arithmetic is rejected. Handled before the numeric
+            // commonType path, which has no notion of pointer types.
+            if (isPtrLikeType(lhs.inferred_type)
+                || isPtrLikeType(rhs.inferred_type)) {
+                bool is_cmp = (op == "==" || op == "!=" || op == "<"
+                            || op == "<=" || op == ">" || op == ">=");
+                if (!is_cmp) {
+                    // References admit no arithmetic at all.
+                    if (isReference(lhs.inferred_type)
+                        || isReference(rhs.inferred_type)) {
+                        diagnostic::report(diag, {e.file_id, e.tok,
+                            "Arithmetic is not allowed on a reference.", {}});
+                        return;
+                    }
+                    // Iterators step by element: `iter ± int` -> iterator;
+                    // `iter - iter` (same pointee) -> intptr (element count).
+                    bool lit = isIteratorType(lhs.inferred_type);
+                    bool rit = isIteratorType(rhs.inferred_type);
+                    if (op == "+"
+                        && ((lit && isIntegerClass(rhs.inferred_type))
+                            || (rit && isIntegerClass(lhs.inferred_type)))) {
+                        e.inferred_type = lit ? lhs.inferred_type
+                                              : rhs.inferred_type;
+                        e.op_type = e.inferred_type;
+                        return;
+                    }
+                    if (op == "-" && lit && isIntegerClass(rhs.inferred_type)) {
+                        e.inferred_type = lhs.inferred_type;
+                        e.op_type = lhs.inferred_type;
+                        return;
+                    }
+                    if (op == "-" && lit && rit) {
+                        if (pointeeType(lhs.inferred_type)
+                                != pointeeType(rhs.inferred_type)) {
+                            diagnostic::report(diag, {e.file_id, e.tok,
+                                "Pointer subtraction requires the same pointee "
+                                "type.", {}});
+                            return;
+                        }
+                        e.inferred_type = "intptr";
+                        e.op_type = lhs.inferred_type;   // element stride for codegen
+                        return;
+                    }
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Arithmetic is not defined on a pointer.", {}});
+                    return;
+                }
+                // A reference has no sequence position: only `==` / `!=` apply.
+                // Ordering is reserved for iterators (and iterator/reference
+                // pairs degrade to `==` / `!=` when a reference is involved).
+                bool ordering = (op == "<" || op == "<=" || op == ">"
+                              || op == ">=");
+                if (ordering && (isReference(lhs.inferred_type)
+                                 || isReference(rhs.inferred_type))) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "References support only '==' and '!=' comparison.",
+                        {}});
+                    return;
+                }
+                bool lnull = lhs.inferred_type == "anyptr";
+                bool rnull = rhs.inferred_type == "anyptr";
+                if (!lnull && !rnull
+                    && pointeeType(lhs.inferred_type)
+                           != pointeeType(rhs.inferred_type)) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Pointer comparison requires the same pointee type.",
+                        {}});
+                    return;
+                }
+                e.inferred_type = "bool";
+                e.op_type = lnull ? rhs.inferred_type : lhs.inferred_type;
+                return;
+            }
+
             flexBinaryOperands(lhs, rhs);
 
             std::string opty;
@@ -437,6 +648,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kVarDeclStmt:
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
+        case parse::Kind::kStoreStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
@@ -706,6 +918,14 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             std::string const& lvalue_type = s.return_type;
 
+            // A reference admits no compound arithmetic/bitwise assignment.
+            if (isReference(lvalue_type)) {
+                inferExpr(tree, rhs, "", diag);
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "Arithmetic is not allowed on a reference.", {}});
+                return;
+            }
+
             if (op == "<<" || op == ">>") {
                 inferExpr(tree, rhs, "", diag);
                 if (!isNumericType(lvalue_type)) {
@@ -759,6 +979,15 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             s.inferred_type = opty;
             s.op_type = opty;
+            return;
+        }
+        case parse::Kind::kStoreStmt: {
+            // `lvalue^ = rhs`. Infer the lvalue (a deref -> the pointee type),
+            // then infer the rhs in that context so a literal flexes to it.
+            assert(s.children.size() == 2 && "kStoreStmt needs lvalue + rhs");
+            parse::Node& lvalue = *s.children[0];
+            inferExpr(tree, lvalue, "", diag);
+            inferExpr(tree, *s.children[1], lvalue.inferred_type, diag);
             return;
         }
         case parse::Kind::kCallStmt: {
@@ -1034,11 +1263,15 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kCharLiteral:
         case parse::Kind::kBoolLiteral:
         case parse::Kind::kFloatLiteral:
+        case parse::Kind::kNullptrLiteral:
         case parse::Kind::kIdentExpr:
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
         case parse::Kind::kPreIncExpr:
         case parse::Kind::kPostIncExpr:
+        case parse::Kind::kAddrOfExpr:
+        case parse::Kind::kDerefExpr:
+        case parse::Kind::kIndexExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kCallExpr:
         case parse::Kind::kParam:

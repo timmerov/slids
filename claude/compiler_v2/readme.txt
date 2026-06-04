@@ -200,7 +200,14 @@ STAGE FILES (.h / .cpp pairs)
             then reports any body-declared local never read: "Unused local
             variable 'x'." if never written, else "Local variable 'x' set but
             never used."; gated on hasErrors so a use-before-init or dup
-            diagnostic isn't trailed by a spurious unused report. Consts and
+            diagnostic isn't trailed by a spurious unused report. ARRAYS use a
+            separate MAY-set (assigned_arrays): a fixed-size array can't be fully
+            initialized in one statement (no initializer lists) and a fill loop's
+            element writes wouldn't survive the must-set's loop join, so an array
+            read requires only that SOME earlier subscript write exists (monotonic,
+            never rolled back) — reading before ANY write still errors; a `^arr[i]`
+            address-of marks it assigned, and an iterator-base store (`it[i]=v`)
+            READS the iterator (the pointer is dereferenced), not writes it. Consts and
             params are exempt (consts substituted away; params not in
             body_locals). Control-flow joins are modeled by a Completion
             { Normal, Abrupt } that resolveStmt RETURNS: return / break / continue
@@ -501,6 +508,20 @@ STAGE FILES (.h / .cpp pairs)
             into a trailing block and a both-arms-return if, mirroring classify.
             Mangled names and field offsets land
             with layout.
+              Pointers & arrays (Phase 4). References (`T^`) and iterators
+            (`T[]`) are both LLVM `ptr`; `anyptr` (nullptr) too. kAddrOfExpr
+            `^var` is the operand's alloca register (no load); kDerefExpr loads
+            the pointer then loads the pointee. A fixed-size array `T name[N]`
+            is an aggregate alloca, with multi-dim REVERSED (`int[3][5]` ->
+            `[5 x [3 x i32]]`); emitElementAddr walks a kIndexExpr chain to the
+            base and emits ONE getelementptr with the indices outer-to-inner
+            (the leftmost source index is innermost) — it also rejects a partial
+            index (chain length must equal the dimension count). An ITERATOR
+            subscript instead loads the pointer and GEPs by element type.
+            kStoreStmt stores through any lvalue expr (deref / index). Iterator
+            arithmetic: `iter ± int` is a signed element GEP, `iter - iter` is
+            ptrtoint-diff / elemBytes, `++`/`--` GEP ±1 element. Pointer
+            comparisons icmp the raw pointers (unsigned).
 
 PRODUCT FILES (.h / .cpp pairs)
 

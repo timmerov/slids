@@ -13,6 +13,7 @@ enum class Kind {
     kVarDeclStmt,
     kAssignStmt,
     kAugAssignStmt,
+    kStoreStmt,     // store through an lvalue expr; children[0]=lvalue, [1]=rhs.
     kCallStmt,
     kCallExpr,
     kExprStmt,
@@ -35,11 +36,17 @@ enum class Kind {
     kCharLiteral,
     kBoolLiteral,
     kFloatLiteral,
+    kNullptrLiteral,// `nullptr` — typeless null pointer; lowers to `ptr null`.
     kIdentExpr,
     kUnaryExpr,
     kBinaryExpr,
     kPreIncExpr,    // survives the parse->ast copy; lowered away by desugar's PPID pass
     kPostIncExpr,
+    kAddrOfExpr,    // prefix `^lvalue` — address-of; children[0]=operand lvalue.
+    kDerefExpr,     // postfix `lvalue^` — dereference; children[0]=operand.
+    kIndexExpr,     // postfix `base[index]` — array subscript; children[0]=base,
+                    // [1]=index. `a[x][y]` nests ((a[x])[y]).
+
     kSeqExpr,       // synthesized by desugar: children evaluated in order; value_index
                     // names the result child, the rest are bumps run for effect
     kBumpExpr,      // synthesized by desugar: resolved_entry_id + inferred_type + text

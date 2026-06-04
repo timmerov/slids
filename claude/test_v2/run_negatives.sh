@@ -36,7 +36,12 @@ if [ "${1:-}" = "--worker" ]; then
     awk -v b="$body_start" -v e="$body_end" '
         function strip_brackets(s,    out) {
             out = ""
-            while (match(s, /\[[^][]+\]/)) {
+            # An escape `[X]` collapses to its content X. The escape set is
+            # exactly the chars that would otherwise break a comment / line:
+            # `[*]`, `[/]`, `[\\]`, `[ ]`, `[\n]` (each starts with * / \ or
+            # space). A real array subscript (`[5]`, `[i]`) or a char-literal
+            # index (`['A']`) starts with something else and is left intact.
+            while (match(s, /\[[*\/\\ ][^][]*\]/)) {
                 out = out substr(s, 1, RSTART-1) substr(s, RSTART+1, RLENGTH-2)
                 s = substr(s, RSTART+RLENGTH)
             }
@@ -94,7 +99,12 @@ for src in "$@"; do
     awk -v src="$src" -v sidx="$src_index" '
         function strip_brackets(s,    out) {
             out = ""
-            while (match(s, /\[[^][]+\]/)) {
+            # An escape `[X]` collapses to its content X. The escape set is
+            # exactly the chars that would otherwise break a comment / line:
+            # `[*]`, `[/]`, `[\\]`, `[ ]`, `[\n]` (each starts with * / \ or
+            # space). A real array subscript (`[5]`, `[i]`) or a char-literal
+            # index (`['A']`) starts with something else and is left intact.
+            while (match(s, /\[[*\/\\ ][^][]*\]/)) {
                 out = out substr(s, 1, RSTART-1) substr(s, RSTART+1, RLENGTH-2)
                 s = substr(s, RSTART+RLENGTH)
             }

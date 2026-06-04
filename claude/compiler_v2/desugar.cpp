@@ -20,6 +20,7 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kVarDeclStmt:   return ast::Kind::kVarDeclStmt;
         case parse::Kind::kAssignStmt:    return ast::Kind::kAssignStmt;
         case parse::Kind::kAugAssignStmt: return ast::Kind::kAugAssignStmt;
+        case parse::Kind::kStoreStmt:     return ast::Kind::kStoreStmt;
         case parse::Kind::kCallStmt:      return ast::Kind::kCallStmt;
         case parse::Kind::kCallExpr:      return ast::Kind::kCallExpr;
         case parse::Kind::kExprStmt:      return ast::Kind::kExprStmt;
@@ -56,11 +57,15 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kCharLiteral:   return ast::Kind::kCharLiteral;
         case parse::Kind::kBoolLiteral:   return ast::Kind::kBoolLiteral;
         case parse::Kind::kFloatLiteral:  return ast::Kind::kFloatLiteral;
+        case parse::Kind::kNullptrLiteral:return ast::Kind::kNullptrLiteral;
         case parse::Kind::kIdentExpr:     return ast::Kind::kIdentExpr;
         case parse::Kind::kUnaryExpr:     return ast::Kind::kUnaryExpr;
         case parse::Kind::kBinaryExpr:    return ast::Kind::kBinaryExpr;
         case parse::Kind::kPreIncExpr:    return ast::Kind::kPreIncExpr;
         case parse::Kind::kPostIncExpr:   return ast::Kind::kPostIncExpr;
+        case parse::Kind::kAddrOfExpr:    return ast::Kind::kAddrOfExpr;
+        case parse::Kind::kDerefExpr:     return ast::Kind::kDerefExpr;
+        case parse::Kind::kIndexExpr:     return ast::Kind::kIndexExpr;
         case parse::Kind::kStringifyType:
             // Rewritten to a kStringLiteral during classify; never copied.
             assert(false && "toAstKind: kStringifyType should be lowered in classify");

@@ -160,10 +160,15 @@ struct Parser {
             error("Expected type.");
             return "";
         }
+        // A pointer suffix: `T[]` (iterator) or `T^` (reference). Mutually
+        // exclusive — a type carries at most one category modifier.
         if (peek().kind == token::Kind::kLBracket) {
             advance();
             if (!expect(token::Kind::kRBracket, "]")) return "";
             type += "[]";
+        } else if (peek().kind == token::Kind::kBitXor) {
+            advance();
+            type += "^";
         }
         return type;
     }
@@ -321,6 +326,11 @@ struct Parser {
             advance();
             return node;
         }
+        if (t.kind == token::Kind::kNullptr) {
+            auto node = newNodeHere(parse::Kind::kNullptrLiteral);
+            advance();
+            return node;
+        }
         if (t.kind == token::Kind::kIdentifier
             || t.kind == token::Kind::kColonColon) {
             int name_file = t.file_id;
@@ -426,9 +436,56 @@ struct Parser {
         return nullptr;
     }
 
+    // Does this token begin a primary (operand) expression? Used to tell a
+    // postfix-deref `x^` (the `^` is followed by a terminator/operator) from a
+    // binary XOR `a ^ b` (the `^` is followed by an operand). Both lex to the
+    // same `^`; this lookahead is the disambiguator.
+    static bool startsPrimary(token::Kind k) {
+        return k == token::Kind::kIdentifier
+            || k == token::Kind::kColonColon
+            || k == token::Kind::kIntLiteral
+            || k == token::Kind::kUintLiteral
+            || k == token::Kind::kCharLiteral
+            || k == token::Kind::kFloatLiteral
+            || k == token::Kind::kBoolLiteral
+            || k == token::Kind::kStringLiteral
+            || k == token::Kind::kNullptr
+            || k == token::Kind::kLParen
+            || k == token::Kind::kHashHash;
+    }
+
     // Field access, indexing, postfix-^/^^, postfix-++/-- all slot in here as
-    // their phases land. Today: postfix-call on a bare identifier.
+    // their phases land. Today: postfix-call, postfix-deref, postfix-++/--.
     std::unique_ptr<parse::Node> parsePostfix(std::unique_ptr<parse::Node> base) {
+        // Postfix chain: subscript `[i]` and dereference `^`, left to right.
+        // A bare `^` whose following token begins an operand is binary XOR, not
+        // deref — leave it for parseBitXor.
+        while (true) {
+            if (peek().kind == token::Kind::kLBracket) {
+                int op_file = peek().file_id;
+                int op_tok = pos;
+                advance();   // [
+                auto index = parseExpr();
+                if (!index) return nullptr;
+                if (!expect(token::Kind::kRBracket, "]")) return nullptr;
+                auto node = newNodeAt(parse::Kind::kIndexExpr, op_file, op_tok);
+                node->children.push_back(std::move(base));
+                node->children.push_back(std::move(index));
+                base = std::move(node);
+                continue;
+            }
+            if (peek().kind == token::Kind::kBitXor
+                && !startsPrimary(peekKind(1))) {
+                int op_file = peek().file_id;
+                int op_tok = pos;
+                advance();   // ^
+                auto node = newNodeAt(parse::Kind::kDerefExpr, op_file, op_tok);
+                node->children.push_back(std::move(base));
+                base = std::move(node);
+                continue;
+            }
+            break;
+        }
         if (base->kind == parse::Kind::kIdentExpr
             && peek().kind == token::Kind::kLParen) {
             auto node = newNodeAt(parse::Kind::kCallExpr, base->file_id, base->tok);
@@ -466,6 +523,18 @@ struct Parser {
             if (!operand) return nullptr;
             auto node = newNodeAt(parse::Kind::kPreIncExpr, op_file, op_tok);
             node->text = pp;
+            node->children.push_back(std::move(operand));
+            return node;
+        }
+        // Prefix `^` is address-of (a reference to the operand lvalue). At the
+        // start of a unary, `^` is unambiguous — binary XOR never leads.
+        if (k == token::Kind::kBitXor) {
+            int op_file = peek().file_id;
+            int op_tok = pos;
+            advance();   // ^
+            auto operand = parseUnary();
+            if (!operand) return nullptr;
+            auto node = newNodeAt(parse::Kind::kAddrOfExpr, op_file, op_tok);
             node->children.push_back(std::move(operand));
             return node;
         }
@@ -710,6 +779,20 @@ struct Parser {
         node->qualifier = std::move(segs);
         node->qualifier_toks = std::move(toks);
         node->global_qualified = global;
+        // Fixed-size array dimensions follow the NAME: `int arr[5]`,
+        // `int grid[3][5]`. Each bracket holds a constant size; the dims append
+        // to the type spelling in declaration order (e.g. "int[3][5]"). The
+        // leftmost dim is the innermost (reversed from the memory nesting).
+        while (peek().kind == token::Kind::kLBracket) {
+            advance();   // [
+            if (peek().kind != token::Kind::kIntLiteral) {
+                error("Array size must be an integer constant.");
+                return nullptr;
+            }
+            type += "[" + peek().text + "]";
+            advance();   // size
+            if (!expect(token::Kind::kRBracket, "]")) return nullptr;
+        }
         node->return_type = std::move(type);
         node->is_const = is_const;
         if (peek().kind == token::Kind::kEquals) {
@@ -751,6 +834,47 @@ struct Parser {
         };
 
         token::Kind next = peek().kind;
+        if (next == token::Kind::kBitXor || next == token::Kind::kLBracket) {
+            // Lvalue-expression store: `name[i]... = rhs` or `name^ = rhs`. The
+            // bare name becomes a kIdentExpr, then the postfix chain (subscripts
+            // and derefs, left to right) wraps it into the store target. (A `^`
+            // here is unambiguously deref — a trailing operand would be XOR, not
+            // a statement.)
+            auto lhs = newNodeAt(parse::Kind::kIdentExpr, stmt_file, stmt_tok);
+            lhs->name = name;
+            lhs->name_tok = name_tok;
+            lhs->qualifier = segs;
+            lhs->qualifier_toks = toks;
+            lhs->global_qualified = global;
+            while (peek().kind == token::Kind::kLBracket
+                   || peek().kind == token::Kind::kBitXor) {
+                int op_file = peek().file_id;
+                int op_tok = pos;
+                if (peek().kind == token::Kind::kLBracket) {
+                    advance();   // [
+                    auto index = parseExpr();
+                    if (!index) return nullptr;
+                    if (!expect(token::Kind::kRBracket, "]")) return nullptr;
+                    auto ix = newNodeAt(parse::Kind::kIndexExpr, op_file, op_tok);
+                    ix->children.push_back(std::move(lhs));
+                    ix->children.push_back(std::move(index));
+                    lhs = std::move(ix);
+                } else {
+                    advance();   // ^
+                    auto d = newNodeAt(parse::Kind::kDerefExpr, op_file, op_tok);
+                    d->children.push_back(std::move(lhs));
+                    lhs = std::move(d);
+                }
+            }
+            if (!expect(token::Kind::kEquals, "=")) return nullptr;
+            auto rhs = parseExpr();
+            if (!rhs) return nullptr;
+            if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+            auto node = newNodeAt(parse::Kind::kStoreStmt, stmt_file, stmt_tok);
+            node->children.push_back(std::move(lhs));
+            node->children.push_back(std::move(rhs));
+            return node;
+        }
         if (next == token::Kind::kLParen) {
             advance();   // (
             auto node = newNodeAt(parse::Kind::kCallStmt, stmt_file, stmt_tok);
@@ -1238,6 +1362,11 @@ struct Parser {
         }
 
         // varlist: [ type var = start, type _$end = end, (type _$step = step) ]
+        // The synthesized bound/step names are made UNIQUE per loop (keyed on the
+        // `..` token) so a nested ranged-for's typeless `_$end`/`_$step` does not
+        // reuse the enclosing loop's same-named local (which clobbered its bound).
+        std::string endName = "_$end$" + std::to_string(dotdot_tok);
+        std::string stepName = "_$step$" + std::to_string(dotdot_tok);
         std::vector<std::unique_ptr<parse::Node>> varlist;
         auto vd = newNodeAt(parse::Kind::kVarDeclStmt, v_file, v_tok);
         vd->name = vname; vd->name_tok = vname_tok; vd->return_type = vtype;
@@ -1245,17 +1374,17 @@ struct Parser {
         varlist.push_back(std::move(vd));
 
         auto ed = newNodeAt(parse::Kind::kVarDeclStmt, v_file, dotdot_tok);
-        ed->name = "_$end"; ed->name_tok = dotdot_tok; ed->return_type = vtype;
+        ed->name = endName; ed->name_tok = dotdot_tok; ed->return_type = vtype;
         ed->children.push_back(std::move(end));
         varlist.push_back(std::move(ed));
 
         std::unique_ptr<parse::Node> step_val;
         if (step) {
             auto sd = newNodeAt(parse::Kind::kVarDeclStmt, v_file, dotdot_tok);
-            sd->name = "_$step"; sd->name_tok = dotdot_tok; sd->return_type = vtype;
+            sd->name = stepName; sd->name_tok = dotdot_tok; sd->return_type = vtype;
             sd->children.push_back(std::move(step));
             varlist.push_back(std::move(sd));
-            step_val = makeIdent("_$step", v_file, dotdot_tok);
+            step_val = makeIdent(stepName, v_file, dotdot_tok);
         } else {
             op = "+";   // default step is +1
             auto one = newNodeAt(parse::Kind::kIntLiteral, v_file, dotdot_tok);
@@ -1265,7 +1394,7 @@ struct Parser {
 
         // cond: `var cmp _$end`
         auto cond = makeBinary(cmp, makeIdent(vname, v_file, vname_tok),
-                               makeIdent("_$end", v_file, dotdot_tok),
+                               makeIdent(endName, v_file, dotdot_tok),
                                v_file, dotdot_tok);
         // update: `{ var = var op step_val }`
         auto rhs = makeBinary(op, makeIdent(vname, v_file, vname_tok),

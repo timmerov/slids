@@ -125,6 +125,7 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kVarDeclStmt:
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
+        case parse::Kind::kStoreStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kCallExpr:
         case parse::Kind::kExprStmt:
@@ -143,11 +144,15 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kSwitchStmt:
         case parse::Kind::kCaseClause:
         case parse::Kind::kStringLiteral:
+        case parse::Kind::kNullptrLiteral:
         case parse::Kind::kIdentExpr:
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
         case parse::Kind::kPreIncExpr:
         case parse::Kind::kPostIncExpr:
+        case parse::Kind::kAddrOfExpr:
+        case parse::Kind::kDerefExpr:
+        case parse::Kind::kIndexExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kParam:
             return;  // non-literal: no nominal type
