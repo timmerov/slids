@@ -1,5 +1,14 @@
 /*
-test user-defined function calls.
+test calling functions.
+includes forward declarations (signature only).
+
+the return type is required.
+non-void functions must return on all code paths.
+void functions may return on any code path.
+*/
+
+/*
+claude says:
 
 scope per Phase 1 plan (todo.txt):
   * grammar: parameter lists (typed, comma-separated); 0 / 1 / N arg call syntax
@@ -15,6 +24,10 @@ per-arg literal-flex: a literal arg flexes into its corresponding param type
 the same way a literal var-decl init flexes into its declared type.
 ident args widen via widen::convert.
 */
+
+// forward declaration (signature only); the definition is at the bottom of the
+// file, and it is both called and forward-referenced before that definition.
+int32 fwd_decl(int32 n);
 
 int32 helper() {
     __println("helper");
@@ -76,6 +89,12 @@ regardless of whether it's used anywhere or not.
 //-EXPECT-ERROR: declared but never defined
 //int declared_not_defined();
 
+/* a definition whose return type disagrees with an earlier declaration (same
+   parameters — not overloadable on return type alone). */
+//-EXPECT-ERROR: Return type 'int64' does not match earlier declaration's 'int32'.
+//int32 mismatch_ret(int32 a);
+//int64 mismatch_ret(int32 a) { return 0; }
+
 int32 main() {
     helper();              // zero-arg
     add(2, 3);             // two-arg
@@ -86,6 +105,8 @@ int32 main() {
     takes_int64(x);        // int32 widens to int64 param
 
     greet();               // void statement-form call (implicit ret void)
+    say_if_pos(1);         // void with an early bare `return;` (takes the return)
+    say_if_pos(-1);        // ... and the fall-through path
 
     // call as expression (kCallExpr)
     int32 s = sum(2, 3);             // call as var-decl init
@@ -97,6 +118,7 @@ int32 main() {
     int32 e = sum(40, 1) + sum(1, 1);  // calls as binary operands
     __println("e= " + e);
     __println("d= " + doubled(21));  // call (return-position result) as print arg
+    __println("fwd= " + fwd_decl(9));  // forward-declared above, defined below
 
     //-EXPECT-ERROR: expects 2 arguments, got 1
     //add(1);
@@ -135,6 +157,21 @@ void greet() {
     __println("greet");
 }
 
+// a void function with a BARE `return;` — an early exit on one path, falling
+// through (implicit ret void) on the other. "void may return on any path."
+void say_if_pos(int32 n) {
+    if (n > 0) {
+        __println("pos");
+        return;
+    }
+    __println("nonpos");
+}
+
+// the definition matching the forward declaration at the top of the file.
+int32 fwd_decl(int32 n) {
+    return n + n;
+}
+
 // file-scope negatives — whole function definitions, so they can't sit inside
 // main (no nested functions yet).
 
@@ -148,10 +185,27 @@ void greet() {
 //    return 0;
 //}
 
+/* a bare `return;` is only valid in a void function. */
+//-EXPECT-ERROR: A non-void function must return a value.
+//int32 bare_return_nonvoid() {
+//    return;
+//}
+
 /* a local may not shadow a parameter — the parameter shares the body's top
    scope, so a same-named body-top local is a duplicate declaration. */
 //-EXPECT-ERROR: Duplicate declaration of 'x'
 //void shadow_ban(int x) {
 //    int x = 0;
 //    return x;
+//}
+
+/* two definitions of the same function is a duplicate definition (a forward
+   declaration first is fine; a second body is not). */
+//-EXPECT-ERROR: Duplicate definition of 'twice'.
+//int twice(int a);
+//int twice(int a) {
+//    return a;
+//}
+//int twice(int a) {
+//    return a + 1;
 //}

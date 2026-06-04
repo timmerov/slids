@@ -406,6 +406,14 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
         std::string llty = llvmTypeFor(dest, arg.file_id, arg.tok, diag);
         arg_vals.push_back({llty, std::move(val)});
     }
+    // A nested-function call passes each capture by reference: the host
+    // variable's alloca address (already a ptr in the host's SymTab).
+    for (int cid : call.captures) {
+        auto it = syms.find(cid);
+        if (it != syms.end()) {
+            arg_vals.push_back({"ptr", it->second.alloca_name});
+        }
+    }
     std::string ret_llty = llvmTypeFor(call.return_type,
                                        call.file_id, call.tok, diag);
     std::string result;
@@ -609,6 +617,11 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             return;
         }
         case ast::Kind::kReturnStmt: {
+            // Bare `return;` (no child) in a void function -> `ret void`.
+            if (stmt.children.empty()) {
+                out << "  ret void\n";
+                return;
+            }
             std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
                                        fn_return_type);
             std::string llty = llvmTypeFor(fn_return_type,
@@ -855,9 +868,14 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kAugAssignStmt:
             assert(false && "emitStmt: AugAssign survived desugar");
             return;
-        case ast::Kind::kProgram:
         case ast::Kind::kFunctionDef:
+            // A nested function is lifted to a top-level function (emitted
+            // separately by run); it produces no inline code in its host.
+            return;
         case ast::Kind::kFunctionDecl:
+            // A nested forward declaration produces no code.
+            return;
+        case ast::Kind::kProgram:
         case ast::Kind::kStringLiteral:
         case ast::Kind::kIntLiteral:
         case ast::Kind::kUintLiteral:
@@ -1017,9 +1035,24 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
         std::string p_llty = llvmTypeFor(p.return_type, p.file_id, p.tok, diag);
         out << p_llty << " %arg." << i;
     }
+    // A lifted nested function takes one extra `ptr` arg per capture (the host
+    // variable's address — by reference).
+    for (size_t i = 0; i < fn.captures.size(); i++) {
+        if (fn.params.size() + i > 0) out << ", ";
+        out << "ptr %cap." << i;
+    }
     out << ") {\n";
 
     SymTab syms;
+    // A capture's SymTab "alloca" IS the incoming ptr arg — reads/writes load /
+    // store through the host variable's address (no fresh alloca / store).
+    for (size_t i = 0; i < fn.captures.size(); i++) {
+        std::string cap_llty = llvmTypeFor(fn.capture_types[i],
+                                           fn.file_id, fn.tok, diag);
+        syms[fn.captures[i]] =
+            {std::string("%cap.") + std::to_string(i), cap_llty,
+             fn.capture_types[i]};
+    }
     // Alloca + store-in each param so the body can read/write it like a local.
     // Register under the param's resolved_entry_id (stamped by classify's
     // body-frame seeding).
@@ -1068,17 +1101,30 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     out << "}\n";
 }
 
+// Collect nested function definitions reachable in a statement subtree (a host
+// body), so they can be lifted to top-level functions.
+void collectNestedFunctions(ast::Node const& s,
+                            std::vector<ast::Node const*>& out) {
+    for (auto const& ch : s.children) {
+        if (!ch) continue;
+        if (ch->kind == ast::Kind::kFunctionDef) out.push_back(ch.get());
+        collectNestedFunctions(*ch, out);
+    }
+}
+
 }  // namespace
 
 void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     strings::Pool pool;
 
     std::ostringstream body;
+    std::vector<ast::Node const*> nested;
     for (auto const& n : tree.nodes) {
         if (n->kind != ast::Kind::kProgram) continue;
         for (auto const& fn : n->children) {
             if (fn->kind == ast::Kind::kFunctionDef) {
                 emitFunction(*fn, pool, body, diag);
+                collectNestedFunctions(*fn, nested);
             } else if (fn->kind == ast::Kind::kFunctionDecl) {
                 // intentional n/a: declarations carry no body to emit
             } else if (fn->kind == ast::Kind::kVarDeclStmt && fn->is_const) {
@@ -1090,6 +1136,10 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
                        "(resolve should have rejected)");
             }
         }
+    }
+    // Lift each nested function to a top-level function.
+    for (ast::Node const* fn : nested) {
+        emitFunction(*fn, pool, body, diag);
     }
 
     out << "target triple = \"x86_64-pc-linux-gnu\"\n\n";

@@ -781,6 +781,11 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
     for (auto& c : slot->children) {
         walk(c, tree, changed, diag);
     }
+    // Fold inside parameter defaults too (params live in a separate vector, not
+    // children) so a constant-expression default reaches a literal.
+    for (auto& p : slot->params) {
+        walk(p, tree, changed, diag);
+    }
     if (slot->kind == parse::Kind::kUnaryExpr) {
         if (auto folded = tryFoldUnary(*slot, diag)) {
             slot = std::move(folded);

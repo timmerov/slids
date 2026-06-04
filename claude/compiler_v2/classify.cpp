@@ -2,10 +2,12 @@
 
 #include <cassert>
 #include <cerrno>
+#include <climits>
 #include <cstdint>
 #include <cstdlib>
 #include <map>
 #include <string>
+#include <vector>
 
 #include "diagnostic.h"
 #include "parse.h"
@@ -203,6 +205,35 @@ void flexBinaryOperands(parse::Node& lhs, parse::Node& rhs) {
     }
 }
 
+// Two types occupy the same width-class (so `int` and `int32` are "the same" for
+// overload-exactness, sidestepping the int/int32 spelling). Non-numeric types
+// (char[], slids) fall back to string equality.
+bool sameClass(std::string const& a, std::string const& b) {
+    widen::TypeKind ka, kb;
+    if (!widen::classify(a, ka) || !widen::classify(b, kb)) return a == b;
+    return ka.cat == kb.cat && ka.bits == kb.bits;
+}
+
+// Conversion cost of argument `a` to parameter type `param` for overload ranking:
+// 0 = exact (same class), 1 = a widening (literal flex, or within-family widen),
+// -1 = not convertible (narrowing / cross-family / un-typeable).
+int argConvertCost(parse::Node const& a, std::string const& param) {
+    std::string const& at = a.inferred_type;
+    if (at.empty()) return -1;
+    if (sameClass(at, param)) return 0;
+    if (isLiteralKind(a.kind)) {
+        return literalFitsContext(a, param) ? 1 : -1;
+    }
+    std::string out;
+    if (widen::commonType(at, param, out) && sameClass(out, param)) return 1;
+    return -1;
+}
+
+// Resolve a (possibly overloaded) user-function call: infer args, pick the best
+// candidate, stamp the chosen signature. Defined after inferExpr (mutually
+// recursive — it infers the argument expressions).
+void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
+
 void inferExpr(parse::Tree& tree, parse::Node& e,
                std::string const& context, diagnostic::Sink& diag) {
     switch (e.kind) {
@@ -271,23 +302,16 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             return;
         }
         case parse::Kind::kCallExpr: {
-            // resolve stamped return_type + param_types (and already rejected
-            // print intrinsics in expression position). A call yields its
-            // return type; widening into `context` happens at codegen, like an
-            // ident read. Reject a void return used where a value is wanted.
+            // Pick the overload (if any) + infer args; then the call yields its
+            // return type (widening into `context` happens at codegen, like an
+            // ident read). Reject a void return used where a value is wanted.
+            classifyCall(tree, e, diag);
             if (e.return_type == "void") {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Function '" + e.name + "' returns no value and cannot be "
                     "used as an expression.", {}});
             }
             e.inferred_type = e.return_type;
-            for (size_t i = 0; i < e.children.size(); i++) {
-                if (!e.children[i]) continue;
-                std::string const& dest = (i < e.param_types.size())
-                    ? e.param_types[i]
-                    : std::string();
-                inferExpr(tree, *e.children[i], dest, diag);
-            }
             return;
         }
         case parse::Kind::kPreIncExpr:
@@ -432,6 +456,103 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kParam:
             assert(false && "inferExpr: not an expression kind");
             return;
+    }
+}
+
+// Append literal arg nodes for omitted trailing OPTIONAL params, from the
+// function entry's captured constant defaults.
+void fillDefaults(parse::Node& s, parse::Entry const& e) {
+    for (std::size_t i = s.children.size();
+         i < e.param_types.size() && i < e.param_default_kind.size(); i++) {
+        auto lit = std::make_unique<parse::Node>();
+        lit->kind = e.param_default_kind[i];
+        lit->text = e.param_default_text[i];
+        lit->file_id = s.file_id;
+        lit->tok = s.tok;
+        s.children.push_back(std::move(lit));
+    }
+}
+
+void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+    // Gather same-name free-function candidates (an unqualified call). A
+    // qualified call was resolved to a single namespace member upstream; a single
+    // free function keeps resolve's resolution.
+    std::vector<int> cands;
+    bool qualified = !s.qualifier.empty() || s.global_qualified;
+    if (!qualified) {
+        for (std::size_t id = 0; id < tree.entries.size(); id++) {
+            parse::Entry const& e = tree.entries[id];
+            // Overload candidates are FILE-SCOPE free functions (parent_frame_id
+            // == the global frame 0). A nested function (in a body frame) was
+            // already resolved singly by resolve and must not collide with a
+            // same-named nested function in another host.
+            if (e.kind == parse::EntryKind::kFunction && e.owner_ns_frame < 0
+                && e.parent_frame_id == 0 && e.name == s.name) {
+                cands.push_back((int)id);
+            }
+        }
+    }
+    if (cands.size() <= 1) {
+        // single candidate (or qualified): refresh the signature from the entry
+        // (a typeless param is now typed), fill omitted optional args, then infer.
+        if (s.resolved_entry_id >= 0) {
+            parse::Entry const& e = tree.entries[s.resolved_entry_id];
+            s.return_type = e.slids_type;
+            s.param_types = e.param_types;
+            s.captures = e.captures;       // a nested-fn call passes these
+            fillDefaults(s, e);
+        }
+        for (std::size_t i = 0; i < s.children.size(); i++) {
+            if (!s.children[i]) continue;
+            std::string const& dest = (i < s.param_types.size())
+                ? s.param_types[i] : std::string();
+            inferExpr(tree, *s.children[i], dest, diag);
+        }
+        return;
+    }
+    // 2+ overloads: infer the PROVIDED args without context, then rank by cost
+    // (a candidate is viable if its arity range admits this arg count and every
+    // provided arg converts; omitted trailing optionals are filled from defaults).
+    for (auto& ch : s.children) {
+        if (ch) inferExpr(tree, *ch, "", diag);
+    }
+    int best = -1, best_cost = INT_MAX;
+    bool tie = false;
+    for (int cid : cands) {
+        parse::Entry const& e = tree.entries[cid];
+        if (s.children.size() < (std::size_t)e.num_required
+            || s.children.size() > e.param_types.size()) {
+            continue;   // arity range
+        }
+        int cost = 0;
+        bool ok = true;
+        for (std::size_t i = 0; i < s.children.size() && ok; i++) {
+            int c = s.children[i] ? argConvertCost(*s.children[i], e.param_types[i])
+                                  : -1;
+            if (c < 0) ok = false; else cost += c;
+        }
+        if (!ok) continue;
+        if (cost < best_cost) { best_cost = cost; best = cid; tie = false; }
+        else if (cost == best_cost) { tie = true; }
+    }
+    if (best < 0) {
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "No matching overload for '" + s.name + "'.", {}});
+        return;
+    }
+    if (tie) {
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "Ambiguous call to '" + s.name + "'; multiple overloads match.", {}});
+        return;
+    }
+    s.resolved_entry_id = best;
+    s.return_type = tree.entries[best].slids_type;
+    s.param_types = tree.entries[best].param_types;
+    s.captures = tree.entries[best].captures;
+    fillDefaults(s, tree.entries[best]);
+    // Re-infer all args (incl. filled defaults) with the chosen param context.
+    for (std::size_t i = 0; i < s.children.size(); i++) {
+        if (s.children[i]) inferExpr(tree, *s.children[i], s.param_types[i], diag);
     }
 }
 
@@ -647,16 +768,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 }
                 return;
             }
-            // resolve stamped resolved_entry_id + return_type + param_types.
-            // Arity already validated upstream; infer each arg with the
-            // corresponding param_type as context.
-            for (size_t i = 0; i < s.children.size(); i++) {
-                if (!s.children[i]) continue;
-                std::string const& dest = (i < s.param_types.size())
-                    ? s.param_types[i]
-                    : std::string();
-                inferExpr(tree, *s.children[i], dest, diag);
-            }
+            // Pick the overload (if any) and infer each arg with the chosen
+            // param type as context.
+            classifyCall(tree, s, diag);
             return;
         }
         case parse::Kind::kReturnStmt: {
@@ -666,6 +780,12 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (fn_return_type == "void" && !s.children.empty()) {
                 diagnostic::report(diag, {s.file_id, s.tok,
                     "A void function cannot return a value.", {}});
+                return;
+            }
+            // A bare `return;` (no value) is only valid in a void function.
+            if (fn_return_type != "void" && s.children.empty()) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "A non-void function must return a value.", {}});
                 return;
             }
             for (auto& ch : s.children) {
@@ -895,9 +1015,19 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // Lowered to a kForLongStmt during resolve; never reaches classify.
             assert(false && "classifyStmt: kForEnumStmt survived resolve");
             return;
-        case parse::Kind::kProgram:
         case parse::Kind::kFunctionDef:
+            // A nested function: type-check its body + return-correctness, then
+            // record each capture's (now-finalized) type for codegen lifting.
+            classifyFunctionBody(tree, s, diag);
+            s.capture_types.clear();
+            for (int cid : s.captures) {
+                s.capture_types.push_back(parse::entryType(tree, cid));
+            }
+            return;
         case parse::Kind::kFunctionDecl:
+            // A nested forward declaration carries no body to type-check.
+            return;
+        case parse::Kind::kProgram:
         case parse::Kind::kStringLiteral:
         case parse::Kind::kIntLiteral:
         case parse::Kind::kUintLiteral:
@@ -976,10 +1106,55 @@ bool endsInReturnNode(parse::Node const& s) {
     return false;
 }
 
+// Pre-pass over a function's signature: fold-infer each parameter default,
+// infer a typeless param's type from it (write-back to the entry + param node),
+// and capture the folded default constant on the entry for call-site filling.
+void classifyFunctionSignature(parse::Tree& tree, parse::Node& fn,
+                               diagnostic::Sink& diag) {
+    if (fn.resolved_entry_id < 0) return;
+    parse::Entry& e = tree.entries[fn.resolved_entry_id];
+    e.param_default_text.assign(e.param_types.size(), "");
+    e.param_default_kind.assign(e.param_types.size(), parse::Kind::kProgram);
+    for (std::size_t i = 0;
+         i < fn.params.size() && i < e.param_types.size(); i++) {
+        parse::Node& p = *fn.params[i];
+        if (p.children.empty() || !p.children[0]) continue;   // required
+        parse::Node& def = *p.children[0];
+        inferExpr(tree, def, p.return_type, diag);
+        if (!isLiteralKind(def.kind)) {
+            diagnostic::report(diag, {def.file_id, def.tok,
+                "A parameter default must be a constant expression.", {}});
+            continue;
+        }
+        if (p.return_type.empty()) {
+            std::string t = preferredSpelling(def.inferred_type);
+            p.return_type = t;
+            e.param_types[i] = t;
+            if (p.resolved_entry_id >= 0) {
+                tree.entries[p.resolved_entry_id].slids_type = t;
+            }
+        } else if (!literalFitsContext(def, p.return_type)) {
+            diagnostic::report(diag, {def.file_id, def.tok,
+                "Default value does not fit parameter type '" + p.return_type
+                    + "'.", {}});
+        }
+        e.param_default_text[i] = def.text;
+        e.param_default_kind[i] = def.kind;
+    }
+}
+
 void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
                           diagnostic::Sink& diag) {
     // No frame push — resolve already handled scope discipline. We just
     // walk stmts and infer types using resolved_entry_id stamped upstream.
+    // Complete each nested function's signature first (typeless params +
+    // default capture), so a call to it — even before its definition —
+    // type-checks against the full signature.
+    for (auto& ch : fn.children) {
+        if (ch && ch->kind == parse::Kind::kFunctionDef) {
+            classifyFunctionSignature(tree, *ch, diag);
+        }
+    }
     for (auto& ch : fn.children) {
         if (ch) classifyStmt(tree, *ch, fn.return_type, diag);
     }
@@ -1025,6 +1200,15 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         }
     }
     if (!program) return;
+
+    // Signature pre-pass first: a call to a later-defined function must see its
+    // completed param types + captured defaults.
+    for (auto& ch : program->children) {
+        if (ch && (ch->kind == parse::Kind::kFunctionDef
+                || ch->kind == parse::Kind::kFunctionDecl)) {
+            classifyFunctionSignature(tree, *ch, diag);
+        }
+    }
 
     for (auto& ch : program->children) {
         if (!ch) continue;

@@ -827,11 +827,15 @@ struct Parser {
         int stmt_file = peek().file_id;
         int stmt_tok = pos;
         advance();   // return
-        auto expr = parseExpr();
-        if (!expr) return nullptr;
-        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
         auto node = newNodeAt(parse::Kind::kReturnStmt, stmt_file, stmt_tok);
-        node->children.push_back(std::move(expr));
+        // Bare `return;` (no value) — valid in a void function; classify rejects
+        // it in a non-void one. Otherwise a returned expression.
+        if (peek().kind != token::Kind::kSemicolon) {
+            auto expr = parseExpr();
+            if (!expr) return nullptr;
+            node->children.push_back(std::move(expr));
+        }
+        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
         return node;
     }
 
@@ -1473,6 +1477,9 @@ struct Parser {
         if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();
         if (t.kind == token::Kind::kEnum) return parseEnumDecl();
+        // A nested function definition (`type name (params) {body}`) — checked
+        // before the var-decl / name-led dispatches it would otherwise hit.
+        if (looksLikeFunctionDef()) return parseFunctionDef();
         if (isTypeStart(t.kind)) return parseVarDeclStmt();
         if (t.kind == token::Kind::kPlusPlus
             || t.kind == token::Kind::kMinusMinus) return parseIncDecStmt();
@@ -1500,6 +1507,30 @@ struct Parser {
         return nullptr;
     }
 
+    // Pure lookahead: do the tokens form `<return-type> <name> (` — a (nested)
+    // function definition — as opposed to a var decl (`type name = / ;`) or a
+    // call (`name(...)`, no leading type)? Consumes nothing.
+    bool looksLikeFunctionDef() const {
+        int o = 0;
+        if (isTypeStart(peekKind(o))) {
+            o++;
+        } else if (peekKind(o) == token::Kind::kColonColon
+                   || peekKind(o) == token::Kind::kIdentifier) {
+            if (peekKind(o) == token::Kind::kColonColon) o++;
+            if (peekKind(o) != token::Kind::kIdentifier) return false;
+            o++;
+            while (peekKind(o) == token::Kind::kColon
+                   && peekKind(o + 1) == token::Kind::kIdentifier) o += 2;
+        } else {
+            return false;
+        }
+        if (peekKind(o) == token::Kind::kLBracket
+            && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
+        if (peekKind(o) != token::Kind::kIdentifier) return false;   // fn name
+        o++;
+        return peekKind(o) == token::Kind::kLParen;
+    }
+
     std::unique_ptr<parse::Node> parseFunctionDef() {
         int fn_file = peek().file_id;
         int fn_tok = pos;
@@ -1522,8 +1553,15 @@ struct Parser {
         while (peek().kind != token::Kind::kRParen) {
             int p_file = peek().file_id;
             int p_tok = pos;
-            std::string p_type = parseType();
-            if (fatal) return nullptr;
+            // `[type] name [= constexpr]` — the type is optional; a typeless
+            // param infers its type from its default value (resolve/classify
+            // enforce that a typeless param HAS a default, and required-before-
+            // optional ordering).
+            std::string p_type;
+            if (isTypeStart(peek().kind) || looksLikeQualifiedTypedDecl()) {
+                p_type = parseType();
+                if (fatal) return nullptr;
+            }
             if (peek().kind != token::Kind::kIdentifier) {
                 error("Expected parameter name.");
                 return nullptr;
@@ -1535,6 +1573,12 @@ struct Parser {
             p->name = std::move(p_name);
             p->name_tok = p_name_tok;
             p->return_type = std::move(p_type);
+            if (peek().kind == token::Kind::kEquals) {
+                advance();   // =
+                auto def = parseExpr();
+                if (!def) return nullptr;
+                p->children.push_back(std::move(def));   // children[0] = default
+            }
             node->params.push_back(std::move(p));
             if (peek().kind == token::Kind::kComma) {
                 advance();

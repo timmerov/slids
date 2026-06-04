@@ -5,7 +5,8 @@ SUBDIRS = \
 	flow \
 	function \
 	lex \
-	misc
+	misc \
+	pointer
 
 .PHONY: all clean test negatives positives $(SUBDIRS)
 

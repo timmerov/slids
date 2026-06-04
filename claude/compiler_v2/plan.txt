@@ -151,12 +151,28 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
   * return — LANDED (kReturnStmt + return-correctness check from Phase 1).
 
 Phase 3 — functions
-  * definitions: params (typed + inferred), return type
-  * declarations (signature-only)
-  * overload resolution (arity → types → const)
-  * nested functions + capture analysis
-  * method dispatch (`.method()`)
-  * function pointers
+  * definitions: params (typed + inferred), return type            LANDED
+  * declarations (signature-only) — file scope + NESTED forward     LANDED
+    decls (decl-then-def merge by signature; orphan check fires for
+    a nested decl never defined, like file scope). decl/def conflicts:
+    a second body → "Duplicate definition" (note carets the first
+    DEFINITION via Entry.def_tok); a conflicting signature → "Duplicate
+    declaration" (note carets the first DECLARATION via Entry.tok).
+  * optional params + default values + inferred param types         LANDED
+    (Entry.num_required + param_default_text/kind; required-before-
+    optional; default = constant expression; classify fills defaults)
+  * overload resolution (arity → types → const)                    LANDED
+    (per-arg cost: exact 0 / widen 1 / reject; ambiguity + no-match
+    diagnostics; mangle-by-entry-id; file-scope candidates only —
+    nested functions do NOT overload)
+  * nested functions + capture analysis                            LANDED
+    (lambda-lift to top-level; capture host locals/params by reference;
+    current value at call time; self-recursion ok; deep nesting + sibling
+    calls unsupported [compile errors]; captured host var must be
+    definitely-assigned at the call — deferred per-call snapshot check)
+  * method dispatch (`.method()`)                                  out of scope (Phase 4/5)
+  * function pointers                                              out of scope
+  * function aliases, ##type-of-function, templates                out of scope
 
 Phase 4 — types beyond primitives
   * pointers (`^` reference, no arithmetic)

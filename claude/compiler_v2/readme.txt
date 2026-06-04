@@ -522,7 +522,12 @@ PRODUCT FILES (.h / .cpp pairs)
             Entry vector + frame stack + pushFrame / popFrame / addEntry /
             findInLiveScopes / findInFrame / entryType APIs that resolve
             calls. Function entries carry param_types alongside their
-            return type; kConst entries carry literal_text + literal_kind
+            return type, plus num_required (optional-param boundary) and a
+            def_tok/def_file_id pair (the first DEFINITION's position,
+            distinct from tok = the first DECLARATION) so "first defined
+            here" and "first declared here" notes caret the right
+            occurrence across a forward decl + later body; kConst entries
+            carry literal_text + literal_kind
             (filled by constfold; read by constfold at substitution sites).
             Stage-vs-product rule: stages make decisions, parse owns
             storage and lookup.

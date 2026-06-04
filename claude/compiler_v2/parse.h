@@ -117,6 +117,14 @@ struct Node {
     std::vector<std::unique_ptr<Node>> children;
     std::vector<std::unique_ptr<Node>> params;   // kFunctionDef/Decl: kParam nodes
     std::vector<std::string> param_types;        // kCallStmt/kCallExpr: classify-cached resolved fn's param types
+    // A NESTED function (kFunctionDef in a body) and each call to it carry the
+    // entry ids of the enclosing-function locals/params it captures — passed
+    // by reference (the host alloca's address) when the nested function is
+    // lifted to a top-level function in codegen. capture_types (on the
+    // kFunctionDef, parallel to captures) is each captured var's slids type, for
+    // emitting the lifted function's by-ref params.
+    std::vector<int> captures;
+    std::vector<std::string> capture_types;
 };
 
 enum class EntryKind {
@@ -139,10 +147,23 @@ struct Entry {
                                   // type (else empty). slids_type holds the erased
                                   // underlying; this is what ##type(var) reports.
     std::vector<std::string> param_types;  // Function only
+    // Function only — default parameters. num_required = count of leading params
+    // without a default (required); params [num_required..param_types.size()) are
+    // optional. param_default_text/kind (parallel to param_types) carry each
+    // optional param's folded constant default — captured by classify's
+    // signature pre-pass; required slots are empty / kProgram.
+    int num_required = 0;
+    std::vector<std::string> param_default_text;
+    std::vector<Kind> param_default_kind;
+    std::vector<int> captures;    // kFunction (nested): captured host entry ids
     int parent_frame_id = -1;
     int file_id = -1;
     int tok = -1;
     bool defined = false;         // Function: true once a body has been seen
+    int def_file_id = -1;         // Function: source of the first definition
+    int def_tok = -1;             // Function: token of the first definition (for
+                                  // "first defined here"; distinct from tok, which
+                                  // is the first *declaration* for "first declared here")
     // kNamespace: identity of its member set (members carry owner_ns_frame ==
     // this). A persistent id, distinct from any lexical frame; reopens reuse it.
     int ns_frame_id = -1;
@@ -209,6 +230,22 @@ struct Tree {
                                   // loop frames (is_switch=false) outward.
     };
     std::vector<LoopFrame> loop_stack;
+    // Transient — while resolving a NESTED function body: capture_floor is the
+    // nested function's frame id (a kLocalVar resolved in a frame between the
+    // global frame and the floor is a capture); capture_node points at the
+    // nested kFunctionDef whose `captures` list is being built.
+    int capture_floor = -1;
+    Node* capture_node = nullptr;
+    // Transient — host-level calls to nested functions, checked after the host
+    // body resolves (captures are known by then): each captured host var must be
+    // definitely-assigned at the call (snapshot of initialized_locals).
+    struct NestedCallCheck {
+        int entry;
+        std::set<int> snapshot;
+        int file_id;
+        int tok;
+    };
+    std::vector<NestedCallCheck> nested_call_checks;
     // Transient — set while resolving a long-for's UPDATE clause, which may not
     // break / continue / return. in_for_update is true throughout the update
     // subtree (guards return, transitively). for_update_floor is loop_stack.size()

@@ -331,7 +331,7 @@ std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
 
 // ---- Namespace registration -------------------------------------------------
 void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
-                         diagnostic::Sink& diag);
+                         diagnostic::Sink& diag, bool nested = false);
 void registerNamespaceTree(parse::Tree& tree, parse::Node& node,
                            int parent_ns, diagnostic::Sink& diag);
 void resolveNamespaceBodies(parse::Tree& tree, parse::Node& node,
@@ -466,6 +466,7 @@ void registerMemberSignature(parse::Tree& tree, parse::Node& m, int ns_frame,
         e.file_id = m.file_id;
         e.tok = m.name_tok;
         e.defined = (m.kind == parse::Kind::kFunctionDef);
+        if (e.defined) { e.def_file_id = m.file_id; e.def_tok = m.name_tok; }
         e.owner_ns_frame = ns_frame;
         m.resolved_entry_id = parse::addEntry(tree, std::move(e));
         return;
@@ -736,6 +737,22 @@ void registerEnum(parse::Tree& tree, parse::Node& node, int parent_ns,
     registerEnumMembers(tree, node, ns, diag);
 }
 
+// While resolving a nested function body, a kLocalVar resolved in an enclosing
+// (host) frame is a capture — record it on the nested function node.
+bool isCaptureLocal(parse::Tree const& tree, int id) {
+    if (tree.capture_floor < 0 || id < 0) return false;
+    parse::Entry const& e = tree.entries[id];
+    return e.kind == parse::EntryKind::kLocalVar
+        && e.parent_frame_id > kGlobalFrame
+        && e.parent_frame_id < tree.capture_floor;
+}
+
+void noteCapture(parse::Tree& tree, int id) {
+    if (!tree.capture_node || !isCaptureLocal(tree, id)) return;
+    for (int c : tree.capture_node->captures) if (c == id) return;
+    tree.capture_node->captures.push_back(id);
+}
+
 void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
     switch (e.kind) {
         case parse::Kind::kIdentExpr: {
@@ -781,7 +798,8 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
             // Definite-assignment: reading a local before it is written is a
             // compile error (a value-before-init footgun). Only kLocalVar is
             // tracked — consts are substituted away, params are pre-seeded.
-            if (tree.entries[id].kind == parse::EntryKind::kLocalVar) {
+            if (tree.entries[id].kind == parse::EntryKind::kLocalVar
+                && !isCaptureLocal(tree, id)) {
                 if (tree.initialized_locals.count(id) == 0) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Use of uninitialized variable '" + e.name + "'.", {}});
@@ -790,6 +808,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
                 // This is a value-position read; record it for the unused sweep.
                 tree.read_locals.insert(id);
             }
+            noteCapture(tree, id);
             e.resolved_entry_id = id;
             return;
         }
@@ -953,6 +972,7 @@ bool resolveAssignTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& di
             {{entry.file_id, entry.tok, std::string(what) + " declared here"}}});
         return false;
     }
+    noteCapture(tree, id);   // an assigned host local is a (by-ref) capture
     s.resolved_entry_id = id;
     return true;
 }
@@ -996,16 +1016,53 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
 // for downstream stages. Then recurse into the argument expressions.
 void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     if (resolveCallTarget(tree, s, diag)) {
-        parse::Entry const& entry = tree.entries[s.resolved_entry_id];
-        if (s.children.size() != entry.param_types.size()) {
-            diagnostic::report(diag, {s.file_id, s.tok,
-                "Function '" + s.name + "' expects "
-                + std::to_string(entry.param_types.size())
-                + " arguments, got "
-                + std::to_string(s.children.size()) + ".", {}});
-        } else {
-            s.return_type = entry.slids_type;
-            s.param_types = entry.param_types;
+        parse::Entry const& callee = tree.entries[s.resolved_entry_id];
+        bool callee_nested = callee.kind == parse::EntryKind::kFunction
+                          && callee.parent_frame_id != kGlobalFrame;
+        if (tree.capture_floor >= 0 && tree.capture_node) {
+            // Inside a nested function: calling another nested function (a
+            // sibling) is unsupported; self-recursion is fine.
+            if (callee_nested
+                && s.resolved_entry_id != tree.capture_node->resolved_entry_id) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "Calling a sibling nested function is not supported.", {}});
+            }
+        } else if (callee_nested) {
+            // Host-level call to a nested function: every captured host variable
+            // must be definitely-assigned here. Deferred — the callee's captures
+            // are known only after its body resolves (it may be defined later).
+            tree.nested_call_checks.push_back(
+                {s.resolved_entry_id, tree.initialized_locals, s.file_id, s.tok});
+        }
+        // Count same-name free-function overloads (unqualified calls only). With
+        // more than one, the pick needs argument TYPES, which only exist after
+        // inference — defer the arity check + signature cache to classify. A
+        // single candidate keeps the precise arity error here.
+        int overloads = 0;
+        if (!isQualified(s)) {
+            for (parse::Entry const& e : tree.entries) {
+                if (e.kind == parse::EntryKind::kFunction && e.owner_ns_frame < 0
+                    && e.name == s.name) {
+                    overloads++;
+                }
+            }
+        }
+        if (overloads <= 1) {
+            parse::Entry const& entry = tree.entries[s.resolved_entry_id];
+            std::size_t total = entry.param_types.size();
+            std::size_t req = (std::size_t)entry.num_required;
+            if (s.children.size() < req || s.children.size() > total) {
+                std::string want = (req == total)
+                    ? std::to_string(total)
+                    : std::to_string(req) + " to " + std::to_string(total);
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "Function '" + s.name + "' expects " + want
+                    + " arguments, got "
+                    + std::to_string(s.children.size()) + ".", {}});
+            } else {
+                s.return_type = entry.slids_type;
+                s.param_types = entry.param_types;
+            }
         }
     }
     for (auto& ch : s.children) {
@@ -1739,9 +1796,18 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             tree.initialized_locals = have ? std::move(after) : std::move(entry);
             return normal_exit ? Completion::Normal : Completion::Abrupt;
         }
-        case parse::Kind::kProgram:
-        case parse::Kind::kFunctionDef:
+        case parse::Kind::kFunctionDef: {
+            // A nested function definition: its signature was registered by the
+            // host body's nested pre-pass; resolve its body, tracking captures.
+            resolveFunctionBody(tree, s, diag, /*nested=*/true);
+            return Completion::Normal;
+        }
         case parse::Kind::kFunctionDecl:
+            // A nested forward declaration: signature-only, registered by the
+            // pre-pass; no body to resolve. (Never defined -> the pass-3 orphan
+            // check reports it, like a file-scope declaration.)
+            return Completion::Normal;
+        case parse::Kind::kProgram:
         case parse::Kind::kStringLiteral:
         case parse::Kind::kIntLiteral:
         case parse::Kind::kUintLiteral:
@@ -1788,8 +1854,25 @@ Completion resolveStmtList(parse::Tree& tree,
 }
 
 void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
-                         diagnostic::Sink& diag) {
+                         diagnostic::Sink& diag, bool nested) {
+    if (!nested) tree.nested_call_checks.clear();   // per top-level function body
+    // Parameter defaults are constant expressions resolved in the ENCLOSING
+    // (file) scope — before the body frame is pushed, so a default cannot
+    // reference a parameter or a body local. (constfold then folds them and
+    // classify requires the result to be a literal constant.)
+    for (auto& p : fn.params) {
+        if (p && !p->children.empty() && p->children[0]) {
+            resolveExpr(tree, *p->children[0], diag);
+        }
+    }
+    int saved_floor = tree.capture_floor;
+    parse::Node* saved_capture_node = tree.capture_node;
     parse::pushFrame(tree);
+    if (nested) {
+        // A kLocalVar resolved below this frame (a host local/param) is a capture.
+        tree.capture_floor = parse::currentFrameId(tree);
+        tree.capture_node = &fn;
+    }
     // Bare `alias Ns;` imports inside this body extend the open-namespace chain;
     // restore it on exit so imports don't leak to sibling functions.
     std::size_t open_ns_at_entry = tree.open_ns_frames.size();
@@ -1847,12 +1930,122 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         e.tok = ch->name_tok;
         ch->resolved_entry_id = parse::addEntry(tree, std::move(e));
     }
+    // Nested-function pre-pass: register each nested function's signature in this
+    // body frame so the host (and the nested function's own body, for recursion)
+    // can call it regardless of textual order. Deep nesting is unsupported.
+    for (auto& ch : fn.children) {
+        if (!ch || (ch->kind != parse::Kind::kFunctionDef
+                    && ch->kind != parse::Kind::kFunctionDecl)) {
+            continue;
+        }
+        if (nested) {
+            diagnostic::report(diag, {ch->file_id, ch->name_tok,
+                "Nested functions may not contain further nested functions.", {}});
+            continue;
+        }
+        std::vector<std::string> ptypes;
+        int nreq = 0;
+        bool seen_default = false;
+        for (auto& p : ch->params) {
+            if (!p) continue;
+            bool has_default = !p->children.empty();
+            if (p->return_type.empty() && !has_default) {
+                diagnostic::report(diag, {p->file_id, p->name_tok,
+                    "Parameter '" + p->name
+                        + "' needs an explicit type or a default value.", {}});
+            }
+            if (has_default) {
+                seen_default = true;
+            } else {
+                if (seen_default) {
+                    diagnostic::report(diag, {p->file_id, p->name_tok,
+                        "A required parameter cannot follow an optional "
+                        "parameter.", {}});
+                }
+                nreq++;
+            }
+            if (!p->return_type.empty()) {
+                resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
+            }
+            ptypes.push_back(p->return_type);
+        }
+        resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
+        bool is_def = (ch->kind == parse::Kind::kFunctionDef);
+        // A nested function may be forward-declared (signature only) and defined
+        // later in the same body — match an existing same-name entry: the
+        // signature must agree, and a second definition is a duplicate.
+        int existing = parse::findInFrame(tree, parse::currentFrameId(tree),
+                                          ch->name);
+        if (existing >= 0) {
+            parse::Entry& prev = tree.entries[existing];
+            if (prev.kind != parse::EntryKind::kFunction
+                || prev.slids_type != ch->return_type
+                || prev.param_types != ptypes) {
+                diagnostic::report(diag, {ch->file_id, ch->name_tok,
+                    "Duplicate declaration of '" + ch->name + "'.",
+                    {{prev.file_id, prev.tok, "first declared here"}}});
+                continue;
+            }
+            if (is_def && prev.defined) {
+                diagnostic::report(diag, {ch->file_id, ch->name_tok,
+                    "Duplicate definition of '" + ch->name + "'.",
+                    {{prev.def_file_id, prev.def_tok, "first defined here"}}});
+                continue;
+            }
+            if (is_def) {
+                prev.defined = true;
+                prev.def_file_id = ch->file_id;
+                prev.def_tok = ch->name_tok;
+            }
+            ch->resolved_entry_id = existing;
+            continue;
+        }
+        parse::Entry e;
+        e.kind = parse::EntryKind::kFunction;
+        e.name = ch->name;
+        e.slids_type = ch->return_type;
+        e.param_types = std::move(ptypes);
+        e.num_required = nreq;
+        e.file_id = ch->file_id;
+        e.tok = ch->name_tok;
+        e.defined = is_def;
+        if (is_def) {
+            e.def_file_id = ch->file_id;
+            e.def_tok = ch->name_tok;
+        }
+        ch->resolved_entry_id = parse::addEntry(tree, std::move(e));
+    }
     resolveStmtList(tree, fn.children, diag);
+    if (!nested) {
+        // Now every nested function's captures are known: a host-level call must
+        // have each captured host variable definitely-assigned at the call.
+        for (auto const& chk : tree.nested_call_checks) {
+            for (int cap : tree.entries[chk.entry].captures) {
+                if (chk.snapshot.count(cap) == 0) {
+                    diagnostic::report(diag, {chk.file_id, chk.tok,
+                        "Use of uninitialized variable '"
+                            + tree.entries[cap].name + "'.", {}});
+                }
+            }
+        }
+        tree.nested_call_checks.clear();
+    }
     sweepUnusedLocals(tree, diag);   // function-body declarations
     tree.body_locals = std::move(saved_body_locals);
+    // A captured host local is used by the nested function — count it as read in
+    // the HOST's unused-local sweep (its reads happened in the cleared nested
+    // body state).
+    for (int c : fn.captures) saved_read.insert(c);
     tree.read_locals = std::move(saved_read);
     tree.initialized_locals = std::move(saved_initialized);
     tree.open_ns_frames.resize(open_ns_at_entry);
+    if (nested && fn.resolved_entry_id >= 0) {
+        // Publish the captured-entry list on the function entry so call sites
+        // (classify) and codegen can pass / receive the captures.
+        tree.entries[fn.resolved_entry_id].captures = fn.captures;
+    }
+    tree.capture_floor = saved_floor;
+    tree.capture_node = saved_capture_node;
     parse::popFrame(tree);
 }
 
@@ -1913,15 +2106,48 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
          || ch->kind == parse::Kind::kFunctionDecl) {
             resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
             std::vector<std::string> param_types;
+            int num_required = 0;
+            bool seen_default = false;
             for (auto& p : ch->params) {
                 if (!p) continue;
-                std::string declared = p->return_type;   // pre-erasure spelling
-                resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
-                if (declared != p->return_type) p->alias_label = declared;
+                bool has_default = !p->children.empty();
+                if (p->return_type.empty() && !has_default) {
+                    diagnostic::report(diag, {p->file_id, p->name_tok,
+                        "Parameter '" + p->name
+                            + "' needs an explicit type or a default value.", {}});
+                }
+                if (has_default) {
+                    seen_default = true;
+                } else {
+                    if (seen_default) {
+                        diagnostic::report(diag, {p->file_id, p->name_tok,
+                            "A required parameter cannot follow an optional "
+                            "parameter.", {}});
+                    }
+                    num_required++;
+                }
+                if (!p->return_type.empty()) {
+                    std::string declared = p->return_type;   // pre-erasure spelling
+                    resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
+                    if (declared != p->return_type) p->alias_label = declared;
+                }
                 param_types.push_back(p->return_type);
             }
             bool is_def = (ch->kind == parse::Kind::kFunctionDef);
-            int existing = parse::findInFrame(tree, parse::currentFrameId(tree), ch->name);
+            // Overloading: a same-name function with a DIFFERENT parameter list is
+            // a new overload. We match an earlier entry only when the parameter
+            // types are identical (a redeclaration / the definition of a forward
+            // decl). Two same-parameter entries with different RETURN types are
+            // not overloadable — an error.
+            int existing = -1;
+            for (std::size_t idx = 0; idx < tree.entries.size(); idx++) {
+                parse::Entry const& pe = tree.entries[idx];
+                if (pe.kind == parse::EntryKind::kFunction && pe.owner_ns_frame < 0
+                    && pe.name == ch->name && pe.param_types == param_types) {
+                    existing = (int)idx;
+                    break;
+                }
+            }
             if (existing >= 0) {
                 parse::Entry& prev = tree.entries[existing];
                 if (prev.slids_type != ch->return_type) {
@@ -1932,19 +2158,18 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
                         {{prev.file_id, prev.tok, "first declared here"}}});
                     continue;
                 }
-                if (prev.param_types != param_types) {
-                    diagnostic::report(diag, {ch->file_id, ch->tok,
-                        "Parameter types do not match earlier declaration.",
-                        {{prev.file_id, prev.tok, "first declared here"}}});
-                    continue;
-                }
                 if (is_def && prev.defined) {
                     diagnostic::report(diag, {ch->file_id, ch->tok,
                         "Duplicate definition of '" + ch->name + "'.",
-                        {{prev.file_id, prev.tok, "first defined here"}}});
+                        {{prev.def_file_id, prev.def_tok, "first defined here"}}});
                     continue;
                 }
-                if (is_def) prev.defined = true;
+                if (is_def) {
+                    prev.defined = true;
+                    prev.num_required = num_required;
+                    prev.def_file_id = ch->file_id;
+                    prev.def_tok = ch->name_tok;
+                }
                 ch->resolved_entry_id = existing;
                 continue;
             }
@@ -1953,9 +2178,14 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             e.name = ch->name;
             e.slids_type = ch->return_type;
             e.param_types = std::move(param_types);
+            e.num_required = num_required;
             e.file_id = ch->file_id;
             e.tok = ch->name_tok;
             e.defined = is_def;
+            if (is_def) {
+                e.def_file_id = ch->file_id;
+                e.def_tok = ch->name_tok;
+            }
             ch->resolved_entry_id = parse::addEntry(tree, std::move(e));
             continue;
         }

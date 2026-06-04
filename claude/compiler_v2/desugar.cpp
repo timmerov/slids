@@ -116,10 +116,27 @@ std::unique_ptr<ast::Node> tryDesugarAugAssign(ast::Node& node) {
 std::string functionSymbol(parse::Node const& p, parse::Tree const& tree) {
     if (p.resolved_entry_id < 0) return p.name;
     parse::Entry const& e = tree.entries[p.resolved_entry_id];
-    if (e.kind != parse::EntryKind::kFunction || e.owner_ns_frame < 0) {
-        return p.name;
+    if (e.kind != parse::EntryKind::kFunction) return p.name;
+    // A namespace member is already disambiguated by its entry id; a NESTED
+    // function (registered in a body frame, parent_frame_id != the global frame
+    // 0) is lifted to a top-level symbol mangled the same way, so it can't
+    // collide with a file-scope name.
+    if (e.owner_ns_frame >= 0 || e.parent_frame_id != 0) {
+        return e.name + "." + std::to_string(p.resolved_entry_id);
     }
-    return e.name + "." + std::to_string(p.resolved_entry_id);
+    // A free function is mangled by entry id ONLY when its name is overloaded
+    // (2+ free-function entries share it), so a single function — and main —
+    // keeps its plain symbol. A call and its chosen definition share the entry
+    // id, so they mangle identically.
+    int count = 0;
+    for (parse::Entry const& q : tree.entries) {
+        if (q.kind == parse::EntryKind::kFunction && q.owner_ns_frame < 0
+            && q.name == e.name) {
+            count++;
+        }
+    }
+    if (count > 1) return e.name + "." + std::to_string(p.resolved_entry_id);
+    return p.name;
 }
 
 std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tree) {
@@ -138,6 +155,8 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     node->loop_levels = p.loop_levels;
     node->is_const = p.is_const;
     node->param_types = p.param_types;
+    node->captures = p.captures;
+    node->capture_types = p.capture_types;
     // Function definitions and calls (including qualified `Space:bar()`) resolve
     // to their entry-id-derived symbol; the qualifier is dropped (ast carries no
     // qualifier — a flat symbol replaces it).

@@ -146,8 +146,26 @@ DEFERRED FEATURES (later; may not be on the plan)
 
   * TEMPLATED ALIAS — `alias X<...> = T;`.
 
+  * NESTED FUNCTION RESTRICTIONS TO REVISIT — three deliberate limits, each a
+    compile error today (canon nested.sl says "needs to be revisited"):
+      - DEEP NESTING — a nested function may not contain a further nested
+        function ("Nested functions may not contain further nested functions.").
+      - SIBLING CALLS — one nested function may not call another ("Calling a
+        sibling nested function is not supported."). Lambda-lift threads only the
+        host's captures, not a sibling's capture environment.
+      - NESTED OVERLOADING — nested functions do NOT overload; a same-name nested
+        pair is a "Duplicate declaration". classifyCall restricts candidates to
+        file scope (parent_frame_id == 0). Revisit if nested overloads are wanted.
+
 
 DEFERRED TESTS
+
+  * DUP-DEF / DUP-DECL NOTE CARET POSITION — the "first defined here" note carets
+    the first DEFINITION (Entry.def_tok) and "first declared here" the first
+    DECLARATION (Entry.tok); verified by manual probe only. The //-EXPECT-ERROR
+    runner matches a message SUBSTRING, not caret line/col, so this attribution
+    can't be locked by a .sl negative. Needs a caret-aware assertion the harness
+    doesn't have.
 
   * IF-CONDITION TYPE DIAGNOSTIC — classify rejects an if condition whose type
     isn't coercible to bool ("An if condition must be a condition expression;

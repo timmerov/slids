@@ -67,6 +67,8 @@ struct Node {
     std::vector<std::unique_ptr<Node>> children;
     std::vector<std::unique_ptr<Node>> params;   // kFunctionDef/Decl: kParam nodes
     std::vector<std::string> param_types;        // kCallStmt/kCallExpr: resolved fn's param types
+    std::vector<int> captures;                   // nested fn + its calls: captured host entry ids
+    std::vector<std::string> capture_types;      // nested fn: each capture's slids type
 };
 
 struct Tree {

@@ -7,8 +7,11 @@ callee
 v64= 100
 v64= 7
 greet
+pos
+nonpos
 s= 5
 n= 7
 w= 30
 e= 43
 d= 42
+fwd= 18
