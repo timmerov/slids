@@ -1336,12 +1336,22 @@ Completion rewriteForArray(parse::Tree& tree, parse::Node& s, int arr_id,
     std::string vname = var_decl.name;
     int vfile = var_decl.file_id, vtok = var_decl.name_tok;
     bool by_ref = isReferenceType(vtype);
-    if (by_ref && vtype.substr(0, vtype.size() - 1) != elem) {
-        diagnostic::report(diag, {vfile, vtok,
-            "Loop variable type '" + vtype
-                + "' does not match the array element type '" + elem + "'.",
-            {}});
-        return Completion::Normal;
+    if (by_ref) {
+        // Compare the loop var's pointee to the (already-resolved) element type
+        // with the var type's aliases resolved — so an `Int^` (alias Int = int)
+        // ref over an `int[]` matches. The original `vtype` rides on for the
+        // diagnostic and the binding decl (preserving its alias label for ##type).
+        std::set<std::string> visiting;
+        bool reported = false;
+        std::string resolved = resolveTypeSpelling(tree, vtype, visiting, reported,
+                                                   vfile, vtok, diag);
+        if (resolved.substr(0, resolved.size() - 1) != elem) {
+            diagnostic::report(diag, {vfile, vtok,
+                "Loop variable type '" + vtype
+                    + "' does not match the array element type '" + elem + "'.",
+                {}});
+            return Completion::Normal;
+        }
     }
     int size = arrayFirstDim(arr_type);
     std::string idxName = "_$idx$" + std::to_string(atok);

@@ -373,8 +373,9 @@ SESSION 6 — labels (labeled / numbered break+continue) — LANDED. Phase 2 flo
   * exit: Phase 2 flow COMPLETE (blocks, if/else, while+do-while, for [long/ranged/
     enum/typeless-reuse], switch, labels). FOR-ARRAY landed once arrays did, in
     Phase 4 (`for (var : arr)`, a resolve-stage desugar to kForLongStmt — by-ref/
-    by-value/typeless; see plan.txt Phase 4). Remaining container-for: for-tuple
-    and for-class, blocked on tuples/classes (Phase 4/5).
+    by-value/typeless; the by-ref base-vs-element match alias-resolves the loop-var
+    type, so `for (Int^ v : intArr)` works; see plan.txt Phase 4). Remaining
+    container-for: for-tuple and for-class, blocked on tuples/classes (Phase 4/5).
 
 
 CROSS-CUTTING (every session)

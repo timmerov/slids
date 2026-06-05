@@ -7,3 +7,10 @@ p+q : Integer
 p+m : int
 p+1 : Integer
 p<q : bool
+Integer^ ref = 100
+Integer[] iter = 22
+for-ref sum= 66
+Dir^ dp = 0
+Space:Compass^ cp = 1
+IntPtr ip = 100
+bump= 101

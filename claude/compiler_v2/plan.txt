@@ -201,7 +201,8 @@ Phase 4 — types beyond primitives
     (resolve-stage desugar to kForLongStmt, like for-enum: synth `_$idx$<tok>`
     walks 0..len-1, the loop var bound at the body top — by reference [`T^ v`],
     by value [`T v`], or typeless [by value; reuse-an-enclosing-local-or-fresh].
-    One-dimensional only; a by-ref var's base type must equal the element type.)
+    One-dimensional only; a by-ref var's base type must equal the element type
+    [alias-resolved first, so `for (Int^ v : intArr)` with `alias Int = int` matches].)
   * pointer casting (`<Type^> ptr`)                                LANDED
     (kCastExpr — a prefix-unary reinterpret cast [a leading `<` is unambiguous;
     operand is another unary so casts chain right-to-left; target on return_type,
@@ -247,7 +248,11 @@ Phase 4 — types beyond primitives
   * anonymous tuples (`(T1, T2, ...)`)
   * type aliases — LANDED (value form `alias Name = type;`, file + function
     scope, transparent; resolveTypeSpelling substitutes the chain; desugar drops
-    kAliasDecl). Deferred alias items (##type, function-rename, templated) → todo.txt.
+    kAliasDecl; an alias TARGET may be a pointer type `alias IntPtr = int^;`. An
+    IDENTIFIER-typed decl with a pointer SUFFIX (`Integer^ ref`, `Integer[] iter`,
+    `Space:Dir^ d`, and the Phase-5 `Cat^ c`) now parses — looksLikeQualifiedTypedDecl
+    accepts an optional `^`/`[]` suffix before the var name. Deferred alias items
+    (##type-of-function, function-rename, templated) → todo.txt.
   * qualified type names — LANDED. A type spelling may be namespace-qualified
     (`Space:Dir`, `::A:B:T`): grammar's parseType accepts a qualified name and a
     looksLikeQualifiedTypedDecl lookahead routes `Space:Dir x` to a var-decl;

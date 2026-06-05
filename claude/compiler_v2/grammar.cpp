@@ -173,11 +173,15 @@ struct Parser {
         return type;
     }
 
-    // Pure lookahead: do the tokens from the current position form a qualified
-    // name (`A`, `A:B`, `::A:B`) immediately followed by an identifier? That is
-    // a qualified TYPE spelling preceding a variable name (`Space:Dir x`), as
-    // opposed to a name leading a call / assignment (`Space:foo()`,
-    // `Space:kX = 1`). Consumes nothing.
+    // Pure lookahead: do the tokens from the current position form a (qualified)
+    // identifier TYPE spelling, with an optional pointer suffix, immediately
+    // followed by an identifier? That is a typed var decl whose type is an
+    // identifier type (alias / enum / class), possibly a reference or iterator:
+    // `Space:Dir x`, `Integer^ ref`, `Integer[] iter`, `Space:Dir^ d`. Opposed to
+    // a name leading a call / assignment (`Space:foo()`, `Space:kX = 1`), a deref
+    // store (`p^ = v`), or an index store (`arr[i] = v` — a NON-empty `[i]`, so
+    // the iterator suffix below doesn't match). Primitive-typed decls don't come
+    // here (isTypeStart catches them). Consumes nothing.
     bool looksLikeQualifiedTypedDecl() const {
         int o = 0;
         if (peekKind(o) == token::Kind::kColonColon) o++;
@@ -185,6 +189,15 @@ struct Parser {
         o++;
         while (peekKind(o) == token::Kind::kColon) {
             if (peekKind(o + 1) != token::Kind::kIdentifier) return false;
+            o += 2;
+        }
+        // An optional reference (`^`) or iterator (`[]` — empty brackets only)
+        // suffix, mirroring parseType. A non-empty `[i]` is a subscript, not a
+        // type suffix, so it is left for the name-led store path.
+        if (peekKind(o) == token::Kind::kBitXor) {
+            o++;
+        } else if (peekKind(o) == token::Kind::kLBracket
+                   && peekKind(o + 1) == token::Kind::kRBracket) {
             o += 2;
         }
         return peekKind(o) == token::Kind::kIdentifier;
@@ -1739,8 +1752,12 @@ struct Parser {
             // `<ident> <ident>` is a declaration with an identifier type
             // (alias / class / enum), e.g. `Integer x = 42;`.
             if (next == token::Kind::kIdentifier) return parseVarDeclStmt();
-            // `Space:Dir x` — a qualified type spelling preceding a var name.
-            if (next == token::Kind::kColon
+            // A qualified (`Space:Dir x`) or pointer-suffixed (`Integer^ ref`,
+            // `Integer[] iter`) identifier-typed decl. looksLikeQualifiedTypedDecl
+            // accepts an optional `^` / `[]` suffix before the var name.
+            if ((next == token::Kind::kColon
+                 || next == token::Kind::kBitXor
+                 || next == token::Kind::kLBracket)
                 && looksLikeQualifiedTypedDecl()) return parseVarDeclStmt();
             // ident, `ident:...` (qualified) -> assign / aug-assign / call.
             return parseNameLedStmt();

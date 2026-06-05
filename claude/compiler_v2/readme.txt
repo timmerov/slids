@@ -57,8 +57,16 @@ STAGE FILES (.h / .cpp pairs)
             name string. Hand-written recursive descent. Parses: types
             (built-in primitives, an identifier type name, a namespace-qualified
             type name `Space:Dir` / `::A:B:T`, + T[] of any); a
-            looksLikeQualifiedTypedDecl lookahead routes `Space:Dir x` to a
-            var-decl (vs `Space:foo()` / `Space:kX = 1`, name-led statements);
+            looksLikeQualifiedTypedDecl lookahead routes an identifier-typed decl
+            to a var-decl (vs `Space:foo()` / `Space:kX = 1` / `p^ = v` /
+            `arr[i] = v`, name-led statements): it scans the (qualified) name, an
+            OPTIONAL `^` (reference) or empty `[]` (iterator) suffix, then requires
+            the var name — so `Space:Dir x`, `Integer^ ref`, `Integer[] iter`,
+            `Space:Dir^ d` all parse (a non-empty `[i]` is a subscript, not a
+            suffix, so `arr[i] = v` stays a store; a bare `a ^ b` reads as a
+            reference decl `a^ b` since a bare XOR is not a statement form). An
+            array DIM (`Int nums[4]`) goes after the name -> the plain `Ident
+            Ident` path;
             `alias Name = type;` + bare `alias Ns;` decls; namespace decls
             (`Name { members }`) and inline qualified member decls
             (`const int Space:kSix = 6;`); enum decls
