@@ -994,6 +994,61 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
             resolveDeclType(tree, e.return_type, e.file_id, e.tok, diag);
             return;
         }
+        case parse::Kind::kSizeofExpr: {
+            // sizeof(T): grammar parsed a type spelling onto return_type — alias-
+            // resolve + validate it. sizeof(expr): the operand is an expression;
+            // an ident NAMING a type (alias / enum facet, bare or qualified) is
+            // measured as that type (stamp the underlying on return_type, like
+            // ##type), and any other operand is a value whose type classify
+            // measures. sizeof never evaluates the operand.
+            if (!e.return_type.empty()) {
+                resolveDeclType(tree, e.return_type, e.file_id, e.tok, diag);
+                return;
+            }
+            parse::Node& operand = *e.children[0];
+            if (operand.kind != parse::Kind::kIdentExpr) {
+                resolveExpr(tree, operand, diag);
+                return;
+            }
+            bool qualified = isQualified(operand);
+            int id = qualified ? resolveQualifiedRef(tree, operand, diag)
+                               : resolveName(tree, operand.name);
+            if (id >= 0) {
+                parse::EntryKind k = tree.entries[id].kind;
+                bool is_type = (k == parse::EntryKind::kAlias)
+                    || (k == parse::EntryKind::kNamespace
+                        && !tree.entries[id].slids_type.empty());   // enum facet
+                if (is_type) {
+                    std::string spelling = operand.global_qualified ? "::" : "";
+                    for (auto const& seg : operand.qualifier) spelling += seg + ":";
+                    spelling += operand.name;
+                    std::set<std::string> visiting;
+                    bool reported = false;
+                    e.return_type = resolveTypeSpelling(tree, spelling, visiting,
+                        reported, operand.file_id, operand.tok, diag);
+                    return;
+                }
+                if (k == parse::EntryKind::kLocalVar
+                    || k == parse::EntryKind::kConst) {
+                    if (qualified) operand.resolved_entry_id = id;
+                    else resolveExpr(tree, operand, diag);
+                    return;
+                }
+                char const* what = (k == parse::EntryKind::kFunction)
+                    ? "function" : "namespace";
+                diagnostic::report(diag, {operand.file_id, operand.tok,
+                    "'" + operand.name + "' is a " + what
+                        + ", not a value or a type.", {}});
+                return;
+            }
+            // id < 0: a qualified ref already reported its own resolution failure
+            // (resolveQualifiedRef); only a bare unresolved name needs reporting.
+            if (!qualified) {
+                diagnostic::report(diag, {operand.file_id, operand.tok,
+                    "'" + operand.name + "' is not a value or a type.", {}});
+            }
+            return;
+        }
         case parse::Kind::kStringifyType: {
             // ##type's operand is either a VALUE (resolve it; classify reports its
             // labeled type) or a TYPE NAME — an alias or an enum's transparent type
@@ -2176,6 +2231,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
         case parse::Kind::kCastExpr:
+        case parse::Kind::kSizeofExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kCallExpr:
         case parse::Kind::kCaseClause:

@@ -107,7 +107,11 @@ STAGE FILES (.h / .cpp pairs)
             kHashHash arm — ##file / ##line / ##func / ##name(x) (raw lexed
             token text, scanned to the matching ')' by bracket depth) /
             ##date / ##time / ##type(x) (a kStringifyType node, child = the
-            operand, lowered to a kStringLiteral in classify)). Stamps (file_id, tok)
+            operand, lowered to a kStringLiteral in classify), and sizeof(...) (a
+            kSizeofExpr — a type operand [paren content starts with a type keyword]
+            rides on return_type, else the operand is parsed as an expression for
+            resolve to dispatch on; lowered to an intptr literal in constfold or
+            classify)). Stamps (file_id, tok)
             on every node for source
             attribution. No identifier resolution, no scope tracking,
             no type inference, no literal folding — all deferred to
@@ -154,7 +158,11 @@ STAGE FILES (.h / .cpp pairs)
             value or an alias."). registerEnumMembers also stamps each NAMED-enum
             member's alias_label with the enum name (an anonymous enum has no name
             -> no label -> bare `const int`), so `##type(Enum:member)` reads
-            `const Enum`.
+            `const Enum`. The kSizeofExpr arm shares that type-vs-value dispatch: a
+            type operand (return_type from grammar) is alias-resolved + validated;
+            an ident naming a type stamps the underlying on return_type; any other
+            ident / expression is resolved as a value (sizeof never evaluates it —
+            so the DA requirement is a known limitation, see todo.txt).
             Owns namespaces: a kNamespace entry has a persistent frame
             identity that reopens reuse; members ride the enclosing lexical
             lifetime, tagged by owning namespace. Bare lookup walks the open-
@@ -353,7 +361,14 @@ STAGE FILES (.h / .cpp pairs)
             typeless const, "declared type" for an explicit one. walk() returns
             early on a kStringifyType node so the ##type operand subtree is
             fold-EXEMPT (a const under ##type is not substituted to a literal before
-            classify reports it).
+            classify reports it). A kSizeofExpr is likewise operand-exempt and
+            folds in place (tryFoldSizeof): a statically-known operand — a type
+            (return_type), a string literal (length + null), nullptr, an address-of
+            (always 8), or a plain ident (its declared type, via
+            widen::typeByteSize) — becomes a STRONG `intptr` literal HERE, before
+            const capture, so sizeof can initialize a const / feed a const
+            expression. Operands needing inference (deref / index / arithmetic) and
+            a slid type are left for classify.
             Iterates to a fixpoint; any kConst whose rhs never folded
             errors with "Initializer for 'X' is not a constant
             expression." (consolidated into one diagnostic with notes
@@ -378,6 +393,11 @@ STAGE FILES (.h / .cpp pairs)
             non-empty); gated to !is_const so it doesn't clobber constfold's const
             inference. A kAugAssignStmt on such a var RE-READS entryType into
             s.return_type (resolve cached it empty before the decl was stamped).
+            sizeof lowering: the kSizeofExpr cases constfold left (a deref / index /
+            arithmetic operand, or a slid type) become a kIntLiteral of type
+            `intptr` — widen::typeByteSize of the type/value operand, or content+1
+            for a string literal; a slid type (-1) reports "Cannot take sizeof of
+            'X'." (the foldable operands already became literals in constfold).
             ##type(x) lowering: a kStringifyType node becomes a kStringLiteral whose
             text is the operand's resolved type — alias_label ?: inferred_type, plus
             the const qualifier (a kIdentExpr operand resolving to a kConst -> "const

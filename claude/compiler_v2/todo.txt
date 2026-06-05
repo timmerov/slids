@@ -52,6 +52,16 @@ BUGS (found, deferred)
     carve-out; lands with the cross-TU / .slh-propagation work (plan Phase 8).
     prerequisite: group with general work on import.
 
+  * UNEVALUATED OPERAND REQUIRES DEFINITE ASSIGNMENT — a `sizeof(x)` (and a
+    `##type(x)`) on an UNINITIALIZED local errors "Use of uninitialized variable
+    'x'.", though neither evaluates its operand — they only read its TYPE. Both
+    route the value-operand through resolveExpr, which fires the use-before-init
+    check + read-mark. The read-mark is desirable (the var counts as used, no
+    unused-local warning); the init REQUIREMENT is wrong. Fix: an "unevaluated
+    context" mode threaded through resolveExpr that suppresses use-before-init
+    (but keeps the read-mark), applied uniformly to sizeof + ##type rather than
+    bolted onto either alone. Canon: test_v2/misc/sizeof.sl claude-block notes it.
+
 
 REACH GOALS
 
@@ -75,6 +85,17 @@ DEFERRED FEATURES (later; may not be on the plan)
     these can be enforced yet. The rules are written + commented in cast.sl's
     canon block (lines ~21, 43-54, 77-86); land them with Phase 6 when const is
     a real qualifier. Until then those lines stay commented and untested.
+
+  * CONST-EXPRESSION ARRAY DIMENSIONS — an array dimension must be an integer
+    LITERAL in the type spelling (`T arr[4]`); a const expression there
+    (`T arr[N]`, `T arr[sizeof(int)]`) errors "Array size must be an integer
+    constant." The dim is parsed into the type spelling and validated at
+    grammar/resolve, BEFORE constfold folds consts / sizeof — so even a foldable
+    dim isn't seen as constant. Needs the dim to carry an expression that a
+    constfold pass evaluates (or the dim-constant check moved after constfold).
+    Surfaced landing sizeof (sizeof folds in constfold, too late for dims);
+    noted in test_v2/misc/sizeof.sl's claude block. Broader than sizeof — covers
+    any const-expression dimension.
 
   * CAST-TARGET CARET GRANULARITY — a kCastExpr's whole error (unknown type,
     void[], rule violation) carets at the `<` token, not the offending type

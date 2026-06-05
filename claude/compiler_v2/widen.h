@@ -21,6 +21,12 @@ bool classify(std::string const& slids_type, TypeKind& out);
 // Classify uses this to validate declared / return type spellings up front.
 bool isKnownType(std::string const& slids_type);
 
+// Byte size of a type spelling, or -1 if not statically known. A reference /
+// iterator / nullptr is a pointer (8); a fixed array is its TOTAL bytes (product
+// of every dimension times the element size). A slid type's size is unknown
+// until its layout (Phase 5) / link (cross-TU) — returns -1. Used by sizeof.
+long long typeByteSize(std::string const& slids_type);
+
 // Literal fit checks. Report a diagnostic and return false if the literal
 // doesn't fit in dest_type. Int literal targeting a float type requires exact
 // representability against the float's significand; float literal targeting

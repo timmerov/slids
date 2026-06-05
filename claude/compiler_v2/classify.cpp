@@ -182,6 +182,7 @@ bool isIntegerClass(std::string const& t) {
     return k.cat != widen::Category::kFloat;
 }
 
+
 bool isNumericType(std::string const& t) {
     widen::TypeKind k;
     return widen::classify(t, k);
@@ -260,6 +261,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
         case parse::Kind::kCastExpr:
+        case parse::Kind::kSizeofExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kBlockStmt:
@@ -463,6 +465,46 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 return;
             }
             e.inferred_type = pointeeType(ot);
+            return;
+        }
+        case parse::Kind::kSizeofExpr: {
+            // sizeof(...) -> the operand's byte size as an `intptr`. constfold
+            // already folded the statically-known operands (type, string,
+            // nullptr, address-of, a plain ident) so they can feed compile-time-
+            // constant contexts (a const initializer, an array dimension). What
+            // reaches HERE is the residual that needs type inference — a deref,
+            // an index, an arithmetic expression — plus a slid-type operand
+            // (typeByteSize -1) that constfold left for this arm to reject. The
+            // computed size is frozen into a kIntLiteral typed `intptr`.
+            // A string literal is special: its byte length INCLUDING the null,
+            // not sizeof(char[]) = 8.
+            long long size;
+            if (e.children.empty()
+                || e.children[0]->kind != parse::Kind::kStringLiteral) {
+                std::string ty = e.return_type;
+                if (ty.empty()) {
+                    parse::Node& operand = *e.children[0];
+                    inferExpr(tree, operand, "", diag);
+                    ty = operand.inferred_type;
+                }
+                // An empty type rides an already-reported upstream error (an
+                // un-typeable operand); fall to 0 silently rather than cascade.
+                // A slid type (typeByteSize -1) is not statically sized — report;
+                // unreachable until classes (Phase 5 / cross-TU) exist.
+                size = ty.empty() ? 0 : widen::typeByteSize(ty);
+                if (size < 0) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Cannot take sizeof of '" + ty + "'.", {}});
+                    size = 0;
+                }
+            } else {
+                size = static_cast<long long>(e.children[0]->text.size()) + 1;
+            }
+            e.kind = parse::Kind::kIntLiteral;
+            e.text = std::to_string(size);
+            e.return_type.clear();
+            e.children.clear();
+            e.inferred_type = "intptr";
             return;
         }
         case parse::Kind::kCastExpr: {
@@ -1414,6 +1456,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
         case parse::Kind::kCastExpr:
+        case parse::Kind::kSizeofExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kCallExpr:
         case parse::Kind::kParam:

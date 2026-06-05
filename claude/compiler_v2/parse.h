@@ -81,6 +81,11 @@ enum class Kind {
     kCastExpr,     // prefix `<Type^> operand` — pointer reinterpret cast.
                    // return_type = target type spelling; children[0] = operand.
                    // The address is unchanged; only the static type changes.
+    kSizeofExpr,   // sizeof(T) / sizeof(expr) — byte size as an `intptr`.
+                   // return_type = a type-operand spelling (grammar) OR the
+                   // underlying of an ident naming a type (resolve); else
+                   // children[0] = the value expression whose type is measured.
+                   // classify computes the size and rewrites this to kIntLiteral.
     kStringifyType,// ##type(expr) — children[0] = operand expression. classify
                    // infers the operand's type and rewrites this node in place
                    // to a kStringLiteral holding the type name; never survives

@@ -428,4 +428,35 @@ bool isKnownType(std::string const& t) {
     return false;
 }
 
+long long typeByteSize(std::string const& t) {
+    if (t == "anyptr") return 8;
+    if (!t.empty() && t.back() == '^') return 8;                  // reference
+    if (t.size() >= 2 && t.compare(t.size() - 2, 2, "[]") == 0)   // iterator
+        return 8;
+    // A fixed array `base[N]...[M]`: total = product of every dimension times the
+    // element size. The first `[` (followed by a digit) marks the dim list; the
+    // dims are contiguous after the element-type base, in any order (the product
+    // is order-independent).
+    std::size_t lb = t.find('[');
+    if (lb != std::string::npos && lb + 1 < t.size()
+        && t[lb + 1] >= '0' && t[lb + 1] <= '9') {
+        long long total = 1;
+        std::size_t p = lb;
+        while (p < t.size() && t[p] == '[') {
+            std::size_t rb = t.find(']', p);
+            if (rb == std::string::npos) return -1;
+            total *= std::atoll(t.substr(p + 1, rb - p - 1).c_str());
+            p = rb + 1;
+        }
+        long long elem = typeByteSize(t.substr(0, lb));
+        return elem < 0 ? -1 : total * elem;
+    }
+    if (t == "bool" || t == "char" || t == "int8" || t == "uint8") return 1;
+    if (t == "int16" || t == "uint16") return 2;
+    if (t == "int"   || t == "int32"  || t == "uint" || t == "uint32"
+     || t == "float" || t == "float32") return 4;
+    if (t == "int64" || t == "uint64" || t == "intptr" || t == "float64") return 8;
+    return -1;   // a slid type — not statically sized yet
+}
+
 }  // namespace widen

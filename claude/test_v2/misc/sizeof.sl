@@ -31,10 +31,119 @@ sizeof accepts qualified types.
 /*
 claude says:
 
-tbd
+- a kSizeofExpr. the grammar parses `sizeof` `(` then EITHER a type (the paren
+  content starts with a type keyword -> parseType onto return_type) OR an
+  expression (an identifier is ambiguous [alias vs variable] and is parsed as an
+  expression, like ##type). an ident naming a type (alias / enum, bare or
+  qualified) is measured as that type; any other ident is a value, measured by
+  its type. sizeof never evaluates its operand.
+- the size (widen::typeByteSize): a reference / iterator / nullptr is a pointer
+  (8); a fixed array is its TOTAL bytes (product of dims x element size); a string
+  literal is its byte length INCLUDING the terminating null (NOT sizeof(char[]) =
+  8). otherwise it is the primitive's width.
+- CONSTFOLD folds the statically-known operands (a type, a string, nullptr, an
+  address-of, a plain ident) to a STRONG `intptr` literal — before const capture,
+  so `const n = sizeof(int)` and `sizeof(a) + sizeof(b)` are compile-time
+  constants. the residual operands that need type inference (a deref, an index,
+  arithmetic) lower in CLASSIFY instead (also an `intptr` literal). NOT supported:
+  sizeof in an array DIMENSION (`T arr[sizeof(int)]`) — the dim is validated
+  before constfold runs.
+- a slid completed in another TU isn't sized until link — that path (a runtime
+  `getelementptr null, 1` / `ptrtoint`) lands with classes (Phase 5/8); until then
+  typeByteSize returns -1 only for a slid and classify reports an error.
+- LIMITATION (deferred, shared with ##type, see todo.txt): a value operand
+  currently must be definitely-assigned — `sizeof(x)` on an uninitialized `x`
+  errors, though sizeof never evaluates it. fix = an "unevaluated context" mode.
 */
 
+int32 foo() {
+    return 0;
+}
+
+Box {
+    const int32 k = 0;
+}
+
+Space {
+    enum Compass ( north, east, south, west );
+}
+
 int32 main() {
+    /* primitive widths. */
+    __println("char= "    + sizeof(char));            // 1
+    __println("int16= "   + sizeof(int16));           // 2
+    __println("int= "     + sizeof(int));             // 4
+    __println("int64= "   + sizeof(int64));           // 8
+    __println("intptr= "  + sizeof(intptr));          // 8
+    __println("float32= " + sizeof(float32));         // 4
+    __println("float64= " + sizeof(float64));         // 8
+
+    /* any pointer / iterator is 8. */
+    __println("void^= "   + sizeof(void^));           // 8
+    __println("char[]= "  + sizeof(char[]));          // 8
+
+    /* a variable, a reference, a dereference, an array (total bytes), a
+       multi-dimensional array, an array element, an address-of, an iterator. */
+    int32  x = 5;
+    int32^ ref = ^x;
+    int32  arr[4];
+    arr[0] = 0;
+    int32  grid[3][5];
+    grid[0][0] = 0;
+    int32[] it = ^arr[0];
+    __println("var= "      + sizeof(x));              // 4
+    __println("ref= "      + sizeof(ref));            // 8
+    __println("ref^= "     + sizeof(ref^));           // 4
+    __println("arr= "      + sizeof(arr));            // 16
+    __println("grid= "     + sizeof(grid));           // 60
+    __println("element= "  + sizeof(grid[0][0]));     // 4
+    __println("addrof= "   + sizeof(^x));             // 8
+    __println("iter= "     + sizeof(it));             // 8
+    __println("nullptr= "  + sizeof(nullptr));        // 8
+    __println("arith= "    + sizeof(x + x));          // 4
+
+    /* a string literal: content bytes + the terminating null. */
+    __println("string= " + sizeof("Hello, World!")); // 14
+
+    /* an alias, a bare enum, and a namespace-qualified enum type all resolve to
+       their underlying. */
+    __println("alias= "     + sizeof(Integer));       // 8
+    __println("enum= "      + sizeof(Dir));           // 4
+    __println("qualified= " + sizeof(Space:Compass)); // 4
+
+    /* sizeof is an intptr value, usable like any other. */
+    intptr total = sizeof(int) + sizeof(int64);
+    __println("sum= " + total);                       // 12
+
+    /* sizeof is a compile-time constant: it folds in constfold, so it may
+       initialize a const (typed or inferred) and feed a const expression. */
+    const intptr cn = sizeof(int);
+    const cm = sizeof(int16) + sizeof(int64);
+    __println("const= "  + cn);                       // 4
+    __println("const2= " + cm);                       // 10
+
+    /* compile errors — each uncommented in isolation by the negative runner. */
+
+    //-EXPECT-ERROR: 'foo' is a function, not a value or a type
+    //__println("e= " + sizeof(foo));
+
+    //-EXPECT-ERROR: 'Box' is a namespace, not a value or a type
+    //__println("e= " + sizeof(Box));
+
+    //-EXPECT-ERROR: 'nope' is not a value or a type
+    //__println("e= " + sizeof(nope));
+
+    /* void has no size. */
+    //-EXPECT-ERROR: Cannot take sizeof of 'void'
+    //__println("e= " + sizeof(void));
+
+    /* a value operand must (for now) be definitely assigned (see claude block). */
+    //-EXPECT-ERROR: Use of uninitialized variable 'u'
+    //int32 u;
+    //__println("e= " + sizeof(u));
 
     return 0;
 }
+
+alias Integer = int64;
+enum Dir ( kN, kE, kS, kW );

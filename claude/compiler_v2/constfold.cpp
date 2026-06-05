@@ -154,6 +154,7 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
         case parse::Kind::kCastExpr:
+        case parse::Kind::kSizeofExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kParam:
             return;  // non-literal: no nominal type
@@ -777,6 +778,41 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
     return true;
 }
 
+// sizeof(...) folds to a strong `intptr` constant whenever its size is known
+// without type inference — a type operand (return_type), a string literal,
+// nullptr, an address-of (always a pointer), or a plain ident (its declared
+// type). Folding HERE (before const capture) lets sizeof initialize a const or
+// size an array dimension. Operands that need inference — a deref, an index,
+// arithmetic — and a slid type are left as kSizeofExpr for classify. Like
+// ##type, sizeof never evaluates its operand, so the operand is not substituted.
+std::unique_ptr<parse::Node> tryFoldSizeof(parse::Node& n, parse::Tree& tree) {
+    long long size = -1;
+    if (!n.children.empty()
+        && n.children[0]->kind == parse::Kind::kStringLiteral) {
+        size = static_cast<long long>(n.children[0]->text.size()) + 1;  // + null
+    } else if (!n.return_type.empty()) {
+        size = widen::typeByteSize(n.return_type);
+    } else if (!n.children.empty()) {
+        parse::Node const& op = *n.children[0];
+        if (op.kind == parse::Kind::kNullptrLiteral
+            || op.kind == parse::Kind::kAddrOfExpr) {
+            size = 8;   // any pointer / iterator
+        } else if (op.kind == parse::Kind::kIdentExpr
+                   && op.resolved_entry_id >= 0) {
+            std::string const& ty = tree.entries[op.resolved_entry_id].slids_type;
+            if (!ty.empty()) size = widen::typeByteSize(ty);
+        }
+    }
+    if (size < 0) return nullptr;   // needs inference / a slid type -> classify
+    auto lit = std::make_unique<parse::Node>();
+    lit->kind = parse::Kind::kIntLiteral;
+    lit->text = std::to_string(size);
+    lit->file_id = n.file_id;
+    lit->tok = n.tok;
+    lit->strong_type = "intptr";   // sizeof is a strong intptr constant
+    return lit;
+}
+
 void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
           bool& changed, diagnostic::Sink& diag) {
     if (!slot) return;
@@ -784,6 +820,16 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
     // leave the operand subtree un-folded and un-substituted. Folding a const
     // operand to a bare literal would erase its declared (const-qualified) type.
     if (slot->kind == parse::Kind::kStringifyType) return;
+    // sizeof likewise never evaluates its operand — fold it in place to an intptr
+    // constant where statically known, without substituting inside the operand.
+    if (slot->kind == parse::Kind::kSizeofExpr) {
+        if (auto folded = tryFoldSizeof(*slot, tree)) {
+            slot = std::move(folded);
+            changed = true;
+            assignNominal(*slot);
+        }
+        return;
+    }
     for (auto& c : slot->children) {
         walk(c, tree, changed, diag);
     }

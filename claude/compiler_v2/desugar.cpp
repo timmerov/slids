@@ -67,6 +67,10 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kDerefExpr:     return ast::Kind::kDerefExpr;
         case parse::Kind::kIndexExpr:     return ast::Kind::kIndexExpr;
         case parse::Kind::kCastExpr:      return ast::Kind::kCastExpr;
+        case parse::Kind::kSizeofExpr:
+            // Rewritten to a kIntLiteral during classify; never copied to the ast.
+            assert(false && "toAstKind: kSizeofExpr should be lowered in classify");
+            __builtin_unreachable();
         case parse::Kind::kStringifyType:
             // Rewritten to a kStringLiteral during classify; never copied.
             assert(false && "toAstKind: kStringifyType should be lowered in classify");

@@ -217,6 +217,19 @@ Phase 4 — types beyond primitives
     DEFERRED to Phase 6: const-cast surface [`const T^`, `<const>`, `<mutable>`,
     mutable<->const] — const is not yet a tracked pointer qualifier. Class-
     hierarchy casts wait on Phase 5.)
+  * sizeof (`sizeof(T)` / `sizeof(expr)`)                          LANDED
+    (kSizeofExpr — a primary; grammar splits a TYPE operand [paren starts with a
+    type keyword -> parseType onto return_type] from an EXPRESSION operand [resolve
+    dispatches type-vs-value, like ##type]. Size = widen::typeByteSize: pointer/
+    iterator/nullptr 8, fixed array = total bytes [∏dims × elem], string literal =
+    content + null [NOT char[]=8], else primitive width. Folds to a STRONG `intptr`
+    literal — in CONSTFOLD for the statically-known operands [type / string /
+    nullptr / address-of / plain ident] so it can initialize a const or feed a
+    const expression, in CLASSIFY for the residual [deref / index / arithmetic].
+    A slid type [-1] errors "Cannot take sizeof of 'X'." until classes [Phase 5/8]
+    bring the runtime `getelementptr null,1`/`ptrtoint` form. test_v2/misc/sizeof.sl.
+    NOT supported: sizeof in an array DIMENSION [dim validated pre-constfold]; a
+    value operand needs definite-assignment [shared ##type limitation, todo.txt].)
   * memory mgmt (`new T(init)`, `new T[n]`, `delete ptr`)
   * anonymous tuples (`(T1, T2, ...)`)
   * type aliases — LANDED (value form `alias Name = type;`, file + function

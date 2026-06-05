@@ -359,6 +359,30 @@ struct Parser {
             if (!expect(token::Kind::kRParen, ")")) return nullptr;
             return inner;
         }
+        if (t.kind == token::Kind::kSizeof) {
+            // sizeof(T) or sizeof(expr) — the byte size as an intptr. The paren
+            // content is a TYPE when it starts with a type keyword (`int`,
+            // `void^`, `int[]`); a bare identifier is ambiguous (alias vs
+            // variable) and is parsed as an expression for resolve to dispatch
+            // on (the same type-vs-value split as ##type). A string literal and
+            // any other expression also take the expression path.
+            int sz_file = t.file_id;
+            int sz_tok = pos;
+            advance();   // sizeof
+            if (!expect(token::Kind::kLParen, "(")) return nullptr;
+            auto node = newNodeAt(parse::Kind::kSizeofExpr, sz_file, sz_tok);
+            if (isTypeStart(peek().kind)) {
+                std::string ty = parseType();
+                if (ty.empty()) return nullptr;
+                node->return_type = ty;
+            } else {
+                auto operand = parseExpr();
+                if (!operand) return nullptr;
+                node->children.push_back(std::move(operand));
+            }
+            if (!expect(token::Kind::kRParen, ")")) return nullptr;
+            return node;
+        }
         if (t.kind == token::Kind::kHashHash) {
             // Compile-time stringify macros. All but ##type resolve to a string
             // literal right here; ##type needs the operand's inferred type, so it
