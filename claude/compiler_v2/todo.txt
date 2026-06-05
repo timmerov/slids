@@ -34,16 +34,6 @@ BUGS (found, deferred)
     is already settled — a DECLARED char re-imposes the strong type (the fix above).
     Overlaps the strong_type / flex machinery and the named-type binary-result rule.
 
-  * QUALIFIED-TYPE CARET GRANULARITY — a bad segment in a namespace-qualified
-    TYPE spelling (`A:B:C x`) carets at the whole type position, not the
-    offending segment. resolveQualifiedType (resolve.cpp) joins the spelling
-    into a flat string with no per-segment tokens (unlike a kIdentExpr, which
-    carries qualifier_toks), so `toks(segs.size(), tok)` points every segment at
-    the same decl-type token. Attribution is correct file/line (never file_id=0),
-    just coarse. A B-precise caret would need parseType to thread per-segment
-    tokens through the type spelling (or a structured qualified-type node).
-    No invalid IR; diagnostic precision only.
-
   * ORPHAN-CHECK vs IMPORT FORWARD-DECLS — resolve's Pass 3 errors on any
     function declared-but-never-defined ("Function 'X' is declared but never
     defined.") — but a `.slh` header legitimately declares-only (defined in the
@@ -51,16 +41,6 @@ BUGS (found, deferred)
     function is an error regardless of file. Needs the `.slh` declare-only
     carve-out; lands with the cross-TU / .slh-propagation work (plan Phase 8).
     prerequisite: group with general work on import.
-
-  * UNEVALUATED OPERAND REQUIRES DEFINITE ASSIGNMENT — a `sizeof(x)` (and a
-    `##type(x)`) on an UNINITIALIZED local errors "Use of uninitialized variable
-    'x'.", though neither evaluates its operand — they only read its TYPE. Both
-    route the value-operand through resolveExpr, which fires the use-before-init
-    check + read-mark. The read-mark is desirable (the var counts as used, no
-    unused-local warning); the init REQUIREMENT is wrong. Fix: an "unevaluated
-    context" mode threaded through resolveExpr that suppresses use-before-init
-    (but keeps the read-mark), applied uniformly to sizeof + ##type rather than
-    bolted onto either alone. Canon: test_v2/misc/sizeof.sl claude-block notes it.
 
 
 REACH GOALS
@@ -96,12 +76,6 @@ DEFERRED FEATURES (later; may not be on the plan)
     Surfaced landing sizeof (sizeof folds in constfold, too late for dims);
     noted in test_v2/misc/sizeof.sl's claude block. Broader than sizeof — covers
     any const-expression dimension.
-
-  * CAST-TARGET CARET GRANULARITY — a kCastExpr's whole error (unknown type,
-    void[], rule violation) carets at the `<` token, not the offending type
-    segment, because the target is a flat string (return_type) with no per-
-    segment tokens. Same root cause as QUALIFIED-TYPE CARET GRANULARITY above;
-    a fix there (threading per-segment type tokens) would cover casts too.
 
   * SWITCH STACKED-EMPTY-BODY TERMINATOR (conservative over-demand) — a switch
     where a stacked label's body is empty and falls through into a returning

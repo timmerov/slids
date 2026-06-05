@@ -106,6 +106,9 @@ struct Node {
     std::string name;            // function name, callee name, variable name
     std::string text;            // literal value (string / int as text / char codepoint)
     std::string return_type;     // function return type; reused for VarDecl's declared type
+    std::vector<int> return_type_seg_toks;  // per-segment tokens of a qualified type
+                                 // spelling in return_type (for precise carets);
+                                 // empty for primitives / non-captured sites
     std::string nominal_type;    // literal nodes: nominal type assigned by constfold
     std::string inferred_type;   // classify: expression nodes' in-context type
     std::string op_type;         // classify: binary's computational type (commonType / shift LHS)

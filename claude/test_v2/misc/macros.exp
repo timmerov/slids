@@ -8,6 +8,7 @@ int64
 bool
 int
 n+1
+int
 char[]
 char[]
 Integer type = int

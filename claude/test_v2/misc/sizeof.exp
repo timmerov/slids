@@ -24,3 +24,5 @@ qualified= 4
 sum= 12
 const= 4
 const2= 10
+uninit= 4
+uninit2= 4

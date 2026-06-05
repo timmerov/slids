@@ -229,8 +229,11 @@ Phase 4 — types beyond primitives
     const expression, in CLASSIFY for the residual [deref / index / arithmetic].
     A slid type [-1] errors "Cannot take sizeof of 'X'." until classes [Phase 5/8]
     bring the runtime `getelementptr null,1`/`ptrtoint` form. test_v2/misc/sizeof.sl.
-    NOT supported: sizeof in an array DIMENSION [dim validated pre-constfold]; a
-    value operand needs definite-assignment [shared ##type limitation, todo.txt].)
+    A value operand is UNEVALUATED — sizeof reads only its type, so an
+    uninitialized local needs no definite assignment [an "unevaluated context"
+    mode threaded through resolveExpr suppresses use-before-init but keeps the
+    read-mark; shared with ##type]. NOT supported: sizeof in an array DIMENSION
+    [dim validated pre-constfold].)
   * memory mgmt (`new T`, `new T[n]`, `new(addr) T[n]`, `delete ptr`)  LANDED
     (kNewExpr / kDeleteStmt. `new T` -> T^ (malloc sizeof(T)); `new T[n]` -> T[]
     (malloc n*sizeof(T), n a RUNTIME expr); `new(addr) T[n]` -> placement, no
@@ -258,7 +261,11 @@ Phase 4 — types beyond primitives
     looksLikeQualifiedTypedDecl lookahead routes `Space:Dir x` to a var-decl;
     resolveTypeSpelling resolves a `:`-bearing spelling through the shared ns
     chain walker to the underlying before any downstream stage. Diagnostics:
-    not-a-namespace / not-a-namespace-member / not-a-type-in.
+    not-a-namespace / not-a-namespace-member / not-a-type-in — each carets the
+    OFFENDING SEGMENT (parseType captures per-segment tokens onto a new
+    Node.return_type_seg_toks, threaded as a defaulted seg_toks param through
+    resolveDeclType -> resolveTypeSpelling -> resolveQualifiedType; wired at the
+    var-decl declared-type + cast-target sites, flat-tok fallback elsewhere).
   * constants — LANDED (file + function scope; kConst entries with captured
     values; constfold substitution + iteration + fixpoint check; sharp
     diagnostics for assign-to-const, range overflow, missing init, dup, cyclic).

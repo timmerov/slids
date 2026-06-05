@@ -51,9 +51,13 @@ claude says:
 - a slid completed in another TU isn't sized until link — that path (a runtime
   `getelementptr null, 1` / `ptrtoint`) lands with classes (Phase 5/8); until then
   typeByteSize returns -1 only for a slid and classify reports an error.
-- LIMITATION (deferred, shared with ##type, see todo.txt): a value operand
-  currently must be definitely-assigned — `sizeof(x)` on an uninitialized `x`
-  errors, though sizeof never evaluates it. fix = an "unevaluated context" mode.
+- a value operand is UNEVALUATED: sizeof reads only its type, so an
+  uninitialized local is fine — `sizeof(u)` on an undefined `u` measures its
+  declared type and does not require definite assignment (an "unevaluated
+  context" suppresses the use-before-init check, recursing through arithmetic /
+  index / deref operands). the operand is still read-marked, so it is not swept
+  as an unused local; sizeof does not COUNT as an assignment, so a later real
+  read of `u` still errors.
 */
 
 int32 foo() {
@@ -137,10 +141,13 @@ int32 main() {
     //-EXPECT-ERROR: Cannot take sizeof of 'void'
     //__println("e= " + sizeof(void));
 
-    /* a value operand must (for now) be definitely assigned (see claude block). */
-    //-EXPECT-ERROR: Use of uninitialized variable 'u'
-    //int32 u;
-    //__println("e= " + sizeof(u));
+    /* a value operand is unevaluated: sizeof reads only the TYPE, so an
+       uninitialized local needs no definite assignment, and the use-before-init
+       suppression recurses through arithmetic. */
+    int32 u;
+    int32 v;
+    __println("uninit= "  + sizeof(u));               // 4
+    __println("uninit2= " + sizeof(v + 1));           // 4
 
     return 0;
 }

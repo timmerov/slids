@@ -70,7 +70,8 @@ void requireKnownType(std::string const& t, int file_id, int tok,
 // Resolve a namespace-qualified type spelling (`Space:Dir`) to its underlying.
 std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
                                  int file_id, int tok, bool& reported,
-                                 diagnostic::Sink& diag);
+                                 diagnostic::Sink& diag,
+                                 std::vector<int> const* seg_toks = nullptr);
 
 // Substitute a type-alias spelling to its underlying type, following chains
 // (`alias A = B; alias B = int` → `int`) and detecting cycles. A namespace-
@@ -81,7 +82,8 @@ std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
 // redundant "Unknown type".
 std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
                                 std::set<std::string>& visiting, bool& reported,
-                                int file_id, int tok, diagnostic::Sink& diag) {
+                                int file_id, int tok, diagnostic::Sink& diag,
+                                std::vector<int> const* seg_toks = nullptr) {
     std::string base = spelling;
     std::string suffix;
     // Strip trailing modifiers so the base type name resolves: `[]` (iterator),
@@ -123,7 +125,7 @@ std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
     }
     if (base.find(':') != std::string::npos) {
         std::string under =
-            resolveQualifiedType(tree, base, file_id, tok, reported, diag);
+            resolveQualifiedType(tree, base, file_id, tok, reported, diag, seg_toks);
         if (under.empty()) return base + suffix;   // error already reported
         return under + suffix;
     }
@@ -162,11 +164,12 @@ std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
 // require the result to be a known type. A cycle has already been reported, so
 // skip the redundant "Unknown type" that the broken chain would otherwise emit.
 void resolveDeclType(parse::Tree& tree, std::string& spelling,
-                     int file_id, int tok, diagnostic::Sink& diag) {
+                     int file_id, int tok, diagnostic::Sink& diag,
+                     std::vector<int> const* seg_toks = nullptr) {
     std::set<std::string> visiting;
     bool reported = false;
     spelling = resolveTypeSpelling(tree, spelling, visiting, reported,
-                                   file_id, tok, diag);
+                                   file_id, tok, diag, seg_toks);
     if (!reported) requireKnownType(spelling, file_id, tok, diag);
 }
 
@@ -189,7 +192,8 @@ void registerAlias(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     s.resolved_entry_id = parse::addEntry(tree, std::move(e));
 }
 
-void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag);
+void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
+                 bool unevaluated = false);
 void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
 
 // ---- Namespace lookup --------------------------------------------------------
@@ -362,11 +366,13 @@ bool isQualified(parse::Node const& n) {
 // underlying type. The leading segments name a namespace path; the final segment
 // must be a type living there — today an enum (a kNamespace carrying a non-empty
 // slids_type underlying). Returns the underlying, or "" with `reported` set after
-// a diagnostic. Carets land at `tok` (the decl's type position) for every
-// segment, since a type spelling carries no per-segment tokens.
+// a diagnostic. When `seg_toks` is supplied (parse captured per-segment tokens)
+// each segment's caret lands on its own token; otherwise every segment falls back
+// to `tok` (the decl's type position), since a type spelling carries no tokens.
 std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
                                  int file_id, int tok, bool& reported,
-                                 diagnostic::Sink& diag) {
+                                 diagnostic::Sink& diag,
+                                 std::vector<int> const* seg_toks) {
     std::vector<std::string> segs;
     bool global = false;
     std::size_t i = 0;
@@ -380,7 +386,12 @@ std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
         else cur.push_back(base[i]);
     }
     segs.push_back(cur);
-    std::vector<int> toks(segs.size(), tok);
+    // Use the real per-segment tokens when parse captured them (and they align
+    // with the segments); otherwise point every segment at the flat decl token.
+    std::vector<int> toks =
+        (seg_toks && seg_toks->size() == segs.size())
+            ? *seg_toks
+            : std::vector<int>(segs.size(), tok);
     // Walk all but the last segment as a namespace path; look the last up there.
     std::vector<std::string> path(segs.begin(), segs.end() - 1);
     std::vector<int> ptoks(toks.begin(), toks.end() - 1);
@@ -389,7 +400,7 @@ std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
     int id = findMemberLive(tree, frame, segs.back());
     if (id < 0 || tree.entries[id].kind != parse::EntryKind::kNamespace
         || tree.entries[id].slids_type.empty()) {
-        diagnostic::report(diag, {file_id, tok,
+        diagnostic::report(diag, {file_id, toks.back(),
             "'" + segs.back() + "' is not a type in '"
             + qualPrefixText(segs, global, segs.size() - 1) + "'.", {}});
         reported = true;
@@ -673,6 +684,7 @@ std::unique_ptr<parse::Node> cloneExpr(parse::Node const& src) {
     n->name = src.name;
     n->text = src.text;
     n->return_type = src.return_type;
+    n->return_type_seg_toks = src.return_type_seg_toks;
     n->file_id = src.file_id;
     n->tok = src.tok;
     n->name_tok = src.name_tok;
@@ -823,7 +835,8 @@ void noteCapture(parse::Tree& tree, int id) {
     tree.capture_node->captures.push_back(id);
 }
 
-void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
+void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
+                 bool unevaluated) {
     switch (e.kind) {
         case parse::Kind::kIdentExpr: {
             int id;
@@ -875,7 +888,12 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
                 bool array = isArrayType(tree.entries[id].slids_type);
                 bool ok = array ? tree.assigned_arrays.count(id) > 0
                                 : tree.initialized_locals.count(id) > 0;
-                if (!ok) {
+                // In an unevaluated context (sizeof / ##type operand) only the
+                // TYPE is read, never the value — so definite assignment is not
+                // required. The read-mark below still fires (the var counts as
+                // used), and the var is NOT marked initialized (a later real read
+                // still errors).
+                if (!ok && !unevaluated) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Use of uninitialized variable '" + e.name + "'.", {}});
                     return;
@@ -909,7 +927,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
                     "The operand of '" + e.text + "' must be a variable.", {}});
                 return;
             }
-            resolveExpr(tree, operand, diag);
+            resolveExpr(tree, operand, diag, unevaluated);
             if (operand.resolved_entry_id >= 0) {
                 parse::Entry const& entry = tree.entries[operand.resolved_entry_id];
                 if (entry.kind == parse::EntryKind::kFunction) {
@@ -927,7 +945,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
             for (auto& ch : e.children) {
-                if (ch) resolveExpr(tree, *ch, diag);
+                if (ch) resolveExpr(tree, *ch, diag, unevaluated);
             }
             return;
         case parse::Kind::kAddrOfExpr: {
@@ -936,7 +954,8 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
             // chain (resolving each index as a read) down to the base variable.
             parse::Node* base = e.children[0].get();
             while (base->kind == parse::Kind::kIndexExpr) {
-                if (base->children[1]) resolveExpr(tree, *base->children[1], diag);
+                if (base->children[1])
+                    resolveExpr(tree, *base->children[1], diag, unevaluated);
                 base = base->children[0].get();
             }
             if (base->kind != parse::Kind::kIdentExpr) {
@@ -966,9 +985,14 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
             // Taking an address aliases the variable — it may be read or written
             // through the pointer. Mark it assigned (so the alias is not a
             // use-before-init) and read (so it is not swept as unused). Arrays
-            // use the monotonic may-set, scalars the strict must-set.
-            if (isArrayType(entry.slids_type)) tree.assigned_arrays.insert(id);
-            else tree.initialized_locals.insert(id);
+            // use the monotonic may-set, scalars the strict must-set. In an
+            // unevaluated context (`sizeof(^x)`) no address is actually taken, so
+            // the var is NOT marked assigned (a later real read still errors);
+            // the read-mark below still fires.
+            if (!unevaluated) {
+                if (isArrayType(entry.slids_type)) tree.assigned_arrays.insert(id);
+                else tree.initialized_locals.insert(id);
+            }
             tree.read_locals.insert(id);
             noteCapture(tree, id);
             return;
@@ -977,21 +1001,22 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
             // `value^` — dereference. The operand is a reference/iterator value;
             // resolve it normally (read-mark + definite-assignment). classify
             // verifies it is a pointer type and supplies the pointee type.
-            if (e.children[0]) resolveExpr(tree, *e.children[0], diag);
+            if (e.children[0]) resolveExpr(tree, *e.children[0], diag, unevaluated);
             return;
         case parse::Kind::kIndexExpr:
             // `base[index]` rvalue read: resolve the base (an array read -> its
             // definite-assignment is required) and the index expression.
             for (auto& ch : e.children) {
-                if (ch) resolveExpr(tree, *ch, diag);
+                if (ch) resolveExpr(tree, *ch, diag, unevaluated);
             }
             return;
         case parse::Kind::kCastExpr: {
             // `<Type^> operand` — resolve the operand as a read, then substitute
             // and validate the target type spelling (alias chains, void[] reject,
             // unknown-type). classify enforces the cast legality rules.
-            if (e.children[0]) resolveExpr(tree, *e.children[0], diag);
-            resolveDeclType(tree, e.return_type, e.file_id, e.tok, diag);
+            if (e.children[0]) resolveExpr(tree, *e.children[0], diag, unevaluated);
+            resolveDeclType(tree, e.return_type, e.file_id, e.tok, diag,
+                            &e.return_type_seg_toks);
             return;
         }
         case parse::Kind::kNewExpr: {
@@ -1000,8 +1025,8 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
             // sub-expressions as value reads. classify computes the result type
             // (T^ / T[]) and checks the size is integer / the addr is buffer-class.
             resolveDeclType(tree, e.return_type, e.file_id, e.tok, diag);
-            if (e.children[0]) resolveExpr(tree, *e.children[0], diag);  // size
-            if (e.children[1]) resolveExpr(tree, *e.children[1], diag);  // addr
+            if (e.children[0]) resolveExpr(tree, *e.children[0], diag, unevaluated);  // size
+            if (e.children[1]) resolveExpr(tree, *e.children[1], diag, unevaluated);  // addr
             return;
         }
         case parse::Kind::kSizeofExpr: {
@@ -1017,7 +1042,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
             }
             parse::Node& operand = *e.children[0];
             if (operand.kind != parse::Kind::kIdentExpr) {
-                resolveExpr(tree, operand, diag);
+                resolveExpr(tree, operand, diag, /*unevaluated=*/true);
                 return;
             }
             bool qualified = isQualified(operand);
@@ -1041,7 +1066,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
                 if (k == parse::EntryKind::kLocalVar
                     || k == parse::EntryKind::kConst) {
                     if (qualified) operand.resolved_entry_id = id;
-                    else resolveExpr(tree, operand, diag);
+                    else resolveExpr(tree, operand, diag, /*unevaluated=*/true);
                     return;
                 }
                 char const* what = (k == parse::EntryKind::kFunction)
@@ -1069,7 +1094,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
             parse::Node& operand = *e.children[0];
             if (operand.kind != parse::Kind::kIdentExpr) {
                 for (auto& ch : e.children) {
-                    if (ch) resolveExpr(tree, *ch, diag);
+                    if (ch) resolveExpr(tree, *ch, diag, /*unevaluated=*/true);
                 }
                 return;
             }
@@ -1096,7 +1121,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
                 if (k == parse::EntryKind::kLocalVar
                     || k == parse::EntryKind::kConst) {
                     if (qualified) operand.resolved_entry_id = id;  // already resolved
-                    else resolveExpr(tree, operand, diag);          // DA + read-mark
+                    else resolveExpr(tree, operand, diag, /*unevaluated=*/true);  // read-mark, no DA
                     return;
                 }
                 char const* what = (k == parse::EntryKind::kFunction)
@@ -1529,7 +1554,8 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 std::string declared = s.return_type;   // pre-erasure spelling
                 // A typeless const (block scope) defers type inference to constfold.
                 if (!s.return_type.empty()) {
-                    resolveDeclType(tree, s.return_type, s.file_id, s.tok, diag);
+                    resolveDeclType(tree, s.return_type, s.file_id, s.tok, diag,
+                                    &s.return_type_seg_toks);
                 }
                 int existing = parse::findInFrame(tree, parse::currentFrameId(tree), s.name);
                 if (existing >= 0) {

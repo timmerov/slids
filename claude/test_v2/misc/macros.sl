@@ -60,6 +60,12 @@ int32 main() {
     // read happens through ##type above, so `n` is not flagged unused.
     __println(##name(n + 1));           // n+1
 
+    // ##type(x) is UNEVALUATED — it reads only x's declared type, so an
+    // uninitialized local needs no definite assignment. The operand is still
+    // read-marked (not swept as unused); ##type does not COUNT as an assignment.
+    int u;
+    __println(##type(u));               // int
+
     // ##date / ##time — the moment THIS file is compiled (not slidsc's build
     // time). Their values are the compile timestamp, so they are not pinned in
     // macros.exp; here we confirm only that each lowers to a usable char[].

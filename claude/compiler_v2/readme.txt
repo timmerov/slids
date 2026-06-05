@@ -159,7 +159,12 @@ STAGE FILES (.h / .cpp pairs)
             spelling (`Space:Dir`) resolves via resolveQualifiedType (the lead
             segments walk the shared ns chain, the leaf must be a type) before
             any downstream stage; the cycle-vs-resolution-failure suppression
-            flag is named `reported`.
+            flag is named `reported`. A bad segment carets the OFFENDING SEGMENT
+            (not the whole type position): parseType captures per-segment tokens
+            onto Node.return_type_seg_toks, threaded as a defaulted seg_toks param
+            through resolveDeclType -> resolveTypeSpelling -> resolveQualifiedType
+            and wired at the var-decl declared-type + cast-target sites (a
+            flat-tok fallback covers the sites that don't pass it yet).
             Owns the `##type` operand dispatch: the kStringifyType arm looks up
             the operand (resolveName for a bare name / resolveQualifiedRef for a
             qualified one — both return the entry for ANY kind, erroring only on
@@ -175,8 +180,10 @@ STAGE FILES (.h / .cpp pairs)
             `const Enum`. The kSizeofExpr arm shares that type-vs-value dispatch: a
             type operand (return_type from grammar) is alias-resolved + validated;
             an ident naming a type stamps the underlying on return_type; any other
-            ident / expression is resolved as a value (sizeof never evaluates it —
-            so the DA requirement is a known limitation, see todo.txt). kNewExpr
+            ident / expression is resolved as a value in an UNEVALUATED context
+            (sizeof / ##type read only the type — resolveExpr's `unevaluated` flag
+            suppresses use-before-init but keeps the read-mark, propagated through
+            arith / index / deref operands; no definite-assignment required). kNewExpr
             alias-resolves + validates the element type (resolveDeclType) and
             resolves the size / placement-address sub-expressions as value reads.
             kDeleteStmt resolves its operand as a read (you can't delete an

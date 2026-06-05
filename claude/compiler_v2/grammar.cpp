@@ -136,7 +136,10 @@ struct Parser {
         return newNodeAt(kind, peek().file_id, pos);
     }
 
-    std::string parseType() {
+    // `seg_toks` (optional out): for a qualified identifier type, the token index
+    // of each `:`-separated segment, so resolve can caret the offending segment
+    // (a flat spelling string otherwise loses them). Left empty for a primitive.
+    std::string parseType(std::vector<int>* seg_toks = nullptr) {
         std::string type;
         if (char const* name = primitiveNameFor(peek().kind)) {
             type = name;
@@ -156,6 +159,7 @@ struct Parser {
                 if (i > 0) type += ":";
                 type += segs[i];
             }
+            if (seg_toks) *seg_toks = std::move(toks);
         } else {
             error("Expected type.");
             return "";
@@ -620,13 +624,15 @@ struct Parser {
             int op_file = peek().file_id;
             int op_tok = pos;
             advance();   // <
-            std::string target = parseType();
+            std::vector<int> target_seg_toks;
+            std::string target = parseType(&target_seg_toks);
             if (target.empty()) return nullptr;
             if (!expect(token::Kind::kGt, ">")) return nullptr;
             auto operand = parseUnary();
             if (!operand) return nullptr;
             auto node = newNodeAt(parse::Kind::kCastExpr, op_file, op_tok);
             node->return_type = target;
+            node->return_type_seg_toks = std::move(target_seg_toks);
             node->children.push_back(std::move(operand));
             return node;
         }
@@ -848,8 +854,9 @@ struct Parser {
             && peek().kind == token::Kind::kIdentifier
             && peekKind(1) == token::Kind::kEquals;
         std::string type;
+        std::vector<int> type_seg_toks;
         if (!typeless) {
-            type = parseType();
+            type = parseType(&type_seg_toks);
             if (fatal) return nullptr;
         }
         if (peek().kind != token::Kind::kIdentifier
@@ -886,6 +893,7 @@ struct Parser {
             if (!expect(token::Kind::kRBracket, "]")) return nullptr;
         }
         node->return_type = std::move(type);
+        node->return_type_seg_toks = std::move(type_seg_toks);
         node->is_const = is_const;
         if (peek().kind == token::Kind::kEquals) {
             advance();
