@@ -192,10 +192,12 @@ Phase 4 — types beyond primitives
     all arithmetic rejected. Both lower to LLVM `ptr`.)
   * iterators (`T[]`, additive arithmetic)                          LANDED
     (`iter^` deref, `iter[i]` subscript, `^arr[i]` -> iterator [operand-driven:
-    var->`^`, indexed->`[]`]; `iter ± int` GEP by element stride, `iter - iter`
-    -> intptr [byte diff / sizeof elem], `++`/`--` step one element; full six
-    comparisons. iterator->reference assignment demotes [v1]. `char[]` from a
-    string literal.)
+    var->`^`, indexed->`[]`]; `iter ± int` GEP by element stride, `iter += n` /
+    `iter -= n` [classify iterator arm in kAugAssignStmt; desugars to
+    `iter = iter + n`, other compound ops rejected "Arithmetic is not defined on
+    a pointer."], `iter - iter` -> intptr [byte diff / sizeof elem], `++`/`--`
+    step one element; full six comparisons. iterator->reference assignment demotes
+    [v1]. `char[]` from a string literal.)
   * fixed-size arrays (`T name[N]`, multi-dim)                      LANDED
     (decl size after the NAME; multi-dim REVERSED — `int[3][5]` is 5 chunks of
     3 = LLVM `[5 x [3 x i32]]`, leftmost dim innermost; `arr[i]...` subscript
