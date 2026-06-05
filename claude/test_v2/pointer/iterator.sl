@@ -41,8 +41,8 @@ claude says:
   `^arr[i]` (array element address) or a `char[]` string literal seeds one.
 - `iter^` derefs; `iter[i]` subscripts (element stride); `^iter[i]` is an
   iterator to that element.
-- additive arithmetic steps by element: `iter + n`, `iter - n`, `++`, `--`. The
-  difference `iter - iter` is in elements (`intptr`).
+- additive arithmetic steps by element: `iter + n`, `iter - n`, `iter += n`,
+  `iter -= n`, `++`, `--`. The difference `iter - iter` is in elements (`intptr`).
 - iterators compare with all six ops against a same-pointee pointer.
 */
 
@@ -64,6 +64,12 @@ int32 main() {
     ++it;
     __println("it^= " + it^);              // arr[2] = 4
     --it;
+    __println("it^= " + it^);              // arr[1] = 1
+
+    /* += / -= step by n elements in place. */
+    it += 2;
+    __println("it^= " + it^);              // arr[3] = 9
+    it -= 2;
     __println("it^= " + it^);              // arr[1] = 1
 
     /* the difference is in elements. */
@@ -114,6 +120,15 @@ int32 main() {
 //    int[] it = ^arr[0];
 //    int[] bad = it * 2;
 //    return bad^;
+//}
+
+/* compound assignment is additive-only — '*=' is rejected (like '*'). */
+//-EXPECT-ERROR: Arithmetic is not defined on a pointer.
+//int neg_mul_assign() {
+//    int arr[5];
+//    int[] it = ^arr[0];
+//    it *= 2;
+//    return it^;
 //}
 
 /* adding two iterators is not defined. */

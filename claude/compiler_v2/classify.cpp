@@ -1150,6 +1150,23 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 return;
             }
 
+            // An iterator steps by element: `iter += n` / `iter -= n` only (the
+            // compound form of `iter ± int`). Any other compound op on a pointer
+            // is rejected like the binary path. Desugar lowers this to
+            // `iter = iter + n`, whose GEP + assignment already handle it.
+            if (isIteratorType(lvalue_type)) {
+                inferExpr(tree, rhs, "", diag);
+                if ((op == "+" || op == "-")
+                    && isIntegerClass(rhs.inferred_type)) {
+                    s.inferred_type = lvalue_type;
+                    s.op_type = lvalue_type;
+                    return;
+                }
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "Arithmetic is not defined on a pointer.", {}});
+                return;
+            }
+
             if (op == "<<" || op == ">>") {
                 inferExpr(tree, rhs, "", diag);
                 if (!isNumericType(lvalue_type)) {

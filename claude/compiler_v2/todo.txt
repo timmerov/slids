@@ -64,13 +64,6 @@ DEFERRED FEATURES (later; may not be on the plan)
     (op[]/size or begin/end/next, Phase 5). Each desugars to a kForLongStmt over
     an index, like for-array. Not landable until those types exist.
 
-  * ITERATOR COMPOUND-ASSIGN (`iter += n` / `iter -= n`) — additive step in
-    place. Today the kAugAssignStmt arith path runs commonType on the iterator
-    type and reports a confusing "No common type for 'int[]' and 'int'". The
-    canon (iterator.sl) uses `++`/`--`/`+`, not `+=`, so it's deferred; when
-    wanted, add an iterator arm to the aug-assign classify (mirror the binary
-    `iter ± int` GEP) and desugar to `iter = iter + n`.
-
   * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — the canon says by-value iteration
     requires a primitive element type (a reference works for all). With only
     primitive element types today the rule never fires, so it isn't enforced;

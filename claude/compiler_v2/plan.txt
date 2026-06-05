@@ -225,6 +225,18 @@ Phase 4 — types beyond primitives
     DEFERRED to Phase 6: const-cast surface [`const T^`, `<const>`, `<mutable>`,
     mutable<->const] — const is not yet a tracked pointer qualifier. Class-
     hierarchy casts wait on Phase 5.)
+  * value type conversions (`(Type = expr)`)
+    (the VALUE analog of the pointer cast — an explicit width/sign/family change
+    on a numeric value, the operation every "use an explicit type conversion"
+    diagnostic [widen.cpp / classify.cpp, emitted since Phase 0-1] already points
+    at but which has NO syntax yet. `(Type = expr)`: int<->int width + sign change,
+    int<->float, narrowing — all the implicit-coercion rejections become legal
+    when written explicitly. Rejects pointer/iterator TARGETS [those are the `<T^>`
+    cast's job — see [[feedback_cast_vs_conversion]]: "cast" is pointer-only,
+    value changes are "conversions"]. Reuses widen::convert [already lowers the
+    int/float/sign cases for assignment + the cast's ptr<->intptr]. Grammar seam:
+    a leading `(` + type-keyword + `=` distinguishes it from a parenthesized
+    expression. Currently UNBUILT — the diagnostics dangle until it lands.)
   * sizeof (`sizeof(T)` / `sizeof(expr)`)                          LANDED
     (kSizeofExpr — a primary; grammar splits a TYPE operand [paren starts with a
     type keyword -> parseType onto return_type] from an EXPRESSION operand [resolve
