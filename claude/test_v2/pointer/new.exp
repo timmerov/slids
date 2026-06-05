@@ -1,0 +1,12 @@
+single= 42
+freed single= true
+array[0]= 7
+array[3]= 9
+freed array= true
+placement[0]= 100
+placement[1]= 200
+wide[2]= 7
+placement single= 5
+to void^= true
+to intptr= true
+alias elem= 11

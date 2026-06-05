@@ -21,6 +21,7 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kAssignStmt:    return ast::Kind::kAssignStmt;
         case parse::Kind::kAugAssignStmt: return ast::Kind::kAugAssignStmt;
         case parse::Kind::kStoreStmt:     return ast::Kind::kStoreStmt;
+        case parse::Kind::kDeleteStmt:    return ast::Kind::kDeleteStmt;
         case parse::Kind::kCallStmt:      return ast::Kind::kCallStmt;
         case parse::Kind::kCallExpr:      return ast::Kind::kCallExpr;
         case parse::Kind::kExprStmt:      return ast::Kind::kExprStmt;
@@ -66,6 +67,7 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kAddrOfExpr:    return ast::Kind::kAddrOfExpr;
         case parse::Kind::kDerefExpr:     return ast::Kind::kDerefExpr;
         case parse::Kind::kIndexExpr:     return ast::Kind::kIndexExpr;
+        case parse::Kind::kNewExpr:       return ast::Kind::kNewExpr;
         case parse::Kind::kCastExpr:      return ast::Kind::kCastExpr;
         case parse::Kind::kSizeofExpr:
             // Rewritten to a kIntLiteral during classify; never copied to the ast.

@@ -661,6 +661,37 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             return widen::convert(tmp, expr.inferred_type, dest_type,
                                   expr.file_id, expr.tok, out, diag);
         }
+        case ast::Kind::kNewExpr: {
+            // new T -> malloc(sizeof(T)); new T[n] -> malloc(n * sizeof(T));
+            // new(addr) T[n] -> the address itself (no allocation). All yield a
+            // `ptr` (the result is T^ / T[]). Phase 4: primitives, so no ctor runs.
+            std::string p;
+            if (expr.children[1]) {            // placement: result is the address
+                ast::Node const& addr = *expr.children[1];
+                p = emitExpr(addr, syms, pool, out, diag, addr.inferred_type);
+            } else {
+                long long elem = widen::typeByteSize(expr.return_type);
+                // classify rejected an unsized element ("Cannot allocate") and
+                // main short-circuits, so a -1 here means a missed gate — assert
+                // rather than emit malloc(i64 -1).
+                assert(elem >= 0 && "kNewExpr: unsized element reached codegen");
+                std::string bytes;
+                if (expr.children[0]) {        // array: n * elem-size
+                    std::string n = emitExpr(*expr.children[0], syms, pool, out,
+                                             diag, "int64");
+                    std::string mul = newTmp("nbytes");
+                    out << "  " << mul << " = mul i64 " << n << ", "
+                        << elem << "\n";
+                    bytes = mul;
+                } else {
+                    bytes = std::to_string(elem);
+                }
+                p = newTmp("new");
+                out << "  " << p << " = call ptr @malloc(i64 " << bytes << ")\n";
+            }
+            return widen::convert(p, expr.inferred_type, dest_type,
+                                  expr.file_id, expr.tok, out, diag);
+        }
         case ast::Kind::kCastExpr: {
             // `<Type^> operand` — reinterpret. Emit the operand at its own type,
             // convert it to the cast target (a ptrtoint/inttoptr only at the
@@ -751,6 +782,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kAssignStmt:
         case ast::Kind::kAugAssignStmt:
         case ast::Kind::kStoreStmt:
+        case ast::Kind::kDeleteStmt:
         case ast::Kind::kCallStmt:
         case ast::Kind::kExprStmt:
         case ast::Kind::kReturnStmt:
@@ -849,6 +881,22 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                                        elem);
             std::string llty = llvmTypeFor(elem, stmt.file_id, stmt.tok, diag);
             out << "  store " << llty << " " << val << ", ptr " << addr << "\n";
+            return;
+        }
+        case ast::Kind::kDeleteStmt: {
+            // delete p; — load the pointer, free it, store null back. resolve
+            // guaranteed the operand is a variable; classify, a pointer type.
+            ast::Node const& operand = *stmt.children[0];
+            assert(operand.kind == ast::Kind::kIdentExpr
+                && operand.resolved_entry_id >= 0
+                && "kDeleteStmt: operand must be a resolved variable");
+            auto it = syms.find(operand.resolved_entry_id);
+            assert(it != syms.end() && "kDeleteStmt: operand not in SymTab");
+            std::string p = newTmp("del");
+            out << "  " << p << " = load ptr, ptr " << it->second.alloca_name
+                << "\n";
+            out << "  call void @free(ptr " << p << ")\n";
+            out << "  store ptr null, ptr " << it->second.alloca_name << "\n";
             return;
         }
         case ast::Kind::kCallStmt: {
@@ -1136,6 +1184,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kDerefExpr:
         case ast::Kind::kIndexExpr:
         case ast::Kind::kCastExpr:
+        case ast::Kind::kNewExpr:
         case ast::Kind::kCallExpr:
         case ast::Kind::kSeqExpr:
         case ast::Kind::kBumpExpr:
@@ -1396,7 +1445,9 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     out << "target triple = \"x86_64-pc-linux-gnu\"\n\n";
     strings::emit(pool, out);
     if (!pool.texts.empty()) out << "\n";
-    out << "declare i32 @printf(ptr, ...)\n\n";
+    out << "declare i32 @printf(ptr, ...)\n";
+    out << "declare ptr @malloc(i64)\n";
+    out << "declare void @free(ptr)\n\n";
     out << body.str();
 }
 

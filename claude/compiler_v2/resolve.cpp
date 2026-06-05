@@ -994,6 +994,16 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
             resolveDeclType(tree, e.return_type, e.file_id, e.tok, diag);
             return;
         }
+        case parse::Kind::kNewExpr: {
+            // new T / new T[n] / new(addr) T[n]. Validate + alias-resolve the
+            // element type, then resolve the array-size and placement-address
+            // sub-expressions as value reads. classify computes the result type
+            // (T^ / T[]) and checks the size is integer / the addr is buffer-class.
+            resolveDeclType(tree, e.return_type, e.file_id, e.tok, diag);
+            if (e.children[0]) resolveExpr(tree, *e.children[0], diag);  // size
+            if (e.children[1]) resolveExpr(tree, *e.children[1], diag);  // addr
+            return;
+        }
         case parse::Kind::kSizeofExpr: {
             // sizeof(T): grammar parsed a type spelling onto return_type — alias-
             // resolve + validate it. sizeof(expr): the operand is an expression;
@@ -1118,6 +1128,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kStoreStmt:
+        case parse::Kind::kDeleteStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
@@ -1620,6 +1631,32 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 resolveExpr(tree, *s.children[1], diag);
             }
             return Completion::Normal;
+        case parse::Kind::kDeleteStmt: {
+            // delete p; — frees p and nulls it. Resolve the operand as a read (you
+            // can't delete an uninitialized pointer; the free reads it), then
+            // require it be a plain variable lvalue (delete writes null back to
+            // it). It stays initialized (now null). classify checks it is a
+            // pointer type.
+            parse::Node& operand = *s.children[0];
+            resolveExpr(tree, operand, diag);
+            // An unresolved bare name was already reported by resolveExpr — don't
+            // cascade a second "must be a pointer variable" onto it.
+            if (operand.kind == parse::Kind::kIdentExpr
+                && operand.resolved_entry_id < 0) {
+                return Completion::Normal;
+            }
+            // Otherwise the operand must be a plain variable lvalue (a non-ident
+            // expression, or an ident resolving to a const / function / namespace,
+            // is rejected). The id is >= 0 here, so the entry access is safe.
+            bool is_var = operand.kind == parse::Kind::kIdentExpr
+                && tree.entries[operand.resolved_entry_id].kind
+                       == parse::EntryKind::kLocalVar;
+            if (!is_var) {
+                diagnostic::report(diag, {operand.file_id, operand.tok,
+                    "The operand of 'delete' must be a pointer variable.", {}});
+            }
+            return Completion::Normal;
+        }
         case parse::Kind::kCallStmt: {
             if (isPrintIntrinsic(s.name)) {
                 if (s.children.size() != 1) {
@@ -2231,6 +2268,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
         case parse::Kind::kCastExpr:
+        case parse::Kind::kNewExpr:
         case parse::Kind::kSizeofExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kCallExpr:

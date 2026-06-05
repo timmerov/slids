@@ -230,7 +230,20 @@ Phase 4 — types beyond primitives
     bring the runtime `getelementptr null,1`/`ptrtoint` form. test_v2/misc/sizeof.sl.
     NOT supported: sizeof in an array DIMENSION [dim validated pre-constfold]; a
     value operand needs definite-assignment [shared ##type limitation, todo.txt].)
-  * memory mgmt (`new T(init)`, `new T[n]`, `delete ptr`)
+  * memory mgmt (`new T`, `new T[n]`, `new(addr) T[n]`, `delete ptr`)  LANDED
+    (kNewExpr / kDeleteStmt. `new T` -> T^ (malloc sizeof(T)); `new T[n]` -> T[]
+    (malloc n*sizeof(T), n a RUNTIME expr); `new(addr) T[n]` -> placement, no
+    alloc, the result is addr (addr a buffer-class pointer void^/int8^/uint8^);
+    `delete p` -> free(p) + store null (p a variable lvalue). classify: element
+    must be statically sized [widen::typeByteSize >= 0; void/slid -> "Cannot
+    allocate"], array size integer-class, placement addr buffer-class, delete
+    operand a pointer. malloc/free declared in the preamble. test_v2/pointer/new.sl.
+    DEFERRED: `new T(value)` initializer needs tuples; constructors / destructors
+    (delete runs none today) land with classes [Phase 5]. Grammar TODO seam: `(`
+    after `new` = placement only while no type spelling starts with `(`; revisit
+    when tuples / `(const T)^` land. Pre-existing blocker for the idiomatic
+    `T^ p = new T` with a non-primitive T: `Alias^`/`ClassName^` decls don't parse
+    yet [todo.txt].)
   * anonymous tuples (`(T1, T2, ...)`)
   * type aliases — LANDED (value form `alias Name = type;`, file + function
     scope, transparent; resolveTypeSpelling substitutes the chain; desugar drops

@@ -10,6 +10,7 @@ SAMPLES = \
 	array \
 	cast \
 	iterator \
+	new \
 	reference
 
 .PHONY: all clean negatives positives $(SAMPLES)

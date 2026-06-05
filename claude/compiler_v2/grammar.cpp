@@ -359,6 +359,42 @@ struct Parser {
             if (!expect(token::Kind::kRParen, ")")) return nullptr;
             return inner;
         }
+        if (t.kind == token::Kind::kNew) {
+            // new T            -> a single object (T^)
+            // new T[n]         -> an array of n objects (T[])
+            // new(addr) T[n]   -> placement: construct at addr, no allocation
+            // children[0] = array-size expr (or null), [1] = placement-addr (or
+            // null). Phase 4: primitives only — no constructor args yet (the
+            // `new T(value)` initializer form needs tuples).
+            int new_file = t.file_id;
+            int new_tok = pos;
+            advance();   // new
+            std::unique_ptr<parse::Node> addr;
+            // A `(` here is a placement address. TODO: once paren-led type
+            // spellings exist (anonymous tuples `(T1,T2)`, const-pointer
+            // `(const T)^`), this needs a placement-vs-type lookahead; today no
+            // type starts with `(`, so `(` unambiguously opens a placement addr.
+            if (peek().kind == token::Kind::kLParen) {
+                advance();   // (
+                addr = parseExpr();
+                if (!addr) return nullptr;
+                if (!expect(token::Kind::kRParen, ")")) return nullptr;
+            }
+            std::string elem = parseAllocElementType();
+            if (elem.empty()) return nullptr;
+            std::unique_ptr<parse::Node> size;
+            if (peek().kind == token::Kind::kLBracket) {
+                advance();   // [
+                size = parseExpr();
+                if (!size) return nullptr;
+                if (!expect(token::Kind::kRBracket, "]")) return nullptr;
+            }
+            auto node = newNodeAt(parse::Kind::kNewExpr, new_file, new_tok);
+            node->return_type = elem;
+            node->children.push_back(std::move(size));   // [0] (may be null)
+            node->children.push_back(std::move(addr));   // [1] (may be null)
+            return node;
+        }
         if (t.kind == token::Kind::kSizeof) {
             // sizeof(T) or sizeof(expr) — the byte size as an intptr. The paren
             // content is a TYPE when it starts with a type keyword (`int`,
@@ -988,6 +1024,45 @@ struct Parser {
             }
         }
         return expect(token::Kind::kRParen, ")");
+    }
+
+    std::unique_ptr<parse::Node> parseDeleteStmt() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
+        advance();   // delete
+        auto node = newNodeAt(parse::Kind::kDeleteStmt, stmt_file, stmt_tok);
+        auto operand = parseExpr();   // the pointer lvalue; resolve checks it
+        if (!operand) return nullptr;
+        node->children.push_back(std::move(operand));
+        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+        return node;
+    }
+
+    // Parse the element type of a `new`: a primitive or (possibly qualified)
+    // identifier type name. Unlike parseType it does NOT consume a trailing `[`
+    // — that introduces the array-size expression (`new T[n]`), not an iterator
+    // suffix. Returns the spelling, or "" on error.
+    std::string parseAllocElementType() {
+        std::string type;
+        if (char const* name = primitiveNameFor(peek().kind)) {
+            type = name;
+            advance();
+        } else if (peek().kind == token::Kind::kIdentifier
+                   || peek().kind == token::Kind::kColonColon) {
+            std::vector<std::string> segs;
+            std::vector<int> toks;
+            bool global = false;
+            if (!parseQualifiedName(segs, toks, global)) return "";
+            if (global) type = "::";
+            for (std::size_t i = 0; i < segs.size(); ++i) {
+                if (i > 0) type += ":";
+                type += segs[i];
+            }
+        } else {
+            error("Expected a type after 'new'.");
+            return "";
+        }
+        return type;
     }
 
     std::unique_ptr<parse::Node> parseReturnStmt() {
@@ -1646,6 +1721,7 @@ struct Parser {
         if (t.kind == token::Kind::kContinue)
             return parseBreakContinue(parse::Kind::kContinueStmt);
         if (t.kind == token::Kind::kReturn) return parseReturnStmt();
+        if (t.kind == token::Kind::kDelete) return parseDeleteStmt();
         if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();
         if (t.kind == token::Kind::kEnum) return parseEnumDecl();

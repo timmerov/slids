@@ -18,6 +18,9 @@ enum class Kind {
     kStoreStmt,      // store through an lvalue EXPRESSION (not a bare name):
                      // children[0] = lvalue expr (e.g. kDerefExpr), [1] = rhs.
                      // Used for `ref^ = v`; future array/field stores route here.
+    kDeleteStmt,   // delete p; — frees the pointer and nulls it. children[0] = the
+                   // pointer lvalue (a variable). Phase 4: lowers to free() + store
+                   // null; destructors land with classes (Phase 5).
     kCallStmt,
     kCallExpr,     // value-producing call; name = callee, children = args
     kExprStmt,     // expression evaluated for effect, value discarded; children[0] = expr
@@ -81,6 +84,11 @@ enum class Kind {
     kCastExpr,     // prefix `<Type^> operand` — pointer reinterpret cast.
                    // return_type = target type spelling; children[0] = operand.
                    // The address is unchanged; only the static type changes.
+    kNewExpr,      // new T / new T[n] / new(addr) T[n] — heap or placement alloc.
+                   // return_type = element type T; children[0] = array-size expr
+                   // (or null for a single object), [1] = placement-address expr
+                   // (or null for a heap allocation). Yields T^ (single) or T[]
+                   // (array). Phase 4: primitives only (no constructors).
     kSizeofExpr,   // sizeof(T) / sizeof(expr) — byte size as an `intptr`.
                    // return_type = a type-operand spelling (grammar) OR the
                    // underlying of an ident naming a type (resolve); else

@@ -107,11 +107,17 @@ STAGE FILES (.h / .cpp pairs)
             kHashHash arm — ##file / ##line / ##func / ##name(x) (raw lexed
             token text, scanned to the matching ')' by bracket depth) /
             ##date / ##time / ##type(x) (a kStringifyType node, child = the
-            operand, lowered to a kStringLiteral in classify), and sizeof(...) (a
+            operand, lowered to a kStringLiteral in classify), sizeof(...) (a
             kSizeofExpr — a type operand [paren content starts with a type keyword]
             rides on return_type, else the operand is parsed as an expression for
             resolve to dispatch on; lowered to an intptr literal in constfold or
-            classify)). Stamps (file_id, tok)
+            classify), and new(...) (a kNewExpr — `new`, an optional `(addr)`
+            placement prefix [today a `(` always opens a placement address; no type
+            spelling starts with `(` yet — a TODO seam marks where the tuple /
+            const-pointer lookahead goes], the element type [parseAllocElementType:
+            a type WITHOUT a trailing `[`, which is the array size], an optional
+            `[n]` size; children[0]=size-or-null, [1]=addr-or-null)). `delete p;` is
+            a statement (kDeleteStmt). Stamps (file_id, tok)
             on every node for source
             attribution. No identifier resolution, no scope tracking,
             no type inference, no literal folding — all deferred to
@@ -162,7 +168,14 @@ STAGE FILES (.h / .cpp pairs)
             type operand (return_type from grammar) is alias-resolved + validated;
             an ident naming a type stamps the underlying on return_type; any other
             ident / expression is resolved as a value (sizeof never evaluates it —
-            so the DA requirement is a known limitation, see todo.txt).
+            so the DA requirement is a known limitation, see todo.txt). kNewExpr
+            alias-resolves + validates the element type (resolveDeclType) and
+            resolves the size / placement-address sub-expressions as value reads.
+            kDeleteStmt resolves its operand as a read (you can't delete an
+            uninitialized pointer) and requires it be a variable lvalue — an
+            UNRESOLVED ident is left to resolveExpr's own "Unresolved identifier"
+            (no cascading "must be a pointer variable"); a resolved non-variable
+            (const / function / a non-ident expr) is rejected here.
             Owns namespaces: a kNamespace entry has a persistent frame
             identity that reopens reuse; members ride the enclosing lexical
             lifetime, tagged by owning namespace. Bare lookup walks the open-
@@ -454,8 +467,13 @@ STAGE FILES (.h / .cpp pairs)
             kStoreStmt (a references-array element / deref slot) — gated on a
             pointer being involved (pure-numeric assignments keep the width path).
             The kCastExpr arm validates the explicit rule and stamps the target.
-            Future: overload resolution when multiple Function
-            entries share a name.
+            kNewExpr (Phase 4): a heap element must be statically sized
+            (widen::typeByteSize >= 0 — a primitive; a slid -> "Cannot allocate");
+            an array size must be integer-class; a placement address must be a
+            buffer-class pointer (isBufferClassPtr, the cast set void^/int8^/uint8^).
+            The result type is element + (array ? "[]" : "^"). kDeleteStmt's
+            operand must be a pointer type. Future: overload resolution when
+            multiple Function entries share a name.
   desugar   parse tree -> ast (separate node-type set). Today: identity
             copy that propagates every annotation classify and constfold
             stamped (nominal_type, inferred_type, op_type, resolved_entry_id,
@@ -567,6 +585,13 @@ STAGE FILES (.h / .cpp pairs)
             `inttoptr` — and asserts if a pointer ever reaches the SCALAR
             conversion path (an ungated ptr->non-intptr would store a `ptr` as an
             integer; classify rejects them, so this guards against a missed gate).
+            kNewExpr: `new T` -> `call ptr @malloc(i64 sizeof(T))`; `new T[n]` ->
+            `mul i64 n, sizeof(T)` then malloc; placement (children[1]) -> the
+            address itself, no allocation (primitives construct nothing). An
+            assert guards an unsized element (classify gated it). kDeleteStmt:
+            load the pointer, `call void @free(ptr)`, store null back to its
+            alloca. malloc / free are declared in the module preamble next to
+            printf. No destructors run (Phase 5).
 
 PRODUCT FILES (.h / .cpp pairs)
 

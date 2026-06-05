@@ -44,6 +44,20 @@ BUGS (found, deferred)
     tokens through the type spelling (or a structured qualified-type node).
     No invalid IR; diagnostic precision only.
 
+  * POINTER-SUFFIXED IDENTIFIER-TYPE DECLS DON'T PARSE — `Alias^ name` /
+    `Alias[] name` (a reference / iterator decl whose element type is an
+    IDENTIFIER type — an alias, and later a class) fails to parse ("Expected
+    '='."). parseStmt's identifier-led dispatch routes to a var-decl only on
+    `Ident Ident` (`Big b`) or `Ident:Ident... Ident` (qualified); it does NOT
+    recognize a `^` / `[` after the type ident, so `Big^ b` falls to
+    parseNameLedStmt and misparses. A primitive works (`int^ b` — isTypeStart).
+    Fix: extend the identifier-typed-decl lookahead to accept a trailing `^` / `[]`
+    (mirroring parseType's suffix) before the variable name. PRE-EXISTING (not a
+    new/delete bug) but surfaced landing new — it blocks the idiomatic
+    `Big^ b = new Big;` (worked around in new.sl with an `int64^` lhs), and will
+    block the canonical `Cat^ c = new Cat;` once classes land (Phase 5), so close
+    it before / with classes.
+
   * ORPHAN-CHECK vs IMPORT FORWARD-DECLS — resolve's Pass 3 errors on any
     function declared-but-never-defined ("Function 'X' is declared but never
     defined.") — but a `.slh` header legitimately declares-only (defined in the

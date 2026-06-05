@@ -14,6 +14,7 @@ enum class Kind {
     kAssignStmt,
     kAugAssignStmt,
     kStoreStmt,     // store through an lvalue expr; children[0]=lvalue, [1]=rhs.
+    kDeleteStmt,    // delete p; — free + null the pointer. children[0]=lvalue var.
     kCallStmt,
     kCallExpr,
     kExprStmt,
@@ -46,6 +47,9 @@ enum class Kind {
     kDerefExpr,     // postfix `lvalue^` — dereference; children[0]=operand.
     kIndexExpr,     // postfix `base[index]` — array subscript; children[0]=base,
                     // [1]=index. `a[x][y]` nests ((a[x])[y]).
+    kNewExpr,       // new T / new T[n] / new(addr) T[n]. return_type=element T;
+                    // children[0]=array-size (or null), [1]=placement-addr (or
+                    // null). Yields T^ (single) or T[] (array).
     kCastExpr,      // prefix `<Type^> operand` — pointer reinterpret cast.
                     // inferred_type = target; children[0]=operand. Codegen emits a
                     // ptrtoint/inttoptr only at the intptr boundary; ptr↔ptr is a

@@ -261,6 +261,8 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
         case parse::Kind::kCastExpr:
+        case parse::Kind::kNewExpr:
+        case parse::Kind::kDeleteStmt:
         case parse::Kind::kSizeofExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kReturnStmt:
@@ -505,6 +507,43 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             e.return_type.clear();
             e.children.clear();
             e.inferred_type = "intptr";
+            return;
+        }
+        case parse::Kind::kNewExpr: {
+            // new T -> T^; new T[n] -> T[]. The array-size must be integer-class;
+            // a placement address (children[1]) must be a buffer-class pointer;
+            // the element type must be statically sized (Phase 4: a primitive — a
+            // slid's size lands with classes).
+            std::string const& elem = e.return_type;
+            bool is_array = e.children[0] != nullptr;
+            // The `!inferred_type.empty()` guards below skip an operand whose type
+            // is empty (an upstream error already reported it) — don't cascade.
+            if (is_array) {
+                parse::Node& size = *e.children[0];
+                inferExpr(tree, size, "intptr", diag);
+                if (!size.inferred_type.empty()
+                    && !isIntegerClass(size.inferred_type)) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "An array size must be an integer; got '"
+                        + size.inferred_type + "'.", {}});
+                }
+            }
+            if (e.children[1]) {
+                parse::Node& addr = *e.children[1];
+                inferExpr(tree, addr, "", diag);
+                if (!addr.inferred_type.empty()
+                    && !isBufferClassPtr(addr.inferred_type)) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "A placement address must be a buffer-class pointer "
+                        "(void^, int8^, uint8^); got '" + addr.inferred_type
+                        + "'.", {}});
+                }
+            }
+            if (widen::typeByteSize(elem) < 0) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "Cannot allocate '" + elem + "'.", {}});
+            }
+            e.inferred_type = elem + (is_array ? "[]" : "^");
             return;
         }
         case parse::Kind::kCastExpr: {
@@ -798,6 +837,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kStoreStmt:
+        case parse::Kind::kDeleteStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
@@ -1173,6 +1213,19 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             checkPtrAssign(lvalue.inferred_type, *s.children[1], diag);
             return;
         }
+        case parse::Kind::kDeleteStmt: {
+            // delete p; — p must be a pointer (reference / iterator). resolve
+            // already checked it is a variable lvalue.
+            parse::Node& operand = *s.children[0];
+            inferExpr(tree, operand, "", diag);
+            if (!operand.inferred_type.empty()
+                && !isPtrLikeType(operand.inferred_type)) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "Cannot delete a non-pointer value of type '"
+                    + operand.inferred_type + "'.", {}});
+            }
+            return;
+        }
         case parse::Kind::kCallStmt: {
             if (isPrintIntrinsic(s.name)) {
                 for (auto& ch : s.children) {
@@ -1456,6 +1509,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
         case parse::Kind::kCastExpr:
+        case parse::Kind::kNewExpr:
         case parse::Kind::kSizeofExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kCallExpr:

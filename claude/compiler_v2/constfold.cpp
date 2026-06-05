@@ -154,6 +154,8 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
         case parse::Kind::kCastExpr:
+        case parse::Kind::kNewExpr:
+        case parse::Kind::kDeleteStmt:
         case parse::Kind::kSizeofExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kParam:

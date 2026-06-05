@@ -391,8 +391,8 @@ CROSS-CUTTING (every session)
     track — grammar + resolve/classify, no flow interaction. LANDED (with the
     `##type(x)` instrument + the for-loop typeless/reuse loop var). The Phase 2
     declarations+flow work is DONE; active work has moved to Phase 4 (pointers —
-    references/iterators/arrays/for-array + pointer CASTING + sizeof all landed;
-    next: new/delete, then anon-tuples). See plan.txt Phase 4.
+    references/iterators/arrays/for-array + pointer CASTING + sizeof + new/delete
+    all landed; next: anon-tuples, then classes [Phase 5]). See plan.txt Phase 4.
 
 SEQUENCING
 
