@@ -5,8 +5,8 @@
 # Usage: run_positives.sh <subdir-name> <sample> [<sample>...]
 #
 # For each sample, runs $SCRIPT_DIR/../bin/<sample> (built by `make all`),
-# captures stdout+stderr, and compares against <sample>.exp in the current
-# working directory. PASS iff exit-code 0 AND output matches the .exp file
+# captures stdout+stderr, and compares against exp.<sample> in the current
+# working directory. PASS iff exit-code 0 AND output matches the golden file
 # byte-for-byte.
 #
 # Prints a per-subdir tally. Exits 0 if all PASS, 1 otherwise.
@@ -34,7 +34,7 @@ fail=0
 
 for sample in "$@"; do
     bin="$BIN_DIR/$sample"
-    exp="$sample.exp"
+    exp="exp.$sample"
     if [ ! -x "$bin" ]; then
         echo "  FAIL  $sample: missing binary $bin"
         fail=$((fail + 1))
