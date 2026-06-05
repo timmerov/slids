@@ -11,11 +11,17 @@ Locked design decisions:
        FALL-THROUGH (a clause with no break falls into the next); landed that
        way. The original "independent cases" plan was wrong.
   2A — unreachable-code detection lands now (a stmt after an abrupt sibling).
-  3B — constant-true loops (`while (true)`) get NO special-case; every loop is
-       treated as possibly-zero-iterations. Deferred to the while landing
-       (Session 3): when `while (true)` + return-correctness forces it, revisit;
-       until then a break-only-exit loop in a value-returning fn over-demands a
-       trailing return. Note in todo.txt if a test trips it.
+  3B — REVISITED (later session). Originally: constant-true loops got no special
+       case (every loop possibly-zero). NOW a constant-true loop (a literal-true /
+       empty `()` condition — detected syntactically in resolve) with NO escaping
+       break is NON-COMPLETING: resolve returns Abrupt (2A flags its after-code
+       "Unreachable statement." + DA after is dead), and classify's endsInReturnNode
+       treats it as a return-terminator (no over-demanded trailing return). Codegen
+       emits `unreachable` in the (unreachable) exit block. Stored on the loop node
+       (Node.non_completing, set in resolve, read in classify + codegen). A
+       break-bearing constant-true loop still completes (the break is an exit). A
+       NAMED-const-true condition is not caught (resolve predates constfold) — see
+       todo.txt. Node.non_completing.
 
 
 THE JOIN MODEL (the load-bearing design; entirely a resolve-stage concern)
@@ -158,10 +164,12 @@ SESSION 3 — while + break/continue (unlabeled) + POST-CONDITION while   [LANDE
     B ∩ continue_accum; after = that ∩ break_accum. break/continue: Abrupt, error
     if loop_stack empty ("A 'break'/'continue' statement must be inside a loop."),
     fold the current init-set into the enclosing frame.
-  * 3B: every loop possibly-zero — NO constant-true special-case; a loop is never
-    a terminator (Normal), so a function ending in a while/do-while still demands a
-    trailing return (negatives cover it). No test tripped the while(true)+return-
-    correctness corner, so nothing added to todo.txt for it.
+  * 3B (as landed in Session 3 — later REVISITED, see the decision header): every
+    loop possibly-zero, no constant-true special-case; a loop was never a terminator
+    (Normal). REVISITED afterward: a constant-true loop with no escaping break is now
+    non-completing (Abrupt + return-terminator; Node.non_completing). The Session-3
+    negatives that demand a trailing return all use NON-constant conditions, so they
+    still hold.
   * codegen: pre = head/body/exit (test-first); post = body/cond/exit (body-first).
     break->exit, continue->head (pre) / cond (post), via a LoopCtx { header, exit }
     threaded through emitStmt. Back-edge emitted only if the body falls through
@@ -191,11 +199,12 @@ SESSION 3 — while + break/continue (unlabeled) + POST-CONDITION while   [LANDE
     constfold). constTruth(cond) -> True/False/NotConst; const-true if flags its
     else, const-false if flags its then, const-false while flags its body
     ("Unreachable statement." at the dead branch's first stmt; empty branch =
-    nothing to flag). Const-TRUE loops are NOT flagged (3B — the unreachable
-    after-code case is the todo.txt deferral); a do-while is never flagged (body
-    runs once). Tests: ifelse.sl (empty-then/empty-else positives + 7 const-dead
-    negatives spanning bool/int/char/float/folded/substituted/else-if) +
-    while.sl (do-const-false + while-true positives confirm no false flag).
+    nothing to flag). The const-true-LOOP unreachable-after case (3B revisited)
+    lives in resolve, not here: a syntactically-constant-true loop with no break
+    returns Abrupt, so 2A flags its after-code. Tests: ifelse.sl (empty-then/
+    empty-else positives + 7 const-dead negatives spanning bool/int/char/float/
+    folded/substituted/else-if) + while.sl (const-true terminators + unreachable-
+    after negatives for while / empty-cond / do-while; forlong.sl likewise).
 
 SESSION 4 — for-loops   [LONG-FORM + RANGED + ENUM + TYPELESS/REUSE + FOR-ARRAY LANDED; tuple/class pending]
 
@@ -313,16 +322,18 @@ SESSION 5 — switch / case — LANDED (C-style fall-through; labels deferred to
     continue skips switch frames to the nearest loop ("break must be inside a
     loop or switch"). FALL-THROUGH: each clause body resolves from S (direct
     match is the weakest entry); after = ∩ over exit paths {break points,
-    bottom-fall, default-less ⇒ S}; an exhaustive switch (default + every clause
-    returns, no escaping break) is Abrupt.
+    bottom-fall, default-less ⇒ S}; an exhaustive switch (default, no escaping
+    break, and the LAST clause does not fall out the bottom — per-clause Completion
+    threading already handles a stacked empty clause) is Abrupt.
   * classify: scrutinee must be integer-class (float rejected); each case label
     must be an integer constant that FITS the scrutinee type (literalFitsContext
     — an out-of-range/sign-mismatched label is rejected, never emitted as a
     truncated `iN` constant); unique labels (value-dedup, full-64-bit, so 'a'==97
     and 1+2==3 collide, with a "first case here" note); default singular.
-    endsInReturnNode: a switch is a return-terminator iff default + every clause
-    returns AND no clause has an escaping break (containsBreak — mirrored in
-    codegen so the two stages agree).
+    endsInReturnNode: a switch is a return-terminator iff it has a default, no
+    clause has an escaping break (containsBreak), and the LAST clause's body ends
+    in a return — C-style fall-through carries a stacked empty / non-returning
+    clause into that final return (mirrored in codegen so the two stages agree).
   * codegen: an `llvm switch` dispatches to per-clause blocks (source order) that
     fall through via `br` unless terminated; naked break -> exit; default's block
     is the switch instr default (exit when none); `unreachable` emitted in the
@@ -334,7 +345,8 @@ SESSION 5 — switch / case — LANDED (C-style fall-through; labels deferred to
     scrutinee/DA/empty-body/expr-scrutinee) + 14 negatives (empty value, dup
     case [+xkind +folded], dup default, float scrutinee, non-const / float /
     out-of-range label, continue-no-loop, unreachable-after, DA default-less +
-    partial, break-escape + stacked return-correctness).
+    partial, break-escape + unreachable-after-stacked) + the stacked-terminator
+    positive (a stacked empty clause that falls into a returning clause).
   * exit: switch with fall-through + the break/continue retargeting + the join.
 
 SESSION 6 — labels (labeled / numbered break+continue) — LANDED. Phase 2 flow COMPLETE.
@@ -368,8 +380,7 @@ SESSION 6 — labels (labeled / numbered break+continue) — LANDED. Phase 2 flo
     targeting the loop, shadowing, do-while/ranged/enum/long-for labels, break
     2/3, nested-switch skip, do-while DA, unused label) + 7 negatives (count <1 /
     exceeds, unknown label, break-while-no-while, numbered/named break+continue in
-    a for-update, label-on-switch). Conservative limit + named-switch break
-    deferred (todo.txt).
+    a for-update, label-on-switch). Named-switch break deferred (todo.txt).
   * exit: Phase 2 flow COMPLETE (blocks, if/else, while+do-while, for [long/ranged/
     enum/typeless-reuse], switch, labels). FOR-ARRAY landed once arrays did, in
     Phase 4 (`for (var : arr)`, a resolve-stage desugar to kForLongStmt — by-ref/

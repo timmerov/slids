@@ -1539,6 +1539,22 @@ void resolveStoreTarget(parse::Tree& tree, parse::Node& lv,
     resolveExpr(tree, lv, diag);
 }
 
+// A loop condition that is a constant-true literal: bool `true`, or a non-zero
+// int/uint/char. The grammar synthesizes an empty `()` condition as bool true,
+// so an empty-condition loop lands here too. Detected SYNTACTICALLY (resolve
+// runs before constfold), so a named-const-true condition is not caught — that
+// path keeps the possibly-completing behavior. Float conditions (exotic) are
+// not treated as constant-true. Mirrors the literal side of classify's constTruth.
+bool condIsConstTrue(parse::Node const& c) {
+    if (c.kind == parse::Kind::kBoolLiteral
+        || c.kind == parse::Kind::kIntLiteral
+        || c.kind == parse::Kind::kUintLiteral
+        || c.kind == parse::Kind::kCharLiteral) {
+        return !c.text.empty() && c.text != "0";
+    }
+    return false;
+}
+
 Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     switch (s.kind) {
         case parse::Kind::kVarDeclStmt: {
@@ -1847,8 +1863,16 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             tree.loop_stack.push_back({});
             tree.loop_stack.back().name = s.label.empty() ? "while" : s.label;
             resolveStmt(tree, *s.children[1], diag);   // body block, from S
+            parse::Tree::LoopFrame lf = std::move(tree.loop_stack.back());
             tree.loop_stack.pop_back();
             tree.initialized_locals = std::move(entry);   // after = S
+            // A constant-true condition with no break targeting THIS loop never
+            // exits (3B exception): the loop is non-completing, so its after-point
+            // is unreachable (Abrupt drives 2A) and it is a return-terminator.
+            if (condIsConstTrue(*s.children[0]) && !lf.break_seen) {
+                s.non_completing = true;
+                return Completion::Abrupt;
+            }
             return Completion::Normal;
         }
         case parse::Kind::kDoWhileStmt: {
@@ -1882,9 +1906,14 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 ? intersectInit(cond_in, lf.break_init)             // ∩ break exits
                 : cond_in;
             tree.initialized_locals = std::move(after);
-            // Like a pre-condition while, treated as Normal-completing (3B): even
-            // a body that always returns is conservatively assumed to be able to
-            // reach its exit, so a trailing return is still demanded after it.
+            // A constant-true post-condition with no break never exits (the body
+            // loops forever): the loop is non-completing — Abrupt (unreachable
+            // after) and a return-terminator. (Otherwise Normal-completing: even a
+            // body that always returns is assumed able to reach its exit.)
+            if (condIsConstTrue(*s.children[0]) && !lf.break_seen) {
+                s.non_completing = true;
+                return Completion::Abrupt;
+            }
             return Completion::Normal;
         }
         case parse::Kind::kForLongStmt: {
@@ -2006,6 +2035,12 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             tree.body_locals = std::move(saved_body_locals);
             parse::popFrame(tree);
             tree.initialized_locals = std::move(after_varlist);   // after = S'
+            // A constant-true condition with no break targeting THIS for never
+            // exits: non-completing — Abrupt (unreachable after) + a terminator.
+            if (condIsConstTrue(*s.children[0]) && !lf.break_seen) {
+                s.non_completing = true;
+                return Completion::Abrupt;
+            }
             return Completion::Normal;
         }
         case parse::Kind::kForEnumStmt: {

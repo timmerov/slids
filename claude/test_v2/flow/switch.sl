@@ -64,8 +64,10 @@ SESSION 5 core (labels = numbered/named break+continue deferred to Phase 6):
   break/return/continue ends the run. naked break exits the SWITCH; naked
   continue skips the switch to the enclosing loop.
 - DA: each clause body enters from S; after = ∩ of break-points + bottom-fall;
-  a default-less switch contributes S (after = S). Exhaustive (all cases +
-  default terminate) is a return-correctness terminator.
+  a default-less switch contributes S (after = S). A switch is a return-
+  correctness terminator iff it has a default, no clause has a break escaping
+  past it, and the LAST clause's body ends in a return — fall-through means a
+  stacked empty (or non-returning) clause reaches that final return.
 - case labels must be unique constants of the scrutinee type; default singular,
   may sit anywhere. QUALIFIED enum-member labels (`Dir:N`) work via a
   terminator-aware qualified-name parse (scan the maximal `:`-ident chain; the
@@ -117,6 +119,18 @@ int stacked(int v) {
             r = 0;
     }
     return r;
+}
+
+/* a stacked empty-body clause that falls through into a returning clause makes
+   the switch exhaustive: every value returns (case 3 falls into case 4's
+   return), so the switch is a return-terminator and the function needs no
+   trailing return. */
+int stacked_terminator(int v) {
+    switch (v) {
+        case 3:
+        case 4: return 1;
+        default: return 0;
+    }
 }
 
 /* a default-less switch: an unmatched value is a no-op. */
@@ -351,6 +365,8 @@ int32 main() {
     __println("stacked(3) = " + stacked(3));                // 34
     __println("stacked(4) = " + stacked(4));                // 34
     __println("stacked(5) = " + stacked(5));                // 0
+    __println("stacked_terminator(3) = " + stacked_terminator(3));  // 1
+    __println("stacked_terminator(0) = " + stacked_terminator(0));  // 0
     __println("no_default(0) = " + no_default(0));          // 0
     __println("no_default(9) = " + no_default(9));          // 7
     __println("default_middle(0) = " + default_middle(0));  // 1
@@ -496,15 +512,16 @@ negatives — one //-block uncommented per run.
 //    }
 //}
 
-/* (F) a stacked empty-body clause is conservatively not a return-terminator, so
-   a function ending in this switch still needs a trailing return. */
-//-EXPECT-ERROR: must end with a return statement
-//int neg_stacked_terminator(int v) {
+/* (F) a stacked empty-body clause falls through into a returning clause, so the
+   switch IS a return-terminator — code after it is unreachable. */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_unreachable_after_stacked(int v) {
 //    switch (v) {
 //        case 3:
 //        case 4: return 1;
 //        default: return 0;
 //    }
+//    return 9;
 //}
 
 /* (D) duplicate case labels across kinds — 'a' and 97 are the same value. */

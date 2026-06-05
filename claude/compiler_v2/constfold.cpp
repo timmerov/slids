@@ -389,6 +389,21 @@ std::string floatToText(double v) {
     return buf;
 }
 
+// char value-narrowing (the literal char-arith rule): an int-class result folded
+// from LITERAL operands, at least one a char literal, stays char when the value
+// fits char's range (0..255); otherwise it takes `dflt` (int, i.e. char promotes
+// to signed int on overflow — never uint). Weak-only by construction: the
+// operands are literals, so a strong const (which carries its type via
+// strong_type / commonType: char+int -> int, char+char -> char) isn't folded
+// here. `dflt` is the kind the op would otherwise emit (kIntLiteral).
+parse::Kind narrowCharKind(parse::Node const& lhs, parse::Node const& rhs,
+                           int64_t value, parse::Kind dflt) {
+    bool charish = lhs.kind == parse::Kind::kCharLiteral
+                || rhs.kind == parse::Kind::kCharLiteral;
+    if (charish && value >= 0 && value <= 255) return parse::Kind::kCharLiteral;
+    return dflt;
+}
+
 // D1 + D3 float arm. Returns kFloatLiteral for arith, kBoolLiteral for cmp.
 std::unique_ptr<parse::Node> tryFoldFloatBinary(parse::Node& node,
                                                  parse::Node& lhs, parse::Node& rhs,
@@ -496,6 +511,12 @@ std::unique_ptr<parse::Node> tryFoldShift(parse::Node& node,
         // Compute in uint64 to avoid signed-overflow UB; reinterpret per kind.
         uint64_t v = lhs_neg ? (0ULL - lhs_mag) : lhs_mag;
         uint64_t r = v << count;
+        if (lhs.kind == parse::Kind::kCharLiteral) {
+            // char shift keeps char when it fits, else promotes to int.
+            parse::Kind k = (r <= 255) ? parse::Kind::kCharLiteral
+                                       : parse::Kind::kIntLiteral;
+            return makeLitAt(node, k, std::to_string(static_cast<int64_t>(r)));
+        }
         if (lhs_unsigned) {
             return makeLitAt(node, parse::Kind::kUintLiteral, std::to_string(r));
         }
@@ -503,6 +524,11 @@ std::unique_ptr<parse::Node> tryFoldShift(parse::Node& node,
                          std::to_string(static_cast<int64_t>(r)));
     }
     // >>
+    if (lhs.kind == parse::Kind::kCharLiteral) {
+        // char >> count always fits char (result <= lhs).
+        uint64_t r = lhs_mag >> count;
+        return makeLitAt(node, parse::Kind::kCharLiteral, std::to_string(r));
+    }
     if (lhs_unsigned) {
         uint64_t r = lhs_mag >> count;
         return makeLitAt(node, parse::Kind::kUintLiteral, std::to_string(r));
@@ -567,7 +593,8 @@ std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
             return makeLitAt(node, parse::Kind::kIntLiteral, "0");
         }
         int64_t r = (op == "/") ? (a / b) : (a % b);
-        return makeLitAt(node, parse::Kind::kIntLiteral, std::to_string(r));
+        return makeLitAt(node, narrowCharKind(lhs, rhs, r, parse::Kind::kIntLiteral),
+                         std::to_string(r));
     }
 
     if (op == "&" || op == "|" || op == "^") {
@@ -575,7 +602,8 @@ std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
         if      (op == "&") r = a & b;
         else if (op == "|") r = a | b;
         else /*    ^   */   r = a ^ b;
-        return makeLitAt(node, parse::Kind::kIntLiteral, std::to_string(r));
+        return makeLitAt(node, narrowCharKind(lhs, rhs, r, parse::Kind::kIntLiteral),
+                         std::to_string(r));
     }
 
     // + - * with rule-6 overflow detection.
@@ -587,7 +615,8 @@ std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
     else return nullptr;
 
     if (!overflow) {
-        return makeLitAt(node, parse::Kind::kIntLiteral, std::to_string(r));
+        return makeLitAt(node, narrowCharKind(lhs, rhs, r, parse::Kind::kIntLiteral),
+                         std::to_string(r));
     }
     // Retry in uint64; if it also overflows, leave unfolded (catch-all surfaces).
     uint64_t ua = static_cast<uint64_t>(a);
@@ -815,13 +844,22 @@ std::unique_ptr<parse::Node> tryFoldSizeof(parse::Node& n, parse::Tree& tree) {
     return lit;
 }
 
+// `no_substitute` (set inside a ##type operand): fold pure-literal subtrees but
+// do NOT substitute a kConst ident to its value. ##type reports the type of its
+// operand as written, so substituting a const would erase its const-qualified
+// type; but a literal-only subtree (`'A' + 1`) SHOULD fold so ##type reports the
+// folded result's type (e.g. char), matching a const/inferred initializer. A
+// const left unsubstituted stays a kIdentExpr, so any binary containing it isn't
+// all-literal and won't fold.
 void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
-          bool& changed, diagnostic::Sink& diag) {
+          bool& changed, diagnostic::Sink& diag, bool no_substitute = false) {
     if (!slot) return;
-    // ##type is a compile-time type query — it never evaluates its operand, so
-    // leave the operand subtree un-folded and un-substituted. Folding a const
-    // operand to a bare literal would erase its declared (const-qualified) type.
-    if (slot->kind == parse::Kind::kStringifyType) return;
+    if (slot->kind == parse::Kind::kStringifyType) {
+        for (auto& c : slot->children) {
+            walk(c, tree, changed, diag, /*no_substitute=*/true);
+        }
+        return;
+    }
     // sizeof likewise never evaluates its operand — fold it in place to an intptr
     // constant where statically known, without substituting inside the operand.
     if (slot->kind == parse::Kind::kSizeofExpr) {
@@ -833,12 +871,12 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
         return;
     }
     for (auto& c : slot->children) {
-        walk(c, tree, changed, diag);
+        walk(c, tree, changed, diag, no_substitute);
     }
     // Fold inside parameter defaults too (params live in a separate vector, not
     // children) so a constant-expression default reaches a literal.
     for (auto& p : slot->params) {
-        walk(p, tree, changed, diag);
+        walk(p, tree, changed, diag, no_substitute);
     }
     if (slot->kind == parse::Kind::kUnaryExpr) {
         if (auto folded = tryFoldUnary(*slot, diag)) {
@@ -851,7 +889,7 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
             changed = true;
         }
     } else if (slot->kind == parse::Kind::kIdentExpr) {
-        if (trySubstituteConst(slot, tree)) {
+        if (!no_substitute && trySubstituteConst(slot, tree)) {
             changed = true;
         }
     }

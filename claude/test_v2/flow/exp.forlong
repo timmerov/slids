@@ -1,6 +1,7 @@
 sum_for(5) = 10
 empty_clauses(4) = 6
 for_empty_cond(5) = 4
+for_true_terminator(4) = 4
 two_vars(10) = 5
 for_continue(6) = 9
 for_break(5) = 4

@@ -129,6 +129,17 @@ int for_empty_cond(int n) {
     return i;
 }
 
+/* a constant-true for condition (here explicit `(true)`) with no break never
+   exits, so it is a non-completing terminator: this non-void function ends in
+   one with no trailing return, exiting only via the return inside the body. */
+int for_true_terminator(int n) {
+    for (int i = 0) (true) { ++i; } {
+        if (i >= n) {
+            return i;
+        }
+    }
+}
+
 /* multiple variables in the varlist, updated together. */
 int two_vars(int n) {
     int sum = 0;
@@ -385,6 +396,7 @@ int32 main() {
     __println("sum_for(5) = " + sum_for(5));                // 10
     __println("empty_clauses(4) = " + empty_clauses(4));    // 6
     __println("for_empty_cond(5) = " + for_empty_cond(5));  // 4
+    __println("for_true_terminator(4) = " + for_true_terminator(4));    // 4
     __println("two_vars(10) = " + two_vars(10));            // 5
     __println("for_continue(6) = " + for_continue(6));      // 9
     __println("for_break(5) = " + for_break(5));            // 4
@@ -478,13 +490,25 @@ negatives — one //-block uncommented per run.
 //    return r;
 //}
 
-/* a for is never a terminator, so a non-void function ending in one needs a
-   trailing return. */
+/* a for with a non-constant condition is never a terminator (it may run zero
+   times / fall through), so a non-void function ending in one needs a trailing
+   return. (a constant-true for with no break IS a terminator — see
+   for_true_terminator above.) */
 //-EXPECT-ERROR: must end with a return statement
 //int neg_for_no_return(int n) {
 //    for (int i = 0) (i < n) { ++i; } {
 //        n = n - 1;
 //    }
+//}
+
+/* a constant-true for with no break never exits, so code after it is
+   unreachable. */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_for_unreachable_after(int n) {
+//    for (int i = 0) (true) { ++i; } {
+//        n = n + 1;
+//    }
+//    return n;
 //}
 
 /* return is banned transitively in the update — even inside a nested loop. */

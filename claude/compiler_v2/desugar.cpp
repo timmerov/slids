@@ -166,6 +166,7 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     node->resolved_entry_id = p.resolved_entry_id;
     node->loop_levels = p.loop_levels;
     node->is_const = p.is_const;
+    node->non_completing = p.non_completing;
     node->param_types = p.param_types;
     node->captures = p.captures;
     node->capture_types = p.capture_types;

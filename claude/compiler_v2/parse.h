@@ -138,6 +138,11 @@ struct Node {
     std::string label;
     int loop_levels = -1;
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
+    bool non_completing = false; // while/do-while/for-long: a constant-true
+                                 // condition with no escaping break — the loop
+                                 // never exits. Set in resolve (Abrupt completion
+                                 // / unreachable-after), read in classify
+                                 // (endsInReturnNode: a return-terminator).
     // Qualified name (ident / call / inline decl / bare alias): leading namespace
     // segments before `name`. `Space:Nested:kFour` -> qualifier {Space, Nested},
     // name kFour. `global_qualified` marks a leading `::` (global root). Consumed

@@ -52,6 +52,13 @@ possibly-zero — a local assigned only in the body is NOT assigned after the lo
 (the post-loop init-set is the entry set), and the condition's reads must be
 satisfied on entry. the condition truthy-coerces like an if condition.
 
+a constant-true loop with no break is the exception: an explicit `while (true)`
+or the empty `while ()` condition can never exit, so the loop never completes —
+it is a non-completing terminator. code after such a loop is unreachable, and a
+non-void function may end in one with no trailing return. a constant-true loop
+that DOES contain a break still completes (the break is an exit), so it is an
+ordinary possibly-completing loop.
+
 break exits the nearest enclosing loop; continue jumps to its test. both are
 abrupt (a statement after one in the same block is unreachable), and both are
 errors outside any loop.
@@ -364,8 +371,9 @@ int do_const_false(int n) {
     return r;
 }
 
-/* an explicit while(true) is NOT flagged (3B: no constant-true loop special
-   case); the body is reachable, break is the only exit. */
+/* an explicit while(true) WITH a break still completes — the break is an exit,
+   so the loop is an ordinary possibly-completing loop and the code after it (the
+   trailing return) is reachable. */
 int while_true(int n) {
     int i = 0;
     while (true) {
@@ -375,6 +383,42 @@ int while_true(int n) {
         i = i + 1;
     }
     return i;
+}
+
+/* a constant-true loop with NO break never exits, so it is a non-completing
+   terminator: this non-void function ends in one with no trailing return, and
+   the only exits are the returns inside the body. */
+int while_true_terminator(int n) {
+    int i = 0;
+    while (true) {
+        if (i >= n) {
+            return i;
+        }
+        i = i + 1;
+    }
+}
+
+/* the same for the empty `while ()` condition (also constant-true). */
+int while_empty_terminator(int n) {
+    int i = 0;
+    while () {
+        if (i >= n) {
+            return i * 2;
+        }
+        i = i + 1;
+    }
+}
+
+/* a constant-true POST-condition (do-while) with no break is likewise a non-
+   completing terminator. */
+int do_true_terminator(int n) {
+    int i = 0;
+    while {
+        if (i >= n) {
+            return i + 100;
+        }
+        i = i + 1;
+    } (true);
 }
 
 int32 main() {
@@ -401,6 +445,9 @@ int32 main() {
     __println("do_countdown(3) = " + do_countdown(3));  // 39
     __println("do_const_false(5) = " + do_const_false(5));  // 6
     __println("while_true(4) = " + while_true(4));  // 4
+    __println("while_true_terminator(4) = " + while_true_terminator(4));    // 4
+    __println("while_empty_terminator(3) = " + while_empty_terminator(3));  // 6
+    __println("do_true_terminator(5) = " + do_true_terminator(5));  // 105
     __println("nested_break(3, 5) = " + nested_break(3, 5));    // 6
     __println("nested_continue(2, 3) = " + nested_continue(2, 3));  // 4
     __println("break_in_block(10) = " + break_in_block(10));    // 3
@@ -514,12 +561,39 @@ negatives — one //-block uncommented per run.
 //    } (n > 0);
 //}
 
-/* a constant-false condition makes the body unreachable. (a constant-TRUE loop
-   is NOT flagged — 3B has no constant-true loop special case.) */
+/* a constant-false condition makes the body unreachable. */
 //-EXPECT-ERROR: Unreachable statement.
 //int neg_while_false() {
 //    while (false) {
 //        __println("dead");
 //    }
 //    return 0;
+//}
+
+/* a constant-true loop with no break never exits, so code after it is
+   unreachable. */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_unreachable_after_while_true(int n) {
+//    while (true) {
+//        n = n + 1;
+//    }
+//    return n;
+//}
+
+/* the empty `while ()` condition is also constant-true. */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_unreachable_after_empty_cond(int n) {
+//    while () {
+//        n = n + 1;
+//    }
+//    return n;
+//}
+
+/* a constant-true post-condition (do-while) with no break never exits either. */
+//-EXPECT-ERROR: Unreachable statement.
+//int neg_unreachable_after_do_true(int n) {
+//    while {
+//        n = n + 1;
+//    } (true);
+//    return n;
 //}

@@ -91,8 +91,9 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     continue) — a 6-session track in plan-flow.txt (the join model + per-construct
     landing stages; tests in test_v2/flow/). Decisions locked: switch cases
     FALL THROUGH C-style (the original "independent cases" plan was wrong — canon
-    in switch.sl/slids_reference.md), unreachable-code detection on, no
-    constant-true loop special-case.
+    in switch.sl/slids_reference.md), unreachable-code detection on. (3B's
+    "no constant-true loop special-case" was later REVISITED — a constant-true
+    loop with no escaping break is now non-completing; see below + plan-flow.txt.)
     Sessions 1 (bare blocks) + 2 (if/else) + 3 (while + do-while + break/continue)
     LANDED. 1: kBlockStmt, per-block scope + DA migration, shadowing allowed,
     alloca names entry-id-suffixed for shadow safety, trailing-block return-
@@ -112,8 +113,14 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     on top of Session 3: empty condition (`if ()` too, via the shared
     parseParenCondition); constant-condition unreachable detection (classify,
     post-constfold) — const-true if flags the else, const-false if/while flags
-    then/body ("Unreachable statement."); const-true loops + do-while never flagged
-    (3B). Session 4 (for) IN PROGRESS — the LONG-FORM for landed
+    then/body ("Unreachable statement."). 3B REVISITED: a syntactically-constant-
+    true loop (literal-true / empty `()`) with no escaping break is NON-COMPLETING
+    — resolve returns Abrupt (2A flags its after-code unreachable), classify's
+    endsInReturnNode treats it as a return-terminator, codegen emits `unreachable`
+    in the dead exit block (Node.non_completing, set in resolve / read in classify
+    + codegen); a break-bearing const-true loop still completes; a named-const-true
+    condition isn't caught (resolve predates constfold, see todo.txt). Session 4
+    (for) IN PROGRESS — the LONG-FORM for landed
     (kForLongStmt `for (varlist) (cond) {update} {body}`, the canonical for node
     that the other for shapes will desugar to): explicit-type varlist, 3 scope
     frames (for/update/body, body may shadow a for-var), body-then-update DA
@@ -303,7 +310,15 @@ Phase 4 — types beyond primitives
     literalKindForType), so char/bool consts and `enum char`/`enum bool` members
     print as their declared type rather than the int-folded initializer. Canon:
     test_v2/constfold/enum.sl. Deferred enum items (reach-goal drop-qualifier,
-    reopen, char-arith-loses-char-ness bare-expr case) → todo.txt.
+    reopen) → todo.txt. The char-arith bare-expr case is now LANDED: a char-literal
+    arithmetic result stays char when the folded value fits 0..255, else promotes
+    to int (constfold's narrowCharKind, all arith operators; ##type folds its
+    literal-only operand so `##type('A'+1)` reports char). Paired with the
+    common-type SPELLING rule in widen::commonType — an explicit width (int32) is
+    honored, else a no-width slot (char/int/uint/float) when a no-width operand
+    contributed it, else the canonical width; two width-named operands stay width
+    (so `int+int8`->int, `int+int32`->int32, `int8+uint8`->int16). Canon:
+    constfold/constant.sl (kSS, kWP1-5, kChFit/kChBig/...).
 
 Phase 5 — classes
   * class definitions (fields, ctor, dtor, methods)

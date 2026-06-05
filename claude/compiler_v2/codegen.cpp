@@ -1004,6 +1004,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             }
 
             out << exit_lbl << ":\n";
+            // A non-completing loop (constant-true, no break) never reaches exit.
+            if (stmt.non_completing) out << "  unreachable\n";
             return;
         }
         case ast::Kind::kDoWhileStmt: {
@@ -1033,6 +1035,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 << ", label %" << exit_lbl << "\n";
 
             out << exit_lbl << ":\n";
+            // A non-completing loop (constant-true, no break) never reaches exit.
+            if (stmt.non_completing) out << "  unreachable\n";
             return;
         }
         case ast::Kind::kForLongStmt: {
@@ -1076,6 +1080,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             out << "  br label %" << head_lbl << "\n";
 
             out << exit_lbl << ":\n";
+            // A non-completing loop (constant-true, no break) never reaches exit.
+            if (stmt.non_completing) out << "  unreachable\n";
             return;
         }
         case ast::Kind::kBreakStmt: {
@@ -1236,28 +1242,38 @@ bool endsInReturnNode(ast::Node const& s) {
             && endsInReturnNode(*s.children[2]);
     }
     if (s.kind == ast::Kind::kSwitchStmt) return switchEndsInReturn(s);
+    // A non-completing loop (resolve-flagged constant-true, no break) never falls
+    // through — like a return, it terminates control. Its exit block already gets
+    // an `unreachable`, so the function epilogue must not append a `ret`.
+    if (s.kind == ast::Kind::kWhileStmt || s.kind == ast::Kind::kDoWhileStmt
+        || s.kind == ast::Kind::kForLongStmt) {
+        return s.non_completing;
+    }
     return false;
 }
 
 bool switchEndsInReturn(ast::Node const& s) {
+    // Mirrors classify: a switch terminates iff it has a default, no clause has an
+    // escaping break, and the LAST clause's body ends in a return (C-style
+    // fall-through carries a stacked/non-returning clause into that final return).
     bool has_default = false;
     for (std::size_t i = 1; i < s.children.size(); i++) {
         ast::Node const& clause = *s.children[i];
         if (!clause.children[0]) has_default = true;
-        if (!endsInReturnNode(*clause.children[1])
-            || containsBreak(*clause.children[1])) {
-            return false;
-        }
+        if (containsBreak(*clause.children[1])) return false;
     }
-    return has_default;
+    if (!has_default) return false;
+    return endsInReturnNode(*s.children.back()->children[1]);
 }
 
 // "This statement always transfers control away" — return / break / continue,
 // or a block / both-armed-if whose paths all do. Broader than endsInReturn
 // (which return-correctness needs); this drives the br-emit decisions where a
 // block must NOT emit a fall-through branch after an already-terminated tail (an
-// if-arm's br-to-merge, a while body's back-edge). A while is NOT terminating:
-// it always reaches its own exit, so control falls through to what follows it.
+// if-arm's br-to-merge, a while body's back-edge). A COMPLETING loop is NOT
+// terminating: it reaches its own exit, so control falls through to what follows
+// it. A NON-completing loop (constant-true, no break) IS terminating — its exit
+// block is `unreachable`, so no fall-through branch may follow it.
 bool endsTerminated(std::vector<std::unique_ptr<ast::Node>> const& stmts) {
     if (stmts.empty() || !stmts.back()) return false;
     return endsTerminatedNode(*stmts.back());
@@ -1277,6 +1293,11 @@ bool endsTerminatedNode(ast::Node const& s) {
     // is a return-terminator (the switchEndsInReturn condition already excludes
     // escaping breaks and requires a default).
     if (s.kind == ast::Kind::kSwitchStmt) return switchEndsInReturn(s);
+    // A non-completing loop's exit is `unreachable` — control never falls past it.
+    if (s.kind == ast::Kind::kWhileStmt || s.kind == ast::Kind::kDoWhileStmt
+        || s.kind == ast::Kind::kForLongStmt) {
+        return s.non_completing;
+    }
     return false;
 }
 

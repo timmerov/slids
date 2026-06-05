@@ -94,6 +94,44 @@ std::string canonicalFloat(int bits) {
     return (bits == 32) ? "float32" : "float64";
 }
 
+// The four width-less ("no-width") spellings the language prefers to keep:
+// char (u8), int (s32), uint (u32), float (f32). bool is deliberately excluded.
+bool isNoWidth(std::string const& t) {
+    return t == "char" || t == "int" || t == "uint" || t == "float";
+}
+
+// The no-width spelling for a (category, bits), or "" when none exists.
+std::string noWidthName(Category cat, int bits) {
+    if (cat == Category::kUnsignedInt && bits == 8)  return "char";
+    if (cat == Category::kSignedInt   && bits == 32) return "int";
+    if (cat == Category::kUnsignedInt && bits == 32) return "uint";
+    if (cat == Category::kFloat       && bits == 32) return "float";
+    return "";
+}
+
+// Choose the spelling for a common type of category `cat`/`bits` derived from
+// operands spelled `t1`/`t2`. Precedence: (1) an operand's EXPLICIT width name
+// that matches the result type wins (the author pinned that width — honor it,
+// e.g. `int + int32 -> int32`, `intptr` preserved); (2) otherwise the no-width
+// name, but only when a no-width operand contributed it (so two width-named
+// operands never collapse to a no-width type); (3) otherwise the canonical
+// width name.
+std::string spellCommon(Category cat, int bits,
+                        std::string const& t1, std::string const& t2) {
+    std::string const* ops[2] = {&t1, &t2};
+    for (std::string const* t : ops) {
+        TypeKind k;
+        if (!isNoWidth(*t) && classify(*t, k) && k.cat == cat && k.bits == bits) {
+            return *t;
+        }
+    }
+    std::string nw = noWidthName(cat, bits);
+    if (!nw.empty() && (isNoWidth(t1) || isNoWidth(t2))) return nw;
+    if (cat == Category::kFloat) return canonicalFloat(bits);
+    if (cat == Category::kUnsignedInt) return canonicalUnsigned(bits);
+    return canonicalSigned(bits);
+}
+
 void reportIntFit(diagnostic::Sink& diag, std::string const& literal,
                   std::string const& dest_type, int file_id, int tok) {
     (void)literal;   // n/a: caret-rendered source carries the spelling
@@ -371,26 +409,27 @@ bool commonType(std::string const& t1, std::string const& t2, std::string& out) 
              || k2.cat == Category::kUnsignedInt;
 
     if (int1 && int2) {
+        // bool classifies as kBool (1-bit, unsigned-like); s1/s2 false for it.
         bool s1 = (k1.cat == Category::kSignedInt);
         bool s2 = (k2.cat == Category::kSignedInt);
-        if (s1 && s2) {
-            out = canonicalSigned(std::max(k1.bits, k2.bits));
-            return true;
+        Category cat;
+        int bits;
+        if (s1 == s2) {
+            cat = s1 ? Category::kSignedInt : Category::kUnsignedInt;
+            bits = std::max(k1.bits, k2.bits);
+        } else {
+            int signed_bits   = s1 ? k1.bits : k2.bits;
+            int unsigned_bits = s1 ? k2.bits : k1.bits;
+            bits = std::max(signed_bits, unsigned_bits + 1);
+            if (bits > 64) return false;
+            cat = Category::kSignedInt;
         }
-        if (!s1 && !s2) {
-            out = canonicalUnsigned(std::max(k1.bits, k2.bits));
-            return true;
-        }
-        int signed_bits   = s1 ? k1.bits : k2.bits;
-        int unsigned_bits = s1 ? k2.bits : k1.bits;
-        int needed = std::max(signed_bits, unsigned_bits + 1);
-        if (needed > 64) return false;
-        out = canonicalSigned(needed);
+        out = spellCommon(cat, bits, t1, t2);
         return true;
     }
 
     if (k1.cat == Category::kFloat && k2.cat == Category::kFloat) {
-        out = canonicalFloat(std::max(k1.bits, k2.bits));
+        out = spellCommon(Category::kFloat, std::max(k1.bits, k2.bits), t1, t2);
         return true;
     }
 

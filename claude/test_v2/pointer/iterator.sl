@@ -5,6 +5,7 @@ iterators are a type of pointer.
 they point to an iterable sequence of objects.
 iterators may be assigned, re-assigned, and set to nullptr.
 you may do additive math operations on iterators.
+including augmented additive math operations.
 
 square brackets [] after a type indicates an iterator.
 caret ^ after an iterator type variable is the object.
@@ -21,6 +22,8 @@ caret ^ before an indexed array variable is an iterator to the indexed object.
     ++e;
     --r;
     intptr diff = r - e;
+    e += 3;
+    r -= 2;
 
 iterators as addresses are incremented by the size of the object.
 the difference between to iterators is the difference between

@@ -121,6 +121,17 @@ int32 main() {
     /* a const read inside an expression strips const -> the bare underlying. */
     __println("kFortyTwo+2 : " + ##type(kFortyTwo + 2));   // int (const dropped)
 
+    /* a bare literal expression reports the no-width preferred spelling (int /
+       uint / float / char), like a const/inferred init — a DECLARED-width value
+       keeps its width name. char-arith stays char when the folded value fits,
+       else promotes to int. (##type folds literal-only subtrees but never
+       substitutes a const, so kFortyTwo above still reads as the const's type.) */
+    __println("1 : "        + ##type(1));                  // int
+    __println("0xFF : "     + ##type(0xFF));               // uint
+    __println("3.5 : "      + ##type(3.5));                // float
+    __println("'A'+1 : "    + ##type('A' + 1));            // char
+    __println("'A'+1000 : " + ##type('A' + 1000));         // int (overflow)
+
     /* compile error — cyclic const dependency (kThree → kOne → kThree) */
 
     const int kThree = kOne + kTwo;
@@ -181,6 +192,41 @@ int32 main() {
     __println(##type(kChainA) + " kChainA = " + kChainA);
     __println(##type(kChainB) + " kChainB = " + kChainB);
     __println(##type(kNeg)    + " kNeg = "    + kNeg);
+
+    /* common-type SPELLING rule: an explicitly-written width name (int32, int64)
+       is honored; a no-width slot (int/uint) is used only when a no-width operand
+       contributed it; two width-named operands stay width-named. */
+    const int32 kI32 = 100;
+    const int64 kI64 = 100;
+    const uint8 kU8  = 100;
+    const uint  kU   = 100;
+    const kWP1 = kByte + kI32;             // int8  + int32 -> int32 (explicit width)
+    const kWP2 = kFortyTwo + kI64;         // int   + int64 -> int64 (explicit width)
+    const kWP3 = kFortyTwo + kI32;         // int   + int32 -> int32 (author's width wins)
+    const kWP4 = kU8 + kU;                 // uint8 + uint  -> uint  (no-width slot)
+    const kWP5 = kByte + kU8;              // int8  + uint8 -> int16 (two width, mixed sign)
+    __println(##type(kWP1) + " kWP1 = " + kWP1);
+    __println(##type(kWP2) + " kWP2 = " + kWP2);
+    __println(##type(kWP3) + " kWP3 = " + kWP3);
+    __println(##type(kWP4) + " kWP4 = " + kWP4);
+    __println(##type(kWP5) + " kWP5 = " + kWP5);
+
+    /* char arithmetic on LITERALS stays char when the folded value fits 0..255,
+       else promotes to int (char's value-dependent rule; all arith operators). */
+    const kChFit  = 'A' + 1;       // 66   fits -> char 'B'
+    const kChDown = 'a' - 32;      // 65   fits -> char 'A'
+    const kChAnd  = 'C' & 'A';     // 65   fits -> char 'A'
+    const kChShr  = 'B' >> 1;      // 33   fits -> char '!'
+    const kChBig  = 'A' + 1000;    // 1065 overflows char -> int
+    const kChMul  = 'a' * 'a';     // 9409 overflows char -> int
+    const kChShl  = 'A' << 8;      // 16640 overflows char -> int
+    __println(##type(kChFit)  + " kChFit = "  + kChFit);
+    __println(##type(kChDown) + " kChDown = " + kChDown);
+    __println(##type(kChAnd)  + " kChAnd = "  + kChAnd);
+    __println(##type(kChShr)  + " kChShr = "  + kChShr);
+    __println(##type(kChBig)  + " kChBig = "  + kChBig);
+    __println(##type(kChMul)  + " kChMul = "  + kChMul);
+    __println(##type(kChShl)  + " kChShl = "  + kChShl);
 
     return 0;
 }

@@ -3,6 +3,11 @@ const int kForty = 40
 const float kPi2 = 1.57
 const int kFortyFour = 44
 kFortyTwo+2 : int
+1 : int
+0xFF : uint
+3.5 : float
+'A'+1 : char
+'A'+1000 : int
 const int kThree = 3
 const float64 kPlanck = 6.626
 const bool kAlive = true
@@ -19,7 +24,19 @@ const bool kWbool = true
 const uint kWuint = 255
 const int64 kWbig = 5000000000
 const float kSfloat = 4.14
-const int32 kSS = 47
+const int kSS = 47
 const int8 kChainA = 5
 const int8 kChainB = 6
 const int8 kNeg = -5
+const int32 kWP1 = 105
+const int64 kWP2 = 142
+const int kWP3 = 142
+const uint kWP4 = 200
+const int16 kWP5 = 105
+const char kChFit = B
+const char kChDown = A
+const char kChAnd = A
+const char kChShr = !
+const int kChBig = 1065
+const int kChMul = 9409
+const int kChShl = 16640

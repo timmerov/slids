@@ -602,9 +602,16 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 parse::Entry const& ce = tree.entries[operand.resolved_entry_id];
                 e.text = "const "
                     + (ce.alias_label.empty() ? ce.slids_type : ce.alias_label);
+            } else if (!operand.alias_label.empty()) {
+                e.text = operand.alias_label;
+            } else if (isLiteralKind(operand.kind)) {
+                // A bare literal reports the no-width preferred spelling
+                // (int/uint/float), consistent with const-capture and the
+                // no-width preference — a value of a DECLARED width keeps its
+                // width name (the else below). char has no width-name to fold.
+                e.text = preferredSpelling(operand.inferred_type);
             } else {
-                e.text = operand.alias_label.empty() ? operand.inferred_type
-                                                     : operand.alias_label;
+                e.text = operand.inferred_type;
             }
             e.children.clear();
             e.kind = parse::Kind::kStringLiteral;
@@ -1559,21 +1566,30 @@ bool endsInReturnNode(parse::Node const& s) {
         return endsInReturnNode(*s.children[1])   // then-branch (a block)
             && endsInReturnNode(*s.children[2]);  // else-branch (block or if)
     }
-    // A switch is a return-terminator iff it has a default AND every clause body
-    // ends in a return (so no break / fall-out reaches past the switch). A
-    // fall-through clause with an empty body is conservatively not a terminator
-    // (demands a trailing return — the same over-demand as loops).
+    // C-style fall-through: control can fall out the bottom of a switch only off
+    // the LAST clause's body (every earlier clause either returns or falls into
+    // the next). So the switch is a return-terminator iff it has a default, no
+    // clause has a break escaping past it, and the LAST clause's body ends in a
+    // return — a stacked empty (or non-returning) clause then reaches that final
+    // return via fall-through.
     if (s.kind == parse::Kind::kSwitchStmt) {
         bool has_default = false;
         for (std::size_t i = 1; i < s.children.size(); i++) {
             parse::Node const& clause = *s.children[i];
             if (!clause.children[0]) has_default = true;
-            if (!endsInReturnNode(*clause.children[1])
-                || containsBreak(*clause.children[1])) {
+            if (containsBreak(*clause.children[1])) {
                 return false;   // an escaping break reaches past the switch
             }
         }
-        return has_default;
+        if (!has_default) return false;
+        return endsInReturnNode(*s.children.back()->children[1]);
+    }
+    // A non-completing loop (resolve flagged a constant-true condition with no
+    // escaping break) never falls through — control leaves only via a return
+    // inside it (or not at all), so it is a return-terminator.
+    if (s.kind == parse::Kind::kWhileStmt || s.kind == parse::Kind::kDoWhileStmt
+        || s.kind == parse::Kind::kForLongStmt) {
+        return s.non_completing;
     }
     return false;
 }

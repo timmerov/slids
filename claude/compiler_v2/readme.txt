@@ -273,12 +273,20 @@ STAGE FILES (.h / .cpp pairs)
             joins (monotonic union — a read on any path is a use). Trailing-return
             correctness (classify) recurses into a trailing block and a trailing
             if/else whose arms both return (endsInReturn / endsInReturnNode).
-            Loops: a kWhileStmt (pre-condition) is possibly-zero (3B, no constant-
-            true special case) — condition + body resolve from S and the post-loop
-            set is S again (body inits don't escape); always Normal. A kDoWhileStmt
-            (post-condition, `while { body } (cond);`) runs the body once so its
-            inits DO escape: resolve the body from S, check the condition's reads
-            against body-out ∩ continue_accum, and set after = that ∩ break_accum.
+            Loops: a kWhileStmt (pre-condition) is possibly-zero — condition + body
+            resolve from S and the post-loop set is S again (body inits don't
+            escape); normally Normal. EXCEPTION (3B revisited): a syntactically-
+            constant-true condition (a bool/int/uint/char literal, incl. the
+            synthesized empty `()`; condIsConstTrue) with no break targeting the
+            loop (loop-frame break_seen false) is NON-COMPLETING — it returns Abrupt
+            (so 2A flags its after-code unreachable) and sets Node.non_completing
+            (classify reads it for return-correctness, codegen for the `unreachable`
+            exit). A named-const-true condition isn't caught (resolve predates
+            constfold). A kDoWhileStmt (post-condition, `while { body } (cond);`)
+            runs the body once so its inits DO escape: resolve the body from S,
+            check the condition's reads against body-out ∩ continue_accum, and set
+            after = that ∩ break_accum (the same constant-true non-completing rule
+            applies).
             break / continue are Abrupt; each resolves a TARGET frame by its
             argument — NAMED (`break name;` → nearest loop whose label matches; the
             label is the explicit `:name` or the keyword default for/while; switches
@@ -447,8 +455,11 @@ STAGE FILES (.h / .cpp pairs)
             condition to True/False/NotConst; a const-true if flags its else dead,
             a const-false if flags its then, a const-false while flags its body —
             "Unreachable statement." at the dead branch's first statement (empty
-            branch = nothing to flag). A const-TRUE loop is NOT flagged (3B); a
-            do-while is never flagged (its body always runs once). A kForLongStmt
+            branch = nothing to flag). The const-TRUE-LOOP unreachable-after case
+            (3B revisited) is handled in RESOLVE (a non-completing loop returns
+            Abrupt, so 2A flags the code after it), not here; classify's only
+            const-true-loop role is endsInReturnNode reading Node.non_completing for
+            return-correctness. A kForLongStmt
             classifies its loop var (children[3]) FIRST so a typeless one is typed
             before the rest; for a ranged/enum for (range_dotdot_tok set) the
             loop-var type is then stamped onto any typeless `_$end`/`_$step`
@@ -464,8 +475,10 @@ STAGE FILES (.h / .cpp pairs)
             rejected, never emitted as a truncated `iN`) and is unique by value
             (full 64-bit dedup, so 'a'==97 and 1+2==3 collide, with a "first case
             here" note); default is singular. A switch is a return-terminator
-            (endsInReturnNode) iff it has a default and every clause body returns
-            with no escaping break (containsBreak — the same test codegen uses).
+            (endsInReturnNode) iff it has a default, no clause has an escaping break
+            (containsBreak — the same test codegen uses), and the LAST clause's
+            body ends in a return; C-style fall-through carries a stacked empty /
+            non-returning clause into that final return.
             Per-arg type inference at call sites uses the resolved
             callee's param_types (cached on the kCallStmt/kCallExpr by
             resolve) as context. A kCallExpr's inferred_type is the

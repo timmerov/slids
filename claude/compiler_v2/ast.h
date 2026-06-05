@@ -79,6 +79,10 @@ struct Node {
                                  // loop/switch context stack to the resolved target
                                  // (0 = innermost), stamped by resolve.
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
+    bool non_completing = false; // while/do-while/for-long: a constant-true loop
+                                 // with no escaping break — its exit block is
+                                 // unreachable (emit `unreachable`) and the loop
+                                 // is a return-terminator.
     std::vector<std::unique_ptr<Node>> children;
     std::vector<std::unique_ptr<Node>> params;   // kFunctionDef/Decl: kParam nodes
     std::vector<std::string> param_types;        // kCallStmt/kCallExpr: resolved fn's param types

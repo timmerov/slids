@@ -8,32 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * CHAR-ARITH LOSES CHAR-NESS (const/enum case FIXED; bare-expr case OPEN) —
-    int-class binary arith folds operands and emits kIntLiteral, dropping a char
-    operand's kind: `'A' + 1` folds to int 66, not char 'B'. The CONST / ENUM
-    manifestation is FIXED: tryCaptureConst now stamps a const's literal_kind from
-    its DECLARED type (literalKindForType), not the folded initializer — so
-    `const char x = 65` prints 'A', an `enum char` member stays char through its
-    auto-incremented (int-folded) value, `enum bool` members print true/false, and
-    inferred locals from them inherit it. Canon: misc/bug.sl, constfold/enum.sl
-    (Flag), constfold/constant.sl (kBeta).
-    STILL OPEN — the DESIGN DECISION: is a char LITERAL strong (sticky, like a char
-    variable) or weak (promotes)? Today it's WEAK and INCONSISTENT with values:
-    `##type('A')`=char but `##type('A' + 1)`=int32 (two weak literals -> common
-    Type(char,int) -> int), whereas a strong char VARIABLE sticks — `##type(c+1)`
-    =char (the int literal flexes into the char), `##type(c+n)`=int32 (char + int
-    var drops). So a bare `'A' + 1` prints/types as int while `c + 1` stays char;
-    each path is internally consistent (weak literal promotes; strong value sticks)
-    but the surface diverges. This lives in BOTH stages: classify's commonType
-    promotes two weak literals, AND foldIntArithBitwise emits kIntLiteral. To make
-    `'A' + literal -> char` (match the variable), a char literal must ANCHOR like a
-    strong char in a bare binary (the partner literal flexes in) — classify's flex
-    + the fold's result-kind both then follow; but it must still flex into context
-    (`int x = 'A'` -> 65). If instead char literals stay weak (C-style promotion),
-    `'A' + 1 -> int` is correct and nothing here needs fixing. The const/enum case
-    is already settled — a DECLARED char re-imposes the strong type (the fix above).
-    Overlaps the strong_type / flex machinery and the named-type binary-result rule.
-
   * ORPHAN-CHECK vs IMPORT FORWARD-DECLS — resolve's Pass 3 errors on any
     function declared-but-never-defined ("Function 'X' is declared but never
     defined.") — but a `.slh` header legitimately declares-only (defined in the
@@ -77,14 +51,6 @@ DEFERRED FEATURES (later; may not be on the plan)
     noted in test_v2/misc/sizeof.sl's claude block. Broader than sizeof — covers
     any const-expression dimension.
 
-  * SWITCH STACKED-EMPTY-BODY TERMINATOR (conservative over-demand) — a switch
-    where a stacked label's body is empty and falls through into a returning
-    clause (`case 3: case 4: return 1; default: return 0;`) is NOT treated as a
-    return-terminator (endsInReturnNode requires every clause body to itself end
-    in a return), so a function ending in it over-demands a trailing return. Same
-    class as the 3B constant-true-loop over-demand; full reachability would fix
-    both. Canon: switch.sl neg_stacked_terminator pins the current behavior.
-
   * NAMED-SWITCH BREAK (`break someswitch;`) — breaking a non-innermost switch by
     its name. switch.sl marks it "distant future, low utility". Session 6 (labels)
     LANDED loop labels + numbered/named break of LOOPS only; switch naming was
@@ -110,24 +76,17 @@ DEFERRED FEATURES (later; may not be on the plan)
     primitive element types today the rule never fires, so it isn't enforced;
     add the check when slid/class array elements exist (Phase 5).
 
-  * RANGED-FOR LITERAL-FOLD LOOP-FOREVER CHECK — a ranged-for `for (var : start ..
-    cmp end op step)` whose start/end/step are ALL integer literals can be checked
-    at compile time for a guaranteed non-terminating (or zero-iteration-degenerate)
-    loop: step == 0; start == end under a strict cmp; cmp-direction vs step-sign
-    mismatch (e.g. cmp `<` ascending but a `-`/negative step, like `0 .. 10 + -1`).
-    Designed in v1 but NEVER built (v1.md "For-loop syntax — remaining work"); v1
-    and v2 both just spin at runtime today. In v2 this fits constfold (it already
-    folds all-literal subtrees) — flag on a kForLongStmt whose synthesized cond +
-    step fold to constants. Literal-only by design; runtime operands (`0 .. n*2`,
-    `0 .. != x`) are not caught. Lands with / after ranged-for.
-
-  * CONSTANT-TRUE LOOP -> UNREACHABLE AFTER-CODE — a `while (true)` / `while {} ()`
-    with no break never exits, so code after it is unreachable; likewise an empty
-    post-condition. NOT flagged today: per 3B there is no constant-true loop
-    special case (the loop is modeled possibly-zero / always-completing). The
-    constant-condition unreachable check (classify) covers if-true/if-false and
-    while-FALSE bodies, but deliberately skips constant-true loops. Revisit only
-    if 3B is revisited.
+  * NAMED-CONST-TRUE LOOP NOT FLAGGED — the constant-true-loop special case
+    (3B revisited: a constant-true loop with no break is non-completing — its
+    after-code is unreachable + it is a return-terminator) is detected
+    SYNTACTICALLY in resolve (a bool/int/uint/char literal condition, incl. the
+    synthesized empty `()`), because resolve runs before constfold. A loop whose
+    condition is a NAMED const that folds to true (`const t = true; while (t)`) is
+    therefore not flagged — it keeps the possibly-completing behavior (no
+    unreachable-after, a trailing return is still demanded). Closing this needs
+    resolve to see folded consts (it predates constfold) or the non-completing
+    determination moved/duplicated post-fold. Low priority — `while (true)` /
+    empty-cond are the common forms and are fully handled.
 
   * REOPEN ENUMS — re-`enum SameName ( ... )` to add members to an existing
     enum (member names can't collide across openings). Open spec qs: does the
@@ -154,14 +113,6 @@ DEFERRED FEATURES (later; may not be on the plan)
     const_strong_type on entries, combineStrong propagation, weakDefaultType for a
     bare-literal rhs). prerequisite: classify/codegen consume strong_type at the
     widen sites.
-
-  * CANONICALSIGNED INT-VS-INT32 SPELLING — widen::commonType's widen branch spells
-    the 32-bit-signed common type "int32" (canonicalSigned), so `const c = <int8
-    const> + <int const>` reports `const int32` while a const carrying its own
-    `int` spelling reports `const int` — an inconsistent spelling. Fix is a one-line
-    policy in canonicalSigned / canonicalUnsigned / canonicalFloat to spell the
-    32-bit defaults int / uint / float, applying uniformly to const inference AND
-    runtime widening. Surfaced by constant.sl's kSS case.
 
   * ALIAS FUNCTION-RENAME — `alias Fn = LongName;` (use case: importing C
     functions with ugly names).
