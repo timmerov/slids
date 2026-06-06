@@ -407,7 +407,7 @@ struct Parser {
                 if (!expect(token::Kind::kRBracket, "]")) return nullptr;
             }
             auto node = newNodeAt(parse::Kind::kNewExpr, new_file, new_tok);
-            node->return_type = elem;
+            node->return_type = widen::internOrNone(elem);
             node->children.push_back(std::move(size));   // [0] (may be null)
             node->children.push_back(std::move(addr));   // [1] (may be null)
             return node;
@@ -427,7 +427,7 @@ struct Parser {
             if (isTypeStart(peek().kind)) {
                 std::string ty = parseType();
                 if (ty.empty()) return nullptr;
-                node->return_type = ty;
+                node->return_type = widen::internOrNone(ty);
             } else {
                 auto operand = parseExpr();
                 if (!operand) return nullptr;
@@ -631,7 +631,7 @@ struct Parser {
             auto operand = parseUnary();
             if (!operand) return nullptr;
             auto node = newNodeAt(parse::Kind::kCastExpr, op_file, op_tok);
-            node->return_type = target;
+            node->return_type = widen::internOrNone(target);
             node->return_type_seg_toks = std::move(target_seg_toks);
             node->children.push_back(std::move(operand));
             return node;
@@ -903,7 +903,7 @@ struct Parser {
             if (!expect(token::Kind::kRBracket, "]")) return nullptr;
         }
         if (any_dim_expr) node->dim_exprs = std::move(dim_exprs);
-        node->return_type = std::move(type);
+        node->return_type = widen::internOrNone(type);
         node->return_type_seg_toks = std::move(type_seg_toks);
         node->is_const = is_const;
         if (peek().kind == token::Kind::kEquals) {
@@ -1189,7 +1189,7 @@ struct Parser {
             advance();   // =
             std::string target = parseType();
             if (fatal) return nullptr;
-            node->return_type = std::move(target);
+            node->return_type = widen::internOrNone(target);
         }
         // else: bare import form — return_type left empty.
         if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
@@ -1223,7 +1223,7 @@ struct Parser {
             underlying = parseType();
             if (fatal) return nullptr;
         }
-        node->return_type = underlying;
+        node->return_type = widen::internOrNone(underlying);
         // Optional name.
         if (peek().kind == token::Kind::kIdentifier) {
             node->name = peek().text;
@@ -1240,7 +1240,7 @@ struct Parser {
             auto m = newNodeAt(parse::Kind::kVarDeclStmt, peek().file_id, pos);
             m->name = peek().text;
             m->name_tok = pos;
-            m->return_type = underlying;
+            m->return_type = widen::internOrNone(underlying);
             m->is_const = true;
             advance();
             if (peek().kind == token::Kind::kEquals) {
@@ -1519,19 +1519,19 @@ struct Parser {
         std::string stepName = "_$step$" + std::to_string(dotdot_tok);
         std::vector<std::unique_ptr<parse::Node>> varlist;
         auto vd = newNodeAt(parse::Kind::kVarDeclStmt, v_file, v_tok);
-        vd->name = vname; vd->name_tok = vname_tok; vd->return_type = vtype;
+        vd->name = vname; vd->name_tok = vname_tok; vd->return_type = widen::internOrNone(vtype);
         vd->children.push_back(std::move(start));
         varlist.push_back(std::move(vd));
 
         auto ed = newNodeAt(parse::Kind::kVarDeclStmt, v_file, dotdot_tok);
-        ed->name = endName; ed->name_tok = dotdot_tok; ed->return_type = vtype;
+        ed->name = endName; ed->name_tok = dotdot_tok; ed->return_type = widen::internOrNone(vtype);
         ed->children.push_back(std::move(end));
         varlist.push_back(std::move(ed));
 
         std::unique_ptr<parse::Node> step_val;
         if (step) {
             auto sd = newNodeAt(parse::Kind::kVarDeclStmt, v_file, dotdot_tok);
-            sd->name = stepName; sd->name_tok = dotdot_tok; sd->return_type = vtype;
+            sd->name = stepName; sd->name_tok = dotdot_tok; sd->return_type = widen::internOrNone(vtype);
             sd->children.push_back(std::move(step));
             varlist.push_back(std::move(sd));
             step_val = makeIdent(stepName, v_file, dotdot_tok);
@@ -1588,7 +1588,7 @@ struct Parser {
             return nullptr;
         }
         auto vd = newNodeAt(parse::Kind::kVarDeclStmt, v_file, v_tok);
-        vd->name = vname; vd->name_tok = vname_tok; vd->return_type = vtype;
+        vd->name = vname; vd->name_tok = vname_tok; vd->return_type = widen::internOrNone(vtype);
         auto node = newNodeAt(parse::Kind::kForEnumStmt, stmt_file, stmt_tok);
         node->children.push_back(std::move(vd));        // [0] loop-var decl
         node->children.push_back(std::move(enum_ref));  // [1] enum-ref
@@ -1636,7 +1636,7 @@ struct Parser {
             auto decl = newNodeAt(parse::Kind::kVarDeclStmt, v_file, v_tok);
             decl->name = vname;
             decl->name_tok = vname_tok;
-            decl->return_type = std::move(vtype);
+            decl->return_type = widen::internOrNone(vtype);
             if (peek().kind == token::Kind::kEquals) {
                 advance();   // =
                 auto init = parseExpr();
@@ -1832,7 +1832,7 @@ struct Parser {
         auto node = newNodeAt(parse::Kind::kFunctionDef, fn_file, fn_tok);
         node->name = std::move(name);
         node->name_tok = name_tok;
-        node->return_type = std::move(ret_type);
+        node->return_type = widen::internOrNone(ret_type);
 
         while (peek().kind != token::Kind::kRParen) {
             int p_file = peek().file_id;
@@ -1856,7 +1856,7 @@ struct Parser {
             auto p = newNodeAt(parse::Kind::kParam, p_file, p_tok);
             p->name = std::move(p_name);
             p->name_tok = p_name_tok;
-            p->return_type = std::move(p_type);
+            p->return_type = widen::internOrNone(p_type);
             if (peek().kind == token::Kind::kEquals) {
                 advance();   // =
                 auto def = parseExpr();

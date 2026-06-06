@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "widen.h"   // widen::TypeRef — the structured type handle
+
 namespace ast {
 
 enum class Kind {
@@ -66,10 +68,10 @@ struct Node {
     Kind kind;
     std::string name;
     std::string text;
-    std::string return_type;
-    std::string nominal_type;    // literal nodes: nominal type from constfold
-    std::string inferred_type;   // expression nodes: in-context type from classify
-    std::string op_type;         // binary's computational type from classify
+    widen::TypeRef return_type = widen::kNoType;
+    widen::TypeRef nominal_type = widen::kNoType;   // literal nodes: from constfold
+    widen::TypeRef inferred_type = widen::kNoType;  // expr nodes: in-context, from classify
+    widen::TypeRef op_type = widen::kNoType;        // binary's computational type
     int file_id = -1;            // source file of the construct
     int tok = -1;                // index into token::List::tokens for error attribution
     int name_tok = -1;           // ident token for named constructs
@@ -85,9 +87,9 @@ struct Node {
                                  // is a return-terminator.
     std::vector<std::unique_ptr<Node>> children;
     std::vector<std::unique_ptr<Node>> params;   // kFunctionDef/Decl: kParam nodes
-    std::vector<std::string> param_types;        // kCallStmt/kCallExpr: resolved fn's param types
+    std::vector<widen::TypeRef> param_types;     // kCallStmt/kCallExpr: resolved fn's param types
     std::vector<int> captures;                   // nested fn + its calls: captured host entry ids
-    std::vector<std::string> capture_types;      // nested fn: each capture's slids type
+    std::vector<widen::TypeRef> capture_types;   // nested fn: each capture's slids type
 };
 
 struct Tree {

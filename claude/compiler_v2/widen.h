@@ -29,6 +29,8 @@ constexpr TypeRef kNoType = -1;
 
 struct Type {
     enum class Form {
+        kNone,        // the kNoType sentinel — "no type" (distinct from void); a
+                      // no-type field reads as this, so form()==kVoid never matches it
         kPrimitive,   // bool/char/intN/uintN/floatN + the no-width int/uint/float + intptr
         kVoid,        // void
         kAnyptr,      // anyptr — the typeless null pointer
@@ -38,7 +40,7 @@ struct Type {
         kSlid,        // a named slid/class type (not a known primitive)
         kTuple,       // (T0, T1, ...) — slots (lands with tuples)
     };
-    Form form = Form::kVoid;
+    Form form = Form::kNone;
     Category cat = Category::kSignedInt;   // kPrimitive
     int bits = 0;                          // kPrimitive
     std::string name;                      // kPrimitive spelling tag / kSlid name
@@ -52,6 +54,13 @@ struct Type {
 // Intern a slids type spelling, returning a stable handle. Round-trips exactly:
 // spell(intern(s)) == s for every well-formed spelling; intern(s) is stable.
 TypeRef intern(std::string const& spelling);
+
+// Intern a spelling, mapping the empty spelling ("no type yet") to kNoType.
+// The boundary helper for the string-stage / TypeRef-field edges.
+TypeRef internOrNone(std::string const& spelling);
+
+// spell(), but kNoType renders as the empty string (the inverse of internOrNone).
+std::string spellOrEmpty(TypeRef ref);
 
 // Render a handle back to its slids spelling.
 std::string spell(TypeRef ref);
@@ -103,6 +112,12 @@ bool checkFloatLiteralFits(std::string const& literal_text,
 bool intLiteralFits(std::string const& literal_text, std::string const& dest_type);
 bool floatLiteralFits(std::string const& literal_text, std::string const& dest_type);
 
+// TypeRef overloads — kNoType is the empty-dest ("no target, always fits") case.
+bool checkIntLiteralFits(std::string const& literal_text, TypeRef dest,
+                         int file_id, int tok, diagnostic::Sink& diag);
+bool checkFloatLiteralFits(std::string const& literal_text, TypeRef dest,
+                           int file_id, int tok, diagnostic::Sink& diag);
+
 // Variable-to-variable conversion. Emits any needed LLVM op
 // (sext/zext/fpext/sitofp/uitofp) and returns the new value name. On
 // disallowed conversion reports a diagnostic attributed to (file_id, tok)
@@ -110,6 +125,13 @@ bool floatLiteralFits(std::string const& literal_text, std::string const& dest_t
 std::string convert(std::string const& src_val,
                     std::string const& src_type,
                     std::string const& dest_type,
+                    int file_id, int tok,
+                    std::ostream& out,
+                    diagnostic::Sink& diag);
+
+// TypeRef overload — kNoType maps to the empty-spelling ("no conversion") case.
+std::string convert(std::string const& src_val,
+                    TypeRef src, TypeRef dest,
                     int file_id, int tok,
                     std::ostream& out,
                     diagnostic::Sink& diag);

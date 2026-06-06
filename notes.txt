@@ -1,9 +1,6 @@
 
-att D29883180
-cancel landline confirmation number #
-
-
 things to do before commits:
+check for silent defaults and mis/unattributed diagnostics.
 check for silent defaults, mis/unattributed diagnostics, and stored canonical names.
 what test coverage gaps remain ?
 update readme.txt, todo.txt, plan.txt, plan-flow.txt, and memories.

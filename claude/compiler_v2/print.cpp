@@ -42,21 +42,19 @@ std::string newTmp(char const* tag) {
 }
 
 struct IntDesc { std::string llty; bool is_unsigned; int bits; };
-bool classifyInt(std::string const& t, IntDesc& d) {
-    if (t == "bool")                              { d = {"i1",  true, 1};  return true; }
-    if (t == "char" || t == "uint8")              { d = {"i8",  true, 8};  return true; }
-    if (t == "int8")                              { d = {"i8",  false,8};  return true; }
-    if (t == "uint16")                            { d = {"i16", true, 16}; return true; }
-    if (t == "int16")                             { d = {"i16", false,16}; return true; }
-    if (t == "uint" || t == "uint32")             { d = {"i32", true, 32}; return true; }
-    if (t == "int"  || t == "int32")              { d = {"i32", false,32}; return true; }
-    if (t == "uint64")                            { d = {"i64", true, 64}; return true; }
-    if (t == "int64" || t == "intptr")            { d = {"i64", false,64}; return true; }
-    return false;
+bool classifyInt(widen::TypeRef t, IntDesc& d) {
+    widen::TypeKind k;
+    if (!widen::classify(t, k)) return false;
+    if (k.cat == widen::Category::kFloat) return false;
+    d.llty = "i" + std::to_string(k.bits);
+    d.is_unsigned = (k.cat != widen::Category::kSignedInt);   // unsigned int or bool
+    d.bits = k.bits;
+    return true;
 }
 
-bool isFloatType(std::string const& t) {
-    return t == "float" || t == "float32" || t == "float64";
+bool isFloatType(widen::TypeRef t) {
+    widen::TypeKind k;
+    return widen::classify(t, k) && k.cat == widen::Category::kFloat;
 }
 
 }  // namespace
@@ -80,10 +78,10 @@ bool tryEmitCall(ast::Node const& call, codegen::SymTab const& syms,
             fmt += escapePct(seg->text);
             continue;
         }
-        std::string const& sty = seg->inferred_type;
-        assert(!sty.empty() && "print: segment missing inferred_type");
+        widen::TypeRef sty = seg->inferred_type;
+        assert(sty != widen::kNoType && "print: segment missing inferred_type");
 
-        if (sty == "bool") {
+        if (sty == widen::intern("bool")) {
             std::string v = codegen::emitExpr(*seg, syms, pool, out, diag, sty);
             int true_id  = strings::add(pool, "true");
             int false_id = strings::add(pool, "false");
@@ -98,7 +96,7 @@ bool tryEmitCall(ast::Node const& call, codegen::SymTab const& syms,
 
         if (isFloatType(sty)) {
             std::string v = codegen::emitExpr(*seg, syms, pool, out, diag, sty);
-            if (sty != "float64") {
+            if (sty != widen::intern("float64")) {
                 std::string ext = newTmp("fext");
                 out << "  " << ext << " = fpext float " << v << " to double\n";
                 v = ext;
@@ -108,7 +106,7 @@ bool tryEmitCall(ast::Node const& call, codegen::SymTab const& syms,
             continue;
         }
 
-        if (sty == "char[]") {
+        if (sty == widen::intern("char[]")) {
             std::string v = codegen::emitExpr(*seg, syms, pool, out, diag, sty);
             fmt += "%s";
             args.push_back({"ptr", v});
@@ -118,7 +116,7 @@ bool tryEmitCall(ast::Node const& call, codegen::SymTab const& syms,
         IntDesc d;
         if (classifyInt(sty, d)) {
             std::string v = codegen::emitExpr(*seg, syms, pool, out, diag, sty);
-            if (sty == "char") {
+            if (sty == widen::intern("char")) {
                 fmt += "%c";
                 args.push_back({"i8", v});
                 continue;
@@ -144,7 +142,7 @@ bool tryEmitCall(ast::Node const& call, codegen::SymTab const& syms,
         // user notified, accepts state.
         diagnostic::report(diag, {seg->file_id, seg->tok,
             "Print intrinsic does not yet support segments of type '"
-            + sty + "'.", {}});
+            + widen::spell(sty) + "'.", {}});
     }
 
     if (newline) fmt += "\n";

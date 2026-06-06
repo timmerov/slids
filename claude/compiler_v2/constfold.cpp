@@ -92,13 +92,13 @@ std::string nominalForFloat(std::string const& text) {
 // other overflowing literal/dest pairs are reported. user notified, accepts
 // state.
 void assignNominal(parse::Node& n) {
-    if (!n.nominal_type.empty()) return;  // already assigned (e.g. by a prior fold)
+    if (n.nominal_type != widen::kNoType) return;  // already assigned (e.g. by a prior fold)
     switch (n.kind) {
         case parse::Kind::kIntLiteral: {
             bool neg = false;
             uint64_t mag = 0;
             if (parseSignedDigits(n.text, neg, mag)) {
-                n.nominal_type = nominalForInt(mag, neg);
+                n.nominal_type = widen::internOrNone(nominalForInt(mag, neg));
             }
             return;
         }
@@ -106,18 +106,18 @@ void assignNominal(parse::Node& n) {
             bool neg = false;
             uint64_t mag = 0;
             if (parseSignedDigits(n.text, neg, mag) && !neg) {
-                n.nominal_type = nominalForUint(mag);
+                n.nominal_type = widen::internOrNone(nominalForUint(mag));
             }
             return;
         }
         case parse::Kind::kCharLiteral:
-            n.nominal_type = "uint8";
+            n.nominal_type = widen::intern("uint8");
             return;
         case parse::Kind::kBoolLiteral:
-            n.nominal_type = "uint1";
+            n.nominal_type = widen::intern("uint1");
             return;
         case parse::Kind::kFloatLiteral:
-            n.nominal_type = nominalForFloat(n.text);
+            n.nominal_type = widen::internOrNone(nominalForFloat(n.text));
             return;
         case parse::Kind::kProgram:
         case parse::Kind::kFunctionDef:
@@ -227,7 +227,7 @@ std::unique_ptr<parse::Node> tryFoldUnary(parse::Node& node, diagnostic::Sink& d
         if (!isLiteral(operand)) return nullptr;
         auto child = std::move(node.children[0]);
         stripLeadingPlus(child->text);
-        child->nominal_type.clear();  // recompute by value
+        child->nominal_type = widen::kNoType;  // recompute by value
         return child;
     }
     if (op == "-") {
@@ -240,7 +240,7 @@ std::unique_ptr<parse::Node> tryFoldUnary(parse::Node& node, diagnostic::Sink& d
             // Per rule 1d the result is kind=integer regardless of operand kind.
             child->kind = parse::Kind::kIntLiteral;
         }
-        child->nominal_type.clear();
+        child->nominal_type = widen::kNoType;
         return child;
     }
     if (op == "~") {
@@ -253,7 +253,7 @@ std::unique_ptr<parse::Node> tryFoldUnary(parse::Node& node, diagnostic::Sink& d
             return nullptr;
         }
         if (!isIntClassLiteral(operand)) return nullptr;
-        std::string operand_nominal = operand.nominal_type;
+        widen::TypeRef operand_nominal = operand.nominal_type;
         auto child = std::move(node.children[0]);
         foldBitNotIntText(child->text);
         // Per 1e: bool becomes unsigned, char/integer/unsigned kind preserved.
@@ -293,7 +293,7 @@ std::unique_ptr<parse::Node> tryFoldUnary(parse::Node& node, diagnostic::Sink& d
         auto out = std::make_unique<parse::Node>();
         out->kind = parse::Kind::kBoolLiteral;
         out->text = result ? "1" : "0";
-        out->nominal_type = "uint1";
+        out->nominal_type = widen::intern("uint1");
         out->file_id = node.file_id;
         out->tok = node.tok;
         return out;
@@ -332,17 +332,18 @@ bool parseDouble(std::string const& t, double& v) {
 // Strength of a binary result: strong if either operand was strong (a typed
 // const), taking the strong operand's type — or, when both are strong, their
 // common type (widen-within-family). Empty = weak.
-std::string combineStrong(parse::Node const& a, parse::Node const& b) {
-    if (a.strong_type.empty()) return b.strong_type;
-    if (b.strong_type.empty()) return a.strong_type;
+widen::TypeRef combineStrong(parse::Node const& a, parse::Node const& b) {
+    if (a.strong_type == widen::kNoType) return b.strong_type;
+    if (b.strong_type == widen::kNoType) return a.strong_type;
     std::string out;
-    if (widen::commonType(a.strong_type, b.strong_type, out)) return out;
+    if (widen::commonType(widen::spell(a.strong_type), widen::spell(b.strong_type), out))
+        return widen::internOrNone(out);
     // No common type — commonType only fails cross-family (int vs float). For
     // arith/compare that's pre-empted by tryFoldBinary's no-mix guard, so the
     // sole path here is the shift carve-out (e.g. float lhs, int rhs), where the
     // result type is the lhs by definition — taking a.strong_type is correct,
     // not a silent pick.
-    assert(!a.strong_type.empty() && !b.strong_type.empty()
+    assert(a.strong_type != widen::kNoType && b.strong_type != widen::kNoType
         && "combineStrong: fallback expects two strong operands");
     return a.strong_type;
 }
@@ -424,9 +425,11 @@ parse::Kind promoteConstKind(parse::Kind base, std::string const& val) {
 // An operand's strong type for the purpose of an INTEGER/UNSIGNED result's
 // strength: bool/char strong types don't propagate into an integer result (they
 // only make a bool/char result strong), so treat them as flex here.
-std::string famStrong(parse::Node const& n) {
-    if (n.strong_type.empty() || n.strong_type == "bool" || n.strong_type == "char")
-        return "";
+widen::TypeRef famStrong(parse::Node const& n) {
+    if (n.strong_type == widen::kNoType
+        || n.strong_type == widen::intern("bool")
+        || n.strong_type == widen::intern("char"))
+        return widen::kNoType;
     return n.strong_type;
 }
 
@@ -442,7 +445,7 @@ std::string constResultStrong(parse::Node const& lhs, parse::Node const& rhs,
     if (result == K::kBoolLiteral) return "bool";
     if (result == K::kCharLiteral) return "char";
     if (result != base) return "";                 // promoted to fit -> flex
-    std::string a = famStrong(lhs), b = famStrong(rhs);
+    std::string a = widen::spellOrEmpty(famStrong(lhs)), b = widen::spellOrEmpty(famStrong(rhs));
     if (a.empty() && b.empty()) return "";          // flex + flex
     if (a.empty() || b.empty()) {                   // strong + flex
         std::string s = a.empty() ? b : a;
@@ -462,7 +465,7 @@ std::string constResultStrong(parse::Node const& lhs, parse::Node const& rhs,
 // strong -> the wider float type if it fits, else flex.
 std::string floatResultStrong(parse::Node const& lhs, parse::Node const& rhs,
                               std::string const& val) {
-    std::string a = famStrong(lhs), b = famStrong(rhs);
+    std::string a = widen::spellOrEmpty(famStrong(lhs)), b = widen::spellOrEmpty(famStrong(rhs));
     if (a.empty() && b.empty()) return "";
     if (a.empty() || b.empty()) {
         std::string s = a.empty() ? b : a;
@@ -487,10 +490,10 @@ std::unique_ptr<parse::Node> emitShiftResult(parse::Node& node, parse::Node& lhs
     else if (kind == parse::Kind::kCharLiteral) st = "char";
     else if (kind != base)                      st = "";   // promoted -> flex
     else {
-        std::string a = famStrong(lhs);
+        std::string a = widen::spellOrEmpty(famStrong(lhs));
         st = (!a.empty() && widen::intLiteralFits(out->text, a)) ? a : "";
     }
-    out->strong_type = st;
+    out->strong_type = widen::internOrNone(st);
     return out;
 }
 
@@ -547,7 +550,7 @@ std::unique_ptr<parse::Node> tryFoldFloatBinary(parse::Node& node,
         return nullptr;
     }
     auto out = makeLitAt(node, parse::Kind::kFloatLiteral, floatToText(r));
-    out->strong_type = floatResultStrong(lhs, rhs, out->text);
+    out->strong_type = widen::internOrNone(floatResultStrong(lhs, rhs, out->text));
     return out;
 }
 
@@ -654,7 +657,7 @@ std::unique_ptr<parse::Node> emitIntResult(parse::Node& node, parse::Node& lhs,
     parse::Kind base = baseConstKind(lhs.kind, rhs.kind);
     parse::Kind kind = promoteConstKind(base, val);
     auto out = makeLitAt(node, kind, std::move(val));
-    out->strong_type = constResultStrong(lhs, rhs, base, kind, out->text);
+    out->strong_type = widen::internOrNone(constResultStrong(lhs, rhs, base, kind, out->text));
     return out;
 }
 
@@ -813,21 +816,21 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
     // below range-checks against it. A strong rhs (carried a typed const) takes
     // that type; a bare literal is WEAK — present the preferred default spelling,
     // keep the narrowest nominal under the hood.
-    if (entry.slids_type.empty() && isLiteral(rhs)) {
-        entry.slids_type = rhs.strong_type.empty()
-            ? weakDefaultType(rhs) : rhs.strong_type;
-        entry.const_strong_type = rhs.strong_type;   // empty = weak
-    } else if (!decl.return_type.empty()) {
+    if (entry.slids_type == widen::kNoType && isLiteral(rhs)) {
+        entry.slids_type = (rhs.strong_type == widen::kNoType)
+            ? widen::internOrNone(weakDefaultType(rhs)) : rhs.strong_type;
+        entry.const_strong_type = rhs.strong_type;   // kNoType = weak
+    } else if (decl.return_type != widen::kNoType) {
         // An explicitly-typed const is strong: it carries its declared type when
         // substituted into another const's rhs.
         entry.const_strong_type = entry.slids_type;
     }
 
-    std::string const& declared = entry.slids_type;
+    std::string declared = widen::spellOrEmpty(entry.slids_type);
     // A typeless const's type was inferred from the rhs, not declared — word the
     // range-check diagnostics accordingly.
     char const* type_word =
-        decl.return_type.empty() ? "inferred type" : "declared type";
+        decl.return_type == widen::kNoType ? "inferred type" : "declared type";
 
     // A string literal is a constant, but isLiteral (used below to mean "folded
     // to a numeric literal") excludes it — so without this branch a string init
@@ -906,7 +909,7 @@ std::unique_ptr<parse::Node> tryFoldSizeof(parse::Node& n, parse::Tree& tree) {
     if (!n.children.empty()
         && n.children[0]->kind == parse::Kind::kStringLiteral) {
         size = static_cast<long long>(n.children[0]->text.size()) + 1;  // + null
-    } else if (!n.return_type.empty()) {
+    } else if (n.return_type != widen::kNoType) {
         size = widen::typeByteSize(n.return_type);
     } else if (!n.children.empty()) {
         parse::Node const& op = *n.children[0];
@@ -915,8 +918,8 @@ std::unique_ptr<parse::Node> tryFoldSizeof(parse::Node& n, parse::Tree& tree) {
             size = 8;   // any pointer / iterator
         } else if (op.kind == parse::Kind::kIdentExpr
                    && op.resolved_entry_id >= 0) {
-            std::string const& ty = tree.entries[op.resolved_entry_id].slids_type;
-            if (!ty.empty()) size = widen::typeByteSize(ty);
+            widen::TypeRef ty = tree.entries[op.resolved_entry_id].slids_type;
+            if (ty != widen::kNoType) size = widen::typeByteSize(ty);
         }
     }
     if (size < 0) return nullptr;   // needs inference / a slid type -> classify
@@ -925,7 +928,7 @@ std::unique_ptr<parse::Node> tryFoldSizeof(parse::Node& n, parse::Tree& tree) {
     lit->text = std::to_string(size);
     lit->file_id = n.file_id;
     lit->tok = n.tok;
-    lit->strong_type = "intptr";   // sizeof is a strong intptr constant
+    lit->strong_type = widen::intern("intptr");   // sizeof is a strong intptr constant
     return lit;
 }
 
@@ -1017,7 +1020,7 @@ void bakeNodeDims(parse::Node& n, parse::Tree& tree, bool final,
             return;
         }
     }
-    std::string const& t = n.return_type;
+    std::string t = widen::spellOrEmpty(n.return_type);
     std::size_t base = t.find('[');
     std::string out = (base == std::string::npos) ? t : t.substr(0, base);
     std::size_t pos = out.size();
@@ -1055,8 +1058,8 @@ void bakeNodeDims(parse::Node& n, parse::Tree& tree, bool final,
         // (classify bounds checks, codegen, sizeof) reads the array type from the
         // entry's slids_type, which resolve stamped with the provisional `[1]`.
         if (n.resolved_entry_id >= 0)
-            tree.entries[n.resolved_entry_id].slids_type = out;
-        n.return_type = std::move(out);
+            tree.entries[n.resolved_entry_id].slids_type = widen::internOrNone(out);
+        n.return_type = widen::internOrNone(out);
         changed = true;
     }
     n.dim_exprs.clear();

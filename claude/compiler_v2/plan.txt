@@ -274,7 +274,12 @@ Phase 4 — types beyond primitives
     when tuples / `(const T)^` land. Pre-existing blocker for the idiomatic
     `T^ p = new T` with a non-primitive T: `Alias^`/`ClassName^` decls don't parse
     yet [todo.txt].)
-  * anonymous tuples (`(T1, T2, ...)`)
+  * anonymous tuples (`(T1, T2, ...)`) — NOW UNBLOCKED by the TypeRef migration
+    (see CURRENT STATE): a tuple is one more widen::Type::Form (kTuple, already
+    stubbed in the enum + spell()/llvmForRef switches), with a `slots` vector —
+    NOT a parallel string mechanism. MVP spec: test_v2/expression/tuple.sl
+    (`claude says:` block). The `new (` placement-vs-tuple-type grammar seam
+    (above) is revisited here.
   * move / swap on PRIMITIVES + TUPLES (`a <-- b`, `a <--> b`) — these operators
     are NOT class-only: they apply to primitive values (mechanical value
     transfer / exchange) and to tuples (slot-by-slot, recursive). Land the
@@ -419,6 +424,17 @@ Phase 9 — templates
   * template classes (plain, derived, with nested members)
   * post-compile-pre-link stage (`--instantiate` aggregation)
 
+
+CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)
+  Types were std::string spellings everywhere; now every type is a structured
+  widen::TypeRef (interned arena, structured Type/Form). Landed in 5 stages
+  (arena+round-trip → widen internals → codegen → classify+resolve → flip the
+  parse::/ast::Node + parse::Entry fields), each behavior-preserving: suite 374,
+  IR byte-identical (bar the macros ##time clock), `--type-selftest` 31 cases.
+  Round-trip polish DONE (predicate+cast-rule cluster reads structure off the
+  handle, no spell/intern round-trips). NEVER cache canonical spellings (v1's
+  fatal mistake). Full detail: readme.txt "TYPE REPRESENTATION" + the
+  type-representation memory. This unblocks anonymous tuples (kTuple Form).
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

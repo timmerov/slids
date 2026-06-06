@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "widen.h"   // widen::TypeRef — the structured type handle
+
 namespace parse {
 
 enum class Kind {
@@ -105,7 +107,7 @@ struct Node {
     Kind kind;
     std::string name;            // function name, callee name, variable name
     std::string text;            // literal value (string / int as text / char codepoint)
-    std::string return_type;     // function return type; reused for VarDecl's declared type
+    widen::TypeRef return_type = widen::kNoType;  // function return / VarDecl declared type
     std::vector<std::unique_ptr<Node>> dim_exprs;  // kVarDeclStmt array dims that are
                                  // const-EXPRESSIONS (not literals): one slot per
                                  // array dim, null for a literal dim, the expr for
@@ -116,15 +118,15 @@ struct Node {
     std::vector<int> return_type_seg_toks;  // per-segment tokens of a qualified type
                                  // spelling in return_type (for precise carets);
                                  // empty for primitives / non-captured sites
-    std::string nominal_type;    // literal nodes: nominal type assigned by constfold
-    std::string inferred_type;   // classify: expression nodes' in-context type
-    std::string op_type;         // classify: binary's computational type (commonType / shift LHS)
+    widen::TypeRef nominal_type = widen::kNoType;   // literal nodes: from constfold
+    widen::TypeRef inferred_type = widen::kNoType;  // classify: expr in-context type
+    widen::TypeRef op_type = widen::kNoType;        // classify: binary's computational type
     std::string alias_label;     // classify: the alias/enum NAME this expr carries as
                                  // a label (else empty). inferred_type/op_type stay
                                  // the erased underlying for width math + codegen;
                                  // this parallel label is what ##type reports. Sticky
                                  // alias+alias / alias+literal, dropped on a mismatch.
-    std::string strong_type;     // constfold: a folded/substituted literal that came
+    widen::TypeRef strong_type = widen::kNoType;  // constfold: a folded/substituted literal that came
                                  // from a STRONG (typed) const carries that const's
                                  // type here (empty = weak literal). Propagated through
                                  // the fold so an inferred typeless const can tell a
@@ -159,7 +161,7 @@ struct Node {
     bool global_qualified = false;
     std::vector<std::unique_ptr<Node>> children;
     std::vector<std::unique_ptr<Node>> params;   // kFunctionDef/Decl: kParam nodes
-    std::vector<std::string> param_types;        // kCallStmt/kCallExpr: classify-cached resolved fn's param types
+    std::vector<widen::TypeRef> param_types;     // kCallStmt/kCallExpr: classify-cached resolved fn's param types
     // A NESTED function (kFunctionDef in a body) and each call to it carry the
     // entry ids of the enclosing-function locals/params it captures — passed
     // by reference (the host alloca's address) when the nested function is
@@ -167,7 +169,7 @@ struct Node {
     // kFunctionDef, parallel to captures) is each captured var's slids type, for
     // emitting the lifted function's by-ref params.
     std::vector<int> captures;
-    std::vector<std::string> capture_types;
+    std::vector<widen::TypeRef> capture_types;
 };
 
 enum class EntryKind {
@@ -181,15 +183,15 @@ enum class EntryKind {
 struct Entry {
     EntryKind kind;
     std::string name;
-    std::string slids_type;       // LocalVar / Const: declared type; Function:
-                                  // return type; Namespace: empty, or the
+    widen::TypeRef slids_type = widen::kNoType;  // LocalVar / Const: declared type;
+                                  // Function: return type; Namespace: kNoType, or the
                                   // underlying type when it is an enum's
                                   // namespace facet (transparent type alias).
     std::string alias_label;      // LocalVar / param: the as-declared alias/enum
                                   // spelling when the declared type was a named
                                   // type (else empty). slids_type holds the erased
                                   // underlying; this is what ##type(var) reports.
-    std::vector<std::string> param_types;  // Function only
+    std::vector<widen::TypeRef> param_types;  // Function only
     // Function only — default parameters. num_required = count of leading params
     // without a default (required); params [num_required..param_types.size()) are
     // optional. param_default_text/kind (parallel to param_types) carry each
@@ -217,7 +219,7 @@ struct Entry {
     // kConst — filled by constfold; substitution at use sites reads these.
     std::string literal_text;     // canonical-precision text at declared type
     Kind literal_kind = Kind::kProgram;  // sentinel; valid after constfold capture
-    std::string const_strong_type;  // kConst: the const's STRONG type (empty = weak,
+    widen::TypeRef const_strong_type = widen::kNoType;  // kConst: the const's STRONG type (kNoType = weak,
                                     // i.e. a named literal). Explicit-typed consts and
                                     // typeless consts inferred from a strong rhs are
                                     // strong; a typeless const from a bare literal is
@@ -315,6 +317,6 @@ int  currentFrameId(Tree const& t);
 int  addEntry(Tree& t, Entry e);                          // returns entry id
 int  findInLiveScopes(Tree const& t, std::string const& name);   // -1 if none
 int  findInFrame(Tree const& t, int frame_id, std::string const& name);
-std::string const& entryType(Tree const& t, int entry_id);
+widen::TypeRef entryType(Tree const& t, int entry_id);
 
 }  // namespace parse

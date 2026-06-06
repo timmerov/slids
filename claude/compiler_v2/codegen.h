@@ -4,6 +4,8 @@
 #include <map>
 #include <string>
 
+#include "widen.h"   // widen::TypeRef
+
 namespace ast { struct Node; struct Tree; }
 namespace diagnostic { struct Sink; }
 namespace strings { struct Pool; }
@@ -11,9 +13,9 @@ namespace strings { struct Pool; }
 namespace codegen {
 
 struct VarInfo {
-    std::string alloca_name;   // e.g. "%ch"
-    std::string llvm_type;     // e.g. "i8", "i32", "ptr"
-    std::string slids_type;    // e.g. "char", "int32", "char[]" — for widening checks
+    std::string alloca_name;       // e.g. "%ch"
+    std::string llvm_type;         // e.g. "i8", "i32", "ptr"
+    widen::TypeRef slids_type;     // structured type handle — for widening checks
 };
 
 // Keyed by parse::Tree::entries index — every ident / lvalue node carries its
@@ -26,7 +28,7 @@ using SymTab = std::map<int, VarInfo>;
 std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                      strings::Pool& pool, std::ostream& out,
                      diagnostic::Sink& diag,
-                     std::string const& dest_type);
+                     widen::TypeRef dest_type);
 
 void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag);
 

@@ -407,6 +407,28 @@ std::string convert(std::string const& src_val,
     return convertErrPlain();
 }
 
+bool checkIntLiteralFits(std::string const& literal_text, TypeRef dest,
+                         int file_id, int tok, diagnostic::Sink& diag) {
+    return checkIntLiteralFits(literal_text, dest == kNoType ? std::string() : spell(dest),
+                               file_id, tok, diag);
+}
+
+bool checkFloatLiteralFits(std::string const& literal_text, TypeRef dest,
+                           int file_id, int tok, diagnostic::Sink& diag) {
+    return checkFloatLiteralFits(literal_text, dest == kNoType ? std::string() : spell(dest),
+                                 file_id, tok, diag);
+}
+
+std::string convert(std::string const& src_val,
+                    TypeRef src, TypeRef dest,
+                    int file_id, int tok,
+                    std::ostream& out,
+                    diagnostic::Sink& diag) {
+    std::string s = (src == kNoType) ? std::string() : spell(src);
+    std::string d = (dest == kNoType) ? std::string() : spell(dest);
+    return convert(src_val, s, d, file_id, tok, out, diag);
+}
+
 bool commonType(std::string const& t1, std::string const& t2, std::string& out) {
     if (t1 == t2) { out = t1; return true; }
     TypeKind k1, k2;
@@ -463,6 +485,7 @@ bool isKnownType(TypeRef ref) {
         case Type::Form::kIterator:  return isKnownType(t.pointee);
         case Type::Form::kArray:     return isKnownType(t.elem);
         case Type::Form::kTuple:     return false;   // until tuples land
+        case Type::Form::kNone:      return false;   // no type
     }
     return false;
 }
@@ -494,6 +517,7 @@ long long typeByteSize(TypeRef ref) {
         case Type::Form::kVoid:
         case Type::Form::kSlid:
         case Type::Form::kTuple:
+        case Type::Form::kNone:
             return -1;
     }
     return -1;
@@ -589,8 +613,9 @@ TypeRef intern(std::string const& s) {
 }
 
 std::string spell(TypeRef ref) {
-    Type const& t = arena().types[ref];
+    Type const& t = get(ref);
     switch (t.form) {
+        case Type::Form::kNone:      return "";   // no type (kNoType) -> empty
         case Type::Form::kPrimitive: return t.name;
         case Type::Form::kVoid:      return "void";
         case Type::Form::kAnyptr:    return "anyptr";
@@ -615,7 +640,24 @@ std::string spell(TypeRef ref) {
 }
 
 Type const& get(TypeRef ref) {
+    // kNoType ("no type yet" / an already-reported error) reads as the kNone
+    // sentinel: every structural predicate (isPtrLikeType / isArrayType / classify
+    // ...) returns false/none on it, matching the pre-TypeRef behavior where an
+    // empty spelling fell through every check. Its form is kNone, NOT kVoid — so a
+    // `form(x) == kVoid` test never mistakes a no-type for void (it would instead
+    // surface loudly, e.g. an llvmForRef assert). Callers needing the spelling use
+    // spellOrEmpty(), which maps kNoType -> "".
+    static const Type sentinel{};   // form defaults to kNone
+    if (ref == kNoType) return sentinel;
     return arena().types[ref];
+}
+
+TypeRef internOrNone(std::string const& s) {
+    return s.empty() ? kNoType : intern(s);
+}
+
+std::string spellOrEmpty(TypeRef ref) {
+    return ref == kNoType ? std::string() : spell(ref);
 }
 
 bool typeSelfTest(std::ostream& out) {

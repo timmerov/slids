@@ -22,12 +22,12 @@ bool isPrintIntrinsic(std::string const& name) {
 
 // A fixed-size array type spelling (`int[5]`, `int[3][5]`), distinct from
 // `int[]` (iterator) and `int^` (reference).
-bool isArrayType(std::string const& t) {
-    return widen::form(widen::intern(t)) == widen::Type::Form::kArray;
+bool isArrayType(widen::TypeRef t) {
+    return widen::form(t) == widen::Type::Form::kArray;
 }
 
-bool isReferenceType(std::string const& t) {
-    return widen::form(widen::intern(t)) == widen::Type::Form::kPointer;
+bool isReferenceType(widen::TypeRef t) {
+    return widen::form(t) == widen::Type::Form::kPointer;
 }
 
 // The element type after one subscript: strip the leftmost `[N]`. `int[3][5]`
@@ -139,14 +139,14 @@ std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
     bool is_alias = id >= 0 && tree.entries[id].kind == parse::EntryKind::kAlias;
     bool is_enum_type = id >= 0
         && tree.entries[id].kind == parse::EntryKind::kNamespace
-        && !tree.entries[id].slids_type.empty();
+        && tree.entries[id].slids_type != widen::kNoType;
     if (!is_alias && !is_enum_type) {
         return spelling;
     }
     if (is_enum_type) {
         // The underlying is already a primitive spelling (validated at decl);
         // no further chain to chase.
-        return tree.entries[id].slids_type + suffix;
+        return widen::spell(tree.entries[id].slids_type) + suffix;
     }
     if (visiting.count(base)) {
         reported = true;
@@ -156,7 +156,7 @@ std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
     }
     visiting.insert(base);
     std::string resolved = resolveTypeSpelling(
-        tree, tree.entries[id].slids_type, visiting, reported, file_id, tok, diag);
+        tree, widen::spell(tree.entries[id].slids_type), visiting, reported, file_id, tok, diag);
     visiting.erase(base);
     return resolved + suffix;
 }
@@ -164,14 +164,16 @@ std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
 // Rewrite a declared type spelling in place to its underlying type, then
 // require the result to be a known type. A cycle has already been reported, so
 // skip the redundant "Unknown type" that the broken chain would otherwise emit.
-void resolveDeclType(parse::Tree& tree, std::string& spelling,
+void resolveDeclType(parse::Tree& tree, widen::TypeRef& type_ref,
                      int file_id, int tok, diagnostic::Sink& diag,
                      std::vector<int> const* seg_toks = nullptr) {
     std::set<std::string> visiting;
     bool reported = false;
+    std::string spelling = widen::spellOrEmpty(type_ref);
     spelling = resolveTypeSpelling(tree, spelling, visiting, reported,
                                    file_id, tok, diag, seg_toks);
     if (!reported) requireKnownType(spelling, file_id, tok, diag);
+    type_ref = widen::internOrNone(spelling);
 }
 
 // Register `alias Name = Type;` as a kAlias entry in the current frame.
@@ -400,14 +402,14 @@ std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
     if (frame < 0) { reported = true; return ""; }
     int id = findMemberLive(tree, frame, segs.back());
     if (id < 0 || tree.entries[id].kind != parse::EntryKind::kNamespace
-        || tree.entries[id].slids_type.empty()) {
+        || tree.entries[id].slids_type == widen::kNoType) {
         diagnostic::report(diag, {file_id, toks.back(),
             "'" + segs.back() + "' is not a type in '"
             + qualPrefixText(segs, global, segs.size() - 1) + "'.", {}});
         reported = true;
         return "";
     }
-    return tree.entries[id].slids_type;
+    return widen::spell(tree.entries[id].slids_type);
 }
 
 // ---- Namespace registration -------------------------------------------------
@@ -490,7 +492,7 @@ int openNamespace(parse::Tree& tree, std::string const& name, int name_tok,
     e.name = name;
     e.ns_frame_id = fid;
     e.owner_ns_frame = (parent_ns == kGlobalFrame) ? -1 : parent_ns;
-    e.slids_type = enum_underlying;   // non-empty → enum (doubles as a type)
+    e.slids_type = widen::internOrNone(enum_underlying);   // set → enum (doubles as a type)
     e.file_id = file_id;
     e.tok = name_tok;
     parse::addEntry(tree, std::move(e));
@@ -529,7 +531,7 @@ void registerMemberSignature(parse::Tree& tree, parse::Node& m, int ns_frame,
     if (m.kind == parse::Kind::kFunctionDef
      || m.kind == parse::Kind::kFunctionDecl) {
         resolveDeclType(tree, m.return_type, m.file_id, m.tok, diag);
-        std::vector<std::string> param_types;
+        std::vector<widen::TypeRef> param_types;
         for (auto& p : m.params) {
             if (!p) continue;
             resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
@@ -708,7 +710,7 @@ std::unique_ptr<parse::Node> cloneExpr(parse::Node const& src) {
 // frame, bare-visible).
 void registerEnumMembers(parse::Tree& tree, parse::Node& node, int ns_frame,
                          diagnostic::Sink& diag) {
-    bool is_float = isFloatUnderlying(node.return_type);
+    bool is_float = isFloatUnderlying(widen::spellOrEmpty(node.return_type));
     // Auto-increment, C rules. A member with no init takes the previous value
     // plus one; an explicit init resets the run. Because an explicit init may
     // be a not-yet-folded expression (`kB = 1 + 2`), we synthesize an implicit
@@ -814,7 +816,7 @@ void registerEnum(parse::Tree& tree, parse::Node& node, int parent_ns,
         return;
     }
     int ns = openNamespace(tree, node.name, node.name_tok, node.file_id,
-                           parent_ns, diag, node.return_type);
+                           parent_ns, diag, widen::spellOrEmpty(node.return_type));
     if (ns < 0) return;
     node.resolved_entry_id = ns;
     registerEnumMembers(tree, node, ns, diag);
@@ -1037,7 +1039,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
             // measured as that type (stamp the underlying on return_type, like
             // ##type), and any other operand is a value whose type classify
             // measures. sizeof never evaluates the operand.
-            if (!e.return_type.empty()) {
+            if (e.return_type != widen::kNoType) {
                 resolveDeclType(tree, e.return_type, e.file_id, e.tok, diag);
                 return;
             }
@@ -1053,15 +1055,15 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                 parse::EntryKind k = tree.entries[id].kind;
                 bool is_type = (k == parse::EntryKind::kAlias)
                     || (k == parse::EntryKind::kNamespace
-                        && !tree.entries[id].slids_type.empty());   // enum facet
+                        && tree.entries[id].slids_type != widen::kNoType);   // enum facet
                 if (is_type) {
                     std::string spelling = operand.global_qualified ? "::" : "";
                     for (auto const& seg : operand.qualifier) spelling += seg + ":";
                     spelling += operand.name;
                     std::set<std::string> visiting;
                     bool reported = false;
-                    e.return_type = resolveTypeSpelling(tree, spelling, visiting,
-                        reported, operand.file_id, operand.tok, diag);
+                    e.return_type = widen::internOrNone(resolveTypeSpelling(tree, spelling, visiting,
+                        reported, operand.file_id, operand.tok, diag));
                     return;
                 }
                 if (k == parse::EntryKind::kLocalVar
@@ -1106,7 +1108,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                 parse::EntryKind k = tree.entries[id].kind;
                 bool is_type = (k == parse::EntryKind::kAlias)
                     || (k == parse::EntryKind::kNamespace
-                        && !tree.entries[id].slids_type.empty());   // enum facet
+                        && tree.entries[id].slids_type != widen::kNoType);   // enum facet
                 if (is_type) {
                     // Reconstruct the (possibly qualified) spelling for the chain /
                     // namespace type resolver.
@@ -1115,8 +1117,8 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                     spelling += operand.name;
                     std::set<std::string> visiting;
                     bool reported = false;
-                    e.return_type = resolveTypeSpelling(tree, spelling, visiting,
-                        reported, operand.file_id, operand.tok, diag);
+                    e.return_type = widen::internOrNone(resolveTypeSpelling(tree, spelling, visiting,
+                        reported, operand.file_id, operand.tok, diag));
                     return;
                 }
                 if (k == parse::EntryKind::kLocalVar
@@ -1348,20 +1350,20 @@ Completion rewriteForArray(parse::Tree& tree, parse::Node& s, int arr_id,
                            diagnostic::Sink& diag) {
     parse::Node& arr_ref = *s.children[1];
     parse::Node& var_decl = *s.children[0];
-    std::string arr_type = tree.entries[arr_id].slids_type;
+    std::string arr_type = widen::spellOrEmpty(tree.entries[arr_id].slids_type);
     std::string elem = arrayElementType(arr_type);
     int afile = arr_ref.file_id, atok = arr_ref.tok;
-    if (isArrayType(elem)) {
+    if (isArrayType(widen::intern(elem))) {
         diagnostic::report(diag, {afile, atok,
             "A for-loop over an array requires a one-dimensional array.",
             {{tree.entries[arr_id].file_id, tree.entries[arr_id].tok,
               "array declared here"}}});
         return Completion::Normal;
     }
-    std::string vtype = var_decl.return_type;
+    std::string vtype = widen::spellOrEmpty(var_decl.return_type);
     std::string vname = var_decl.name;
     int vfile = var_decl.file_id, vtok = var_decl.name_tok;
-    bool by_ref = isReferenceType(vtype);
+    bool by_ref = isReferenceType(var_decl.return_type);
     if (by_ref) {
         // Compare the loop var's pointee to the (already-resolved) element type
         // with the var type's aliases resolved — so an `Int^` (alias Int = int)
@@ -1408,7 +1410,7 @@ Completion rewriteForArray(parse::Tree& tree, parse::Node& s, int arr_id,
     auto idx_decl = std::make_unique<parse::Node>();
     idx_decl->kind = parse::Kind::kVarDeclStmt;
     idx_decl->name = idxName; idx_decl->name_tok = atok;
-    idx_decl->return_type = "intptr";
+    idx_decl->return_type = widen::intern("intptr");
     idx_decl->file_id = afile; idx_decl->tok = atok;
     idx_decl->children.push_back(intLit("0"));
 
@@ -1464,7 +1466,7 @@ Completion rewriteForArray(parse::Tree& tree, parse::Node& s, int arr_id,
         binding = std::make_unique<parse::Node>();
         binding->kind = parse::Kind::kVarDeclStmt;
         binding->name = vname; binding->name_tok = vtok;
-        binding->return_type = vtype;
+        binding->return_type = widen::internOrNone(vtype);
         binding->file_id = vfile; binding->tok = vtok;
         binding->children.push_back(std::move(init));
     }
@@ -1574,9 +1576,9 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // pre-pass (resolveFunctionBody). If resolved_entry_id is set,
             // entry already exists; skip creation and dup-check.
             if (s.resolved_entry_id < 0) {
-                std::string declared = s.return_type;   // pre-erasure spelling
+                std::string declared = widen::spellOrEmpty(s.return_type);   // pre-erasure spelling
                 // A typeless const (block scope) defers type inference to constfold.
-                if (!s.return_type.empty()) {
+                if (s.return_type != widen::kNoType) {
                     resolveDeclType(tree, s.return_type, s.file_id, s.tok, diag,
                                     &s.return_type_seg_toks);
                 }
@@ -1594,7 +1596,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                     e.slids_type = s.return_type;
                     // A named type (alias / enum / qualified) erased to a different
                     // underlying — keep the as-declared spelling as the ##type label.
-                    if (declared != s.return_type) e.alias_label = declared;
+                    if (declared != widen::spellOrEmpty(s.return_type)) e.alias_label = declared;
                     e.file_id = s.file_id;
                     e.tok = s.name_tok;   // caret at the ident, not at 'const'/type
                     s.resolved_entry_id = parse::addEntry(tree, std::move(e));
@@ -1630,7 +1632,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 parse::Entry e;
                 e.kind = parse::EntryKind::kLocalVar;
                 e.name = s.name;
-                e.slids_type = "";          // classify stamps it from the rhs
+                e.slids_type = widen::kNoType;   // classify stamps it from the rhs
                 e.file_id = s.file_id;
                 e.tok = s.name_tok;
                 s.resolved_entry_id = parse::addEntry(tree, std::move(e));
@@ -1732,7 +1734,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         }
         case parse::Kind::kAliasDecl: {
             // Bare `alias Ns;` imports a namespace's members into this scope.
-            if (s.return_type.empty()) {
+            if (s.return_type == widen::kNoType) {
                 resolveBareAlias(tree, s, diag);
                 return Completion::Normal;
             }
@@ -1953,7 +1955,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 // reassignable local — reuse it as the loop var (a no-op slot);
                 // otherwise it is an error.
                 if (d.kind == parse::Kind::kVarDeclStmt && !d.is_const
-                    && d.return_type.empty() && !isQualified(d)) {
+                    && d.return_type == widen::kNoType && !isQualified(d)) {
                     if (!d.children.empty()) {
                         d.kind = parse::Kind::kAssignStmt;
                         resolveStmt(tree, d, diag);
@@ -2079,7 +2081,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // Otherwise it must be an enum: a kNamespace carrying an underlying
             // type (transparent).
             if (tree.entries[enum_id].kind != parse::EntryKind::kNamespace
-                || tree.entries[enum_id].slids_type.empty()) {
+                || tree.entries[enum_id].slids_type == widen::kNoType) {
                 parse::Entry const& bad = tree.entries[enum_id];
                 diagnostic::report(diag, {enum_ref.file_id, enum_ref.tok,
                     "'" + enum_ref.name + "' is not an enum or array.",
@@ -2131,7 +2133,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // Reuse the loop-var decl; init it to the first member.
             std::unique_ptr<parse::Node> var_decl = std::move(s.children[0]);
             std::string var_name = var_decl->name;
-            std::string var_type = var_decl->return_type;
+            widen::TypeRef var_type = var_decl->return_type;
             int var_tok = var_decl->name_tok;
             var_decl->children.push_back(memberRef(first));
             // _$end = last member.
@@ -2449,7 +2451,7 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         }
         // A typeless const has no spelling to validate; constfold infers its
         // type from the rhs and stamps slids_type later.
-        if (!ch->return_type.empty()) {
+        if (ch->return_type != widen::kNoType) {
             resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
         }
         parse::Entry e;
@@ -2473,13 +2475,13 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
                 "Nested functions may not contain further nested functions.", {}});
             continue;
         }
-        std::vector<std::string> ptypes;
+        std::vector<widen::TypeRef> ptypes;
         int nreq = 0;
         bool seen_default = false;
         for (auto& p : ch->params) {
             if (!p) continue;
             bool has_default = !p->children.empty();
-            if (p->return_type.empty() && !has_default) {
+            if (p->return_type == widen::kNoType && !has_default) {
                 diagnostic::report(diag, {p->file_id, p->name_tok,
                     "Parameter '" + p->name
                         + "' needs an explicit type or a default value.", {}});
@@ -2494,7 +2496,7 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
                 }
                 nreq++;
             }
-            if (!p->return_type.empty()) {
+            if (p->return_type != widen::kNoType) {
                 resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
             }
             ptypes.push_back(p->return_type);
@@ -2598,13 +2600,13 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // Bare `alias Ns;` (no target) is a namespace import, handled at use scope.
     for (auto& ch : program->children) {
         if (ch && ch->kind == parse::Kind::kAliasDecl
-            && !ch->return_type.empty()) {
+            && ch->return_type != widen::kNoType) {
             registerAlias(tree, *ch, diag);
         }
     }
     for (auto& ch : program->children) {
         if (ch && ch->kind == parse::Kind::kAliasDecl
-            && !ch->return_type.empty()) {
+            && ch->return_type != widen::kNoType) {
             resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
         }
     }
@@ -2635,13 +2637,13 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         if (ch->kind == parse::Kind::kFunctionDef
          || ch->kind == parse::Kind::kFunctionDecl) {
             resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
-            std::vector<std::string> param_types;
+            std::vector<widen::TypeRef> param_types;
             int num_required = 0;
             bool seen_default = false;
             for (auto& p : ch->params) {
                 if (!p) continue;
                 bool has_default = !p->children.empty();
-                if (p->return_type.empty() && !has_default) {
+                if (p->return_type == widen::kNoType && !has_default) {
                     diagnostic::report(diag, {p->file_id, p->name_tok,
                         "Parameter '" + p->name
                             + "' needs an explicit type or a default value.", {}});
@@ -2656,10 +2658,10 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
                     }
                     num_required++;
                 }
-                if (!p->return_type.empty()) {
-                    std::string declared = p->return_type;   // pre-erasure spelling
+                if (p->return_type != widen::kNoType) {
+                    std::string declared = widen::spellOrEmpty(p->return_type);   // pre-erasure
                     resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
-                    if (declared != p->return_type) p->alias_label = declared;
+                    if (declared != widen::spellOrEmpty(p->return_type)) p->alias_label = declared;
                 }
                 param_types.push_back(p->return_type);
             }
@@ -2682,9 +2684,9 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
                 parse::Entry& prev = tree.entries[existing];
                 if (prev.slids_type != ch->return_type) {
                     diagnostic::report(diag, {ch->file_id, ch->tok,
-                        "Return type '" + ch->return_type
+                        "Return type '" + widen::spellOrEmpty(ch->return_type)
                         + "' does not match earlier declaration's '"
-                        + prev.slids_type + "'.",
+                        + widen::spellOrEmpty(prev.slids_type) + "'.",
                         {{prev.file_id, prev.tok, "first declared here"}}});
                     continue;
                 }
@@ -2764,7 +2766,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // scope = the whole file), so all const inits and function bodies below see
     // its members unqualified.
     for (auto& ch : program->children) {
-        if (ch && ch->kind == parse::Kind::kAliasDecl && ch->return_type.empty()) {
+        if (ch && ch->kind == parse::Kind::kAliasDecl && ch->return_type == widen::kNoType) {
             resolveBareAlias(tree, *ch, diag);
         }
     }

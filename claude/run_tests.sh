@@ -9,6 +9,9 @@ OPTS="-j 8"
 echo "building slids compiler..."
 make ${OPTS} -C compiler_v2/ || { echo "compiler build FAILED"; exit 1; }
 
+echo "running type-arena self-test..."
+./bin/slidsc --type-selftest || { echo "type self-test FAILED"; exit 1; }
+
 echo "building test code..."
 make ${OPTS} -C test_v2/ || { echo "test build FAILED"; exit 1; }
 

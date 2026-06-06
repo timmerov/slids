@@ -33,6 +33,31 @@ DESIGN PRINCIPLES
   * No silent defaults. Every default arm is documented no-op, unreachable
     assert, or error path. Enforced by `-Werror -Wswitch-enum`.
 
+TYPE REPRESENTATION (the carrier; not a stage)
+
+  * Types are STRUCTURED, never strings. A type is a widen::TypeRef — a handle
+    into a process-lifetime interned arena (widen::intern / widen::spell). A
+    widen::Type carries a Form (kNone / kPrimitive / kVoid / kAnyptr / kPointer /
+    kIterator / kArray / kSlid / kTuple) plus its payload (cat+bits, pointee,
+    elem+dims, slots). Interning is keyed on SPELLING, so int / int32 / intptr
+    stay DISTINCT handles yet share cat()/bits(). spell(intern(s)) == s exactly,
+    guarded by `slidsc --type-selftest` (run by run_tests.sh).
+  * Every type FIELD is a TypeRef: Node.return_type / inferred_type / op_type /
+    nominal_type / strong_type and Entry.slids_type / const_strong_type /
+    param_types / capture_types (both parse:: and ast::), plus codegen::VarInfo.
+    alias_label stays a std::string — it is a display NAME, not a type.
+  * Structure is the single source of truth. Spellings are RENDERED on demand
+    ONLY at genuine edges: diagnostics, ##type, the no-width commonType rule, and
+    the classify primitive-name lexer. NEVER cache a canonical spelling — storing
+    a type-string is what killed v1. codegen + print + the classify/resolve
+    predicate+cast-rule cluster read structure off the handle (form/cat/bits);
+    upstream stages that still compute spellings bridge at field boundaries via
+    widen::spellOrEmpty (read) / widen::internOrNone (write).
+  * kNoType is the "no type" handle (empty spelling). get(kNoType) reads as
+    Form::kNone, so every predicate returns false/none on it AND a form==kVoid
+    test can never mistake a no-type for void — a stray no-type surfaces loudly
+    (e.g. llvmForRef assert) rather than silently lowering as void.
+
 STAGE FILES (.h / .cpp pairs)
 
   lex       text -> tokens. Wraps the scanner in an ImportWrapper that

@@ -24,7 +24,7 @@ namespace codegen {
 std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                      strings::Pool& pool, std::ostream& out,
                      diagnostic::Sink& diag,
-                     std::string const& dest_type);
+                     widen::TypeRef dest_type);
 
 namespace {
 
@@ -50,19 +50,13 @@ std::string llvmForRef(widen::TypeRef ref) {
             for (int d : t.dims) ll = "[" + std::to_string(d) + " x " + ll + "]";
             return ll;
         }
+        case widen::Type::Form::kNone:
         case widen::Type::Form::kSlid:
         case widen::Type::Form::kTuple:
-            break;   // not lowerable yet
+            break;   // not lowerable (kNone = no type reached codegen)
     }
-    assert(false && "llvmTypeFor: classify let through an unknown type");
+    assert(false && "llvmForRef: classify let through an unknown type");
     __builtin_unreachable();
-}
-
-std::string llvmTypeFor(std::string const& slids_type,
-                        int file_id, int tok,
-                        diagnostic::Sink& diag) {
-    (void)file_id; (void)tok; (void)diag;
-    return llvmForRef(widen::intern(slids_type));
 }
 
 std::string normalizeFloatLiteral(std::string const& text) {
@@ -104,32 +98,33 @@ std::string newTmp(char const* tag) {
     return std::string("%") + tag + "_" + std::to_string(n++);
 }
 
-bool isFloatType(std::string const& t) {
-    return t == "float" || t == "float32" || t == "float64";
+bool isFloatType(widen::TypeRef t) {
+    widen::TypeKind k;
+    return widen::classify(t, k) && k.cat == widen::Category::kFloat;
 }
 
-bool isUnsignedType(std::string const& t) {
-    return t == "uint" || t == "uint8" || t == "uint16" || t == "uint32"
-        || t == "uint64" || t == "char";
+bool isUnsignedType(widen::TypeRef t) {
+    widen::TypeKind k;
+    return widen::classify(t, k) && k.cat == widen::Category::kUnsignedInt;
 }
 
-bool isIteratorType(std::string const& t) {
-    return widen::form(widen::intern(t)) == widen::Type::Form::kIterator;
+bool isIteratorType(widen::TypeRef t) {
+    return widen::form(t) == widen::Type::Form::kIterator;
 }
 
 // The element type of an iterator (`int[]` -> `int`) or reference (`int^` ->
-// `int`). Empty otherwise.
-std::string pointeeTypeC(std::string const& t) {
-    widen::Type const& ty = widen::get(widen::intern(t));
+// `int`). kNoType otherwise.
+widen::TypeRef pointeeTypeC(widen::TypeRef t) {
+    widen::Type const& ty = widen::get(t);
     if (ty.form == widen::Type::Form::kIterator
      || ty.form == widen::Type::Form::kPointer) {
-        return widen::spell(ty.pointee);
+        return ty.pointee;
     }
-    return "";
+    return widen::kNoType;
 }
 
 // Byte size of a scalar element, for iterator element-stride arithmetic.
-int elemBytes(std::string const& t) {
+int elemBytes(widen::TypeRef t) {
     widen::TypeKind k;
     if (widen::classify(t, k)) return k.bits / 8;
     // Every iterator element today is a scalar, so classify always succeeds.
@@ -145,35 +140,32 @@ std::string newLabel(char const* tag) {
 
 // Truthy coercion: 0-like values (false, 0, 0.0, null ptr) → i1 0; everything
 // else → i1 1.
-std::string emitToBool(std::string const& val, std::string const& slids_type,
+std::string emitToBool(std::string const& val, widen::TypeRef slids_type,
                        std::ostream& out) {
-    if (slids_type == "bool") return val;  // already i1
-    if (isFloatType(slids_type)) {
-        std::string llty = (slids_type == "float64") ? "double" : "float";
+    widen::TypeKind k;
+    bool numeric = widen::classify(slids_type, k);
+    if (numeric && k.cat == widen::Category::kBool) return val;  // already i1
+    if (numeric && k.cat == widen::Category::kFloat) {
+        std::string llty = (k.bits == 64) ? "double" : "float";
         std::string tmp = newTmp("tob");
         out << "  " << tmp << " = fcmp une " << llty << " "
             << val << ", 0.0\n";
         return tmp;
     }
-    widen::Type::Form bf = widen::form(widen::intern(slids_type));
+    widen::Type::Form bf = widen::form(slids_type);
     if (bf == widen::Type::Form::kPointer || bf == widen::Type::Form::kIterator
      || bf == widen::Type::Form::kAnyptr) {
         std::string tmp = newTmp("tob");
         out << "  " << tmp << " = icmp ne ptr " << val << ", null\n";
         return tmp;
     }
-    std::string llty;
-    if      (slids_type == "char"   || slids_type == "int8"   || slids_type == "uint8")   llty = "i8";
-    else if (slids_type == "int16"  || slids_type == "uint16")                            llty = "i16";
-    else if (slids_type == "int"    || slids_type == "int32"
-          || slids_type == "uint"   || slids_type == "uint32")                            llty = "i32";
-    else if (slids_type == "int64"  || slids_type == "uint64" || slids_type == "intptr")  llty = "i64";
-    else {
+    if (!numeric) {
         assert(false && "emitToBool: unhandled slids type");
         __builtin_unreachable();
     }
     std::string tmp = newTmp("tob");
-    out << "  " << tmp << " = icmp ne " << llty << " " << val << ", 0\n";
+    out << "  " << tmp << " = icmp ne " << llvmForRef(slids_type) << " "
+        << val << ", 0\n";
     return tmp;
 }
 
@@ -194,13 +186,13 @@ std::string emitLogical(ast::Node const& expr, SymTab const& syms,
     ast::Node const& lhs = *expr.children[0];
     ast::Node const& rhs = *expr.children[1];
 
-    std::string const& lty = lhs.inferred_type;
-    assert(!lty.empty() && "emitLogical: lhs missing inferred_type");
+    widen::TypeRef lty = lhs.inferred_type;
+    assert(lty != widen::kNoType && "emitLogical: lhs missing inferred_type");
     std::string lv = emitExpr(lhs, syms, pool, out, diag, lty);
     std::string left_bool = emitToBool(lv, lty, out);
 
-    std::string const& rty = rhs.inferred_type;
-    assert(!rty.empty() && "emitLogical: rhs missing inferred_type");
+    widen::TypeRef rty = rhs.inferred_type;
+    assert(rty != widen::kNoType && "emitLogical: rhs missing inferred_type");
 
     if (op == "^^") {
         // Logical xor cannot short-circuit (it needs both operands): evaluate
@@ -252,7 +244,7 @@ std::string emitLogical(ast::Node const& expr, SymTab const& syms,
 std::string emitUnary(ast::Node const& expr, SymTab const& syms,
                       strings::Pool& pool, std::ostream& out,
                       diagnostic::Sink& diag,
-                      std::string const& dest_type) {
+                      widen::TypeRef dest_type) {
     assert(expr.children.size() == 1 && "emitUnary: UnaryExpr needs 1 child");
     std::string const& op = expr.text;
     ast::Node const& operand = *expr.children[0];
@@ -262,7 +254,7 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
     }
     if (op == "-") {
         std::string v = emitExpr(operand, syms, pool, out, diag, dest_type);
-        std::string llty = llvmTypeFor(dest_type, expr.file_id, expr.tok, diag);
+        std::string llty = llvmForRef(dest_type);
         std::string tmp = newTmp("neg");
         if (isFloatType(dest_type)) {
             out << "  " << tmp << " = fneg " << llty << " " << v << "\n";
@@ -273,16 +265,16 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
     }
     if (op == "~") {
         std::string v = emitExpr(operand, syms, pool, out, diag, dest_type);
-        std::string llty = llvmTypeFor(dest_type, expr.file_id, expr.tok, diag);
+        std::string llty = llvmForRef(dest_type);
         std::string tmp = newTmp("bnot");
         out << "  " << tmp << " = xor " << llty << " " << v << ", -1\n";
         return tmp;
     }
     if (op == "!") {
-        std::string const& operand_type = operand.inferred_type;
-        assert(!operand_type.empty() && "emitUnary '!': operand missing inferred_type");
+        widen::TypeRef operand_type = operand.inferred_type;
+        assert(operand_type != widen::kNoType && "emitUnary '!': operand missing inferred_type");
         std::string v = emitExpr(operand, syms, pool, out, diag, operand_type);
-        std::string llty = llvmTypeFor(operand_type, expr.file_id, expr.tok, diag);
+        std::string llty = llvmForRef(operand_type);
         std::string tmp = newTmp("lnot");
         if (isFloatType(operand_type)) {
             out << "  " << tmp << " = fcmp oeq " << llty << " "
@@ -301,7 +293,7 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
 std::string emitBinary(ast::Node const& expr, SymTab const& syms,
                        strings::Pool& pool, std::ostream& out,
                        diagnostic::Sink& diag,
-                       std::string const& dest_type) {
+                       widen::TypeRef dest_type) {
     assert(expr.children.size() == 2 && "emitBinary: BinaryExpr needs 2 children");
     std::string const& op = expr.text;
     ast::Node const& lhs = *expr.children[0];
@@ -309,15 +301,15 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
 
     if (op == "&&" || op == "||" || op == "^^") {
         std::string r = emitLogical(expr, syms, pool, out, diag);
-        return widen::convert(r, "bool", dest_type,
+        return widen::convert(r, widen::intern("bool"), dest_type,
                               expr.file_id, expr.tok, out, diag);
     }
 
     if (op == "<<" || op == ">>") {
-        std::string const& lt = lhs.inferred_type;
-        std::string const& rt = rhs.inferred_type;
-        assert(!lt.empty() && "emitBinary shift: lhs missing inferred_type");
-        assert(!rt.empty() && "emitBinary shift: rhs missing inferred_type");
+        widen::TypeRef lt = lhs.inferred_type;
+        widen::TypeRef rt = rhs.inferred_type;
+        assert(lt != widen::kNoType && "emitBinary shift: lhs missing inferred_type");
+        assert(rt != widen::kNoType && "emitBinary shift: rhs missing inferred_type");
         // Classify already rejected non-integer rhs; nothing to recheck here.
 
         std::string lv = emitExpr(lhs, syms, pool, out, diag, lt);
@@ -325,8 +317,8 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
 
         if (isFloatType(lt)) {
             // Per fold.sl:128-131: `f << r` ≡ `f * (1<<r)`; `f >> r` ≡ `f / (1<<r)`.
-            std::string rllty = llvmTypeFor(rt, expr.file_id, expr.tok, diag);
-            std::string fllty = llvmTypeFor(lt, expr.file_id, expr.tok, diag);
+            std::string rllty = llvmForRef(rt);
+            std::string fllty = llvmForRef(lt);
             std::string pow2 = newTmp("pow2");
             out << "  " << pow2 << " = shl " << rllty << " 1, " << rv << "\n";
             std::string pow2f = newTmp("pow2f");
@@ -343,8 +335,8 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
         widen::TypeKind lk, rk;
         widen::classify(lt, lk);
         widen::classify(rt, rk);
-        std::string lllty = llvmTypeFor(lt, expr.file_id, expr.tok, diag);
-        std::string rllty = llvmTypeFor(rt, expr.file_id, expr.tok, diag);
+        std::string lllty = llvmForRef(lt);
+        std::string rllty = llvmForRef(rt);
         if (rk.bits != lk.bits) {
             std::string tmp = newTmp("shft");
             if (rk.bits > lk.bits) {
@@ -365,16 +357,16 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
                               expr.file_id, expr.tok, out, diag);
     }
 
-    std::string const& opty = expr.op_type;
-    assert(!opty.empty() && "emitBinary: BinaryExpr missing op_type");
+    widen::TypeRef opty = expr.op_type;
+    assert(opty != widen::kNoType && "emitBinary: BinaryExpr missing op_type");
 
     // Iterator arithmetic: `iter ± int` (GEP by element) and `iter - iter`
     // (element-count difference). op_type carries the iterator type; the generic
     // operand emit below would mis-convert the integer operand, so branch first.
     // (Comparisons keep the generic path — they icmp the raw pointers.)
     if (isIteratorType(opty) && (op == "+" || op == "-")) {
-        std::string elem = pointeeTypeC(opty);
-        std::string elem_ll = llvmTypeFor(elem, expr.file_id, expr.tok, diag);
+        widen::TypeRef elem = pointeeTypeC(opty);
+        std::string elem_ll = llvmForRef(elem);
         bool lit = isIteratorType(lhs.inferred_type);
         bool rit = isIteratorType(rhs.inferred_type);
         if (op == "-" && lit && rit) {
@@ -391,7 +383,7 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
             std::string d = newTmp("pdiv");
             out << "  " << d << " = sdiv i64 " << byte << ", "
                 << elemBytes(elem) << "\n";
-            return widen::convert(d, "intptr", dest_type,
+            return widen::convert(d, widen::intern("intptr"), dest_type,
                                   expr.file_id, expr.tok, out, diag);
         }
         // iter ± int: GEP the iterator by (signed) the integer count.
@@ -399,7 +391,7 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
         ast::Node const& intnode = lit ? rhs : lhs;
         std::string ptr = emitExpr(itnode, syms, pool, out, diag,
                                    itnode.inferred_type);
-        std::string idx = emitExpr(intnode, syms, pool, out, diag, "int64");
+        std::string idx = emitExpr(intnode, syms, pool, out, diag, widen::intern("int64"));
         if (op == "-") {
             std::string neg = newTmp("pneg");
             out << "  " << neg << " = sub i64 0, " << idx << "\n";
@@ -415,15 +407,15 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
     std::string rv = emitExpr(rhs, syms, pool, out, diag, opty);
 
     if (op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=") {
-        std::string llty = llvmTypeFor(opty, expr.file_id, expr.tok, diag);
+        std::string llty = llvmForRef(opty);
         bool flt = isFloatType(opty);
         // Pointer comparisons (reference / iterator / anyptr) compare addresses
         // as unsigned.
-        widen::Type::Form of = widen::form(widen::intern(opty));
+        widen::Type::Form of = widen::form(opty);
         bool ptr_cmp = of == widen::Type::Form::kPointer
             || of == widen::Type::Form::kIterator
             || of == widen::Type::Form::kAnyptr;
-        bool uns = isUnsignedType(opty) || opty == "bool" || ptr_cmp;
+        bool uns = isUnsignedType(opty) || opty == widen::intern("bool") || ptr_cmp;
         char const* pred;
         if      (op == "==") pred = flt ? "oeq" : "eq";
         else if (op == "!=") pred = flt ? "one" : "ne";
@@ -440,11 +432,11 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
         std::string tmp = newTmp("cmp");
         out << "  " << tmp << " = " << (flt ? "fcmp " : "icmp ")
             << pred << " " << llty << " " << lv << ", " << rv << "\n";
-        return widen::convert(tmp, "bool", dest_type,
+        return widen::convert(tmp, widen::intern("bool"), dest_type,
                               expr.file_id, expr.tok, out, diag);
     }
 
-    std::string llty = llvmTypeFor(opty, expr.file_id, expr.tok, diag);
+    std::string llty = llvmForRef(opty);
     bool flt = isFloatType(opty);
     bool uns = isUnsignedType(opty);
 
@@ -487,9 +479,9 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
     arg_vals.reserve(call.children.size());
     for (size_t i = 0; i < call.children.size(); i++) {
         ast::Node const& arg = *call.children[i];
-        std::string const& dest = call.param_types[i];
+        widen::TypeRef dest = call.param_types[i];
         std::string val = emitExpr(arg, syms, pool, out, diag, dest);
-        std::string llty = llvmTypeFor(dest, arg.file_id, arg.tok, diag);
+        std::string llty = llvmForRef(dest);
         arg_vals.push_back({llty, std::move(val)});
     }
     // A nested-function call passes each capture by reference: the host
@@ -500,11 +492,10 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
             arg_vals.push_back({"ptr", it->second.alloca_name});
         }
     }
-    std::string ret_llty = llvmTypeFor(call.return_type,
-                                       call.file_id, call.tok, diag);
+    std::string ret_llty = llvmForRef(call.return_type);
     std::string result;
     out << "  ";
-    if (call.return_type != "void") {
+    if (widen::form(call.return_type) != widen::Type::Form::kVoid) {
         result = newTmp("call");
         out << result << " = ";
     }
@@ -537,9 +528,8 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
         std::string ptr = emitExpr(*node, syms, pool, out, diag,
                                    node->inferred_type);
         std::string idx = emitExpr(*chain.back()->children[1], syms, pool, out,
-                                   diag, "int64");
-        std::string elem_ll = llvmTypeFor(pointeeTypeC(node->inferred_type),
-                                          node->file_id, node->tok, diag);
+                                   diag, widen::intern("int64"));
+        std::string elem_ll = llvmForRef(pointeeTypeC(node->inferred_type));
         std::string gep = newTmp("elt");
         out << "  " << gep << " = getelementptr " << elem_ll << ", ptr " << ptr
             << ", i64 " << idx << "\n";
@@ -552,8 +542,7 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
     assert(it != syms.end() && "emitElementAddr: array not in SymTab");
     // Every dimension must be indexed — a partial index (`grid[0]` on a 2-D
     // array) would yield a sub-array, which has no scalar value to load/store.
-    int dims = 0;
-    for (char c : it->second.slids_type) if (c == '[') dims++;
+    int dims = (int)widen::get(it->second.slids_type).dims.size();
     if ((int)chain.size() != dims) {
         diagnostic::report(diag, {index_expr.file_id, index_expr.tok,
             "An array subscript must index every dimension.", {}});
@@ -564,7 +553,7 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
     std::vector<std::string> idx_vals;
     for (ast::Node const* ix : chain) {
         idx_vals.push_back(
-            emitExpr(*ix->children[1], syms, pool, out, diag, "int64"));
+            emitExpr(*ix->children[1], syms, pool, out, diag, widen::intern("int64")));
     }
     std::string gep = newTmp("elt");
     out << "  " << gep << " = getelementptr inbounds " << it->second.llvm_type
@@ -579,7 +568,7 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
 std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                      strings::Pool& pool, std::ostream& out,
                      diagnostic::Sink& diag,
-                     std::string const& dest_type) {
+                     widen::TypeRef dest_type) {
     switch (expr.kind) {
         case ast::Kind::kIntLiteral:
         case ast::Kind::kUintLiteral:
@@ -592,7 +581,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kFloatLiteral: {
             widen::checkFloatLiteralFits(expr.text, dest_type,
                                          expr.file_id, expr.tok, diag);
-            if (dest_type == "float" || dest_type == "float32") {
+            if (dest_type == widen::intern("float") || dest_type == widen::intern("float32")) {
                 return float32HexLiteral(expr.text);
             }
             return normalizeFloatLiteral(expr.text);
@@ -634,8 +623,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kIndexExpr: {
             // `arr[i]` rvalue: address the element, load it.
             std::string addr = emitElementAddr(expr, syms, pool, out, diag);
-            std::string llty = llvmTypeFor(expr.inferred_type,
-                                           expr.file_id, expr.tok, diag);
+            std::string llty = llvmForRef(expr.inferred_type);
             std::string tmp = newTmp("idx");
             out << "  " << tmp << " = load " << llty << ", ptr " << addr << "\n";
             return widen::convert(tmp, expr.inferred_type, dest_type,
@@ -648,8 +636,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             ast::Node const& operand = *expr.children[0];
             std::string addr = emitExpr(operand, syms, pool, out, diag,
                                         operand.inferred_type);
-            std::string llty = llvmTypeFor(expr.inferred_type,
-                                           expr.file_id, expr.tok, diag);
+            std::string llty = llvmForRef(expr.inferred_type);
             std::string tmp = newTmp("deref");
             out << "  " << tmp << " = load " << llty << ", ptr " << addr << "\n";
             return widen::convert(tmp, expr.inferred_type, dest_type,
@@ -672,7 +659,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                 std::string bytes;
                 if (expr.children[0]) {        // array: n * elem-size
                     std::string n = emitExpr(*expr.children[0], syms, pool, out,
-                                             diag, "int64");
+                                             diag, widen::intern("int64"));
                     std::string mul = newTmp("nbytes");
                     out << "  " << mul << " = mul i64 " << n << ", "
                         << elem << "\n";
@@ -706,7 +693,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kBinaryExpr:
             return emitBinary(expr, syms, pool, out, diag, dest_type);
         case ast::Kind::kCallExpr: {
-            assert(expr.return_type != "void"
+            assert(widen::form(expr.return_type) != widen::Type::Form::kVoid
                 && "emitExpr kCallExpr: classify should have rejected void call-as-value");
             std::string r = emitCall(expr, syms, pool, out, diag);
             return widen::convert(r, expr.return_type, dest_type,
@@ -723,7 +710,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                 if (static_cast<int>(i) == expr.value_index) {
                     result = emitExpr(*expr.children[i], syms, pool, out, diag, dest_type);
                 } else {
-                    emitExpr(*expr.children[i], syms, pool, out, diag, "");
+                    emitExpr(*expr.children[i], syms, pool, out, diag, widen::kNoType);
                 }
             }
             return result;
@@ -739,9 +726,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                 std::string cur = newTmp("itld");
                 out << "  " << cur << " = load ptr, ptr "
                     << it->second.alloca_name << "\n";
-                std::string elem_ll = llvmTypeFor(
-                    pointeeTypeC(it->second.slids_type),
-                    expr.file_id, expr.tok, diag);
+                std::string elem_ll = llvmForRef(pointeeTypeC(it->second.slids_type));
                 std::string nv = newTmp("itinc");
                 out << "  " << nv << " = getelementptr " << elem_ll << ", ptr "
                     << cur << ", i64 " << (expr.text == "++" ? "1" : "-1")
@@ -818,7 +803,7 @@ struct LoopCtx {
 
 void emitStmt(ast::Node const& stmt, SymTab& syms,
               strings::Pool& pool,
-              std::string const& fn_return_type,
+              widen::TypeRef fn_return_type,
               LoopCtx const* loop,
               std::ostream& out, diagnostic::Sink& diag) {
     switch (stmt.kind) {
@@ -860,7 +845,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             // the rhs flexed to the element/pointee type.
             assert(stmt.children.size() == 2 && "kStoreStmt needs lvalue + rhs");
             ast::Node const& lvalue = *stmt.children[0];
-            std::string const& elem = lvalue.inferred_type;
+            widen::TypeRef elem = lvalue.inferred_type;
             std::string addr;
             if (lvalue.kind == ast::Kind::kIndexExpr) {
                 addr = emitElementAddr(lvalue, syms, pool, out, diag);
@@ -873,7 +858,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             }
             std::string val = emitExpr(*stmt.children[1], syms, pool, out, diag,
                                        elem);
-            std::string llty = llvmTypeFor(elem, stmt.file_id, stmt.tok, diag);
+            std::string llty = llvmForRef(elem);
             out << "  store " << llty << " " << val << ", ptr " << addr << "\n";
             return;
         }
@@ -901,7 +886,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         }
         case ast::Kind::kExprStmt: {
             // Evaluate the expression for its side effects; discard the value.
-            emitExpr(*stmt.children[0], syms, pool, out, diag, "");
+            emitExpr(*stmt.children[0], syms, pool, out, diag, widen::kNoType);
             return;
         }
         case ast::Kind::kReturnStmt: {
@@ -912,8 +897,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             }
             std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
                                        fn_return_type);
-            std::string llty = llvmTypeFor(fn_return_type,
-                                           stmt.file_id, stmt.tok, diag);
+            std::string llty = llvmForRef(fn_return_type);
             out << "  ret " << llty << " " << val << "\n";
             return;
         }
@@ -1110,8 +1094,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             ast::Node const& scrut = *stmt.children[0];
             std::string sv = emitExpr(scrut, syms, pool, out, diag,
                                       scrut.inferred_type);
-            std::string llty = llvmTypeFor(scrut.inferred_type, scrut.file_id,
-                                           scrut.tok, diag);
+            std::string llty = llvmForRef(scrut.inferred_type);
             std::size_t n = stmt.children.size() - 1;   // clause count
             std::string exit_lbl = newLabel("switch_exit");
             if (n == 0) {                                // empty body: no clauses
@@ -1341,13 +1324,12 @@ void collectVarDecls(ast::Node const& s, std::vector<ast::Node const*>& out) {
 
 void emitFunction(ast::Node const& fn, strings::Pool& pool,
                   std::ostream& out, diagnostic::Sink& diag) {
-    std::string ret_llty = llvmTypeFor(fn.return_type,
-                                       fn.file_id, fn.tok, diag);
+    std::string ret_llty = llvmForRef(fn.return_type);
     out << "define " << ret_llty << " @" << fn.name << "(";
     for (size_t i = 0; i < fn.params.size(); i++) {
         ast::Node const& p = *fn.params[i];
         if (i > 0) out << ", ";
-        std::string p_llty = llvmTypeFor(p.return_type, p.file_id, p.tok, diag);
+        std::string p_llty = llvmForRef(p.return_type);
         out << p_llty << " %arg." << i;
     }
     // A lifted nested function takes one extra `ptr` arg per capture (the host
@@ -1362,8 +1344,7 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     // A capture's SymTab "alloca" IS the incoming ptr arg — reads/writes load /
     // store through the host variable's address (no fresh alloca / store).
     for (size_t i = 0; i < fn.captures.size(); i++) {
-        std::string cap_llty = llvmTypeFor(fn.capture_types[i],
-                                           fn.file_id, fn.tok, diag);
+        std::string cap_llty = llvmForRef(fn.capture_types[i]);
         syms[fn.captures[i]] =
             {std::string("%cap.") + std::to_string(i), cap_llty,
              fn.capture_types[i]};
@@ -1373,7 +1354,7 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     // body-frame seeding).
     for (size_t i = 0; i < fn.params.size(); i++) {
         ast::Node const& p = *fn.params[i];
-        std::string p_llty = llvmTypeFor(p.return_type, p.file_id, p.tok, diag);
+        std::string p_llty = llvmForRef(p.return_type);
         std::string regname = std::string("%") + p.name;
         out << "  " << regname << " = alloca " << p_llty << "\n";
         out << "  store " << p_llty << " %arg." << i
@@ -1392,7 +1373,7 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
         if (s) collectVarDecls(*s, decls);
     }
     for (ast::Node const* d : decls) {
-        std::string llty = llvmTypeFor(d->return_type, d->file_id, d->tok, diag);
+        std::string llty = llvmForRef(d->return_type);
         std::string regname = std::string("%") + d->name + "."
             + std::to_string(d->resolved_entry_id);
         out << "  " << regname << " = alloca " << llty << "\n";
@@ -1409,7 +1390,7 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     // return won't double-terminate once bare `return;` is supported. A trailing
     // block counts if ITS last statement returns (mirrors classify's recursion).
     if (!endsInReturn(fn.children)) {
-        assert(fn.return_type == "void"
+        assert(widen::form(fn.return_type) == widen::Type::Form::kVoid
             && "emitFunction: non-void function reached codegen without a trailing return");
         out << "  ret void\n";
     }

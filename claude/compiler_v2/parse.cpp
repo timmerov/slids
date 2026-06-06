@@ -56,7 +56,7 @@ int findInFrame(Tree const& t, int frame_id, std::string const& name) {
     return -1;
 }
 
-std::string const& entryType(Tree const& t, int entry_id) {
+widen::TypeRef entryType(Tree const& t, int entry_id) {
     assert(entry_id >= 0 && entry_id < static_cast<int>(t.entries.size())
         && "entryType: out of range");
     return t.entries[entry_id].slids_type;

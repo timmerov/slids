@@ -40,53 +40,60 @@ std::string preferredSpelling(std::string const& t) {
     return t;
 }
 
-bool isFloatType(std::string const& t) {
-    return t == "float" || t == "float32" || t == "float64";
+// These predicates read the STRUCTURE off the handle (form / cat / bits) — no
+// spelling is produced. Callers pass a type field (a TypeRef) directly; the
+// structure is the single source of truth (spellings live only at human edges).
+
+bool isFloatType(widen::TypeRef t) {
+    widen::TypeKind k;
+    return widen::classify(t, k) && k.cat == widen::Category::kFloat;
 }
 
-// A reference type spelling: `T^`.
-bool isReference(std::string const& t) {
-    return widen::form(widen::intern(t)) == widen::Type::Form::kPointer;
+// A reference type: `T^`.
+bool isReference(widen::TypeRef t) {
+    return widen::form(t) == widen::Type::Form::kPointer;
 }
 
-// An iterator type spelling: `T[]`.
-bool isIteratorType(std::string const& t) {
-    return widen::form(widen::intern(t)) == widen::Type::Form::kIterator;
+// An iterator type: `T[]`.
+bool isIteratorType(widen::TypeRef t) {
+    return widen::form(t) == widen::Type::Form::kIterator;
 }
 
 // Any pointer: an iterator (`T[]`), a reference (`T^`), or the typeless null
 // (`anyptr`, nullptr's type). Used for truthy-coercion and pointer ops.
-bool isPtrLikeType(std::string const& t) {
-    widen::Type::Form f = widen::form(widen::intern(t));
+bool isPtrLikeType(widen::TypeRef t) {
+    widen::Type::Form f = widen::form(t);
     return f == widen::Type::Form::kPointer
         || f == widen::Type::Form::kIterator
         || f == widen::Type::Form::kAnyptr;
 }
 
-// The pointee type of a reference/iterator; empty for anyptr or a non-pointer.
-std::string pointeeType(std::string const& t) {
-    widen::Type const& ty = widen::get(widen::intern(t));
+// The pointee type of a reference/iterator; kNoType for anyptr or a non-pointer.
+widen::TypeRef pointeeType(widen::TypeRef t) {
+    widen::Type const& ty = widen::get(t);
     if (ty.form == widen::Type::Form::kPointer
      || ty.form == widen::Type::Form::kIterator) {
-        return widen::spell(ty.pointee);
+        return ty.pointee;
     }
-    return "";
+    return widen::kNoType;
 }
 
-bool isNumericType(std::string const& t);   // defined below
+bool isNumericType(widen::TypeRef t);   // defined below
 
 // A buffer-class pointer: a pointer (reference or iterator) whose pointee is a
 // generic byte type — `void`, `int8`, `uint8`. These reinterpret to/from any
 // pointer type; every other pointer pair must reinterpret indirectly (chain
 // through a buffer-class type). `void` is included though it only spells as a
 // reference (`void^`): void has no stride, so `void[]` never reaches here.
-bool isBufferClassPtr(std::string const& t) {
-    std::string p = pointeeType(t);
-    return p == "void" || p == "int8" || p == "uint8";
+bool isBufferClassPtr(widen::TypeRef t) {
+    widen::TypeRef p = pointeeType(t);
+    if (p == widen::kNoType) return false;
+    return p == widen::intern("void") || p == widen::intern("int8")
+        || p == widen::intern("uint8");
 }
 
 // The pointee of a reference / iterator (used below for same-pointee checks).
-std::string castPointee(std::string const& t) {
+widen::TypeRef castPointee(widen::TypeRef t) {
     return pointeeType(t);
 }
 
@@ -96,11 +103,11 @@ std::string castPointee(std::string const& t) {
 // `intptr`, and an iterator demoted to a reference of the same pointee. Adding
 // information (`void^`/`intptr` → a typed pointer, reference → iterator) needs
 // an explicit `<Type^>`. Caller gates on either side being pointer-ish.
-bool ptrImplicitOk(std::string const& from, std::string const& to) {
+bool ptrImplicitOk(widen::TypeRef from, widen::TypeRef to) {
     if (from == to) return true;
-    if (from == "anyptr") return isPtrLikeType(to);   // nullptr → any pointer
-    if (to == "void^")    return isPtrLikeType(from);  // strip to a void reference
-    if (to == "intptr")   return isPtrLikeType(from);  // strip to an integer
+    if (from == widen::intern("anyptr")) return isPtrLikeType(to);   // nullptr → any
+    if (to == widen::intern("void^"))    return isPtrLikeType(from); // strip to void ref
+    if (to == widen::intern("intptr"))   return isPtrLikeType(from); // strip to integer
     // An iterator demotes to a reference of the same pointee (loses arithmetic).
     if (isReference(to) && isIteratorType(from)
         && castPointee(to) == castPointee(from)) return true;
@@ -110,8 +117,8 @@ bool ptrImplicitOk(std::string const& from, std::string const& to) {
 // Is `t` a legal cast endpoint — a pointer, or the integer type `intptr`? Only
 // `intptr` bridges pointers and integers; no other integer type may be cast
 // to or from a pointer.
-bool isCastEndpoint(std::string const& t) {
-    return isPtrLikeType(t) || t == "intptr";
+bool isCastEndpoint(widen::TypeRef t) {
+    return isPtrLikeType(t) || t == widen::intern("intptr");
 }
 
 // May an EXPLICIT `<to> from` cast reinterpret a value of type `from` as `to`?
@@ -120,13 +127,14 @@ bool isCastEndpoint(std::string const& t) {
 // of the same pointee reinterpret either way. Two unrelated non-buffer pointers
 // may not cast directly (the canonical "chain through void^" rule). On failure,
 // `why` is set to a user-facing reason.
-bool ptrExplicitOk(std::string const& from, std::string const& to,
+bool ptrExplicitOk(widen::TypeRef from, widen::TypeRef to,
                    std::string& why) {
-    if (isNumericType(from) && from != "intptr") {
+    widen::TypeRef intptr = widen::intern("intptr");
+    if (isNumericType(from) && from != intptr) {
         why = "only 'intptr' may be cast to or from a pointer";
         return false;
     }
-    if (isNumericType(to) && to != "intptr") {
+    if (isNumericType(to) && to != intptr) {
         why = "only 'intptr' may be cast to or from a pointer";
         return false;
     }
@@ -139,8 +147,8 @@ bool ptrExplicitOk(std::string const& from, std::string const& to,
         return false;
     }
     if (from == to) return true;
-    if (from == "anyptr") return true;                 // nullptr → any pointer
-    if (from == "intptr" || to == "intptr") return true;  // pointer ↔ integer
+    if (from == widen::intern("anyptr")) return true;     // nullptr → any pointer
+    if (from == intptr || to == intptr) return true;      // pointer ↔ integer
     if (isBufferClassPtr(from) || isBufferClassPtr(to)) return true;  // buffer ↔ any
     if (((isReference(from) && isIteratorType(to))
       || (isIteratorType(from) && isReference(to)))
@@ -149,36 +157,37 @@ bool ptrExplicitOk(std::string const& from, std::string const& to,
     return false;
 }
 
-// A fixed-size array type spelling (`int[5]`, `int[3][5]`), distinct from
-// `int[]` (iterator) and `int^` (ref).
-bool isArrayType(std::string const& t) {
-    return widen::form(widen::intern(t)) == widen::Type::Form::kArray;
+// A fixed-size array type (`int[5]`, `int[3][5]`), distinct from `int[]`
+// (iterator) and `int^` (ref).
+bool isArrayType(widen::TypeRef t) {
+    return widen::form(t) == widen::Type::Form::kArray;
 }
 
 // The leftmost (innermost) dimension's size — the dimension one subscript
 // consumes. `int[3][5]` -> 3.
-int arrayFirstDim(std::string const& t) {
-    return widen::get(widen::intern(t)).dims.front();
+int arrayFirstDim(widen::TypeRef t) {
+    return widen::get(t).dims.front();
 }
 
 // The type after one subscript: strip the leftmost `[N]`. `int[3][5]` ->
-// `int[5]`; `int[5]` -> `int`.
-std::string arrayElementType(std::string const& t) {
-    widen::Type const& a = widen::get(widen::intern(t));
+// `int[5]`; `int[5]` -> `int`. Returns a fresh interned handle (a derived type,
+// not a stored spelling).
+widen::TypeRef arrayElementType(widen::TypeRef t) {
+    widen::Type const& a = widen::get(t);
     std::string s = widen::spell(a.elem);
     for (std::size_t i = 1; i < a.dims.size(); i++)
         s += "[" + std::to_string(a.dims[i]) + "]";
-    return s;
+    return widen::intern(s);
 }
 
-bool isIntegerClass(std::string const& t) {
+bool isIntegerClass(widen::TypeRef t) {
     widen::TypeKind k;
     if (!widen::classify(t, k)) return false;
     return k.cat != widen::Category::kFloat;
 }
 
 
-bool isNumericType(std::string const& t) {
+bool isNumericType(widen::TypeRef t) {
     widen::TypeKind k;
     return widen::classify(t, k);
 }
@@ -186,7 +195,7 @@ bool isNumericType(std::string const& t) {
 // `!` and the logical operators truthy-coerce: numerics via cmp-against-zero,
 // pointer-like via cmp-against-null. Void (and any future non-value type) is
 // rejected here.
-bool isCoercibleToBool(std::string const& t) {
+bool isCoercibleToBool(widen::TypeRef t) {
     return isNumericType(t) || isPtrLikeType(t);
 }
 
@@ -327,12 +336,12 @@ std::string binaryLabel(parse::Node const& lhs, parse::Node const& rhs) {
 void flexBinaryOperands(parse::Node& lhs, parse::Node& rhs) {
     bool lhs_lit = isLiteralKind(lhs.kind);
     bool rhs_lit = isLiteralKind(rhs.kind);
-    if (lhs_lit && !rhs_lit && !rhs.inferred_type.empty()) {
-        if (literalFitsContext(lhs, rhs.inferred_type)) {
+    if (lhs_lit && !rhs_lit && rhs.inferred_type != widen::kNoType) {
+        if (literalFitsContext(lhs, widen::spellOrEmpty(rhs.inferred_type))) {
             lhs.inferred_type = rhs.inferred_type;
         }
-    } else if (rhs_lit && !lhs_lit && !lhs.inferred_type.empty()) {
-        if (literalFitsContext(rhs, lhs.inferred_type)) {
+    } else if (rhs_lit && !lhs_lit && lhs.inferred_type != widen::kNoType) {
+        if (literalFitsContext(rhs, widen::spellOrEmpty(lhs.inferred_type))) {
             rhs.inferred_type = lhs.inferred_type;
         }
     }
@@ -351,7 +360,7 @@ bool sameClass(std::string const& a, std::string const& b) {
 // 0 = exact (same class), 1 = a widening (literal flex, or within-family widen),
 // -1 = not convertible (narrowing / cross-family / un-typeable).
 int argConvertCost(parse::Node const& a, std::string const& param) {
-    std::string const& at = a.inferred_type;
+    std::string at = widen::spellOrEmpty(a.inferred_type);
     if (at.empty()) return -1;
     if (sameClass(at, param)) return 0;
     if (isLiteralKind(a.kind)) {
@@ -366,7 +375,7 @@ int argConvertCost(parse::Node const& a, std::string const& param) {
 // candidate, stamp the chosen signature. Defined after inferExpr (mutually
 // recursive — it infers the argument expressions).
 void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
-void checkStrongConstAssign(std::string const& dest, parse::Node const& rhs,
+void checkStrongConstAssign(widen::TypeRef dest, parse::Node const& rhs,
                             diagnostic::Sink& diag);
 
 void inferExpr(parse::Tree& tree, parse::Node& e,
@@ -378,21 +387,22 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kBoolLiteral:
         case parse::Kind::kFloatLiteral: {
             if (literalFitsContext(e, context)) {
-                e.inferred_type = context;
+                e.inferred_type = widen::internOrNone(context);
             } else {
-                e.inferred_type = defaultLiteralType(e);
+                e.inferred_type = widen::internOrNone(defaultLiteralType(e));
             }
             return;
         }
         case parse::Kind::kStringLiteral: {
-            e.inferred_type = "char[]";
+            e.inferred_type = widen::intern("char[]");
             return;
         }
         case parse::Kind::kNullptrLiteral: {
             // nullptr takes the pointer type in context (`int^ p = nullptr`);
             // with no pointer context it is the typeless null `anyptr`, which
             // coerces in comparisons against any pointer.
-            e.inferred_type = isPtrLikeType(context) ? context : "anyptr";
+            widen::TypeRef ctx = widen::internOrNone(context);
+            e.inferred_type = isPtrLikeType(ctx) ? ctx : widen::intern("anyptr");
             return;
         }
         case parse::Kind::kAddrOfExpr: {
@@ -402,9 +412,10 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             assert(e.children.size() == 1 && "kAddrOfExpr needs 1 operand");
             parse::Node& operand = *e.children[0];
             inferExpr(tree, operand, "", diag);
-            if (!operand.inferred_type.empty()) {
+            if (operand.inferred_type != widen::kNoType) {
                 bool indexed = (operand.kind == parse::Kind::kIndexExpr);
-                e.inferred_type = operand.inferred_type + (indexed ? "[]" : "^");
+                e.inferred_type = widen::intern(
+                    widen::spell(operand.inferred_type) + (indexed ? "[]" : "^"));
             }
             return;
         }
@@ -416,20 +427,20 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             parse::Node& index = *e.children[1];
             inferExpr(tree, base, "", diag);
             inferExpr(tree, index, "", diag);
-            std::string const& bt = base.inferred_type;
-            bool array = isArrayType(bt);
-            bool iter = isIteratorType(bt);
+            std::string bt = widen::spellOrEmpty(base.inferred_type);
+            bool array = isArrayType(base.inferred_type);
+            bool iter = isIteratorType(base.inferred_type);
             if (!bt.empty() && !array && !iter) {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Cannot subscript a non-array value of type '" + bt + "'.",
                     {}});
                 return;
             }
-            if (!index.inferred_type.empty()
+            if (index.inferred_type != widen::kNoType
                 && !isIntegerClass(index.inferred_type)) {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "An array index must be an integer; got '"
-                    + index.inferred_type + "'.", {}});
+                    + widen::spellOrEmpty(index.inferred_type) + "'.", {}});
             }
             // A constant integer index is bounds-checked against a fixed-size
             // array; an iterator has no known length, so no check. char literals
@@ -439,16 +450,16 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     || index.kind == parse::Kind::kUintLiteral
                     || index.kind == parse::Kind::kCharLiteral)) {
                 long idx = std::strtol(index.text.c_str(), nullptr, 10);
-                int dim = arrayFirstDim(bt);
+                int dim = arrayFirstDim(base.inferred_type);
                 if (idx < 0 || idx >= dim) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Array index " + std::to_string(idx)
                         + " is out of bounds for '" + bt + "'.", {}});
                 }
             }
-            e.inferred_type = bt.empty() ? std::string()
-                            : array       ? arrayElementType(bt)
-                                          : pointeeType(bt);   // iterator element
+            e.inferred_type = bt.empty()  ? widen::kNoType
+                            : array       ? arrayElementType(base.inferred_type)
+                                          : pointeeType(base.inferred_type);
             return;
         }
         case parse::Kind::kDerefExpr: {
@@ -456,14 +467,14 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             assert(e.children.size() == 1 && "kDerefExpr needs 1 operand");
             parse::Node& operand = *e.children[0];
             inferExpr(tree, operand, "", diag);
-            std::string const& ot = operand.inferred_type;
-            if (!ot.empty() && !isPtrLikeType(ot)) {
+            std::string ot = widen::spellOrEmpty(operand.inferred_type);
+            if (!ot.empty() && !isPtrLikeType(operand.inferred_type)) {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Cannot dereference a non-pointer value of type '"
                     + ot + "'.", {}});
                 return;
             }
-            e.inferred_type = pointeeType(ot);
+            e.inferred_type = pointeeType(operand.inferred_type);
             return;
         }
         case parse::Kind::kSizeofExpr: {
@@ -480,11 +491,11 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             long long size;
             if (e.children.empty()
                 || e.children[0]->kind != parse::Kind::kStringLiteral) {
-                std::string ty = e.return_type;
+                std::string ty = widen::spellOrEmpty(e.return_type);
                 if (ty.empty()) {
                     parse::Node& operand = *e.children[0];
                     inferExpr(tree, operand, "", diag);
-                    ty = operand.inferred_type;
+                    ty = widen::spellOrEmpty(operand.inferred_type);
                 }
                 // An empty type rides an already-reported upstream error (an
                 // un-typeable operand); fall to 0 silently rather than cascade.
@@ -501,9 +512,9 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             }
             e.kind = parse::Kind::kIntLiteral;
             e.text = std::to_string(size);
-            e.return_type.clear();
+            e.return_type = widen::kNoType;
             e.children.clear();
-            e.inferred_type = "intptr";
+            e.inferred_type = widen::intern("intptr");
             return;
         }
         case parse::Kind::kNewExpr: {
@@ -511,28 +522,29 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // a placement address (children[1]) must be a buffer-class pointer;
             // the element type must be statically sized (Phase 4: a primitive — a
             // slid's size lands with classes).
-            std::string const& elem = e.return_type;
+            std::string elem = widen::spellOrEmpty(e.return_type);
             bool is_array = e.children[0] != nullptr;
             // The `!inferred_type.empty()` guards below skip an operand whose type
             // is empty (an upstream error already reported it) — don't cascade.
             if (is_array) {
                 parse::Node& size = *e.children[0];
                 inferExpr(tree, size, "intptr", diag);
-                if (!size.inferred_type.empty()
+                if (size.inferred_type != widen::kNoType
                     && !isIntegerClass(size.inferred_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "An array size must be an integer; got '"
-                        + size.inferred_type + "'.", {}});
+                        + widen::spellOrEmpty(size.inferred_type) + "'.", {}});
                 }
             }
             if (e.children[1]) {
                 parse::Node& addr = *e.children[1];
                 inferExpr(tree, addr, "", diag);
-                if (!addr.inferred_type.empty()
+                if (addr.inferred_type != widen::kNoType
                     && !isBufferClassPtr(addr.inferred_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "A placement address must be a buffer-class pointer "
-                        "(void^, int8^, uint8^); got '" + addr.inferred_type
+                        "(void^, int8^, uint8^); got '"
+                        + widen::spellOrEmpty(addr.inferred_type)
                         + "'.", {}});
                 }
             }
@@ -540,7 +552,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Cannot allocate '" + elem + "'.", {}});
             }
-            e.inferred_type = elem + (is_array ? "[]" : "^");
+            e.inferred_type = widen::intern(elem + (is_array ? "[]" : "^"));
             return;
         }
         case parse::Kind::kCastExpr: {
@@ -551,20 +563,21 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             assert(e.children.size() == 1 && "kCastExpr needs 1 operand");
             parse::Node& operand = *e.children[0];
             inferExpr(tree, operand, "", diag);
-            std::string const& to = e.return_type;
+            std::string to = widen::spellOrEmpty(e.return_type);
             // An empty operand type means inferExpr already reported an error;
             // skip the rule check (it would cascade a second, misleading
             // diagnostic) but still stamp the target type so downstream stages
             // see a typed node — the cast's type IS the target regardless.
-            if (!operand.inferred_type.empty()) {
+            if (operand.inferred_type != widen::kNoType) {
                 std::string why;
-                if (!ptrExplicitOk(operand.inferred_type, to, why)) {
+                std::string ot = widen::spellOrEmpty(operand.inferred_type);
+                if (!ptrExplicitOk(operand.inferred_type, e.return_type, why)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
-                        "Cannot cast '" + operand.inferred_type + "' to '" + to
+                        "Cannot cast '" + ot + "' to '" + to
                         + "'; " + why + ".", {}});
                 }
             }
-            e.inferred_type = to;
+            e.inferred_type = widen::internOrNone(to);
             return;
         }
         case parse::Kind::kStringifyType: {
@@ -577,12 +590,12 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // Type-name operand: resolve stamped the underlying type on return_type
             // (`##type(Integer)` -> `int`). Emit it directly; the operand is a type,
             // not a value, so skip inferExpr.
-            if (!e.return_type.empty()) {
-                e.text = e.return_type;
-                e.return_type.clear();
+            if (e.return_type != widen::kNoType) {
+                e.text = widen::spellOrEmpty(e.return_type);
+                e.return_type = widen::kNoType;
                 e.children.clear();
                 e.kind = parse::Kind::kStringLiteral;
-                e.inferred_type = "char[]";
+                e.inferred_type = widen::intern("char[]");
                 return;
             }
             parse::Node& operand = *e.children[0];
@@ -598,7 +611,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                        == parse::EntryKind::kConst) {
                 parse::Entry const& ce = tree.entries[operand.resolved_entry_id];
                 e.text = "const "
-                    + (ce.alias_label.empty() ? ce.slids_type : ce.alias_label);
+                    + (ce.alias_label.empty() ? widen::spellOrEmpty(ce.slids_type) : ce.alias_label);
             } else if (!operand.alias_label.empty()) {
                 e.text = operand.alias_label;
             } else if (isLiteralKind(operand.kind)) {
@@ -606,13 +619,13 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 // (int/uint/float), consistent with const-capture and the
                 // no-width preference — a value of a DECLARED width keeps its
                 // width name (the else below). char has no width-name to fold.
-                e.text = preferredSpelling(operand.inferred_type);
+                e.text = preferredSpelling(widen::spellOrEmpty(operand.inferred_type));
             } else {
-                e.text = operand.inferred_type;
+                e.text = widen::spellOrEmpty(operand.inferred_type);
             }
             e.children.clear();
             e.kind = parse::Kind::kStringLiteral;
-            e.inferred_type = "char[]";
+            e.inferred_type = widen::intern("char[]");
             return;
         }
         case parse::Kind::kIdentExpr: {
@@ -627,7 +640,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // return type (widening into `context` happens at codegen, like an
             // ident read). Reject a void return used where a value is wanted.
             classifyCall(tree, e, diag);
-            if (e.return_type == "void") {
+            if (e.return_type == widen::intern("void")) {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Function '" + e.name + "' returns no value and cannot be "
                     "used as an expression.", {}});
@@ -642,18 +655,19 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // everything else are rejected until their phases wire the step.
             parse::Node& operand = *e.children[0];
             inferExpr(tree, operand, "", diag);
-            std::string const& ot = operand.inferred_type;
-            if (isReference(ot)) {
+            std::string ot = widen::spellOrEmpty(operand.inferred_type);
+            if (isReference(operand.inferred_type)) {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Arithmetic is not allowed on a reference.", {}});
-            } else if (isIteratorType(ot)) {
+            } else if (isIteratorType(operand.inferred_type)) {
                 // ok — an iterator steps by one element.
-            } else if (!ot.empty() && (!isNumericType(ot) || ot == "bool")) {
+            } else if (!ot.empty()
+                       && (!isNumericType(operand.inferred_type) || ot == "bool")) {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Operator '" + e.text + "' is not defined on type '"
                     + ot + "'.", {}});
             }
-            e.inferred_type = ot;
+            e.inferred_type = widen::internOrNone(ot);
             return;
         }
         case parse::Kind::kUnaryExpr: {
@@ -662,13 +676,13 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             std::string const& op = e.text;
             if (op == "!") {
                 inferExpr(tree, operand, "", diag);
-                if (!operand.inferred_type.empty()
+                if (operand.inferred_type != widen::kNoType
                     && !isCoercibleToBool(operand.inferred_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Operator '!' is not defined on type '"
-                        + operand.inferred_type + "'.", {}});
+                        + widen::spellOrEmpty(operand.inferred_type) + "'.", {}});
                 }
-                e.inferred_type = "bool";
+                e.inferred_type = widen::intern("bool");
             } else {  // + - ~
                 inferExpr(tree, operand, context, diag);
                 e.inferred_type = operand.inferred_type;
@@ -685,20 +699,20 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             if (op == "&&" || op == "||" || op == "^^") {
                 inferExpr(tree, lhs, "", diag);
                 inferExpr(tree, rhs, "", diag);
-                if (!lhs.inferred_type.empty()
+                if (lhs.inferred_type != widen::kNoType
                     && !isCoercibleToBool(lhs.inferred_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Operator '" + op + "' is not defined on type '"
-                        + lhs.inferred_type + "'.", {}});
+                        + widen::spellOrEmpty(lhs.inferred_type) + "'.", {}});
                 }
-                if (!rhs.inferred_type.empty()
+                if (rhs.inferred_type != widen::kNoType
                     && !isCoercibleToBool(rhs.inferred_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Operator '" + op + "' is not defined on type '"
-                        + rhs.inferred_type + "'.", {}});
+                        + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
                 }
-                e.inferred_type = "bool";
-                e.op_type = "bool";
+                e.inferred_type = widen::intern("bool");
+                e.op_type = widen::intern("bool");
                 return;
             }
 
@@ -707,17 +721,17 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 // Shift count stands alone — flexing into a float lhs would
                 // mis-type a small int literal. Codegen handles width mismatch.
                 inferExpr(tree, rhs, "", diag);
-                if (!lhs.inferred_type.empty()
+                if (lhs.inferred_type != widen::kNoType
                     && !isNumericType(lhs.inferred_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Shift left-hand side must be numeric; got '"
-                        + lhs.inferred_type + "'.", {}});
+                        + widen::spellOrEmpty(lhs.inferred_type) + "'.", {}});
                 }
-                if (!rhs.inferred_type.empty()
+                if (rhs.inferred_type != widen::kNoType
                     && !isIntegerClass(rhs.inferred_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Shift count must be integer-class; got '"
-                        + rhs.inferred_type + "'.", {}});
+                        + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
                 }
                 e.inferred_type = lhs.inferred_type;
                 e.op_type = lhs.inferred_type;
@@ -729,50 +743,47 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // then literal-flex, then commonType.
             inferExpr(tree, lhs, "", diag);
             inferExpr(tree, rhs, "", diag);
+            widen::TypeRef lref = lhs.inferred_type, rref = rhs.inferred_type;
 
             // Pointer operands (reference / iterator / nullptr): the six
             // relational ops compare them (same pointee type required; nullptr
             // exempt), and arithmetic is rejected. Handled before the numeric
             // commonType path, which has no notion of pointer types.
-            if (isPtrLikeType(lhs.inferred_type)
-                || isPtrLikeType(rhs.inferred_type)) {
+            if (isPtrLikeType(lref) || isPtrLikeType(rref)) {
                 bool is_cmp = (op == "==" || op == "!=" || op == "<"
                             || op == "<=" || op == ">" || op == ">=");
                 if (!is_cmp) {
                     // References admit no arithmetic at all.
-                    if (isReference(lhs.inferred_type)
-                        || isReference(rhs.inferred_type)) {
+                    if (isReference(lref) || isReference(rref)) {
                         diagnostic::report(diag, {e.file_id, e.tok,
                             "Arithmetic is not allowed on a reference.", {}});
                         return;
                     }
                     // Iterators step by element: `iter ± int` -> iterator;
                     // `iter - iter` (same pointee) -> intptr (element count).
-                    bool lit = isIteratorType(lhs.inferred_type);
-                    bool rit = isIteratorType(rhs.inferred_type);
+                    bool lit = isIteratorType(lref);
+                    bool rit = isIteratorType(rref);
                     if (op == "+"
-                        && ((lit && isIntegerClass(rhs.inferred_type))
-                            || (rit && isIntegerClass(lhs.inferred_type)))) {
-                        e.inferred_type = lit ? lhs.inferred_type
-                                              : rhs.inferred_type;
+                        && ((lit && isIntegerClass(rref))
+                            || (rit && isIntegerClass(lref)))) {
+                        e.inferred_type = lit ? lref : rref;
                         e.op_type = e.inferred_type;
                         return;
                     }
-                    if (op == "-" && lit && isIntegerClass(rhs.inferred_type)) {
-                        e.inferred_type = lhs.inferred_type;
-                        e.op_type = lhs.inferred_type;
+                    if (op == "-" && lit && isIntegerClass(rref)) {
+                        e.inferred_type = lref;
+                        e.op_type = lref;
                         return;
                     }
                     if (op == "-" && lit && rit) {
-                        if (pointeeType(lhs.inferred_type)
-                                != pointeeType(rhs.inferred_type)) {
+                        if (pointeeType(lref) != pointeeType(rref)) {
                             diagnostic::report(diag, {e.file_id, e.tok,
                                 "Pointer subtraction requires the same pointee "
                                 "type.", {}});
                             return;
                         }
-                        e.inferred_type = "intptr";
-                        e.op_type = lhs.inferred_type;   // element stride for codegen
+                        e.inferred_type = widen::intern("intptr");
+                        e.op_type = lref;   // element stride for codegen
                         return;
                     }
                     diagnostic::report(diag, {e.file_id, e.tok,
@@ -784,41 +795,42 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 // pairs degrade to `==` / `!=` when a reference is involved).
                 bool ordering = (op == "<" || op == "<=" || op == ">"
                               || op == ">=");
-                if (ordering && (isReference(lhs.inferred_type)
-                                 || isReference(rhs.inferred_type))) {
+                if (ordering && (isReference(lref) || isReference(rref))) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "References support only '==' and '!=' comparison.",
                         {}});
                     return;
                 }
-                bool lnull = lhs.inferred_type == "anyptr";
-                bool rnull = rhs.inferred_type == "anyptr";
-                if (!lnull && !rnull
-                    && pointeeType(lhs.inferred_type)
-                           != pointeeType(rhs.inferred_type)) {
+                widen::TypeRef anyptr = widen::intern("anyptr");
+                bool lnull = lref == anyptr;
+                bool rnull = rref == anyptr;
+                if (!lnull && !rnull && pointeeType(lref) != pointeeType(rref)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Pointer comparison requires the same pointee type.",
                         {}});
                     return;
                 }
-                e.inferred_type = "bool";
-                e.op_type = lnull ? rhs.inferred_type : lhs.inferred_type;
+                e.inferred_type = widen::intern("bool");
+                e.op_type = lnull ? rref : lref;
                 return;
             }
 
             flexBinaryOperands(lhs, rhs);
+            std::string lt = widen::spellOrEmpty(lhs.inferred_type);
+            std::string rt = widen::spellOrEmpty(rhs.inferred_type);
 
             std::string opty;
-            bool ok = widen::commonType(lhs.inferred_type, rhs.inferred_type, opty);
+            bool ok = widen::commonType(lt, rt, opty);
             if (!ok) {
                 diagnostic::report(diag, {e.file_id, e.tok,
-                    "No common type for '" + lhs.inferred_type + "' and '"
-                    + rhs.inferred_type + "'; use an explicit type conversion.",
+                    "No common type for '" + lt + "' and '"
+                    + rt + "'; use an explicit type conversion.",
                     {}});
                 return;
             }
 
-            if ((op == "&" || op == "|" || op == "^") && isFloatType(opty)) {
+            widen::TypeRef optyRef = widen::internOrNone(opty);
+            if ((op == "&" || op == "|" || op == "^") && isFloatType(optyRef)) {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Bitwise '" + op + "' not defined on floating-point type '"
                     + opty + "'.", {}});
@@ -827,8 +839,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
 
             bool is_cmp = (op == "==" || op == "!=" || op == "<"
                         || op == "<=" || op == ">"  || op == ">=");
-            e.inferred_type = is_cmp ? std::string("bool") : opty;
-            e.op_type = opty;
+            e.inferred_type = is_cmp ? widen::intern("bool") : optyRef;
+            e.op_type = optyRef;
             // A comparison yields bool (no label); an arith/bitwise result keeps
             // an alias label only when both sides agree (or a literal flexes in).
             if (!is_cmp) e.alias_label = binaryLabel(lhs, rhs);
@@ -909,10 +921,10 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
         }
         for (std::size_t i = 0; i < s.children.size(); i++) {
             if (!s.children[i]) continue;
-            std::string const& dest = (i < s.param_types.size())
-                ? s.param_types[i] : std::string();
-            inferExpr(tree, *s.children[i], dest, diag);
-            checkStrongConstAssign(dest, *s.children[i], diag);
+            widen::TypeRef destRef = (i < s.param_types.size())
+                ? s.param_types[i] : widen::kNoType;
+            inferExpr(tree, *s.children[i], widen::spellOrEmpty(destRef), diag);
+            checkStrongConstAssign(destRef, *s.children[i], diag);
         }
         return;
     }
@@ -933,8 +945,9 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
         int cost = 0;
         bool ok = true;
         for (std::size_t i = 0; i < s.children.size() && ok; i++) {
-            int c = s.children[i] ? argConvertCost(*s.children[i], e.param_types[i])
-                                  : -1;
+            int c = s.children[i]
+                ? argConvertCost(*s.children[i], widen::spellOrEmpty(e.param_types[i]))
+                : -1;
             if (c < 0) ok = false; else cost += c;
         }
         if (!ok) continue;
@@ -960,7 +973,7 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     // a strong-const literal arg obeys the typed-value widen rules into the param.
     for (std::size_t i = 0; i < s.children.size(); i++) {
         if (!s.children[i]) continue;
-        inferExpr(tree, *s.children[i], s.param_types[i], diag);
+        inferExpr(tree, *s.children[i], widen::spellOrEmpty(s.param_types[i]), diag);
         if (i < s.param_types.size())
             checkStrongConstAssign(s.param_types[i], *s.children[i], diag);
     }
@@ -1056,17 +1069,17 @@ bool rangeFirstTestFalse(parse::Node const& start, parse::Node const& end,
 // involved on either side — pure-numeric assignments keep the width-coercion
 // path. An info-adding implicit cast is rejected here; the user must write an
 // explicit `<Type^>` (which then passes this check as a same-typed rhs).
-void checkPtrAssign(std::string const& lvalue_type, parse::Node const& rhs,
+void checkPtrAssign(widen::TypeRef lvalue_type, parse::Node const& rhs,
                     diagnostic::Sink& diag) {
-    std::string const& R = rhs.inferred_type;
     // An empty type on either side rides an already-reported upstream error
     // (an unresolved name, a void value, ...) — skip silently rather than emit a
     // misleading second diagnostic. Deliberate, not a missing check.
-    if (R.empty() || lvalue_type.empty()) return;
-    if (!isPtrLikeType(lvalue_type) && !isPtrLikeType(R)) return;  // numeric path
-    if (ptrImplicitOk(R, lvalue_type)) return;
+    if (rhs.inferred_type == widen::kNoType || lvalue_type == widen::kNoType) return;
+    if (!isPtrLikeType(lvalue_type) && !isPtrLikeType(rhs.inferred_type)) return;  // numeric
+    if (ptrImplicitOk(rhs.inferred_type, lvalue_type)) return;
     diagnostic::report(diag, {rhs.file_id, rhs.tok,
-        "Cannot implicitly cast '" + R + "' to '" + lvalue_type
+        "Cannot implicitly cast '" + widen::spellOrEmpty(rhs.inferred_type)
+        + "' to '" + widen::spellOrEmpty(lvalue_type)
         + "'; an explicit cast is required.", {}});
 }
 
@@ -1079,22 +1092,24 @@ void checkPtrAssign(std::string const& lvalue_type, parse::Node const& rhs,
 // source are left to codegen's convert (so they aren't double-reported). A weak
 // literal (no strong_type) still flexes; the const-fold demotion guarantees a
 // strong literal's value always fits its strong type, so no value check is needed.
-void checkStrongConstAssign(std::string const& dest, parse::Node const& rhs,
+void checkStrongConstAssign(widen::TypeRef dest, parse::Node const& rhs,
                             diagnostic::Sink& diag) {
-    if (rhs.strong_type.empty() || !isLiteralKind(rhs.kind) || dest.empty()) return;
-    std::string const& src = rhs.strong_type;
+    if (rhs.strong_type == widen::kNoType || !isLiteralKind(rhs.kind)
+        || dest == widen::kNoType) return;
+    std::string src = widen::spellOrEmpty(rhs.strong_type);
+    std::string dest_s = widen::spellOrEmpty(dest);
     widen::TypeKind st, dt;
-    if (!widen::classify(src, st) || !widen::classify(dest, dt)) return;
+    if (!widen::classify(rhs.strong_type, st) || !widen::classify(dest, dt)) return;
     if (st.cat == dt.cat && st.bits == dt.bits) return;          // same type
     using C = widen::Category;
     auto narrow = [&] {
         diagnostic::report(diag, {rhs.file_id, rhs.tok,
-            "Cannot implicitly narrow '" + src + "' to '" + dest
+            "Cannot implicitly narrow '" + src + "' to '" + dest_s
             + "'; use an explicit type conversion.", {}});
     };
     auto convertErr = [&](char const* tail) {
         diagnostic::report(diag, {rhs.file_id, rhs.tok,
-            "Cannot implicitly convert '" + src + "' to '" + dest + "' (" + tail
+            "Cannot implicitly convert '" + src + "' to '" + dest_s + "' (" + tail
             + "); use an explicit type conversion.", {}});
     };
     if ((st.cat == C::kSignedInt   && dt.cat == C::kSignedInt)
@@ -1115,7 +1130,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
     switch (s.kind) {
         case parse::Kind::kVarDeclStmt: {
             if (!s.children.empty()) {
-                inferExpr(tree, *s.children[0], s.return_type, diag);
+                inferExpr(tree, *s.children[0], widen::spellOrEmpty(s.return_type), diag);
                 // Inferred-init: a typeless decl (empty return_type, promoted from
                 // an assign in resolve) takes the rhs type. A literal-inferred type
                 // normalizes to its preferred spelling (int32->int, ...); a typed
@@ -1124,7 +1139,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 // later reads resolve to the inferred type.
                 // Typeless CONSTS are inferred by constfold (it folds + captures
                 // and stamps slids_type with strong/weak); don't clobber that here.
-                if (s.return_type.empty() && s.resolved_entry_id >= 0
+                if (s.return_type == widen::kNoType && s.resolved_entry_id >= 0
                     && !s.is_const) {
                     parse::Node& rhs = *s.children[0];
                     // Invariant: a typeable rhs yields a non-empty inferred type.
@@ -1133,19 +1148,19 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     // before codegen — so an empty type here only ever coexists
                     // with an already-reported error (don't abort on that path).
                     assert((diagnostic::hasErrors(diag)
-                            || !rhs.inferred_type.empty())
+                            || rhs.inferred_type != widen::kNoType)
                         && "inferred-init: a typeable rhs must yield a type");
                     std::string t = isLiteralKind(rhs.kind)
-                        ? preferredSpelling(rhs.inferred_type)
-                        : rhs.inferred_type;
-                    s.return_type = t;
-                    tree.entries[s.resolved_entry_id].slids_type = t;
+                        ? preferredSpelling(widen::spellOrEmpty(rhs.inferred_type))
+                        : widen::spellOrEmpty(rhs.inferred_type);
+                    s.return_type = widen::internOrNone(t);
+                    tree.entries[s.resolved_entry_id].slids_type = widen::internOrNone(t);
                     tree.entries[s.resolved_entry_id].alias_label = rhs.alias_label;
                 }
                 // A typed pointer init obeys the implicit-cast rules (a typeless
                 // init took the rhs type above, so there is nothing to cast); a
                 // strong-const literal init obeys the typed-value widen rules.
-                if (!s.return_type.empty()) {
+                if (s.return_type != widen::kNoType) {
                     checkPtrAssign(s.return_type, *s.children[0], diag);
                     checkStrongConstAssign(s.return_type, *s.children[0], diag);
                 }
@@ -1156,8 +1171,10 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // resolve already stamped resolved_entry_id (or emitted an error
             // and we won't reach here — main short-circuits on resolve errors).
             std::string lvalue_type;
+            widen::TypeRef lref = widen::kNoType;
             if (s.resolved_entry_id >= 0) {
-                lvalue_type = parse::entryType(tree, s.resolved_entry_id);
+                lref = parse::entryType(tree, s.resolved_entry_id);
+                lvalue_type = widen::spellOrEmpty(lref);
             }
             for (auto& ch : s.children) {
                 if (ch) inferExpr(tree, *ch, lvalue_type, diag);
@@ -1165,8 +1182,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // Assigning to a pointer variable obeys the implicit-cast rules; a
             // strong-const literal rhs obeys the typed-value widen rules.
             if (!s.children.empty() && s.children[0]) {
-                checkPtrAssign(lvalue_type, *s.children[0], diag);
-                checkStrongConstAssign(lvalue_type, *s.children[0], diag);
+                checkPtrAssign(lref, *s.children[0], diag);
+                checkStrongConstAssign(lref, *s.children[0], diag);
             }
             return;
         }
@@ -1185,10 +1202,10 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (s.resolved_entry_id >= 0) {
                 s.return_type = parse::entryType(tree, s.resolved_entry_id);
             }
-            std::string const& lvalue_type = s.return_type;
+            std::string lvalue_type = widen::spellOrEmpty(s.return_type);
 
             // A reference admits no compound arithmetic/bitwise assignment.
-            if (isReference(lvalue_type)) {
+            if (isReference(s.return_type)) {
                 inferExpr(tree, rhs, "", diag);
                 diagnostic::report(diag, {s.file_id, s.tok,
                     "Arithmetic is not allowed on a reference.", {}});
@@ -1199,12 +1216,12 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // compound form of `iter ± int`). Any other compound op on a pointer
             // is rejected like the binary path. Desugar lowers this to
             // `iter = iter + n`, whose GEP + assignment already handle it.
-            if (isIteratorType(lvalue_type)) {
+            if (isIteratorType(s.return_type)) {
                 inferExpr(tree, rhs, "", diag);
                 if ((op == "+" || op == "-")
                     && isIntegerClass(rhs.inferred_type)) {
-                    s.inferred_type = lvalue_type;
-                    s.op_type = lvalue_type;
+                    s.inferred_type = s.return_type;
+                    s.op_type = s.return_type;
                     return;
                 }
                 diagnostic::report(diag, {s.file_id, s.tok,
@@ -1214,57 +1231,58 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
 
             if (op == "<<" || op == ">>") {
                 inferExpr(tree, rhs, "", diag);
-                if (!isNumericType(lvalue_type)) {
+                if (!isNumericType(s.return_type)) {
                     diagnostic::report(diag, {s.file_id, s.tok,
                         "Shift left-hand side must be numeric; got '"
                         + lvalue_type + "'.", {}});
                 }
-                if (!rhs.inferred_type.empty()
+                if (rhs.inferred_type != widen::kNoType
                     && !isIntegerClass(rhs.inferred_type)) {
                     diagnostic::report(diag, {s.file_id, s.tok,
                         "Shift count must be integer-class; got '"
-                        + rhs.inferred_type + "'.", {}});
+                        + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
                 }
-                s.inferred_type = lvalue_type;
-                s.op_type = lvalue_type;
+                s.inferred_type = s.return_type;
+                s.op_type = s.return_type;
                 return;
             }
             if (op == "&&" || op == "||" || op == "^^") {
                 inferExpr(tree, rhs, "", diag);
-                if (!isCoercibleToBool(lvalue_type)) {
+                if (!isCoercibleToBool(s.return_type)) {
                     diagnostic::report(diag, {s.file_id, s.tok,
                         "Operator '" + op + "' is not defined on type '"
                         + lvalue_type + "'.", {}});
                 }
-                if (!rhs.inferred_type.empty()
+                if (rhs.inferred_type != widen::kNoType
                     && !isCoercibleToBool(rhs.inferred_type)) {
                     diagnostic::report(diag, {s.file_id, s.tok,
                         "Operator '" + op + "' is not defined on type '"
-                        + rhs.inferred_type + "'.", {}});
+                        + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
                 }
-                s.inferred_type = "bool";
-                s.op_type = "bool";
+                s.inferred_type = widen::intern("bool");
+                s.op_type = widen::intern("bool");
                 return;
             }
             // arith / bitwise — rhs literal flexes into lvalue's type, then
             // commonType drives the op.
             inferExpr(tree, rhs, lvalue_type, diag);
             std::string opty;
-            if (!widen::commonType(lvalue_type, rhs.inferred_type, opty)) {
+            if (!widen::commonType(lvalue_type, widen::spellOrEmpty(rhs.inferred_type), opty)) {
                 diagnostic::report(diag, {s.file_id, s.tok,
                     "No common type for '" + lvalue_type + "' and '"
-                    + rhs.inferred_type
+                    + widen::spellOrEmpty(rhs.inferred_type)
                     + "'; use an explicit type conversion.", {}});
                 return;
             }
-            if ((op == "&" || op == "|" || op == "^") && isFloatType(opty)) {
+            widen::TypeRef optyRef = widen::internOrNone(opty);
+            if ((op == "&" || op == "|" || op == "^") && isFloatType(optyRef)) {
                 diagnostic::report(diag, {s.file_id, s.tok,
                     "Bitwise '" + op + "' not defined on floating-point type '"
                     + opty + "'.", {}});
                 return;
             }
-            s.inferred_type = opty;
-            s.op_type = opty;
+            s.inferred_type = optyRef;
+            s.op_type = optyRef;
             return;
         }
         case parse::Kind::kStoreStmt: {
@@ -1274,7 +1292,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             assert(s.children.size() == 2 && "kStoreStmt needs lvalue + rhs");
             parse::Node& lvalue = *s.children[0];
             inferExpr(tree, lvalue, "", diag);
-            inferExpr(tree, *s.children[1], lvalue.inferred_type, diag);
+            std::string lvt = widen::spellOrEmpty(lvalue.inferred_type);
+            inferExpr(tree, *s.children[1], lvt, diag);
             // A store into a pointer-typed slot (an element of a references array,
             // or a deref whose pointee is itself a pointer) obeys the same
             // implicit-cast rules as a plain assignment — storing an unrelated
@@ -1289,11 +1308,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // already checked it is a variable lvalue.
             parse::Node& operand = *s.children[0];
             inferExpr(tree, operand, "", diag);
-            if (!operand.inferred_type.empty()
+            if (operand.inferred_type != widen::kNoType
                 && !isPtrLikeType(operand.inferred_type)) {
                 diagnostic::report(diag, {s.file_id, s.tok,
                     "Cannot delete a non-pointer value of type '"
-                    + operand.inferred_type + "'.", {}});
+                    + widen::spellOrEmpty(operand.inferred_type) + "'.", {}});
             }
             return;
         }
@@ -1327,7 +1346,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             for (auto& ch : s.children) {
                 if (ch) {
                     inferExpr(tree, *ch, fn_return_type, diag);
-                    checkStrongConstAssign(fn_return_type, *ch, diag);
+                    checkStrongConstAssign(widen::internOrNone(fn_return_type), *ch, diag);
                 }
             }
             return;
@@ -1362,11 +1381,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             assert(s.children.size() >= 2 && "kIfStmt needs condition + then");
             parse::Node& cond = *s.children[0];
             inferExpr(tree, cond, "", diag);
-            if (!cond.inferred_type.empty()
+            if (cond.inferred_type != widen::kNoType
                 && !isCoercibleToBool(cond.inferred_type)) {
                 diagnostic::report(diag, {cond.file_id, cond.tok,
                     "An if condition must be a condition expression; type '"
-                    + cond.inferred_type + "' is not.", {}});
+                    + widen::spellOrEmpty(cond.inferred_type) + "' is not.", {}});
             }
             // Constant condition -> the opposite branch is dead: a const-true if
             // never enters the else, a const-false if never enters the then.
@@ -1389,11 +1408,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             assert(s.children.size() == 2 && "kWhileStmt needs condition + body");
             parse::Node& cond = *s.children[0];
             inferExpr(tree, cond, "", diag);
-            if (!cond.inferred_type.empty()
+            if (cond.inferred_type != widen::kNoType
                 && !isCoercibleToBool(cond.inferred_type)) {
                 diagnostic::report(diag, {cond.file_id, cond.tok,
                     "A while condition must be a condition expression; type '"
-                    + cond.inferred_type + "' is not.", {}});
+                    + widen::spellOrEmpty(cond.inferred_type) + "' is not.", {}});
             }
             // A constant-false pre-condition never runs the body. A constant-true
             // loop is NOT flagged: per 3B there is no constant-true loop special
@@ -1411,11 +1430,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             assert(s.children.size() == 2 && "kDoWhileStmt needs condition + body");
             parse::Node& cond = *s.children[0];
             inferExpr(tree, cond, "", diag);
-            if (!cond.inferred_type.empty()
+            if (cond.inferred_type != widen::kNoType
                 && !isCoercibleToBool(cond.inferred_type)) {
                 diagnostic::report(diag, {cond.file_id, cond.tok,
                     "A while condition must be a condition expression; type '"
-                    + cond.inferred_type + "' is not.", {}});
+                    + widen::spellOrEmpty(cond.inferred_type) + "' is not.", {}});
             }
             classifyStmt(tree, *s.children[1], fn_return_type, diag);
             return;
@@ -1435,15 +1454,15 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             if (s.range_dotdot_tok >= 0 && s.children.size() > 3 && s.children[3]
                 && s.children[3]->resolved_entry_id >= 0) {
-                std::string lv = parse::entryType(tree, s.children[3]->resolved_entry_id);
+                std::string lv = widen::spellOrEmpty(parse::entryType(tree, s.children[3]->resolved_entry_id));
                 for (std::size_t i = 4; i < s.children.size(); i++) {
                     if (s.children[i]
                         && s.children[i]->kind == parse::Kind::kVarDeclStmt
-                        && s.children[i]->return_type.empty()
+                        && s.children[i]->return_type == widen::kNoType
                         && s.children[i]->resolved_entry_id >= 0
                         && !lv.empty()) {
-                        s.children[i]->return_type = lv;
-                        tree.entries[s.children[i]->resolved_entry_id].slids_type = lv;
+                        s.children[i]->return_type = widen::internOrNone(lv);
+                        tree.entries[s.children[i]->resolved_entry_id].slids_type = widen::internOrNone(lv);
                     }
                 }
             }
@@ -1452,11 +1471,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             parse::Node& cond = *s.children[0];
             inferExpr(tree, cond, "", diag);
-            if (!cond.inferred_type.empty()
+            if (cond.inferred_type != widen::kNoType
                 && !isCoercibleToBool(cond.inferred_type)) {
                 diagnostic::report(diag, {cond.file_id, cond.tok,
                     "A for condition must be a condition expression; type '"
-                    + cond.inferred_type + "' is not.", {}});
+                    + widen::spellOrEmpty(cond.inferred_type) + "' is not.", {}});
             }
             classifyStmt(tree, *s.children[1], fn_return_type, diag);   // update
             classifyStmt(tree, *s.children[2], fn_return_type, diag);   // body
@@ -1485,8 +1504,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             assert(!s.children.empty() && "kSwitchStmt needs a scrutinee");
             parse::Node& scrut = *s.children[0];
             inferExpr(tree, scrut, "", diag);
-            std::string const& st = scrut.inferred_type;
-            if (!st.empty() && !isIntegerClass(st)) {
+            std::string st = widen::spellOrEmpty(scrut.inferred_type);
+            if (!st.empty() && !isIntegerClass(scrut.inferred_type)) {
                 diagnostic::report(diag, {scrut.file_id, scrut.tok,
                     "A switch value must be integer-class; got '" + st + "'.",
                     {}});
@@ -1502,7 +1521,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                         diagnostic::report(diag, {label.file_id, label.tok,
                             "A case label must be a constant.", {}});
                     } else if (label.kind == parse::Kind::kFloatLiteral
-                               || (!label.inferred_type.empty()
+                               || (label.inferred_type != widen::kNoType
                                    && !isIntegerClass(label.inferred_type))) {
                         diagnostic::report(diag, {label.file_id, label.tok,
                             "A case label must be an integer constant.", {}});
@@ -1675,23 +1694,23 @@ void classifyFunctionSignature(parse::Tree& tree, parse::Node& fn,
         parse::Node& p = *fn.params[i];
         if (p.children.empty() || !p.children[0]) continue;   // required
         parse::Node& def = *p.children[0];
-        inferExpr(tree, def, p.return_type, diag);
+        inferExpr(tree, def, widen::spellOrEmpty(p.return_type), diag);
         if (!isLiteralKind(def.kind)) {
             diagnostic::report(diag, {def.file_id, def.tok,
                 "A parameter default must be a constant expression.", {}});
             continue;
         }
-        if (p.return_type.empty()) {
-            std::string t = preferredSpelling(def.inferred_type);
-            p.return_type = t;
-            e.param_types[i] = t;
+        if (p.return_type == widen::kNoType) {
+            std::string t = preferredSpelling(widen::spellOrEmpty(def.inferred_type));
+            p.return_type = widen::internOrNone(t);
+            e.param_types[i] = widen::internOrNone(t);
             if (p.resolved_entry_id >= 0) {
-                tree.entries[p.resolved_entry_id].slids_type = t;
+                tree.entries[p.resolved_entry_id].slids_type = widen::internOrNone(t);
             }
-        } else if (!literalFitsContext(def, p.return_type)) {
+        } else if (!literalFitsContext(def, widen::spellOrEmpty(p.return_type))) {
             diagnostic::report(diag, {def.file_id, def.tok,
-                "Default value does not fit parameter type '" + p.return_type
-                    + "'.", {}});
+                "Default value does not fit parameter type '"
+                    + widen::spellOrEmpty(p.return_type) + "'.", {}});
         }
         e.param_default_text[i] = def.text;
         e.param_default_kind[i] = def.kind;
@@ -1711,13 +1730,13 @@ void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
         }
     }
     for (auto& ch : fn.children) {
-        if (ch) classifyStmt(tree, *ch, fn.return_type, diag);
+        if (ch) classifyStmt(tree, *ch, widen::spellOrEmpty(fn.return_type), diag);
     }
     // A non-void function must end with a return statement, else codegen
     // would emit an unterminated block. This is the "last statement is a
     // return" heuristic, not full reachability (see todo: revisit non-void
     // function returns). void bodies fall through to an implicit `ret void`.
-    if (fn.return_type != "void") {
+    if (fn.return_type != widen::intern("void")) {
         if (!endsInReturn(fn.children)) {
             diagnostic::report(diag, {fn.file_id, fn.name_tok,
                 "Function '" + fn.name + "' must end with a return statement.", {}});
@@ -1736,7 +1755,7 @@ void classifyNamespace(parse::Tree& tree, parse::Node& node,
             classifyNamespace(tree, *m, diag);
         } else if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
             for (auto& init : m->children) {
-                if (init) inferExpr(tree, *init, m->return_type, diag);
+                if (init) inferExpr(tree, *init, widen::spellOrEmpty(m->return_type), diag);
             }
         } else if (m->kind == parse::Kind::kFunctionDef) {
             classifyFunctionBody(tree, *m, diag);
@@ -1774,7 +1793,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         } else if (ch->kind == parse::Kind::kVarDeclStmt && ch->is_const) {
             // Type-infer top-level const init in its declared type's context.
             for (auto& init : ch->children) {
-                if (init) inferExpr(tree, *init, ch->return_type, diag);
+                if (init) inferExpr(tree, *init, widen::spellOrEmpty(ch->return_type), diag);
             }
         }
     }
