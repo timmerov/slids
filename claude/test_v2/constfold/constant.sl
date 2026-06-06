@@ -149,6 +149,13 @@ int32 main() {
     //-EXPECT-ERROR: does not fit declared type 'int8'
     //const int8 kTooBig = 200;
 
+    /* a strong const is a TYPED value at use sites: narrowing it is rejected like
+       a variable of its type (kFortyTwo is `const int`; int -> int8 narrows),
+       even though 42 fits int8. A weak const would flex. */
+    //-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
+    //int8 kNarrow = kFortyTwo;
+    //__println("kNarrow = " + kNarrow);
+
     /* compile errors — duplicate const decl in the same frame */
 
     //-EXPECT-ERROR: Duplicate declaration of 'kDupe'
@@ -316,5 +323,24 @@ int32 main() {
     __println(##type(kBoolAnd) + " kBoolAnd = " + kBoolAnd);
     __println(##type(kBoolAdd) + " kBoolAdd = " + kBoolAdd);
 
+    /* a strong const WIDENS within family like a typed value (kFortyTwo is int ->
+       int64 widens); narrowing it is rejected (see the kNarrow negative). */
+    int64 kWide = kFortyTwo;
+    __println("kWide = " + kWide);   // 42
+
     return 0;
 }
+
+/* a strong const is a typed value at the OTHER assignment sites too — narrowing
+   it is rejected at a return, a call argument, and a store (kFortyTwo is the
+   file-scope `const int`). */
+
+//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
+//int8 neg_return() { return kFortyTwo; }
+
+//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
+//int8 neg_arg_helper(int8 x) { return x; }
+//int32 neg_arg() { neg_arg_helper(kFortyTwo); return 0; }
+
+//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
+//int32 neg_store() { int8 arr[2]; arr[0] = kFortyTwo; return arr[0]; }

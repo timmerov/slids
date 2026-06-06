@@ -304,8 +304,12 @@ Phase 4 — types beyond primitives
     const that overflows its narrow type demotes to flex (e.g. `const k = int8c +
     200` -> flex int 205, was the kOver error), and `'A'+1`->strong char,
     `3u-5u`->int, `true+true`->int. Canon: constant.sl (kSS/kWP/kCh/kDemote/kSub*/
-    kBool*). NOT in this landing: strong-const WIDENING enforcement in runtime
-    contexts — now UNBLOCKED by the demotion (todo.txt).
+    kBool*). STRONG-CONST WIDENING ENFORCEMENT LANDED on top, at every assignment
+    site (var-decl-init, assign, store, return, call-arg): a strong const is a
+    typed value — narrowing / sign-change rejected (classify's checkStrongConstAssign
+    mirrors widen::convert; `const int sc; int8 a=sc;` errors), weak literals still
+    flex. NOT covered (separate, broader call — todo.txt): strong consts flexing as
+    BINARY OPERANDS (`a += sc`, `v + sc`) via flexBinaryOperands.
   * namespaces — LANDED (pulled forward from Phase 8). `Name { members }` open/
     reopen at file or function-body scope; members are consts, functions, nested
     namespaces; kNamespace entry with persistent frame identity; open-namespace-

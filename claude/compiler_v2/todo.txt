@@ -84,26 +84,25 @@ DEFERRED FEATURES (later; may not be on the plan)
     FUNCTION `##type(Fn)` (waits on function aliases), and the `#` 5-tuple
     (Phase 5, blocked on tuples + `^`).
 
-  * STRONG-CONST WIDENING ENFORCEMENT — a strong const should behave like a TYPED
-    value at use sites (widen within family, REJECT narrowing / cross-family like a
-    variable of its type), not as a flexing literal. Today `const int sc=5; int8
-    a=sc;` SILENTLY NARROWS where `int sv=5; int8 b=sv;` is correctly rejected.
-    NOT a "consume strong_type at the widen site" one-liner: a const substitutes
-    to a LITERAL, and codegen's narrowing check (widen::convert) only fires for a
-    NON-literal (variable) rhs — a literal rhs is emitted in the declared type with
-    a RANGE check (42 fits int8 -> allowed), never a narrowing check. So enforcement
-    must be a NEW classify-stage assignment-compatibility check for strong-const
-    literals at every assignment-family site (var-decl, assign, store, aug-assign,
-    call-arg, return): reject when `commonType(strong_type, lvalue) != lvalue`
-    (narrowing / sign-change / cross-family). (float / cross-family ALREADY errors
-    today for both literal and var rhs; the open hole is same-family NARROWING of an
-    in-range strong const.)
-    NOW UNBLOCKED: the const+const fold rules landed (constant.sl) — a strong const
-    literal can no longer carry a value outside its own type (it DEMOTES to flex on
-    overflow). So the value-fits-strong gate that the old caveat needed is now
-    UNCONDITIONAL, and the check is the clean classify-stage addition above.
-    The type-inference half is DONE (##type of a strong const reports its declared
-    type; strong_type on nodes / const_strong_type on entries / combineStrong).
+  * STRONG-CONST WIDENING ENFORCEMENT — LANDED at every assignment site. A strong
+    const is a TYPED value (widen within family; REJECT narrowing / sign-change),
+    not a flexing literal: `const int sc=5; int8 a=sc;` errors "Cannot implicitly
+    narrow 'int' to 'int8'" like an int variable would. codegen's literal path only
+    range-checks, so the check is in CLASSIFY — checkStrongConstAssign mirrors
+    widen::convert's accept/reject + wording for the same-/cross-sign integer and
+    float cases (cross-family / bool-source left to codegen, no double-report).
+    Wired at var-decl-init, assign, store (`ref^=`/`arr[i]=`), return, and call-arg
+    (BOTH the single-candidate and overload arg loops in classifyCall). Weak
+    literals still flex. Canon: constant.sl kNarrow + neg_return/neg_arg/neg_store
+    + kWide (widen positive).
+    NOT enforced (a SEPARATE, broader matter — strong consts flexing as BINARY
+    OPERANDS, not an assignment): `flexBinaryOperands` still flexes a strong-const
+    literal into the partner's type, so `int8 a; a += sc` (sc strong int) treats sc
+    as int8 (and `int8 v; v + sc` types as int8), where the typed-value model would
+    make it int and reject the narrowing back into int8. Changing this means
+    "a strong const does not flex in a binary op" — it re-types every binary expr
+    with a strong-const operand, so it's its own design call, not an assignment-site
+    fix. Decide separately.
 
   * ALIAS FUNCTION-RENAME — `alias Fn = LongName;` (use case: importing C
     functions with ugly names).

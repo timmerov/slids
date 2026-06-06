@@ -371,6 +371,8 @@ int argConvertCost(parse::Node const& a, std::string const& param) {
 // candidate, stamp the chosen signature. Defined after inferExpr (mutually
 // recursive — it infers the argument expressions).
 void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
+void checkStrongConstAssign(std::string const& dest, parse::Node const& rhs,
+                            diagnostic::Sink& diag);
 
 void inferExpr(parse::Tree& tree, parse::Node& e,
                std::string const& context, diagnostic::Sink& diag) {
@@ -915,6 +917,7 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             std::string const& dest = (i < s.param_types.size())
                 ? s.param_types[i] : std::string();
             inferExpr(tree, *s.children[i], dest, diag);
+            checkStrongConstAssign(dest, *s.children[i], diag);
         }
         return;
     }
@@ -958,9 +961,13 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     s.param_types = tree.entries[best].param_types;
     s.captures = tree.entries[best].captures;
     fillDefaults(s, tree.entries[best]);
-    // Re-infer all args (incl. filled defaults) with the chosen param context.
+    // Re-infer all args (incl. filled defaults) with the chosen param context;
+    // a strong-const literal arg obeys the typed-value widen rules into the param.
     for (std::size_t i = 0; i < s.children.size(); i++) {
-        if (s.children[i]) inferExpr(tree, *s.children[i], s.param_types[i], diag);
+        if (!s.children[i]) continue;
+        inferExpr(tree, *s.children[i], s.param_types[i], diag);
+        if (i < s.param_types.size())
+            checkStrongConstAssign(s.param_types[i], *s.children[i], diag);
     }
 }
 
@@ -1068,6 +1075,45 @@ void checkPtrAssign(std::string const& lvalue_type, parse::Node const& rhs,
         + "'; an explicit cast is required.", {}});
 }
 
+// A strong-const LITERAL rhs is a TYPED value, not a flexing literal: assigning it
+// to `dest` must be a same-type or widen-within-family conversion, exactly as a
+// variable of the strong type would be — `const int sc=5; int8 a=sc;` narrows and
+// is rejected. codegen's literal path only RANGE-checks (so it misses the
+// narrowing); this mirrors widen::convert's accept/reject + wording for the
+// same-/cross-sign integer and float cases. CROSS-FAMILY (int<->float) and a bool
+// source are left to codegen's convert (so they aren't double-reported). A weak
+// literal (no strong_type) still flexes; the const-fold demotion guarantees a
+// strong literal's value always fits its strong type, so no value check is needed.
+void checkStrongConstAssign(std::string const& dest, parse::Node const& rhs,
+                            diagnostic::Sink& diag) {
+    if (rhs.strong_type.empty() || !isLiteralKind(rhs.kind) || dest.empty()) return;
+    std::string const& src = rhs.strong_type;
+    widen::TypeKind st, dt;
+    if (!widen::classify(src, st) || !widen::classify(dest, dt)) return;
+    if (st.cat == dt.cat && st.bits == dt.bits) return;          // same type
+    using C = widen::Category;
+    auto narrow = [&] {
+        diagnostic::report(diag, {rhs.file_id, rhs.tok,
+            "Cannot implicitly narrow '" + src + "' to '" + dest
+            + "'; use an explicit type conversion.", {}});
+    };
+    auto convertErr = [&](char const* tail) {
+        diagnostic::report(diag, {rhs.file_id, rhs.tok,
+            "Cannot implicitly convert '" + src + "' to '" + dest + "' (" + tail
+            + "); use an explicit type conversion.", {}});
+    };
+    if ((st.cat == C::kSignedInt   && dt.cat == C::kSignedInt)
+     || (st.cat == C::kUnsignedInt && dt.cat == C::kUnsignedInt)
+     || (st.cat == C::kFloat       && dt.cat == C::kFloat)) {
+        if (dt.bits <= st.bits) narrow();                        // same sign: narrowing
+    } else if (st.cat == C::kUnsignedInt && dt.cat == C::kSignedInt) {
+        if (dt.bits <= st.bits) convertErr("unsigned to same-width signed");
+    } else if (st.cat == C::kSignedInt && dt.cat == C::kUnsignedInt) {
+        convertErr("signed \xe2\x86\x92 unsigned");
+    }
+    // bool source / int<->float cross-family: left to codegen's convert.
+}
+
 void classifyStmt(parse::Tree& tree, parse::Node& s,
                   std::string const& fn_return_type,
                   diagnostic::Sink& diag) {
@@ -1102,9 +1148,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     tree.entries[s.resolved_entry_id].alias_label = rhs.alias_label;
                 }
                 // A typed pointer init obeys the implicit-cast rules (a typeless
-                // init took the rhs type above, so there is nothing to cast).
+                // init took the rhs type above, so there is nothing to cast); a
+                // strong-const literal init obeys the typed-value widen rules.
                 if (!s.return_type.empty()) {
                     checkPtrAssign(s.return_type, *s.children[0], diag);
+                    checkStrongConstAssign(s.return_type, *s.children[0], diag);
                 }
             }
             return;
@@ -1119,9 +1167,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             for (auto& ch : s.children) {
                 if (ch) inferExpr(tree, *ch, lvalue_type, diag);
             }
-            // Assigning to a pointer variable obeys the implicit-cast rules.
+            // Assigning to a pointer variable obeys the implicit-cast rules; a
+            // strong-const literal rhs obeys the typed-value widen rules.
             if (!s.children.empty() && s.children[0]) {
                 checkPtrAssign(lvalue_type, *s.children[0], diag);
+                checkStrongConstAssign(lvalue_type, *s.children[0], diag);
             }
             return;
         }
@@ -1233,8 +1283,10 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // A store into a pointer-typed slot (an element of a references array,
             // or a deref whose pointee is itself a pointer) obeys the same
             // implicit-cast rules as a plain assignment — storing an unrelated
-            // pointer here would otherwise reach codegen and emit invalid IR.
+            // pointer here would otherwise reach codegen and emit invalid IR. A
+            // strong-const literal stored here obeys the typed-value widen rules.
             checkPtrAssign(lvalue.inferred_type, *s.children[1], diag);
+            checkStrongConstAssign(lvalue.inferred_type, *s.children[1], diag);
             return;
         }
         case parse::Kind::kDeleteStmt: {
@@ -1278,7 +1330,10 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 return;
             }
             for (auto& ch : s.children) {
-                if (ch) inferExpr(tree, *ch, fn_return_type, diag);
+                if (ch) {
+                    inferExpr(tree, *ch, fn_return_type, diag);
+                    checkStrongConstAssign(fn_return_type, *ch, diag);
+                }
             }
             return;
         }

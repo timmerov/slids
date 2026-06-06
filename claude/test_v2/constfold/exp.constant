@@ -45,3 +45,4 @@ const uint kSubPos = 2
 const int kSubNeg = -2
 const bool kBoolAnd = false
 const int kBoolAdd = 2
+kWide = 42
