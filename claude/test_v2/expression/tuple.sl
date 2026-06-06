@@ -34,7 +34,7 @@ slots may be empty.
     (dir, ) = pair;
 
 tuples may be operands in math operations.
-the operation is applied slot by slot and recurses.
+the operation is applied by slot iteratively and recursively.
 the types stored at each slot must be compatible via widening rules.
 the tuples must have the same shape.
 
@@ -61,7 +61,7 @@ they're interchangeable.
 
     (expr)
 
-arrays are homogenous tuples.
+arrays are homogenous tuples that can be accessed by a runtime index.
 */
 
 /*

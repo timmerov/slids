@@ -275,6 +275,12 @@ Phase 4 — types beyond primitives
     `T^ p = new T` with a non-primitive T: `Alias^`/`ClassName^` decls don't parse
     yet [todo.txt].)
   * anonymous tuples (`(T1, T2, ...)`)
+  * move / swap on PRIMITIVES + TUPLES (`a <-- b`, `a <--> b`) — these operators
+    are NOT class-only: they apply to primitive values (mechanical value
+    transfer / exchange) and to tuples (slot-by-slot, recursive). Land the
+    primitive form (standalone, no class dependency) and the tuple form (with the
+    tuple landings) here. The OVERLOADABLE class `op<--`/`op<-->` + destructor-
+    balance is the Phase 5 piece below.
   * type aliases — LANDED (value form `alias Name = type;`, file + function
     scope, transparent; resolveTypeSpelling substitutes the chain; desugar drops
     kAliasDecl; an alias TARGET may be a pointer type `alias IntPtr = int^;`. An
@@ -355,7 +361,8 @@ Phase 5 — classes
   * class definitions (fields, ctor, dtor, methods)
   * inferred field types (`Foo(name = const_expr)`)
   * operator overloading per slid
-  * move / swap (`<--`, `<-->`)
+  * move / swap — the OVERLOADABLE class operators (`op<--`/`op<-->`) + resource
+    semantics (the primitive + tuple forms landed in Phase 4)
   * destructor balance invariant
   * for-each protocol (op[]+size OR begin/end/next)
   * stringification operators (`##name`, `##type`, `#`) — the 7 `##` macros
