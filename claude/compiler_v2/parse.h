@@ -106,6 +106,13 @@ struct Node {
     std::string name;            // function name, callee name, variable name
     std::string text;            // literal value (string / int as text / char codepoint)
     std::string return_type;     // function return type; reused for VarDecl's declared type
+    std::vector<std::unique_ptr<Node>> dim_exprs;  // kVarDeclStmt array dims that are
+                                 // const-EXPRESSIONS (not literals): one slot per
+                                 // array dim, null for a literal dim, the expr for
+                                 // a const-expr dim. The type spelling carries a
+                                 // provisional `[1]` at each; constfold folds the
+                                 // expr and bakes the real size in. Empty when the
+                                 // decl has no const-expr dim.
     std::vector<int> return_type_seg_toks;  // per-segment tokens of a qualified type
                                  // spelling in return_type (for precise carets);
                                  // empty for primitives / non-captured sites

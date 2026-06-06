@@ -929,6 +929,9 @@ std::unique_ptr<parse::Node> tryFoldSizeof(parse::Node& n, parse::Tree& tree) {
     return lit;
 }
 
+void bakeNodeDims(parse::Node& n, parse::Tree& tree, bool final,
+                  bool& changed, diagnostic::Sink& diag);
+
 // `no_substitute` (set inside a ##type operand): fold pure-literal subtrees but
 // do NOT substitute a kConst ident to its value. ##type reports the type of its
 // operand as written, so substituting a const would erase its const-qualified
@@ -963,6 +966,11 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
     for (auto& p : slot->params) {
         walk(p, tree, changed, diag, no_substitute);
     }
+    // Fold const-expression array dims (a separate vector) so they reach a
+    // literal; bakeArrayDims (after the fixpoint) splices the size into the type.
+    for (auto& d : slot->dim_exprs) {
+        walk(d, tree, changed, diag, no_substitute);
+    }
     if (slot->kind == parse::Kind::kUnaryExpr) {
         if (auto folded = tryFoldUnary(*slot, diag)) {
             slot = std::move(folded);
@@ -982,8 +990,84 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
         if (tryCaptureConst(*slot, tree, diag)) {
             changed = true;
         }
+        // Bake const-expression array dims as soon as they've folded (so the array
+        // type is correct before a later sizeof of it folds). final=false: a dim
+        // not yet folded is left for a later round.
+        bakeNodeDims(*slot, tree, /*final=*/false, changed, diag);
     }
     assignNominal(*slot);
+}
+
+// Splice a var-decl's folded const-expression dims into its type spelling (and
+// entry). dim_exprs is aligned to the spelling's dims, left to right (a null slot
+// is a literal dim, already baked). Each must have folded to a POSITIVE INTEGER
+// literal. `final` (the post-fixpoint pass): a dim that STILL isn't a literal is a
+// non-constant array size -> error. During the fold fixpoint (final=false) an
+// unfolded dim is just left for a later round — important so a dim like
+// `sizeof(int)` bakes the array BEFORE a `sizeof(thatArray)` elsewhere folds.
+void bakeNodeDims(parse::Node& n, parse::Tree& tree, bool final,
+                  bool& changed, diagnostic::Sink& diag) {
+    if (n.dim_exprs.empty()) return;
+    for (auto& d : n.dim_exprs) {
+        if (d && !isLiteral(*d)) {
+            if (!final) return;             // not folded yet — wait for a later round
+            diagnostic::report(diag, {d->file_id, d->tok,
+                "Array size must be an integer constant.", {}});
+            n.dim_exprs.clear();
+            return;
+        }
+    }
+    std::string const& t = n.return_type;
+    std::size_t base = t.find('[');
+    std::string out = (base == std::string::npos) ? t : t.substr(0, base);
+    std::size_t pos = out.size();
+    std::size_t i = 0;
+    bool failed = false;
+    while (pos < t.size() && t[pos] == '[') {
+        std::size_t rb = t.find(']', pos);
+        if (rb == std::string::npos) break;
+        std::string content = t.substr(pos + 1, rb - pos - 1);
+        if (i < n.dim_exprs.size() && n.dim_exprs[i]) {
+            parse::Node const& d = *n.dim_exprs[i];
+            bool int_lit = d.kind == parse::Kind::kIntLiteral
+                        || d.kind == parse::Kind::kUintLiteral
+                        || d.kind == parse::Kind::kCharLiteral;
+            int64_t v = 0;
+            if (!int_lit || !parseI64(d.text, v)) {
+                diagnostic::report(diag, {d.file_id, d.tok,
+                    "Array size must be an integer constant.", {}});
+                failed = true;
+            } else if (v <= 0) {
+                diagnostic::report(diag, {d.file_id, d.tok,
+                    "Array size must be a positive integer constant.", {}});
+                failed = true;
+            } else {
+                content = d.text;
+            }
+        }
+        out += "[" + content + "]";
+        pos = rb + 1;
+        i++;
+    }
+    out += t.substr(pos);   // trailing `^` / `[]` suffix, if any
+    if (!failed) {
+        // Update BOTH the node spelling and the symbol-table entry — downstream
+        // (classify bounds checks, codegen, sizeof) reads the array type from the
+        // entry's slids_type, which resolve stamped with the provisional `[1]`.
+        if (n.resolved_entry_id >= 0)
+            tree.entries[n.resolved_entry_id].slids_type = out;
+        n.return_type = std::move(out);
+        changed = true;
+    }
+    n.dim_exprs.clear();
+}
+
+// Post-fixpoint sweep: bake any remaining dims (final — an unfolded dim errors).
+void finalizeArrayDims(parse::Node& n, parse::Tree& tree, diagnostic::Sink& diag) {
+    for (auto& c : n.children) if (c) finalizeArrayDims(*c, tree, diag);
+    for (auto& p : n.params)   if (p) finalizeArrayDims(*p, tree, diag);
+    bool dummy = false;
+    bakeNodeDims(n, tree, /*final=*/true, dummy, diag);
 }
 
 }  // namespace
@@ -1005,6 +1089,11 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         // triggered by some other node folding — would re-enter and re-report
         // the same const. One round, one diagnostic.
         if (diagnostic::hasErrors(diag)) break;
+    }
+    // Bake const-expression array dims now the fold has reached its fixpoint (the
+    // dim exprs have folded as far as they will). Skip if folding already errored.
+    if (!diagnostic::hasErrors(diag)) {
+        for (auto& n : tree.nodes) finalizeArrayDims(*n, tree, diag);
     }
     // Fixpoint check: any kConst whose rhs never folded is unresolvable
     // (cyclic or refers to a non-constant). Emit ONE diagnostic at the

@@ -881,17 +881,28 @@ struct Parser {
         // Fixed-size array dimensions follow the NAME: `int arr[5]`,
         // `int grid[3][5]`. Each bracket holds a constant size; the dims append
         // to the type spelling in declaration order (e.g. "int[3][5]"). The
-        // leftmost dim is the innermost (reversed from the memory nesting).
+        // leftmost dim is the innermost (reversed from the memory nesting). A
+        // dim that is a const-EXPRESSION rather than a literal (`arr[N]`,
+        // `arr[sizeof(int)]`) parses as an expression, bakes a provisional `[1]`
+        // into the spelling, and is folded + baked for real in constfold.
+        std::vector<std::unique_ptr<parse::Node>> dim_exprs;
+        bool any_dim_expr = false;
         while (peek().kind == token::Kind::kLBracket) {
             advance();   // [
-            if (peek().kind != token::Kind::kIntLiteral) {
-                error("Array size must be an integer constant.");
-                return nullptr;
+            if (peek().kind == token::Kind::kIntLiteral) {
+                type += "[" + peek().text + "]";
+                advance();   // size
+                dim_exprs.push_back(nullptr);
+            } else {
+                auto dim = parseExpr();
+                if (!dim) return nullptr;
+                type += "[1]";              // provisional; constfold bakes the size
+                dim_exprs.push_back(std::move(dim));
+                any_dim_expr = true;
             }
-            type += "[" + peek().text + "]";
-            advance();   // size
             if (!expect(token::Kind::kRBracket, "]")) return nullptr;
         }
+        if (any_dim_expr) node->dim_exprs = std::move(dim_exprs);
         node->return_type = std::move(type);
         node->return_type_seg_toks = std::move(type_seg_toks);
         node->is_const = is_const;

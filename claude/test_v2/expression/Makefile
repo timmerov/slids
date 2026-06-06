@@ -14,6 +14,7 @@ SAMPLES = \
 	noninttype \
 	order \
 	ppid \
+	tuple \
 	vardecl
 
 .PHONY: all clean negatives positives $(SAMPLES)

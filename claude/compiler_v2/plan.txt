@@ -203,9 +203,14 @@ Phase 4 — types beyond primitives
     3 = LLVM `[5 x [3 x i32]]`, leftmost dim innermost; `arr[i]...` subscript
     [every dimension required] via one reversed-index GEP; `^arr[i]` -> iterator;
     constant-index [incl. char] bounds-checked; NO initializer lists [tuples
-    out]. Whole-array definite-assignment is a monotonic may-set [a subscript
-    write assigns the array; read-before-any-write errors]; arrays join the
-    unused-local sweep.)
+    out]. A dim may be a const EXPRESSION, not just a literal [`T a[N]`,
+    `T a[sizeof(int)]`, `T a[N+1]`]: grammar parses it as an expression + bakes a
+    provisional `[1]`; constfold folds it and bakes the real size into the type
+    spelling AND the entry [bakeNodeDims, within the fixpoint so a later
+    sizeof-of-the-array sees the real size; final pass errors a non-constant /
+    non-positive / non-integer dim]. Whole-array definite-assignment is a monotonic
+    may-set [a subscript write assigns the array; read-before-any-write errors];
+    arrays join the unused-local sweep.)
   * for-array (`for (var : arr)`)                                  LANDED
     (resolve-stage desugar to kForLongStmt, like for-enum: synth `_$idx$<tok>`
     walks 0..len-1, the loop var bound at the body top — by reference [`T^ v`],

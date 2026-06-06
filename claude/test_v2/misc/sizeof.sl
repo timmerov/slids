@@ -45,9 +45,10 @@ claude says:
   address-of, a plain ident) to a STRONG `intptr` literal — before const capture,
   so `const n = sizeof(int)` and `sizeof(a) + sizeof(b)` are compile-time
   constants. the residual operands that need type inference (a deref, an index,
-  arithmetic) lower in CLASSIFY instead (also an `intptr` literal). NOT supported:
-  sizeof in an array DIMENSION (`T arr[sizeof(int)]`) — the dim is validated
-  before constfold runs.
+  arithmetic) lower in CLASSIFY instead (also an `intptr` literal). sizeof in an
+  array DIMENSION (`T arr[sizeof(int)]`) works too: a const-expression dim parses
+  as an expression, bakes a provisional `[1]`, and constfold folds + bakes the
+  real size in (see pointer/array.sl).
 - a slid completed in another TU isn't sized until link — that path (a runtime
   `getelementptr null, 1` / `ptrtoint`) lands with classes (Phase 5/8); until then
   typeByteSize returns -1 only for a slid and classify reports an error.

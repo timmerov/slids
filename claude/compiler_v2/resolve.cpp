@@ -1563,6 +1563,12 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 resolveInlineQualifiedDecl(tree, s, diag);
                 return Completion::Normal;
             }
+            // Const-expression array dims (`arr[N]`, `arr[sizeof(int)]`): resolve
+            // each so its const refs / sizeof resolve; constfold folds + bakes the
+            // size into the type spelling (provisional `[1]` until then).
+            for (auto& d : s.dim_exprs) {
+                if (d) resolveExpr(tree, *d, diag);
+            }
             // Consts in function bodies are pre-created in the forward-decl
             // pre-pass (resolveFunctionBody). If resolved_entry_id is set,
             // entry already exists; skip creation and dup-check.

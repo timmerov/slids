@@ -40,17 +40,6 @@ DEFERRED FEATURES (later; may not be on the plan)
     canon block (lines ~21, 43-54, 77-86); land them with Phase 6 when const is
     a real qualifier. Until then those lines stay commented and untested.
 
-  * CONST-EXPRESSION ARRAY DIMENSIONS — an array dimension must be an integer
-    LITERAL in the type spelling (`T arr[4]`); a const expression there
-    (`T arr[N]`, `T arr[sizeof(int)]`) errors "Array size must be an integer
-    constant." The dim is parsed into the type spelling and validated at
-    grammar/resolve, BEFORE constfold folds consts / sizeof — so even a foldable
-    dim isn't seen as constant. Needs the dim to carry an expression that a
-    constfold pass evaluates (or the dim-constant check moved after constfold).
-    Surfaced landing sizeof (sizeof folds in constfold, too late for dims);
-    noted in test_v2/misc/sizeof.sl's claude block. Broader than sizeof — covers
-    any const-expression dimension.
-
   * FOR-TUPLE / FOR-CLASS — the remaining colon-form for shapes (FOR-ARRAY
     LANDED in Phase 4 — resolve-stage desugar to kForLongStmt). for-tuple needs
     anon-tuples (Phase 4); for-class needs classes + a for-each protocol

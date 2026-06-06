@@ -77,6 +77,23 @@ int32 main() {
     int[] it2 = ^twodim[1][3];
     __println("it2^= " + it2^);                  // 4
 
+    /* const-EXPRESSION dimensions: a const, sizeof, an arithmetic expression, and
+       a const dim in a multi-dim array. They fold in constfold and bake into the
+       array type (so sizeof of the array sees the real size). */
+    const int N = 4;
+    int ca[N];                                   // int[4]
+    ca[3] = 7;
+    __println("ca[3]= " + ca[3] + " size= " + sizeof(ca));      // 7, 16
+    int sa[sizeof(int)];                         // int[4]
+    sa[3] = 8;
+    __println("sa size= " + sizeof(sa));                        // 16
+    int ea[N + 1];                               // int[5]
+    ea[4] = 9;
+    __println("ea[4]= " + ea[4] + " size= " + sizeof(ea));      // 9, 20
+    int cg[N][3];                                // int[4][3] (3 chunks of 4)
+    cg[3][2] = 5;
+    __println("cg[3][2]= " + cg[3][2] + " size= " + sizeof(cg)); // 5, 48
+
     return 0;
 }
 
@@ -141,4 +158,31 @@ int32 main() {
 //int neg_use_before_init() {
 //    int arr[5];
 //    return arr[0];
+//}
+
+/* a non-constant array size (a runtime variable) is an error. */
+//-EXPECT-ERROR: Array size must be an integer constant.
+//int neg_dim_runtime() {
+//    int v = 5;
+//    int a[v];
+//    a[0] = 1;
+//    return a[0];
+//}
+
+/* a const-expression dimension must be positive (0 / negative rejected). */
+//-EXPECT-ERROR: Array size must be a positive integer constant.
+//int neg_dim_zero() {
+//    const int N = 0;
+//    int a[N];
+//    a[0] = 1;
+//    return a[0];
+//}
+
+/* a const-expression dimension must be an integer (a float is rejected). */
+//-EXPECT-ERROR: Array size must be an integer constant.
+//int neg_dim_float() {
+//    const float F = 2.0;
+//    int a[F];
+//    a[0] = 1;
+//    return a[0];
 //}
