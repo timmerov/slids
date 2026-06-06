@@ -30,32 +30,17 @@ bool isReferenceType(widen::TypeRef t) {
     return widen::form(t) == widen::Type::Form::kPointer;
 }
 
-// The element type after one subscript: strip the leftmost `[N]`. `int[3][5]`
-// -> `int[5]`; `int[5]` -> `int`.
-std::string arrayElementType(std::string const& t) {
-    widen::Type const& a = widen::get(widen::intern(t));
-    std::string s = widen::spell(a.elem);
-    for (std::size_t i = 1; i < a.dims.size(); i++)
-        s += "[" + std::to_string(a.dims[i]) + "]";
-    return s;
-}
-
-// The leftmost (only, for a 1-D array) dimension's size. `int[5]` -> 5.
-int arrayFirstDim(std::string const& t) {
-    return widen::get(widen::intern(t)).dims.front();
-}
-
 // Reject the declared / return / parameter type if it's not a known spelling.
 // Caret points at the construct's own tok (the type-name token's position),
 // which together with surrounding source context tells the user where the
 // unknown name appears.
-void requireKnownType(std::string const& t, int file_id, int tok,
+void requireKnownType(widen::TypeRef t, int file_id, int tok,
                       diagnostic::Sink& diag) {
     // `void` has no stride: it may only be a reference (`void^`), never an
     // iterator (`void[]`) or array (`void[N]`) — i.e. an iterator/array wrapping
-    // a void element directly.
+    // a void element directly. strip() sees through an alias to the same end.
     {
-        widen::Type const& ty = widen::get(widen::intern(t));
+        widen::Type const& ty = widen::get(widen::strip(t));
         bool void_iter = ty.form == widen::Type::Form::kIterator
                       && widen::form(ty.pointee) == widen::Type::Form::kVoid;
         bool void_arr  = ty.form == widen::Type::Form::kArray
@@ -69,7 +54,7 @@ void requireKnownType(std::string const& t, int file_id, int tok,
     }
     if (widen::isKnownType(t)) return;
     diagnostic::report(diag, {file_id, tok,
-        "Unknown type '" + t + "'.", {}});
+        "Unknown type '" + widen::spell(t) + "'.", {}});
 }
 
 // Resolve a namespace-qualified type spelling (`Space:Dir`) to its underlying.
@@ -161,19 +146,92 @@ std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
     return resolved + suffix;
 }
 
-// Rewrite a declared type spelling in place to its underlying type, then
-// require the result to be a known type. A cycle has already been reported, so
-// skip the redundant "Unknown type" that the broken chain would otherwise emit.
+// Structurally resolve a DECLARED type: walk the handle, and for each named leaf
+// (kSlid) that is an alias / enum-facet / qualified type, replace it with a
+// transparent kAlias(name, resolved-underlying) — preserving the as-written name
+// for ##type while seeing through to the underlying everywhere else. Wrappers
+// (pointer/iterator/array/tuple) are rebuilt around resolved children via the
+// structural constructors, so an alias leaf survives inside a composite (the
+// spelling path can't do this). Child handles are copied BEFORE recursing (a
+// recursive intern may realloc the arena).
+widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
+                              std::set<std::string>& visiting, bool& reported,
+                              int file_id, int tok, diagnostic::Sink& diag,
+                              std::vector<int> const* seg_toks = nullptr) {
+    using F = widen::Type::Form;
+    switch (widen::get(t).form) {
+        case F::kPointer: {
+            widen::TypeRef p = widen::get(t).pointee;
+            return widen::internPointer(
+                resolveTypeRef(tree, p, visiting, reported, file_id, tok, diag));
+        }
+        case F::kIterator: {
+            widen::TypeRef p = widen::get(t).pointee;
+            return widen::internIterator(
+                resolveTypeRef(tree, p, visiting, reported, file_id, tok, diag));
+        }
+        case F::kArray: {
+            widen::TypeRef e = widen::get(t).elem;
+            std::vector<int> dims = widen::get(t).dims;
+            return widen::internArray(
+                resolveTypeRef(tree, e, visiting, reported, file_id, tok, diag), dims);
+        }
+        case F::kTuple: {
+            std::vector<widen::TypeRef> slots = widen::get(t).slots;
+            for (auto& s : slots)
+                s = resolveTypeRef(tree, s, visiting, reported, file_id, tok, diag);
+            return widen::internTuple(slots);
+        }
+        case F::kSlid: {
+            std::string name = widen::get(t).name;
+            if (name.find(':') != std::string::npos) {   // qualified (Space:Dir)
+                std::string under = resolveQualifiedType(
+                    tree, name, file_id, tok, reported, diag, seg_toks);
+                if (under.empty()) return t;   // error already reported
+                widen::TypeRef u = resolveTypeRef(
+                    tree, widen::intern(under), visiting, reported, file_id, tok, diag);
+                return widen::internAlias(name, u);
+            }
+            int id = parse::findInLiveScopes(tree, name);
+            bool is_alias = id >= 0 && tree.entries[id].kind == parse::EntryKind::kAlias;
+            bool is_enum  = id >= 0
+                && tree.entries[id].kind == parse::EntryKind::kNamespace
+                && tree.entries[id].slids_type != widen::kNoType;
+            if (!is_alias && !is_enum) return t;   // unknown name / real slid — leave
+            if (visiting.count(name)) {
+                reported = true;
+                diagnostic::report(diag, {file_id, tok,
+                    "Type alias '" + name + "' is part of a cycle.", {}});
+                return t;
+            }
+            visiting.insert(name);
+            widen::TypeRef target = tree.entries[id].slids_type;
+            widen::TypeRef u =
+                resolveTypeRef(tree, target, visiting, reported, file_id, tok, diag);
+            visiting.erase(name);
+            return widen::internAlias(name, u);
+        }
+        case F::kPrimitive:
+        case F::kVoid:
+        case F::kAnyptr:
+        case F::kAlias:
+        case F::kNone:
+            return t;   // already resolved / nothing to resolve
+    }
+    return t;
+}
+
+// Resolve a declared type IN PLACE to its structured form (alias leaves become
+// transparent kAlias), then require the result to be a known type. A cycle was
+// already reported, so skip the redundant "Unknown type" the broken chain emits.
 void resolveDeclType(parse::Tree& tree, widen::TypeRef& type_ref,
                      int file_id, int tok, diagnostic::Sink& diag,
                      std::vector<int> const* seg_toks = nullptr) {
     std::set<std::string> visiting;
     bool reported = false;
-    std::string spelling = widen::spellOrEmpty(type_ref);
-    spelling = resolveTypeSpelling(tree, spelling, visiting, reported,
-                                   file_id, tok, diag, seg_toks);
-    if (!reported) requireKnownType(spelling, file_id, tok, diag);
-    type_ref = widen::internOrNone(spelling);
+    type_ref = resolveTypeRef(tree, type_ref, visiting, reported,
+                              file_id, tok, diag, seg_toks);
+    if (!reported) requireKnownType(type_ref, file_id, tok, diag);
 }
 
 // Register `alias Name = Type;` as a kAlias entry in the current frame.
@@ -1350,10 +1408,17 @@ Completion rewriteForArray(parse::Tree& tree, parse::Node& s, int arr_id,
                            diagnostic::Sink& diag) {
     parse::Node& arr_ref = *s.children[1];
     parse::Node& var_decl = *s.children[0];
-    std::string arr_type = widen::spellOrEmpty(tree.entries[arr_id].slids_type);
-    std::string elem = arrayElementType(arr_type);
+    // Element type + length come off the array handle STRUCTURALLY (one subscript
+    // strips the first dim). strip() sees through an alias-typed array.
+    widen::TypeRef arrS = widen::strip(tree.entries[arr_id].slids_type);
+    widen::TypeRef aelem = widen::get(arrS).elem;
+    std::vector<int> adims = widen::get(arrS).dims;
+    widen::TypeRef elemRef = (adims.size() <= 1)
+        ? aelem
+        : widen::internArray(aelem, std::vector<int>(adims.begin() + 1, adims.end()));
+    std::string elem = widen::spell(elemRef);   // for diagnostics
     int afile = arr_ref.file_id, atok = arr_ref.tok;
-    if (isArrayType(widen::intern(elem))) {
+    if (widen::form(widen::strip(elemRef)) == widen::Type::Form::kArray) {
         diagnostic::report(diag, {afile, atok,
             "A for-loop over an array requires a one-dimensional array.",
             {{tree.entries[arr_id].file_id, tree.entries[arr_id].tok,
@@ -1363,17 +1428,23 @@ Completion rewriteForArray(parse::Tree& tree, parse::Node& s, int arr_id,
     std::string vtype = widen::spellOrEmpty(var_decl.return_type);
     std::string vname = var_decl.name;
     int vfile = var_decl.file_id, vtok = var_decl.name_tok;
-    bool by_ref = isReferenceType(var_decl.return_type);
-    if (by_ref) {
-        // Compare the loop var's pointee to the (already-resolved) element type
-        // with the var type's aliases resolved — so an `Int^` (alias Int = int)
-        // ref over an `int[]` matches. The original `vtype` rides on for the
-        // diagnostic and the binding decl (preserving its alias label for ##type).
+    // The loop var's declared type hasn't been through resolveDeclType yet (its
+    // leaf is still the raw kSlid name) — resolve it now so an alias matches the
+    // (already-resolved) array element, and so the binding decl carries the kAlias.
+    if (var_decl.return_type != widen::kNoType) {
         std::set<std::string> visiting;
         bool reported = false;
-        std::string resolved = resolveTypeSpelling(tree, vtype, visiting, reported,
-                                                   vfile, vtok, diag);
-        if (widen::spell(widen::get(widen::intern(resolved)).pointee) != elem) {
+        var_decl.return_type = resolveTypeRef(tree, var_decl.return_type, visiting,
+                                              reported, vfile, vtok, diag);
+    }
+    bool by_ref = isReferenceType(var_decl.return_type);
+    if (by_ref) {
+        // A by-ref loop var `T^` must reference the element type. Compare the
+        // pointee to the element by their stripped underlyings (so `Integer^`
+        // over an `Integer[]` / `int[]` matches); the as-written types ride on
+        // for the diagnostic and the binding decl (keeping the alias label).
+        widen::TypeRef pointeeRef = widen::get(widen::strip(var_decl.return_type)).pointee;
+        if (widen::strip(pointeeRef) != widen::strip(elemRef)) {
             diagnostic::report(diag, {vfile, vtok,
                 "Loop variable type '" + vtype
                     + "' does not match the array element type '" + elem + "'.",
@@ -1381,7 +1452,7 @@ Completion rewriteForArray(parse::Tree& tree, parse::Node& s, int arr_id,
             return Completion::Normal;
         }
     }
-    int size = arrayFirstDim(arr_type);
+    int size = adims.empty() ? 0 : adims.front();
     std::string idxName = "_$idx$" + std::to_string(atok);
 
     auto ident = [&](std::string const& nm, int tok) {

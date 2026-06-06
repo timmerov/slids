@@ -38,6 +38,7 @@ bool classify(std::string const& t, TypeKind& out) {
 // Type — no re-lex. Non-primitive forms are not numeric.
 bool classify(TypeRef ref, TypeKind& out) {
     Type const& t = get(ref);
+    if (t.form == Type::Form::kAlias) return classify(t.underlying, out);  // see through
     if (t.form != Type::Form::kPrimitive) return false;
     out = {t.cat, t.bits};
     return true;
@@ -166,6 +167,63 @@ std::string newWidenTmp() {
     return std::string("%wid_") + std::to_string(nextTmpId());
 }
 
+// Loud-fit cores — dest already classified to `tk`; `dest_s` is the spelling for
+// messages. Shared by the std::string and TypeRef check overloads (which differ
+// only in how they classify the dest — a TypeRef classify sees through kAlias).
+bool checkIntFitsCore(std::string const& literal_text, TypeKind tk,
+                      std::string const& dest_s, int file_id, int tok,
+                      diagnostic::Sink& diag) {
+    bool negative = false;
+    uint64_t mag = 0;
+    if (!parseSignedDigits(literal_text, negative, mag)) {
+        reportIntFit(diag, literal_text, dest_s, file_id, tok);
+        return false;
+    }
+    if (tk.cat == Category::kFloat) {
+        diagnostic::report(diag, {file_id, tok,
+            "Cannot implicitly convert 'int' to '" + dest_s
+            + "'; use an explicit type conversion.", {}});
+        return false;
+    }
+    if (tk.cat == Category::kBool) {
+        if (!negative && (mag == 0 || mag == 1)) return true;
+        reportIntFit(diag, literal_text, dest_s, file_id, tok);
+        return false;
+    }
+    if (tk.cat == Category::kSignedInt && !intFitsSigned(mag, negative, tk.bits)) {
+        reportIntFit(diag, literal_text, dest_s, file_id, tok);
+        return false;
+    }
+    if (tk.cat == Category::kUnsignedInt && !intFitsUnsigned(mag, negative, tk.bits)) {
+        reportIntFit(diag, literal_text, dest_s, file_id, tok);
+        return false;
+    }
+    return true;
+}
+
+bool checkFloatFitsCore(std::string const& literal_text, TypeKind tk,
+                        std::string const& dest_s, int file_id, int tok,
+                        diagnostic::Sink& diag) {
+    errno = 0;
+    double v = std::strtod(literal_text.c_str(), nullptr);
+    if (errno == ERANGE) {
+        reportFloatFit(diag, literal_text, dest_s, file_id, tok);
+        return false;
+    }
+    if (tk.cat == Category::kFloat) {
+        double m = (tk.bits == 32) ? (double)FLT_MAX : DBL_MAX;
+        if (v > m || v < -m) {
+            reportFloatFit(diag, literal_text, dest_s, file_id, tok);
+            return false;
+        }
+        return true;
+    }
+    diagnostic::report(diag, {file_id, tok,
+        "Cannot implicitly convert 'float' to '" + dest_s
+        + "'; use an explicit type conversion.", {}});
+    return false;
+}
+
 }  // namespace
 
 bool checkIntLiteralFits(std::string const& literal_text,
@@ -178,38 +236,7 @@ bool checkIntLiteralFits(std::string const& literal_text,
         reportIntFit(diag, literal_text, dest_type, file_id, tok);
         return false;
     }
-    bool negative = false;
-    uint64_t mag = 0;
-    if (!parseSignedDigits(literal_text, negative, mag)) {
-        reportIntFit(diag, literal_text, dest_type, file_id, tok);
-        return false;
-    }
-    if (tk.cat == Category::kFloat) {
-        diagnostic::report(diag, {file_id, tok,
-            "Cannot implicitly convert 'int' to '" + dest_type
-            + "'; use an explicit type conversion.", {}});
-        return false;
-    }
-    if (tk.cat == Category::kBool) {
-        if (!negative && (mag == 0 || mag == 1)) return true;
-        reportIntFit(diag, literal_text, dest_type, file_id, tok);
-        return false;
-    }
-    if (tk.cat == Category::kSignedInt) {
-        if (!intFitsSigned(mag, negative, tk.bits)) {
-            reportIntFit(diag, literal_text, dest_type, file_id, tok);
-            return false;
-        }
-        return true;
-    }
-    if (tk.cat == Category::kUnsignedInt) {
-        if (!intFitsUnsigned(mag, negative, tk.bits)) {
-            reportIntFit(diag, literal_text, dest_type, file_id, tok);
-            return false;
-        }
-        return true;
-    }
-    return true;
+    return checkIntFitsCore(literal_text, tk, dest_type, file_id, tok, diag);
 }
 
 bool checkFloatLiteralFits(std::string const& literal_text,
@@ -222,25 +249,7 @@ bool checkFloatLiteralFits(std::string const& literal_text,
         reportFloatFit(diag, literal_text, dest_type, file_id, tok);
         return false;
     }
-    errno = 0;
-    double v = std::strtod(literal_text.c_str(), nullptr);
-    if (errno == ERANGE) {
-        reportFloatFit(diag, literal_text, dest_type, file_id, tok);
-        return false;
-    }
-    if (tk.cat == Category::kFloat) {
-        double m = (tk.bits == 32) ? (double)FLT_MAX : DBL_MAX;
-        if (v > m || v < -m) {
-            reportFloatFit(diag, literal_text, dest_type, file_id, tok);
-            return false;
-        }
-        return true;
-    }
-    // float → int-class (bool / signed / unsigned): cross-family, no silent mix.
-    diagnostic::report(diag, {file_id, tok,
-        "Cannot implicitly convert 'float' to '" + dest_type
-        + "'; use an explicit type conversion.", {}});
-    return false;
+    return checkFloatFitsCore(literal_text, tk, dest_type, file_id, tok, diag);
 }
 
 // Silent variant — returns false on any parse failure / overflow / disallowed
@@ -248,26 +257,21 @@ bool checkFloatLiteralFits(std::string const& literal_text,
 // (typically the loud variant checkIntLiteralFits does, while literal-flex
 // callers in classify/constfold treat false as "doesn't fit; fall back to
 // defaultLiteralType / partner type"). user notified, accepts state.
-bool intLiteralFits(std::string const& literal_text, std::string const& dest_type) {
-    if (dest_type.empty()) return true;
-    TypeKind tk;
-    if (!classify(dest_type, tk)) return false;
+// Kind-based cores — shared by the std::string and TypeRef overloads, which
+// differ only in how they classify the destination (a TypeRef classify sees
+// through a future kAlias to its underlying for free).
+static bool intLiteralFitsKind(std::string const& literal_text, TypeKind tk) {
     bool negative = false;
     uint64_t mag = 0;
     if (!parseSignedDigits(literal_text, negative, mag)) return false;
     if (tk.cat == Category::kFloat) return false;  // no silent int → float
-    if (tk.cat == Category::kBool) {
-        return !negative && (mag == 0 || mag == 1);
-    }
+    if (tk.cat == Category::kBool) return !negative && (mag == 0 || mag == 1);
     if (tk.cat == Category::kSignedInt) return intFitsSigned(mag, negative, tk.bits);
     if (tk.cat == Category::kUnsignedInt) return intFitsUnsigned(mag, negative, tk.bits);
     return false;
 }
 
-bool floatLiteralFits(std::string const& literal_text, std::string const& dest_type) {
-    if (dest_type.empty()) return true;
-    TypeKind tk;
-    if (!classify(dest_type, tk)) return false;
+static bool floatLiteralFitsKind(std::string const& literal_text, TypeKind tk) {
     errno = 0;
     double v = std::strtod(literal_text.c_str(), nullptr);
     if (errno == ERANGE) return false;
@@ -275,8 +279,35 @@ bool floatLiteralFits(std::string const& literal_text, std::string const& dest_t
         double m = (tk.bits == 32) ? (double)FLT_MAX : DBL_MAX;
         return v <= m && v >= -m;
     }
-    // no silent float → int-class
-    return false;
+    return false;   // no silent float → int-class
+}
+
+bool intLiteralFits(std::string const& literal_text, std::string const& dest_type) {
+    if (dest_type.empty()) return true;
+    TypeKind tk;
+    if (!classify(dest_type, tk)) return false;
+    return intLiteralFitsKind(literal_text, tk);
+}
+
+bool floatLiteralFits(std::string const& literal_text, std::string const& dest_type) {
+    if (dest_type.empty()) return true;
+    TypeKind tk;
+    if (!classify(dest_type, tk)) return false;
+    return floatLiteralFitsKind(literal_text, tk);
+}
+
+bool intLiteralFits(std::string const& literal_text, TypeRef dest) {
+    if (dest == kNoType) return true;
+    TypeKind tk;
+    if (!classify(dest, tk)) return false;
+    return intLiteralFitsKind(literal_text, tk);
+}
+
+bool floatLiteralFits(std::string const& literal_text, TypeRef dest) {
+    if (dest == kNoType) return true;
+    TypeKind tk;
+    if (!classify(dest, tk)) return false;
+    return floatLiteralFitsKind(literal_text, tk);
 }
 
 std::string convert(std::string const& src_val,
@@ -409,14 +440,26 @@ std::string convert(std::string const& src_val,
 
 bool checkIntLiteralFits(std::string const& literal_text, TypeRef dest,
                          int file_id, int tok, diagnostic::Sink& diag) {
-    return checkIntLiteralFits(literal_text, dest == kNoType ? std::string() : spell(dest),
-                               file_id, tok, diag);
+    if (dest == kNoType) return true;
+    TypeKind tk;
+    std::string dest_s = spell(dest);
+    if (!classify(dest, tk)) {            // classify(TypeRef) sees through kAlias
+        reportIntFit(diag, literal_text, dest_s, file_id, tok);
+        return false;
+    }
+    return checkIntFitsCore(literal_text, tk, dest_s, file_id, tok, diag);
 }
 
 bool checkFloatLiteralFits(std::string const& literal_text, TypeRef dest,
                            int file_id, int tok, diagnostic::Sink& diag) {
-    return checkFloatLiteralFits(literal_text, dest == kNoType ? std::string() : spell(dest),
-                                 file_id, tok, diag);
+    if (dest == kNoType) return true;
+    TypeKind tk;
+    std::string dest_s = spell(dest);
+    if (!classify(dest, tk)) {
+        reportFloatFit(diag, literal_text, dest_s, file_id, tok);
+        return false;
+    }
+    return checkFloatFitsCore(literal_text, tk, dest_s, file_id, tok, diag);
 }
 
 std::string convert(std::string const& src_val,
@@ -424,8 +467,11 @@ std::string convert(std::string const& src_val,
                     int file_id, int tok,
                     std::ostream& out,
                     diagnostic::Sink& diag) {
-    std::string s = (src == kNoType) ? std::string() : spell(src);
-    std::string d = (dest == kNoType) ? std::string() : spell(dest);
+    // Strip aliases to the underlying so the string convert's classify works (an
+    // alias widening must still emit its sext/zext/fpext). The string convert is
+    // codegen-only — classify already validated, so message-spelling is moot here.
+    std::string s = (src == kNoType) ? std::string() : spell(strip(src));
+    std::string d = (dest == kNoType) ? std::string() : spell(strip(dest));
     return convert(src_val, s, d, file_id, tok, out, diag);
 }
 
@@ -484,7 +530,11 @@ bool isKnownType(TypeRef ref) {
         case Type::Form::kPointer:   return isKnownType(t.pointee);
         case Type::Form::kIterator:  return isKnownType(t.pointee);
         case Type::Form::kArray:     return isKnownType(t.elem);
-        case Type::Form::kTuple:     return false;   // until tuples land
+        case Type::Form::kAlias:     return isKnownType(t.underlying);  // see through
+        case Type::Form::kTuple: {
+            for (TypeRef slot : t.slots) if (!isKnownType(slot)) return false;
+            return true;
+        }
         case Type::Form::kNone:      return false;   // no type
     }
     return false;
@@ -514,6 +564,8 @@ long long typeByteSize(TypeRef ref) {
             for (int d : t.dims) total *= d;
             return total;
         }
+        case Type::Form::kAlias:
+            return typeByteSize(t.underlying);   // see through
         case Type::Form::kVoid:
         case Type::Form::kSlid:
         case Type::Form::kTuple:
@@ -537,12 +589,55 @@ namespace {
 
 struct Arena {
     std::vector<Type> types;
-    std::unordered_map<std::string, TypeRef> by_spelling;
+    std::unordered_map<std::string, TypeRef> by_struct;     // STRUCTURAL dedup (primary)
+    std::unordered_map<std::string, TypeRef> by_spelling;   // intern(spelling) parse memo
 };
 
 Arena& arena() {
     static Arena a;
     return a;
+}
+
+// A type's STRUCTURAL identity — form + child handles (which are themselves
+// canonical). This is the primary dedup key: it distinguishes a kAlias-leaf
+// composite from a kSlid-leaf one (same spelling, different structure), which a
+// spelling key cannot. Child refs are already interned, so equal structure ->
+// equal key -> one handle.
+std::string structKey(Type const& t) {
+    using F = Type::Form;
+    switch (t.form) {
+        case F::kNone:      return "N";
+        case F::kVoid:      return "V";
+        case F::kAnyptr:    return "A";
+        case F::kPrimitive: return "P" + t.name;
+        case F::kSlid:      return "S" + t.name;
+        case F::kAlias:     return "L" + t.name + "=" + std::to_string(t.underlying);
+        case F::kPointer:   return "p" + std::to_string(t.pointee);
+        case F::kIterator:  return "i" + std::to_string(t.pointee);
+        case F::kArray: {
+            std::string k = "a" + std::to_string(t.elem);
+            for (int d : t.dims) k += "," + std::to_string(d);
+            return k;
+        }
+        case F::kTuple: {
+            std::string k = "t";
+            for (TypeRef s : t.slots) k += std::to_string(s) + ",";
+            return k;
+        }
+    }
+    return "";
+}
+
+// Intern a fully-built Type by its structure. The one mint point for the arena.
+TypeRef internStruct(Type&& t) {
+    Arena& a = arena();
+    std::string key = structKey(t);
+    auto it = a.by_struct.find(key);
+    if (it != a.by_struct.end()) return it->second;
+    TypeRef ref = static_cast<TypeRef>(a.types.size());
+    a.types.push_back(std::move(t));
+    a.by_struct.emplace(key, ref);
+    return ref;
 }
 
 // If `s` ends with one or more contiguous `[digits]` groups, set `base` to the
@@ -567,6 +662,28 @@ bool splitArraySuffix(std::string const& s, std::string& base, std::vector<int>&
     return true;
 }
 
+// Split the interior of a tuple spelling on top-level (paren-depth-0) commas,
+// interning each slot. spell() emits ", " between slots, so a leading space is
+// trimmed. Nested tuples raise the depth so their inner commas don't split.
+std::vector<TypeRef> internTupleSlots(std::string const& inner) {
+    std::vector<TypeRef> slots;
+    if (inner.empty()) return slots;
+    auto push = [&](std::size_t b, std::size_t e) {
+        while (b < e && inner[b] == ' ') b++;
+        slots.push_back(intern(inner.substr(b, e - b)));
+    };
+    int depth = 0;
+    std::size_t start = 0;
+    for (std::size_t i = 0; i < inner.size(); i++) {
+        char c = inner[i];
+        if (c == '(') depth++;
+        else if (c == ')') depth--;
+        else if (c == ',' && depth == 0) { push(start, i); start = i + 1; }
+    }
+    push(start, inner.size());
+    return slots;
+}
+
 }  // namespace
 
 TypeRef intern(std::string const& s) {
@@ -576,6 +693,8 @@ TypeRef intern(std::string const& s) {
 
     // Decompose from the RIGHT (the outermost / last-applied suffix), mirroring
     // isKnownType's strip order: iterator `[]`, reference `^`, array `[N]...`.
+    // Children intern (and structurally dedup) recursively; the built Type is then
+    // structurally interned, so intern("<x>^") and internPointer(x) share a handle.
     Type t;
     std::string array_base;
     std::vector<int> array_dims;
@@ -589,6 +708,14 @@ TypeRef intern(std::string const& s) {
         t.form = Type::Form::kArray;
         t.elem = intern(array_base);
         t.dims = std::move(array_dims);
+    } else if (s.size() >= 2 && s.front() == '(' && s.back() == ')') {
+        std::vector<TypeRef> slots = internTupleSlots(s.substr(1, s.size() - 2));
+        if (slots.size() == 1) {                   // size-1 tuple == scalar
+            a.by_spelling.emplace(s, slots[0]);
+            return slots[0];
+        }
+        t.form = Type::Form::kTuple;
+        t.slots = std::move(slots);
     } else if (s == "void") {
         t.form = Type::Form::kVoid;
     } else if (s == "anyptr") {
@@ -606,9 +733,69 @@ TypeRef intern(std::string const& s) {
         }
     }
 
-    TypeRef ref = static_cast<TypeRef>(a.types.size());
-    a.types.push_back(std::move(t));
+    TypeRef ref = internStruct(std::move(t));
     a.by_spelling.emplace(s, ref);
+    return ref;
+}
+
+TypeRef internPointer(TypeRef pointee) {
+    Type t;
+    t.form = Type::Form::kPointer;
+    t.pointee = pointee;
+    return internStruct(std::move(t));
+}
+
+TypeRef internIterator(TypeRef pointee) {
+    Type t;
+    t.form = Type::Form::kIterator;
+    t.pointee = pointee;
+    return internStruct(std::move(t));
+}
+
+TypeRef internArray(TypeRef elem, std::vector<int> const& dims) {
+    Type t;
+    t.form = Type::Form::kArray;
+    t.elem = elem;
+    t.dims = dims;
+    return internStruct(std::move(t));
+}
+
+TypeRef internAlias(std::string const& name, TypeRef underlying) {
+    Type t;
+    t.form = Type::Form::kAlias;
+    t.name = name;
+    t.underlying = underlying;
+    return internStruct(std::move(t));
+}
+
+TypeRef strip(TypeRef ref) {
+    while (get(ref).form == Type::Form::kAlias) ref = get(ref).underlying;
+    return ref;
+}
+
+TypeRef deepStrip(TypeRef ref) {
+    Type const& t = get(ref);
+    switch (t.form) {
+        case Type::Form::kAlias:    return deepStrip(t.underlying);
+        case Type::Form::kPointer:  { TypeRef p = t.pointee; return internPointer(deepStrip(p)); }
+        case Type::Form::kIterator: { TypeRef p = t.pointee; return internIterator(deepStrip(p)); }
+        case Type::Form::kArray: {
+            TypeRef e = t.elem;
+            std::vector<int> d = t.dims;
+            return internArray(deepStrip(e), d);
+        }
+        case Type::Form::kTuple: {
+            std::vector<TypeRef> s = t.slots;
+            for (TypeRef& x : s) x = deepStrip(x);
+            return internTuple(s);
+        }
+        case Type::Form::kPrimitive:
+        case Type::Form::kVoid:
+        case Type::Form::kAnyptr:
+        case Type::Form::kSlid:
+        case Type::Form::kNone:
+            return ref;
+    }
     return ref;
 }
 
@@ -616,6 +803,7 @@ std::string spell(TypeRef ref) {
     Type const& t = get(ref);
     switch (t.form) {
         case Type::Form::kNone:      return "";   // no type (kNoType) -> empty
+        case Type::Form::kAlias:     return t.name;   // spells as the alias name
         case Type::Form::kPrimitive: return t.name;
         case Type::Form::kVoid:      return "void";
         case Type::Form::kAnyptr:    return "anyptr";
@@ -656,6 +844,17 @@ TypeRef internOrNone(std::string const& s) {
     return s.empty() ? kNoType : intern(s);
 }
 
+// Construct (and intern) a tuple type from its slot handles. Builds the
+// canonical spelling and routes through intern() so it dedups with a parsed
+// `(...)`; a 1-slot tuple collapses to that slot (size-1 tuple == scalar).
+TypeRef internTuple(std::vector<TypeRef> const& slots) {
+    if (slots.size() == 1) return slots[0];   // size-1 tuple == scalar
+    Type t;
+    t.form = Type::Form::kTuple;
+    t.slots = slots;
+    return internStruct(std::move(t));
+}
+
 std::string spellOrEmpty(TypeRef ref) {
     return ref == kNoType ? std::string() : spell(ref);
 }
@@ -670,6 +869,8 @@ bool typeSelfTest(std::ostream& out) {
         "int^", "int[]", "int[3]", "int[3][5]", "int^[3]", "int[3]^",
         "float64[]^", "char[]", "char[]^",
         "Point", "Point^", "Point[4]", "Point[2][3]^",
+        "(int, bool)", "((int, int), bool)", "(int, bool)^", "(int, bool)[3]",
+        "(char[], float64, Dir)",
     };
     bool ok = true;
     int n = 0;

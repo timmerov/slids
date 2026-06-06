@@ -854,7 +854,7 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
     if (!isLiteral(rhs)) return false;              // not yet folded
 
     if (rhs.kind == parse::Kind::kFloatLiteral) {
-        if (!widen::floatLiteralFits(rhs.text, declared)) {
+        if (!widen::floatLiteralFits(rhs.text, entry.slids_type)) {   // sees through alias
             diagnostic::report(diag, {decl.file_id, decl.tok,
                 "Constant '" + entry.name + "' value '" + rhs.text
                 + "' does not fit " + type_word + " '" + declared + "'.", {}});
@@ -863,7 +863,10 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
         double d;
         if (!parseDouble(rhs.text, d)) return false;
         double captured;
-        if (declared == "float" || declared == "float32") {
+        widen::TypeKind fk;
+        bool is_f32 = widen::classify(entry.slids_type, fk)
+                   && fk.cat == widen::Category::kFloat && fk.bits == 32;
+        if (is_f32) {
             // Round through float32 to capture the actual storage value.
             float f = static_cast<float>(d);
             captured = static_cast<double>(f);
@@ -883,7 +886,7 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
     if (rhs.kind == parse::Kind::kBoolLiteral) {
         // numeric canonicalizes bool to "1"/"0" already; pass through.
     }
-    if (!widen::intLiteralFits(text_for_fit, declared)) {
+    if (!widen::intLiteralFits(text_for_fit, entry.slids_type)) {   // sees through alias
         diagnostic::report(diag, {decl.file_id, decl.tok,
             "Constant '" + entry.name + "' value '" + rhs.text
             + "' does not fit " + type_word + " '" + declared + "'.", {}});
@@ -893,7 +896,7 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
     // The stored value takes the const's DECLARED type's kind, not the folded
     // initializer's — so a char const stays char (incl. an enum char member
     // whose auto-increment folded to an int literal), a bool prints true/false.
-    entry.literal_kind = literalKindForType(declared);
+    entry.literal_kind = literalKindForType(widen::spell(widen::strip(entry.slids_type)));
     return true;
 }
 

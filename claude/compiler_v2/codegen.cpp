@@ -50,9 +50,19 @@ std::string llvmForRef(widen::TypeRef ref) {
             for (int d : t.dims) ll = "[" + std::to_string(d) + " x " + ll + "]";
             return ll;
         }
+        case widen::Type::Form::kTuple: {
+            // Anonymous tuple -> an LLVM literal struct: { llvm(t0), llvm(t1) }.
+            std::string s = "{ ";
+            for (std::size_t i = 0; i < t.slots.size(); i++) {
+                if (i) s += ", ";
+                s += llvmForRef(t.slots[i]);
+            }
+            return s + " }";
+        }
+        case widen::Type::Form::kAlias:
+            return llvmForRef(t.underlying);   // transparent — lower the underlying
         case widen::Type::Form::kNone:
         case widen::Type::Form::kSlid:
-        case widen::Type::Form::kTuple:
             break;   // not lowerable (kNone = no type reached codegen)
     }
     assert(false && "llvmForRef: classify let through an unknown type");
@@ -581,7 +591,11 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kFloatLiteral: {
             widen::checkFloatLiteralFits(expr.text, dest_type,
                                          expr.file_id, expr.tok, diag);
-            if (dest_type == widen::intern("float") || dest_type == widen::intern("float32")) {
+            // A 32-bit float dest emits the hex bit-pattern (classify sees through
+            // a float alias); float64 / no context keeps the decimal form.
+            widen::TypeKind fk;
+            if (widen::classify(dest_type, fk) && fk.cat == widen::Category::kFloat
+                && fk.bits == 32) {
                 return float32HexLiteral(expr.text);
             }
             return normalizeFloatLiteral(expr.text);

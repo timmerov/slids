@@ -39,13 +39,16 @@ struct Type {
         kArray,       // T[d0][d1]... — elem + dims in source order
         kSlid,        // a named slid/class type (not a known primitive)
         kTuple,       // (T0, T1, ...) — slots (lands with tuples)
+        kAlias,       // a transparent named type — name + underlying; sees through
+                      // to underlying for all structural queries, spells as name
     };
     Form form = Form::kNone;
     Category cat = Category::kSignedInt;   // kPrimitive
     int bits = 0;                          // kPrimitive
-    std::string name;                      // kPrimitive spelling tag / kSlid name
+    std::string name;                      // kPrimitive spelling tag / kSlid / kAlias name
     TypeRef pointee = kNoType;             // kPointer / kIterator
     TypeRef elem = kNoType;                // kArray element
+    TypeRef underlying = kNoType;          // kAlias — the type it transparently names
     std::vector<int> dims;                 // kArray dims, source order
     std::vector<TypeRef> slots;            // kTuple
     int slid_entry_id = -1;                // kSlid (resolved later)
@@ -58,6 +61,34 @@ TypeRef intern(std::string const& spelling);
 // Intern a spelling, mapping the empty spelling ("no type yet") to kNoType.
 // The boundary helper for the string-stage / TypeRef-field edges.
 TypeRef internOrNone(std::string const& spelling);
+
+// Construct + intern a tuple type from its slot handles (dedups with a parsed
+// `(...)` spelling; a 1-slot tuple collapses to that slot).
+TypeRef internTuple(std::vector<TypeRef> const& slots);
+
+// Structural constructors — build + dedup a composite type from child HANDLES,
+// not a spelling. These are how resolve rebuilds a type after resolving its leaves
+// (an alias-bearing composite can't be reconstructed from its spelling). The arena
+// dedups STRUCTURALLY (form + children), so internPointer(x) and intern("<x>^")
+// agree, and a kAlias-leaf composite is distinct from a kSlid-leaf one.
+TypeRef internPointer(TypeRef pointee);
+TypeRef internIterator(TypeRef pointee);
+TypeRef internArray(TypeRef elem, std::vector<int> const& dims);
+
+// A transparent alias type: spells as `name`, but sees through to `underlying`
+// for every structural query (cat/bits/llvm/size/known/predicates). Minted only
+// by resolve (which has the symbol table that knows name -> underlying).
+TypeRef internAlias(std::string const& name, TypeRef underlying);
+
+// Peel any alias layers, returning the first non-alias handle (the underlying
+// structure). Predicates that switch on form() use this to see through aliases.
+TypeRef strip(TypeRef ref);
+
+// Recursively remove EVERY alias (at all levels), rebuilding wrappers — so two
+// types that are equal modulo aliases (`Integer^` and `IntPtr = int^`) deep-strip
+// to the SAME handle. Use for type-equality across alias boundaries (ptr casts,
+// same-pointee checks).
+TypeRef deepStrip(TypeRef ref);
 
 // spell(), but kNoType renders as the empty string (the inverse of internOrNone).
 std::string spellOrEmpty(TypeRef ref);
@@ -111,6 +142,9 @@ bool checkFloatLiteralFits(std::string const& literal_text,
 // Silent variants used by the binary-op literal-flex rule.
 bool intLiteralFits(std::string const& literal_text, std::string const& dest_type);
 bool floatLiteralFits(std::string const& literal_text, std::string const& dest_type);
+// TypeRef overloads — classify the dest directly (sees through kAlias); kNoType fits.
+bool intLiteralFits(std::string const& literal_text, TypeRef dest);
+bool floatLiteralFits(std::string const& literal_text, TypeRef dest);
 
 // TypeRef overloads — kNoType is the empty-dest ("no target, always fits") case.
 bool checkIntLiteralFits(std::string const& literal_text, TypeRef dest,
