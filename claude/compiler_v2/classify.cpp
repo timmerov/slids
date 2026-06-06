@@ -255,6 +255,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kStoreStmt:
+        case parse::Kind::kDestructureStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kCallExpr:
         case parse::Kind::kExprStmt:
@@ -266,6 +267,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kAddrOfExpr:
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
+        case parse::Kind::kTupleExpr:
         case parse::Kind::kCastExpr:
         case parse::Kind::kNewExpr:
         case parse::Kind::kDeleteStmt:
@@ -430,6 +432,31 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             inferExpr(tree, base, widen::kNoType, diag);
             inferExpr(tree, index, widen::kNoType, diag);
             std::string bt = widen::spellOrEmpty(base.inferred_type);
+            // A tuple slot read. Slots are heterogeneous, so the result type
+            // depends on a STATIC index — the index must be a compile-time
+            // constant (a runtime index is array subscript, not a tuple slot).
+            if (widen::form(widen::strip(base.inferred_type))
+                == widen::Type::Form::kTuple) {
+                std::vector<widen::TypeRef> slots =
+                    widen::get(widen::strip(base.inferred_type)).slots;
+                bool const_idx = index.kind == parse::Kind::kIntLiteral
+                              || index.kind == parse::Kind::kUintLiteral
+                              || index.kind == parse::Kind::kCharLiteral;
+                if (!const_idx) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "A tuple slot index must be a compile-time constant.", {}});
+                    return;
+                }
+                long idx = std::strtol(index.text.c_str(), nullptr, 10);
+                if (idx < 0 || idx >= static_cast<long>(slots.size())) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Tuple slot index " + std::to_string(idx)
+                        + " is out of bounds for '" + bt + "'.", {}});
+                    return;
+                }
+                e.inferred_type = slots[idx];
+                return;
+            }
             bool array = isArrayType(base.inferred_type);
             bool iter = isIteratorType(base.inferred_type);
             if (!bt.empty() && !array && !iter) {
@@ -462,6 +489,27 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             e.inferred_type = bt.empty()  ? widen::kNoType
                             : array       ? arrayElementType(base.inferred_type)
                                           : pointeeType(base.inferred_type);
+            return;
+        }
+        case parse::Kind::kTupleExpr: {
+            // A tuple literal `(e0, e1, ...)`. Each slot is inferred; if the
+            // context is a tuple of the same arity, each slot gets its declared
+            // slot type as context (so a literal flexes into it). The result type
+            // is the kTuple of the slots' inferred types.
+            widen::TypeRef ctx_s = widen::strip(context);
+            std::vector<widen::TypeRef> ctx_slots;
+            if (widen::form(ctx_s) == widen::Type::Form::kTuple
+                && widen::get(ctx_s).slots.size() == e.children.size()) {
+                ctx_slots = widen::get(ctx_s).slots;
+            }
+            std::vector<widen::TypeRef> slots;
+            for (std::size_t i = 0; i < e.children.size(); i++) {
+                widen::TypeRef slot_ctx =
+                    ctx_slots.empty() ? widen::kNoType : ctx_slots[i];
+                inferExpr(tree, *e.children[i], slot_ctx, diag);
+                slots.push_back(e.children[i]->inferred_type);
+            }
+            e.inferred_type = widen::internTuple(slots);
             return;
         }
         case parse::Kind::kDerefExpr: {
@@ -753,6 +801,72 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             inferExpr(tree, rhs, widen::kNoType, diag);
             widen::TypeRef lref = lhs.inferred_type, rref = rhs.inferred_type;
 
+            // Tuple operand(s): slot-wise arithmetic, with a scalar operand
+            // BROADCAST to every slot. Arith / bitwise only (comparison / logical
+            // on a tuple is not defined here). Result = the per-slot common type
+            // tuple. (Nested-tuple slots are deferred — a non-scalar slot fails
+            // the per-slot commonType.)
+            {
+                bool ltup = widen::form(widen::strip(lref)) == widen::Type::Form::kTuple;
+                bool rtup = widen::form(widen::strip(rref)) == widen::Type::Form::kTuple;
+                if (ltup || rtup) {
+                    bool is_cmp = (op == "==" || op == "!=" || op == "<"
+                                || op == "<=" || op == ">"  || op == ">=");
+                    if (is_cmp) {
+                        diagnostic::report(diag, {e.file_id, e.tok,
+                            "Operator '" + op + "' is not defined on a tuple.", {}});
+                        return;
+                    }
+                    std::vector<widen::TypeRef> lslots, rslots;
+                    if (ltup) lslots = widen::get(widen::strip(lref)).slots;
+                    if (rtup) rslots = widen::get(widen::strip(rref)).slots;
+                    if (ltup && rtup && lslots.size() != rslots.size()) {
+                        diagnostic::report(diag, {e.file_id, e.tok,
+                            "Tuple shapes differ: '" + widen::spellOrEmpty(lref)
+                            + "' vs '" + widen::spellOrEmpty(rref) + "'.", {}});
+                        return;
+                    }
+                    std::size_t n = ltup ? lslots.size() : rslots.size();
+                    // Flex a literal scalar into the (homogeneous) slot type so it
+                    // doesn't default to a wider int width than the tuple's slots.
+                    if (!ltup && n > 0) {
+                        inferExpr(tree, lhs, rslots[0], diag);
+                        lref = lhs.inferred_type;
+                    }
+                    if (!rtup && n > 0) {
+                        inferExpr(tree, rhs, lslots[0], diag);
+                        rref = rhs.inferred_type;
+                    }
+                    std::vector<widen::TypeRef> out_slots;
+                    for (std::size_t i = 0; i < n; i++) {
+                        widen::TypeRef ls = ltup ? lslots[i] : lref;
+                        widen::TypeRef rs = rtup ? rslots[i] : rref;
+                        std::string ct;
+                        if (!widen::commonType(widen::spellOrEmpty(widen::strip(ls)),
+                                               widen::spellOrEmpty(widen::strip(rs)),
+                                               ct)) {
+                            diagnostic::report(diag, {e.file_id, e.tok,
+                                "No common type for tuple slot "
+                                + std::to_string(i) + " ('" + widen::spellOrEmpty(ls)
+                                + "' and '" + widen::spellOrEmpty(rs) + "').", {}});
+                            return;
+                        }
+                        widen::TypeRef ctr = widen::internOrNone(ct);
+                        if ((op == "&" || op == "|" || op == "^")
+                            && isFloatType(ctr)) {
+                            diagnostic::report(diag, {e.file_id, e.tok,
+                                "Bitwise '" + op
+                                + "' not defined on a floating-point slot.", {}});
+                            return;
+                        }
+                        out_slots.push_back(ctr);
+                    }
+                    e.inferred_type = widen::internTuple(out_slots);
+                    e.op_type = e.inferred_type;
+                    return;
+                }
+            }
+
             // Pointer operands (reference / iterator / nullptr): the six
             // relational ops compare them (same pointee type required; nullptr
             // exempt), and arithmetic is rejected. Handled before the numeric
@@ -862,6 +976,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kStoreStmt:
+        case parse::Kind::kDestructureStmt:
         case parse::Kind::kDeleteStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kExprStmt:
@@ -1316,6 +1431,47 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             checkStrongConstAssign(lvalue.inferred_type, *s.children[1], diag);
             return;
         }
+        case parse::Kind::kDestructureStmt: {
+            // (a, b, ) = tuple. children[0] = rhs tuple, [1..] = target lvalues
+            // (null = skipped slot). The rhs must be a tuple, the arity must
+            // match, and each target's type must match its slot (a slot is
+            // assigned to the target; MVP requires the same underlying type).
+            parse::Node& rhs = *s.children[0];
+            inferExpr(tree, rhs, widen::kNoType, diag);
+            widen::TypeRef rs = widen::strip(rhs.inferred_type);
+            if (widen::form(rs) != widen::Type::Form::kTuple) {
+                if (rhs.inferred_type != widen::kNoType)
+                    diagnostic::report(diag, {s.file_id, s.tok,
+                        "The right side of a destructure must be a tuple; got '"
+                        + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
+                return;
+            }
+            std::vector<widen::TypeRef> slots = widen::get(rs).slots;
+            std::size_t ntargets = s.children.size() - 1;
+            if (ntargets != slots.size()) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "Destructure has " + std::to_string(ntargets)
+                    + " target(s) but the tuple '"
+                    + widen::spellOrEmpty(rhs.inferred_type) + "' has "
+                    + std::to_string(slots.size()) + " slot(s).", {}});
+                return;
+            }
+            for (std::size_t i = 0; i < ntargets; i++) {
+                parse::Node* tgt = s.children[i + 1].get();
+                if (!tgt) continue;   // skipped slot
+                inferExpr(tree, *tgt, widen::kNoType, diag);
+                if (tgt->inferred_type != widen::kNoType
+                    && widen::deepStrip(tgt->inferred_type)
+                           != widen::deepStrip(slots[i])) {
+                    diagnostic::report(diag, {tgt->file_id, tgt->tok,
+                        "Destructure target '" + tgt->name + "' has type '"
+                        + widen::spellOrEmpty(tgt->inferred_type)
+                        + "' but slot " + std::to_string(i) + " is '"
+                        + widen::spellOrEmpty(slots[i]) + "'.", {}});
+                }
+            }
+            return;
+        }
         case parse::Kind::kDeleteStmt: {
             // delete p; — p must be a pointer (reference / iterator). resolve
             // already checked it is a variable lvalue.
@@ -1614,6 +1770,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kAddrOfExpr:
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
+        case parse::Kind::kTupleExpr:
         case parse::Kind::kCastExpr:
         case parse::Kind::kNewExpr:
         case parse::Kind::kSizeofExpr:

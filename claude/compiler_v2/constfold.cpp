@@ -126,6 +126,7 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kStoreStmt:
+        case parse::Kind::kDestructureStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kCallExpr:
         case parse::Kind::kExprStmt:
@@ -153,6 +154,7 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kAddrOfExpr:
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
+        case parse::Kind::kTupleExpr:
         case parse::Kind::kCastExpr:
         case parse::Kind::kNewExpr:
         case parse::Kind::kDeleteStmt:

@@ -1005,6 +1005,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
         }
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
+        case parse::Kind::kTupleExpr:   // resolve each slot expr
             for (auto& ch : e.children) {
                 if (ch) resolveExpr(tree, *ch, diag, unevaluated);
             }
@@ -1214,6 +1215,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kStoreStmt:
+        case parse::Kind::kDestructureStmt:
         case parse::Kind::kDeleteStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kExprStmt:
@@ -1761,6 +1763,20 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             resolveStoreTarget(tree, *s.children[0], diag);
             if (s.children.size() > 1 && s.children[1]) {
                 resolveExpr(tree, *s.children[1], diag);
+            }
+            return Completion::Normal;
+        case parse::Kind::kDestructureStmt:
+            // (a, b, ) = tuple. children[0] = rhs (read), [1..] = target lvalues
+            // (a null child is a skipped slot). Each target is a WRITE (like an
+            // assign lhs) — resolve + mark it initialized. rhs read FIRST.
+            if (s.children[0]) resolveExpr(tree, *s.children[0], diag);
+            for (std::size_t i = 1; i < s.children.size(); i++) {
+                if (!s.children[i]) continue;
+                if (resolveAssignTarget(tree, *s.children[i], diag)
+                    && tree.entries[s.children[i]->resolved_entry_id].kind
+                           == parse::EntryKind::kLocalVar) {
+                    tree.initialized_locals.insert(s.children[i]->resolved_entry_id);
+                }
             }
             return Completion::Normal;
         case parse::Kind::kDeleteStmt: {
@@ -2418,6 +2434,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         case parse::Kind::kAddrOfExpr:
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
+        case parse::Kind::kTupleExpr:
         case parse::Kind::kCastExpr:
         case parse::Kind::kNewExpr:
         case parse::Kind::kSizeofExpr:

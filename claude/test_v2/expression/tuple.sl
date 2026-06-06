@@ -90,7 +90,69 @@ deferred to later landings:
   - array-init-via-tuple, for-tuple, #x, class init
 */
 
+enum Dir ( kN, kE, kS, kW );
+
+/* landing 4 — tuple params / returns + tuple references */
+
+(int, int) addpair( (int, int) p ) {       // by-value tuple param + tuple return
+    return (p[0] + 1, p[1] + 1);
+}
+
+int firstRef( (int, int)^ pr ) {           // by-reference tuple param
+    return pr^[0];                          // deref the ref, read slot 0
+}
+
 int32 main() {
+
+    (Dir, bool) pair = (Dir:kN, false);
+
+    (Dir, bool) other = pair;          // whole-tuple copy
+
+    Dir  dir  = pair[0];               // const-index slot read (Dir)
+    bool good = pair[1];               // const-index slot read (bool)
+
+    __println(##type(pair));           // (Dir, bool)
+    __println(##type(other));          // (Dir, bool)
+    __println(##type(dir));            // Dir
+    __println(##type(good));           // bool
+    __println(good);                   // false
+
+    /* landing 2 — slot write + destructure (incl. empty slots) */
+
+    pair[0] = Dir:kS;                  // write a slot by const index
+    __println("w0= " + pair[0]);       // 2
+
+    Dir  da;
+    bool ga;
+    (da, ga) = pair;                   // destructure both slots
+    __println("da= " + da);            // 2
+    __println("ga= " + ga);            // false
+
+    Dir db;
+    (db, ) = pair;                     // empty trailing slot — skip slot 1
+    __println("db= " + db);            // 2
+
+    /* landing 3 — slot-wise math + scalar broadcast */
+
+    (int, int, int) a3 = (1, 2, 3);
+    (int, int, int) b3 = (4, 5, 6);
+
+    (int, int, int) s3 = a3 + b3;      // slot-wise add: (5, 7, 9)
+    __println("s3= " + s3[0] + " " + s3[1] + " " + s3[2]);   // 5 7 9
+
+    (int, int, int) c3 = a3 + 7;       // scalar broadcast: (8, 9, 10)
+    __println("c3= " + c3[0] + " " + c3[1] + " " + c3[2]);   // 8 9 10
+
+    (int, int, int) d3 = 100 - a3;     // scalar on the LEFT: (99, 98, 97)
+    __println("d3= " + d3[0] + " " + d3[1] + " " + d3[2]);   // 99 98 97
+
+    /* landing 4 — tuple through functions */
+
+    (int, int) q = (10, 20);
+    (int, int) r = addpair(q);         // by-value param + tuple return
+    __println("r= " + r[0] + " " + r[1]);   // 11 21
+
+    __println("fr= " + firstRef(^q));  // by-reference param: 10
 
     return 0;
 }

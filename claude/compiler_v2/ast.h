@@ -16,6 +16,8 @@ enum class Kind {
     kAssignStmt,
     kAugAssignStmt,
     kStoreStmt,     // store through an lvalue expr; children[0]=lvalue, [1]=rhs.
+    kDestructureStmt,// `(a, b, ) = tuple;` children[0]=rhs, [1..]=target lvalues
+                    // (a NULL child is a skipped slot).
     kDeleteStmt,    // delete p; — free + null the pointer. children[0]=lvalue var.
     kCallStmt,
     kCallExpr,
@@ -49,6 +51,7 @@ enum class Kind {
     kDerefExpr,     // postfix `lvalue^` — dereference; children[0]=operand.
     kIndexExpr,     // postfix `base[index]` — array subscript; children[0]=base,
                     // [1]=index. `a[x][y]` nests ((a[x])[y]).
+    kTupleExpr,     // tuple literal `(e0, e1, ...)`; children = slot exprs.
     kNewExpr,       // new T / new T[n] / new(addr) T[n]. return_type=element T;
                     // children[0]=array-size (or null), [1]=placement-addr (or
                     // null). Yields T^ (single) or T[] (array).

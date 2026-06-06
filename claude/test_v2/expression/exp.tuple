@@ -1,0 +1,14 @@
+(Dir, bool)
+(Dir, bool)
+Dir
+bool
+false
+w0= 2
+da= 2
+ga= false
+db= 2
+s3= 5 7 9
+c3= 8 9 10
+d3= 99 98 97
+r= 11 21
+fr= 10

@@ -20,6 +20,9 @@ enum class Kind {
     kStoreStmt,      // store through an lvalue EXPRESSION (not a bare name):
                      // children[0] = lvalue expr (e.g. kDerefExpr), [1] = rhs.
                      // Used for `ref^ = v`; future array/field stores route here.
+    kDestructureStmt,// `(a, b, ) = tuple;` — children[0] = rhs tuple expr,
+                     // [1..] = target lvalues in slot order; a NULL child is an
+                     // empty/skipped slot. Arity must match the rhs tuple.
     kDeleteStmt,   // delete p; — frees the pointer and nulls it. children[0] = the
                    // pointer lvalue (a variable). Phase 4: lowers to free() + store
                    // null; destructors land with classes (Phase 5).
@@ -83,6 +86,9 @@ enum class Kind {
     kIndexExpr,    // postfix `base[index]` — array subscript, an element lvalue.
                    // children[0] = base (array or a nested kIndexExpr),
                    // [1] = index expr. `a[x][y]` nests: ((a[x])[y]).
+    kTupleExpr,    // anonymous tuple literal `(e0, e1, ...)` — children = slots.
+                   // (size-1 collapses to the bare expr at parse; the comma marks
+                   // a tuple.) inferred_type = the kTuple type from classify.
     kCastExpr,     // prefix `<Type^> operand` — pointer reinterpret cast.
                    // return_type = target type spelling; children[0] = operand.
                    // The address is unchanged; only the static type changes.

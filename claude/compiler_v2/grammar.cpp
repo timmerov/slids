@@ -141,7 +141,35 @@ struct Parser {
     // (a flat spelling string otherwise loses them). Left empty for a primitive.
     std::string parseType(std::vector<int>* seg_toks = nullptr) {
         std::string type;
-        if (char const* name = primitiveNameFor(peek().kind)) {
+        if (peek().kind == token::Kind::kLParen) {
+            // Anonymous tuple type `(T0, T1, ...)`. A size-1 `(T)` collapses to T
+            // (the comma is the tuple marker). Elements recurse, so nested tuples
+            // and qualified/aliased element types work.
+            advance();   // (
+            if (peek().kind == token::Kind::kRParen) {
+                error("A tuple type needs at least one element.");
+                return "";
+            }
+            std::vector<std::string> elems;
+            while (true) {
+                std::string e = parseType();
+                if (e.empty()) return "";
+                elems.push_back(e);
+                if (peek().kind != token::Kind::kComma) break;
+                advance();   // ,
+            }
+            if (!expect(token::Kind::kRParen, ")")) return "";
+            if (elems.size() == 1) {
+                type = elems[0];
+            } else {
+                type = "(";
+                for (std::size_t i = 0; i < elems.size(); i++) {
+                    if (i) type += ", ";
+                    type += elems[i];
+                }
+                type += ")";
+            }
+        } else if (char const* name = primitiveNameFor(peek().kind)) {
             type = name;
             advance();
         } else if (peek().kind == token::Kind::kIdentifier
@@ -205,6 +233,44 @@ struct Parser {
             o += 2;
         }
         return peekKind(o) == token::Kind::kIdentifier;
+    }
+
+    // Pure lookahead: does a leading `(...)` form a tuple-TYPE declaration —
+    // `(T0, T1) name` — as opposed to a parenthesized / tuple-literal expression
+    // statement? Scan to the matching `)`, skip an optional `^` / `[]` suffix,
+    // and require a trailing identifier (the var name). Consumes nothing.
+    bool looksLikeTupleTypeDecl() const {
+        if (peekKind(0) != token::Kind::kLParen) return false;
+        int o = 1, depth = 1;
+        while (depth > 0) {
+            token::Kind k = peekKind(o);
+            if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput)
+                return false;
+            if (k == token::Kind::kLParen) depth++;
+            else if (k == token::Kind::kRParen) depth--;
+            o++;
+        }
+        if (peekKind(o) == token::Kind::kBitXor) o++;
+        else if (peekKind(o) == token::Kind::kLBracket
+                 && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
+        return peekKind(o) == token::Kind::kIdentifier;
+    }
+
+    // Pure lookahead: does a leading `(...)` form a tuple DESTRUCTURE assignment —
+    // `(a, b, ) = tuple` — i.e. a `(...)` immediately followed by `=`? (Opposed to
+    // a tuple-type decl, which has a trailing name, or a paren-expr statement.)
+    bool looksLikeTupleDestructure() const {
+        if (peekKind(0) != token::Kind::kLParen) return false;
+        int o = 1, depth = 1;
+        while (depth > 0) {
+            token::Kind k = peekKind(o);
+            if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput)
+                return false;
+            if (k == token::Kind::kLParen) depth++;
+            else if (k == token::Kind::kRParen) depth--;
+            o++;
+        }
+        return peekKind(o) == token::Kind::kEquals;
     }
 
     // Parse a for-varlist variable head: an optional type then the variable
@@ -370,9 +436,24 @@ struct Parser {
             return node;
         }
         if (t.kind == token::Kind::kLParen) {
+            int lp = pos;
             advance();
             auto inner = parseExpr();
             if (!inner) return nullptr;
+            if (peek().kind == token::Kind::kComma) {
+                // Tuple literal `(e0, e1, ...)` — the comma is the marker; a
+                // size-1 `(e)` is just a parenthesized expr (the branch below).
+                auto tup = newNodeAt(parse::Kind::kTupleExpr, t.file_id, lp);
+                tup->children.push_back(std::move(inner));
+                while (peek().kind == token::Kind::kComma) {
+                    advance();   // ,
+                    auto e = parseExpr();
+                    if (!e) return nullptr;
+                    tup->children.push_back(std::move(e));
+                }
+                if (!expect(token::Kind::kRParen, ")")) return nullptr;
+                return tup;
+            }
             if (!expect(token::Kind::kRParen, ")")) return nullptr;
             return inner;
         }
@@ -1787,8 +1868,45 @@ struct Parser {
             if (looksLikeQualifiedTypedDecl()) return parseVarDeclStmt();
             return parseNameLedStmt();
         }
+        // A leading `(...)` is a tuple-typed var decl when a name follows the
+        // `)` (`(Dir, bool) pair = ...`), or a destructure when `=` follows
+        // (`(a, b) = tuple`); otherwise it's an expression statement.
+        if (t.kind == token::Kind::kLParen) {
+            if (looksLikeTupleTypeDecl()) return parseVarDeclStmt();
+            if (looksLikeTupleDestructure()) return parseDestructureStmt();
+        }
         error("Expected statement.");
         return nullptr;
+    }
+
+    // `(a, b, ) = tuple;` — a tuple destructure. children[0] = rhs tuple expr;
+    // [1..] = target lvalues in slot order, a NULL child for an empty/skipped
+    // slot. Targets are parsed first (syntactic order) into [1..], then the rhs
+    // is filled into [0].
+    std::unique_ptr<parse::Node> parseDestructureStmt() {
+        int lp = pos;
+        auto node = newNodeAt(parse::Kind::kDestructureStmt, peek().file_id, lp);
+        node->children.push_back(nullptr);   // [0] = rhs, filled below
+        advance();   // (
+        while (true) {
+            if (peek().kind == token::Kind::kComma
+                || peek().kind == token::Kind::kRParen) {
+                node->children.push_back(nullptr);   // empty / skipped slot
+            } else {
+                auto tgt = parseExpr();
+                if (!tgt) return nullptr;
+                node->children.push_back(std::move(tgt));
+            }
+            if (peek().kind != token::Kind::kComma) break;
+            advance();   // ,
+        }
+        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+        if (!expect(token::Kind::kEquals, "=")) return nullptr;
+        auto rhs = parseExpr();
+        if (!rhs) return nullptr;
+        node->children[0] = std::move(rhs);
+        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+        return node;
     }
 
     // Pure lookahead: do the tokens form `<return-type> <name> (` — a (nested)
@@ -1842,7 +1960,9 @@ struct Parser {
             // enforce that a typeless param HAS a default, and required-before-
             // optional ordering).
             std::string p_type;
-            if (isTypeStart(peek().kind) || looksLikeQualifiedTypedDecl()) {
+            if (isTypeStart(peek().kind) || looksLikeQualifiedTypedDecl()
+                || (peek().kind == token::Kind::kLParen
+                    && looksLikeTupleTypeDecl())) {
                 p_type = parseType();
                 if (fatal) return nullptr;
             }

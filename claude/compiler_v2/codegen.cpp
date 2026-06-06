@@ -300,6 +300,41 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
     __builtin_unreachable();
 }
 
+// Emit one scalar arith/bitwise instruction on two already-computed values (both
+// already at `opty`), returning the result register. Shared by emitBinary's
+// scalar path and the slot-wise tuple path. Not for comparisons / shifts / logical.
+std::string emitArithInstr(std::string const& op, std::string const& lv,
+                           std::string const& rv, widen::TypeRef opty,
+                           std::ostream& out) {
+    std::string llty = llvmForRef(opty);
+    bool flt = isFloatType(opty);
+    bool uns = isUnsignedType(opty);
+    std::string instr;
+    if (flt) {
+        if      (op == "+") instr = "fadd";
+        else if (op == "-") instr = "fsub";
+        else if (op == "*") instr = "fmul";
+        else if (op == "/") instr = "fdiv";
+        else if (op == "%") instr = "frem";
+    } else {
+        if      (op == "+") instr = "add";
+        else if (op == "-") instr = "sub";
+        else if (op == "*") instr = "mul";
+        else if (op == "/") instr = uns ? "udiv" : "sdiv";
+        else if (op == "%") instr = uns ? "urem" : "srem";
+        else if (op == "&") instr = "and";
+        else if (op == "|") instr = "or";
+        else if (op == "^") instr = "xor";
+    }
+    assert(!instr.empty()
+        && "emitArithInstr: no instruction mapped — classify should have rejected "
+           "(float bitwise) or covered (all int ops, all float arith)");
+    std::string tmp = newTmp("bin");
+    out << "  " << tmp << " = " << instr << " " << llty
+        << " " << lv << ", " << rv << "\n";
+    return tmp;
+}
+
 std::string emitBinary(ast::Node const& expr, SymTab const& syms,
                        strings::Pool& pool, std::ostream& out,
                        diagnostic::Sink& diag,
@@ -369,6 +404,57 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
 
     widen::TypeRef opty = expr.op_type;
     assert(opty != widen::kNoType && "emitBinary: BinaryExpr missing op_type");
+
+    // Tuple operand(s): slot-wise op, with a scalar operand BROADCAST to every
+    // slot. opty is the result tuple; build it by applying the op per slot
+    // (operands converted to the slot's result type). dest_type == opty here, so
+    // the aggregate is returned directly.
+    if (widen::form(widen::strip(opty)) == widen::Type::Form::kTuple) {
+        std::vector<widen::TypeRef> rslots = widen::get(widen::strip(opty)).slots;
+        bool ltup = widen::form(widen::strip(lhs.inferred_type))
+                    == widen::Type::Form::kTuple;
+        bool rtup = widen::form(widen::strip(rhs.inferred_type))
+                    == widen::Type::Form::kTuple;
+        std::string lagg = emitExpr(lhs, syms, pool, out, diag, lhs.inferred_type);
+        std::string ragg = emitExpr(rhs, syms, pool, out, diag, rhs.inferred_type);
+        std::string aggty = llvmForRef(opty);
+        std::vector<widen::TypeRef> lsl = ltup
+            ? widen::get(widen::strip(lhs.inferred_type)).slots
+            : std::vector<widen::TypeRef>{};
+        std::vector<widen::TypeRef> rsl = rtup
+            ? widen::get(widen::strip(rhs.inferred_type)).slots
+            : std::vector<widen::TypeRef>{};
+        std::string acc = "undef";
+        for (std::size_t i = 0; i < rslots.size(); i++) {
+            widen::TypeRef st = rslots[i];
+            std::string lv;
+            if (ltup) {
+                std::string ex = newTmp("lx");
+                out << "  " << ex << " = extractvalue "
+                    << llvmForRef(lhs.inferred_type) << " " << lagg << ", " << i << "\n";
+                lv = widen::convert(ex, lsl[i], st, expr.file_id, expr.tok, out, diag);
+            } else {
+                lv = widen::convert(lagg, lhs.inferred_type, st,
+                                    expr.file_id, expr.tok, out, diag);
+            }
+            std::string rv;
+            if (rtup) {
+                std::string ex = newTmp("rx");
+                out << "  " << ex << " = extractvalue "
+                    << llvmForRef(rhs.inferred_type) << " " << ragg << ", " << i << "\n";
+                rv = widen::convert(ex, rsl[i], st, expr.file_id, expr.tok, out, diag);
+            } else {
+                rv = widen::convert(ragg, rhs.inferred_type, st,
+                                    expr.file_id, expr.tok, out, diag);
+            }
+            std::string r = emitArithInstr(op, lv, rv, st, out);
+            std::string tmp = newTmp("tup");
+            out << "  " << tmp << " = insertvalue " << aggty << " " << acc << ", "
+                << llvmForRef(st) << " " << r << ", " << i << "\n";
+            acc = tmp;
+        }
+        return acc;
+    }
 
     // Iterator arithmetic: `iter ± int` (GEP by element) and `iter - iter`
     // (element-count difference). op_type carries the iterator type; the generic
@@ -446,33 +532,7 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
                               expr.file_id, expr.tok, out, diag);
     }
 
-    std::string llty = llvmForRef(opty);
-    bool flt = isFloatType(opty);
-    bool uns = isUnsignedType(opty);
-
-    std::string instr;
-    if (flt) {
-        if (op == "+") instr = "fadd";
-        else if (op == "-") instr = "fsub";
-        else if (op == "*") instr = "fmul";
-        else if (op == "/") instr = "fdiv";
-        else if (op == "%") instr = "frem";
-    } else {
-        if      (op == "+") instr = "add";
-        else if (op == "-") instr = "sub";
-        else if (op == "*") instr = "mul";
-        else if (op == "/") instr = uns ? "udiv" : "sdiv";
-        else if (op == "%") instr = uns ? "urem" : "srem";
-        else if (op == "&") instr = "and";
-        else if (op == "|") instr = "or";
-        else if (op == "^") instr = "xor";
-    }
-    assert(!instr.empty()
-        && "emitBinary: no instruction mapped — classify should have rejected "
-           "(float bitwise) or covered (all int ops, all float arith)");
-    std::string tmp = newTmp("bin");
-    out << "  " << tmp << " = " << instr << " " << llty
-        << " " << lv << ", " << rv << "\n";
+    std::string tmp = emitArithInstr(op, lv, rv, opty, out);
     return widen::convert(tmp, opty, dest_type,
                           expr.file_id, expr.tok, out, diag);
 }
@@ -543,6 +603,19 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
         std::string gep = newTmp("elt");
         out << "  " << gep << " = getelementptr " << elem_ll << ", ptr " << ptr
             << ", i64 " << idx << "\n";
+        return gep;
+    }
+    // Tuple-slot base: GEP the struct field at the (constant) slot index.
+    if (widen::form(widen::strip(node->inferred_type))
+        == widen::Type::Form::kTuple) {
+        assert(node->kind == ast::Kind::kIdentExpr && node->resolved_entry_id >= 0
+            && "emitElementAddr: tuple slot base must be a variable");
+        auto tit = syms.find(node->resolved_entry_id);
+        assert(tit != syms.end() && "emitElementAddr: tuple not in SymTab");
+        long k = std::strtol(chain.back()->children[1]->text.c_str(), nullptr, 10);
+        std::string gep = newTmp("slot");
+        out << "  " << gep << " = getelementptr inbounds " << tit->second.llvm_type
+            << ", ptr " << tit->second.alloca_name << ", i32 0, i32 " << k << "\n";
         return gep;
     }
     // Fixed-size array base: GEP into the aggregate at its alloca.
@@ -635,6 +708,21 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             return it->second.alloca_name;
         }
         case ast::Kind::kIndexExpr: {
+            // A tuple slot read `tup[k]`: emit the aggregate value, extract slot k
+            // (classify guaranteed k is a constant in range).
+            ast::Node const& ibase = *expr.children[0];
+            if (widen::form(widen::strip(ibase.inferred_type))
+                == widen::Type::Form::kTuple) {
+                std::string agg = emitExpr(ibase, syms, pool, out, diag,
+                                           ibase.inferred_type);
+                long idx = std::strtol(expr.children[1]->text.c_str(), nullptr, 10);
+                std::string llbase = llvmForRef(ibase.inferred_type);
+                std::string tmp = newTmp("slot");
+                out << "  " << tmp << " = extractvalue " << llbase << " " << agg
+                    << ", " << idx << "\n";
+                return widen::convert(tmp, expr.inferred_type, dest_type,
+                                      expr.file_id, expr.tok, out, diag);
+            }
             // `arr[i]` rvalue: address the element, load it.
             std::string addr = emitElementAddr(expr, syms, pool, out, diag);
             std::string llty = llvmForRef(expr.inferred_type);
@@ -642,6 +730,23 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             out << "  " << tmp << " = load " << llty << ", ptr " << addr << "\n";
             return widen::convert(tmp, expr.inferred_type, dest_type,
                                   expr.file_id, expr.tok, out, diag);
+        }
+        case ast::Kind::kTupleExpr: {
+            // Build the literal struct `{ t0, t1, ... }` by inserting each slot
+            // value into an undef aggregate (value semantics).
+            std::string llty = llvmForRef(expr.inferred_type);
+            std::vector<widen::TypeRef> slots =
+                widen::get(widen::strip(expr.inferred_type)).slots;
+            std::string acc = "undef";
+            for (std::size_t i = 0; i < expr.children.size(); i++) {
+                std::string v = emitExpr(*expr.children[i], syms, pool, out, diag,
+                                         slots[i]);
+                std::string tmp = newTmp("tup");
+                out << "  " << tmp << " = insertvalue " << llty << " " << acc
+                    << ", " << llvmForRef(slots[i]) << " " << v << ", " << i << "\n";
+                acc = tmp;
+            }
+            return acc;
         }
         case ast::Kind::kDerefExpr: {
             // `ptr^` rvalue: the operand yields the pointer value (the address);
@@ -775,6 +880,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kAssignStmt:
         case ast::Kind::kAugAssignStmt:
         case ast::Kind::kStoreStmt:
+        case ast::Kind::kDestructureStmt:
         case ast::Kind::kDeleteStmt:
         case ast::Kind::kCallStmt:
         case ast::Kind::kExprStmt:
@@ -874,6 +980,27 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                                        elem);
             std::string llty = llvmForRef(elem);
             out << "  store " << llty << " " << val << ", ptr " << addr << "\n";
+            return;
+        }
+        case ast::Kind::kDestructureStmt: {
+            // (a, b, ) = tuple. Evaluate the rhs aggregate once, then extract
+            // each slot and store it to its target (a null child is skipped).
+            ast::Node const& rhs = *stmt.children[0];
+            std::string agg = emitExpr(rhs, syms, pool, out, diag,
+                                       rhs.inferred_type);
+            std::string llty = llvmForRef(rhs.inferred_type);
+            for (std::size_t i = 1; i < stmt.children.size(); i++) {
+                ast::Node const* tgt = stmt.children[i].get();
+                if (!tgt) continue;   // skipped slot
+                auto it = syms.find(tgt->resolved_entry_id);
+                assert(it != syms.end()
+                    && "kDestructureStmt: target not in SymTab");
+                std::string slot = newTmp("dslot");
+                out << "  " << slot << " = extractvalue " << llty << " " << agg
+                    << ", " << (i - 1) << "\n";
+                out << "  store " << it->second.llvm_type << " " << slot
+                    << ", ptr " << it->second.alloca_name << "\n";
+            }
             return;
         }
         case ast::Kind::kDeleteStmt: {
@@ -1180,6 +1307,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kAddrOfExpr:
         case ast::Kind::kDerefExpr:
         case ast::Kind::kIndexExpr:
+        case ast::Kind::kTupleExpr:
         case ast::Kind::kCastExpr:
         case ast::Kind::kNewExpr:
         case ast::Kind::kCallExpr:
