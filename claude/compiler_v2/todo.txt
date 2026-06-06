@@ -58,10 +58,21 @@ DEFERRED FEATURES (later; may not be on the plan)
     synthesized empty `()`), because resolve runs before constfold. A loop whose
     condition is a NAMED const that folds to true (`const t = true; while (t)`) is
     therefore not flagged — it keeps the possibly-completing behavior (no
-    unreachable-after, a trailing return is still demanded). Closing this needs
-    resolve to see folded consts (it predates constfold) or the non-completing
-    determination moved/duplicated post-fold. Low priority — `while (true)` /
-    empty-cond are the common forms and are fully handled.
+    unreachable-after, a trailing return is still demanded).
+    NOT a small cleanup (investigated 2026): a safe fix needs BOTH halves, both
+    in classify (post-constfold, where constTruth sees the folded named const):
+      - set Node.non_completing for a const-true-no-break loop (so endsInReturnNode
+        stops the trailing-return over-demand AND codegen emits the `unreachable`
+        exit — codegen already reads non_completing, propagated via desugar).
+      - a NEW classify-side unreachable-after pass: flag a statement following a
+        non-completing loop "Unreachable statement." Without it, codegen's block
+        loop emits ALL children, so code after the loop lands after the
+        `unreachable` -> INVALID IR. (resolve's 2A does this syntactically; classify
+        must mirror it value-aware. Only fires for the named-const case — the
+        syntactic case already errored in resolve and never reaches classify.)
+    Plus a minor wart: resolve's possibly-zero DA may report "use of uninitialized"
+    on the (now-unreachable) after-code before classify flags it. Low value
+    (`while (true)` / empty-cond are the common forms and fully handled), real cost.
 
   * ##type — LANDED: the 7-macro set + `##type(x)`; the alias-label channel (an
     alias/enum-typed VARIABLE reports the source spelling — `Integer x` ->
