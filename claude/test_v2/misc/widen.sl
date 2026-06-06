@@ -1,16 +1,18 @@
 /*
 test widening of the built-in primitives.
 
+note: some of this prose is a bit stale. read claude's section.
+
 these widening rules apply to operations where there are one or two source operands.
 at least one of the operands is strongly typed - a strong operand.
 its type is int8, int16, int32, int64, uint8, uint16, uint32, uint64,
 float, float32, float64.
 char, int, and intptr are treated as strongly typed with their implementation
-dependent types - usually uint8 and int64.
+dependent types - usually uint8, int32, and int64.
 bool is a strange case. it can be either strong typed or weak typed -
 depending on the situation.
 at most one of the operands is a constant literal - a weak operand.
-widening rules specific to constant literals are found in const/fold.sl.
+widening rules specific to constant literals are found in constfold/constant.sl.
 
 constant literal type review:
 constant literals have a default type determined by kind.
@@ -173,6 +175,42 @@ the type of the numeric value of a literal is its computation type.
 to widen a literal, the numeric value is truncated (or rounded) from its computation type
 directly to the target type.
 the numeric value is not sign or zero extended from the nominal type to the target type.
+*/
+
+/*
+claude says (reconcile this spec with the new const-fold philosophy in
+constfold/constant.sl):
+
+DECIDED: char_var + char_var -> char, and the result WRAPS mod 256. a char
+variable operation preserves the char kind; unlike the const rule there is no
+compile-time value to fit-check, so there is no promotion-on-overflow — the
+runtime value simply wraps.
+
+notes / corrections still pending:
+
+- char is now a first-class KIND (bool, char, integer, unsigned, float), not just
+  "uint8". var widening treats it inconsistently today: char+char -> char (kept),
+  char+int -> int (the no-width int), char+int8 -> int16 (char taken as a raw
+  uint8: u8+s8 -> s16). document the ACTUAL behavior; "char ... treated as ...
+  uint8" above is only half true.
+
+- line ~8: int is int32 (fixed), NOT int64. only char (uint8) and intptr (int64)
+  are implementation-dependent; the "usually uint8 and int64" wording wrongly
+  lumps int in.
+
+- the const+const widening rules live in constfold/constant.sl (its claude block),
+  not "const/fold.sl" (line ~13). fix the cross-reference.
+
+- no-width preference: commonType honors an explicitly-written width and otherwise
+  prefers the no-width spelling (int/uint/float) when an operand contributed it
+  (int+int8 -> int, not int32; int+int32 -> int32; two width-named operands stay
+  width-named). rule 6b's "smallest type that holds both" should state this
+  spelling precedence.
+
+- bool: the const work settled bool as always-strong (kind bool) — it yields to
+  its partner in arithmetic, stays bool under bitwise, and cannot hold > 1. the
+  "bool is a strange case / can be weak / strange cases" wording (lines ~10, 1e,
+  2d) can be tightened to match.
 */
 
 int32 main() {
