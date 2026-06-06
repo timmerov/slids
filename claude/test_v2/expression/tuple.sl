@@ -67,7 +67,27 @@ arrays are homogenous tuples that can be accessed by a runtime index.
 /*
 claude says:
 
-tbd
+landing 1 — MVP. the smallest tuple that stands on its own.
+
+covered here:
+  - construct a tuple literal: (Dir:kN, false)
+  - a tuple-typed local: (Dir, bool) pair = ...
+  - whole-tuple copy with value semantics: (Dir, bool) other = pair;
+  - read a slot by CONSTANT index, heterogeneous: pair[0] is Dir, pair[1] is bool
+  - ##type renders the structured tuple type: ##type(pair) is (Dir, bool)
+
+the tuple type is a real structured type object, not a type-string. the
+(Dir, bool) spelling is rendered only for ##type and diagnostics.
+
+a slot index must be a compile-time constant — the result type depends on a
+static index. a runtime index is rejected (that is array subscript, not a tuple
+slot).
+
+deferred to later landings:
+  - slot write (pair[0] = ...), destructuring ((a,b)=pair, empty slot (a,))
+  - slot-wise math + scalar broadcast, move/swap (<-- / <-->)
+  - tuple params/returns + tuple references
+  - array-init-via-tuple, for-tuple, #x, class init
 */
 
 int32 main() {

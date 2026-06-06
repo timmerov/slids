@@ -20,31 +20,29 @@ bool isPrintIntrinsic(std::string const& name) {
     return name == "__println" || name == "__print";
 }
 
-// A fixed-size array type spelling (`int[5]`, `int[3][5]`): the first `[` is
-// followed by a digit. Distinct from `int[]` (iterator) and `int^` (reference).
+// A fixed-size array type spelling (`int[5]`, `int[3][5]`), distinct from
+// `int[]` (iterator) and `int^` (reference).
 bool isArrayType(std::string const& t) {
-    std::size_t lb = t.find('[');
-    return lb != std::string::npos && lb + 1 < t.size()
-        && t[lb + 1] >= '0' && t[lb + 1] <= '9';
+    return widen::form(widen::intern(t)) == widen::Type::Form::kArray;
 }
 
 bool isReferenceType(std::string const& t) {
-    return !t.empty() && t.back() == '^';
+    return widen::form(widen::intern(t)) == widen::Type::Form::kPointer;
 }
 
 // The element type after one subscript: strip the leftmost `[N]`. `int[3][5]`
 // -> `int[5]`; `int[5]` -> `int`.
 std::string arrayElementType(std::string const& t) {
-    std::size_t lb = t.find('[');
-    std::size_t rb = t.find(']', lb);
-    return t.substr(0, lb) + t.substr(rb + 1);
+    widen::Type const& a = widen::get(widen::intern(t));
+    std::string s = widen::spell(a.elem);
+    for (std::size_t i = 1; i < a.dims.size(); i++)
+        s += "[" + std::to_string(a.dims[i]) + "]";
+    return s;
 }
 
 // The leftmost (only, for a 1-D array) dimension's size. `int[5]` -> 5.
 int arrayFirstDim(std::string const& t) {
-    std::size_t lb = t.find('[');
-    std::size_t rb = t.find(']', lb);
-    return std::atoi(t.substr(lb + 1, rb - lb - 1).c_str());
+    return widen::get(widen::intern(t)).dims.front();
 }
 
 // Reject the declared / return / parameter type if it's not a known spelling.
@@ -54,13 +52,20 @@ int arrayFirstDim(std::string const& t) {
 void requireKnownType(std::string const& t, int file_id, int tok,
                       diagnostic::Sink& diag) {
     // `void` has no stride: it may only be a reference (`void^`), never an
-    // iterator (`void[]`) or array (`void[N]`). A bracket directly after `void`
-    // is the only way these spell, so reject them before the known-type check.
-    if (t.size() > 4 && t.compare(0, 4, "void") == 0 && t[4] == '[') {
-        diagnostic::report(diag, {file_id, tok,
-            "A void pointer must be a reference 'void^'; void has no stride and "
-            "cannot be an iterator or array.", {}});
-        return;
+    // iterator (`void[]`) or array (`void[N]`) — i.e. an iterator/array wrapping
+    // a void element directly.
+    {
+        widen::Type const& ty = widen::get(widen::intern(t));
+        bool void_iter = ty.form == widen::Type::Form::kIterator
+                      && widen::form(ty.pointee) == widen::Type::Form::kVoid;
+        bool void_arr  = ty.form == widen::Type::Form::kArray
+                      && widen::form(ty.elem) == widen::Type::Form::kVoid;
+        if (void_iter || void_arr) {
+            diagnostic::report(diag, {file_id, tok,
+                "A void pointer must be a reference 'void^'; void has no stride and "
+                "cannot be an iterator or array.", {}});
+            return;
+        }
     }
     if (widen::isKnownType(t)) return;
     diagnostic::report(diag, {file_id, tok,
@@ -73,6 +78,36 @@ std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
                                  diagnostic::Sink& diag,
                                  std::vector<int> const* seg_toks = nullptr);
 
+// Split a type spelling into its resolvable leaf NAME and the modifier SUFFIX
+// (`^` / `[]` / `[N]...`) that rides back along once the leaf resolves —
+// structurally, off the interned type, not by slicing the spelling. Mirrors the
+// legacy peel exactly: a run of OUTER iterator/array wrappers, then AT MOST ONE
+// reference; anything further in stays part of the base (so `int[3]^` -> base
+// `int[3]`, suffix `^`, which then resolves to itself).
+std::pair<std::string, std::string> splitTypeModifiers(std::string const& spelling) {
+    std::vector<widen::TypeRef> chain;   // outermost wrapper first
+    widen::TypeRef cur = widen::intern(spelling);
+    for (;;) {
+        widen::Type const& t = widen::get(cur);
+        if (t.form == widen::Type::Form::kIterator) { chain.push_back(cur); cur = t.pointee; }
+        else if (t.form == widen::Type::Form::kArray) { chain.push_back(cur); cur = t.elem; }
+        else break;
+    }
+    if (widen::form(cur) == widen::Type::Form::kPointer) {
+        chain.push_back(cur);
+        cur = widen::get(cur).pointee;
+    }
+    std::string base = widen::spell(cur);
+    std::string suffix;
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        widen::Type const& t = widen::get(*it);
+        if (t.form == widen::Type::Form::kPointer)       suffix += "^";
+        else if (t.form == widen::Type::Form::kIterator) suffix += "[]";
+        else for (int d : t.dims) suffix += "[" + std::to_string(d) + "]";
+    }
+    return {base, suffix};
+}
+
 // Substitute a type-alias spelling to its underlying type, following chains
 // (`alias A = B; alias B = int` → `int`) and detecting cycles. A namespace-
 // qualified spelling (`Space:Dir`) resolves through the namespace chain. The
@@ -84,45 +119,11 @@ std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
                                 std::set<std::string>& visiting, bool& reported,
                                 int file_id, int tok, diagnostic::Sink& diag,
                                 std::vector<int> const* seg_toks = nullptr) {
-    std::string base = spelling;
-    std::string suffix;
-    // Strip trailing modifiers so the base type name resolves: `[]` (iterator),
-    // `[N]` (fixed-size array dimension), then a single `^` (reference). They
-    // ride back along on the resolved base. `[N]` dims are peeled right-to-left.
-    auto endsWithArrayDim = [](std::string const& s, std::size_t& open) {
-        if (s.empty() || s.back() != ']') return false;
-        std::size_t lb = s.rfind('[');
-        if (lb == std::string::npos) return false;
-        // [] (iterator) is handled separately; require digits between the brackets.
-        if (lb + 1 >= s.size() - 1) return false;
-        for (std::size_t i = lb + 1; i + 1 < s.size(); i++) {
-            if (s[i] < '0' || s[i] > '9') return false;
-        }
-        open = lb;
-        return true;
-    };
-    bool more = true;
-    while (more) {
-        more = false;
-        if (base.size() >= 2 && base.compare(base.size() - 2, 2, "[]") == 0) {
-            suffix = "[]" + suffix;
-            base.resize(base.size() - 2);
-            more = true;
-            continue;
-        }
-        std::size_t open = 0;
-        if (endsWithArrayDim(base, open)) {
-            suffix = base.substr(open) + suffix;
-            base.resize(open);
-            more = true;
-        }
-    }
-    // A single trailing `^` is the reference modifier (mutually exclusive with
-    // the bracket suffixes at the grammar level).
-    if (!base.empty() && base.back() == '^') {
-        suffix = "^" + suffix;
-        base.pop_back();
-    }
+    // Split off the modifier suffix so the base type name resolves; the suffix
+    // (`[]` / `[N]` / `^`) rides back along on the resolved base.
+    auto bs = splitTypeModifiers(spelling);
+    std::string& base = bs.first;
+    std::string& suffix = bs.second;
     if (base.find(':') != std::string::npos) {
         std::string under =
             resolveQualifiedType(tree, base, file_id, tok, reported, diag, seg_toks);
@@ -1370,7 +1371,7 @@ Completion rewriteForArray(parse::Tree& tree, parse::Node& s, int arr_id,
         bool reported = false;
         std::string resolved = resolveTypeSpelling(tree, vtype, visiting, reported,
                                                    vfile, vtok, diag);
-        if (resolved.substr(0, resolved.size() - 1) != elem) {
+        if (widen::spell(widen::get(widen::intern(resolved)).pointee) != elem) {
             diagnostic::report(diag, {vfile, vtok,
                 "Loop variable type '" + vtype
                     + "' does not match the array element type '" + elem + "'.",

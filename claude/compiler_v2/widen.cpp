@@ -11,6 +11,8 @@
 #include <cstdlib>
 #include <limits>
 #include <ostream>
+#include <unordered_map>
+#include <vector>
 
 #include "diagnostic.h"
 
@@ -30,6 +32,15 @@ bool classify(std::string const& t, TypeKind& out) {
     if (t == "float" || t == "float32") { out = {Category::kFloat, 32}; return true; }
     if (t == "float64") { out = {Category::kFloat, 64}; return true; }
     return false;
+}
+
+// Structured reader: a primitive's (cat, bits) come straight off the interned
+// Type — no re-lex. Non-primitive forms are not numeric.
+bool classify(TypeRef ref, TypeKind& out) {
+    Type const& t = get(ref);
+    if (t.form != Type::Form::kPrimitive) return false;
+    out = {t.cat, t.bits};
+    return true;
 }
 
 namespace {
@@ -281,12 +292,13 @@ std::string convert(std::string const& src_val,
     // boundary emits an instruction. classify (above) has already approved the
     // cast — here we just lower it. A pointer-ish spelling is `^`, `[]`, or the
     // typeless null `anyptr`.
-    auto isPtrish = [](std::string const& t) {
-        return (t.size() >= 2 && t.compare(t.size() - 2, 2, "[]") == 0)
-            || (!t.empty() && t.back() == '^')
-            || t == "anyptr";
+    TypeRef src_ref = intern(src_type), dest_ref = intern(dest_type);
+    auto isPtrish = [](TypeRef r) {
+        Type::Form f = form(r);
+        return f == Type::Form::kPointer || f == Type::Form::kIterator
+            || f == Type::Form::kAnyptr;
     };
-    bool src_ptr = isPtrish(src_type), dest_ptr = isPtrish(dest_type);
+    bool src_ptr = isPtrish(src_ref), dest_ptr = isPtrish(dest_ref);
     if (src_ptr && dest_ptr) return src_val;             // ptr ↔ ptr: no-op
     if (src_ptr && dest_type == "intptr") {
         std::string tmp = newWidenTmp();
@@ -309,10 +321,10 @@ std::string convert(std::string const& src_val,
     // unreachable — assert rather than emit bad IR if a gate is ever missed.
     {
         TypeKind probe;
-        assert(!(src_ptr && classify(dest_type, probe))
+        assert(!(src_ptr && classify(dest_ref, probe))
             && "convert: ungated pointer->scalar conversion reached codegen");
     }
-    if (!classify(src_type, src_tk) || !classify(dest_type, dest_tk)) {
+    if (!classify(src_ref, src_tk) || !classify(dest_ref, dest_tk)) {
         return src_val;
     }
 
@@ -437,65 +449,204 @@ bool commonType(std::string const& t1, std::string const& t2, std::string& out) 
     return false;
 }
 
-bool isKnownType(std::string const& t) {
-    static char const* const kPrimitives[] = {
-        "bool", "char",
-        "int", "int8", "int16", "int32", "int64",
-        "uint", "uint8", "uint16", "uint32", "uint64",
-        "intptr",
-        "float", "float32", "float64",
-        "void",
-    };
-    for (auto p : kPrimitives) if (t == p) return true;
-    if (t.size() >= 2 && t.substr(t.size() - 2) == "[]") {
-        return isKnownType(t.substr(0, t.size() - 2));   // iterator
-    }
-    if (!t.empty() && t.back() == '^') {
-        return isKnownType(t.substr(0, t.size() - 1));   // reference
-    }
-    // A fixed-size array dimension `[N]` (N a positive integer): strip and recur.
-    if (!t.empty() && t.back() == ']') {
-        std::size_t lb = t.rfind('[');
-        if (lb != std::string::npos && lb + 1 < t.size() - 1) {
-            bool digits = true;
-            for (std::size_t i = lb + 1; i + 1 < t.size(); i++) {
-                if (t[i] < '0' || t[i] > '9') { digits = false; break; }
-            }
-            if (digits) return isKnownType(t.substr(0, lb));
-        }
+// Structured: a type is "known" if its leaf is a built-in primitive or void.
+// A reference/iterator/array is known iff its pointee/element is; a named slid
+// type and the internal anyptr are not (matches the pre-migration predicate).
+bool isKnownType(TypeRef ref) {
+    Type const& t = get(ref);
+    switch (t.form) {
+        case Type::Form::kPrimitive: return true;
+        case Type::Form::kVoid:      return true;
+        case Type::Form::kAnyptr:    return false;
+        case Type::Form::kSlid:      return false;
+        case Type::Form::kPointer:   return isKnownType(t.pointee);
+        case Type::Form::kIterator:  return isKnownType(t.pointee);
+        case Type::Form::kArray:     return isKnownType(t.elem);
+        case Type::Form::kTuple:     return false;   // until tuples land
     }
     return false;
 }
 
-long long typeByteSize(std::string const& t) {
-    if (t == "anyptr") return 8;
-    if (!t.empty() && t.back() == '^') return 8;                  // reference
-    if (t.size() >= 2 && t.compare(t.size() - 2, 2, "[]") == 0)   // iterator
-        return 8;
-    // A fixed array `base[N]...[M]`: total = product of every dimension times the
-    // element size. The first `[` (followed by a digit) marks the dim list; the
-    // dims are contiguous after the element-type base, in any order (the product
-    // is order-independent).
-    std::size_t lb = t.find('[');
-    if (lb != std::string::npos && lb + 1 < t.size()
-        && t[lb + 1] >= '0' && t[lb + 1] <= '9') {
-        long long total = 1;
-        std::size_t p = lb;
-        while (p < t.size() && t[p] == '[') {
-            std::size_t rb = t.find(']', p);
-            if (rb == std::string::npos) return -1;
-            total *= std::atoll(t.substr(p + 1, rb - p - 1).c_str());
-            p = rb + 1;
+bool isKnownType(std::string const& t) {
+    return isKnownType(intern(t));
+}
+
+// Structured: a pointer / iterator / anyptr is 8; a fixed array is the product
+// of its dims times the element size (-1 if the element is unsized); a primitive
+// rounds its bit width up to whole bytes (bool -> 1); void / slid / tuple are not
+// statically sized (-1).
+long long typeByteSize(TypeRef ref) {
+    Type const& t = get(ref);
+    switch (t.form) {
+        case Type::Form::kPointer:
+        case Type::Form::kIterator:
+        case Type::Form::kAnyptr:
+            return 8;
+        case Type::Form::kPrimitive:
+            return (t.bits + 7) / 8;
+        case Type::Form::kArray: {
+            long long elem = typeByteSize(t.elem);
+            if (elem < 0) return -1;
+            long long total = elem;
+            for (int d : t.dims) total *= d;
+            return total;
         }
-        long long elem = typeByteSize(t.substr(0, lb));
-        return elem < 0 ? -1 : total * elem;
+        case Type::Form::kVoid:
+        case Type::Form::kSlid:
+        case Type::Form::kTuple:
+            return -1;
     }
-    if (t == "bool" || t == "char" || t == "int8" || t == "uint8") return 1;
-    if (t == "int16" || t == "uint16") return 2;
-    if (t == "int"   || t == "int32"  || t == "uint" || t == "uint32"
-     || t == "float" || t == "float32") return 4;
-    if (t == "int64" || t == "uint64" || t == "intptr" || t == "float64") return 8;
-    return -1;   // a slid type — not statically sized yet
+    return -1;
+}
+
+long long typeByteSize(std::string const& t) {
+    return typeByteSize(intern(t));
+}
+
+// ---------------------------------------------------------------------------
+// Structured-type arena (Stage 0). A process-lifetime interned table; matches
+// the existing function-local-static pattern (nextTmpId). One TU per process,
+// so type identity is process-stable.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct Arena {
+    std::vector<Type> types;
+    std::unordered_map<std::string, TypeRef> by_spelling;
+};
+
+Arena& arena() {
+    static Arena a;
+    return a;
+}
+
+// If `s` ends with one or more contiguous `[digits]` groups, set `base` to the
+// prefix before the run and `dims` to the dim values in source order; else false.
+bool splitArraySuffix(std::string const& s, std::string& base, std::vector<int>& dims) {
+    std::size_t end = s.size();
+    std::vector<int> rev;
+    while (end >= 3 && s[end - 1] == ']') {
+        std::size_t lb = s.rfind('[', end - 1);
+        if (lb == std::string::npos || lb + 1 >= end - 1) break;   // empty -> not `[N]`
+        bool digits = true;
+        for (std::size_t i = lb + 1; i < end - 1; i++) {
+            if (s[i] < '0' || s[i] > '9') { digits = false; break; }
+        }
+        if (!digits) break;
+        rev.push_back(std::atoi(s.substr(lb + 1, end - 1 - (lb + 1)).c_str()));
+        end = lb;
+    }
+    if (rev.empty()) return false;
+    base = s.substr(0, end);
+    dims.assign(rev.rbegin(), rev.rend());
+    return true;
+}
+
+}  // namespace
+
+TypeRef intern(std::string const& s) {
+    Arena& a = arena();
+    auto it = a.by_spelling.find(s);
+    if (it != a.by_spelling.end()) return it->second;
+
+    // Decompose from the RIGHT (the outermost / last-applied suffix), mirroring
+    // isKnownType's strip order: iterator `[]`, reference `^`, array `[N]...`.
+    Type t;
+    std::string array_base;
+    std::vector<int> array_dims;
+    if (s.size() >= 2 && s.compare(s.size() - 2, 2, "[]") == 0) {
+        t.form = Type::Form::kIterator;
+        t.pointee = intern(s.substr(0, s.size() - 2));
+    } else if (!s.empty() && s.back() == '^') {
+        t.form = Type::Form::kPointer;
+        t.pointee = intern(s.substr(0, s.size() - 1));
+    } else if (splitArraySuffix(s, array_base, array_dims)) {
+        t.form = Type::Form::kArray;
+        t.elem = intern(array_base);
+        t.dims = std::move(array_dims);
+    } else if (s == "void") {
+        t.form = Type::Form::kVoid;
+    } else if (s == "anyptr") {
+        t.form = Type::Form::kAnyptr;
+    } else {
+        TypeKind k;
+        if (classify(s, k)) {
+            t.form = Type::Form::kPrimitive;
+            t.cat = k.cat;
+            t.bits = k.bits;
+            t.name = s;
+        } else {
+            t.form = Type::Form::kSlid;   // a named slid/class type
+            t.name = s;
+        }
+    }
+
+    TypeRef ref = static_cast<TypeRef>(a.types.size());
+    a.types.push_back(std::move(t));
+    a.by_spelling.emplace(s, ref);
+    return ref;
+}
+
+std::string spell(TypeRef ref) {
+    Type const& t = arena().types[ref];
+    switch (t.form) {
+        case Type::Form::kPrimitive: return t.name;
+        case Type::Form::kVoid:      return "void";
+        case Type::Form::kAnyptr:    return "anyptr";
+        case Type::Form::kSlid:      return t.name;
+        case Type::Form::kPointer:   return spell(t.pointee) + "^";
+        case Type::Form::kIterator:  return spell(t.pointee) + "[]";
+        case Type::Form::kArray: {
+            std::string s = spell(t.elem);
+            for (int d : t.dims) s += "[" + std::to_string(d) + "]";
+            return s;
+        }
+        case Type::Form::kTuple: {
+            std::string s = "(";
+            for (std::size_t i = 0; i < t.slots.size(); i++) {
+                if (i) s += ", ";
+                s += spell(t.slots[i]);
+            }
+            return s + ")";
+        }
+    }
+    return "";
+}
+
+Type const& get(TypeRef ref) {
+    return arena().types[ref];
+}
+
+bool typeSelfTest(std::ostream& out) {
+    char const* const cases[] = {
+        "bool", "char",
+        "int8", "int16", "int32", "int64", "int",
+        "uint8", "uint16", "uint32", "uint64", "uint", "intptr",
+        "float", "float32", "float64",
+        "void", "anyptr",
+        "int^", "int[]", "int[3]", "int[3][5]", "int^[3]", "int[3]^",
+        "float64[]^", "char[]", "char[]^",
+        "Point", "Point^", "Point[4]", "Point[2][3]^",
+    };
+    bool ok = true;
+    int n = 0;
+    for (char const* c : cases) {
+        std::string s = c;
+        TypeRef r = intern(s);
+        std::string back = spell(r);
+        if (back != s) {
+            ok = false;
+            out << "round-trip FAIL: '" << s << "' -> '" << back << "'\n";
+        }
+        if (intern(s) != r) {
+            ok = false;
+            out << "intern not stable: '" << s << "'\n";
+        }
+        n++;
+    }
+    if (ok) out << "type self-test: " << n << " cases OK\n";
+    return ok;
 }
 
 }  // namespace widen

@@ -18,11 +18,16 @@
 #include "parse.h"
 #include "resolve.h"
 #include "token.h"
+#include "widen.h"
 
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::cerr << "usage: slidsc <source.sl> [-o <out.ll>] [-I <path>...]\n";
         return 1;
+    }
+
+    if (std::string(argv[1]) == "--type-selftest") {
+        return widen::typeSelfTest(std::cout) ? 0 : 1;
     }
 
     std::string in_path = argv[1];

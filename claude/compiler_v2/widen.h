@@ -2,6 +2,7 @@
 
 #include <iosfwd>
 #include <string>
+#include <vector>
 
 namespace diagnostic { struct Sink; }
 
@@ -13,6 +14,62 @@ struct TypeKind {
     Category cat;
     int bits;
 };
+
+// ---------------------------------------------------------------------------
+// Structured types (replacing the type-as-string debt). A TypeRef is a stable
+// handle into a process-lifetime interned arena; equal types share a handle, so
+// type-equality is a handle compare and no consumer ever re-parses a spelling.
+// The human-readable spelling is produced by spell() only at diagnostic / ##type
+// boundaries.  Migration is staged: while the AST still carries strings, callers
+// bridge via intern()/spell(); the round-trip is exact (spell(intern(s)) == s).
+// ---------------------------------------------------------------------------
+
+using TypeRef = int;
+constexpr TypeRef kNoType = -1;
+
+struct Type {
+    enum class Form {
+        kPrimitive,   // bool/char/intN/uintN/floatN + the no-width int/uint/float + intptr
+        kVoid,        // void
+        kAnyptr,      // anyptr — the typeless null pointer
+        kPointer,     // T^  (reference)
+        kIterator,    // T[] (iterator)
+        kArray,       // T[d0][d1]... — elem + dims in source order
+        kSlid,        // a named slid/class type (not a known primitive)
+        kTuple,       // (T0, T1, ...) — slots (lands with tuples)
+    };
+    Form form = Form::kVoid;
+    Category cat = Category::kSignedInt;   // kPrimitive
+    int bits = 0;                          // kPrimitive
+    std::string name;                      // kPrimitive spelling tag / kSlid name
+    TypeRef pointee = kNoType;             // kPointer / kIterator
+    TypeRef elem = kNoType;                // kArray element
+    std::vector<int> dims;                 // kArray dims, source order
+    std::vector<TypeRef> slots;            // kTuple
+    int slid_entry_id = -1;                // kSlid (resolved later)
+};
+
+// Intern a slids type spelling, returning a stable handle. Round-trips exactly:
+// spell(intern(s)) == s for every well-formed spelling; intern(s) is stable.
+TypeRef intern(std::string const& spelling);
+
+// Render a handle back to its slids spelling.
+std::string spell(TypeRef ref);
+
+// Structured access to an interned type.
+Type const& get(TypeRef ref);
+inline Type::Form form(TypeRef ref) { return get(ref).form; }
+
+// Structured-type readers — the TypeRef-native cores. The std::string overloads
+// above bridge via intern() during the migration (Stage 1); consumers move onto
+// these as they migrate. classify(string) stays the primitive-name lexer that
+// feeds intern(), so it is NOT a bridge wrapper.
+bool classify(TypeRef ref, TypeKind& out);
+bool isKnownType(TypeRef ref);
+long long typeByteSize(TypeRef ref);
+
+// Stage-0 round-trip self-test over a fixed vocabulary; true on success.
+bool typeSelfTest(std::ostream& out);
 
 // Returns false if the slids type isn't a numeric primitive (e.g. void, char[]).
 bool classify(std::string const& slids_type, TypeKind& out);

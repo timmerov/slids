@@ -28,51 +28,41 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
 
 namespace {
 
+// The LLVM type for an interned slids type, read off the structured Type — no
+// spelling decomposition. A primitive maps by (cat, bits): float/double for the
+// float category, iN otherwise (bool -> i1). Every pointer flavor is `ptr`. A
+// fixed array nests REVERSED — the rightmost declared dim is outermost
+// (int[3][5] -> [5 x [3 x i32]]) — by wrapping each source-order dim outward.
+std::string llvmForRef(widen::TypeRef ref) {
+    widen::Type const& t = widen::get(ref);
+    switch (t.form) {
+        case widen::Type::Form::kPrimitive:
+            if (t.cat == widen::Category::kFloat) return t.bits == 32 ? "float" : "double";
+            return "i" + std::to_string(t.bits);
+        case widen::Type::Form::kVoid:
+            return "void";
+        case widen::Type::Form::kPointer:
+        case widen::Type::Form::kIterator:
+        case widen::Type::Form::kAnyptr:
+            return "ptr";
+        case widen::Type::Form::kArray: {
+            std::string ll = llvmForRef(t.elem);
+            for (int d : t.dims) ll = "[" + std::to_string(d) + " x " + ll + "]";
+            return ll;
+        }
+        case widen::Type::Form::kSlid:
+        case widen::Type::Form::kTuple:
+            break;   // not lowerable yet
+    }
+    assert(false && "llvmTypeFor: classify let through an unknown type");
+    __builtin_unreachable();
+}
+
 std::string llvmTypeFor(std::string const& slids_type,
                         int file_id, int tok,
                         diagnostic::Sink& diag) {
-    if (slids_type == "bool")    return "i1";
-    if (slids_type == "char"
-     || slids_type == "int8"
-     || slids_type == "uint8")   return "i8";
-    if (slids_type == "int16"
-     || slids_type == "uint16")  return "i16";
-    if (slids_type == "int"
-     || slids_type == "int32"
-     || slids_type == "uint"
-     || slids_type == "uint32")  return "i32";
-    if (slids_type == "int64"
-     || slids_type == "uint64"
-     || slids_type == "intptr")  return "i64";
-    if (slids_type == "float"
-     || slids_type == "float32") return "float";
-    if (slids_type == "float64") return "double";
-    if (slids_type == "void")    return "void";
-    if (slids_type.size() >= 2 && slids_type.substr(slids_type.size() - 2) == "[]")
-        return "ptr";   // iterator
-    if (!slids_type.empty() && slids_type.back() == '^') return "ptr";  // reference
-    if (slids_type == "anyptr")  return "ptr";   // nullptr
-    // Fixed-size array: build the LLVM aggregate with nesting REVERSED — the
-    // rightmost declared dim is outermost. int[3][5] -> [5 x [3 x i32]], so the
-    // leftmost (inner) dim varies fastest in memory.
-    {
-        std::size_t lb = slids_type.find('[');
-        if (lb != std::string::npos && lb + 1 < slids_type.size()
-            && slids_type[lb + 1] >= '0' && slids_type[lb + 1] <= '9') {
-            std::string ll = llvmTypeFor(slids_type.substr(0, lb),
-                                         file_id, tok, diag);
-            std::size_t p = lb;
-            while (p < slids_type.size() && slids_type[p] == '[') {
-                std::size_t rb = slids_type.find(']', p);
-                ll = "[" + slids_type.substr(p + 1, rb - p - 1) + " x " + ll + "]";
-                p = rb + 1;
-            }
-            return ll;
-        }
-    }
     (void)file_id; (void)tok; (void)diag;
-    assert(false && "llvmTypeFor: classify let through an unknown type");
-    __builtin_unreachable();
+    return llvmForRef(widen::intern(slids_type));
 }
 
 std::string normalizeFloatLiteral(std::string const& text) {
@@ -124,14 +114,17 @@ bool isUnsignedType(std::string const& t) {
 }
 
 bool isIteratorType(std::string const& t) {
-    return t.size() >= 2 && t.substr(t.size() - 2) == "[]";
+    return widen::form(widen::intern(t)) == widen::Type::Form::kIterator;
 }
 
 // The element type of an iterator (`int[]` -> `int`) or reference (`int^` ->
 // `int`). Empty otherwise.
 std::string pointeeTypeC(std::string const& t) {
-    if (isIteratorType(t)) return t.substr(0, t.size() - 2);
-    if (!t.empty() && t.back() == '^') return t.substr(0, t.size() - 1);
+    widen::Type const& ty = widen::get(widen::intern(t));
+    if (ty.form == widen::Type::Form::kIterator
+     || ty.form == widen::Type::Form::kPointer) {
+        return widen::spell(ty.pointee);
+    }
     return "";
 }
 
@@ -162,9 +155,9 @@ std::string emitToBool(std::string const& val, std::string const& slids_type,
             << val << ", 0.0\n";
         return tmp;
     }
-    if ((slids_type.size() >= 2 && slids_type.substr(slids_type.size() - 2) == "[]")
-        || (!slids_type.empty() && slids_type.back() == '^')
-        || slids_type == "anyptr") {
+    widen::Type::Form bf = widen::form(widen::intern(slids_type));
+    if (bf == widen::Type::Form::kPointer || bf == widen::Type::Form::kIterator
+     || bf == widen::Type::Form::kAnyptr) {
         std::string tmp = newTmp("tob");
         out << "  " << tmp << " = icmp ne ptr " << val << ", null\n";
         return tmp;
@@ -426,9 +419,10 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
         bool flt = isFloatType(opty);
         // Pointer comparisons (reference / iterator / anyptr) compare addresses
         // as unsigned.
-        bool ptr_cmp = (!opty.empty() && opty.back() == '^')
-            || (opty.size() >= 2 && opty.substr(opty.size() - 2) == "[]")
-            || opty == "anyptr";
+        widen::Type::Form of = widen::form(widen::intern(opty));
+        bool ptr_cmp = of == widen::Type::Form::kPointer
+            || of == widen::Type::Form::kIterator
+            || of == widen::Type::Form::kAnyptr;
         bool uns = isUnsignedType(opty) || opty == "bool" || ptr_cmp;
         char const* pred;
         if      (op == "==") pred = flt ? "oeq" : "eq";

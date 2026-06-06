@@ -46,27 +46,30 @@ bool isFloatType(std::string const& t) {
 
 // A reference type spelling: `T^`.
 bool isReference(std::string const& t) {
-    return !t.empty() && t.back() == '^';
+    return widen::form(widen::intern(t)) == widen::Type::Form::kPointer;
 }
 
 // An iterator type spelling: `T[]`.
 bool isIteratorType(std::string const& t) {
-    return t.size() >= 2 && t.substr(t.size() - 2) == "[]";
+    return widen::form(widen::intern(t)) == widen::Type::Form::kIterator;
 }
 
 // Any pointer: an iterator (`T[]`), a reference (`T^`), or the typeless null
 // (`anyptr`, nullptr's type). Used for truthy-coercion and pointer ops.
 bool isPtrLikeType(std::string const& t) {
-    return (t.size() >= 2 && t.substr(t.size() - 2) == "[]")
-        || isReference(t)
-        || t == "anyptr";
+    widen::Type::Form f = widen::form(widen::intern(t));
+    return f == widen::Type::Form::kPointer
+        || f == widen::Type::Form::kIterator
+        || f == widen::Type::Form::kAnyptr;
 }
 
 // The pointee type of a reference/iterator; empty for anyptr or a non-pointer.
 std::string pointeeType(std::string const& t) {
-    if (isReference(t)) return t.substr(0, t.size() - 1);
-    if (t.size() >= 2 && t.substr(t.size() - 2) == "[]")
-        return t.substr(0, t.size() - 2);
+    widen::Type const& ty = widen::get(widen::intern(t));
+    if (ty.form == widen::Type::Form::kPointer
+     || ty.form == widen::Type::Form::kIterator) {
+        return widen::spell(ty.pointee);
+    }
     return "";
 }
 
@@ -78,19 +81,13 @@ bool isNumericType(std::string const& t);   // defined below
 // through a buffer-class type). `void` is included though it only spells as a
 // reference (`void^`): void has no stride, so `void[]` never reaches here.
 bool isBufferClassPtr(std::string const& t) {
-    std::string p = (t.size() >= 2 && t.substr(t.size() - 2) == "[]")
-                        ? t.substr(0, t.size() - 2)
-                  : (!t.empty() && t.back() == '^') ? t.substr(0, t.size() - 1)
-                                                    : std::string();
+    std::string p = pointeeType(t);
     return p == "void" || p == "int8" || p == "uint8";
 }
 
 // The pointee of a reference / iterator (used below for same-pointee checks).
 std::string castPointee(std::string const& t) {
-    if (!t.empty() && t.back() == '^') return t.substr(0, t.size() - 1);
-    if (t.size() >= 2 && t.substr(t.size() - 2) == "[]")
-        return t.substr(0, t.size() - 2);
-    return "";
+    return pointeeType(t);
 }
 
 // May a value of type `from` be IMPLICITLY assigned to a pointer-or-intptr
@@ -152,28 +149,26 @@ bool ptrExplicitOk(std::string const& from, std::string const& to,
     return false;
 }
 
-// A fixed-size array type spelling: the first `[` is followed by a digit
-// (`int[5]`, `int[3][5]`), distinct from `int[]` (iterator) and `int^` (ref).
+// A fixed-size array type spelling (`int[5]`, `int[3][5]`), distinct from
+// `int[]` (iterator) and `int^` (ref).
 bool isArrayType(std::string const& t) {
-    std::size_t lb = t.find('[');
-    return lb != std::string::npos && lb + 1 < t.size()
-        && t[lb + 1] >= '0' && t[lb + 1] <= '9';
+    return widen::form(widen::intern(t)) == widen::Type::Form::kArray;
 }
 
 // The leftmost (innermost) dimension's size — the dimension one subscript
 // consumes. `int[3][5]` -> 3.
 int arrayFirstDim(std::string const& t) {
-    std::size_t lb = t.find('[');
-    std::size_t rb = t.find(']', lb);
-    return std::atoi(t.substr(lb + 1, rb - lb - 1).c_str());
+    return widen::get(widen::intern(t)).dims.front();
 }
 
 // The type after one subscript: strip the leftmost `[N]`. `int[3][5]` ->
 // `int[5]`; `int[5]` -> `int`.
 std::string arrayElementType(std::string const& t) {
-    std::size_t lb = t.find('[');
-    std::size_t rb = t.find(']', lb);
-    return t.substr(0, lb) + t.substr(rb + 1);
+    widen::Type const& a = widen::get(widen::intern(t));
+    std::string s = widen::spell(a.elem);
+    for (std::size_t i = 1; i < a.dims.size(); i++)
+        s += "[" + std::to_string(a.dims[i]) + "]";
+    return s;
 }
 
 bool isIntegerClass(std::string const& t) {
