@@ -27,6 +27,79 @@ the type of kSeventeen is "const int" but under the hood it is a numeric literal
 with nominal type int8.
 kForty follows the widening rules for strong types.
 kSeventeen follows the widening rules for weak types.
+
+named constants and literals have a kind: bool, char, integer, unsigned, float
+they have a value.
+they have an optional strong type: bool, char, int/uint 8/16/32/64, float 32/64.
+if they don't have a strong type then they have a nominal type that is the
+narrowest weak sized type that will hold the value: int8, uint8, int16, uint16,
+int32, uint32, int64, uint64, float32, float64.
+
+after constant folding:
+kind is to be preserved whenever possible.
+strong type is to be preserved whenever possible.
+kind and strong/nominal type must be consistent with value.
+consistent sensible things happen when different kinds and types are mixed.
+*/
+
+/*
+claude says:
+
+these are the CONST + CONST folding rules. (var + var / var + const WIDENING
+rules are different and are not described here.)
+
+combining two constants: compute the result KIND, promote the kind to stay
+consistent with the value, then settle the result TYPE (strong or flex). the
+guiding idea: preserve kind and strong type whenever the value allows, else bail
+to a flex type.
+
+result KIND -- arithmetic (+ - * / %) and bitwise (& | ^), symmetric:
+- float combines only with float; float mixed with any integer-class kind is a
+  "no common type" error.
+- bool yields to the other operand: bool + K -> K; bool + bool -> bool.
+- char is preferred whenever present: char + char/integer/unsigned -> char.
+- a signed + unsigned mix -> integer (signed wins).
+- otherwise the shared kind: integer + integer -> integer, unsigned + unsigned
+  -> unsigned.
+
+promote the KIND to fit the value (kind must stay consistent with the value):
+- bool whose value is not 0 or 1   -> integer    (true + true = 2)
+- char whose value is not 0..255   -> integer    ('A' + 1000; 'A' - 'B' = -1)
+- unsigned whose value is < 0      -> integer    (3u - 5u = -2)
+- integer whose value > int64 max  -> unsigned    (needs uint64)
+- a value that fits nothing (> uint64) is a compile error.
+
+result TYPE -- strong vs flex:
+- a bool or char result is always STRONG (bool / char).
+- flex + flex -> flex (nominal: the narrowest weak type that holds the value).
+- strong + flex, or strong + the same strong type -> that strong type if the
+  value fits it, else flex.
+- strong + strong, same sign, different width -> the larger strong type if the
+  value fits it, else flex.
+- strong signed + strong unsigned -> flex integer (a sign mix always drops
+  strength).
+- if the KIND was promoted above (the value didn't fit), the result is FLEX --
+  the strong type could not hold it.
+
+operation-specific:
+- comparison (== != < <= > >=) and logical (&& || ^^) -> bool.
+- shift (<< >>) -> the kind and type of the LEFT operand, then the value-fit
+  promotion; the right operand need only be integer-class.
+- subtraction is the only op that drives a same-sign result negative; the
+  unsigned -> integer promotion above covers it.
+- bitwise on two bools (true & false) stays bool (the 0/1 result fits).
+
+examples:
+  'A' + 1                  -> strong char 'B'      (char, fits 0..255)
+  'A' + 1000               -> flex integer 1065    (char promoted to integer)
+  'a' * 'a'                -> flex integer 9409     (char promoted)
+  char + unsigned-flex     -> strong char          (char preferred), then value-fit
+  const int8 a;  a + 1     -> strong int8 6         (fits int8)
+  const int8 a;  a + 200   -> flex integer 205      (205 exceeds int8 -> bails)
+  const int8 + const int16 -> strong int16          (larger, if value fits)
+  const int + const uint   -> flex integer          (sign mix drops strength)
+  5u - 3u                  -> unsigned 2
+  3u - 5u                  -> integer -2            (unsigned went negative)
 */
 
 const float kPi = 2.14 + 1.0;
@@ -99,11 +172,12 @@ int32 main() {
     //int xVar = 42;
     //const int kFromVar = xVar + 1;
 
-    /* compile errors — typeless const whose STRONG value overflows the inferred
-       type (the diagnostic says "inferred type", not "declared type") */
-
-    //-EXPECT-ERROR: does not fit inferred type 'int8'
-    //const kOver = kByte + 200;
+    /* a typeless const whose strong value overflows its inferred narrow type
+       DEMOTES to flex — kByte is strong int8, but 205 doesn't fit int8, so the
+       result is a flex int (no error; the const-fold demotion rule). A DECLARED
+       int8 that overflows is still a hard error (see kTooBig above). */
+    const kDemote = kByte + 200;          // 205 exceeds int8 -> flex int
+    __println(##type(kDemote) + " kDemote = " + kDemote);   // const int 205
 
     /* compile errors — typeless const initialized from a non-constant local */
 
@@ -193,9 +267,9 @@ int32 main() {
     __println(##type(kChainB) + " kChainB = " + kChainB);
     __println(##type(kNeg)    + " kNeg = "    + kNeg);
 
-    /* common-type SPELLING rule: an explicitly-written width name (int32, int64)
-       is honored; a no-width slot (int/uint) is used only when a no-width operand
-       contributed it; two width-named operands stay width-named. */
+    /* two strong consts of the SAME sign take their common type (explicit width
+       honored, no-width slot when an operand contributed it). A sign MIX drops
+       strength to flex (kWP5). */
     const int32 kI32 = 100;
     const int64 kI64 = 100;
     const uint8 kU8  = 100;
@@ -204,7 +278,7 @@ int32 main() {
     const kWP2 = kFortyTwo + kI64;         // int   + int64 -> int64 (explicit width)
     const kWP3 = kFortyTwo + kI32;         // int   + int32 -> int32 (author's width wins)
     const kWP4 = kU8 + kU;                 // uint8 + uint  -> uint  (no-width slot)
-    const kWP5 = kByte + kU8;              // int8  + uint8 -> int16 (two width, mixed sign)
+    const kWP5 = kByte + kU8;              // int8  + uint8 -> flex int (sign mix drops strength)
     __println(##type(kWP1) + " kWP1 = " + kWP1);
     __println(##type(kWP2) + " kWP2 = " + kWP2);
     __println(##type(kWP3) + " kWP3 = " + kWP3);
@@ -227,6 +301,20 @@ int32 main() {
     __println(##type(kChBig)  + " kChBig = "  + kChBig);
     __println(##type(kChMul)  + " kChMul = "  + kChMul);
     __println(##type(kChShl)  + " kChShl = "  + kChShl);
+
+    /* unsigned subtraction is sign-aware (positive stays unsigned, negative ->
+       integer); bool yields to its partner and promotes when it can't hold the
+       value, but a bitwise bool result stays bool. */
+    const uint kU5 = 5;
+    const uint kU3 = 3;
+    const kSubPos  = kU5 - kU3;     // 2  fits unsigned -> unsigned
+    const kSubNeg  = kU3 - kU5;     // -2 negative      -> integer
+    const kBoolAnd = true & false;  // 0/1              -> bool
+    const kBoolAdd = true + true;   // 2 can't fit bool -> integer
+    __println(##type(kSubPos)  + " kSubPos = "  + kSubPos);
+    __println(##type(kSubNeg)  + " kSubNeg = "  + kSubNeg);
+    __println(##type(kBoolAnd) + " kBoolAnd = " + kBoolAnd);
+    __println(##type(kBoolAdd) + " kBoolAdd = " + kBoolAdd);
 
     return 0;
 }

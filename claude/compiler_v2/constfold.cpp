@@ -389,19 +389,109 @@ std::string floatToText(double v) {
     return buf;
 }
 
-// char value-narrowing (the literal char-arith rule): an int-class result folded
-// from LITERAL operands, at least one a char literal, stays char when the value
-// fits char's range (0..255); otherwise it takes `dflt` (int, i.e. char promotes
-// to signed int on overflow — never uint). Weak-only by construction: the
-// operands are literals, so a strong const (which carries its type via
-// strong_type / commonType: char+int -> int, char+char -> char) isn't folded
-// here. `dflt` is the kind the op would otherwise emit (kIntLiteral).
-parse::Kind narrowCharKind(parse::Node const& lhs, parse::Node const& rhs,
-                           int64_t value, parse::Kind dflt) {
-    bool charish = lhs.kind == parse::Kind::kCharLiteral
-                || rhs.kind == parse::Kind::kCharLiteral;
-    if (charish && value >= 0 && value <= 255) return parse::Kind::kCharLiteral;
-    return dflt;
+// ---- const + const result kind + strength (spec: test_v2/constfold/constant.sl)
+// The folded operands' literal KIND maps to a constant kind: kBoolLiteral=bool,
+// kCharLiteral=char, kIntLiteral=integer (signed), kUintLiteral=unsigned,
+// kFloatLiteral=float. The result of a binary op gets a KIND (matrix below, then
+// promoted to hold the value) and a TYPE (strong or flex/weak).
+
+// Matrix base kind for an integer-class binary op (before value-fit promotion),
+// symmetric: char preferred; bool yields to its partner; a signed/unsigned mix
+// is signed; otherwise the shared kind.
+parse::Kind baseConstKind(parse::Kind lk, parse::Kind rk) {
+    using K = parse::Kind;
+    if (lk == K::kCharLiteral || rk == K::kCharLiteral) return K::kCharLiteral;
+    if (lk == K::kBoolLiteral && rk == K::kBoolLiteral)  return K::kBoolLiteral;
+    if (lk == K::kBoolLiteral) return rk;
+    if (rk == K::kBoolLiteral) return lk;
+    if (lk == K::kUintLiteral && rk == K::kUintLiteral)  return K::kUintLiteral;
+    return K::kIntLiteral;
+}
+
+// Promote the base kind so it stays consistent with the value `val` (decimal
+// text): bool not 0/1 -> integer; char not 0..255 -> integer; unsigned negative
+// -> integer; integer past int64 -> unsigned (uint64).
+parse::Kind promoteConstKind(parse::Kind base, std::string const& val) {
+    using K = parse::Kind;
+    bool neg = !val.empty() && val[0] == '-';
+    if (base == K::kBoolLiteral && val != "0" && val != "1") base = K::kIntLiteral;
+    if (base == K::kCharLiteral && !widen::intLiteralFits(val, "char")) base = K::kIntLiteral;
+    if (base == K::kUintLiteral && neg) base = K::kIntLiteral;
+    if (base == K::kIntLiteral && !widen::intLiteralFits(val, "int64")) base = K::kUintLiteral;
+    return base;
+}
+
+// An operand's strong type for the purpose of an INTEGER/UNSIGNED result's
+// strength: bool/char strong types don't propagate into an integer result (they
+// only make a bool/char result strong), so treat them as flex here.
+std::string famStrong(parse::Node const& n) {
+    if (n.strong_type.empty() || n.strong_type == "bool" || n.strong_type == "char")
+        return "";
+    return n.strong_type;
+}
+
+// Strength (strong type, or "" for flex) of an integer-class binary result.
+// bool/char result -> always strong. A kind PROMOTED to fit the value -> flex.
+// Otherwise: flex+flex -> flex; strong+flex -> the strong type if the value fits
+// it, else flex; both strong same-sign -> their common type (widen-within-family,
+// honoring an explicit width) if the value fits, else flex; mixed sign -> flex.
+std::string constResultStrong(parse::Node const& lhs, parse::Node const& rhs,
+                              parse::Kind base, parse::Kind result,
+                              std::string const& val) {
+    using K = parse::Kind;
+    if (result == K::kBoolLiteral) return "bool";
+    if (result == K::kCharLiteral) return "char";
+    if (result != base) return "";                 // promoted to fit -> flex
+    std::string a = famStrong(lhs), b = famStrong(rhs);
+    if (a.empty() && b.empty()) return "";          // flex + flex
+    if (a.empty() || b.empty()) {                   // strong + flex
+        std::string s = a.empty() ? b : a;
+        return widen::intLiteralFits(val, s) ? s : "";
+    }
+    widen::TypeKind ka, kb;                          // both strong
+    if (!widen::classify(a, ka) || !widen::classify(b, kb)) return "";
+    if ((ka.cat == widen::Category::kSignedInt)
+        != (kb.cat == widen::Category::kSignedInt)) return "";   // mixed sign -> flex
+    std::string out;
+    if (!widen::commonType(a, b, out)) return "";
+    return widen::intLiteralFits(val, out) ? out : "";
+}
+
+// Strength of a FLOAT binary result (no kind promotion, no sign): flex+flex ->
+// flex; strong+flex -> the strong float type if the value fits, else flex; both
+// strong -> the wider float type if it fits, else flex.
+std::string floatResultStrong(parse::Node const& lhs, parse::Node const& rhs,
+                              std::string const& val) {
+    std::string a = famStrong(lhs), b = famStrong(rhs);
+    if (a.empty() && b.empty()) return "";
+    if (a.empty() || b.empty()) {
+        std::string s = a.empty() ? b : a;
+        return widen::floatLiteralFits(val, s) ? s : "";
+    }
+    std::string out;
+    if (!widen::commonType(a, b, out)) return "";
+    return widen::floatLiteralFits(val, out) ? out : "";
+}
+
+// Emit a folded SHIFT result of value `val`: kind and strength follow the LEFT
+// operand (then the value-fit promotion). A bool/char result is strong; a
+// promoted kind is flex; otherwise the lhs's strong type if the value fits, else
+// flex.
+std::unique_ptr<parse::Node> emitShiftResult(parse::Node& node, parse::Node& lhs,
+                                             std::string val) {
+    parse::Kind base = lhs.kind;
+    parse::Kind kind = promoteConstKind(base, val);
+    auto out = makeLitAt(node, kind, std::move(val));
+    std::string st;
+    if (kind == parse::Kind::kBoolLiteral)      st = "bool";
+    else if (kind == parse::Kind::kCharLiteral) st = "char";
+    else if (kind != base)                      st = "";   // promoted -> flex
+    else {
+        std::string a = famStrong(lhs);
+        st = (!a.empty() && widen::intLiteralFits(out->text, a)) ? a : "";
+    }
+    out->strong_type = st;
+    return out;
 }
 
 // D1 + D3 float arm. Returns kFloatLiteral for arith, kBoolLiteral for cmp.
@@ -456,7 +546,9 @@ std::unique_ptr<parse::Node> tryFoldFloatBinary(parse::Node& node,
             "Floating-point overflow in folded expression.", {}});
         return nullptr;
     }
-    return makeLitAt(node, parse::Kind::kFloatLiteral, floatToText(r));
+    auto out = makeLitAt(node, parse::Kind::kFloatLiteral, floatToText(r));
+    out->strong_type = floatResultStrong(lhs, rhs, out->text);
+    return out;
 }
 
 // D2 shift fold. Dispatches on lhs kind: float lhs lowers to pow2 mul/div;
@@ -497,46 +589,33 @@ std::unique_ptr<parse::Node> tryFoldShift(parse::Node& node,
 
     // Int lhs: count >= 64 folds to 0 per spec.
     if (count_mag >= 64) {
-        return makeLitAt(node, parse::Kind::kIntLiteral, "0");
+        return emitShiftResult(node, lhs, "0");
     }
     int count = static_cast<int>(count_mag);
     bool lhs_neg = false;
     uint64_t lhs_mag = 0;
     if (!parseSignedDigits(lhs.text, lhs_neg, lhs_mag)) return nullptr;
-    bool lhs_unsigned = (lhs.kind == parse::Kind::kUintLiteral
-                      || lhs.kind == parse::Kind::kCharLiteral
-                      || lhs.kind == parse::Kind::kBoolLiteral);
+    bool lhs_signed = (lhs.kind == parse::Kind::kIntLiteral);
 
     if (op == "<<") {
-        // Compute in uint64 to avoid signed-overflow UB; reinterpret per kind.
+        // Compute in uint64 to avoid signed-overflow UB; a signed lhs reinterprets
+        // the bits as int64. emitShiftResult settles kind + strength off the lhs.
         uint64_t v = lhs_neg ? (0ULL - lhs_mag) : lhs_mag;
         uint64_t r = v << count;
-        if (lhs.kind == parse::Kind::kCharLiteral) {
-            // char shift keeps char when it fits, else promotes to int.
-            parse::Kind k = (r <= 255) ? parse::Kind::kCharLiteral
-                                       : parse::Kind::kIntLiteral;
-            return makeLitAt(node, k, std::to_string(static_cast<int64_t>(r)));
-        }
-        if (lhs_unsigned) {
-            return makeLitAt(node, parse::Kind::kUintLiteral, std::to_string(r));
-        }
-        return makeLitAt(node, parse::Kind::kIntLiteral,
-                         std::to_string(static_cast<int64_t>(r)));
+        std::string val = lhs_signed ? std::to_string(static_cast<int64_t>(r))
+                                      : std::to_string(r);
+        return emitShiftResult(node, lhs, std::move(val));
     }
     // >>
-    if (lhs.kind == parse::Kind::kCharLiteral) {
-        // char >> count always fits char (result <= lhs).
-        uint64_t r = lhs_mag >> count;
-        return makeLitAt(node, parse::Kind::kCharLiteral, std::to_string(r));
+    std::string val;
+    if (lhs_signed) {
+        int64_t sv = lhs_neg ? -static_cast<int64_t>(lhs_mag)
+                             :  static_cast<int64_t>(lhs_mag);
+        val = std::to_string(sv >> count);   // arithmetic right shift
+    } else {
+        val = std::to_string(lhs_mag >> count);
     }
-    if (lhs_unsigned) {
-        uint64_t r = lhs_mag >> count;
-        return makeLitAt(node, parse::Kind::kUintLiteral, std::to_string(r));
-    }
-    int64_t sv = lhs_neg ? -static_cast<int64_t>(lhs_mag)
-                         :  static_cast<int64_t>(lhs_mag);
-    int64_t r = sv >> count;  // arithmetic right shift (C++20-defined)
-    return makeLitAt(node, parse::Kind::kIntLiteral, std::to_string(r));
+    return emitShiftResult(node, lhs, std::move(val));
 }
 
 // D3 int-class comparison fold.
@@ -567,9 +646,21 @@ std::unique_ptr<parse::Node> foldIntCompare(parse::Node& node,
     return makeLitAt(node, parse::Kind::kBoolLiteral, r ? "1" : "0");
 }
 
-// D4 — int-class arith with rule-6 overflow-to-unsigned exception. Result
-// is kIntLiteral when the int64 path succeeds, kUintLiteral when int64
-// overflows but uint64 holds it.
+// Emit a folded integer-class result of value `val` (decimal text): the result
+// KIND comes from the operand-kind matrix promoted to hold the value, and the
+// strong/flex TYPE from constResultStrong (the const+const rules).
+std::unique_ptr<parse::Node> emitIntResult(parse::Node& node, parse::Node& lhs,
+                                           parse::Node& rhs, std::string val) {
+    parse::Kind base = baseConstKind(lhs.kind, rhs.kind);
+    parse::Kind kind = promoteConstKind(base, val);
+    auto out = makeLitAt(node, kind, std::move(val));
+    out->strong_type = constResultStrong(lhs, rhs, base, kind, out->text);
+    return out;
+}
+
+// D4 — int-class arith/bitwise. Computes the value, then settles kind + strength
+// per the const+const rules (rule-6 overflow-to-unsigned falls out of the
+// integer->unsigned value-fit promotion).
 std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
                                                   parse::Node& lhs, parse::Node& rhs,
                                                   std::string const& op,
@@ -585,16 +676,12 @@ std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
         }
         // INT64_MIN / -1 overflows int64 → uint64 holds the magnitude.
         if (a == INT64_MIN && b == -1) {
-            if (op == "/") {
-                return makeLitAt(node, parse::Kind::kUintLiteral,
-                                 std::to_string(static_cast<uint64_t>(INT64_MAX) + 1ULL));
-            }
-            // INT64_MIN % -1 = 0 mathematically.
-            return makeLitAt(node, parse::Kind::kIntLiteral, "0");
+            std::string val = (op == "/")
+                ? std::to_string(static_cast<uint64_t>(INT64_MAX) + 1ULL) : "0";
+            return emitIntResult(node, lhs, rhs, std::move(val));
         }
-        int64_t r = (op == "/") ? (a / b) : (a % b);
-        return makeLitAt(node, narrowCharKind(lhs, rhs, r, parse::Kind::kIntLiteral),
-                         std::to_string(r));
+        return emitIntResult(node, lhs, rhs,
+                             std::to_string((op == "/") ? (a / b) : (a % b)));
     }
 
     if (op == "&" || op == "|" || op == "^") {
@@ -602,8 +689,7 @@ std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
         if      (op == "&") r = a & b;
         else if (op == "|") r = a | b;
         else /*    ^   */   r = a ^ b;
-        return makeLitAt(node, narrowCharKind(lhs, rhs, r, parse::Kind::kIntLiteral),
-                         std::to_string(r));
+        return emitIntResult(node, lhs, rhs, std::to_string(r));
     }
 
     // + - * with rule-6 overflow detection.
@@ -615,8 +701,7 @@ std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
     else return nullptr;
 
     if (!overflow) {
-        return makeLitAt(node, narrowCharKind(lhs, rhs, r, parse::Kind::kIntLiteral),
-                         std::to_string(r));
+        return emitIntResult(node, lhs, rhs, std::to_string(r));
     }
     // Retry in uint64; if it also overflows, leave unfolded (catch-all surfaces).
     uint64_t ua = static_cast<uint64_t>(a);
@@ -627,7 +712,7 @@ std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
     else if (op == "-") u_overflow = __builtin_sub_overflow(ua, ub, &ur);
     else /*    *   */   u_overflow = __builtin_mul_overflow(ua, ub, &ur);
     if (u_overflow) return nullptr;
-    return makeLitAt(node, parse::Kind::kUintLiteral, std::to_string(ur));
+    return emitIntResult(node, lhs, rhs, std::to_string(ur));
 }
 
 // Binary fold dispatcher. Both operands must be literals; per-shape arms

@@ -292,12 +292,20 @@ Phase 4 — types beyond primitives
     diagnostics for assign-to-const, range overflow, missing init, dup, cyclic).
     Inferred-type constants LANDED (typeless `const name = expr`, grammar infers
     when `const` is followed by `name =`): the strong/weak distinction via
-    strong_type on nodes / const_strong_type on entries — constfold's combineStrong
-    + makeLitAt propagate strength through folds (a strong/typed operand makes the
-    result strong + takes its type, both-strong uses commonType, a bool/comparison
-    result is weak); tryCaptureConst infers a typeless const (strong rhs takes its
-    type, a bare-literal rhs is WEAK -> weakDefaultType preferred spelling). NOT in
-    this landing: strong-const WIDENING enforcement in runtime contexts (todo.txt).
+    strong_type on nodes / const_strong_type on entries. The CONST + CONST fold
+    rules (spec in constant.sl's claude block) determine a folded result's KIND and
+    strength: baseConstKind (matrix — char preferred, bool yields, sign mix ->
+    signed) + promoteConstKind (value-fit: bool!0/1->int, char!0..255->int,
+    unsigned<0->int, integer>int64->uint) for the kind; constResultStrong /
+    floatResultStrong for the type (flex+flex->flex; strong+flex / strong+strong
+    same-sign -> the type [commonType for both-strong] if the value fits, else
+    DEMOTE to flex; sign mix -> flex; bool/char result -> strong). emitIntResult /
+    emitShiftResult / the float arm apply it; shift follows the LHS. So a strong
+    const that overflows its narrow type demotes to flex (e.g. `const k = int8c +
+    200` -> flex int 205, was the kOver error), and `'A'+1`->strong char,
+    `3u-5u`->int, `true+true`->int. Canon: constant.sl (kSS/kWP/kCh/kDemote/kSub*/
+    kBool*). NOT in this landing: strong-const WIDENING enforcement in runtime
+    contexts — now UNBLOCKED by the demotion (todo.txt).
   * namespaces — LANDED (pulled forward from Phase 8). `Name { members }` open/
     reopen at file or function-body scope; members are consts, functions, nested
     namespaces; kNamespace entry with persistent frame identity; open-namespace-

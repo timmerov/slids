@@ -51,13 +51,6 @@ DEFERRED FEATURES (later; may not be on the plan)
     noted in test_v2/misc/sizeof.sl's claude block. Broader than sizeof — covers
     any const-expression dimension.
 
-  * NAMED-SWITCH BREAK (`break someswitch;`) — breaking a non-innermost switch by
-    its name. switch.sl marks it "distant future, low utility". Session 6 (labels)
-    LANDED loop labels + numbered/named break of LOOPS only; switch naming was
-    deliberately left out. Needs switch blocks to carry a label (Node.label +
-    parse the `:name` after a switch body, currently a parse error) and the
-    numbered/named resolver to consider switch frames as named targets.
-
   * FOR-TUPLE / FOR-CLASS — the remaining colon-form for shapes (FOR-ARRAY
     LANDED in Phase 4 — resolve-stage desugar to kForLongStmt). for-tuple needs
     anon-tuples (Phase 4); for-class needs classes + a for-each protocol
@@ -81,13 +74,6 @@ DEFERRED FEATURES (later; may not be on the plan)
     determination moved/duplicated post-fold. Low priority — `while (true)` /
     empty-cond are the common forms and are fully handled.
 
-  * REOPEN ENUMS — re-`enum SameName ( ... )` to add members to an existing
-    enum (member names can't collide across openings). Open spec qs: does the
-    value counter restart at 0 on reopen, and must the first member of a
-    reopening carry an explicit value? Defer until decided. (Namespaces already
-    reopen; enums would reuse openNamespace's find-or-create, but the
-    value-counter continuation across openings is the undecided part.)
-
   * ##type — LANDED: the 7-macro set + `##type(x)`; the alias-label channel (an
     alias/enum-typed VARIABLE reports the source spelling — `Integer x` ->
     `Integer`, `Dir d` -> `Dir` — via a parallel alias_label, not un-erase); and
@@ -98,14 +84,26 @@ DEFERRED FEATURES (later; may not be on the plan)
     FUNCTION `##type(Fn)` (waits on function aliases), and the `#` 5-tuple
     (Phase 5, blocked on tuples + `^`).
 
-  * STRONG-CONST WIDENING ENFORCEMENT — a strong const should widen-within-family
-    (not flex) when used in a runtime context; today strong_type is consumed ONLY
-    by constfold's const inference, so a strong const still substitutes to a
-    flexing literal in non-const use. This is the widening-BEHAVIOR half of
-    inferred-type constants (the type-inference half landed: strong_type on nodes /
-    const_strong_type on entries, combineStrong propagation, weakDefaultType for a
-    bare-literal rhs). prerequisite: classify/codegen consume strong_type at the
-    widen sites.
+  * STRONG-CONST WIDENING ENFORCEMENT — a strong const should behave like a TYPED
+    value at use sites (widen within family, REJECT narrowing / cross-family like a
+    variable of its type), not as a flexing literal. Today `const int sc=5; int8
+    a=sc;` SILENTLY NARROWS where `int sv=5; int8 b=sv;` is correctly rejected.
+    NOT a "consume strong_type at the widen site" one-liner: a const substitutes
+    to a LITERAL, and codegen's narrowing check (widen::convert) only fires for a
+    NON-literal (variable) rhs — a literal rhs is emitted in the declared type with
+    a RANGE check (42 fits int8 -> allowed), never a narrowing check. So enforcement
+    must be a NEW classify-stage assignment-compatibility check for strong-const
+    literals at every assignment-family site (var-decl, assign, store, aug-assign,
+    call-arg, return): reject when `commonType(strong_type, lvalue) != lvalue`
+    (narrowing / sign-change / cross-family). (float / cross-family ALREADY errors
+    today for both literal and var rhs; the open hole is same-family NARROWING of an
+    in-range strong const.)
+    NOW UNBLOCKED: the const+const fold rules landed (constant.sl) — a strong const
+    literal can no longer carry a value outside its own type (it DEMOTES to flex on
+    overflow). So the value-fits-strong gate that the old caveat needed is now
+    UNCONDITIONAL, and the check is the clean classify-stage addition above.
+    The type-inference half is DONE (##type of a strong const reports its declared
+    type; strong_type on nodes / const_strong_type on entries / combineStrong).
 
   * ALIAS FUNCTION-RENAME — `alias Fn = LongName;` (use case: importing C
     functions with ugly names).
@@ -146,3 +144,20 @@ DEFERRED TESTS
     will wrongly error when `^` reference values land (Phase 4). Widen the
     shared helper then — at the helper, not the if-condition call site.
     prerequisite: pointers/iterators (Phase 4).
+
+
+ASPIRATIONAL FEATURES (someday; low priority, may never land)
+
+  * REOPEN ENUMS — re-`enum SameName ( ... )` to add members to an existing
+    enum (member names can't collide across openings). Open spec qs: does the
+    value counter restart at 0 on reopen, and must the first member of a
+    reopening carry an explicit value? Defer until decided. (Namespaces already
+    reopen; enums would reuse openNamespace's find-or-create, but the
+    value-counter continuation across openings is the undecided part.)
+
+  * NAMED-SWITCH BREAK (`break someswitch;`) — breaking a non-innermost switch by
+    its name. switch.sl marks it "distant future, low utility". Session 6 (labels)
+    LANDED loop labels + numbered/named break of LOOPS only; switch naming was
+    deliberately left out. Needs switch blocks to carry a label (Node.label +
+    parse the `:name` after a switch body, currently a parse error) and the
+    numbered/named resolver to consider switch frames as named targets.
