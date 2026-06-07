@@ -34,13 +34,6 @@ REACH GOALS
     element forces by-ref + the class copy/move machinery. prerequisite: classes
     (Phase 5).
 
-  * FOR-TUPLE HETEROGENEOUS-LITERAL REJECTION — `for (x : (1, true))` over a
-    heterogeneous tuple LITERAL is not rejected (it would miscompile: the iterator
-    strides by slot-0's type). A tuple VARIABLE is checked at resolve (the type is
-    known); a literal's slot types are classify-time, so the check must move there
-    (or the for-tuple lowering must defer past classify). Homogeneous literals
-    (the spec's cases) work; only heterogeneous misuse is unguarded.
-
   * ARRAY FROM A TUPLE VALUE — `a = tupleVar` / `int a[3] = tupleVar` where the
     rhs is a tuple VARIABLE, not a literal. The landed array-from-tuple gates on a
     tuple LITERAL (kTupleExpr) so it can flatten the leaf NODES + elide the
@@ -79,11 +72,10 @@ DEFERRED FEATURES (later; may not be on the plan)
     canon block (lines ~21, 43-54, 77-86); land them with Phase 6 when const is
     a real qualifier. Until then those lines stay commented and untested.
 
-  * FOR-TUPLE / FOR-CLASS — the remaining colon-form for shapes (FOR-ARRAY
-    LANDED in Phase 4 — resolve-stage desugar to kForLongStmt). for-tuple needs
-    anon-tuples (Phase 4); for-class needs classes + a for-each protocol
-    (op[]/size or begin/end/next, Phase 5). Each desugars to a kForLongStmt over
-    an index, like for-array. Not landable until those types exist.
+  * FOR-CLASS — the last colon-form for shape (FOR-ARRAY + FOR-TUPLE LANDED in
+    Phase 4, resolve-stage desugar to kForLongStmt). for-class needs classes + a
+    for-each protocol (op[]/size or begin/end/next, Phase 5). Desugars to a
+    kForLongStmt like the others. Not landable until classes exist.
 
   * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — the canon says by-value iteration
     requires a primitive element type (a reference works for all). With only

@@ -38,10 +38,24 @@ TYPE REPRESENTATION (the carrier; not a stage)
   * Types are STRUCTURED, never strings. A type is a widen::TypeRef — a handle
     into a process-lifetime interned arena (widen::intern / widen::spell). A
     widen::Type carries a Form (kNone / kPrimitive / kVoid / kAnyptr / kPointer /
-    kIterator / kArray / kSlid / kTuple) plus its payload (cat+bits, pointee,
-    elem+dims, slots). Interning is keyed on SPELLING, so int / int32 / intptr
-    stay DISTINCT handles yet share cat()/bits(). spell(intern(s)) == s exactly,
-    guarded by `slidsc --type-selftest` (run by run_tests.sh).
+    kIterator / kArray / kSlid / kTuple / kAlias) plus its payload (cat+bits,
+    pointee, elem+dims, slots, underlying). spell(intern(s)) == s exactly (bar
+    kAlias, which is minted not parsed), guarded by `slidsc --type-selftest`.
+  * Dedup is STRUCTURAL (by_struct, keyed on form + child handles), NOT by
+    spelling — int / int32 / intptr still stay DISTINCT (their spellings differ)
+    yet share cat()/bits(), but an alias-bearing composite (`(Dir,bool)`, `Dir^`)
+    is now distinct from its kSlid-leaf form, which a spelling key could not do
+    (grammar interns spellings with kSlid leaves BEFORE resolve knows they are
+    aliases). intern(spelling) parses then structurally interns; by_spelling is
+    only a parse memo. Structural constructors build a composite from child
+    HANDLES: internPointer / internIterator / internArray / internTuple, and
+    internAlias(name, underlying) — the last minted ONLY by resolve (which has the
+    symbol table). strip() peels one alias layer; deepStrip() removes all (so
+    `Integer^` and `IntPtr=int^` compare equal modulo aliases).
+  * kAlias is a TRANSPARENT type: spells as its name (for ##type/diagnostics) but
+    sees through to `underlying` for every structural query (classify / llvm /
+    size / known / the form-predicate cluster via strip). Aliases + enum type
+    facets are kAlias; alias_label is now a derived display cache, not a channel.
   * Every type FIELD is a TypeRef: Node.return_type / inferred_type / op_type /
     nominal_type / strong_type and Entry.slids_type / const_strong_type /
     param_types / capture_types (both parse:: and ast::), plus codegen::VarInfo.
@@ -57,6 +71,32 @@ TYPE REPRESENTATION (the carrier; not a stage)
     Form::kNone, so every predicate returns false/none on it AND a form==kVoid
     test can never mistake a no-type for void — a stray no-type surfaces loudly
     (e.g. llvmForRef assert) rather than silently lowering as void.
+
+ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
+
+  * A tuple is Form::kTuple (slots). LITERAL `(a,b,...)` is kTupleExpr (grammar:
+    parsePrimary, comma after the first paren expr; size-1 collapses to the bare
+    expr). TYPE `(T,T,...)` parses in parseType; a `(`-led statement disambiguates
+    via looksLikeTupleTypeDecl (trailing name) / looksLikeTupleDestructure (`)=`).
+  * Landed: construct + whole-copy + const-index read `t[k]` (extractvalue; a
+    RUNTIME index on a tuple is rejected — heterogeneous slots); slot write
+    `t[k]=v` (struct-GEP) + destructure `(a,b,)=t` (kDestructureStmt, null child =
+    skipped slot); slot-wise arith + scalar broadcast (`(1,2,3)+7`); params /
+    returns / references (`{i32,i32}` by value, `(T,T)^` = ptr). Codegen builds
+    the aggregate via insertvalue; classify slot-types via internTuple.
+  * ARRAY from a homogeneous tuple: `int a[3]=(1,2,3)`, `a=(4,5,6)`, multi-dim
+    `int td[2][3]=((1,2),(3,4),(5,6))` (nested tuple in storage/outer order onto
+    the reversed-dim layout). Element-wise, tuple aggregate ELIDED, each slot
+    widens into the element type (resolve marks assigned_arrays; classify counts +
+    per-leaf checks; codegen flat-GEP per leaf).
+  * FOR-TUPLE `for (v : tuple)` over a HOMOGENEOUS tuple: rewriteForTuple lowers
+    (like for-array) to a kForLongStmt walking an iterator (`_$iter=^base[0]`,
+    typeless so classify fills T); a VARIABLE iterates in place (no copy, mutable
+    by-ref writes back), a LITERAL spills to a temp (require_homogeneous-checked).
+  * #x desugars (grammar parseUnary) to the 5-tuple `(##file, ##line, ##type(x),
+    ##name(x), ^x)`; x must be an lvalue. Passing an rvalue tuple to a reference
+    param (`dump(#x)`) materializes it in a temp — emitCall brackets such a call
+    in @llvm.stacksave/stackrestore so a materializing call in a loop doesn't leak.
 
 STAGE FILES (.h / .cpp pairs)
 

@@ -726,6 +726,7 @@ struct Parser {
             tuple->children.push_back(strlit(baseName(tokens.files[h_file].path)));  // ##file
             tuple->children.push_back(strlit(std::to_string(h_line)));               // ##line
             auto ty = newNodeAt(parse::Kind::kStringifyType, h_file, h_tok);         // ##type(x)
+            ty->quiet_diag = true;   // the sibling ^x reports a bad operand once
             ty->children.push_back(std::move(x_type));
             tuple->children.push_back(std::move(ty));
             tuple->children.push_back(strlit(std::move(x_text)));                    // ##name(x)

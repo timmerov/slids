@@ -274,12 +274,20 @@ Phase 4 — types beyond primitives
     when tuples / `(const T)^` land. Pre-existing blocker for the idiomatic
     `T^ p = new T` with a non-primitive T: `Alias^`/`ClassName^` decls don't parse
     yet [todo.txt].)
-  * anonymous tuples (`(T1, T2, ...)`) — NOW UNBLOCKED by the TypeRef migration
-    (see CURRENT STATE): a tuple is one more widen::Type::Form (kTuple, already
-    stubbed in the enum + spell()/llvmForRef switches), with a `slots` vector —
-    NOT a parallel string mechanism. MVP spec: test_v2/expression/tuple.sl
-    (`claude says:` block). The `new (` placement-vs-tuple-type grammar seam
-    (above) is revisited here.
+  * anonymous tuples (`(T1, T2, ...)`) — LANDED (Form::kTuple + slots, NOT a
+    string mechanism). kTupleExpr through all stages. Landed: construct +
+    whole-copy + const-index read (runtime tuple index rejected); slot write
+    `t[k]=v` + destructure `(a,b,)=t` (kDestructureStmt, null = skipped slot);
+    slot-wise arith + scalar broadcast; params/returns/references. ARRAY-from-
+    tuple (1-D + multi-dim init/assign, element-wise, widening). FOR-TUPLE
+    `for (v:tuple)` (homogeneous; in-place for vars, spill for literals; by
+    value/ref). `#x` 5-tuple (`(##file,##line,##type,##name,^x)`). Tests:
+    test_v2/expression/tuple.sl, pointer/array.sl, flow/fortuple.sl, misc/macros.sl.
+    STILL OPEN here: arrays-OF-tuples + sub-array assign + array-from-tuple-VALUE
+    (todo.txt); the `new (` placement-vs-tuple-type seam (deferred with `new
+    T(value)`); for-tuple over non-primitive elements (Phase 5) + by-ref-to-const
+    enforcement (Phase 6).
+  * move / swap on PRIMITIVES + TUPLES (`a <-- b`, `a <--> b`) — STILL OPEN. These operators
   * move / swap on PRIMITIVES + TUPLES (`a <-- b`, `a <--> b`) — these operators
     are NOT class-only: they apply to primitive values (mechanical value
     transfer / exchange) and to tuples (slot-by-slot, recursive). Land the
@@ -430,11 +438,20 @@ CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)
   widen::TypeRef (interned arena, structured Type/Form). Landed in 5 stages
   (arena+round-trip → widen internals → codegen → classify+resolve → flip the
   parse::/ast::Node + parse::Entry fields), each behavior-preserving: suite 374,
-  IR byte-identical (bar the macros ##time clock), `--type-selftest` 31 cases.
-  Round-trip polish DONE (predicate+cast-rule cluster reads structure off the
-  handle, no spell/intern round-trips). NEVER cache canonical spellings (v1's
-  fatal mistake). Full detail: readme.txt "TYPE REPRESENTATION" + the
-  type-representation memory. This unblocks anonymous tuples (kTuple Form).
+  IR byte-identical (bar the macros ##time clock). Round-trip polish DONE
+  (predicate+cast-rule cluster reads structure off the handle, no spell/intern
+  round-trips). NEVER cache canonical spellings (v1's fatal mistake).
+
+  THEN — ARENA STRUCTURAL-DEDUP REDESIGN + ALIASES-AS-TYPES (DONE). The arena now
+  dedups by STRUCTURE (form + child handles), not spelling — required so an
+  alias-bearing composite is distinct from its kSlid-leaf form (grammar interns
+  spellings before resolve knows they're aliases). Aliases + enum facets became a
+  transparent Form::kAlias (name + underlying), minted by resolve's structural
+  resolveTypeRef; see-through via strip()/deepStrip() + classify; ##type names
+  them. Behavior-identical (suite 374, IR byte-identical, `--type-selftest` 36).
+  Full detail: readme.txt "TYPE REPRESENTATION" + the type-representation memory.
+  This unblocked anonymous tuples (now LANDED — see Phase 4) whose slots can be
+  kAlias.
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

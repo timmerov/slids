@@ -1332,6 +1332,24 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     tree.entries[s.resolved_entry_id].slids_type = inferred;
                     tree.entries[s.resolved_entry_id].alias_label = rhs.alias_label;
                 }
+                // A for-tuple LITERAL spill temp must be homogeneous — the loop
+                // iterates by an iterator strided by slot 0's type, so a mixed
+                // tuple would misread the other slots. (A tuple VARIABLE is checked
+                // at resolve, where its type is known.)
+                if (s.require_homogeneous
+                    && widen::form(widen::strip(s.return_type))
+                           == widen::Type::Form::kTuple) {
+                    std::vector<widen::TypeRef> slots =
+                        widen::get(widen::strip(s.return_type)).slots;
+                    for (std::size_t i = 1; i < slots.size(); i++) {
+                        if (widen::deepStrip(slots[i]) != widen::deepStrip(slots[0])) {
+                            diagnostic::report(diag, {s.file_id, s.tok,
+                                "A for-loop over a tuple requires a homogeneous "
+                                "tuple.", {}});
+                            break;
+                        }
+                    }
+                }
                 // An array initialized from a tuple literal (`int a[3]=(1,2,3)`)
                 // is checked element-wise; otherwise a typed pointer init obeys
                 // the implicit-cast rules (a typeless init took the rhs type above,

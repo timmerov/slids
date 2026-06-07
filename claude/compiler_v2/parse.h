@@ -153,6 +153,13 @@ struct Node {
     std::string label;
     int loop_levels = -1;
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
+    bool quiet_diag = false;     // kStringifyType inside a `#x` desugar: the same
+                                 // operand is also resolved by the sibling `^x`, so
+                                 // suppress THIS arm's undefined-operand diagnostic
+                                 // (the `^x` arm reports the real error once).
+    bool require_homogeneous = false; // kVarDeclStmt: a for-tuple LITERAL spill
+                                 // temp — classify rejects a non-homogeneous
+                                 // inferred tuple (the iterator strides by slot 0).
     bool non_completing = false; // while/do-while/for-long: a constant-true
                                  // condition with no escaping break — the loop
                                  // never exits. Set in resolve (Abrupt completion

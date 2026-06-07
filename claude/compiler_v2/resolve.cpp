@@ -1186,15 +1186,18 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                     else resolveExpr(tree, operand, diag, /*unevaluated=*/true);  // read-mark, no DA
                     return;
                 }
-                char const* what = (k == parse::EntryKind::kFunction)
-                    ? "function" : "namespace";
-                diagnostic::report(diag, {operand.file_id, operand.tok,
-                    "'" + operand.name + "' is a " + what
-                        + ", not a value or an alias.", {}});
+                if (!e.quiet_diag) {
+                    char const* what = (k == parse::EntryKind::kFunction)
+                        ? "function" : "namespace";
+                    diagnostic::report(diag, {operand.file_id, operand.tok,
+                        "'" + operand.name + "' is a " + what
+                            + ", not a value or an alias.", {}});
+                }
                 return;
             }
             // qualified: resolveQualifiedRef already reported the resolution error.
-            if (!qualified) {
+            // quiet_diag (`#x`): the sibling `^x` reports the unresolved operand.
+            if (!qualified && !e.quiet_diag) {
                 diagnostic::report(diag, {operand.file_id, operand.tok,
                     "'" + operand.name + "' is not a value or an alias.", {}});
             }
@@ -1659,6 +1662,7 @@ Completion rewriteForTuple(parse::Tree& tree, parse::Node& s, int var_id,
         tmp->kind = parse::Kind::kVarDeclStmt;
         tmp->name = tmpName; tmp->name_tok = itok;
         tmp->return_type = tmp_type;
+        tmp->require_homogeneous = true;   // classify rejects a heterogeneous literal
         tmp->file_id = ifile; tmp->tok = itok;
         tmp->children.push_back(std::move(s.children[1]));   // the literal
         varlist.push_back(std::move(tmp));
