@@ -1,5 +1,5 @@
 macros.sl
-44
+42
 main
 a+b
 obj.field[2]
@@ -16,3 +16,4 @@ Whole type = int
 Status type = int
 Geo:Dir type = int
 Geo:kSize type = const int
+macros.sl:95: int x = 42

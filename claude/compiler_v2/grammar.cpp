@@ -696,6 +696,44 @@ struct Parser {
             node->children.push_back(std::move(operand));
             return node;
         }
+        // Prefix `#x` describes a postfix lvalue: it desugars HERE to the 5-tuple
+        // `(##file, ##line, ##type(x), ##name(x), ^x)` — all of which already
+        // exist (string-literal macros, kStringifyType, address-of, tuple
+        // literal). x is parsed twice (one tree for ##type, one for ^x — there is
+        // no parse-node cloner) and its lexed text captured for ##name. ^x
+        // enforces that x is an lvalue.
+        if (k == token::Kind::kHash) {
+            int h_file = peek().file_id;
+            int h_tok = pos;
+            int h_line = peek().line;
+            advance();   // #
+            int x_start = pos;
+            auto x_type = parseUnary();          // tree for ##type(x)
+            if (!x_type) return nullptr;
+            int x_end = pos;
+            std::string x_text;
+            for (int i = x_start; i < x_end; i++) x_text += tokens.tokens[i].text;
+            pos = x_start;
+            auto x_addr = parseUnary();           // re-parse: tree for ^x
+            if (!x_addr) return nullptr;
+
+            auto strlit = [&](std::string s) {
+                auto n = newNodeAt(parse::Kind::kStringLiteral, h_file, h_tok);
+                n->text = std::move(s);
+                return n;
+            };
+            auto tuple = newNodeAt(parse::Kind::kTupleExpr, h_file, h_tok);
+            tuple->children.push_back(strlit(baseName(tokens.files[h_file].path)));  // ##file
+            tuple->children.push_back(strlit(std::to_string(h_line)));               // ##line
+            auto ty = newNodeAt(parse::Kind::kStringifyType, h_file, h_tok);         // ##type(x)
+            ty->children.push_back(std::move(x_type));
+            tuple->children.push_back(std::move(ty));
+            tuple->children.push_back(strlit(std::move(x_text)));                    // ##name(x)
+            auto addr = newNodeAt(parse::Kind::kAddrOfExpr, h_file, h_tok);          // ^x
+            addr->children.push_back(std::move(x_addr));
+            tuple->children.push_back(std::move(addr));
+            return tuple;
+        }
         // Prefix `<Type^>` is a pointer reinterpret cast. A `<` leading a unary
         // operand is unambiguous — binary `<` (less-than) only appears in a
         // comparison, where its right operand never starts with `<`. The cast

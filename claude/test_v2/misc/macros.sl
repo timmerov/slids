@@ -29,11 +29,9 @@ deferred:
 ##value(expr)
 */
 
-/*
 void dump( (char[], char[], char[], char[], int^)^ tuple ) {
     __println(tuple^[0] + ":" + tuple^[1] + ": " + tuple^[2] + " " + tuple^[3] + " = " + tuple^[4]^);
 }
-*/
 
 int32 main() {
 
@@ -92,6 +90,9 @@ int32 main() {
     Geo { enum Dir ( kN ); const int kSize = 3; }
     __println("Geo:Dir type = " + ##type(Geo:Dir));    // int        (qualified enum type)
     __println("Geo:kSize type = " + ##type(Geo:kSize)); // const int  (qualified value)
+
+    int x = 42;
+    dump(#x);
 
     return 0;
 }

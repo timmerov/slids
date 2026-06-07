@@ -550,6 +550,25 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
     for (size_t i = 0; i < call.children.size(); i++) {
         ast::Node const& arg = *call.children[i];
         widen::TypeRef dest = call.param_types[i];
+        // Passing a VALUE to a reference param (`dump(#x)` — an rvalue tuple to a
+        // `(...)^`): materialize it in a temp and pass its address. Excludes a
+        // pointer-like arg (an iterator demoting to a reference passes its own
+        // pointer, not a fresh temp).
+        widen::Type::Form af = widen::form(widen::strip(arg.inferred_type));
+        bool arg_ptrlike = af == widen::Type::Form::kPointer
+                        || af == widen::Type::Form::kIterator
+                        || af == widen::Type::Form::kAnyptr;
+        if (widen::form(widen::strip(dest)) == widen::Type::Form::kPointer
+            && arg.inferred_type != widen::kNoType && !arg_ptrlike) {
+            widen::TypeRef pointee = widen::get(widen::strip(dest)).pointee;
+            std::string pll = llvmForRef(pointee);
+            std::string v = emitExpr(arg, syms, pool, out, diag, pointee);
+            std::string slot = newTmp("argtmp");
+            out << "  " << slot << " = alloca " << pll << "\n";
+            out << "  store " << pll << " " << v << ", ptr " << slot << "\n";
+            arg_vals.push_back({"ptr", slot});
+            continue;
+        }
         std::string val = emitExpr(arg, syms, pool, out, diag, dest);
         std::string llty = llvmForRef(dest);
         arg_vals.push_back({llty, std::move(val)});
