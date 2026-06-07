@@ -921,6 +921,37 @@ struct LoopCtx {
                                       // break/continue walks `loop_levels` hops out
 };
 
+// Collect a tuple literal's leaf value-nodes in storage order (recurse nested).
+void collectTupleLeafNodesAst(ast::Node const& n,
+                              std::vector<ast::Node const*>& out) {
+    if (n.kind == ast::Kind::kTupleExpr) {
+        for (auto const& c : n.children) if (c) collectTupleLeafNodesAst(*c, out);
+    } else {
+        out.push_back(&n);
+    }
+}
+
+// Initialize / assign an array from a tuple LITERAL, element-wise. A homogeneous
+// (possibly nested) tuple's leaves in storage order map onto the array's flat
+// slots; each leaf is emitted in the element type's context (a literal flexes, a
+// typed value widens) and stored at flat offset i — no tuple aggregate is built.
+void emitArrayFromTuple(std::string const& alloca_name, widen::TypeRef arrType,
+                        ast::Node const& rhs, SymTab const& syms,
+                        strings::Pool& pool, std::ostream& out,
+                        diagnostic::Sink& diag) {
+    widen::TypeRef elem = widen::get(widen::strip(arrType)).elem;
+    std::string elem_ll = llvmForRef(elem);
+    std::vector<ast::Node const*> leaves;
+    collectTupleLeafNodesAst(rhs, leaves);
+    for (std::size_t i = 0; i < leaves.size(); i++) {
+        std::string v = emitExpr(*leaves[i], syms, pool, out, diag, elem);
+        std::string gep = newTmp("aelt");
+        out << "  " << gep << " = getelementptr " << elem_ll << ", ptr "
+            << alloca_name << ", i64 " << i << "\n";
+        out << "  store " << elem_ll << " " << v << ", ptr " << gep << "\n";
+    }
+}
+
 void emitStmt(ast::Node const& stmt, SymTab& syms,
               strings::Pool& pool,
               widen::TypeRef fn_return_type,
@@ -940,6 +971,13 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             assert(it != syms.end()
                 && "kVarDeclStmt: alloca not hoisted to entry block");
             if (!stmt.children.empty()) {
+                if (widen::form(widen::strip(it->second.slids_type))
+                        == widen::Type::Form::kArray
+                    && stmt.children[0]->kind == ast::Kind::kTupleExpr) {
+                    emitArrayFromTuple(it->second.alloca_name, it->second.slids_type,
+                                       *stmt.children[0], syms, pool, out, diag);
+                    return;
+                }
                 std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
                                            it->second.slids_type);
                 out << "  store " << it->second.llvm_type << " " << val
@@ -953,6 +991,13 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             auto it = syms.find(stmt.resolved_entry_id);
             assert(it != syms.end()
                 && "kAssignStmt: entry not in SymTab (alloca never emitted?)");
+            if (widen::form(widen::strip(it->second.slids_type))
+                    == widen::Type::Form::kArray
+                && stmt.children[0]->kind == ast::Kind::kTupleExpr) {
+                emitArrayFromTuple(it->second.alloca_name, it->second.slids_type,
+                                   *stmt.children[0], syms, pool, out, diag);
+                return;
+            }
             std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
                                        it->second.slids_type);
             out << "  store " << it->second.llvm_type << " " << val

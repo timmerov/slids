@@ -27,6 +27,20 @@ cause sometimes the standard is stupid.
             twodim[x][y] = x*x + y;
         }
     }
+
+arrays can be set to a homogenous tuple.
+
+    int arr[3] = (1,2,3);
+    arr = (4,5,6);
+
+    int twodim[2][3] = ((1,2), (3,4), (5,6));
+    twodim = ((10,11), (12,13), (14,15));
+    twodim[1] = (100,101);
+
+arrays of tuples.
+
+    (int, int) arr[3] = ((1,2), (3,4), (5,6));
+    six = arr[1][2];
 */
 
 /*
@@ -39,7 +53,16 @@ claude says:
 - multi-dim is reversed: `int twodim[3][5]` is 5 chunks of 3 ints (LLVM
   `[5 x [3 x i32]]`). `twodim[a][b]` -> a is the INNER index (0..3), b the OUTER
   (0..5); flat = b*3 + a, so the inner index varies fastest in memory.
-- no initializer list (tuples out): elements are filled by assignment.
+- an array may be SET from a homogeneous tuple, at its declaration or by a
+  whole-array assign: `int a[3] = (1,2,3)`, `a = (4,5,6)`. a multi-dim array
+  takes a NESTED tuple in storage/outer order, which maps straight onto the
+  reversed layout: `int td[2][3] = ((1,2),(3,4),(5,6))` gives td[0][0]=1,
+  td[1][0]=2, td[0][1]=3, ... It lowers ELEMENT-WISE (the tuple aggregate is
+  elided — a literal's slot expressions feed the array slots directly) and each
+  slot WIDENS into the element type (the same apparatus a class initializer uses).
+  The tuple's flattened leaf count must equal the array's element count.
+  (Reach, in todo: sub-array assign `td[1] = (100,101)`, and arrays OF tuples
+  `(int,int) a[3] = ((1,2),(3,4),(5,6))`.)
 */
 
 int32 main() {
@@ -93,6 +116,30 @@ int32 main() {
     int cg[N][3];                                // int[4][3] (3 chunks of 4)
     cg[3][2] = 5;
     __println("cg[3][2]= " + cg[3][2] + " size= " + sizeof(cg)); // 5, 48
+
+    /* an array may be SET from a homogeneous tuple — element-wise, the tuple
+       aggregate elided, each slot widening into the element type. */
+    int t1[3] = (1, 2, 3);
+    __println("t1= " + t1[0] + " " + t1[1] + " " + t1[2]);       // 1 2 3
+    t1 = (4, 5, 6);                              // whole-array assign from a tuple
+    __println("t1b= " + t1[0] + " " + t1[1] + " " + t1[2]);      // 4 5 6
+
+    /* multi-dim from nested tuples: the tuple is in storage/outer order, so it
+       maps straight onto the reversed-dimension layout. */
+    int td[2][3] = ((1,2), (3,4), (5,6));
+    __println("td[0][0]= " + td[0][0]);          // 1
+    __println("td[1][0]= " + td[1][0]);          // 2
+    __println("td[0][1]= " + td[0][1]);          // 3
+    __println("td[1][2]= " + td[1][2]);          // 6
+    td = ((10,11), (12,13), (14,15));            // multi-dim whole-array assign
+    __println("td2[0][0]= " + td[0][0]);         // 10
+    __println("td2[1][2]= " + td[1][2]);         // 15
+
+    /* per-slot WIDENING: int8 / int leaves widen into the int64 element type. */
+    int8 e0 = 5;
+    int e1 = 9;
+    int64 wv[2] = (e0, e1);
+    __println("wv= " + wv[0] + " " + wv[1]);     // 5 9
 
     return 0;
 }

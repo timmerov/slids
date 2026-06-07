@@ -1693,6 +1693,10 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 && tree.entries[s.resolved_entry_id].kind
                        == parse::EntryKind::kLocalVar) {
                 tree.initialized_locals.insert(s.resolved_entry_id);
+                // A whole-array initializer (`int a[3] = (1,2,3)`) assigns the
+                // entire array — mark it in the array may-set too.
+                if (isArrayType(tree.entries[s.resolved_entry_id].slids_type))
+                    tree.assigned_arrays.insert(s.resolved_entry_id);
             }
             return Completion::Normal;
         }
@@ -1727,6 +1731,9 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 && tree.entries[s.resolved_entry_id].kind
                        == parse::EntryKind::kLocalVar) {
                 tree.initialized_locals.insert(s.resolved_entry_id);
+                // A whole-array assign (`a = (4,5,6)`) assigns the entire array.
+                if (isArrayType(tree.entries[s.resolved_entry_id].slids_type))
+                    tree.assigned_arrays.insert(s.resolved_entry_id);
             }
             return Completion::Normal;
         }

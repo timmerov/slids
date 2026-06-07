@@ -1248,6 +1248,53 @@ void checkStrongConstAssign(widen::TypeRef dest, parse::Node const& rhs,
     // bool source / int<->float cross-family: left to codegen's convert.
 }
 
+// An array initialized / assigned from a tuple LITERAL: `int a[3] = (1,2,3)`,
+// `a = (4,5,6)`, `int td[2][3] = ((1,2),(3,4),(5,6))`. (A tuple value rhs is not
+// handled here — it falls to the normal path and is rejected.)
+bool isArrayFromTuple(widen::TypeRef declType, parse::Node const& rhs) {
+    return widen::form(widen::strip(declType)) == widen::Type::Form::kArray
+        && rhs.kind == parse::Kind::kTupleExpr;
+}
+
+// Flatten a tuple literal's leaf NODES in source / storage order (recursing into
+// nested tuple literals), so a homogeneous (possibly nested) tuple maps onto the
+// array's flat element slots.
+void collectTupleLeafNodes(parse::Node& n, std::vector<parse::Node*>& out) {
+    if (n.kind == parse::Kind::kTupleExpr) {
+        for (auto& c : n.children) if (c) collectTupleLeafNodes(*c, out);
+    } else {
+        out.push_back(&n);
+    }
+}
+
+// Validate (and type) an array-from-tuple init/assign: the tuple's flattened
+// leaf count must equal the array's total element count, and each leaf
+// initializes one element under the normal per-element widen/flex rules.
+void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
+                            parse::Node& rhs, diagnostic::Sink& diag) {
+    widen::TypeRef a = widen::strip(declType);
+    widen::TypeRef elem = widen::get(a).elem;
+    long total = 1;
+    for (int d : widen::get(a).dims) total *= d;
+    std::vector<parse::Node*> leaves;
+    collectTupleLeafNodes(rhs, leaves);
+    if (static_cast<long>(leaves.size()) != total) {
+        diagnostic::report(diag, {rhs.file_id, rhs.tok,
+            "Tuple has " + std::to_string(leaves.size())
+            + " elements but array '" + widen::spellOrEmpty(declType)
+            + "' has " + std::to_string(total) + ".", {}});
+        return;
+    }
+    // Each leaf is an element initializer — re-infer in the element's context so a
+    // literal flexes into it, then run the same assignment checks `a[i] = leaf`
+    // would (pointer-cast + strong-const; typed narrowing is codegen's convert).
+    for (parse::Node* lf : leaves) {
+        inferExpr(tree, *lf, elem, diag);
+        checkPtrAssign(elem, *lf, diag);
+        checkStrongConstAssign(elem, *lf, diag);
+    }
+}
+
 void classifyStmt(parse::Tree& tree, parse::Node& s,
                   widen::TypeRef fn_return_type,
                   diagnostic::Sink& diag) {
@@ -1285,12 +1332,17 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     tree.entries[s.resolved_entry_id].slids_type = inferred;
                     tree.entries[s.resolved_entry_id].alias_label = rhs.alias_label;
                 }
-                // A typed pointer init obeys the implicit-cast rules (a typeless
-                // init took the rhs type above, so there is nothing to cast); a
-                // strong-const literal init obeys the typed-value widen rules.
+                // An array initialized from a tuple literal (`int a[3]=(1,2,3)`)
+                // is checked element-wise; otherwise a typed pointer init obeys
+                // the implicit-cast rules (a typeless init took the rhs type above,
+                // so nothing to cast) and a strong-const literal the widen rules.
                 if (s.return_type != widen::kNoType) {
-                    checkPtrAssign(s.return_type, *s.children[0], diag);
-                    checkStrongConstAssign(s.return_type, *s.children[0], diag);
+                    if (isArrayFromTuple(s.return_type, *s.children[0])) {
+                        classifyArrayFromTuple(tree, s.return_type, *s.children[0], diag);
+                    } else {
+                        checkPtrAssign(s.return_type, *s.children[0], diag);
+                        checkStrongConstAssign(s.return_type, *s.children[0], diag);
+                    }
                 }
             }
             return;
@@ -1307,11 +1359,15 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             for (auto& ch : s.children) {
                 if (ch) inferExpr(tree, *ch, lref, diag);
             }
-            // Assigning to a pointer variable obeys the implicit-cast rules; a
-            // strong-const literal rhs obeys the typed-value widen rules.
+            // A whole-array assign from a tuple literal (`a = (4,5,6)`) is
+            // element-wise; otherwise pointer/strong-const assignment rules.
             if (!s.children.empty() && s.children[0]) {
-                checkPtrAssign(lref, *s.children[0], diag);
-                checkStrongConstAssign(lref, *s.children[0], diag);
+                if (isArrayFromTuple(lref, *s.children[0])) {
+                    classifyArrayFromTuple(tree, lref, *s.children[0], diag);
+                } else {
+                    checkPtrAssign(lref, *s.children[0], diag);
+                    checkStrongConstAssign(lref, *s.children[0], diag);
+                }
             }
             return;
         }

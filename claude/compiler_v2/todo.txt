@@ -19,6 +19,31 @@ BUGS (found, deferred)
 
 REACH GOALS
 
+  * ARRAY-FROM-TUPLE, SUB-ARRAY ASSIGN — `td[1] = (100,101)` assigns one ROW of
+    a multi-dim array from a tuple. Needs a PARTIAL-index lvalue (a sub-array
+    slice), which today errors "An array subscript must index every dimension."
+    Same bucket as nested-for over a 2-D array (a partial index yields a
+    sub-array). Deferred from the array-from-tuple landing (plan Phase 4, which
+    did 1-D init/assign + multi-dim init/assign). prerequisite: partial-index
+    array lvalues.
+
+  * ARRAY FROM A TUPLE VALUE — `a = tupleVar` / `int a[3] = tupleVar` where the
+    rhs is a tuple VARIABLE, not a literal. The landed array-from-tuple gates on a
+    tuple LITERAL (kTupleExpr) so it can flatten the leaf NODES + elide the
+    aggregate; a tuple value falls to the normal path and is rejected. To support
+    it: detect (array lvalue, tuple-typed value rhs), then flatten via
+    extractvalue per slot (recursing nested tuples) and store each into the array
+    slots — no node-level leaves to elide, so it copies through the value.
+    prerequisite: the homogeneous array-from-tuple (LANDED).
+
+  * ARRAYS OF TUPLES — `(int,int) arr[3] = ((1,2),(3,4),(5,6))`: an array whose
+    ELEMENT type is a tuple. A DIFFERENT mapping than the homogeneous flatten —
+    the outer tuple maps to elements, each kept as a tuple aggregate (no flatten).
+    Indexing is `arr[tuple-index][array-index]` (the reversed convention applied
+    to the array-of-tuples; array.sl:44 `six = arr[1][2]`). Deferred from the
+    array-from-tuple landing. prerequisite: the homogeneous array-from-tuple
+    (LANDED) + element-is-a-tuple layout.
+
   * DROP THE ENUM QUALIFIER IN CONTEXT — when a variable's declared type is an
     enum, a bare member name on the rhs should resolve against that enum's
     namespace: `Language best = kRust;` then `best = kSlids;` (an implied
