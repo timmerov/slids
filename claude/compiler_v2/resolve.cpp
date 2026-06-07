@@ -1227,6 +1227,8 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kStoreStmt:
+        case parse::Kind::kMoveStmt:
+        case parse::Kind::kSwapStmt:
         case parse::Kind::kDestructureStmt:
         case parse::Kind::kDeleteStmt:
         case parse::Kind::kCallStmt:
@@ -1811,6 +1813,46 @@ void resolveStoreTarget(parse::Tree& tree, parse::Node& lv,
     resolveExpr(tree, lv, diag);
 }
 
+// Resolve an lvalue operand of a move / swap. An index/deref target reuses
+// resolveStoreTarget (a store-through — its DA reads the base). A bare-name
+// target is checked assignable here: `read` (swap, and the moved-from leaf) means
+// it must already be initialized and counts as a use; the target always ends up
+// initialized (a move/swap writes it). Only an lvalue can be addressed this way:
+// BOTH swap operands and a move's LHS must be lvalues (a move's RHS may be an
+// rvalue — it is read, not written, so it is resolved by resolveExpr, not here).
+// A swap rhs is parsed as a general expression, so a literal / arithmetic / call
+// rvalue can reach here and must be rejected (`what` names the offender — "A swap
+// operand" / "A move target") rather than crash codegen with no address.
+void resolveMoveSwapLvalue(parse::Tree& tree, parse::Node& lv,
+                           bool read, char const* what, diagnostic::Sink& diag) {
+    if (lv.kind == parse::Kind::kIndexExpr || lv.kind == parse::Kind::kDerefExpr) {
+        resolveStoreTarget(tree, lv, diag);
+        return;
+    }
+    if (lv.kind != parse::Kind::kIdentExpr) {
+        resolveExpr(tree, lv, diag);   // resolve sub-exprs so inner errors surface
+        diagnostic::report(diag, {lv.file_id, lv.tok,
+            std::string(what) + " must be an lvalue.", {}});
+        return;
+    }
+    if (!resolveAssignTarget(tree, lv, diag)) return;
+    // resolveAssignTarget returns true ONLY for a kLocalVar (id >= 0); this guard
+    // is defensive (unreachable in practice) so the DA below is unconditionally
+    // safe. user notified, accepts state.
+    int id = lv.resolved_entry_id;
+    if (id < 0 || tree.entries[id].kind != parse::EntryKind::kLocalVar) return;
+    if (read) {
+        if (!isCaptureLocal(tree, id) && tree.initialized_locals.count(id) == 0) {
+            diagnostic::report(diag, {lv.file_id, lv.tok,
+                "Use of uninitialized variable '" + lv.name + "'.", {}});
+        } else {
+            tree.read_locals.insert(id);
+        }
+    }
+    tree.initialized_locals.insert(id);
+    if (isArrayType(tree.entries[id].slids_type)) tree.assigned_arrays.insert(id);
+}
+
 // A loop condition that is a constant-true literal: bool `true`, or a non-zero
 // int/uint/char. The grammar synthesizes an empty `()` condition as bool true,
 // so an empty-condition loop lands here too. Detected SYNTACTICALLY (resolve
@@ -1967,6 +2009,23 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             if (s.children.size() > 1 && s.children[1]) {
                 resolveExpr(tree, *s.children[1], diag);
             }
+            return Completion::Normal;
+        case parse::Kind::kMoveStmt:
+            // `a <-- b;` — a is a WRITE destination (need not be pre-initialized);
+            // b is a READ (the copy reads it; pointer leaves are then nulled but b
+            // stays initialized and valid). rhs FIRST so `x <-- x` reads x before
+            // the write. classify checks copy compatibility.
+            if (s.children[1]) resolveExpr(tree, *s.children[1], diag);
+            resolveMoveSwapLvalue(tree, *s.children[0], /*read=*/false,
+                                  "A move target", diag);
+            return Completion::Normal;
+        case parse::Kind::kSwapStmt:
+            // `a <--> b;` — both operands are READ and WRITTEN (exchanged), so
+            // both must already be initialized lvalues. classify checks same-type.
+            resolveMoveSwapLvalue(tree, *s.children[0], /*read=*/true,
+                                  "A swap operand", diag);
+            resolveMoveSwapLvalue(tree, *s.children[1], /*read=*/true,
+                                  "A swap operand", diag);
             return Completion::Normal;
         case parse::Kind::kDestructureStmt:
             // (a, b, ) = tuple. children[0] = rhs (read), [1..] = target lvalues

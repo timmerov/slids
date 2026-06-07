@@ -19,6 +19,15 @@ BUGS (found, deferred)
 
 REACH GOALS
 
+  * WHOLE-ARRAY MOVE / SWAP — `dst <-- arr` / `a <--> b` where the operands are
+    ENTIRE arrays (not elements). moveswap.sl marks it "to be revisited". Move /
+    swap LANDED for primitives / pointers / tuples (element operands `arr[i]` work);
+    a whole array needs a per-element walk (swap = element-wise SSA exchange or a
+    memcpy-through-temp; move = copy + null each pointer element). Also the null
+    walk (codegen emitNullLeaves) does NOT yet recurse into an ARRAY leaf — wire
+    that here too (today an array can't be a tuple slot, so it can't arise).
+    prerequisite: the homogeneous-array machinery (LANDED). See [[project_v2_move_swap]].
+
   * ARRAY-FROM-TUPLE, SUB-ARRAY ASSIGN — `td[1] = (100,101)` assigns one ROW of
     a multi-dim array from a tuple. Needs a PARTIAL-index lvalue (a sub-array
     slice), which today errors "An array subscript must index every dimension."

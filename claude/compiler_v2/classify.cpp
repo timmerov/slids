@@ -255,6 +255,8 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kStoreStmt:
+        case parse::Kind::kMoveStmt:
+        case parse::Kind::kSwapStmt:
         case parse::Kind::kDestructureStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kCallExpr:
@@ -1023,6 +1025,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kAssignStmt:
         case parse::Kind::kAugAssignStmt:
         case parse::Kind::kStoreStmt:
+        case parse::Kind::kMoveStmt:
+        case parse::Kind::kSwapStmt:
         case parse::Kind::kDestructureStmt:
         case parse::Kind::kDeleteStmt:
         case parse::Kind::kCallStmt:
@@ -1550,6 +1554,42 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // strong-const literal stored here obeys the typed-value widen rules.
             checkPtrAssign(lvalue.inferred_type, *s.children[1], diag);
             checkStrongConstAssign(lvalue.inferred_type, *s.children[1], diag);
+            return;
+        }
+        case parse::Kind::kMoveStmt: {
+            // `a <-- b;` — the COPY obeys assignment rules (widen for values,
+            // implicit pointer-cast for pointers; desugar adds the source-nulling
+            // afterward). Infer the lhs lvalue, then the rhs in that context so a
+            // literal flexes, then check the same pointer / strong-const rules a
+            // store would. The null step needs no check (nulling a pointer is
+            // always valid).
+            assert(s.children.size() == 2 && "kMoveStmt needs lhs + rhs");
+            parse::Node& lhs = *s.children[0];
+            inferExpr(tree, lhs, widen::kNoType, diag);
+            inferExpr(tree, *s.children[1], lhs.inferred_type, diag);
+            checkPtrAssign(lhs.inferred_type, *s.children[1], diag);
+            checkStrongConstAssign(lhs.inferred_type, *s.children[1], diag);
+            return;
+        }
+        case parse::Kind::kSwapStmt: {
+            // `a <--> b;` — exchange; both operands must be EXACTLY the same type
+            // (no widening — a symmetric swap cannot convert both directions).
+            assert(s.children.size() == 2 && "kSwapStmt needs two operands");
+            parse::Node& a = *s.children[0];
+            parse::Node& b = *s.children[1];
+            inferExpr(tree, a, widen::kNoType, diag);
+            inferExpr(tree, b, widen::kNoType, diag);
+            // Both-non-kNoType guard is cascade suppression: a kNoType operand
+            // means inferExpr already reported an error, so skip the mismatch
+            // report to avoid a second misleading diagnostic. user notified,
+            // accepts state.
+            if (a.inferred_type != widen::kNoType && b.inferred_type != widen::kNoType
+                && widen::deepStrip(a.inferred_type) != widen::deepStrip(b.inferred_type)) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "Swap operands must be the same type; got '"
+                    + widen::spellOrEmpty(a.inferred_type) + "' and '"
+                    + widen::spellOrEmpty(b.inferred_type) + "'.", {}});
+            }
             return;
         }
         case parse::Kind::kDestructureStmt: {

@@ -301,13 +301,21 @@ Phase 4 — types beyond primitives
     (todo.txt); the `new (` placement-vs-tuple-type seam (deferred with `new
     T(value)`); for-tuple over non-primitive elements (Phase 5) + by-ref-to-const
     enforcement (Phase 6).
-  * move / swap on PRIMITIVES + TUPLES (`a <-- b`, `a <--> b`) — STILL OPEN. These operators
-  * move / swap on PRIMITIVES + TUPLES (`a <-- b`, `a <--> b`) — these operators
-    are NOT class-only: they apply to primitive values (mechanical value
-    transfer / exchange) and to tuples (slot-by-slot, recursive). Land the
-    primitive form (standalone, no class dependency) and the tuple form (with the
-    tuple landings) here. The OVERLOADABLE class `op<--`/`op<-->` + destructor-
-    balance is the Phase 5 piece below.
+  * move / swap on PRIMITIVES + POINTERS + TUPLES (`a <-- b`, `a <--> b`) — LANDED
+    (kMoveStmt / kSwapStmt; see [[project_v2_move_swap]]). MOVE is a specialized
+    assignment: the COPY obeys assignment rules (widen for values, implicit
+    pointer-cast for pointers — reuses emitExpr+store), then every ADDRESSABLE
+    pointer leaf of the rhs is nulled so the source stays valid (a reference /
+    iterator leaf, recursing through nested tuples — the "fancy case"). An rvalue
+    source has no leaves to null (move from a literal / addr-of is a pure copy).
+    SWAP exchanges two EXACTLY-same-type lvalues via SSA temporaries (no stack
+    temp; whole-value load/store handles tuples). Forms: a move-init decl
+    (`T x <-- y`, the move_init flag) + statement; both operand kinds (ident,
+    array element, tuple slot, deref). BOTH swap operands and a move's LHS must be
+    lvalues (a move's RHS may be an rvalue). Done entirely in codegen (move + swap
+    pass through desugar untouched); resolve/classify validate. The OVERLOADABLE
+    class `op<--`/`op<-->` + destructor-balance + class fields + whole-array
+    move/swap is the Phase 5 / reach-goal piece. test_v2/expression/moveswap.sl.
   * type aliases — LANDED (value form `alias Name = type;`, file + function
     scope, transparent; resolveTypeSpelling substitutes the chain; desugar drops
     kAliasDecl; an alias TARGET may be a pointer type `alias IntPtr = int^;`. An
@@ -389,7 +397,8 @@ Phase 5 — classes
   * inferred field types (`Foo(name = const_expr)`)
   * operator overloading per slid
   * move / swap — the OVERLOADABLE class operators (`op<--`/`op<-->`) + resource
-    semantics (the primitive + tuple forms landed in Phase 4)
+    semantics + class fields inside a moved/swapped tuple (the primitive / pointer
+    / tuple forms landed in Phase 4 — [[project_v2_move_swap]])
   * destructor balance invariant
   * for-each protocol (op[]+size OR begin/end/next)
   * stringification operators (`##name`, `##type`, `#`) — the 7 `##` macros

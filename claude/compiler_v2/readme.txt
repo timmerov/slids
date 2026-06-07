@@ -140,7 +140,11 @@ STAGE FILES (.h / .cpp pairs)
             scope or function scope) — incl. a TYPELESS const (`const name =
             expr`, detected by `=` immediately after the name, parseType skipped
             so constfold infers the type); statements (var-decl incl. the
-            `<ident> <ident>` typed-decl shape, assign, aug-assign, alias,
+            `<ident> <ident>` typed-decl shape and a `<--` move-init form
+            (`T x <-- y`, the move_init flag — `<-->` swap is not a decl), assign,
+            aug-assign, move (`a <-- b`) / swap (`a <--> b`) — finishMoveSwap on
+            both the bare-name and indexed/deref-lvalue paths, lhs as an expr child,
+            alias,
             namespace decl, 0/1/N-arg call possibly qualified, bare inc/dec,
             return, if/else, while + post-condition do-while, the long-form for,
             the RANGED for, and the ENUM for — a qualified name leading a statement
@@ -582,6 +586,18 @@ STAGE FILES (.h / .cpp pairs)
             stamps the target as inferred_type (even on the error paths). Because
             the result is a strong typed value, an over-narrow assignment of it is
             caught by the same checkStrongConstAssign as any typed value.
+            Move / swap (Phase 4): kMoveStmt classifies like a store — infer the
+            lhs lvalue, the rhs in that context, then checkPtrAssign +
+            checkStrongConstAssign (so a move COPIES under assignment rules; a
+            narrowing move rejects). kSwapStmt requires the two operands' deepStrip
+            types be IDENTICAL (no widening — a symmetric exchange can't convert
+            both ways), else "Swap operands must be the same type". resolve owns
+            the lvalue rule: resolveMoveSwapLvalue rejects a non-lvalue (a swap rhs
+            is a general expression, so `x <--> 7` would otherwise crash codegen)
+            — BOTH swap operands and a move's LHS must be lvalues ("A swap operand"
+            / "A move target" must be an lvalue); a move's RHS is a plain read, so
+            an rvalue source is allowed. DA: a move lhs is a pure write (need not
+            be pre-init); a swap reads+writes both (both must be init).
             kNewExpr (Phase 4): a heap element must be statically sized
             (widen::typeByteSize >= 0 — a primitive; a slid -> "Cannot allocate");
             an array size must be integer-class; a placement address must be a
@@ -690,7 +706,21 @@ STAGE FILES (.h / .cpp pairs)
             (the leftmost source index is innermost) — it also rejects a partial
             index (chain length must equal the dimension count). An ITERATOR
             subscript instead loads the pointer and GEPs by element type.
-            kStoreStmt stores through any lvalue expr (deref / index). Iterator
+            kStoreStmt stores through any lvalue expr (deref / index). Move /
+            swap (kMoveStmt / kSwapStmt, `a <-- b` / `a <--> b`) are lowered HERE
+            (they pass through desugar untouched). A MOVE copies the rhs into the
+            lhs via emitExpr(rhs, dest=lhs type)+store (so it reuses the widen /
+            implicit-pointer-cast / whole-tuple machinery, exactly an assignment),
+            then emitNullLeaves walks the rhs's structured type and `store ptr
+            null`s every pointer / iterator leaf — recursing by GEP into nested
+            tuple slots (the "fancy case"), so the source is left valid; an rvalue
+            source (isAstLvalue false) has no address and is a pure copy. A SWAP
+            loads both lvalues into SSA temporaries and stores them crossed (no
+            stack temp; a whole-value load/store handles tuples; both loads precede
+            either store, so an aliased swap is safe). emitLvalueAddr gives an
+            operand's address (a bare var's alloca / emitElementAddr / a deref's
+            pointer); a move-init decl (`T x <-- y`) nulls after the var-decl store.
+            Iterator
             arithmetic: `iter ± int` is a signed element GEP, `iter - iter` is
             ptrtoint-diff / elemBytes, `++`/`--` GEP ±1 element. Pointer
             comparisons icmp the raw pointers (unsigned). A kCastExpr

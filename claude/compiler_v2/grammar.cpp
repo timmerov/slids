@@ -1056,7 +1056,12 @@ struct Parser {
         node->return_type = widen::internOrNone(type);
         node->return_type_seg_toks = std::move(type_seg_toks);
         node->is_const = is_const;
-        if (peek().kind == token::Kind::kEquals) {
+        if (peek().kind == token::Kind::kEquals
+            || peek().kind == token::Kind::kArrowLeft) {
+            // `<--` is a move-init: the same copy as `=`, then desugar nulls the
+            // init's pointer leaves. (`<-->` swap needs two existing values, so
+            // it is not a declaration form.)
+            node->move_init = (peek().kind == token::Kind::kArrowLeft);
             advance();
             auto init = parseExpr();
             if (!init) return nullptr;
@@ -1066,6 +1071,23 @@ struct Parser {
             return nullptr;
         }
         if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+        return node;
+    }
+
+    // Build a move (`<--`) or swap (`<-->`) statement from an already-parsed lhs
+    // lvalue expression. Positioned at the arrow token; consumes the arrow, the
+    // rhs expression, and the trailing `;`. children[0] = lhs, [1] = rhs.
+    std::unique_ptr<parse::Node> finishMoveSwap(std::unique_ptr<parse::Node> lhs,
+                                                int stmt_file, int stmt_tok) {
+        parse::Kind k = (peek().kind == token::Kind::kArrowBoth)
+            ? parse::Kind::kSwapStmt : parse::Kind::kMoveStmt;
+        advance();   // <-- or <-->
+        auto rhs = parseExpr();
+        if (!rhs) return nullptr;
+        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+        auto node = newNodeAt(k, stmt_file, stmt_tok);
+        node->children.push_back(std::move(lhs));
+        node->children.push_back(std::move(rhs));
         return node;
     }
 
@@ -1127,6 +1149,10 @@ struct Parser {
                     lhs = std::move(d);
                 }
             }
+            if (peek().kind == token::Kind::kArrowLeft
+                || peek().kind == token::Kind::kArrowBoth) {
+                return finishMoveSwap(std::move(lhs), stmt_file, stmt_tok);
+            }
             if (!expect(token::Kind::kEquals, "=")) return nullptr;
             auto rhs = parseExpr();
             if (!rhs) return nullptr;
@@ -1143,6 +1169,18 @@ struct Parser {
             if (!parseCallArgs(*node)) return nullptr;
             if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
             return node;
+        }
+        if (next == token::Kind::kArrowLeft || next == token::Kind::kArrowBoth) {
+            // `name <-- rhs;` / `name <--> rhs;` — move / swap with a bare-name
+            // lhs. The lhs is an lvalue EXPRESSION (a kIdentExpr), uniform with
+            // the indexed/deref store path, so desugar treats every lhs alike.
+            auto lhs = newNodeAt(parse::Kind::kIdentExpr, stmt_file, stmt_tok);
+            lhs->name = name;
+            lhs->name_tok = name_tok;
+            lhs->qualifier = segs;
+            lhs->qualifier_toks = toks;
+            lhs->global_qualified = global;
+            return finishMoveSwap(std::move(lhs), stmt_file, stmt_tok);
         }
         if (next == token::Kind::kEquals) {
             advance();   // =

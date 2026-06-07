@@ -16,6 +16,8 @@ enum class Kind {
     kAssignStmt,
     kAugAssignStmt,
     kStoreStmt,     // store through an lvalue expr; children[0]=lvalue, [1]=rhs.
+    kMoveStmt,      // `a <-- b;` transient — desugar lowers to copy-assign + null
+    kSwapStmt,      // `a <--> b;` transient — desugar lowers to temp + 3 assigns
     kDestructureStmt,// `(a, b, ) = tuple;` children[0]=rhs, [1..]=target lvalues
                     // (a NULL child is a skipped slot).
     kDeleteStmt,    // delete p; — free + null the pointer. children[0]=lvalue var.
@@ -88,6 +90,7 @@ struct Node {
                                  // loop/switch context stack to the resolved target
                                  // (0 = innermost), stamped by resolve.
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
+    bool move_init = false;      // kVarDeclStmt: `<--` move-init (desugar nulls leaves)
     bool non_completing = false; // while/do-while/for-long: a constant-true loop
                                  // with no escaping break — its exit block is
                                  // unreachable (emit `unreachable`) and the loop

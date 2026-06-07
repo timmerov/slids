@@ -23,6 +23,14 @@ enum class Kind {
     kDestructureStmt,// `(a, b, ) = tuple;` — children[0] = rhs tuple expr,
                      // [1..] = target lvalues in slot order; a NULL child is an
                      // empty/skipped slot. Arity must match the rhs tuple.
+    kMoveStmt,       // `a <-- b;` — a specialized assignment: children[0] = lhs
+                     // lvalue expr, [1] = rhs. Copies rhs into lhs (widen / ptr-
+                     // cast rules), then NULLS every addressable pointer leaf of
+                     // the rhs. Desugar lowers it to a copy-assign + nullptr-
+                     // stores; never reaches codegen.
+    kSwapStmt,       // `a <--> b;` — exchange. children[0]/[1] = the two lvalue
+                     // exprs (EXACTLY the same type). Desugar lowers it to a temp
+                     // + three assigns; never reaches codegen.
     kDeleteStmt,   // delete p; — frees the pointer and nulls it. children[0] = the
                    // pointer lvalue (a variable). Phase 4: lowers to free() + store
                    // null; destructors land with classes (Phase 5).
@@ -158,6 +166,8 @@ struct Node {
     std::string label;
     int loop_levels = -1;
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
+    bool move_init = false;      // kVarDeclStmt: initialized with `<--` (a move),
+                                 // so desugar nulls the init's pointer leaves
     bool quiet_diag = false;     // kStringifyType inside a `#x` desugar: the same
                                  // operand is also resolved by the sibling `^x`, so
                                  // suppress THIS arm's undefined-operand diagnostic

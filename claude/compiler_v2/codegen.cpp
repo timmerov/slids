@@ -686,6 +686,82 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
     return gep;
 }
 
+// True if `ty` is, or (for a tuple) transitively contains, a pointer / iterator
+// leaf — i.e. a move must null something inside it.
+bool typeHasPointer(widen::TypeRef ty) {
+    widen::TypeRef s = widen::strip(ty);
+    widen::Type::Form f = widen::form(s);
+    if (f == widen::Type::Form::kPointer || f == widen::Type::Form::kIterator) {
+        return true;
+    }
+    if (f == widen::Type::Form::kTuple) {
+        for (widen::TypeRef slot : widen::get(s).slots) {
+            if (typeHasPointer(slot)) return true;
+        }
+    }
+    return false;
+}
+
+// An lvalue expression's address: a bare variable is its alloca; an index is
+// emitElementAddr; a deref's address is the pointer value it loads.
+std::string emitLvalueAddr(ast::Node const& lv, SymTab const& syms,
+                           strings::Pool& pool, std::ostream& out,
+                           diagnostic::Sink& diag) {
+    if (lv.kind == ast::Kind::kIdentExpr) {
+        auto it = syms.find(lv.resolved_entry_id);
+        assert(it != syms.end() && "emitLvalueAddr: ident not in SymTab");
+        return it->second.alloca_name;
+    }
+    if (lv.kind == ast::Kind::kIndexExpr) {
+        return emitElementAddr(lv, syms, pool, out, diag);
+    }
+    assert(lv.kind == ast::Kind::kDerefExpr && "emitLvalueAddr: unsupported lvalue");
+    ast::Node const& ptr_expr = *lv.children[0];
+    return emitExpr(ptr_expr, syms, pool, out, diag, ptr_expr.inferred_type);
+}
+
+// True for a move/swap operand whose storage can be addressed (so a move can
+// null its pointer leaves). A literal / addr-of / call / tuple-literal is an
+// rvalue with no storage — a move from one is a pure copy.
+bool isAstLvalue(ast::Node const& n) {
+    return n.kind == ast::Kind::kIdentExpr
+        || n.kind == ast::Kind::kIndexExpr
+        || n.kind == ast::Kind::kDerefExpr;
+}
+
+// Null every addressable pointer leaf reachable from `addr` (a value of type
+// `ty`): a pointer / iterator leaf gets `store ptr null`; a tuple recurses into
+// each slot that transitively holds a pointer; a primitive is left untouched.
+// The address-level GEP recursion handles arbitrarily nested tuples (the move
+// "fancy case").
+void emitNullLeaves(std::string const& addr, widen::TypeRef ty,
+                    std::ostream& out) {
+    widen::TypeRef s = widen::strip(ty);
+    widen::Type::Form f = widen::form(s);
+    if (f == widen::Type::Form::kPointer || f == widen::Type::Form::kIterator) {
+        out << "  store ptr null, ptr " << addr << "\n";
+        return;
+    }
+    if (f == widen::Type::Form::kTuple) {
+        std::string tll = llvmForRef(s);
+        std::vector<widen::TypeRef> const& slots = widen::get(s).slots;
+        for (std::size_t i = 0; i < slots.size(); i++) {
+            if (!typeHasPointer(slots[i])) continue;
+            std::string gep = newTmp("nleaf");
+            out << "  " << gep << " = getelementptr inbounds " << tll
+                << ", ptr " << addr << ", i32 0, i32 " << i << "\n";
+            emitNullLeaves(gep, slots[i], out);
+        }
+    }
+    // Any other form is a leaf with nothing to null: a primitive (the common
+    // case — reached, intended), or — once they can be tuple slots — an array of
+    // pointers or a class with pointer fields. Those are NOT constructible inside
+    // a tuple today (an array type as a slot is a parse error; classes are Phase
+    // 5), so this falls through cleanly; revisit when they land (an array would
+    // need a per-element walk, a class its move operator). user notified, accepts
+    // state.
+}
+
 }  // namespace
 
 std::string emitExpr(ast::Node const& expr, SymTab const& syms,
@@ -933,6 +1009,8 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kAssignStmt:
         case ast::Kind::kAugAssignStmt:
         case ast::Kind::kStoreStmt:
+        case ast::Kind::kMoveStmt:
+        case ast::Kind::kSwapStmt:
         case ast::Kind::kDestructureStmt:
         case ast::Kind::kDeleteStmt:
         case ast::Kind::kCallStmt:
@@ -1035,6 +1113,14 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                                            it->second.slids_type);
                 out << "  store " << it->second.llvm_type << " " << val
                     << ", ptr " << it->second.alloca_name << "\n";
+                // A move-init (`T x <-- y`) nulls the source's pointer leaves
+                // after the copy, leaving the source in a valid state. An rvalue
+                // source has no storage to null.
+                if (stmt.move_init && isAstLvalue(*stmt.children[0])) {
+                    std::string src = emitLvalueAddr(*stmt.children[0], syms, pool,
+                                                     out, diag);
+                    emitNullLeaves(src, stmt.children[0]->inferred_type, out);
+                }
             }
             return;
         }
@@ -1078,6 +1164,41 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                                        elem);
             std::string llty = llvmForRef(elem);
             out << "  store " << llty << " " << val << ", ptr " << addr << "\n";
+            return;
+        }
+        case ast::Kind::kMoveStmt: {
+            // `a <-- b;` — copy b into a (widen / pointer-cast via emitExpr+store,
+            // exactly an assignment), then null every addressable pointer leaf of
+            // b so the source is left valid. An rvalue source has no leaves.
+            assert(stmt.children.size() == 2 && "kMoveStmt needs lhs + rhs");
+            ast::Node const& lhs = *stmt.children[0];
+            ast::Node const& rhs = *stmt.children[1];
+            std::string dst = emitLvalueAddr(lhs, syms, pool, out, diag);
+            std::string val = emitExpr(rhs, syms, pool, out, diag, lhs.inferred_type);
+            out << "  store " << llvmForRef(lhs.inferred_type) << " " << val
+                << ", ptr " << dst << "\n";
+            if (isAstLvalue(rhs)) {
+                std::string src = emitLvalueAddr(rhs, syms, pool, out, diag);
+                emitNullLeaves(src, rhs.inferred_type, out);
+            }
+            return;
+        }
+        case ast::Kind::kSwapStmt: {
+            // `a <--> b;` — exchange two same-type lvalues via SSA temporaries
+            // (no stack temp). A whole-value load/store handles tuples too. Both
+            // addresses and loads precede either store, so an aliased swap is safe.
+            assert(stmt.children.size() == 2 && "kSwapStmt needs two operands");
+            ast::Node const& a = *stmt.children[0];
+            ast::Node const& b = *stmt.children[1];
+            std::string ll = llvmForRef(a.inferred_type);
+            std::string addr_a = emitLvalueAddr(a, syms, pool, out, diag);
+            std::string addr_b = emitLvalueAddr(b, syms, pool, out, diag);
+            std::string va = newTmp("swap");
+            std::string vb = newTmp("swap");
+            out << "  " << va << " = load " << ll << ", ptr " << addr_a << "\n";
+            out << "  " << vb << " = load " << ll << ", ptr " << addr_b << "\n";
+            out << "  store " << ll << " " << vb << ", ptr " << addr_a << "\n";
+            out << "  store " << ll << " " << va << ", ptr " << addr_b << "\n";
             return;
         }
         case ast::Kind::kDestructureStmt: {

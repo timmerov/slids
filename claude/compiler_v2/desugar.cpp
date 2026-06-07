@@ -21,6 +21,8 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kAssignStmt:    return ast::Kind::kAssignStmt;
         case parse::Kind::kAugAssignStmt: return ast::Kind::kAugAssignStmt;
         case parse::Kind::kStoreStmt:     return ast::Kind::kStoreStmt;
+        case parse::Kind::kMoveStmt:      return ast::Kind::kMoveStmt;
+        case parse::Kind::kSwapStmt:      return ast::Kind::kSwapStmt;
         case parse::Kind::kDestructureStmt: return ast::Kind::kDestructureStmt;
         case parse::Kind::kDeleteStmt:    return ast::Kind::kDeleteStmt;
         case parse::Kind::kCallStmt:      return ast::Kind::kCallStmt;
@@ -169,6 +171,7 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     node->resolved_entry_id = p.resolved_entry_id;
     node->loop_levels = p.loop_levels;
     node->is_const = p.is_const;
+    node->move_init = p.move_init;
     node->non_completing = p.non_completing;
     node->param_types = p.param_types;
     node->captures = p.captures;
