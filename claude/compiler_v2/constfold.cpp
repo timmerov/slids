@@ -156,6 +156,7 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kIndexExpr:
         case parse::Kind::kTupleExpr:
         case parse::Kind::kCastExpr:
+        case parse::Kind::kConvertExpr:
         case parse::Kind::kNewExpr:
         case parse::Kind::kDeleteStmt:
         case parse::Kind::kSizeofExpr:
@@ -937,6 +938,89 @@ std::unique_ptr<parse::Node> tryFoldSizeof(parse::Node& n, parse::Tree& tree) {
     return lit;
 }
 
+// `(Type=literal)` value conversion folds to a STRONG target-typed literal with
+// C semantics: anything->bool is a nonzero test; ->float converts the value
+// (rounded to the float's precision); ->intN takes the low N bits and interprets
+// them per the target signedness (float source truncates toward zero first). A
+// pointer operand (nullptr / an address / a non-constant) never folds — those
+// are lowered at runtime by codegen. Folding lets a conversion initialize a
+// const or size an array dimension.
+std::unique_ptr<parse::Node> tryFoldConvert(parse::Node& n) {
+    assert(n.children.size() == 1 && "kConvertExpr needs 1 operand");
+    parse::Node const& op = *n.children[0];
+    widen::TypeKind tk;
+    if (!widen::classify(n.return_type, tk)) return nullptr;  // non-value target -> classify errors
+
+    using K = parse::Kind;
+    bool int_src = (op.kind == K::kIntLiteral || op.kind == K::kUintLiteral
+                 || op.kind == K::kCharLiteral || op.kind == K::kBoolLiteral);
+    bool float_src = (op.kind == K::kFloatLiteral);
+    if (!int_src && !float_src) return nullptr;  // ident / pointer / non-constant -> runtime
+
+    bool neg = false;
+    uint64_t mag = 0;
+    double fv = 0.0;
+    if (int_src) {
+        // A numeric-stage-canonicalized int/uint/char/bool literal always parses
+        // (bool is "1"/"0", char is its numeric code); the bail is defensive —
+        // not folding is always safe (codegen lowers it). user notified, accepts state.
+        if (!parseSignedDigits(op.text, neg, mag)) return nullptr;
+    } else {
+        errno = 0;
+        fv = std::strtod(op.text.c_str(), nullptr);
+        if (errno == ERANGE || !std::isfinite(fv)) return nullptr;
+    }
+
+    auto lit = std::make_unique<parse::Node>();
+    lit->file_id = n.file_id;
+    lit->tok = n.tok;
+    lit->strong_type = n.return_type;   // a conversion yields a STRONG typed value
+
+    if (tk.cat == widen::Category::kBool) {
+        bool nz = int_src ? (mag != 0) : (fv != 0.0);
+        lit->kind = K::kBoolLiteral;
+        lit->text = nz ? "1" : "0";
+        return lit;
+    }
+    if (tk.cat == widen::Category::kFloat) {
+        double v = int_src ? (neg ? -static_cast<double>(mag) : static_cast<double>(mag)) : fv;
+        if (tk.bits == 32) v = static_cast<double>(static_cast<float>(v));   // round to float precision
+        lit->kind = K::kFloatLiteral;
+        lit->text = floatToText(v);
+        return lit;
+    }
+    // Integer target. Build the source's 64-bit two's-complement pattern, then
+    // mask to the target width and sign-extend if the target is signed.
+    uint64_t bits;
+    if (int_src) {
+        bits = neg ? (0ULL - mag) : mag;
+    } else {
+        double t = std::trunc(fv);
+        if (t >= 9223372036854775808.0 || t < -9223372036854775808.0) {
+            return nullptr;   // out of int64 range — leave the operand to runtime
+        }
+        bits = static_cast<uint64_t>(static_cast<int64_t>(t));
+    }
+    if (tk.bits < 64) {
+        uint64_t mask = (1ULL << tk.bits) - 1ULL;
+        bits &= mask;
+        if (tk.cat == widen::Category::kSignedInt && (bits & (1ULL << (tk.bits - 1)))) {
+            bits |= ~mask;   // sign-extend the in-range pattern
+        }
+    }
+    if (tk.cat == widen::Category::kSignedInt) {
+        lit->kind = K::kIntLiteral;
+        lit->text = std::to_string(static_cast<int64_t>(bits));
+    } else {
+        // char is an unsigned-8 too — keep it a char literal so it types/prints
+        // as char; its text is the numeric code (the lexer's canonical form).
+        lit->kind = (widen::spellOrEmpty(widen::deepStrip(n.return_type)) == "char")
+                  ? K::kCharLiteral : K::kUintLiteral;
+        lit->text = std::to_string(bits);
+    }
+    return lit;
+}
+
 void bakeNodeDims(parse::Node& n, parse::Tree& tree, bool final,
                   bool& changed, diagnostic::Sink& diag);
 
@@ -986,6 +1070,11 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
         }
     } else if (slot->kind == parse::Kind::kBinaryExpr) {
         if (auto folded = tryFoldBinary(*slot, diag)) {
+            slot = std::move(folded);
+            changed = true;
+        }
+    } else if (slot->kind == parse::Kind::kConvertExpr) {
+        if (auto folded = tryFoldConvert(*slot)) {
             slot = std::move(folded);
             changed = true;
         }

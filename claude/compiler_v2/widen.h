@@ -170,6 +170,16 @@ std::string convert(std::string const& src_val,
                     std::ostream& out,
                     diagnostic::Sink& diag);
 
+// Explicit value conversion — the `(Type=expr)` grid. Unlike `convert` (implicit
+// widening; rejects narrowing / cross-family / sign-change), this permits the
+// whole grid with C semantics and NEVER reports — classify has already validated
+// the source/target. Emits the op (trunc/ext/fp<->int/sign reinterpret/nonzero
+// test) and returns the new value. A pointer source is allowed only to `bool`
+// (non-null test) or `intptr` (ptrtoint); the target is never a pointer.
+std::string convertExplicit(std::string const& src_val,
+                            TypeRef src, TypeRef dest,
+                            std::ostream& out);
+
 // "Smallest type large enough to hold either operand" per the widen.sl binary
 // rule. Returns false if no built-in type fits both.
 bool commonType(std::string const& t1, std::string const& t2, std::string& out);

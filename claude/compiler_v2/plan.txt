@@ -232,18 +232,32 @@ Phase 4 — types beyond primitives
     DEFERRED to Phase 6: const-cast surface [`const T^`, `<const>`, `<mutable>`,
     mutable<->const] — const is not yet a tracked pointer qualifier. Class-
     hierarchy casts wait on Phase 5.)
-  * value type conversions (`(Type = expr)`)
-    (the VALUE analog of the pointer cast — an explicit width/sign/family change
-    on a numeric value, the operation every "use an explicit type conversion"
-    diagnostic [widen.cpp / classify.cpp, emitted since Phase 0-1] already points
-    at but which has NO syntax yet. `(Type = expr)`: int<->int width + sign change,
-    int<->float, narrowing — all the implicit-coercion rejections become legal
-    when written explicitly. Rejects pointer/iterator TARGETS [those are the `<T^>`
-    cast's job — see [[feedback_cast_vs_conversion]]: "cast" is pointer-only,
-    value changes are "conversions"]. Reuses widen::convert [already lowers the
-    int/float/sign cases for assignment + the cast's ptr<->intptr]. Grammar seam:
-    a leading `(` + type-keyword + `=` distinguishes it from a parenthesized
-    expression. Currently UNBUILT — the diagnostics dangle until it lands.)
+  * value type conversions (`(Type = expr)`)                        LANDED
+    (kConvertExpr — the VALUE analog of the pointer cast: an explicit width/sign/
+    family change that makes the implicit-coercion rejections legal, the operation
+    every "use an explicit type conversion" diagnostic points at. It CHANGES the
+    bits [a cast reinterprets them]; modeled as assignment-to-a-temp, so the
+    result is a STRONG typed value of the target [does not flex — `int8 = (int=5)`
+    is a narrowing error]. Grammar seam: a type-keyword right after `(` is
+    unambiguous [no expr/tuple starts with a type] -> parseConvertChain; chains
+    `(A = B = expr)` nest right-to-left, no inner parens. Semantics are C across
+    the whole value grid [int/uint/float families + bool + char]: float->int
+    truncates toward zero, int->int reinterprets the low N bits per target
+    signedness [same-width sign change is a free no-op], ->bool is a nonzero/
+    non-null test, ->float is sitofp/uitofp/fpext/fptrunc. classify gates: the
+    target must be a value type [pointer/iterator -> "may not be a pointer type",
+    void/tuple/class -> "must be a value type"]; a value source converts to any
+    value target; a pointer/iterator source converts ONLY to `bool` [icmp ne null]
+    or `intptr` [ptrtoint], or a class with op=(Type^) [Phase 5]. constfold
+    tryFoldConvert folds a literal operand to a strong target-typed literal so a
+    conversion can initialize a const or size an array dimension. Lowering is
+    widen::convertExplicit [the full grid — sibling to widen::convert which only
+    widens; never reports, classify pre-validated]. codegen arm mirrors the cast
+    [emit operand -> convertExplicit -> flex into dest]. test_v2/expression/
+    typeconv.sl. DEFERRED to Phase 5: a class target `(String = "...")` /
+    `(Class = Type^)` [class assignment-conversion] and a user-named type as
+    target [only primitive type keywords lead a conversion in the grammar today].
+    See [[project_v2_type_conversions]], [[feedback_cast_vs_conversion]].)
   * sizeof (`sizeof(T)` / `sizeof(expr)`)                          LANDED
     (kSizeofExpr — a primary; grammar splits a TYPE operand [paren starts with a
     type keyword -> parseType onto return_type] from an EXPRESSION operand [resolve

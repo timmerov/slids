@@ -269,6 +269,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kIndexExpr:
         case parse::Kind::kTupleExpr:
         case parse::Kind::kCastExpr:
+        case parse::Kind::kConvertExpr:
         case parse::Kind::kNewExpr:
         case parse::Kind::kDeleteStmt:
         case parse::Kind::kSizeofExpr:
@@ -629,6 +630,52 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 }
             }
             e.inferred_type = widen::internOrNone(to);
+            return;
+        }
+        case parse::Kind::kConvertExpr: {
+            // `(Type=operand)` value conversion. Infer the operand with NO
+            // context (the conversion explicitly retypes it; it does not flex),
+            // then check the grid: the target must be a value type (not a
+            // pointer); a value source converts to any value target; a pointer
+            // source converts only to `bool` (non-null test) or `intptr`
+            // (ptrtoint). A literal operand was already folded in constfold.
+            assert(e.children.size() == 1 && "kConvertExpr needs 1 operand");
+            parse::Node& operand = *e.children[0];
+            inferExpr(tree, operand, widen::kNoType, diag);
+            std::string to = widen::spellOrEmpty(e.return_type);
+            std::string to_c = widen::spellOrEmpty(widen::deepStrip(e.return_type));
+            if (!isNumericType(e.return_type)) {
+                if (isPtrLikeType(e.return_type)) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "A type conversion target may not be a pointer type.", {}});
+                } else {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Cannot convert to '" + to
+                        + "'; the target must be a value type.", {}});
+                }
+            } else if (operand.inferred_type != widen::kNoType) {
+                std::string from = widen::spellOrEmpty(operand.inferred_type);
+                if (isPtrLikeType(operand.inferred_type)) {
+                    if (to_c != "bool" && to_c != "intptr") {
+                        diagnostic::report(diag, {e.file_id, e.tok,
+                            "Cannot convert '" + from + "' to '" + to
+                            + "'; a pointer converts only to 'bool' or 'intptr'.", {}});
+                    }
+                } else if (!isNumericType(operand.inferred_type)) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Cannot convert '" + from + "' to '" + to + "'.", {}});
+                }
+                // else: a numeric source into a value target — the whole grid is
+                // legal, no diagnostic. The implicit outer else (operand type is
+                // kNoType) is the cascade-suppression case: inferExpr already
+                // reported the operand's error, so skip the source check to avoid
+                // a second misleading diagnostic. user notified, accepts state.
+            }
+            // Stamp the target type even on the error paths above (pointer / void
+            // target), so downstream stages see a typed node — the conversion's
+            // type IS the target regardless. Moot when there was an error (no
+            // codegen), but uniform with kCastExpr. user notified, accepts state.
+            e.inferred_type = e.return_type;
             return;
         }
         case parse::Kind::kStringifyType: {
@@ -1846,6 +1893,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kIndexExpr:
         case parse::Kind::kTupleExpr:
         case parse::Kind::kCastExpr:
+        case parse::Kind::kConvertExpr:
         case parse::Kind::kNewExpr:
         case parse::Kind::kSizeofExpr:
         case parse::Kind::kStringifyType:

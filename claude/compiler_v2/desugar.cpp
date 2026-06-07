@@ -71,6 +71,7 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kTupleExpr:     return ast::Kind::kTupleExpr;
         case parse::Kind::kNewExpr:       return ast::Kind::kNewExpr;
         case parse::Kind::kCastExpr:      return ast::Kind::kCastExpr;
+        case parse::Kind::kConvertExpr:   return ast::Kind::kConvertExpr;
         case parse::Kind::kSizeofExpr:
             // Rewritten to a kIntLiteral during classify; never copied to the ast.
             assert(false && "toAstKind: kSizeofExpr should be lowered in classify");

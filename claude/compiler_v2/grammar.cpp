@@ -366,6 +366,26 @@ struct Parser {
         return true;
     }
 
+    // One `Type=operand` link of a value conversion. Called positioned at the
+    // target type (the leading `(` already consumed; the trailing `)` is the
+    // caller's). The operand is another link when it too begins with a type
+    // keyword (`(float64 = intptr = ref)`), else a full expression.
+    std::unique_ptr<parse::Node> parseConvertChain(int file_id) {
+        int op_tok = pos;
+        std::vector<int> target_seg_toks;
+        std::string target = parseType(&target_seg_toks);
+        if (target.empty()) return nullptr;
+        if (!expect(token::Kind::kEquals, "=")) return nullptr;
+        std::unique_ptr<parse::Node> operand =
+            isTypeStart(peek().kind) ? parseConvertChain(file_id) : parseExpr();
+        if (!operand) return nullptr;
+        auto node = newNodeAt(parse::Kind::kConvertExpr, file_id, op_tok);
+        node->return_type = widen::internOrNone(target);
+        node->return_type_seg_toks = std::move(target_seg_toks);
+        node->children.push_back(std::move(operand));
+        return node;
+    }
+
     std::unique_ptr<parse::Node> parsePrimary() {
         token::Token const& t = peek();
         if (t.kind == token::Kind::kStringLiteral) {
@@ -438,6 +458,16 @@ struct Parser {
         if (t.kind == token::Kind::kLParen) {
             int lp = pos;
             advance();
+            // `(Type=expr)` value conversion. No parenthesized expression or
+            // tuple literal can start with a type keyword, so a type-start right
+            // after `(` unambiguously marks a conversion. Chains `(A=B=expr)`
+            // nest right-to-left (one kConvertExpr per `Type=` link).
+            if (isTypeStart(peek().kind)) {
+                auto conv = parseConvertChain(t.file_id);
+                if (!conv) return nullptr;
+                if (!expect(token::Kind::kRParen, ")")) return nullptr;
+                return conv;
+            }
             auto inner = parseExpr();
             if (!inner) return nullptr;
             if (peek().kind == token::Kind::kComma) {

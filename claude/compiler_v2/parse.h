@@ -92,6 +92,11 @@ enum class Kind {
     kCastExpr,     // prefix `<Type^> operand` — pointer reinterpret cast.
                    // return_type = target type spelling; children[0] = operand.
                    // The address is unchanged; only the static type changes.
+    kConvertExpr,  // `(Type=expr)` value/type conversion — assignment to a temp.
+                   // return_type = target value type; children[0] = operand. Unlike
+                   // kCastExpr (reinterpret bits), this CHANGES the bits (trunc /
+                   // ext / fp<->int / sign reinterpret / non-null test). Chains
+                   // `(A=B=expr)` nest right-to-left as one kConvertExpr per link.
     kNewExpr,      // new T / new T[n] / new(addr) T[n] — heap or placement alloc.
                    // return_type = element type T; children[0] = array-size expr
                    // (or null for a single object), [1] = placement-address expr

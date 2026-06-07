@@ -11,10 +11,12 @@ SAMPLES = \
 	inferred \
 	inttype \
 	mixedtype \
+	moveswap \
 	noninttype \
 	order \
 	ppid \
 	tuple \
+	typeconv \
 	vardecl
 
 .PHONY: all clean negatives positives $(SAMPLES)

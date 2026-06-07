@@ -59,6 +59,10 @@ enum class Kind {
                     // inferred_type = target; children[0]=operand. Codegen emits a
                     // ptrtoint/inttoptr only at the intptr boundary; ptr↔ptr is a
                     // no-op (opaque `ptr`).
+    kConvertExpr,   // `(Type=expr)` value conversion. inferred_type = target value
+                    // type; children[0]=operand. Codegen changes the bits via the
+                    // full conversion grid (widen::convertExplicit) or a pointer
+                    // lowering (ptr->intptr / ptr->bool non-null test).
 
     kSeqExpr,       // synthesized by desugar: children evaluated in order; value_index
                     // names the result child, the rest are bumps run for effect

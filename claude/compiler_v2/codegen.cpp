@@ -847,6 +847,19 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             return widen::convert(v, expr.inferred_type, dest_type,
                                   expr.file_id, expr.tok, out, diag);
         }
+        case ast::Kind::kConvertExpr: {
+            // `(Type=operand)` value conversion. Emit the operand at its own type,
+            // change the bits via the explicit grid (trunc/ext/fp<->int/sign
+            // reinterpret/nonzero test), then flex the target into the
+            // surrounding dest_type (a no-op or implicit widen).
+            assert(expr.children.size() == 1 && "kConvertExpr needs 1 operand");
+            ast::Node const& operand = *expr.children[0];
+            std::string v = emitExpr(operand, syms, pool, out, diag,
+                                     operand.inferred_type);
+            v = widen::convertExplicit(v, operand.inferred_type, expr.inferred_type, out);
+            return widen::convert(v, expr.inferred_type, dest_type,
+                                  expr.file_id, expr.tok, out, diag);
+        }
         case ast::Kind::kUnaryExpr:
             return emitUnary(expr, syms, pool, out, diag, dest_type);
         case ast::Kind::kBinaryExpr:
@@ -1394,6 +1407,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kIndexExpr:
         case ast::Kind::kTupleExpr:
         case ast::Kind::kCastExpr:
+        case ast::Kind::kConvertExpr:
         case ast::Kind::kNewExpr:
         case ast::Kind::kCallExpr:
         case ast::Kind::kSeqExpr:

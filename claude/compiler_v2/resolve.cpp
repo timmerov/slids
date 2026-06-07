@@ -1081,6 +1081,15 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                             &e.return_type_seg_toks);
             return;
         }
+        case parse::Kind::kConvertExpr: {
+            // `(Type=operand)` — resolve the operand as a read, then substitute
+            // and validate the target value type. classify enforces the grid
+            // legality (value/pointer source, non-pointer target).
+            resolveExpr(tree, *e.children[0], diag, unevaluated);
+            resolveDeclType(tree, e.return_type, e.file_id, e.tok, diag,
+                            &e.return_type_seg_toks);
+            return;
+        }
         case parse::Kind::kNewExpr: {
             // new T / new T[n] / new(addr) T[n]. Validate + alias-resolve the
             // element type, then resolve the array-size and placement-address
@@ -2640,6 +2649,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         case parse::Kind::kIndexExpr:
         case parse::Kind::kTupleExpr:
         case parse::Kind::kCastExpr:
+        case parse::Kind::kConvertExpr:
         case parse::Kind::kNewExpr:
         case parse::Kind::kSizeofExpr:
         case parse::Kind::kStringifyType:

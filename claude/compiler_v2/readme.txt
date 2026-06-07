@@ -174,7 +174,11 @@ STAGE FILES (.h / .cpp pairs)
             `! ~ + -`, the `<Type^>` pointer cast (a prefix unary — a leading
             `<` is unambiguous since binary `<` only sits between operands; the
             target spelling rides on return_type, the operand is another unary so
-            casts chain right-to-left), prefix/postfix ++/--, full binary set
+            casts chain right-to-left), the `(Type = expr)` value conversion
+            (kConvertExpr — a type-keyword right after `(` opens it, unambiguous
+            since no parenthesized expr or tuple starts with a type; parseConvertChain
+            parses the target onto return_type and recurses for chain links
+            `(A = B = expr)`, right-to-left, no inner parens), prefix/postfix ++/--, full binary set
             arith/bitwise/shift/comparison/logical, parens, postfix-call on
             a bare ident, and the `##` stringify macros in parsePrimary's
             kHashHash arm — ##file / ##line / ##func / ##name(x) (raw lexed
@@ -215,7 +219,9 @@ STAGE FILES (.h / .cpp pairs)
             `void` with an iterator/array suffix (`void[]`, `void[N]`): void has
             no stride, so a void pointer must be a reference (`void^`). A
             kCastExpr's target type runs through the same resolveDeclType, so a
-            cast inherits alias substitution and the void/unknown-type checks. Whenever resolveDeclType erases
+            cast inherits alias substitution and the void/unknown-type checks; a
+            kConvertExpr's target rides the same path (operand resolved as a read,
+            target alias-resolved + seg-tok carets). Whenever resolveDeclType erases
             a NAMED type to a different underlying (at a local-var decl site or the
             param pass-1 site), the as-declared alias/enum spelling is stashed in a
             parallel alias_label channel (parse::Entry.alias_label) for ##type to
@@ -470,6 +476,12 @@ STAGE FILES (.h / .cpp pairs)
             const capture, so sizeof can initialize a const / feed a const
             expression. Operands needing inference (deref / index / arithmetic) and
             a slid type are left for classify.
+            A `(Type = expr)` conversion (tryFoldConvert) with a LITERAL operand
+            folds the same way: it computes the C-semantics result (float->int
+            trunc, int->int low-N-bit reinterpret, ->bool nonzero, ->float convert)
+            and emits a STRONG target-typed literal, so a conversion can initialize
+            a const or size an array dimension. A non-literal / pointer operand is
+            left for codegen (no compile-time pointer value).
             Iterates to a fixpoint; any kConst whose rhs never folded
             errors with "Initializer for 'X' is not a constant
             expression." (consolidated into one diagnostic with notes
@@ -560,6 +572,16 @@ STAGE FILES (.h / .cpp pairs)
             kStoreStmt (a references-array element / deref slot) — gated on a
             pointer being involved (pure-numeric assignments keep the width path).
             The kCastExpr arm validates the explicit rule and stamps the target.
+            The kConvertExpr arm (`(Type = expr)`, Phase 4) infers the operand
+            with NO context (it retypes, never flexes) then gates the grid: the
+            target must be a value type (a pointer/iterator -> "may not be a
+            pointer type", anything else non-numeric -> "must be a value type");
+            a value source converts to any value target; a pointer/iterator source
+            converts ONLY to `bool` or `intptr` (else "a pointer converts only to
+            'bool' or 'intptr'"); a non-value source is rejected outright. It
+            stamps the target as inferred_type (even on the error paths). Because
+            the result is a strong typed value, an over-narrow assignment of it is
+            caught by the same checkStrongConstAssign as any typed value.
             kNewExpr (Phase 4): a heap element must be statically sized
             (widen::typeByteSize >= 0 — a primitive; a slid -> "Cannot allocate");
             an array size must be integer-class; a placement address must be a
@@ -678,6 +700,15 @@ STAGE FILES (.h / .cpp pairs)
             `inttoptr` — and asserts if a pointer ever reaches the SCALAR
             conversion path (an ungated ptr->non-intptr would store a `ptr` as an
             integer; classify rejects them, so this guards against a missed gate).
+            A kConvertExpr (`(Type = expr)`) mirrors the cast shape: emit the
+            operand at its own type, then widen::convertExplicit (operand->target)
+            then widen::convert (target->dest). convertExplicit is the FULL value
+            grid (sibling to convert, which only widens): trunc / sext / zext /
+            fptrunc / fpext / fptosi / fptoui / sitofp / uitofp, a same-width int
+            change is a no-op (sign reinterpret is free), `->bool` is a nonzero
+            (`icmp`/`fcmp une`) / non-null test, a pointer source is `ptrtoint`
+            (->intptr) or the non-null test (->bool). It never reports — classify
+            pre-validated — and asserts on any state classify should have caught.
             kNewExpr: `new T` -> `call ptr @malloc(i64 sizeof(T))`; `new T[n]` ->
             `mul i64 n, sizeof(T)` then malloc; placement (children[1]) -> the
             address itself, no allocation (primitives construct nothing). An

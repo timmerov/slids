@@ -63,6 +63,24 @@ REACH GOALS
 
 DEFERRED FEATURES (later; may not be on the plan)
 
+  * CLASS / USER-TYPE CONVERSION TARGET (Phase 5) — `(Type = expr)` value
+    conversions LANDED for primitives (kConvertExpr; see [[project_v2_type_conversions]]).
+    Two slices wait on classes:
+      - a CLASS target `(String = "...")` / `(Class = Type^)` is class
+        assignment-conversion (routes through the class's `op=` / char[]-assign
+        path, exactly like `String s = "x"`), plus a pointer SOURCE to a class
+        that defines `op=(Type^)`.
+      - a USER-NAMED type as the target: the grammar only opens a conversion on a
+        primitive type KEYWORD after `(`, so `(Foo = v)` isn't recognized yet
+        (falls to parseExpr -> "Expected ')'"). Needs the is-this-a-type
+        lookahead Phase 5 brings.
+    typeconv.sl keeps the `(String=...)` example commented. prerequisite: classes.
+
+  * CONVERSION OF AN OUT-OF-INT64-RANGE FLOAT LITERAL — tryFoldConvert does NOT
+    fold a float-literal operand whose truncation falls outside int64 (|v| >=
+    2^63); `(int = 1e30)` is lowered at runtime where `fptosi` of an out-of-range
+    float is poison (C UB). Low value; emit a compile-time diagnostic if it bites.
+
   * CONST-POINTER CASTS (Phase 6) — the const-correctness slice of cast.sl is
     deferred (the A1 landing): `const Type^` (a const-qualified pointer type),
     the `<const>` / `<mutable>` qualifier-only casts, and the mutable<->const

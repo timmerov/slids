@@ -438,6 +438,93 @@ std::string convert(std::string const& src_val,
     return convertErrPlain();
 }
 
+std::string convertExplicit(std::string const& src_val,
+                            TypeRef src, TypeRef dest,
+                            std::ostream& out) {
+    TypeRef src_ref = deepStrip(src), dest_ref = deepStrip(dest);
+    if (src_ref == dest_ref) return src_val;
+
+    auto isPtrish = [](TypeRef r) {
+        Type::Form f = form(r);
+        return f == Type::Form::kPointer || f == Type::Form::kIterator
+            || f == Type::Form::kAnyptr;
+    };
+    TypeKind src_tk, dest_tk;
+    bool dest_num = classify(dest_ref, dest_tk);
+    assert(dest_num && "convertExplicit: non-value destination reached codegen");
+
+    // Pointer source — only `intptr` (ptrtoint) or `bool` (non-null test); both
+    // gated by classify, so anything else is a missed gate.
+    if (isPtrish(src_ref)) {
+        std::string tmp = newWidenTmp();
+        if (spell(dest_ref) == "intptr") {
+            out << "  " << tmp << " = ptrtoint ptr " << src_val << " to i64\n";
+        } else if (dest_tk.cat == Category::kBool) {
+            out << "  " << tmp << " = icmp ne ptr " << src_val << ", null\n";
+        } else {
+            assert(false && "convertExplicit: pointer source to non-bool/intptr");
+            return src_val;
+        }
+        return tmp;
+    }
+
+    bool src_num = classify(src_ref, src_tk);
+    assert(src_num && "convertExplicit: non-value source reached codegen");
+    if (src_tk.cat == dest_tk.cat && src_tk.bits == dest_tk.bits) return src_val;
+
+    // Destination bool — a nonzero test (NOT a truncation).
+    if (dest_tk.cat == Category::kBool) {
+        std::string tmp = newWidenTmp();
+        if (src_tk.cat == Category::kFloat) {
+            out << "  " << tmp << " = fcmp une " << llvmFloatType(src_tk.bits)
+                << " " << src_val << ", 0.0\n";
+        } else {
+            out << "  " << tmp << " = icmp ne " << llvmIntType(src_tk.bits)
+                << " " << src_val << ", 0\n";
+        }
+        return tmp;
+    }
+
+    // Destination float.
+    if (dest_tk.cat == Category::kFloat) {
+        std::string dll = llvmFloatType(dest_tk.bits);
+        std::string tmp = newWidenTmp();
+        if (src_tk.cat == Category::kFloat) {
+            char const* opc = (dest_tk.bits > src_tk.bits) ? "fpext" : "fptrunc";
+            out << "  " << tmp << " = " << opc << " " << llvmFloatType(src_tk.bits)
+                << " " << src_val << " to " << dll << "\n";
+        } else {
+            // bool / unsigned / char -> uitofp; signed -> sitofp.
+            char const* opc = (src_tk.cat == Category::kSignedInt) ? "sitofp" : "uitofp";
+            out << "  " << tmp << " = " << opc << " " << llvmIntType(src_tk.bits)
+                << " " << src_val << " to " << dll << "\n";
+        }
+        return tmp;
+    }
+
+    // Destination integer (signed / unsigned / char).
+    std::string dll = llvmIntType(dest_tk.bits);
+    std::string tmp = newWidenTmp();
+    if (src_tk.cat == Category::kFloat) {
+        char const* opc = (dest_tk.cat == Category::kSignedInt) ? "fptosi" : "fptoui";
+        out << "  " << tmp << " = " << opc << " " << llvmFloatType(src_tk.bits)
+            << " " << src_val << " to " << dll << "\n";
+        return tmp;
+    }
+    std::string sll = llvmIntType(src_tk.bits);
+    if (dest_tk.bits == src_tk.bits) return src_val;   // same width: sign reinterpret is free
+    if (dest_tk.bits > src_tk.bits) {
+        // Extend by SOURCE signedness (sext signed; zext unsigned / char / bool).
+        char const* opc = (src_tk.cat == Category::kSignedInt) ? "sext" : "zext";
+        out << "  " << tmp << " = " << opc << " " << sll << " " << src_val
+            << " to " << dll << "\n";
+    } else {
+        out << "  " << tmp << " = trunc " << sll << " " << src_val
+            << " to " << dll << "\n";
+    }
+    return tmp;
+}
+
 bool checkIntLiteralFits(std::string const& literal_text, TypeRef dest,
                          int file_id, int tok, diagnostic::Sink& diag) {
     if (dest == kNoType) return true;
