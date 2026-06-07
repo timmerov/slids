@@ -1652,8 +1652,9 @@ struct Parser {
     std::unique_ptr<parse::Node> parseEnumFor(int stmt_file, int stmt_tok,
             std::string vtype, std::string vname, int v_file, int v_tok,
             int vname_tok, std::unique_ptr<parse::Node> enum_ref) {
-        if (enum_ref->kind != parse::Kind::kIdentExpr) {
-            error("Expected an enum name or a range after ':'.");
+        if (enum_ref->kind != parse::Kind::kIdentExpr
+            && enum_ref->kind != parse::Kind::kTupleExpr) {
+            error("Expected an enum name, an array/tuple, or a range after ':'.");
             return nullptr;
         }
         if (!expect(token::Kind::kRParen, ")")) return nullptr;

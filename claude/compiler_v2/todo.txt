@@ -27,6 +27,20 @@ REACH GOALS
     did 1-D init/assign + multi-dim init/assign). prerequisite: partial-index
     array lvalues.
 
+  * FOR-TUPLE OVER NON-PRIMITIVE ELEMENTS — `for (p : classTuple)` where the
+    tuple's element type is not a primitive. Such a loop var MUST be by reference
+    (a by-value copy needs a constructor — not available). The landed for-tuple
+    handles primitive element types (by value or reference); a non-primitive
+    element forces by-ref + the class copy/move machinery. prerequisite: classes
+    (Phase 5).
+
+  * FOR-TUPLE HETEROGENEOUS-LITERAL REJECTION — `for (x : (1, true))` over a
+    heterogeneous tuple LITERAL is not rejected (it would miscompile: the iterator
+    strides by slot-0's type). A tuple VARIABLE is checked at resolve (the type is
+    known); a literal's slot types are classify-time, so the check must move there
+    (or the for-tuple lowering must defer past classify). Homogeneous literals
+    (the spec's cases) work; only heterogeneous misuse is unguarded.
+
   * ARRAY FROM A TUPLE VALUE — `a = tupleVar` / `int a[3] = tupleVar` where the
     rhs is a tuple VARIABLE, not a literal. The landed array-from-tuple gates on a
     tuple LITERAL (kTupleExpr) so it can flatten the leaf NODES + elide the

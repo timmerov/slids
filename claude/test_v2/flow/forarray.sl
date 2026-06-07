@@ -127,8 +127,8 @@ int32 main() {
 //    }
 //}
 
-/* the right-hand side must be an array (or enum), not a scalar. */
-//-EXPECT-ERROR: is not an enum or array
+/* the right-hand side must be an array (or enum / tuple), not a scalar. */
+//-EXPECT-ERROR: is not an enum, array, or tuple
 //void neg_scalar() {
 //    int v = 5;
 //    for (int^ it : v) {

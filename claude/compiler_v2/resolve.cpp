@@ -1562,6 +1562,189 @@ Completion rewriteForArray(parse::Tree& tree, parse::Node& s, int arr_id,
     return resolveStmt(tree, s, diag);
 }
 
+// Lower `for (var : tuple) {body}` into the canonical kForLongStmt, walking an
+// ITERATOR across the tuple's slots (the spec desugar). The tuple must be
+// homogeneous; element type T comes from classify (the synthesized iterator /
+// loop-var are typeless and inferred). A tuple VARIABLE is iterated IN PLACE (no
+// copy — so a by-mutable-reference loop var writes back); a tuple LITERAL is
+// spilled to a temp (a by-ref var over it is ref-to-const, not yet enforced).
+// var_id = the variable's entry (in place), or -1 for a literal (spill).
+Completion rewriteForTuple(parse::Tree& tree, parse::Node& s, int var_id,
+                           diagnostic::Sink& diag) {
+    parse::Node& it_ref = *s.children[1];     // kTupleExpr (literal) or kIdentExpr
+    parse::Node& var_decl = *s.children[0];
+    bool literal = (var_id < 0);
+    int ifile = it_ref.file_id, itok = it_ref.tok;
+
+    int N;
+    if (literal) {
+        N = static_cast<int>(it_ref.children.size());
+    } else {
+        widen::TypeRef tt = widen::strip(tree.entries[var_id].slids_type);
+        std::vector<widen::TypeRef> slots = widen::get(tt).slots;
+        N = static_cast<int>(slots.size());
+        for (std::size_t i = 1; i < slots.size(); i++) {
+            if (widen::deepStrip(slots[i]) != widen::deepStrip(slots[0])) {
+                diagnostic::report(diag, {ifile, itok,
+                    "A for-loop over a tuple requires a homogeneous tuple.",
+                    {{tree.entries[var_id].file_id, tree.entries[var_id].tok,
+                      "tuple declared here"}}});
+                return Completion::Normal;
+            }
+        }
+    }
+
+    std::string vtype = widen::spellOrEmpty(var_decl.return_type);
+    std::string vname = var_decl.name;
+    int vfile = var_decl.file_id, vtok = var_decl.name_tok;
+    if (var_decl.return_type != widen::kNoType) {   // resolve alias leaves in T^
+        std::set<std::string> visiting;
+        bool reported = false;
+        var_decl.return_type = resolveTypeRef(tree, var_decl.return_type, visiting,
+                                              reported, vfile, vtok, diag);
+    }
+    bool by_ref = isReferenceType(var_decl.return_type);
+
+    std::string tmpName  = "_$ftmp$" + std::to_string(itok);
+    std::string idxName  = "_$idx$"  + std::to_string(itok);
+    std::string iterName = "_$iter$" + std::to_string(itok);
+
+    auto ident = [&](std::string const& nm, int tok) {
+        auto n = std::make_unique<parse::Node>();
+        n->kind = parse::Kind::kIdentExpr;
+        n->name = nm; n->file_id = ifile; n->tok = tok; n->name_tok = tok;
+        return n;
+    };
+    auto intLit = [&](std::string const& v) {
+        auto n = std::make_unique<parse::Node>();
+        n->kind = parse::Kind::kIntLiteral; n->text = v;
+        n->file_id = ifile; n->tok = itok;
+        return n;
+    };
+    auto binary = [&](char const* op, std::unique_ptr<parse::Node> l,
+                      std::unique_ptr<parse::Node> r) {
+        auto n = std::make_unique<parse::Node>();
+        n->kind = parse::Kind::kBinaryExpr; n->text = op;
+        n->file_id = ifile; n->tok = itok;
+        n->children.push_back(std::move(l));
+        n->children.push_back(std::move(r));
+        return n;
+    };
+    auto baseIdent = [&]() {
+        if (literal) return ident(tmpName, itok);
+        auto b = ident(it_ref.name, itok);
+        b->qualifier = it_ref.qualifier;
+        b->qualifier_toks = it_ref.qualifier_toks;
+        b->global_qualified = it_ref.global_qualified;
+        return b;
+    };
+
+    std::vector<std::unique_ptr<parse::Node>> varlist;
+
+    // [literal only] spill the tuple to a temp (so `^_$ftmp[0]` has an address).
+    // Must precede the iterator decl. With a TYPED loop var, give the temp the
+    // homogeneous tuple type `(T, ..., T)` (T = the loop var's element type) so the
+    // literal's slots flex to T — otherwise they default to int32 and the iterator
+    // pointee won't match an `int^` loop var. A typeless loop var leaves it
+    // inferred.
+    if (literal) {
+        widen::TypeRef tmp_type = widen::kNoType;
+        if (var_decl.return_type != widen::kNoType) {
+            widen::TypeRef T = by_ref
+                ? widen::get(widen::strip(var_decl.return_type)).pointee
+                : var_decl.return_type;
+            tmp_type = widen::internTuple(std::vector<widen::TypeRef>(N, T));
+        }
+        auto tmp = std::make_unique<parse::Node>();
+        tmp->kind = parse::Kind::kVarDeclStmt;
+        tmp->name = tmpName; tmp->name_tok = itok;
+        tmp->return_type = tmp_type;
+        tmp->file_id = ifile; tmp->tok = itok;
+        tmp->children.push_back(std::move(s.children[1]));   // the literal
+        varlist.push_back(std::move(tmp));
+    }
+
+    // intptr _$idx = 0
+    auto idx = std::make_unique<parse::Node>();
+    idx->kind = parse::Kind::kVarDeclStmt; idx->name = idxName; idx->name_tok = itok;
+    idx->return_type = widen::intern("intptr");
+    idx->file_id = ifile; idx->tok = itok;
+    idx->children.push_back(intLit("0"));
+    varlist.push_back(std::move(idx));
+
+    // _$iter = ^base[0]  (typeless -> classify infers T[]; ^indexed is an iterator)
+    auto idx0 = std::make_unique<parse::Node>();
+    idx0->kind = parse::Kind::kIndexExpr; idx0->file_id = ifile; idx0->tok = itok;
+    idx0->children.push_back(baseIdent());
+    idx0->children.push_back(intLit("0"));
+    auto addr = std::make_unique<parse::Node>();
+    addr->kind = parse::Kind::kAddrOfExpr; addr->file_id = ifile; addr->tok = itok;
+    addr->children.push_back(std::move(idx0));
+    auto iter = std::make_unique<parse::Node>();
+    iter->kind = parse::Kind::kVarDeclStmt; iter->name = iterName; iter->name_tok = itok;
+    iter->return_type = widen::kNoType;
+    iter->file_id = ifile; iter->tok = itok;
+    iter->children.push_back(std::move(addr));
+    varlist.push_back(std::move(iter));
+
+    // cond: _$idx < N
+    auto cond = binary("<", ident(idxName, itok), intLit(std::to_string(N)));
+
+    // update: { _$idx = _$idx + 1; _$iter = _$iter + 1; }
+    auto bump = [&](std::string const& nm) {
+        auto a = std::make_unique<parse::Node>();
+        a->kind = parse::Kind::kAssignStmt; a->name = nm; a->name_tok = itok;
+        a->file_id = ifile; a->tok = itok;
+        a->children.push_back(binary("+", ident(nm, itok), intLit("1")));
+        return a;
+    };
+    auto update = std::make_unique<parse::Node>();
+    update->kind = parse::Kind::kBlockStmt; update->file_id = ifile; update->tok = itok;
+    update->children.push_back(bump(idxName));
+    update->children.push_back(bump(iterName));
+
+    // binding (first body statement): by value `val = _$iter^`, by ref
+    // `ref = _$iter` (iterator -> reference demote). The pointee/element type
+    // match + homogeneity-vs-loop-var-type are enforced by classify here.
+    auto deref = [&]() {
+        auto d = std::make_unique<parse::Node>();
+        d->kind = parse::Kind::kDerefExpr; d->file_id = vfile; d->tok = vtok;
+        d->children.push_back(ident(iterName, vtok));
+        return d;
+    };
+    std::unique_ptr<parse::Node> binding;
+    if (vtype.empty()) {
+        binding = std::make_unique<parse::Node>();
+        binding->kind = parse::Kind::kAssignStmt;
+        binding->name = vname; binding->name_tok = vtok;
+        binding->file_id = vfile; binding->tok = vtok;
+        binding->children.push_back(deref());          // typeless -> by value
+    } else {
+        binding = std::make_unique<parse::Node>();
+        binding->kind = parse::Kind::kVarDeclStmt;
+        binding->name = vname; binding->name_tok = vtok;
+        binding->return_type = var_decl.return_type;
+        binding->file_id = vfile; binding->tok = vtok;
+        binding->children.push_back(by_ref ? ident(iterName, vtok)   // iter -> ref
+                                           : deref());               // by value
+    }
+
+    std::unique_ptr<parse::Node> user_body = std::move(s.children[2]);
+    auto body = std::make_unique<parse::Node>();
+    body->kind = parse::Kind::kBlockStmt;
+    body->file_id = user_body->file_id; body->tok = user_body->tok;
+    body->children.push_back(std::move(binding));
+    for (auto& st : user_body->children) body->children.push_back(std::move(st));
+
+    s.kind = parse::Kind::kForLongStmt;
+    s.children.clear();
+    s.children.push_back(std::move(cond));      // [0]
+    s.children.push_back(std::move(update));    // [1]
+    s.children.push_back(std::move(body));      // [2]
+    for (auto& v : varlist) s.children.push_back(std::move(v));   // [3..] varlist
+    return resolveStmt(tree, s, diag);
+}
+
 // Resolve a store lvalue (the target of a kStoreStmt). An index store WRITES
 // its base array — mark it initialized (whole-array definite-assignment; a
 // subscript write assigns the array) but don't require it and don't read-mark
@@ -2156,6 +2339,10 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // range." on the enum name, via range_dotdot_tok).
             assert(s.children.size() == 3 && "kForEnumStmt needs var+enum+body");
             parse::Node& enum_ref = *s.children[1];
+            // A tuple LITERAL iterable — `for (x : (7,4,2))`. Spill + iterate.
+            if (enum_ref.kind == parse::Kind::kTupleExpr) {
+                return rewriteForTuple(tree, s, -1, diag);
+            }
             int enum_id = isQualified(enum_ref)
                 ? resolveQualifiedRef(tree, enum_ref, diag)
                 : resolveName(tree, enum_ref.name);
@@ -2167,10 +2354,16 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 return Completion::Normal;
             }
             // The colon-form also iterates a fixed-size ARRAY local — `for (v :
-            // arr)`. Dispatch on what the name resolved to.
+            // arr)` — or a TUPLE local — `for (v : tuple)`. Dispatch on what the
+            // name resolved to.
             if (tree.entries[enum_id].kind == parse::EntryKind::kLocalVar
                 && isArrayType(tree.entries[enum_id].slids_type)) {
                 return rewriteForArray(tree, s, enum_id, diag);
+            }
+            if (tree.entries[enum_id].kind == parse::EntryKind::kLocalVar
+                && widen::form(widen::strip(tree.entries[enum_id].slids_type))
+                       == widen::Type::Form::kTuple) {
+                return rewriteForTuple(tree, s, enum_id, diag);
             }
             // Otherwise it must be an enum: a kNamespace carrying an underlying
             // type (transparent).
@@ -2178,7 +2371,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 || tree.entries[enum_id].slids_type == widen::kNoType) {
                 parse::Entry const& bad = tree.entries[enum_id];
                 diagnostic::report(diag, {enum_ref.file_id, enum_ref.tok,
-                    "'" + enum_ref.name + "' is not an enum or array.",
+                    "'" + enum_ref.name + "' is not an enum, array, or tuple.",
                     {{bad.file_id, bad.tok, "declared here"}}});
                 return Completion::Normal;
             }

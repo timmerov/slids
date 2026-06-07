@@ -29,6 +29,12 @@ deferred:
 ##value(expr)
 */
 
+/*
+void dump( (char[], char[], char[], char[], int^)^ tuple ) {
+    __println(tuple^[0] + ":" + tuple^[1] + ": " + tuple^[2] + " " + tuple^[3] + " = " + tuple^[4]^);
+}
+*/
+
 int32 main() {
 
     // ##file — short filename, no directory path.
