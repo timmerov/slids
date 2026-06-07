@@ -545,21 +545,39 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
                      diagnostic::Sink& diag) {
     assert(call.children.size() == call.param_types.size()
         && "emitCall: arity should have been verified by classify");
+    // Passing a VALUE to a reference param (`dump(#x)` — an rvalue tuple to a
+    // `(...)^`) materializes it in a temp alloca and passes the address. Excludes
+    // a pointer-like arg (an iterator demoting to a reference passes its own
+    // pointer, not a fresh temp).
+    auto isValueByRef = [&](ast::Node const& arg, widen::TypeRef dest) {
+        if (widen::form(widen::strip(dest)) != widen::Type::Form::kPointer)
+            return false;
+        if (arg.inferred_type == widen::kNoType) return false;
+        widen::Type::Form af = widen::form(widen::strip(arg.inferred_type));
+        return af != widen::Type::Form::kPointer
+            && af != widen::Type::Form::kIterator
+            && af != widen::Type::Form::kAnyptr;
+    };
+    // If any arg materializes a temp alloca, bracket the call in stacksave/
+    // stackrestore so the slot is freed each time — a materializing call in a
+    // loop reuses the stack region instead of leaking an alloca per iteration.
+    bool materializes = false;
+    for (size_t i = 0; i < call.children.size(); i++)
+        if (isValueByRef(*call.children[i], call.param_types[i])) {
+            materializes = true;
+            break;
+        }
+    std::string sp;
+    if (materializes) {
+        sp = newTmp("sp");
+        out << "  " << sp << " = call ptr @llvm.stacksave.p0()\n";
+    }
     std::vector<std::pair<std::string, std::string>> arg_vals;
     arg_vals.reserve(call.children.size());
     for (size_t i = 0; i < call.children.size(); i++) {
         ast::Node const& arg = *call.children[i];
         widen::TypeRef dest = call.param_types[i];
-        // Passing a VALUE to a reference param (`dump(#x)` — an rvalue tuple to a
-        // `(...)^`): materialize it in a temp and pass its address. Excludes a
-        // pointer-like arg (an iterator demoting to a reference passes its own
-        // pointer, not a fresh temp).
-        widen::Type::Form af = widen::form(widen::strip(arg.inferred_type));
-        bool arg_ptrlike = af == widen::Type::Form::kPointer
-                        || af == widen::Type::Form::kIterator
-                        || af == widen::Type::Form::kAnyptr;
-        if (widen::form(widen::strip(dest)) == widen::Type::Form::kPointer
-            && arg.inferred_type != widen::kNoType && !arg_ptrlike) {
+        if (isValueByRef(arg, dest)) {
             widen::TypeRef pointee = widen::get(widen::strip(dest)).pointee;
             std::string pll = llvmForRef(pointee);
             std::string v = emitExpr(arg, syms, pool, out, diag, pointee);
@@ -594,6 +612,9 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
         out << arg_vals[i].first << " " << arg_vals[i].second;
     }
     out << ")\n";
+    if (materializes) {
+        out << "  call void @llvm.stackrestore.p0(ptr " << sp << ")\n";
+    }
     return result;
 }
 
@@ -1649,7 +1670,12 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     if (!pool.texts.empty()) out << "\n";
     out << "declare i32 @printf(ptr, ...)\n";
     out << "declare ptr @malloc(i64)\n";
-    out << "declare void @free(ptr)\n\n";
+    out << "declare void @free(ptr)\n";
+    // Save/restore the stack pointer around a call that materializes an rvalue
+    // arg in a temp alloca, so a such a call in a loop reuses the slot instead of
+    // leaking a fresh alloca each iteration.
+    out << "declare ptr @llvm.stacksave.p0()\n";
+    out << "declare void @llvm.stackrestore.p0(ptr)\n\n";
     out << body.str();
 }
 
