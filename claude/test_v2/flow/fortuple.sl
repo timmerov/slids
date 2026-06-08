@@ -82,6 +82,11 @@ claude says:
   [Phase 5, forced by-ref].)
 */
 
+/* a function returning a tuple — for the rvalue-spill case. */
+(int, int, int) make_tuple() {
+    return (4, 5, 6);
+}
+
 int32 main() {
 
     /* by value, tuple literal */
@@ -134,5 +139,132 @@ int32 main() {
     }
     __println(")");
 
+    /* break exits a tuple loop. */
+    (int, int, int) bt = (1, 2, 3);
+    int bsum = 0;
+    for (int^ p : bt) {
+        if (p^ == 2) { break; }
+        bsum = bsum + p^;
+    }
+    __println("break= " + bsum);                 // 1
+
+    /* continue skips an element. */
+    int csum = 0;
+    for (int^ p : bt) {
+        if (p^ == 2) { continue; }
+        csum = csum + p^;
+    }
+    __println("continue= " + csum);              // 1 + 3 = 4
+
+    /* a labeled break from the inner tuple loop exits the OUTER. */
+    int lb = 0;
+    for (int^ a : bt) {
+        for (int^ b : bt) {
+            lb = lb + a^;
+            if (b^ == 2) { break scan; }
+        }
+    } :scan;
+    __println("labeled_break= " + lb);           // 2
+
+    /* a numbered break exits both tuple loops. */
+    int nb = 0;
+    for (int^ a : bt) {
+        for (int^ b : bt) {
+            nb = nb + a^;
+            if (b^ == 2) { break 2; }
+        }
+    }
+    __println("numbered_break= " + nb);          // 2
+
+    /* a labeled continue restarts the OUTER tuple loop. */
+    int lc = 0;
+    for (int^ a : bt) {
+        for (int^ b : bt) {
+            if (b^ == 2) { continue outer; }
+            lc = lc + a^;
+        }
+    } :outer;
+    __println("labeled_continue= " + lc);        // 1 + 2 + 3 = 6
+
+    /* a typeless loop var reuses an enclosing local — observable after. */
+    int rlast = 0;
+    for (rlast : bt) {
+    }
+    __println("reuse= " + rlast);                // 3
+
+    /* a typed by-value loop var (the cases above use typeless by value). */
+    int tv = 0;
+    for (int x : bt) {
+        tv = tv + x;
+    }
+    __println("typed_byval= " + tv);             // 6
+
+    /* a char-element tuple, by reference. */
+    (char, char, char) ct = ('a', 'b', 'c');
+    int chsum = 0;
+    for (char^ p : ct) {
+        chsum = chsum + p^;
+    }
+    __println("char= " + chsum);                 // 294
+
+    /* a float-element tuple, by value. */
+    (float, float, float) ft = (1.5, 2.5, 3.0);
+    float fsum = 0.0;
+    for (float f : ft) {
+        fsum = fsum + f;
+    }
+    __println("float= " + fsum);                 // 7
+
+    /* an rvalue (a function call) is SPILLED to a temp, then iterated. */
+    int spill = 0;
+    for (x : make_tuple()) {
+        spill = spill + x;
+    }
+    __println("call_spill= " + spill);           // 15
+
     return 0;
 }
+
+/*
+negatives — one //-block uncommented per run.
+*/
+
+/* a heterogeneous tuple cannot be iterated (the iterator strides by slot 0's type). */
+//-EXPECT-ERROR: requires a homogeneous tuple
+//int neg_heterogeneous() {
+//    for (x : (1, 2.0, 3)) {
+//        __println("" + x);
+//    }
+//    return 0;
+//}
+
+/* a non-primitive element (a tuple slot) must be iterated by reference. */
+//-EXPECT-ERROR: must use a reference loop variable
+//int neg_nonprimitive_byvalue() {
+//    alias Pair = (int, int);
+//    t = ((1, 2), (3, 4));
+//    for (Pair sub : t) {
+//        __println("" + sub[0]);
+//    }
+//    return 0;
+//}
+
+/* a by-reference loop variable's pointee must match the element type. */
+//-EXPECT-ERROR: does not match the tuple element type
+//int neg_byref_mismatch() {
+//    (int, int, int) t = (1, 2, 3);
+//    for (int64^ p : t) {
+//        p^ = 0;
+//    }
+//    return 0;
+//}
+
+/* the iterable must be a tuple (or enum / array), not a scalar. */
+//-EXPECT-ERROR: is not an enum, array, or tuple
+//int neg_not_tuple() {
+//    int v = 5;
+//    for (x : v) {
+//        __println("" + x);
+//    }
+//    return 0;
+//}

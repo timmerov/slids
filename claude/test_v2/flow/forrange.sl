@@ -315,6 +315,108 @@ int range_typeless_wide(int64 lo, int64 hi) {
     return c;
 }
 
+/* a labeled break from the inner loop exits the OUTER ranged-for. */
+int range_labeled_break() {
+    int c = 0;
+    for (int a : 0..3) {
+        for (int b : 0..3) {
+            c = c + 1;
+            if (b == 1) {
+                break scan;
+            }
+        }
+    } :scan;
+    return c;
+}
+
+/* a numbered break exits both ranged-fors at once. */
+int range_numbered_break() {
+    int c = 0;
+    for (int a : 0..3) {
+        for (int b : 0..3) {
+            c = c + 1;
+            if (b == 1) {
+                break 2;
+            }
+        }
+    }
+    return c;
+}
+
+/* a labeled continue restarts the OUTER ranged-for. */
+int range_labeled_continue() {
+    int c = 0;
+    for (int a : 0..3) {
+        for (int b : 0..3) {
+            if (b == 1) {
+                continue outer;
+            }
+            c = c + 1;
+        }
+    } :outer;
+    return c;
+}
+
+/* nested TYPELESS ranged-fors — each synthesized `_$end` is minted per loop in
+   desugar, so the inner bound can't clobber the outer's. */
+int nested_typeless_range(int a, int b) {
+    int total = 0;
+    for (i : 0..a) {
+        for (j : 0..b) {
+            total = total + 1;
+        }
+    }
+    return total;
+}
+
+/* a PRE-increment in a bound — bumped once at loop start (like the post-inc case,
+   but the bumped value IS the bound). n=5 -> bound 6, 6 iterations, n ends 6. */
+int ppid_pre_operand(int n) {
+    int c = 0;
+    for (int i : 0..++n) {
+        c = c + 1;
+    }
+    return c * 10 + n;
+}
+
+/* an explicit int64-typed loop var over int64 bounds. */
+int range_int64_typed(int64 lo, int64 hi) {
+    int c = 0;
+    for (int64 i : lo..hi) {
+        c = c + 1;
+    }
+    return c;
+}
+
+/* a runtime-empty non-constant range (lo > hi) iterates zero times — no compile
+   error, since the bounds aren't constants. */
+int range_runtime_empty(int lo, int hi) {
+    int c = 0;
+    for (int i : lo..hi) {
+        c = c + 1;
+    }
+    return c;
+}
+
+/* the bounds need only be COMPATIBLE with the loop var, not the same type — a
+   char bound widens into an int var: 97..'e'(101) -> 4. */
+int range_char_bound() {
+    int c = 0;
+    for (int i : 97..'e') {
+        c = c + 1;
+    }
+    return c;
+}
+
+/* the reverse widening — an int bound into an int64 var. */
+int range_int_bound_wide(int n) {
+    int c = 0;
+    for (int64 i : 0..n) {
+        c = c + 1;
+    }
+    return c;
+}
+
 int32 main() {
     __println("sum_range(5) = " + sum_range(5));        // 10
     __println("sum_incl(5) = " + sum_incl(5));          // 15
@@ -343,6 +445,15 @@ int32 main() {
     __println("range_typeless_incl(5) = " + range_typeless_incl(5));    // 15
     __println("range_typeless_step(27) = " + range_typeless_step(27));  // 4
     __println("range_typeless_wide(2, 7) = " + range_typeless_wide(2, 7));  // 5
+    __println("range_labeled_break() = " + range_labeled_break());      // 2
+    __println("range_numbered_break() = " + range_numbered_break());    // 2
+    __println("range_labeled_continue() = " + range_labeled_continue());  // 3
+    __println("nested_typeless_range(3, 4) = " + nested_typeless_range(3, 4));  // 12
+    __println("ppid_pre_operand(5) = " + ppid_pre_operand(5));          // 66
+    __println("range_int64_typed(2, 7) = " + range_int64_typed(2, 7));  // 5
+    __println("range_runtime_empty(5, 0) = " + range_runtime_empty(5, 0));  // 0
+    __println("range_char_bound() = " + range_char_bound());            // 4
+    __println("range_int_bound_wide(5) = " + range_int_bound_wide(5));  // 5
     return 0;
 }
 
@@ -427,6 +538,42 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Cannot implicitly narrow 'int64' to 'int'; use an explicit type conversion.
 //int neg_range_typeless_narrow(int64 hi) {
 //    for (i : 0..hi) {
+//        __println(i);
+//    }
+//    return 0;
+//}
+
+/* `==` is not a valid range comparator (only < <= > >= != are). */
+//-EXPECT-ERROR: Invalid range comparator
+//int neg_range_eqeq() {
+//    for (int i : 0..==5) {
+//        __println(i);
+//    }
+//    return 0;
+//}
+
+/* `%` is not a valid range step operator (only + - * / << >> are). */
+//-EXPECT-ERROR: Invalid range step operator
+//int neg_range_mod_step() {
+//    for (int i : 0..<=10 % 2) {
+//        __println(i);
+//    }
+//    return 0;
+//}
+
+/* a bitwise `&` step operator is rejected the same way. */
+//-EXPECT-ERROR: Invalid range step operator
+//int neg_range_and_step() {
+//    for (int i : 0..<=10 & 2) {
+//        __println(i);
+//    }
+//    return 0;
+//}
+
+/* a logical `&&` step operator is rejected the same way. */
+//-EXPECT-ERROR: Invalid range step operator
+//int neg_range_andand_step() {
+//    for (int i : 0..<=10 && 2) {
 //        __println(i);
 //    }
 //    return 0;

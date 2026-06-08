@@ -68,12 +68,14 @@ REACH GOALS
     did 1-D init/assign + multi-dim init/assign). prerequisite: partial-index
     array lvalues.
 
-  * FOR-TUPLE OVER NON-PRIMITIVE ELEMENTS — `for (p : classTuple)` where the
-    tuple's element type is not a primitive. Such a loop var MUST be by reference
-    (a by-value copy needs a constructor — not available). The landed for-tuple
-    handles primitive element types (by value or reference); a non-primitive
-    element forces by-ref + the class copy/move machinery. prerequisite: classes
-    (Phase 5).
+  * FOR-TUPLE OVER CLASS ELEMENTS — `for (p : classTuple)` where the element is a
+    CLASS. The forced-by-ref rule for non-primitive elements has LANDED: a
+    tuple/array/slid element forces the loop var to `T^` (classify), and a declared
+    by-value loop var over one errors "must use a reference loop variable" — so
+    NESTED tuples (`for (sub : tupleOfTuples) { for (x : sub^) ... }`) work today.
+    What remains needs classes: by-VALUE iteration over a class element (a copy
+    needs a constructor — not available) + the class copy/move machinery, and
+    by-ref iteration once class-typed tuples exist. prerequisite: classes (Phase 5).
 
   * ARRAY FROM A TUPLE VALUE — `a = tupleVar` / `int a[3] = tupleVar` where the
     rhs is a tuple VARIABLE, not a literal. The landed array-from-tuple gates on a
@@ -134,10 +136,10 @@ DEFERRED FEATURES (later; may not be on the plan)
     canon block (lines ~21, 43-54, 77-86); land them with Phase 6 when const is
     a real qualifier. Until then those lines stay commented and untested.
 
-  * FOR-CLASS — the last colon-form for shape (FOR-ARRAY + FOR-TUPLE LANDED in
-    Phase 4, resolve-stage desugar to kForLongStmt). for-class needs classes + a
-    for-each protocol (op[]/size or begin/end/next, Phase 5). Desugars to a
-    kForLongStmt like the others. Not landable until classes exist.
+  * FOR-CLASS — the last colon-form for shape (ranged/array/tuple/enum all LANDED
+    and now lower in the DESUGAR stage). for-class needs classes + a for-each
+    protocol (op[]/size or begin/end/next, Phase 5). Lowers to a kForLongStmt in
+    desugar like the others. Not landable until classes exist.
 
   * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — the canon says by-value iteration
     requires a primitive element type (a reference works for all). With only

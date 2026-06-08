@@ -1954,6 +1954,22 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                         "A for-loop over a tuple with non-primitive elements must "
                         "use a reference loop variable.", {}});
                 }
+                // An EXPLICITLY by-reference loop var (`T^ p`) must reference the
+                // element type — mirrors the for-array by-ref check. (A typeless
+                // var has kNoType, so by_ref is false; a forced-by-ref over a
+                // non-primitive element matches by construction.) Without this, a
+                // mismatch (`int^` over a char tuple) reached codegen as invalid IR.
+                if (by_ref && !slots.empty()) {
+                    widen::TypeRef pointee =
+                        widen::get(widen::strip(var_decl.return_type)).pointee;
+                    if (widen::strip(pointee) != widen::strip(elem)) {
+                        diagnostic::report(diag, {var_decl.file_id, var_decl.name_tok,
+                            "Loop variable type '"
+                                + widen::spellOrEmpty(var_decl.return_type)
+                                + "' does not match the tuple element type '"
+                                + widen::spell(elem) + "'.", {}});
+                    }
+                }
                 // A FRESH typeless loop var takes the element (slot 0) type — a
                 // non-primitive element FORCES a reference (`T^`). A reuse keeps its
                 // enclosing type (the binding coerces the slot).

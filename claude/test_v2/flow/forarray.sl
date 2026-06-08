@@ -56,6 +56,8 @@ the compiler inserts instructions at the start of the loop body.
 
 */
 
+alias Cell = int;
+
 int32 main() {
     int arr[5];
 
@@ -106,6 +108,98 @@ int32 main() {
     } :scan;
     __println("count= " + count);          // 3
 
+    /* continue skips an element. */
+    int csum = 0;
+    for (int x : arr) {
+        if (x == 4) {
+            continue;
+        }
+        csum = csum + x;
+    }
+    __println("csum= " + csum);            // 0+1+9+16 = 26
+
+    /* a naked continue. */
+    int ncsum = 0;
+    for (int x : arr) {
+        if (x == 0) {
+            continue;
+        }
+        ncsum = ncsum + x;
+    }
+    __println("ncsum= " + ncsum);          // 1+4+9+16 = 30
+
+    /* by reference, read only (no write-back). */
+    int rsum = 0;
+    for (int^ p : arr) {
+        rsum = rsum + p^;
+    }
+    __println("rsum= " + rsum);            // 30
+
+    /* non-int element types, by value: int64, char, float. */
+    int64 big[3] = (100, 200, 300);
+    int64 bsum = 0;
+    for (int64 v : big) {
+        bsum = bsum + v;
+    }
+    __println("bsum= " + bsum);            // 600
+
+    char letters[3] = ('a', 'b', 'c');
+    for (char c : letters) {
+        __print("" + c);
+    }
+    __println("");                         // abc
+
+    float fs[3] = (1.5, 2.5, 3.0);
+    float fsum = 0.0;
+    for (float f : fs) {
+        fsum = fsum + f;
+    }
+    __println("fsum= " + fsum);            // 7
+
+    /* an alias element type, iterated by reference. */
+    Cell cells[3] = (5, 6, 7);
+    int asum = 0;
+    for (Cell^ p : cells) {
+        asum = asum + p^;
+    }
+    __println("asum= " + asum);            // 18
+
+    /* nested for-array. */
+    int a2[2] = (10, 20);
+    int b2[3] = (1, 2, 3);
+    int xsum = 0;
+    for (x : a2) {
+        for (y : b2) {
+            xsum = xsum + x + y;
+        }
+    }
+    __println("xsum= " + xsum);            // 36 + 66 = 102
+
+    /* a numbered break exits N enclosing for-arrays at once. */
+    int firstpair = -1;
+    for (x : a2) {
+        for (y : b2) {
+            firstpair = x + y;
+            break 2;
+        }
+    }
+    __println("firstpair= " + firstpair);  // 10 + 1 = 11
+
+    /* a typeless loop variable reuses a WIDER enclosing local (int -> int64). */
+    int64 wlast = 0;
+    for (wlast : arr) {
+    }
+    __println("wlast= " + wlast);          // 16
+
+    /* a single-element array. */
+    int one[1];
+    one[0] = 42;
+    int osum = 0;
+    for (v : one) {
+        osum = osum + v;
+    }
+    __println("osum= " + osum);            // 42
+
     return 0;
 }
 
@@ -148,4 +242,26 @@ int32 main() {
 //        __println("" + x);
 //    }
 //    return 0;
+//}
+
+/* reading an array BY VALUE before any write is use-before-init — a by-reference
+   loop FILLS the array (no init required), a by-value loop READS it (init required). */
+//-EXPECT-ERROR: Use of uninitialized variable 'arr'
+//void neg_value_uninit() {
+//    int arr[5];
+//    for (int x : arr) {
+//        __println("" + x);
+//    }
+//}
+
+/* a loop variable that is bound each iteration but never read is an unused local. */
+//-EXPECT-ERROR: set but never used
+//int neg_unused_var() {
+//    int arr[5];
+//    for (i : 0..5) {
+//        arr[i] = i;
+//    }
+//    for (int x : arr) {
+//    }
+//    return arr[0];
 //}

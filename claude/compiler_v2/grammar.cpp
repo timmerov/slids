@@ -1703,6 +1703,11 @@ struct Parser {
         else if (ck == token::Kind::kGt)    { cmp = ">";  advance(); }
         else if (ck == token::Kind::kGtEq)  { cmp = ">="; advance(); }
         else if (ck == token::Kind::kNotEq) { cmp = "!="; advance(); }
+        else if (ck == token::Kind::kEqEq)  {
+            // `==` is not a range comparator (a range is half-open / ordered).
+            error("Invalid range comparator; use '<', '<=', '>', '>=', or '!='.");
+            return nullptr;
+        }
         auto end = parseUnary();
         if (!end) return nullptr;
         std::string op;
@@ -1713,6 +1718,18 @@ struct Parser {
         else if (ok == token::Kind::kSlash)  op = "/";
         else if (ok == token::Kind::kLShift) op = "<<";
         else if (ok == token::Kind::kRShift) op = ">>";
+        // A recognized-but-unsupported operator in the step position (`%`, `&`,
+        // `|`, `^`, `&&`, `||`, `^^`) is rejected clearly rather than left to a
+        // misleading "Expected ')'". (A modulus etc. INSIDE a parenthesized bound
+        // is fine — parseUnary consumed it, so this only sees a BARE operator.)
+        else if (ok == token::Kind::kPercent || ok == token::Kind::kBitAnd
+              || ok == token::Kind::kBitOr   || ok == token::Kind::kBitXor
+              || ok == token::Kind::kAnd     || ok == token::Kind::kOr
+              || ok == token::Kind::kXorXor) {
+            error("Invalid range step operator; use '+', '-', '*', '/', "
+                  "'<<', or '>>'.");
+            return nullptr;
+        }
         std::unique_ptr<parse::Node> step;
         if (!op.empty()) {
             advance();   // op

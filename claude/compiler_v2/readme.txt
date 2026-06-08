@@ -92,10 +92,14 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     [a transposed / flat literal rejected: "Array initializer shape does not match
     the dimensions of '<T>'"]; codegen flat-GEP per leaf — layout-agnostic, so the
     leaf order IS the row-major store order).
-  * FOR-TUPLE `for (v : tuple)` over a HOMOGENEOUS tuple: rewriteForTuple lowers
-    (like for-array) to a kForLongStmt walking an iterator (`_$iter=^base[0]`,
-    typeless so classify fills T); a VARIABLE iterates in place (no copy, mutable
-    by-ref writes back), a LITERAL spills to a temp (require_homogeneous-checked).
+  * FOR-TUPLE `for (v : tuple)` over a HOMOGENEOUS tuple: resolve understands it
+    (understandForTuple, retagging the kForEnumStmt carrier to kForTupleStmt) and
+    desugar lowers it (lowerForTuple) to a kForLongStmt walking an iterator
+    `_$iter = <T[]><void^>base` (the void^ bridge — so a `ref^` deref iterable
+    dodges addr-of-through-deref); a VARIABLE iterates in place (no copy, mutable
+    by-ref writes back), a LITERAL or rvalue call spills to a `_$ftmp`. A
+    non-primitive element forces by-ref; a by-ref var's pointee must match the
+    element type.
   * #x desugars (grammar parseUnary) to the 5-tuple `(##file, ##line, ##type(x),
     ##name(x), ^x)`; x must be an lvalue. Passing an rvalue tuple to a reference
     param (`dump(#x)`) materializes it in a temp — emitCall brackets such a call
@@ -163,10 +167,13 @@ STAGE FILES (.h / .cpp pairs)
             dispatch on what follows the `[type] var`: ':' then an operand, then
             '..' -> ranged form (`for (var : start .. [cmp] end [op step]) {body}`,
             cmp `< <= > >= !=` default `<`, op `+ - * / << >>` default `+1`,
-            operands are unary-expressions), DESUGARED in the grammar to a
-            kForLongStmt (hidden `_$end` / `_$step` vars + cond/update, tagged with
-            the `..` token); ':' then a bare identifier -> ENUM form (`for (var :
-            Enum) {body}`) parsed as a kForEnumStmt (resolve lowers it, below);
+            operands are unary-expressions; `==` and `% & | ^ && || ^^` are
+            rejected here as invalid range comparator / step operators), emitted as
+            a kForRangedStmt that survives to desugar (which lowers it to a
+            kForLongStmt, minting `_$end`/`_$step`; the `..` token rides along for
+            the empty-range check); ':' then a bare identifier -> ENUM form (`for
+            (var : Enum) {body}`) parsed as a kForEnumStmt (resolve dispatches it,
+            below);
             anything else is the long form's varlist. parseSwitchStmt parses
             `switch (value) { (case const-expr | default) : stmts ... }` into a
             kSwitchStmt (children[0]=scrutinee, [1..]=kCaseClause, label null =
@@ -405,16 +412,21 @@ STAGE FILES (.h / .cpp pairs)
             for_update_floor: a break/continue at the update's own loop-depth or
             any return in the update errors ("A '<kw>' statement is not allowed in
             a for-loop update clause."), while a loop nested in the update gives
-            its own legal break/continue target. A kForEnumStmt (`for (var : Enum)
-            {body}`) is REWRITTEN IN PLACE here into a kForLongStmt over the enum's
-            first..last DEFINED members: resolve the enum-ref (must be a kNamespace
-            with an underlying type), find the first/last kConst members by id
-            (definition) order in its ns_frame, and synthesize
-            `for (T var = Enum:first) (var <= _$end = Enum:last) { var = var + 1; }
-            {body}` (members referenced by qualified name → normal resolve/constfold
-            fills their values), tagged range-derived so a descending/empty enum
-            (first > last) trips the empty-range "Invalid range." check on the enum
-            name; then resolved through the for-long path. A kSwitchStmt resolves
+            its own legal break/continue target. A kForEnumStmt (`for (var : iter)
+            {body}`) is the colon-form CARRIER: resolve DISPATCHES on the iterable —
+            an array/tuple local (or a tuple literal / `ref^` / call) is UNDERSTOOD
+            here (understandForArray / understandForTuple register the loop var,
+            resolve the body + DA, validate) and RETAGGED kForArrayStmt /
+            kForTupleStmt for desugar to lower; a real enum (a kNamespace with an
+            underlying type) is rebuilt as a kForRangedStmt over the enum's
+            first..last DEFINED members — find the first/last kConst members by id
+            (definition) order in its ns_frame, build `for (var : Enum:first .. <=
+            Enum:last) {body}` (members referenced by qualified name → normal
+            resolve/constfold fills their values), tagged range-derived so a
+            descending/empty enum (first > last) trips the empty-range "Invalid
+            range." check on the enum name; then resolved through the RANGED path
+            (lowered in desugar, so its `_$end` is minted fresh — no clobber across
+            nested typeless enum loops). A kSwitchStmt resolves
             the scrutinee, then each clause body from the entry set S (any case can
             be matched directly, so direct entry is the weakest join input) under a
             loop_stack frame with is_switch=true: naked break targets the nearest
@@ -636,9 +648,16 @@ STAGE FILES (.h / .cpp pairs)
             a phrase re-tested each iteration, the body recurses), and a
             kForLongStmt (lowerForLong: varlist initializers + condition are
             phrases, the update + body are statement lists) so a bump inside them
-            splices within that scope, not at function scope. Future canonical-form
-            rewrites (other for shapes desugaring to kForLongStmt, receiver shapes,
-            stringify, operator dispatch) slot in as their phases land.
+            splices within that scope, not at function scope. The OTHER for-shapes
+            now lower HERE too (no longer in grammar/resolve): lowerForRanged /
+            lowerForArray / lowerForTuple build a kForLongStmt subtree, minting
+            helper locals (`_$idx`/`_$end`/`_$step`/`_$iter`/`_$ftmp`) with fresh
+            resolved_entry_ids from one program-wide counter seeded at entries.size()
+            — resolve/classify UNDERSTAND the short form, desugar lowers it (no
+            parse-tree mutation; codegen is node-driven). The for-tuple iterator is
+            `<T[]><void^>base` (the void^ bridge), so a `ref^` deref dodges
+            addr-of-through-deref. Future rewrites (receiver shapes, more operator
+            dispatch) slot in as their phases land.
   optimize  ast -> ast in place. Slids-aware perf rewrites LLVM can't do
             (compound-fuse, NRVO, identity-temp adoption, build-into-target).
             (TODO stub.)

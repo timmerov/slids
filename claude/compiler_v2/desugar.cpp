@@ -257,9 +257,10 @@ std::unique_ptr<ast::Node> lowerForRanged(parse::Node const& p,
     int lv_id = lvp.resolved_entry_id;
     // The loop var's type drives the bound/step allocas and the cond/update ops.
     // Read it off the entry (correct for a fresh decl AND a reuse, where the decl
-    // is a kAssignStmt whose return_type isn't the loop var type).
-    widen::TypeRef T = (lv_id >= 0) ? tree.entries[lv_id].slids_type
-                                    : widen::kNoType;
+    // is a kAssignStmt whose return_type isn't the loop var type). resolve always
+    // resolves the loop var, and desugar runs only on classify-clean trees.
+    assert(lv_id >= 0 && "lowerForRanged: loop var resolved");
+    widen::TypeRef T = tree.entries[lv_id].slids_type;
     std::string vname = lvp.name;
     int file = p.file_id;
     int tok = (p.range_dotdot_tok >= 0) ? p.range_dotdot_tok : p.tok;
@@ -372,17 +373,21 @@ std::unique_ptr<ast::Node> lowerForArray(parse::Node const& p,
     widen::TypeRef arrS = widen::strip(arr_type);
     widen::TypeRef elem = widen::get(arrS).elem;           // 1-D (resolve validated)
     std::vector<int> adims = widen::get(arrS).dims;
-    int size = adims.empty() ? 0 : adims.front();
+    // resolve validated a fixed-size array (>= 1 dim); desugar runs error-free.
+    assert(!adims.empty() && "lowerForArray: array has at least one dimension");
+    int size = adims.front();
     // by-ref is a property of the DECLARED type (`T^ v`), not the element type —
     // a typeless var over a pointer-element array is by VALUE, not by ref.
     bool by_ref = lvp.return_type != widen::kNoType
         && widen::form(widen::strip(lvp.return_type)) == widen::Type::Form::kPointer;
     bool reuse = (lvp.kind == parse::Kind::kAssignStmt);
     // The binding's declared type: as-written (typed / by-ref) or the element
-    // (typeless fresh, off the entry resolve typed). Reuse needs no type.
+    // (typeless fresh, off the entry resolve typed — always resolved). Reuse needs
+    // no type.
+    assert(v_id >= 0 && "lowerForArray: loop var resolved");
     widen::TypeRef bind_type = (lvp.return_type != widen::kNoType)
         ? lvp.return_type
-        : ((v_id >= 0) ? tree.entries[v_id].slids_type : widen::kNoType);
+        : tree.entries[v_id].slids_type;
 
     int afile = arrp.file_id, atok = arrp.tok;
     int vfile = lvp.file_id, vtok = lvp.name_tok;
@@ -520,14 +525,18 @@ std::unique_ptr<ast::Node> lowerForTuple(parse::Node const& p,
     widen::TypeRef tup_type = itp.inferred_type;
     std::vector<widen::TypeRef> slots = widen::get(widen::strip(tup_type)).slots;
     int N = static_cast<int>(slots.size());
-    widen::TypeRef T = slots.empty() ? widen::kNoType : slots[0];   // homogeneous
-    widen::TypeRef iter_type = widen::internIterator(T);            // T[]
+    // resolve/classify validated a (homogeneous) tuple (>= 2 slots); desugar runs
+    // only on classify-clean trees.
+    assert(!slots.empty() && "lowerForTuple: iterable is a tuple");
+    widen::TypeRef T = slots[0];                          // homogeneous element
+    widen::TypeRef iter_type = widen::internIterator(T);  // T[]
     // The binding's declared type: as-written (typed / by-ref) or the element
     // (typeless fresh, off the entry — classify forces a reference for a
-    // non-primitive element). Reuse needs no type.
+    // non-primitive element; the loop var is always resolved). Reuse needs no type.
+    assert(v_id >= 0 && "lowerForTuple: loop var resolved");
     widen::TypeRef bind_type = (lvp.return_type != widen::kNoType)
         ? lvp.return_type
-        : ((v_id >= 0) ? tree.entries[v_id].slids_type : widen::kNoType);
+        : tree.entries[v_id].slids_type;
     // By reference iff the loop var's resolved type is a reference to the element T:
     // a declared `T^`, or the classify forced-by-ref over a non-primitive element. A
     // by-VALUE loop over POINTER elements keeps bind_type == T (not T^), so it stays

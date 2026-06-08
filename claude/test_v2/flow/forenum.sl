@@ -49,6 +49,8 @@ enum Solo ( only );
 enum Neg ( n2 = -2, n1, z );
 /* a char-underlying enum: a..d = 97..100. */
 enum char Letter ( a = 'a', b, c, d );
+/* an int64-underlying enum (a non-int, non-char underlying type). */
+enum int64 Big ( bx = 1000000000000, by, bz );
 /* a zero-member enum — used by a negative below. */
 enum Empty ( );
 
@@ -214,6 +216,78 @@ int dir_typeless() {
     return c;
 }
 
+/* nested TYPELESS loops over DIFFERENT enums — the synthesized bound is minted
+   per loop in desugar, so the inner loop's bound can't clobber the outer's. */
+int nested_typeless_diff() {
+    int total = 0;
+    for (a : Color) {
+        for (b : Level) {
+            total = total + 1;
+        }
+    }
+    return total;
+}
+
+/* a labeled break from the inner loop exits the OUTER enum loop. */
+int enum_labeled_break() {
+    int c = 0;
+    for (Color a : Color) {
+        for (Color b : Color) {
+            c = c + 1;
+            if (b == 1) {
+                break scan;
+            }
+        }
+    } :scan;
+    return c;
+}
+
+/* a numbered break exits both enum loops at once. */
+int enum_numbered_break() {
+    int c = 0;
+    for (Color a : Color) {
+        for (Color b : Color) {
+            c = c + 1;
+            if (b == 1) {
+                break 2;
+            }
+        }
+    }
+    return c;
+}
+
+/* a labeled continue restarts the OUTER enum loop. */
+int enum_labeled_continue() {
+    int c = 0;
+    for (Color a : Color) {
+        for (Color b : Color) {
+            if (b == 1) {
+                continue outer;
+            }
+            c = c + 1;
+        }
+    } :outer;
+    return c;
+}
+
+/* a typeless loop var reuses an enclosing local — observable after. The enum loop
+   counts up to last and then past it, so the var ends at last + 1 (blue + 1 = 3). */
+int enum_typeless_reuse() {
+    int prev = 99;
+    for (prev : Color) {
+    }
+    return prev;
+}
+
+/* an int64-underlying enum: bx + by + bz = 3 * 1e12 + 3. */
+int64 sum_big() {
+    int64 s = 0;
+    for (Big v : Big) {
+        s = s + v;
+    }
+    return s;
+}
+
 int32 main() {
     __println("count_colors() = " + count_colors());    // 3
     __println("sum_colors() = " + sum_colors());        // 3
@@ -232,6 +306,12 @@ int32 main() {
     __println("sum_typeless() = " + sum_typeless());        // 3
     __println("letters_typeless() = " + letters_typeless());  // 4
     __println("dir_typeless() = " + dir_typeless());        // 4
+    __println("nested_typeless_diff() = " + nested_typeless_diff());  // 9
+    __println("enum_labeled_break() = " + enum_labeled_break());      // 2
+    __println("enum_numbered_break() = " + enum_numbered_break());    // 2
+    __println("enum_labeled_continue() = " + enum_labeled_continue());  // 3
+    __println("enum_typeless_reuse() = " + enum_typeless_reuse());    // 3
+    __println("sum_big() = " + sum_big());                  // 3000000000003
     return 0;
 }
 

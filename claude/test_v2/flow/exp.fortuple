@@ -9,3 +9,13 @@ tpl3 = (
   ( 3 4 )
   ( 5 6 )
 )
+break= 1
+continue= 4
+labeled_break= 2
+numbered_break= 2
+labeled_continue= 6
+reuse= 3
+typed_byval= 6
+char= 294
+float= 7
+call_spill= 15

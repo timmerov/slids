@@ -142,9 +142,8 @@ Phase 2 — declarations + flow (LANDED)
     no-init decl reuses-or-errors, and the after-set is S' so a reused var is
     observable after; classify propagates the loop-var type onto a typeless ranged
     `_$end`/`_$step`; reuse requires a compatible type, else the normal assignment
-    conversion rejects it). FOR-ARRAY landed in Phase 4 (`for (var : arr)`, a
-    resolve-stage desugar to kForLongStmt — see Phase 4); for-tuple/for-class
-    still pending tuples/classes. Session 5 (switch) LANDED — kSwitchStmt +
+    conversion rejects it). FOR-ARRAY + FOR-TUPLE landed in Phase 4 (`for (var :
+    arr)` / `for (v : tuple)` — see Phase 4); for-class pending classes. Session 5 (switch) LANDED — kSwitchStmt +
     kCaseClause, C-style FALL-THROUGH, integer-class scrutinee, unique in-range
     integer-constant labels (incl. qualified `case Dir:N:` via a terminator-aware
     parse), default singular + anywhere, naked break exits the switch / naked
@@ -156,6 +155,14 @@ Phase 2 — declarations + flow (LANDED)
     walked over a LoopCtx linked list in codegen; no break/continue of any flavor
     in a for-update; labels on loops only (named-switch-break distant-future).
     Phase 2 FLOW COMPLETE; for-array + for-tuple landed in Phase 4, for-class pending (Phase 5).
+    RELOCATION (later): all for-shapes (ranged/array/tuple/enum) were moved to lower
+    in the DESUGAR stage (was grammar for ranged, resolve for array/tuple/enum) —
+    grammar emits kForRangedStmt, resolve retags the kForEnumStmt carrier to
+    kForArrayStmt/kForTupleStmt, enum builds a kForRangedStmt over first..last;
+    desugar's lowerForRanged/Array/Tuple build the kForLongStmt with fresh-id helper
+    locals. Wins: inferred `for(x:ref^)`, addr-of-through-deref dodge (`<T[]><void^>`),
+    `_$end` clobber retired. The grammar/resolve stage notes above are historical.
+    See project_v2_for_desugar_relocation (memory) + readme.txt desugar stage.
   * return — LANDED (kReturnStmt + return-correctness check from Phase 1).
 
 Phase 3 — functions
@@ -222,11 +229,21 @@ Phase 4 — types beyond primitives
     may-set [a subscript write assigns the array; read-before-any-write errors];
     arrays join the unused-local sweep.)
   * for-array (`for (var : arr)`)                                  LANDED
-    (resolve-stage desugar to kForLongStmt, like for-enum: synth `_$idx$<tok>`
-    walks 0..len-1, the loop var bound at the body top — by reference [`T^ v`],
-    by value [`T v`], or typeless [by value; reuse-an-enclosing-local-or-fresh].
-    One-dimensional only; a by-ref var's base type must equal the element type
-    [alias-resolved first, so `for (Int^ v : intArr)` with `alias Int = int` matches].)
+    (DESUGAR-stage lowering to kForLongStmt: resolve UNDERSTANDS it
+    [understandForArray, retags kForArrayStmt], desugar's lowerForArray builds a
+    fresh `_$idx` walking 0..len-1, the loop var bound at the body top — by
+    reference [`T^ v`], by value [`T v`], or typeless [by value;
+    reuse-an-enclosing-local-or-fresh]. One-dimensional only; a by-ref var's base
+    type must equal the element type [alias-resolved first, so `for (Int^ v :
+    intArr)` with `alias Int = int` matches].)
+  * for-tuple (`for (v : tuple)`)                                   LANDED
+    (DESUGAR-stage, like for-array: resolve understands [understandForTuple, from
+    the kForEnumStmt carrier → kForTupleStmt], desugar's lowerForTuple walks a
+    `_$iter = <T[]><void^>base` iterator [the void^ bridge → a `ref^` deref dodges
+    addr-of-through-deref]; literal/rvalue spills to `_$ftmp`, variable in place.
+    Homogeneous only; by value / by ref [a non-primitive element forces by-ref; a
+    by-ref var's pointee must match the element]; typeless local + inferred-ref
+    deref dispatch via classify guard. test_v2/flow/fortuple.sl.)
   * pointer casting (`<Type^> ptr`)                                LANDED
     (kCastExpr — a prefix-unary reinterpret cast [a leading `<` is unambiguous;
     operand is another unary so casts chain right-to-left; target on return_type,
