@@ -1396,6 +1396,42 @@ void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
     }
 }
 
+// A tuple's flattened scalar-slot count (nested tuples expand recursively).
+long tupleFlatSlotCount(widen::TypeRef t) {
+    widen::Type const& ty = widen::get(widen::strip(t));
+    if (ty.form != widen::Type::Form::kTuple) return 1;
+    long n = 0;
+    for (widen::TypeRef s : ty.slots) n += tupleFlatSlotCount(s);
+    return n;
+}
+
+// An array initialized / assigned from a tuple VALUE — a tuple-typed expression
+// that is NOT a literal (`int a[4] = t4;`). The literal case is isArrayFromTuple
+// (its leaf NODES are re-inferred); a value has no node-level leaves, so it copies
+// through the aggregate (codegen extractvalue per slot).
+bool isArrayFromTupleValue(widen::TypeRef declType, parse::Node const& rhs) {
+    return widen::form(widen::strip(declType)) == widen::Type::Form::kArray
+        && rhs.kind != parse::Kind::kTupleExpr
+        && widen::form(widen::strip(rhs.inferred_type)) == widen::Type::Form::kTuple;
+}
+
+// Validate an array-from-tuple-VALUE init/assign: the tuple's flattened slot count
+// must equal the array's element count. Per-slot widening into the element type is
+// checked + emitted by codegen (widen::convert), as for any typed-value assign.
+void classifyArrayFromTupleValue(widen::TypeRef declType, parse::Node& rhs,
+                                 diagnostic::Sink& diag) {
+    widen::TypeRef a = widen::strip(declType);
+    long total = 1;
+    for (int d : widen::get(a).dims) total *= d;
+    long slots = tupleFlatSlotCount(rhs.inferred_type);
+    if (slots != total) {
+        diagnostic::report(diag, {rhs.file_id, rhs.tok,
+            "Tuple has " + std::to_string(slots)
+            + " elements but array '" + widen::spellOrEmpty(declType)
+            + "' has " + std::to_string(total) + ".", {}});
+    }
+}
+
 void classifyStmt(parse::Tree& tree, parse::Node& s,
                   widen::TypeRef fn_return_type,
                   diagnostic::Sink& diag) {
@@ -1458,6 +1494,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 if (s.return_type != widen::kNoType) {
                     if (isArrayFromTuple(s.return_type, *s.children[0])) {
                         classifyArrayFromTuple(tree, s.return_type, *s.children[0], diag);
+                    } else if (isArrayFromTupleValue(s.return_type, *s.children[0])) {
+                        classifyArrayFromTupleValue(s.return_type, *s.children[0], diag);
                     } else {
                         checkPtrAssign(s.return_type, *s.children[0], diag);
                         checkStrongConstAssign(s.return_type, *s.children[0], diag);
@@ -1483,6 +1521,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (!s.children.empty() && s.children[0]) {
                 if (isArrayFromTuple(lref, *s.children[0])) {
                     classifyArrayFromTuple(tree, lref, *s.children[0], diag);
+                } else if (isArrayFromTupleValue(lref, *s.children[0])) {
+                    classifyArrayFromTupleValue(lref, *s.children[0], diag);
                 } else {
                     checkPtrAssign(lref, *s.children[0], diag);
                     checkStrongConstAssign(lref, *s.children[0], diag);

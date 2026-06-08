@@ -1089,6 +1089,60 @@ void emitArrayFromTuple(std::string const& alloca_name, widen::TypeRef arrType,
     }
 }
 
+// Recurse a tuple VALUE's slots, extracting each scalar leaf (a nested-tuple slot
+// recurses with a longer index path) and storing it — widened to `elem` — into the
+// array's flat slot `flat`. The aggregate `agg` (LLVM type `agg_ll`) is the
+// top-level tuple, so a leaf is one `extractvalue agg, p0, p1, ...` over its path.
+void emitTupleLeafStores(std::string const& agg, std::string const& agg_ll,
+                         widen::TypeRef tupleTy, std::vector<int>& path,
+                         widen::TypeRef elem, std::string const& elem_ll,
+                         std::string const& alloca_name, std::size_t& flat,
+                         ast::Node const& rhs, std::ostream& out,
+                         diagnostic::Sink& diag) {
+    std::vector<widen::TypeRef> slots = widen::get(widen::strip(tupleTy)).slots;
+    for (std::size_t i = 0; i < slots.size(); i++) {
+        path.push_back(static_cast<int>(i));
+        if (widen::form(widen::strip(slots[i])) == widen::Type::Form::kTuple) {
+            emitTupleLeafStores(agg, agg_ll, slots[i], path, elem, elem_ll,
+                                alloca_name, flat, rhs, out, diag);
+        } else {
+            std::string raw = newTmp("tslot");
+            out << "  " << raw << " = extractvalue " << agg_ll << " " << agg << ", ";
+            for (std::size_t k = 0; k < path.size(); k++) {
+                if (k) out << ", ";
+                out << path[k];
+            }
+            out << "\n";
+            std::string v = widen::convert(raw, slots[i], elem,
+                                           rhs.file_id, rhs.tok, out, diag);
+            std::string gep = newTmp("aelt");
+            out << "  " << gep << " = getelementptr " << elem_ll << ", ptr "
+                << alloca_name << ", i64 " << flat << "\n";
+            out << "  store " << elem_ll << " " << v << ", ptr " << gep << "\n";
+            flat++;
+        }
+        path.pop_back();
+    }
+}
+
+// Assign / initialize an array from a tuple VALUE: evaluate the aggregate once,
+// then flatten its leaves into the array's flat slots (no aggregate is kept). The
+// counterpart to emitArrayFromTuple for a tuple LITERAL (classify already checked
+// the flattened slot count equals the element count).
+void emitArrayFromTupleValue(std::string const& alloca_name, widen::TypeRef arrType,
+                             ast::Node const& rhs, SymTab const& syms,
+                             strings::Pool& pool, std::ostream& out,
+                             diagnostic::Sink& diag) {
+    widen::TypeRef elem = widen::get(widen::strip(arrType)).elem;
+    std::string elem_ll = llvmForRef(elem);
+    std::string agg = emitExpr(rhs, syms, pool, out, diag, rhs.inferred_type);
+    std::string agg_ll = llvmForRef(rhs.inferred_type);
+    std::vector<int> path;
+    std::size_t flat = 0;
+    emitTupleLeafStores(agg, agg_ll, rhs.inferred_type, path, elem, elem_ll,
+                        alloca_name, flat, rhs, out, diag);
+}
+
 void emitStmt(ast::Node const& stmt, SymTab& syms,
               strings::Pool& pool,
               widen::TypeRef fn_return_type,
@@ -1113,6 +1167,15 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                     && stmt.children[0]->kind == ast::Kind::kTupleExpr) {
                     emitArrayFromTuple(it->second.alloca_name, it->second.slids_type,
                                        *stmt.children[0], syms, pool, out, diag);
+                    return;
+                }
+                if (widen::form(widen::strip(it->second.slids_type))
+                        == widen::Type::Form::kArray
+                    && widen::form(widen::strip(stmt.children[0]->inferred_type))
+                           == widen::Type::Form::kTuple) {
+                    emitArrayFromTupleValue(it->second.alloca_name,
+                                            it->second.slids_type,
+                                            *stmt.children[0], syms, pool, out, diag);
                     return;
                 }
                 std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
@@ -1141,6 +1204,14 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 && stmt.children[0]->kind == ast::Kind::kTupleExpr) {
                 emitArrayFromTuple(it->second.alloca_name, it->second.slids_type,
                                    *stmt.children[0], syms, pool, out, diag);
+                return;
+            }
+            if (widen::form(widen::strip(it->second.slids_type))
+                    == widen::Type::Form::kArray
+                && widen::form(widen::strip(stmt.children[0]->inferred_type))
+                       == widen::Type::Form::kTuple) {
+                emitArrayFromTupleValue(it->second.alloca_name, it->second.slids_type,
+                                        *stmt.children[0], syms, pool, out, diag);
                 return;
             }
             std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
