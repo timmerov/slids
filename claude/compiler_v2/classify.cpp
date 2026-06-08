@@ -463,6 +463,21 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             bool array = isArrayType(base.inferred_type);
             bool iter = isIteratorType(base.inferred_type);
             if (!bt.empty() && !array && !iter) {
+                // Over-indexing: the base is itself a subscript that already
+                // bottomed out at a scalar (`a[i][j][k]` on a 2-D array, or the
+                // comma form `a[i,j,k]`). Name the over-indexed type rather than
+                // the incidental scalar. A genuine scalar subscript (`s[0]`) keeps
+                // the plain message.
+                if (base.kind == parse::Kind::kIndexExpr) {
+                    parse::Node const* root = &base;
+                    while (root->kind == parse::Kind::kIndexExpr) {
+                        root = root->children[0].get();
+                    }
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Subscript indexes past the last dimension of '"
+                        + widen::spellOrEmpty(root->inferred_type) + "'.", {}});
+                    return;
+                }
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Cannot subscript a non-array value of type '" + bt + "'.",
                     {}});

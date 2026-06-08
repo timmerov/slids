@@ -185,6 +185,44 @@ int32 main() {
     int64 wv[2] = (e0, e1);
     __println("wv= " + wv[0] + " " + wv[1]);     // 5 9
 
+    /* three-dimensional, standard row-major: a[i][j][k] = i,j,k flat row-major. */
+    int a3[2][3][4];
+    for (i : 0..2) {
+        for (j : 0..3) {
+            for (k : 0..4) {
+                a3[i][j][k] = i * 100 + j * 10 + k;
+            }
+        }
+    }
+    __println("a3[0][0][0]= " + a3[0][0][0]);     // 0
+    __println("a3[1][2][3]= " + a3[1][2][3]);     // 123
+    __println("a3[0][1][2]= " + a3[0][1][2]);     // 12
+    __println("a3comma= " + a3[3,2,1]);           // == a3[1][2][3] -> 123
+
+    /* a 3-D array from a fully-nested tuple — shape (2 × 2 × 2). */
+    int n3[2][2][2] = (((1,2), (3,4)), ((5,6), (7,8)));
+    __println("n3= " + n3[0][0][0] + " " + n3[1][1][1] + " " + n3[1][0][1]);  // 1 8 6
+
+    /* a comma subscript composes with addr-of: ^a[i,j] == ^a[j][i]. */
+    int g2[2][3];
+    g2[1][2] = 7;
+    int[] cit = ^g2[2,1];                        // == ^g2[1][2]
+    __println("commaiter= " + cit^);             // 7
+
+    /* an iterator walks the flat row-major layout across element boundaries. */
+    int seq[5][3];
+    for (y : 0..5) {
+        for (x : 0..3) {
+            seq[y][x] = x * x + y;
+        }
+    }
+    int[] it = ^seq[0][1];                        // x=1,y=0 -> 1
+    __println("it= " + it^);                      // 1
+    it = it + 1;                                  // -> seq[0][2] -> x=2,y=0 -> 4
+    __println("itnext= " + it^);                  // 4
+    it = it + 1;                                  // -> seq[1][0] -> x=0,y=1 -> 1
+    __println("itwrap= " + it^);                  // 1
+
     return 0;
 }
 
@@ -220,6 +258,14 @@ int32 main() {
 //    return a[0][0];
 //}
 
+/* a FLAT tuple into a multi-dim array is rejected too — the leaf count matches
+   but the nesting doesn't (the top level isn't dims[0] tuples). */
+//-EXPECT-ERROR: Array initializer shape does not match
+//int neg_shape_flat() {
+//    int a[2][3] = (1, 2, 3, 4, 5, 6);
+//    return a[0][0];
+//}
+
 /* a char-constant index is bounds-checked too ('A' is 65). */
 //-EXPECT-ERROR: Array index 65 is out of bounds
 //int neg_oob_char() {
@@ -242,6 +288,23 @@ int32 main() {
 //int neg_subscript_scalar() {
 //    int s = 5;
 //    return s[0];
+//}
+
+/* OVER-indexing — one subscript past the rank — names the over-indexed array
+   (the symmetric case of the partial-index error above). */
+//-EXPECT-ERROR: Subscript indexes past the last dimension of 'int[3][5]'
+//int neg_over_index() {
+//    int twodim[3][5];
+//    twodim[0][0] = 1;
+//    return twodim[0][2][1];
+//}
+
+/* the comma form over-indexes the same way (a[i,j,k] on a 2-D array). */
+//-EXPECT-ERROR: Subscript indexes past the last dimension of 'int[2][3]'
+//int neg_over_index_comma() {
+//    int a[2][3];
+//    a[0][0] = 1;
+//    return a[1,1,1];
 //}
 
 /* an array index must be an integer. */
@@ -275,6 +338,30 @@ int32 main() {
 //    int a[N];
 //    a[0] = 1;
 //    return a[0];
+//}
+
+/* a LITERAL dimension is validated the same way — a zero literal is rejected. */
+//-EXPECT-ERROR: Array size must be a positive integer constant.
+//int neg_dim_zero_literal() {
+//    int a[0];
+//    a[0] = 1;
+//    return a[0];
+//}
+
+/* every dimension is validated, including a non-first one in a multi-dim array. */
+//-EXPECT-ERROR: Array size must be a positive integer constant.
+//int neg_dim_zero_multi() {
+//    int a[3][0];
+//    a[0][0] = 1;
+//    return a[0][0];
+//}
+
+/* a zero in a comma dim list is rejected too (it desugars to a chained dim). */
+//-EXPECT-ERROR: Array size must be a positive integer constant.
+//int neg_dim_zero_comma() {
+//    int a[0,3];
+//    a[0][0] = 1;
+//    return a[0][0];
 //}
 
 /* a const-expression dimension must be an integer (a float is rejected). */

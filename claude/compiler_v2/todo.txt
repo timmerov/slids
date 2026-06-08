@@ -8,6 +8,23 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
+  * BAKEDIMS CLOBBERS ALIAS RESOLUTION — constfold's bakeNodeDims rebuilds an
+    array's type spelling from `n.return_type` (widen::spellOrEmpty), which is the
+    GRAMMAR spelling with the element alias UNRESOLVED (e.g. `Integer[1]`), then
+    stamps the rebuilt `Integer[3]` onto the entry — clobbering the `int[3]`
+    resolve had already substituted. So an alias-element array with a
+    const-EXPRESSION dim (`alias Integer = int; Integer nums[N];`) ends up typed
+    `Integer[...]` (alias un-stripped), and a downstream use (`Integer[] it =
+    ^nums[0]`) hits a spurious "Cannot implicitly cast 'Integer[]' to 'Integer[]'".
+    A LITERAL-dim alias array is fine (the dim bakes at grammar, resolve strips the
+    whole spelling, bakeNodeDims early-returns on empty dim_exprs). Exposed (then
+    side-stepped) while fixing the literal-zero-dim check: routing literal dims
+    through dim_exprs made EVERY alias array hit it, so the fix stayed at the
+    grammar instead. Real fix: bakeNodeDims should rebuild onto the ALIAS-RESOLVED
+    base — read the entry's slids_type (resolve's output) for the base type, not
+    n.return_type — or have resolve re-resolve n.return_type post-bake.
+    prerequisite: none; small, but touches the constfold dim-baking path.
+
   * ORPHAN-CHECK vs IMPORT FORWARD-DECLS — resolve's Pass 3 errors on any
     function declared-but-never-defined ("Function 'X' is declared but never
     defined.") — but a `.slh` header legitimately declares-only (defined in the
@@ -55,10 +72,11 @@ REACH GOALS
   * ARRAYS OF TUPLES — `(int,int) arr[3] = ((1,2),(3,4),(5,6))`: an array whose
     ELEMENT type is a tuple. A DIFFERENT mapping than the homogeneous flatten —
     the outer tuple maps to elements, each kept as a tuple aggregate (no flatten).
-    Indexing is `arr[tuple-index][array-index]` (the reversed convention applied
-    to the array-of-tuples; array.sl:44 `six = arr[1][2]`). Deferred from the
-    array-from-tuple landing. prerequisite: the homogeneous array-from-tuple
-    (LANDED) + element-is-a-tuple layout.
+    Indexing is `arr[array-index][slot-index]` (standard order — the array
+    subscript outer, the tuple slot inner; array.sl spec block `six = arr[2][1]`
+    / the comma `arr[1,2]`). Deferred from the array-from-tuple landing.
+    prerequisite: the homogeneous array-from-tuple (LANDED) + element-is-a-tuple
+    layout.
 
   * DROP THE ENUM QUALIFIER IN CONTEXT — when a variable's declared type is an
     enum, a bare member name on the rhs should resolve against that enum's

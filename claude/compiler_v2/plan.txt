@@ -199,16 +199,26 @@ Phase 4 — types beyond primitives
     step one element; full six comparisons. iterator->reference assignment demotes
     [v1]. `char[]` from a string literal.)
   * fixed-size arrays (`T name[N]`, multi-dim)                      LANDED
-    (decl size after the NAME; multi-dim REVERSED — `int[3][5]` is 5 chunks of
-    3 = LLVM `[5 x [3 x i32]]`, leftmost dim innermost; `arr[i]...` subscript
-    [every dimension required] via one reversed-index GEP; `^arr[i]` -> iterator;
-    constant-index [incl. char] bounds-checked; NO initializer lists [tuples
-    out]. A dim may be a const EXPRESSION, not just a literal [`T a[N]`,
-    `T a[sizeof(int)]`, `T a[N+1]`]: grammar parses it as an expression + bakes a
-    provisional `[1]`; constfold folds it and bakes the real size into the type
-    spelling AND the entry [bakeNodeDims, within the fixpoint so a later
-    sizeof-of-the-array sees the real size; final pass errors a non-constant /
-    non-positive / non-integer dim]. Whole-array definite-assignment is a monotonic
+    (decl size after the NAME; multi-dim is STANDARD row-major — `int[5][3]` is 5
+    chunks of 3 = LLVM `[5 x [3 x i32]]`, the LEFTMOST dim OUTERMOST; `arr[i]...`
+    subscript [every dimension required] is one GEP with the source indices
+    outer-to-inner [subscript[k] consumes dims[k]]; `^arr[i]` -> iterator;
+    constant-index [incl. char] bounds-checked. The COMMA form `arr[a,b]` /
+    `int g[3,5]` is the "natural order" transpose — a comma list desugars
+    `[a,..,z] -> [z]...[a]` purely in the grammar [type-blind], so `g[x,y]` ==
+    `g[y][x]` and `int[3,5]` == `int[5][3]`. OVER-indexing past the rank reports
+    "Subscript indexes past the last dimension of '<arr>'"; a LITERAL zero/negative
+    dim is rejected in the grammar [a const-EXPRESSION dim in constfold]. A dim may
+    be a const EXPRESSION, not just a literal [`T a[N]`, `T a[sizeof(int)]`,
+    `T a[N+1]`]: grammar parses it as an expression + bakes a provisional `[1]`;
+    constfold folds it and bakes the real size into the type spelling AND the entry
+    [bakeNodeDims, within the fixpoint so a later sizeof-of-the-array sees the real
+    size; final pass errors a non-constant / non-positive / non-integer dim].
+    SET FROM A HOMOGENEOUS TUPLE [init or whole-array assign]: a multi-dim array
+    takes a NESTED tuple whose SHAPE matches the declared dims [row × col] —
+    classifyArrayFromTuple checks the leaf count AND the nesting [a transposed or
+    flat literal is rejected]; lowers element-wise row-major, each slot widening
+    into the element type. Whole-array definite-assignment is a monotonic
     may-set [a subscript write assigns the array; read-before-any-write errors];
     arrays join the unused-local sweep.)
   * for-array (`for (var : arr)`)                                  LANDED

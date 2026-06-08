@@ -1063,6 +1063,14 @@ struct Parser {
             std::vector<std::unique_ptr<parse::Node>> bracket_expr;
             while (true) {
                 if (peek().kind == token::Kind::kIntLiteral) {
+                    // A LITERAL dim is a known constant — validate its positivity
+                    // here (a const-EXPRESSION dim is validated, after folding, in
+                    // constfold's bakeNodeDims). It bakes straight into the
+                    // spelling, so it carries no dim_expr.
+                    if (std::strtoll(peek().text.c_str(), nullptr, 10) <= 0) {
+                        error("Array size must be a positive integer constant.");
+                        return nullptr;
+                    }
                     bracket_spell.push_back(peek().text);
                     advance();   // size
                     bracket_expr.push_back(nullptr);

@@ -85,10 +85,13 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     returns / references (`{i32,i32}` by value, `(T,T)^` = ptr). Codegen builds
     the aggregate via insertvalue; classify slot-types via internTuple.
   * ARRAY from a homogeneous tuple: `int a[3]=(1,2,3)`, `a=(4,5,6)`, multi-dim
-    `int td[2][3]=((1,2),(3,4),(5,6))` (nested tuple in storage/outer order onto
-    the reversed-dim layout). Element-wise, tuple aggregate ELIDED, each slot
-    widens into the element type (resolve marks assigned_arrays; classify counts +
-    per-leaf checks; codegen flat-GEP per leaf).
+    `int td[3][2]=((1,2),(3,4),(5,6))` (a NESTED tuple whose SHAPE — row × col —
+    matches the standard-order dims). Element-wise row-major, tuple aggregate
+    ELIDED, each slot widens into the element type (resolve marks assigned_arrays;
+    classify checks the leaf count AND the nesting shape via tupleMatchesArrayShape
+    [a transposed / flat literal rejected: "Array initializer shape does not match
+    the dimensions of '<T>'"]; codegen flat-GEP per leaf — layout-agnostic, so the
+    leaf order IS the row-major store order).
   * FOR-TUPLE `for (v : tuple)` over a HOMOGENEOUS tuple: rewriteForTuple lowers
     (like for-array) to a kForLongStmt walking an iterator (`_$iter=^base[0]`,
     typeless so classify fills T); a VARIABLE iterates in place (no copy, mutable
@@ -131,7 +134,12 @@ STAGE FILES (.h / .cpp pairs)
             suffix, so `arr[i] = v` stays a store; a bare `a ^ b` reads as a
             reference decl `a^ b` since a bare XOR is not a statement form). An
             array DIM (`Int nums[4]`) goes after the name -> the plain `Ident
-            Ident` path;
+            Ident` path; a bracket may hold a COMMA dim-list (`int g[3,5]`, the
+            natural-order form) — each bracket's dims are appended REVERSED
+            (`[a,..,z]` -> `[z]...[a]`), the same transpose parseSubscript applies
+            to a `g[x,y]` read/store. A literal dim is validated for positivity
+            here (a zero/negative literal -> "Array size must be a positive integer
+            constant"); a const-EXPRESSION dim is validated in constfold;
             `alias Name = type;` + bare `alias Ns;` decls; namespace decls
             (`Name { members }`) and inline qualified member decls
             (`const int Space:kSix = 6;`); enum decls
@@ -700,11 +708,15 @@ STAGE FILES (.h / .cpp pairs)
             (`T[]`) are both LLVM `ptr`; `anyptr` (nullptr) too. kAddrOfExpr
             `^var` is the operand's alloca register (no load); kDerefExpr loads
             the pointer then loads the pointee. A fixed-size array `T name[N]`
-            is an aggregate alloca, with multi-dim REVERSED (`int[3][5]` ->
-            `[5 x [3 x i32]]`); emitElementAddr walks a kIndexExpr chain to the
-            base and emits ONE getelementptr with the indices outer-to-inner
-            (the leftmost source index is innermost) — it also rejects a partial
-            index (chain length must equal the dimension count). An ITERATOR
+            is an aggregate alloca, STANDARD row-major (`int[5][3]` ->
+            `[5 x [3 x i32]]`, leftmost dim outermost — llvmForRef wraps the dims
+            last-first); emitElementAddr walks a kIndexExpr chain to the base and
+            emits ONE getelementptr with the indices in SOURCE order (leftmost
+            subscript outermost — it iterates the chain in reverse to do so) — it
+            also rejects a partial index (chain length must equal the dimension
+            count). The COMMA subscript `a[x,y]` is a grammar-level transpose
+            (`[a,..,z]` -> `[z]...[a]`, parseSubscript), so by codegen it is just a
+            chained kIndexExpr. An ITERATOR
             subscript instead loads the pointer and GEPs by element type.
             kStoreStmt stores through any lvalue expr (deref / index). Move /
             swap (kMoveStmt / kSwapStmt, `a <-- b` / `a <--> b`) are lowered HERE
