@@ -49,30 +49,6 @@ BUGS (found, deferred)
     same-"type"? assignment with no shape/representation bridge. prerequisite: none.
 
 
-  * FOR-ENUM `_$end` NOT UNIQUIFIED — NESTED TYPELESS ENUM LOOPS CLOBBER — the
-    for-enum -> for-long rewrite (resolve.cpp ~2562) names its synthesized bound
-    the bare `_$end`, unlike every other synthesized loop helper, which carries a
-    per-loop token suffix (ranged-for `_$end$<dotdot_tok>` grammar.cpp ~1739;
-    for-array `_$idx$<atok>` resolve.cpp ~1472; for-tuple `_$ftmp/_$idx/_$iter
-    $<itok>` ~1669). `_$end` takes `return_type = var_type`, so a TYPELESS enum
-    loop var (`for (a : Color)`) makes `_$end` typeless too. In the for-long
-    resolve, a typeless varlist decl WITH an initializer routes through the
-    reuse-or-fresh kAssignStmt path (resolve.cpp ~2352) — so a nested loop's inner
-    `_$end = Inner:last` resolves the name OUTWARD, finds the enclosing for-scope's
-    `_$end`, and REASSIGNS it instead of declaring fresh, corrupting the outer
-    loop's terminating bound. Triggers on nested typeless for-enums over DIFFERENT
-    enums (same-enum nesting masks it by coincident `last`; a typed loop var is
-    safe — typed `_$end` declares fresh per frame). This is exactly the clobber
-    the ranged-for uniquification (grammar.cpp ~1736-1738 comment) was added to
-    prevent. FIX: name it `_$end$<en_tok>` (and the two reference sites — cond at
-    ~2576, update ident at ~2588-area). prerequisite: none; one-line-ish.
-    Root cause is structural: this lowering lives in RESOLVE (a stage/product-split
-    breach — readme.txt:640 reserves for-shape desugaring for the desugar stage),
-    so its synthesized vardecls flow through resolve's name reuse-or-fresh logic,
-    which IS the clobber mechanism. A desugar-stage lowering would mint
-    guaranteed-unique temps and never touch name resolution.
-
-
 REACH GOALS
 
   * WHOLE-ARRAY MOVE / SWAP — `dst <-- arr` / `a <--> b` where the operands are

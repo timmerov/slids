@@ -105,28 +105,34 @@ int32 main() {
     for (int^ p : m) { p^ = p^ * 10; }
     __println("m= " + m[0] + " " + m[1] + " " + m[2]);   // 10 20 30
 
-    /*
-    backing out of these until the for loops move to desugaring.
-    where they are supposed to be.
+    /* inferred type. */
+    tpl1 = (1,2,4);
+    __print("tpl1 = ( ");
+    for (x : tpl1) {
+        __print(x+" ");
+    }
+    __println(")");
 
-    /* dereferenced */
-    ref = ^tup;
-    int s3 = 100;
-    for (x : ref^) { s3 = s3 + x; }
-    __println("s3= " + s3);                              // 113
+    /* inferred reference */
+    tpl2 = (88,89,90);
+    ref2 = ^tpl2;
+    __print("tpl1 = ( ");
+    for (x : ref2^) {
+        __print(x+" ");
+    }
+    __println(")");
 
     /* nested tuples */
-    tuple = ((1,2), (3,4), (5,6));
-    __println("tuple = (" + tuple[0][0]);
-    for (sub : tuple) {
-        __print("( ");
+    tpl3 = ((1,2), (3,4), (5,6));
+    __println("tpl3 = (");
+    for (sub : tpl3) {
+        __print("  ( ");
         for (x : sub^) {
             __print(x + " ");
         }
         __println(")");
     }
     __println(")");
-    */
 
     return 0;
 }

@@ -1243,6 +1243,8 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
         case parse::Kind::kDoWhileStmt:
         case parse::Kind::kForLongStmt:
         case parse::Kind::kForEnumStmt:
+        case parse::Kind::kForArrayStmt:
+        case parse::Kind::kForTupleStmt:
         case parse::Kind::kForRangedStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
@@ -1413,16 +1415,15 @@ Completion resolveStmtList(parse::Tree& tree,
 Completion resolveStmt(parse::Tree& tree, parse::Node& s,
                        diagnostic::Sink& diag);
 
-// Lower `for (var : arr) {body}` into the canonical kForLongStmt and resolve
-// that. The array's element type and length come from arr's type. A synthesized
-// index `_$idx$<tok>` walks 0..length-1 (the name is unique per loop so nested
-// for-arrays don't collide). The loop variable is bound at the TOP of the body
-// each iteration — by reference (`int^ v`: `v = ^arr[i]`, the element address),
-// by value (`int v`: `v = arr[i]`), or typeless (by value; reuses an enclosing
-// local or declares a fresh inferred one). Only a one-dimensional array; a
-// by-reference variable's base type must equal the element type.
-Completion rewriteForArray(parse::Tree& tree, parse::Node& s, int arr_id,
-                           diagnostic::Sink& diag) {
+// Understand `for (var : arr) {body}` over a fixed-size 1-D array WITHOUT
+// lowering: register the loop var bound to the element, resolve the body with it
+// in scope, run definite-assignment, and validate (one-dimensional; a by-ref
+// var's base type must equal the element type). desugar builds the `_$idx`
+// counter + the per-iteration element binding (by ref `v = ^arr[i]`, by value
+// `v = arr[i]`, or typeless by value reusing/declaring v). The node is re-tagged
+// kForArrayStmt; s.children stay [loop-var decl, array ident, body].
+Completion understandForArray(parse::Tree& tree, parse::Node& s, int arr_id,
+                              diagnostic::Sink& diag) {
     parse::Node& arr_ref = *s.children[1];
     parse::Node& var_decl = *s.children[0];
     // Element type + length come off the array handle STRUCTURALLY (one subscript
@@ -1433,7 +1434,6 @@ Completion rewriteForArray(parse::Tree& tree, parse::Node& s, int arr_id,
     widen::TypeRef elemRef = (adims.size() <= 1)
         ? aelem
         : widen::internArray(aelem, std::vector<int>(adims.begin() + 1, adims.end()));
-    std::string elem = widen::spell(elemRef);   // for diagnostics
     int afile = arr_ref.file_id, atok = arr_ref.tok;
     if (widen::form(widen::strip(elemRef)) == widen::Type::Form::kArray) {
         diagnostic::report(diag, {afile, atok,
@@ -1442,12 +1442,9 @@ Completion rewriteForArray(parse::Tree& tree, parse::Node& s, int arr_id,
               "array declared here"}}});
         return Completion::Normal;
     }
-    std::string vtype = widen::spellOrEmpty(var_decl.return_type);
-    std::string vname = var_decl.name;
     int vfile = var_decl.file_id, vtok = var_decl.name_tok;
-    // The loop var's declared type hasn't been through resolveDeclType yet (its
-    // leaf is still the raw kSlid name) — resolve it now so an alias matches the
-    // (already-resolved) array element, and so the binding decl carries the kAlias.
+    // Resolve the loop var's declared type (alias leaf) so it matches the
+    // already-resolved element type and the desugared binding carries the alias.
     if (var_decl.return_type != widen::kNoType) {
         std::set<std::string> visiting;
         bool reported = false;
@@ -1456,125 +1453,81 @@ Completion rewriteForArray(parse::Tree& tree, parse::Node& s, int arr_id,
     }
     bool by_ref = isReferenceType(var_decl.return_type);
     if (by_ref) {
-        // A by-ref loop var `T^` must reference the element type. Compare the
-        // pointee to the element by their stripped underlyings (so `Integer^`
-        // over an `Integer[]` / `int[]` matches); the as-written types ride on
-        // for the diagnostic and the binding decl (keeping the alias label).
+        // A by-ref loop var `T^` must reference the element type.
         widen::TypeRef pointeeRef = widen::get(widen::strip(var_decl.return_type)).pointee;
         if (widen::strip(pointeeRef) != widen::strip(elemRef)) {
             diagnostic::report(diag, {vfile, vtok,
-                "Loop variable type '" + vtype
-                    + "' does not match the array element type '" + elem + "'.",
-                {}});
+                "Loop variable type '" + widen::spellOrEmpty(var_decl.return_type)
+                    + "' does not match the array element type '"
+                    + widen::spell(elemRef) + "'.", {}});
             return Completion::Normal;
         }
     }
-    int size = adims.empty() ? 0 : adims.front();
-    std::string idxName = "_$idx$" + std::to_string(atok);
-
-    auto ident = [&](std::string const& nm, int tok) {
-        auto n = std::make_unique<parse::Node>();
-        n->kind = parse::Kind::kIdentExpr;
-        n->name = nm; n->file_id = afile; n->tok = tok; n->name_tok = tok;
-        return n;
-    };
-    auto intLit = [&](std::string const& v) {
-        auto n = std::make_unique<parse::Node>();
-        n->kind = parse::Kind::kIntLiteral; n->text = v;
-        n->file_id = afile; n->tok = atok;
-        return n;
-    };
-    auto binary = [&](char const* op, std::unique_ptr<parse::Node> l,
-                      std::unique_ptr<parse::Node> r) {
-        auto n = std::make_unique<parse::Node>();
-        n->kind = parse::Kind::kBinaryExpr; n->text = op;
-        n->file_id = afile; n->tok = atok;
-        n->children.push_back(std::move(l));
-        n->children.push_back(std::move(r));
-        return n;
-    };
-
-    // varlist[0]: intptr _$idx = 0
-    auto idx_decl = std::make_unique<parse::Node>();
-    idx_decl->kind = parse::Kind::kVarDeclStmt;
-    idx_decl->name = idxName; idx_decl->name_tok = atok;
-    idx_decl->return_type = widen::intern("intptr");
-    idx_decl->file_id = afile; idx_decl->tok = atok;
-    idx_decl->children.push_back(intLit("0"));
-
-    // cond: _$idx < size
-    auto cond = binary("<", ident(idxName, atok), intLit(std::to_string(size)));
-
-    // update: { _$idx = _$idx + 1 }
-    auto upd = std::make_unique<parse::Node>();
-    upd->kind = parse::Kind::kAssignStmt;
-    upd->name = idxName; upd->name_tok = atok;
-    upd->file_id = afile; upd->tok = atok;
-    upd->children.push_back(binary("+", ident(idxName, atok), intLit("1")));
-    auto update = std::make_unique<parse::Node>();
-    update->kind = parse::Kind::kBlockStmt;
-    update->file_id = afile; update->tok = atok;
-    update->children.push_back(std::move(upd));
-
-    // arr[_$idx]. The `arr` child keeps the array's position so an array-specific
-    // error (use-before-init, etc.) carets at `arr`; the kIndexExpr itself takes
-    // the LOOP VARIABLE's position so a binding type/width error (the element
-    // not fitting the declared loop-var type) carets at the loop variable.
-    auto arr_copy = ident(arr_ref.name, atok);
-    arr_copy->qualifier = arr_ref.qualifier;
-    arr_copy->qualifier_toks = arr_ref.qualifier_toks;
-    arr_copy->global_qualified = arr_ref.global_qualified;
-    auto index_expr = std::make_unique<parse::Node>();
-    index_expr->kind = parse::Kind::kIndexExpr;
-    index_expr->file_id = vfile; index_expr->tok = vtok;
-    index_expr->children.push_back(std::move(arr_copy));
-    index_expr->children.push_back(ident(idxName, atok));
-
-    // binding (first body statement)
-    std::unique_ptr<parse::Node> binding;
-    if (vtype.empty()) {
-        // typeless -> by value, reuse-or-fresh: `v = arr[_$idx]`.
-        binding = std::make_unique<parse::Node>();
-        binding->kind = parse::Kind::kAssignStmt;
-        binding->name = vname; binding->name_tok = vtok;
-        binding->file_id = vfile; binding->tok = vtok;
-        binding->children.push_back(std::move(index_expr));
-    } else {
-        // typed -> a fresh per-iteration decl. by-ref binds the element address
-        // (an iterator demoting to the reference); by-value copies the element.
-        std::unique_ptr<parse::Node> init;
-        if (by_ref) {
-            init = std::make_unique<parse::Node>();
-            init->kind = parse::Kind::kAddrOfExpr;
-            init->file_id = afile; init->tok = atok;
-            init->children.push_back(std::move(index_expr));
-        } else {
-            init = std::move(index_expr);
-        }
-        binding = std::make_unique<parse::Node>();
-        binding->kind = parse::Kind::kVarDeclStmt;
-        binding->name = vname; binding->name_tok = vtok;
-        binding->return_type = widen::internOrNone(vtype);
-        binding->file_id = vfile; binding->tok = vtok;
-        binding->children.push_back(std::move(init));
+    // Stamp the ident (classify asserts resolve did) and apply the definite-
+    // assignment side effects the desugared element binding used to carry:
+    //  - by REFERENCE (`^arr[_$idx]`): the array is FILLED through element
+    //    references — it need not be initialized first, and is marked assigned.
+    //  - by VALUE (`arr[_$idx]`): each element is READ, so the array must already
+    //    be initialized (mirrors the read-before-write check).
+    // Either way the array is read every iteration, so it is never unused.
+    arr_ref.resolved_entry_id = arr_id;
+    if (by_ref) {
+        tree.assigned_arrays.insert(arr_id);
+    } else if (tree.assigned_arrays.count(arr_id) == 0) {
+        diagnostic::report(diag, {afile, atok,
+            "Use of uninitialized variable '" + tree.entries[arr_id].name + "'.",
+            {}});
     }
-
-    // body: { binding; <user body> }
-    std::unique_ptr<parse::Node> user_body = std::move(s.children[2]);
-    auto body = std::make_unique<parse::Node>();
-    body->kind = parse::Kind::kBlockStmt;
-    body->file_id = user_body->file_id; body->tok = user_body->tok;
-    body->children.push_back(std::move(binding));
-    for (auto& st : user_body->children) body->children.push_back(std::move(st));
-
-    // Rebuild s as a kForLongStmt (label rides along on s) and resolve it.
-    s.kind = parse::Kind::kForLongStmt;
-    s.children.clear();
-    s.children.push_back(std::move(cond));      // [0]
-    s.children.push_back(std::move(update));    // [1]
-    s.children.push_back(std::move(body));      // [2]
-    s.children.push_back(std::move(idx_decl));  // [3] varlist
-    return resolveStmt(tree, s, diag);
+    tree.read_locals.insert(arr_id);
+    // Scope the loop var to the loop, resolve the body with it bound to an element.
+    parse::pushFrame(tree);
+    std::vector<int> saved_body_locals = std::move(tree.body_locals);
+    tree.body_locals.clear();
+    std::set<int> entry_set = tree.initialized_locals;   // S (possibly-zero body)
+    if (var_decl.return_type != widen::kNoType) {
+        // Typed: a fresh per-iteration local (by value or by ref), as declared.
+        parse::Entry e;
+        e.kind = parse::EntryKind::kLocalVar;
+        e.name = var_decl.name;
+        e.slids_type = var_decl.return_type;
+        e.file_id = vfile; e.tok = vtok;
+        var_decl.resolved_entry_id = parse::addEntry(tree, std::move(e));
+        tree.body_locals.push_back(var_decl.resolved_entry_id);
+    } else {
+        // Typeless by value: REUSE an enclosing local (the binding becomes a
+        // store — flag it kAssignStmt for desugar) or declare a fresh inferred
+        // one typed as the element.
+        int existing = resolveName(tree, var_decl.name);
+        if (existing >= 0
+            && tree.entries[existing].kind == parse::EntryKind::kLocalVar) {
+            var_decl.resolved_entry_id = existing;
+            var_decl.kind = parse::Kind::kAssignStmt;
+        } else {
+            parse::Entry e;
+            e.kind = parse::EntryKind::kLocalVar;
+            e.name = var_decl.name;
+            e.slids_type = elemRef;
+            e.file_id = vfile; e.tok = vtok;
+            var_decl.resolved_entry_id = parse::addEntry(tree, std::move(e));
+            tree.body_locals.push_back(var_decl.resolved_entry_id);
+        }
+    }
+    // The loop var is (re)bound at the top of every iteration, so the body sees
+    // it initialized; whether it is READ is left to the body (an unused loop var
+    // is swept like any other).
+    if (var_decl.resolved_entry_id >= 0) {
+        tree.initialized_locals.insert(var_decl.resolved_entry_id);
+    }
+    tree.loop_stack.push_back({});
+    tree.loop_stack.back().name = s.label.empty() ? "for" : s.label;
+    resolveStmt(tree, *s.children[2], diag);   // body
+    tree.loop_stack.pop_back();
+    sweepUnusedLocals(tree, diag);
+    tree.body_locals = std::move(saved_body_locals);
+    parse::popFrame(tree);
+    tree.initialized_locals = std::move(entry_set);   // possibly-zero: after = S
+    s.kind = parse::Kind::kForArrayStmt;   // understood; desugar lowers it
+    return Completion::Normal;
 }
 
 // Best-effort tuple/array type of a for-iterable, derived at RESOLVE time (before
@@ -1626,27 +1579,28 @@ widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
     return widen::kNoType;
 }
 
-// Lower a `for (v : <iterable>) {body}` over a homogeneous tuple. The iterable is
-// a tuple LITERAL (is_literal), an LVALUE expression (is_lvalue — a var / `ref^`
-// deref / index, iterated IN PLACE so a mutable-ref loop var writes back), or an
-// rvalue expression (a call / computed tuple, SPILLED to a temp). `tuple_type` is
-// the iterable's tuple type (kNoType for a literal — its slot types come from
-// classify).
-Completion rewriteForTuple(parse::Tree& tree, parse::Node& s,
-                           widen::TypeRef tuple_type, bool is_literal,
-                           bool is_lvalue, diagnostic::Sink& diag) {
+// Understand `for (v : <iterable>) {body}` over a homogeneous tuple WITHOUT
+// lowering: validate (non-literal homogeneity), register the loop var bound to a
+// slot, resolve the iterable + body, run definite-assignment, and re-tag the node
+// kForTupleStmt. The iterable is a tuple LITERAL (is_literal), an LVALUE (a var /
+// `ref^` deref / index — iterated IN PLACE), or an rvalue call (SPILLED to a temp
+// in desugar). desugar builds the `_$idx` counter, the `_$iter` walking iterator
+// (as `<T[]><void^>` of the storage address, so a `ref^` iterable dodges
+// addr-of-through-deref) and the per-iteration binding. A literal's slot
+// homogeneity is checked in classify (slot types aren't known here); `tuple_type`
+// is kNoType for a literal.
+Completion understandForTuple(parse::Tree& tree, parse::Node& s,
+                              widen::TypeRef tuple_type, bool is_literal,
+                              bool is_lvalue, diagnostic::Sink& diag) {
     parse::Node& it_ref = *s.children[1];     // the iterable expression
     parse::Node& var_decl = *s.children[0];
-    bool spill = is_literal || !is_lvalue;    // an rvalue has no storage to iterate
     int ifile = it_ref.file_id, itok = it_ref.tok;
-
-    int N;
-    if (is_literal) {
-        N = static_cast<int>(it_ref.children.size());
-    } else {
-        widen::TypeRef tt = widen::strip(tuple_type);
-        std::vector<widen::TypeRef> slots = widen::get(tt).slots;
-        N = static_cast<int>(slots.size());
+    (void)is_lvalue;   // desugar re-derives spill-vs-in-place from it_ref's kind
+    // A non-literal with a KNOWN type has its slot types here, so check homogeneity
+    // (the iterator strides by one slot type). A literal — or a TYPELESS local,
+    // kNoType until classify — defers the check (and the is-it-a-tuple guard).
+    if (!is_literal && tuple_type != widen::kNoType) {
+        std::vector<widen::TypeRef> slots = widen::get(widen::strip(tuple_type)).slots;
         for (std::size_t i = 1; i < slots.size(); i++) {
             if (widen::deepStrip(slots[i]) != widen::deepStrip(slots[0])) {
                 diagnostic::report(diag, {ifile, itok,
@@ -1655,9 +1609,6 @@ Completion rewriteForTuple(parse::Tree& tree, parse::Node& s,
             }
         }
     }
-
-    std::string vtype = widen::spellOrEmpty(var_decl.return_type);
-    std::string vname = var_decl.name;
     int vfile = var_decl.file_id, vtok = var_decl.name_tok;
     if (var_decl.return_type != widen::kNoType) {   // resolve alias leaves in T^
         std::set<std::string> visiting;
@@ -1665,146 +1616,54 @@ Completion rewriteForTuple(parse::Tree& tree, parse::Node& s,
         var_decl.return_type = resolveTypeRef(tree, var_decl.return_type, visiting,
                                               reported, vfile, vtok, diag);
     }
-    bool by_ref = isReferenceType(var_decl.return_type);
-
-    std::string tmpName  = "_$ftmp$" + std::to_string(itok);
-    std::string idxName  = "_$idx$"  + std::to_string(itok);
-    std::string iterName = "_$iter$" + std::to_string(itok);
-
-    auto ident = [&](std::string const& nm, int tok) {
-        auto n = std::make_unique<parse::Node>();
-        n->kind = parse::Kind::kIdentExpr;
-        n->name = nm; n->file_id = ifile; n->tok = tok; n->name_tok = tok;
-        return n;
-    };
-    auto intLit = [&](std::string const& v) {
-        auto n = std::make_unique<parse::Node>();
-        n->kind = parse::Kind::kIntLiteral; n->text = v;
-        n->file_id = ifile; n->tok = itok;
-        return n;
-    };
-    auto binary = [&](char const* op, std::unique_ptr<parse::Node> l,
-                      std::unique_ptr<parse::Node> r) {
-        auto n = std::make_unique<parse::Node>();
-        n->kind = parse::Kind::kBinaryExpr; n->text = op;
-        n->file_id = ifile; n->tok = itok;
-        n->children.push_back(std::move(l));
-        n->children.push_back(std::move(r));
-        return n;
-    };
-    auto baseIdent = [&]() {
-        // spill -> iterate the temp; in place -> iterate a CLONE of the iterable
-        // lvalue expr (a var ident, a `ref^` deref, an `arr[i]` index).
-        if (spill) return ident(tmpName, itok);
-        return cloneExpr(it_ref);
-    };
-
-    std::vector<std::unique_ptr<parse::Node>> varlist;
-
-    // [spill] an rvalue iterable (a tuple LITERAL, a function call, a computed
-    // tuple) has no storage, so copy it to a temp (`^_$ftmp[0]` then has an
-    // address). Must precede the iterator decl. A LITERAL gets the homogeneous
-    // tuple type `(T, ..., T)` (T = the loop var's element type) so its slots flex
-    // to T — else they default to int32 and the iterator pointee won't match an
-    // `int^` loop var; a typed rvalue (a call) is left typeless and classify
-    // infers it (its homogeneity was already checked above).
-    if (spill) {
-        widen::TypeRef tmp_type = widen::kNoType;
-        if (is_literal && var_decl.return_type != widen::kNoType) {
-            widen::TypeRef T = by_ref
-                ? widen::get(widen::strip(var_decl.return_type)).pointee
-                : var_decl.return_type;
-            tmp_type = widen::internTuple(std::vector<widen::TypeRef>(N, T));
-        }
-        auto tmp = std::make_unique<parse::Node>();
-        tmp->kind = parse::Kind::kVarDeclStmt;
-        tmp->name = tmpName; tmp->name_tok = itok;
-        tmp->return_type = tmp_type;
-        tmp->require_homogeneous = is_literal;   // classify rejects a heterogeneous literal
-        tmp->file_id = ifile; tmp->tok = itok;
-        tmp->children.push_back(std::move(s.children[1]));   // the literal / rvalue
-        varlist.push_back(std::move(tmp));
-    }
-
-    // intptr _$idx = 0
-    auto idx = std::make_unique<parse::Node>();
-    idx->kind = parse::Kind::kVarDeclStmt; idx->name = idxName; idx->name_tok = itok;
-    idx->return_type = widen::intern("intptr");
-    idx->file_id = ifile; idx->tok = itok;
-    idx->children.push_back(intLit("0"));
-    varlist.push_back(std::move(idx));
-
-    // _$iter = ^base[0]  (typeless -> classify infers T[]; ^indexed is an iterator)
-    auto idx0 = std::make_unique<parse::Node>();
-    idx0->kind = parse::Kind::kIndexExpr; idx0->file_id = ifile; idx0->tok = itok;
-    idx0->children.push_back(baseIdent());
-    idx0->children.push_back(intLit("0"));
-    auto addr = std::make_unique<parse::Node>();
-    addr->kind = parse::Kind::kAddrOfExpr; addr->file_id = ifile; addr->tok = itok;
-    addr->children.push_back(std::move(idx0));
-    auto iter = std::make_unique<parse::Node>();
-    iter->kind = parse::Kind::kVarDeclStmt; iter->name = iterName; iter->name_tok = itok;
-    iter->return_type = widen::kNoType;
-    iter->file_id = ifile; iter->tok = itok;
-    iter->children.push_back(std::move(addr));
-    varlist.push_back(std::move(iter));
-
-    // cond: _$idx < N
-    auto cond = binary("<", ident(idxName, itok), intLit(std::to_string(N)));
-
-    // update: { _$idx = _$idx + 1; _$iter = _$iter + 1; }
-    auto bump = [&](std::string const& nm) {
-        auto a = std::make_unique<parse::Node>();
-        a->kind = parse::Kind::kAssignStmt; a->name = nm; a->name_tok = itok;
-        a->file_id = ifile; a->tok = itok;
-        a->children.push_back(binary("+", ident(nm, itok), intLit("1")));
-        return a;
-    };
-    auto update = std::make_unique<parse::Node>();
-    update->kind = parse::Kind::kBlockStmt; update->file_id = ifile; update->tok = itok;
-    update->children.push_back(bump(idxName));
-    update->children.push_back(bump(iterName));
-
-    // binding (first body statement): by value `val = _$iter^`, by ref
-    // `ref = _$iter` (iterator -> reference demote). The pointee/element type
-    // match + homogeneity-vs-loop-var-type are enforced by classify here.
-    auto deref = [&]() {
-        auto d = std::make_unique<parse::Node>();
-        d->kind = parse::Kind::kDerefExpr; d->file_id = vfile; d->tok = vtok;
-        d->children.push_back(ident(iterName, vtok));
-        return d;
-    };
-    std::unique_ptr<parse::Node> binding;
-    if (vtype.empty()) {
-        binding = std::make_unique<parse::Node>();
-        binding->kind = parse::Kind::kAssignStmt;
-        binding->name = vname; binding->name_tok = vtok;
-        binding->file_id = vfile; binding->tok = vtok;
-        binding->children.push_back(deref());          // typeless -> by value
+    // Resolve the iterable: an lvalue (var / `ref^` / index) is read + init-checked
+    // + use-marked; a literal's / call's sub-expressions resolve.
+    resolveExpr(tree, it_ref, diag);
+    // Scope the loop var to the loop; resolve the body with it bound to a slot.
+    parse::pushFrame(tree);
+    std::vector<int> saved_body_locals = std::move(tree.body_locals);
+    tree.body_locals.clear();
+    std::set<int> entry_set = tree.initialized_locals;   // S (possibly-zero body)
+    if (var_decl.return_type != widen::kNoType) {
+        // Typed: a fresh per-iteration local (by value or by ref), as declared.
+        parse::Entry e;
+        e.kind = parse::EntryKind::kLocalVar;
+        e.name = var_decl.name;
+        e.slids_type = var_decl.return_type;
+        e.file_id = vfile; e.tok = vtok;
+        var_decl.resolved_entry_id = parse::addEntry(tree, std::move(e));
+        tree.body_locals.push_back(var_decl.resolved_entry_id);
     } else {
-        binding = std::make_unique<parse::Node>();
-        binding->kind = parse::Kind::kVarDeclStmt;
-        binding->name = vname; binding->name_tok = vtok;
-        binding->return_type = var_decl.return_type;
-        binding->file_id = vfile; binding->tok = vtok;
-        binding->children.push_back(by_ref ? ident(iterName, vtok)   // iter -> ref
-                                           : deref());               // by value
+        // Typeless by value: REUSE an enclosing local (flag kAssignStmt for
+        // desugar) or declare a fresh one whose element type classify infers.
+        int existing = resolveName(tree, var_decl.name);
+        if (existing >= 0
+            && tree.entries[existing].kind == parse::EntryKind::kLocalVar) {
+            var_decl.resolved_entry_id = existing;
+            var_decl.kind = parse::Kind::kAssignStmt;
+        } else {
+            parse::Entry e;
+            e.kind = parse::EntryKind::kLocalVar;
+            e.name = var_decl.name;
+            e.slids_type = widen::kNoType;   // classify infers from slot 0
+            e.file_id = vfile; e.tok = vtok;
+            var_decl.resolved_entry_id = parse::addEntry(tree, std::move(e));
+            tree.body_locals.push_back(var_decl.resolved_entry_id);
+        }
     }
-
-    std::unique_ptr<parse::Node> user_body = std::move(s.children[2]);
-    auto body = std::make_unique<parse::Node>();
-    body->kind = parse::Kind::kBlockStmt;
-    body->file_id = user_body->file_id; body->tok = user_body->tok;
-    body->children.push_back(std::move(binding));
-    for (auto& st : user_body->children) body->children.push_back(std::move(st));
-
-    s.kind = parse::Kind::kForLongStmt;
-    s.children.clear();
-    s.children.push_back(std::move(cond));      // [0]
-    s.children.push_back(std::move(update));    // [1]
-    s.children.push_back(std::move(body));      // [2]
-    for (auto& v : varlist) s.children.push_back(std::move(v));   // [3..] varlist
-    return resolveStmt(tree, s, diag);
+    if (var_decl.resolved_entry_id >= 0) {
+        tree.initialized_locals.insert(var_decl.resolved_entry_id);
+    }
+    tree.loop_stack.push_back({});
+    tree.loop_stack.back().name = s.label.empty() ? "for" : s.label;
+    resolveStmt(tree, *s.children[2], diag);   // body
+    tree.loop_stack.pop_back();
+    sweepUnusedLocals(tree, diag);
+    tree.body_locals = std::move(saved_body_locals);
+    parse::popFrame(tree);
+    tree.initialized_locals = std::move(entry_set);   // possibly-zero: after = S
+    s.kind = parse::Kind::kForTupleStmt;   // understood; desugar lowers it
+    return Completion::Normal;
 }
 
 // Resolve a store lvalue (the target of a kStoreStmt). An index store WRITES
@@ -2498,6 +2357,16 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // unlike a long-for — it is never constant-true / non-completing.
             return Completion::Normal;
         }
+        case parse::Kind::kForArrayStmt:
+            // Produced by understandForArray's retag inside the kForEnumStmt case
+            // (which already resolved it); it is never dispatched here directly.
+            assert(false && "resolveStmt: kForArrayStmt resolved via kForEnumStmt");
+            return Completion::Normal;
+        case parse::Kind::kForTupleStmt:
+            // Produced by understandForTuple's retag inside the kForEnumStmt case;
+            // already resolved there, never dispatched here directly.
+            assert(false && "resolveStmt: kForTupleStmt resolved via kForEnumStmt");
+            return Completion::Normal;
         case parse::Kind::kForEnumStmt: {
             // children[0]=loop-var decl, [1]=enum-ref, [2]=body. Rewrite IN PLACE
             // into a kForLongStmt over the enum's first..last defined members,
@@ -2510,19 +2379,27 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             parse::Node& enum_ref = *s.children[1];
             // A tuple LITERAL iterable — `for (x : (7,4,2))`. Spill + iterate.
             if (enum_ref.kind == parse::Kind::kTupleExpr) {
-                return rewriteForTuple(tree, s, widen::kNoType,
+                return understandForTuple(tree, s, widen::kNoType,
                                        /*is_literal=*/true, /*is_lvalue=*/false, diag);
             }
             // Any non-name, non-literal EXPRESSION — `for (x : ref^)`, `f()`,
             // `arr[i]`. Peek its type: a homogeneous tuple iterates (in place for
-            // an lvalue deref/index, spilled for an rvalue call), else error.
+            // an lvalue deref/index, spilled for an rvalue call). A tuple is the
+            // ONLY iterable expression form, so an UNKNOWN-typed expression (an
+            // inferred ref/index — peek yields kNoType) is routed as a tuple with a
+            // deferred type; classify guards it (errors if it isn't one). A KNOWN
+            // non-tuple type errors here.
             if (enum_ref.kind != parse::Kind::kIdentExpr) {
                 widen::TypeRef ity = peekIterableType(tree, enum_ref, diag);
+                bool lval = (enum_ref.kind == parse::Kind::kDerefExpr
+                          || enum_ref.kind == parse::Kind::kIndexExpr);
                 if (widen::form(widen::strip(ity)) == widen::Type::Form::kTuple) {
-                    bool lval = (enum_ref.kind == parse::Kind::kDerefExpr
-                              || enum_ref.kind == parse::Kind::kIndexExpr);
-                    return rewriteForTuple(tree, s, ity, /*is_literal=*/false,
+                    return understandForTuple(tree, s, ity, /*is_literal=*/false,
                                            lval, diag);
+                }
+                if (ity == widen::kNoType) {
+                    return understandForTuple(tree, s, widen::kNoType,
+                                           /*is_literal=*/false, lval, diag);
                 }
                 diagnostic::report(diag, {enum_ref.file_id, enum_ref.tok,
                     "A for-loop operand must be an enum, an array, or a tuple.", {}});
@@ -2543,12 +2420,22 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // name resolved to.
             if (tree.entries[enum_id].kind == parse::EntryKind::kLocalVar
                 && isArrayType(tree.entries[enum_id].slids_type)) {
-                return rewriteForArray(tree, s, enum_id, diag);
+                return understandForArray(tree, s, enum_id, diag);
             }
             if (tree.entries[enum_id].kind == parse::EntryKind::kLocalVar
                 && widen::form(widen::strip(tree.entries[enum_id].slids_type))
                        == widen::Type::Form::kTuple) {
-                return rewriteForTuple(tree, s, tree.entries[enum_id].slids_type,
+                return understandForTuple(tree, s, tree.entries[enum_id].slids_type,
+                                       /*is_literal=*/false, /*is_lvalue=*/true, diag);
+            }
+            // A TYPELESS local (`t = (1,2,4)`) is still kNoType at resolve (classify
+            // infers it). Arrays are always explicitly typed, so a typeless local
+            // used as an iterable can only be a tuple — route it as one with a
+            // deferred type (homogeneity + arity resolve in classify); classify
+            // errors if it doesn't actually infer to a tuple.
+            if (tree.entries[enum_id].kind == parse::EntryKind::kLocalVar
+                && tree.entries[enum_id].slids_type == widen::kNoType) {
+                return understandForTuple(tree, s, widen::kNoType,
                                        /*is_literal=*/false, /*is_lvalue=*/true, diag);
             }
             // Otherwise it must be an enum: a kNamespace carrying an underlying
@@ -2603,58 +2490,24 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 return r;
             };
 
-            // Reuse the loop-var decl; init it to the first member.
+            // An enum-for IS a ranged-for over the member VALUES first..last
+            // (inclusive, `<=`, step +1): build a kForRangedStmt and resolve it
+            // through that path. desugar lowers it, minting `_$end` with a fresh id
+            // — so the old nested-typeless-`_$end` clobber can't arise.
             std::unique_ptr<parse::Node> var_decl = std::move(s.children[0]);
-            std::string var_name = var_decl->name;
-            widen::TypeRef var_type = var_decl->return_type;
-            int var_tok = var_decl->name_tok;
-            var_decl->children.push_back(memberRef(first));
-            // _$end = last member.
-            auto end_decl = std::make_unique<parse::Node>();
-            end_decl->kind = parse::Kind::kVarDeclStmt;
-            end_decl->name = "_$end";
-            end_decl->return_type = var_type;
-            end_decl->file_id = en_file;
-            end_decl->tok = en_tok;
-            end_decl->name_tok = en_tok;
-            end_decl->children.push_back(memberRef(last));
-            // cond: var <= _$end
-            auto cond = std::make_unique<parse::Node>();
-            cond->kind = parse::Kind::kBinaryExpr;
-            cond->text = "<=";
-            cond->file_id = en_file; cond->tok = en_tok;
-            cond->children.push_back(ident(var_name, var_tok));
-            cond->children.push_back(ident("_$end", en_tok));
-            // update: { var = var + 1 }
-            auto one = std::make_unique<parse::Node>();
-            one->kind = parse::Kind::kIntLiteral; one->text = "1";
-            one->file_id = en_file; one->tok = en_tok;
-            auto add = std::make_unique<parse::Node>();
-            add->kind = parse::Kind::kBinaryExpr; add->text = "+";
-            add->file_id = en_file; add->tok = en_tok;
-            add->children.push_back(ident(var_name, var_tok));
-            add->children.push_back(std::move(one));
-            auto assign = std::make_unique<parse::Node>();
-            assign->kind = parse::Kind::kAssignStmt;
-            assign->name = var_name; assign->name_tok = var_tok;
-            assign->file_id = en_file; assign->tok = var_tok;
-            assign->children.push_back(std::move(add));
-            auto update = std::make_unique<parse::Node>();
-            update->kind = parse::Kind::kBlockStmt;
-            update->file_id = en_file; update->tok = en_tok;
-            update->children.push_back(std::move(assign));
-
+            var_decl->children.push_back(memberRef(first));   // init = first member
+            std::unique_ptr<parse::Node> end = memberRef(last);
             std::unique_ptr<parse::Node> body = std::move(s.children[2]);
 
-            // Rebuild s as a kForLongStmt and resolve it through that path.
-            s.kind = parse::Kind::kForLongStmt;
+            s.kind = parse::Kind::kForRangedStmt;
+            s.text = "<=";                 // var <= last
+            s.name = "+";                  // step +1
             s.range_dotdot_tok = en_tok;   // empty-range caret on the enum name
             s.children.clear();
-            s.children.push_back(std::move(cond));       // [0]
-            s.children.push_back(std::move(update));     // [1]
-            s.children.push_back(std::move(body));       // [2]
-            s.children.push_back(std::move(var_decl));   // [3]
-            s.children.push_back(std::move(end_decl));   // [4]
+            s.children.push_back(std::move(var_decl));   // [0] loop-var (init=first)
+            s.children.push_back(std::move(end));        // [1] end = last
+            s.children.push_back(nullptr);               // [2] step (null => +1)
+            s.children.push_back(std::move(body));       // [3] body
             return resolveStmt(tree, s, diag);
         }
         case parse::Kind::kBreakStmt:

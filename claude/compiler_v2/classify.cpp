@@ -283,6 +283,8 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kDoWhileStmt:
         case parse::Kind::kForLongStmt:
         case parse::Kind::kForEnumStmt:
+        case parse::Kind::kForArrayStmt:
+        case parse::Kind::kForTupleStmt:
         case parse::Kind::kForRangedStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
@@ -1057,6 +1059,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kDoWhileStmt:
         case parse::Kind::kForLongStmt:
         case parse::Kind::kForEnumStmt:
+        case parse::Kind::kForArrayStmt:
+        case parse::Kind::kForTupleStmt:
         case parse::Kind::kForRangedStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
@@ -1894,6 +1898,90 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             return;
         }
+        case parse::Kind::kForArrayStmt: {
+            // [0]=loop-var decl (typed in resolve, no init), [1]=array ident,
+            // [2]=body. The element binding + `_$idx` counter are built in desugar;
+            // here only the iterable's array type needs stamping (desugar reads its
+            // element / length) and the body classified with the loop var in scope.
+            assert(s.children.size() == 3 && "kForArrayStmt needs var+array+body");
+            inferExpr(tree, *s.children[1], widen::kNoType, diag);
+            classifyStmt(tree, *s.children[2], fn_return_type, diag);
+            return;
+        }
+        case parse::Kind::kForTupleStmt: {
+            // [0]=loop-var decl (no init), [1]=iterable, [2]=body. Type the
+            // iterable (a literal flexes its slots to the loop var's element type),
+            // check slot homogeneity, and give a FRESH typeless loop var the
+            // element (slot 0) type. The `_$iter`/binding are built in desugar.
+            assert(s.children.size() == 3 && "kForTupleStmt needs var+iterable+body");
+            parse::Node& var_decl = *s.children[0];
+            parse::Node& it_ref = *s.children[1];
+            bool by_ref = widen::form(widen::strip(var_decl.return_type))
+                          == widen::Type::Form::kPointer;
+            widen::TypeRef context = widen::kNoType;
+            if (var_decl.return_type != widen::kNoType
+                && it_ref.kind == parse::Kind::kTupleExpr) {
+                widen::TypeRef velem = by_ref
+                    ? widen::get(widen::strip(var_decl.return_type)).pointee
+                    : var_decl.return_type;
+                int n = static_cast<int>(it_ref.children.size());
+                context = widen::internTuple(std::vector<widen::TypeRef>(n, velem));
+            }
+            inferExpr(tree, it_ref, context, diag);
+            widen::TypeRef itup = widen::strip(it_ref.inferred_type);
+            if (widen::form(itup) == widen::Type::Form::kTuple) {
+                std::vector<widen::TypeRef> slots = widen::get(itup).slots;
+                for (std::size_t i = 1; i < slots.size(); i++) {
+                    if (widen::deepStrip(slots[i]) != widen::deepStrip(slots[0])) {
+                        diagnostic::report(diag, {it_ref.file_id, it_ref.tok,
+                            "A for-loop over a tuple requires a homogeneous tuple.",
+                            {}});
+                        break;
+                    }
+                }
+                // A NON-PRIMITIVE element (a tuple / array / slid slot) can't be
+                // bound by value here — it must be iterated by REFERENCE.
+                widen::TypeRef elem = slots.empty() ? widen::kNoType : slots[0];
+                widen::Type::Form ef = widen::form(widen::strip(elem));
+                bool elem_aggregate = !slots.empty()
+                    && (ef == widen::Type::Form::kTuple
+                     || ef == widen::Type::Form::kArray
+                     || ef == widen::Type::Form::kSlid);
+                // A DECLARED by-value loop var over such an element is an error.
+                if (elem_aggregate && var_decl.return_type != widen::kNoType
+                    && !by_ref) {
+                    diagnostic::report(diag, {var_decl.file_id, var_decl.name_tok,
+                        "A for-loop over a tuple with non-primitive elements must "
+                        "use a reference loop variable.", {}});
+                }
+                // A FRESH typeless loop var takes the element (slot 0) type — a
+                // non-primitive element FORCES a reference (`T^`). A reuse keeps its
+                // enclosing type (the binding coerces the slot).
+                if (var_decl.kind == parse::Kind::kVarDeclStmt
+                    && var_decl.return_type == widen::kNoType
+                    && var_decl.resolved_entry_id >= 0 && !slots.empty()) {
+                    tree.entries[var_decl.resolved_entry_id].slids_type =
+                        elem_aggregate ? widen::internPointer(elem) : elem;
+                }
+            } else if (it_ref.inferred_type != widen::kNoType) {
+                // An unknown-typed iterable the dispatcher routed here on faith (a
+                // typeless local — arrays are always typed — or an inferred-typed
+                // expression, the only iterable expression form being a tuple) that
+                // did NOT infer to a tuple: `x = 5; for (v : x)`, or an inferred ref
+                // to a non-tuple. A named local names itself; an expression uses the
+                // operand wording. (kNoType => an earlier error already fired.)
+                if (it_ref.kind == parse::Kind::kIdentExpr) {
+                    diagnostic::report(diag, {it_ref.file_id, it_ref.tok,
+                        "'" + it_ref.name + "' is not an enum, array, or tuple.", {}});
+                } else {
+                    diagnostic::report(diag, {it_ref.file_id, it_ref.tok,
+                        "A for-loop operand must be an enum, an array, or a tuple.",
+                        {}});
+                }
+            }
+            classifyStmt(tree, *s.children[2], fn_return_type, diag);
+            return;
+        }
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
             // Nothing to type-infer; resolve handled loop-legality.
@@ -2031,6 +2119,7 @@ bool containsBreak(parse::Node const& s) {
     if (s.kind == parse::Kind::kBreakStmt) return true;
     if (s.kind == parse::Kind::kWhileStmt || s.kind == parse::Kind::kDoWhileStmt
         || s.kind == parse::Kind::kForLongStmt || s.kind == parse::Kind::kForEnumStmt
+        || s.kind == parse::Kind::kForArrayStmt || s.kind == parse::Kind::kForTupleStmt
         || s.kind == parse::Kind::kForRangedStmt
         || s.kind == parse::Kind::kSwitchStmt) {
         return false;   // a nested loop/switch captures its own breaks

@@ -3,12 +3,6 @@ the bug of the day.
 */
 
 int32 main() {
-
-    start = 1;
-    end = 3;
-    for (x : start..end) {
-        __println(x);
-    }
 /*
     int array[2,3] = ((1,2), (3,4), (5,6));
     __println(##type(array[0]));

@@ -6,6 +6,15 @@ what test coverage gaps remain ?
 update readme.txt, todo.txt, plan.txt, and memories.
 update readme.txt, todo.txt, plan.txt, plan-flow.txt, and memories.
 
+inferred reference type.
+int x = 100;
+ref^ = x;
+type of ref is int^.
+actual use case:
+for (ref^ : container) { }
+the loop type is inferred from container.
+but we specify we want to loop by reference, not value.
+
 these need to move to optimizations.
 operations may be reduced:
 for examples:

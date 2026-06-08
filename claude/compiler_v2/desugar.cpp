@@ -51,6 +51,14 @@ ast::Kind toAstKind(parse::Kind k) {
             // Intercepted by copyNode and lowered to a kForLongStmt; never reaches
             // toAstKind (which has no short-for ast kind to map to).
             assert(false && "toAstKind: kForRangedStmt should be lowered by copyNode");
+        case parse::Kind::kForArrayStmt:
+            // Intercepted by copyNode and lowered to a kForLongStmt; never reaches
+            // toAstKind.
+            assert(false && "toAstKind: kForArrayStmt should be lowered by copyNode");
+        case parse::Kind::kForTupleStmt:
+            // Intercepted by copyNode and lowered to a kForLongStmt; never reaches
+            // toAstKind.
+            assert(false && "toAstKind: kForTupleStmt should be lowered by copyNode");
         case parse::Kind::kForEnumStmt:
             // Rewritten to a kForLongStmt during resolve; never copied to the ast.
             assert(false && "toAstKind: kForEnumStmt should be lowered in resolve");
@@ -168,13 +176,23 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
                                     int& next_id);
 std::unique_ptr<ast::Node> lowerForRanged(parse::Node const& p,
                                           parse::Tree const& tree, int& next_id);
+std::unique_ptr<ast::Node> lowerForArray(parse::Node const& p,
+                                         parse::Tree const& tree, int& next_id);
+std::unique_ptr<ast::Node> lowerForTuple(parse::Node const& p,
+                                         parse::Tree const& tree, int& next_id);
 
 std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tree,
                                     int& next_id) {
-    // A short ranged-for is lowered to the canonical kForLongStmt here (toAstKind
-    // has no short-for ast kind); the loop's helper locals get fresh ids.
+    // A short ranged / array / tuple for is lowered to the canonical kForLongStmt
+    // here (toAstKind has no short-for ast kind); its helper locals get fresh ids.
     if (p.kind == parse::Kind::kForRangedStmt) {
         return lowerForRanged(p, tree, next_id);
+    }
+    if (p.kind == parse::Kind::kForArrayStmt) {
+        return lowerForArray(p, tree, next_id);
+    }
+    if (p.kind == parse::Kind::kForTupleStmt) {
+        return lowerForTuple(p, tree, next_id);
     }
     auto node = std::make_unique<ast::Node>();
     node->kind = toAstKind(p.kind);
@@ -333,6 +351,342 @@ std::unique_ptr<ast::Node> lowerForRanged(parse::Node const& p,
     out->children.push_back(std::move(lv));
     out->children.push_back(std::move(end_decl));
     if (step_decl) out->children.push_back(std::move(step_decl));
+    return out;
+}
+
+// Lower a kForArrayStmt to the canonical kForLongStmt: a fresh `_$idx` counter
+// walks 0..length-1 and the loop var is (re)bound at the TOP of the body each
+// iteration — by reference (`T^ v = ^arr[i]`), by value (`T v = arr[i]`), or
+// typeless reuse (`v = arr[i]`). resolve already typed the loop var + validated
+// the iterable; here we build the counter / index / binding and hand-stamp the
+// types classify never saw. See lowerForRanged for the fresh-id INVARIANT.
+std::unique_ptr<ast::Node> lowerForArray(parse::Node const& p,
+                                         parse::Tree const& tree, int& next_id) {
+    // p.children: [0]=loop-var decl (typed in resolve, no init; kind==kAssignStmt
+    // flags a typeless REUSE), [1]=array ident, [2]=body.
+    parse::Node const& lvp = *p.children[0];
+    parse::Node const& arrp = *p.children[1];
+    int v_id = lvp.resolved_entry_id;
+    int arr_id = arrp.resolved_entry_id;
+    widen::TypeRef arr_type = arrp.inferred_type;          // classify stamped it
+    widen::TypeRef arrS = widen::strip(arr_type);
+    widen::TypeRef elem = widen::get(arrS).elem;           // 1-D (resolve validated)
+    std::vector<int> adims = widen::get(arrS).dims;
+    int size = adims.empty() ? 0 : adims.front();
+    // by-ref is a property of the DECLARED type (`T^ v`), not the element type —
+    // a typeless var over a pointer-element array is by VALUE, not by ref.
+    bool by_ref = lvp.return_type != widen::kNoType
+        && widen::form(widen::strip(lvp.return_type)) == widen::Type::Form::kPointer;
+    bool reuse = (lvp.kind == parse::Kind::kAssignStmt);
+    // The binding's declared type: as-written (typed / by-ref) or the element
+    // (typeless fresh, off the entry resolve typed). Reuse needs no type.
+    widen::TypeRef bind_type = (lvp.return_type != widen::kNoType)
+        ? lvp.return_type
+        : ((v_id >= 0) ? tree.entries[v_id].slids_type : widen::kNoType);
+
+    int afile = arrp.file_id, atok = arrp.tok;
+    int vfile = lvp.file_id, vtok = lvp.name_tok;
+    widen::TypeRef intptr = widen::intern("intptr");
+
+    auto ident = [&](std::string const& nm, int id, widen::TypeRef ty,
+                     int file, int tok) {
+        auto n = std::make_unique<ast::Node>();
+        n->kind = ast::Kind::kIdentExpr;
+        n->name = nm; n->resolved_entry_id = id; n->inferred_type = ty;
+        n->file_id = file; n->tok = tok;
+        return n;
+    };
+    auto intLit = [&](std::string const& v) {
+        auto n = std::make_unique<ast::Node>();
+        n->kind = ast::Kind::kIntLiteral; n->text = v;
+        n->inferred_type = intptr; n->file_id = afile; n->tok = atok;
+        return n;
+    };
+
+    // varlist[0]: intptr _$idx = 0 (fresh id).
+    int idx_id = next_id++;
+    auto idx_decl = std::make_unique<ast::Node>();
+    idx_decl->kind = ast::Kind::kVarDeclStmt;
+    idx_decl->name = "_$idx"; idx_decl->resolved_entry_id = idx_id;
+    idx_decl->return_type = intptr;
+    idx_decl->file_id = afile; idx_decl->tok = atok; idx_decl->name_tok = atok;
+    idx_decl->children.push_back(intLit("0"));
+
+    // cond: _$idx < size.
+    auto cond = std::make_unique<ast::Node>();
+    cond->kind = ast::Kind::kBinaryExpr; cond->text = "<";
+    cond->inferred_type = widen::intern("bool"); cond->op_type = intptr;
+    cond->file_id = afile; cond->tok = atok;
+    cond->children.push_back(ident("_$idx", idx_id, intptr, afile, atok));
+    cond->children.push_back(intLit(std::to_string(size)));
+
+    // update: { _$idx = _$idx + 1 }.
+    auto inc = std::make_unique<ast::Node>();
+    inc->kind = ast::Kind::kBinaryExpr; inc->text = "+";
+    inc->inferred_type = intptr; inc->op_type = intptr;
+    inc->file_id = afile; inc->tok = atok;
+    inc->children.push_back(ident("_$idx", idx_id, intptr, afile, atok));
+    inc->children.push_back(intLit("1"));
+    auto upd_assign = std::make_unique<ast::Node>();
+    upd_assign->kind = ast::Kind::kAssignStmt;
+    upd_assign->name = "_$idx"; upd_assign->resolved_entry_id = idx_id;
+    upd_assign->file_id = afile; upd_assign->tok = atok;
+    upd_assign->children.push_back(std::move(inc));
+    auto update = std::make_unique<ast::Node>();
+    update->kind = ast::Kind::kBlockStmt;
+    update->file_id = afile; update->tok = atok;
+    update->children.push_back(std::move(upd_assign));
+
+    // arr[_$idx]. The base ident keeps the array's position; the kIndexExpr takes
+    // the LOOP VARIABLE's position so an element/width error carets at the loop var.
+    auto index_expr = std::make_unique<ast::Node>();
+    index_expr->kind = ast::Kind::kIndexExpr;
+    index_expr->inferred_type = elem;
+    index_expr->file_id = vfile; index_expr->tok = vtok;
+    index_expr->children.push_back(ident(arrp.name, arr_id, arr_type, afile, atok));
+    index_expr->children.push_back(ident("_$idx", idx_id, intptr, afile, atok));
+
+    // binding init: by-ref takes the element address (iterator demoting to ref),
+    // otherwise the element value.
+    std::unique_ptr<ast::Node> init;
+    if (by_ref) {
+        init = std::make_unique<ast::Node>();
+        init->kind = ast::Kind::kAddrOfExpr;
+        init->inferred_type = bind_type;          // T^
+        init->file_id = afile; init->tok = atok;
+        init->children.push_back(std::move(index_expr));
+    } else {
+        init = std::move(index_expr);
+    }
+    std::unique_ptr<ast::Node> binding;
+    if (reuse) {
+        binding = std::make_unique<ast::Node>();
+        binding->kind = ast::Kind::kAssignStmt;
+        binding->name = lvp.name; binding->resolved_entry_id = v_id;
+        binding->file_id = vfile; binding->tok = vtok;
+        binding->children.push_back(std::move(init));
+    } else {
+        binding = std::make_unique<ast::Node>();
+        binding->kind = ast::Kind::kVarDeclStmt;
+        binding->name = lvp.name; binding->resolved_entry_id = v_id;
+        binding->return_type = bind_type;
+        binding->file_id = vfile; binding->tok = vtok; binding->name_tok = vtok;
+        binding->children.push_back(std::move(init));
+    }
+
+    // body: { binding; <user body statements> }.
+    auto body = std::make_unique<ast::Node>();
+    body->kind = ast::Kind::kBlockStmt;
+    body->file_id = p.children[2]->file_id; body->tok = p.children[2]->tok;
+    body->children.push_back(std::move(binding));
+    auto user_body = copyNode(*p.children[2], tree, next_id);
+    for (auto& st : user_body->children) body->children.push_back(std::move(st));
+
+    // Assemble: [0]=cond, [1]=update, [2]=body, [3]=_$idx varlist.
+    auto out = std::make_unique<ast::Node>();
+    out->kind = ast::Kind::kForLongStmt;
+    out->file_id = p.file_id; out->tok = p.tok;
+    out->children.push_back(std::move(cond));
+    out->children.push_back(std::move(update));
+    out->children.push_back(std::move(body));
+    out->children.push_back(std::move(idx_decl));
+    return out;
+}
+
+// Lower a kForTupleStmt to the canonical kForLongStmt. A `_$idx` counter bounds
+// the loop (< N slots) and a `_$iter` iterator WALKS the slots; the loop var is
+// (re)bound from `_$iter` each iteration — by value `v = _$iter^`, by ref
+// `v = _$iter` (iterator -> reference). A literal / rvalue iterable is SPILLED
+// to a fresh `_$ftmp`; a var / `ref^` / index lvalue iterates in place. The
+// iterator is `<T[]><void^>(storage address)`: for `ref^` the address is the
+// pointer ITSELF (no addr-of-through-deref), and the void^ bridge keeps both
+// casts buffer-class-legal. resolve typed the loop var + validated homogeneity;
+// the synthesized nodes are hand-stamped here. See lowerForRanged for the
+// fresh-id INVARIANT.
+std::unique_ptr<ast::Node> lowerForTuple(parse::Node const& p,
+                                         parse::Tree const& tree, int& next_id) {
+    // p.children: [0]=loop-var decl (kind==kAssignStmt flags a typeless REUSE),
+    // [1]=iterable expr, [2]=body.
+    parse::Node const& lvp = *p.children[0];
+    parse::Node const& itp = *p.children[1];
+    int v_id = lvp.resolved_entry_id;
+    bool reuse = (lvp.kind == parse::Kind::kAssignStmt);
+    // In place iff the iterable is an lvalue (var / `ref^` / index); everything
+    // else (a literal, a call, a computed tuple) has no storage -> spill.
+    bool spill = !(itp.kind == parse::Kind::kIdentExpr
+                || itp.kind == parse::Kind::kDerefExpr
+                || itp.kind == parse::Kind::kIndexExpr);
+
+    widen::TypeRef tup_type = itp.inferred_type;
+    std::vector<widen::TypeRef> slots = widen::get(widen::strip(tup_type)).slots;
+    int N = static_cast<int>(slots.size());
+    widen::TypeRef T = slots.empty() ? widen::kNoType : slots[0];   // homogeneous
+    widen::TypeRef iter_type = widen::internIterator(T);            // T[]
+    // The binding's declared type: as-written (typed / by-ref) or the element
+    // (typeless fresh, off the entry — classify forces a reference for a
+    // non-primitive element). Reuse needs no type.
+    widen::TypeRef bind_type = (lvp.return_type != widen::kNoType)
+        ? lvp.return_type
+        : ((v_id >= 0) ? tree.entries[v_id].slids_type : widen::kNoType);
+    // By reference iff the loop var's resolved type is a reference to the element T:
+    // a declared `T^`, or the classify forced-by-ref over a non-primitive element. A
+    // by-VALUE loop over POINTER elements keeps bind_type == T (not T^), so it stays
+    // by value — distinguishing it from a `T^` reference whose pointee IS T.
+    bool by_ref = widen::form(widen::strip(bind_type)) == widen::Type::Form::kPointer
+        && widen::deepStrip(widen::get(widen::strip(bind_type)).pointee)
+               == widen::deepStrip(T);
+
+    int ifile = itp.file_id, itok = itp.tok;
+    int vfile = lvp.file_id, vtok = lvp.name_tok;
+    widen::TypeRef intptr = widen::intern("intptr");
+
+    auto ident = [&](std::string const& nm, int id, widen::TypeRef ty,
+                     int file, int tok) {
+        auto n = std::make_unique<ast::Node>();
+        n->kind = ast::Kind::kIdentExpr;
+        n->name = nm; n->resolved_entry_id = id; n->inferred_type = ty;
+        n->file_id = file; n->tok = tok;
+        return n;
+    };
+    auto intLit = [&](std::string const& v) {
+        auto n = std::make_unique<ast::Node>();
+        n->kind = ast::Kind::kIntLiteral; n->text = v;
+        n->inferred_type = intptr; n->file_id = ifile; n->tok = itok;
+        return n;
+    };
+
+    std::vector<std::unique_ptr<ast::Node>> varlist;
+
+    // [spill] materialize the rvalue tuple into a fresh `_$ftmp` (so it has an
+    // address). Must precede the iterator (which addresses it). varlist[0].
+    int ftmp_id = -1;
+    if (spill) {
+        ftmp_id = next_id++;
+        auto ftmp = std::make_unique<ast::Node>();
+        ftmp->kind = ast::Kind::kVarDeclStmt;
+        ftmp->name = "_$ftmp"; ftmp->resolved_entry_id = ftmp_id;
+        ftmp->return_type = tup_type;
+        ftmp->file_id = ifile; ftmp->tok = itok; ftmp->name_tok = itok;
+        ftmp->children.push_back(copyNode(itp, tree, next_id));
+        varlist.push_back(std::move(ftmp));
+    }
+
+    // intptr _$idx = 0
+    int idx_id = next_id++;
+    auto idx_decl = std::make_unique<ast::Node>();
+    idx_decl->kind = ast::Kind::kVarDeclStmt;
+    idx_decl->name = "_$idx"; idx_decl->resolved_entry_id = idx_id;
+    idx_decl->return_type = intptr;
+    idx_decl->file_id = ifile; idx_decl->tok = itok; idx_decl->name_tok = itok;
+    idx_decl->children.push_back(intLit("0"));
+
+    // _$iter = <T[]> <void^> (storage address). The base address is the start of
+    // the tuple (== slot 0): spill / in-place var / index -> ^storage; in-place
+    // `ref^` -> the ref pointer itself (its VALUE is the address — the dodge).
+    std::unique_ptr<ast::Node> base_addr;
+    if (!spill && itp.kind == parse::Kind::kDerefExpr) {
+        base_addr = copyNode(*itp.children[0], tree, next_id);
+    } else {
+        base_addr = std::make_unique<ast::Node>();
+        base_addr->kind = ast::Kind::kAddrOfExpr;
+        base_addr->inferred_type = widen::internPointer(tup_type);
+        base_addr->file_id = ifile; base_addr->tok = itok;
+        if (spill) base_addr->children.push_back(
+            ident("_$ftmp", ftmp_id, tup_type, ifile, itok));
+        else base_addr->children.push_back(copyNode(itp, tree, next_id));
+    }
+    auto to_void = std::make_unique<ast::Node>();
+    to_void->kind = ast::Kind::kCastExpr;
+    to_void->inferred_type = widen::intern("void^");
+    to_void->file_id = ifile; to_void->tok = itok;
+    to_void->children.push_back(std::move(base_addr));
+    auto to_iter = std::make_unique<ast::Node>();
+    to_iter->kind = ast::Kind::kCastExpr;
+    to_iter->inferred_type = iter_type;
+    to_iter->file_id = ifile; to_iter->tok = itok;
+    to_iter->children.push_back(std::move(to_void));
+    int iter_id = next_id++;
+    auto iter_decl = std::make_unique<ast::Node>();
+    iter_decl->kind = ast::Kind::kVarDeclStmt;
+    iter_decl->name = "_$iter"; iter_decl->resolved_entry_id = iter_id;
+    iter_decl->return_type = iter_type;
+    iter_decl->file_id = ifile; iter_decl->tok = itok; iter_decl->name_tok = itok;
+    iter_decl->children.push_back(std::move(to_iter));
+
+    varlist.push_back(std::move(idx_decl));
+    varlist.push_back(std::move(iter_decl));
+
+    // cond: _$idx < N
+    auto cond = std::make_unique<ast::Node>();
+    cond->kind = ast::Kind::kBinaryExpr; cond->text = "<";
+    cond->inferred_type = widen::intern("bool"); cond->op_type = intptr;
+    cond->file_id = ifile; cond->tok = itok;
+    cond->children.push_back(ident("_$idx", idx_id, intptr, ifile, itok));
+    cond->children.push_back(intLit(std::to_string(N)));
+
+    // update: { _$idx = _$idx + 1; _$iter = _$iter + 1 } (the iter += 1 is a GEP).
+    auto mkbump = [&](std::string const& nm, int id, widen::TypeRef ty) {
+        auto bin = std::make_unique<ast::Node>();
+        bin->kind = ast::Kind::kBinaryExpr; bin->text = "+";
+        bin->inferred_type = ty; bin->op_type = ty;
+        bin->file_id = ifile; bin->tok = itok;
+        bin->children.push_back(ident(nm, id, ty, ifile, itok));
+        bin->children.push_back(intLit("1"));
+        auto a = std::make_unique<ast::Node>();
+        a->kind = ast::Kind::kAssignStmt; a->name = nm; a->resolved_entry_id = id;
+        a->file_id = ifile; a->tok = itok;
+        a->children.push_back(std::move(bin));
+        return a;
+    };
+    auto update = std::make_unique<ast::Node>();
+    update->kind = ast::Kind::kBlockStmt;
+    update->file_id = ifile; update->tok = itok;
+    update->children.push_back(mkbump("_$idx", idx_id, intptr));
+    update->children.push_back(mkbump("_$iter", iter_id, iter_type));
+
+    // binding: by value `v = _$iter^`, by ref `v = _$iter` (iterator -> reference).
+    std::unique_ptr<ast::Node> init;
+    if (by_ref) {
+        init = ident("_$iter", iter_id, iter_type, vfile, vtok);
+    } else {
+        init = std::make_unique<ast::Node>();
+        init->kind = ast::Kind::kDerefExpr;
+        init->inferred_type = T;
+        init->file_id = vfile; init->tok = vtok;
+        init->children.push_back(ident("_$iter", iter_id, iter_type, vfile, vtok));
+    }
+    std::unique_ptr<ast::Node> binding;
+    if (reuse) {
+        binding = std::make_unique<ast::Node>();
+        binding->kind = ast::Kind::kAssignStmt;
+        binding->name = lvp.name; binding->resolved_entry_id = v_id;
+        binding->file_id = vfile; binding->tok = vtok;
+        binding->children.push_back(std::move(init));
+    } else {
+        binding = std::make_unique<ast::Node>();
+        binding->kind = ast::Kind::kVarDeclStmt;
+        binding->name = lvp.name; binding->resolved_entry_id = v_id;
+        binding->return_type = bind_type;
+        binding->file_id = vfile; binding->tok = vtok; binding->name_tok = vtok;
+        binding->children.push_back(std::move(init));
+    }
+
+    // body: { binding; <user body statements> }
+    auto body = std::make_unique<ast::Node>();
+    body->kind = ast::Kind::kBlockStmt;
+    body->file_id = p.children[2]->file_id; body->tok = p.children[2]->tok;
+    body->children.push_back(std::move(binding));
+    auto user_body = copyNode(*p.children[2], tree, next_id);
+    for (auto& st : user_body->children) body->children.push_back(std::move(st));
+
+    // Assemble: [0]=cond, [1]=update, [2]=body, [3..]=varlist.
+    auto out = std::make_unique<ast::Node>();
+    out->kind = ast::Kind::kForLongStmt;
+    out->file_id = p.file_id; out->tok = p.tok;
+    out->children.push_back(std::move(cond));
+    out->children.push_back(std::move(update));
+    out->children.push_back(std::move(body));
+    for (auto& v : varlist) out->children.push_back(std::move(v));
     return out;
 }
 

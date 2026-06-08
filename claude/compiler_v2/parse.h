@@ -66,6 +66,30 @@ enum class Kind {
                    // [1] = enum-ref (kIdentExpr), [2] = body. resolve rewrites it
                    // in place into a kForLongStmt over the enum's first..last
                    // members; never survives to constfold/classify/codegen.
+    kForArrayStmt, // `for ([type] var : arr) {body}` over a fixed-size 1-D array.
+                   // The grammar emits a kForEnumStmt carrier; resolve discovers
+                   // the array iterable, UNDERSTANDS it in scope (loop var bound to
+                   // the element, body resolved, DA run, one-dim / by-ref-match
+                   // validated) and re-tags the node to this kind WITHOUT lowering.
+                   // desugar lowers it to a kForLongStmt (a `_$idx` counter + a
+                   // per-iteration element binding). children[0] = loop-var decl
+                   // (no init — the binding is synthesized; kind flipped to
+                   // kAssignStmt to flag a typeless REUSE), [1] = array ident,
+                   // [2] = body (kBlockStmt).
+    kForTupleStmt, // `for ([type] var : tup) {body}` over a homogeneous tuple —
+                   // a literal `(7,4,2)` (spilled to a temp), an lvalue (a tuple
+                   // local / `ref^` / index, iterated in place), or an rvalue call
+                   // (spilled). The grammar emits a kForEnumStmt carrier; resolve
+                   // discovers the tuple iterable, UNDERSTANDS it in scope (loop
+                   // var bound to a slot, body resolved, DA run, homogeneity
+                   // validated for non-literals) and re-tags this kind WITHOUT
+                   // lowering. desugar lowers it to a kForLongStmt: a `_$idx`
+                   // counter + a `_$iter` iterator that walks the slots (built as
+                   // `<T[]><void^>` of the storage address, so a `ref^` iterable
+                   // dodges addr-of-through-deref) + a per-iteration binding (by
+                   // value `v = _$iter^`, by ref `v = _$iter`). children[0] =
+                   // loop-var decl (kind flipped to kAssignStmt to flag a typeless
+                   // REUSE), [1] = iterable expr, [2] = body.
     kForRangedStmt,// `for ([type] var : start .. [cmp] end [op step]) {body}` —
                    // the short ranged form, kept intact through resolve/constfold/
                    // classify (which UNDERSTAND it in scope) and lowered to a
