@@ -1100,13 +1100,64 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
     assignNominal(*slot);
 }
 
-// Splice a var-decl's folded const-expression dims into its type spelling (and
-// entry). dim_exprs is aligned to the spelling's dims, left to right (a null slot
-// is a literal dim, already baked). Each must have folded to a POSITIVE INTEGER
-// literal. `final` (the post-fixpoint pass): a dim that STILL isn't a literal is a
-// non-constant array size -> error. During the fold fixpoint (final=false) an
-// unfolded dim is just left for a later round — important so a dim like
-// `sizeof(int)` bakes the array BEFORE a `sizeof(thatArray)` elsewhere folds.
+// The kArray within a (possibly pointer/iterator/alias-wrapped) type, or kNoType
+// if there is none. The array decl's dims live on this node; the spine wrappers
+// (a trailing `^`/`[]`, or an alias OF an array) sit around it.
+widen::TypeRef findArrayRef(widen::TypeRef t) {
+    using F = widen::Type::Form;
+    switch (widen::form(t)) {
+        case F::kArray:    return t;
+        case F::kPointer:  return findArrayRef(widen::get(t).pointee);
+        case F::kIterator: return findArrayRef(widen::get(t).pointee);
+        case F::kAlias:    return findArrayRef(widen::get(t).underlying);
+        case F::kPrimitive: case F::kVoid: case F::kAnyptr:
+        case F::kSlid: case F::kTuple: case F::kNone:
+            return widen::kNoType;
+    }
+    return widen::kNoType;
+}
+
+// Rebuild `t` with the spine's kArray re-dimensioned to `new_dims`, STRUCTURALLY —
+// the array's element type (alias and all) and every wrapper are preserved by
+// re-interning from child HANDLES, never a spelling. (A spelling round-trip is what
+// clobbered an alias element: `spell(kAlias)` is the bare name, so re-interning it
+// yields a kSlid, losing the alias->underlying link.) Child handles are captured
+// before recursing (a recursive intern may realloc the arena).
+widen::TypeRef rebuildArrayDims(widen::TypeRef t, std::vector<int> const& new_dims) {
+    using F = widen::Type::Form;
+    switch (widen::form(t)) {
+        case F::kArray: {
+            widen::TypeRef e = widen::get(t).elem;
+            return widen::internArray(e, new_dims);
+        }
+        case F::kPointer: {
+            widen::TypeRef p = widen::get(t).pointee;
+            return widen::internPointer(rebuildArrayDims(p, new_dims));
+        }
+        case F::kIterator: {
+            widen::TypeRef p = widen::get(t).pointee;
+            return widen::internIterator(rebuildArrayDims(p, new_dims));
+        }
+        case F::kAlias: {
+            std::string name = widen::get(t).name;
+            widen::TypeRef u = widen::get(t).underlying;
+            return widen::internAlias(name, rebuildArrayDims(u, new_dims));
+        }
+        case F::kPrimitive: case F::kVoid: case F::kAnyptr:
+        case F::kSlid: case F::kTuple: case F::kNone:
+            break;   // unreachable: bakeNodeDims only runs on a node carrying dims
+    }
+    assert(false && "rebuildArrayDims: no array in a dim-bearing type");
+    return t;
+}
+
+// Splice a var-decl's folded const-expression dims into its type (and entry).
+// dim_exprs is aligned to the array's dims, left to right (a null slot is a literal
+// dim, already baked). Each must have folded to a POSITIVE INTEGER literal. `final`
+// (the post-fixpoint pass): a dim that STILL isn't a literal is a non-constant array
+// size -> error. During the fold fixpoint (final=false) an unfolded dim is just left
+// for a later round — important so a dim like `sizeof(int)` bakes the array BEFORE a
+// `sizeof(thatArray)` elsewhere folds.
 void bakeNodeDims(parse::Node& n, parse::Tree& tree, bool final,
                   bool& changed, diagnostic::Sink& diag) {
     if (n.dim_exprs.empty()) return;
@@ -1119,46 +1170,40 @@ void bakeNodeDims(parse::Node& n, parse::Tree& tree, bool final,
             return;
         }
     }
-    std::string t = widen::spellOrEmpty(n.return_type);
-    std::size_t base = t.find('[');
-    std::string out = (base == std::string::npos) ? t : t.substr(0, base);
-    std::size_t pos = out.size();
-    std::size_t i = 0;
+    // Splice the folded dims onto resolve's STRUCTURED type — read the array's
+    // provisional dims, override each expression-dim's slot, rebuild via handles.
+    widen::TypeRef arr = findArrayRef(n.return_type);
+    assert(arr != widen::kNoType
+        && "bakeNodeDims: dim_exprs on a type with no array");
+    std::vector<int> dims = widen::get(arr).dims;
     bool failed = false;
-    while (pos < t.size() && t[pos] == '[') {
-        std::size_t rb = t.find(']', pos);
-        if (rb == std::string::npos) break;
-        std::string content = t.substr(pos + 1, rb - pos - 1);
-        if (i < n.dim_exprs.size() && n.dim_exprs[i]) {
-            parse::Node const& d = *n.dim_exprs[i];
-            bool int_lit = d.kind == parse::Kind::kIntLiteral
-                        || d.kind == parse::Kind::kUintLiteral
-                        || d.kind == parse::Kind::kCharLiteral;
-            int64_t v = 0;
-            if (!int_lit || !parseI64(d.text, v)) {
-                diagnostic::report(diag, {d.file_id, d.tok,
-                    "Array size must be an integer constant.", {}});
-                failed = true;
-            } else if (v <= 0) {
-                diagnostic::report(diag, {d.file_id, d.tok,
-                    "Array size must be a positive integer constant.", {}});
-                failed = true;
-            } else {
-                content = d.text;
-            }
+    for (std::size_t i = 0; i < n.dim_exprs.size() && i < dims.size(); i++) {
+        if (!n.dim_exprs[i]) continue;      // literal dim — already baked at grammar
+        parse::Node const& d = *n.dim_exprs[i];
+        bool int_lit = d.kind == parse::Kind::kIntLiteral
+                    || d.kind == parse::Kind::kUintLiteral
+                    || d.kind == parse::Kind::kCharLiteral;
+        int64_t v = 0;
+        if (!int_lit || !parseI64(d.text, v)) {
+            diagnostic::report(diag, {d.file_id, d.tok,
+                "Array size must be an integer constant.", {}});
+            failed = true;
+        } else if (v <= 0) {
+            diagnostic::report(diag, {d.file_id, d.tok,
+                "Array size must be a positive integer constant.", {}});
+            failed = true;
+        } else {
+            dims[i] = static_cast<int>(v);
         }
-        out += "[" + content + "]";
-        pos = rb + 1;
-        i++;
     }
-    out += t.substr(pos);   // trailing `^` / `[]` suffix, if any
     if (!failed) {
-        // Update BOTH the node spelling and the symbol-table entry — downstream
+        // Update BOTH the node type and the symbol-table entry — downstream
         // (classify bounds checks, codegen, sizeof) reads the array type from the
         // entry's slids_type, which resolve stamped with the provisional `[1]`.
+        widen::TypeRef rebuilt = rebuildArrayDims(n.return_type, dims);
         if (n.resolved_entry_id >= 0)
-            tree.entries[n.resolved_entry_id].slids_type = widen::internOrNone(out);
-        n.return_type = widen::internOrNone(out);
+            tree.entries[n.resolved_entry_id].slids_type = rebuilt;
+        n.return_type = rebuilt;
         changed = true;
     }
     n.dim_exprs.clear();

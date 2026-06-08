@@ -240,6 +240,16 @@ int32 main() {
     }
     __println(" )");
 
+    /* array of aliased type and named constant size. */
+    alias Integer = int;
+    const intptr n5 = 5;
+    Integer a5[n5] = (10,9,8,7,6);
+    __print("a5 = (");
+    for (x : a5) {
+        __print(" " + x);
+    }
+    __println(" )");
+
     return 0;
 }
 
