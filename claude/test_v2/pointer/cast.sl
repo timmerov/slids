@@ -220,6 +220,15 @@ int32 main() {
     int32[] ci = <int32[]> cv;
     __println("complex operand= " + ci^);                // 8
 
+    /* a cast TO an ALIASED pointer type keeps the alias transparent: deref the
+       cast result directly, so the cast expression's OWN type drives the load. (A
+       spelling round-trip would clobber 'Pint' to an unknown slid and mis-lower
+       the pointee.) */
+    alias Pint = int32;
+    int32 av = 77;
+    int32^ ap = ^av;
+    __println("alias cast= " + (<Pint^> ap)^);           // 77
+
     /* compile errors — each uncommented in isolation by the negative runner. */
 
     //-EXPECT-ERROR: Cannot implicitly cast 'void^' to 'int32^'

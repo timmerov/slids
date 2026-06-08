@@ -25,6 +25,7 @@ range_typeless_char() = 4
 range_typeless_incl(5) = 15
 range_typeless_step(27) = 4
 range_typeless_wide(2, 7) = 5
+range_typeless_alias(2, 7) = 5
 range_labeled_break() = 2
 range_numbered_break() = 2
 range_labeled_continue() = 3

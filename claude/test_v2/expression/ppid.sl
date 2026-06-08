@@ -91,6 +91,16 @@ int32 main() {
     f++;                      // float scalar steps by 1.0
     __println("f= " + f);
 
+    /* an inc on an ALIASED-type variable keeps the alias transparent: the inc
+       expression is a binary OPERAND, so its OWN type drives the common-type rule.
+       (A spelling round-trip would clobber 'Counter' to an unknown slid, which has
+       no common type with int.) */
+    alias Counter = int32;
+    Counter cnt = 41;
+    int32 sum = (cnt++) + 100;            // post-inc value 41 -> 141; cnt becomes 42
+    __println("alias inc= " + sum);       // 141
+    __println("alias var= " + cnt);       // 42
+
     //-EXPECT-ERROR: Constant 'K' cannot be incremented
     //const int32 K = 5;
     //K++;

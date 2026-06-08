@@ -315,6 +315,18 @@ int range_typeless_wide(int64 lo, int64 hi) {
     return c;
 }
 
+/* typeless over an ALIASED bound type — the loop var infers `Span` from `start`
+   and the end bound coerces to it; the alias stays transparent through the
+   ranged-for type-flow. */
+alias Span = int64;
+int range_typeless_alias(Span lo, Span hi) {
+    int c = 0;
+    for (i : lo..hi) {
+        c = c + 1;
+    }
+    return c;
+}
+
 /* a labeled break from the inner loop exits the OUTER ranged-for. */
 int range_labeled_break() {
     int c = 0;
@@ -445,6 +457,7 @@ int32 main() {
     __println("range_typeless_incl(5) = " + range_typeless_incl(5));    // 15
     __println("range_typeless_step(27) = " + range_typeless_step(27));  // 4
     __println("range_typeless_wide(2, 7) = " + range_typeless_wide(2, 7));  // 5
+    __println("range_typeless_alias(2, 7) = " + range_typeless_alias(2, 7));  // 5
     __println("range_labeled_break() = " + range_labeled_break());      // 2
     __println("range_numbered_break() = " + range_numbered_break());    // 2
     __println("range_labeled_continue() = " + range_labeled_continue());  // 3

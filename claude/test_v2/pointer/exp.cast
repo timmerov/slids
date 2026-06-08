@@ -18,3 +18,4 @@ bridge void= true
 bridge uint8= true
 expr cast= true
 complex operand= 8
+alias cast= 77

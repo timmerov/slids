@@ -649,7 +649,9 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                         + "'; " + why + ".", {}});
                 }
             }
-            e.inferred_type = widen::internOrNone(to);
+            // The cast's type IS the (resolved) target — keep its handle, don't
+            // re-intern the spelling (that would clobber an alias target to a slid).
+            e.inferred_type = e.return_type;
             return;
         }
         case parse::Kind::kConvertExpr: {
@@ -790,7 +792,9 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     "Operator '" + e.text + "' is not defined on type '"
                     + ot + "'.", {}});
             }
-            e.inferred_type = widen::internOrNone(ot);
+            // The result type IS the operand's — keep its handle, don't re-intern
+            // the spelling (that would clobber an alias operand to a slid).
+            e.inferred_type = operand.inferred_type;
             return;
         }
         case parse::Kind::kUnaryExpr: {
@@ -1894,28 +1898,10 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // children[0]=cond, [1]=update, [2]=body, [3..]=varlist decls.
             assert(s.children.size() >= 3 && "kForLongStmt needs cond+update+body");
             // The loop var [3] is classified first so a typeless (inferred) loop
-            // var has its type stamped before the rest of the varlist. For a
-            // ranged/enum for, the synthesized `_$end`/`_$step` (children[4..])
-            // share the loop var's type per the desugar spec — when they are
-            // typeless (the loop var was inferred), give them the loop var's
-            // resolved type as context so their bounds flex into it, matching an
-            // explicitly-typed range (where parse already stamped the type).
+            // var has its type stamped before the rest of the varlist (a later
+            // varlist decl may reference it).
             if (s.children.size() > 3 && s.children[3]) {
                 classifyStmt(tree, *s.children[3], fn_return_type, diag);
-            }
-            if (s.range_dotdot_tok >= 0 && s.children.size() > 3 && s.children[3]
-                && s.children[3]->resolved_entry_id >= 0) {
-                std::string lv = widen::spellOrEmpty(parse::entryType(tree, s.children[3]->resolved_entry_id));
-                for (std::size_t i = 4; i < s.children.size(); i++) {
-                    if (s.children[i]
-                        && s.children[i]->kind == parse::Kind::kVarDeclStmt
-                        && s.children[i]->return_type == widen::kNoType
-                        && s.children[i]->resolved_entry_id >= 0
-                        && !lv.empty()) {
-                        s.children[i]->return_type = widen::internOrNone(lv);
-                        tree.entries[s.children[i]->resolved_entry_id].slids_type = widen::internOrNone(lv);
-                    }
-                }
             }
             for (std::size_t i = 4; i < s.children.size(); i++) {
                 if (s.children[i]) classifyStmt(tree, *s.children[i], fn_return_type, diag);

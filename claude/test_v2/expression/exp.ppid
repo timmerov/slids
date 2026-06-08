@@ -12,3 +12,5 @@ r1= false
 i= 0
 r2= false
 f= 2
+alias inc= 141
+alias var= 42
