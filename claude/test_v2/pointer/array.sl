@@ -231,7 +231,8 @@ int32 main() {
     it = it + 1;                                  // -> seq[1][0] -> x=0,y=1 -> 1
     __println("itwrap= " + it^);                  // 1
 
-    t4 = (1, 2, 3, 4);
+    /* assign an array from a tuple variable. */
+    (int8,int8,int8,int8) t4 = (1, 2, 3, 4);
     int a4[4] = t4;
     __print("a4 = (");
     for (x : a4) {

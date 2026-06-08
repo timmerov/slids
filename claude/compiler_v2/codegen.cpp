@@ -1143,6 +1143,70 @@ void emitArrayFromTupleValue(std::string const& alloca_name, widen::TypeRef arrT
                         alloca_name, flat, rhs, out, diag);
 }
 
+// Recurse a tuple DESTINATION's slots, pulling array elements in row-major flat
+// order from the loaded array value `arr` (type `arr_ll`, dims `dims`, element
+// `elem`) and storing each — widened to the slot type — into the tuple alloca via
+// a struct GEP over `path`. The mirror of emitTupleLeafStores (a nested-tuple slot
+// recurses; the source flat index decomposes into the array's dim indices).
+void emitArrayElemStores(std::string const& arr, std::string const& arr_ll,
+                         std::vector<int> const& dims, widen::TypeRef elem,
+                         widen::TypeRef tupleTy, std::string const& tuple_ll,
+                         std::vector<int>& path, std::size_t& flat,
+                         std::string const& alloca_name, ast::Node const& rhs,
+                         std::ostream& out, diagnostic::Sink& diag) {
+    std::vector<widen::TypeRef> slots = widen::get(widen::strip(tupleTy)).slots;
+    for (std::size_t i = 0; i < slots.size(); i++) {
+        path.push_back(static_cast<int>(i));
+        if (widen::form(widen::strip(slots[i])) == widen::Type::Form::kTuple) {
+            emitArrayElemStores(arr, arr_ll, dims, elem, slots[i], tuple_ll,
+                                path, flat, alloca_name, rhs, out, diag);
+        } else {
+            // Source: array element `flat`, decomposed into row-major dim indices.
+            std::vector<long> ix(dims.size());
+            long rem = static_cast<long>(flat);
+            for (int k = static_cast<int>(dims.size()) - 1; k >= 0; k--) {
+                ix[k] = rem % dims[k];
+                rem /= dims[k];
+            }
+            std::string raw = newTmp("aelt");
+            out << "  " << raw << " = extractvalue " << arr_ll << " " << arr;
+            for (long v : ix) out << ", " << v;
+            out << "\n";
+            std::string v = widen::convert(raw, elem, slots[i],
+                                           rhs.file_id, rhs.tok, out, diag);
+            std::string slot_ll = llvmForRef(slots[i]);
+            std::string gep = newTmp("tslot");
+            out << "  " << gep << " = getelementptr " << tuple_ll << ", ptr "
+                << alloca_name << ", i32 0";
+            for (int p : path) out << ", i32 " << p;
+            out << "\n";
+            out << "  store " << slot_ll << " " << v << ", ptr " << gep << "\n";
+            flat++;
+        }
+        path.pop_back();
+    }
+}
+
+// Assign / initialize a tuple from an array VALUE: evaluate the array aggregate
+// once, then flatten its elements into the tuple's slots. The counterpart to
+// emitArrayFromTupleValue (classify already checked the element count matches).
+void emitTupleFromArrayValue(std::string const& alloca_name, widen::TypeRef tupleTy,
+                             ast::Node const& rhs, SymTab const& syms,
+                             strings::Pool& pool, std::ostream& out,
+                             diagnostic::Sink& diag) {
+    widen::TypeRef arrTy = rhs.inferred_type;
+    widen::Type const& a = widen::get(widen::strip(arrTy));
+    widen::TypeRef elem = a.elem;
+    std::vector<int> dims = a.dims;
+    std::string arr_ll = llvmForRef(arrTy);
+    std::string tuple_ll = llvmForRef(tupleTy);
+    std::string arr = emitExpr(rhs, syms, pool, out, diag, arrTy);
+    std::vector<int> path;
+    std::size_t flat = 0;
+    emitArrayElemStores(arr, arr_ll, dims, elem, tupleTy, tuple_ll, path, flat,
+                        alloca_name, rhs, out, diag);
+}
+
 void emitStmt(ast::Node const& stmt, SymTab& syms,
               strings::Pool& pool,
               widen::TypeRef fn_return_type,
@@ -1174,6 +1238,15 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                     && widen::form(widen::strip(stmt.children[0]->inferred_type))
                            == widen::Type::Form::kTuple) {
                     emitArrayFromTupleValue(it->second.alloca_name,
+                                            it->second.slids_type,
+                                            *stmt.children[0], syms, pool, out, diag);
+                    return;
+                }
+                if (widen::form(widen::strip(it->second.slids_type))
+                        == widen::Type::Form::kTuple
+                    && widen::form(widen::strip(stmt.children[0]->inferred_type))
+                           == widen::Type::Form::kArray) {
+                    emitTupleFromArrayValue(it->second.alloca_name,
                                             it->second.slids_type,
                                             *stmt.children[0], syms, pool, out, diag);
                     return;
@@ -1211,6 +1284,14 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 && widen::form(widen::strip(stmt.children[0]->inferred_type))
                        == widen::Type::Form::kTuple) {
                 emitArrayFromTupleValue(it->second.alloca_name, it->second.slids_type,
+                                        *stmt.children[0], syms, pool, out, diag);
+                return;
+            }
+            if (widen::form(widen::strip(it->second.slids_type))
+                    == widen::Type::Form::kTuple
+                && widen::form(widen::strip(stmt.children[0]->inferred_type))
+                       == widen::Type::Form::kArray) {
+                emitTupleFromArrayValue(it->second.alloca_name, it->second.slids_type,
                                         *stmt.children[0], syms, pool, out, diag);
                 return;
             }

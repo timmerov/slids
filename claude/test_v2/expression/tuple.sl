@@ -154,5 +154,10 @@ int32 main() {
 
     __println("fr= " + firstRef(^q));  // by-reference param: 10
 
+    /* assign a tuple from an array. */
+    int8 a1[4] = (1,2,3,4);
+    (int,int,int,int) t1 = a1;
+    __println("t1=("+t1[0]+","+t1[1]+","+t1[2]+","+t1[3]+")");
+
     return 0;
 }
