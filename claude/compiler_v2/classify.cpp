@@ -1916,18 +1916,6 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             classifyStmt(tree, *s.children[1], fn_return_type, diag);   // update
             classifyStmt(tree, *s.children[2], fn_return_type, diag);   // body
-            // Ranged-for empty-range check: children[3] = loop var (init = start),
-            // [4] = _$end (init = end); cond.text = cmp. Both bounds constant and
-            // `start cmp end` false -> the body never runs -> "Invalid range." at
-            // the `..`. (Ranged-for only — gated on range_dotdot_tok.)
-            if (s.range_dotdot_tok >= 0 && s.children.size() >= 5
-                && !s.children[3]->children.empty()
-                && !s.children[4]->children.empty()
-                && rangeFirstTestFalse(*s.children[3]->children[0],
-                                       *s.children[4]->children[0], cond.text)) {
-                diagnostic::report(diag, {s.file_id, s.range_dotdot_tok,
-                    "Invalid range.", {}});
-            }
             return;
         }
         case parse::Kind::kForRangedStmt: {
