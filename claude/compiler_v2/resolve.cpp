@@ -1576,33 +1576,80 @@ Completion rewriteForArray(parse::Tree& tree, parse::Node& s, int arr_id,
     return resolveStmt(tree, s, diag);
 }
 
-// Lower `for (var : tuple) {body}` into the canonical kForLongStmt, walking an
-// ITERATOR across the tuple's slots (the spec desugar). The tuple must be
-// homogeneous; element type T comes from classify (the synthesized iterator /
-// loop-var are typeless and inferred). A tuple VARIABLE is iterated IN PLACE (no
-// copy — so a by-mutable-reference loop var writes back); a tuple LITERAL is
-// spilled to a temp (a by-ref var over it is ref-to-const, not yet enforced).
-// var_id = the variable's entry (in place), or -1 for a literal (spill).
-Completion rewriteForTuple(parse::Tree& tree, parse::Node& s, int var_id,
-                           diagnostic::Sink& diag) {
-    parse::Node& it_ref = *s.children[1];     // kTupleExpr (literal) or kIdentExpr
+// Best-effort tuple/array type of a for-iterable, derived at RESOLVE time (before
+// classify) for the forms whose type is structural: a variable, a deref of a
+// typed pointer (`ref^`), an array element / tuple slot index, a function call's
+// return. Returns kNoType when the type isn't resolvable here (e.g. a computed
+// tuple rvalue — that needs classify). Only LOOKS NAMES UP (resolveName /
+// resolveCallTarget), so the iterable's real resolution still happens when the
+// rebuilt kForLongStmt is re-resolved.
+widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
+                                diagnostic::Sink& diag) {
+    // if/else (not a switch — -Wswitch-enum would demand every parse::Kind).
+    if (e.kind == parse::Kind::kIdentExpr) {
+        int id = isQualified(e) ? resolveQualifiedRef(tree, e, diag)
+                                : resolveName(tree, e.name);
+        if (id < 0 || tree.entries[id].kind != parse::EntryKind::kLocalVar)
+            return widen::kNoType;
+        return tree.entries[id].slids_type;
+    }
+    if (e.kind == parse::Kind::kDerefExpr) {
+        widen::TypeRef b = widen::strip(peekIterableType(tree, *e.children[0], diag));
+        if (widen::form(b) == widen::Type::Form::kPointer
+            || widen::form(b) == widen::Type::Form::kIterator) {
+            return widen::get(b).pointee;
+        }
+        return widen::kNoType;
+    }
+    if (e.kind == parse::Kind::kIndexExpr) {
+        widen::TypeRef b = widen::strip(peekIterableType(tree, *e.children[0], diag));
+        if (widen::form(b) == widen::Type::Form::kArray) {
+            std::vector<int> dims = widen::get(b).dims;
+            if (dims.size() <= 1) return widen::get(b).elem;
+            return widen::internArray(widen::get(b).elem,
+                std::vector<int>(dims.begin() + 1, dims.end()));
+        }
+        if (widen::form(b) == widen::Type::Form::kTuple
+            && e.children[1]->kind == parse::Kind::kIntLiteral) {
+            long k = std::strtol(e.children[1]->text.c_str(), nullptr, 10);
+            std::vector<widen::TypeRef> const& slots = widen::get(b).slots;
+            if (k >= 0 && k < static_cast<long>(slots.size())) return slots[k];
+        }
+        return widen::kNoType;
+    }
+    if (e.kind == parse::Kind::kCallExpr) {
+        // A function entry's slids_type IS its return type (parse::Entry).
+        if (!resolveCallTarget(tree, e, diag)) return widen::kNoType;
+        return tree.entries[e.resolved_entry_id].slids_type;
+    }
+    return widen::kNoType;
+}
+
+// Lower a `for (v : <iterable>) {body}` over a homogeneous tuple. The iterable is
+// a tuple LITERAL (is_literal), an LVALUE expression (is_lvalue — a var / `ref^`
+// deref / index, iterated IN PLACE so a mutable-ref loop var writes back), or an
+// rvalue expression (a call / computed tuple, SPILLED to a temp). `tuple_type` is
+// the iterable's tuple type (kNoType for a literal — its slot types come from
+// classify).
+Completion rewriteForTuple(parse::Tree& tree, parse::Node& s,
+                           widen::TypeRef tuple_type, bool is_literal,
+                           bool is_lvalue, diagnostic::Sink& diag) {
+    parse::Node& it_ref = *s.children[1];     // the iterable expression
     parse::Node& var_decl = *s.children[0];
-    bool literal = (var_id < 0);
+    bool spill = is_literal || !is_lvalue;    // an rvalue has no storage to iterate
     int ifile = it_ref.file_id, itok = it_ref.tok;
 
     int N;
-    if (literal) {
+    if (is_literal) {
         N = static_cast<int>(it_ref.children.size());
     } else {
-        widen::TypeRef tt = widen::strip(tree.entries[var_id].slids_type);
+        widen::TypeRef tt = widen::strip(tuple_type);
         std::vector<widen::TypeRef> slots = widen::get(tt).slots;
         N = static_cast<int>(slots.size());
         for (std::size_t i = 1; i < slots.size(); i++) {
             if (widen::deepStrip(slots[i]) != widen::deepStrip(slots[0])) {
                 diagnostic::report(diag, {ifile, itok,
-                    "A for-loop over a tuple requires a homogeneous tuple.",
-                    {{tree.entries[var_id].file_id, tree.entries[var_id].tok,
-                      "tuple declared here"}}});
+                    "A for-loop over a tuple requires a homogeneous tuple.", {}});
                 return Completion::Normal;
             }
         }
@@ -1645,25 +1692,24 @@ Completion rewriteForTuple(parse::Tree& tree, parse::Node& s, int var_id,
         return n;
     };
     auto baseIdent = [&]() {
-        if (literal) return ident(tmpName, itok);
-        auto b = ident(it_ref.name, itok);
-        b->qualifier = it_ref.qualifier;
-        b->qualifier_toks = it_ref.qualifier_toks;
-        b->global_qualified = it_ref.global_qualified;
-        return b;
+        // spill -> iterate the temp; in place -> iterate a CLONE of the iterable
+        // lvalue expr (a var ident, a `ref^` deref, an `arr[i]` index).
+        if (spill) return ident(tmpName, itok);
+        return cloneExpr(it_ref);
     };
 
     std::vector<std::unique_ptr<parse::Node>> varlist;
 
-    // [literal only] spill the tuple to a temp (so `^_$ftmp[0]` has an address).
-    // Must precede the iterator decl. With a TYPED loop var, give the temp the
-    // homogeneous tuple type `(T, ..., T)` (T = the loop var's element type) so the
-    // literal's slots flex to T — otherwise they default to int32 and the iterator
-    // pointee won't match an `int^` loop var. A typeless loop var leaves it
-    // inferred.
-    if (literal) {
+    // [spill] an rvalue iterable (a tuple LITERAL, a function call, a computed
+    // tuple) has no storage, so copy it to a temp (`^_$ftmp[0]` then has an
+    // address). Must precede the iterator decl. A LITERAL gets the homogeneous
+    // tuple type `(T, ..., T)` (T = the loop var's element type) so its slots flex
+    // to T — else they default to int32 and the iterator pointee won't match an
+    // `int^` loop var; a typed rvalue (a call) is left typeless and classify
+    // infers it (its homogeneity was already checked above).
+    if (spill) {
         widen::TypeRef tmp_type = widen::kNoType;
-        if (var_decl.return_type != widen::kNoType) {
+        if (is_literal && var_decl.return_type != widen::kNoType) {
             widen::TypeRef T = by_ref
                 ? widen::get(widen::strip(var_decl.return_type)).pointee
                 : var_decl.return_type;
@@ -1673,9 +1719,9 @@ Completion rewriteForTuple(parse::Tree& tree, parse::Node& s, int var_id,
         tmp->kind = parse::Kind::kVarDeclStmt;
         tmp->name = tmpName; tmp->name_tok = itok;
         tmp->return_type = tmp_type;
-        tmp->require_homogeneous = true;   // classify rejects a heterogeneous literal
+        tmp->require_homogeneous = is_literal;   // classify rejects a heterogeneous literal
         tmp->file_id = ifile; tmp->tok = itok;
-        tmp->children.push_back(std::move(s.children[1]));   // the literal
+        tmp->children.push_back(std::move(s.children[1]));   // the literal / rvalue
         varlist.push_back(std::move(tmp));
     }
 
@@ -2413,7 +2459,23 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             parse::Node& enum_ref = *s.children[1];
             // A tuple LITERAL iterable — `for (x : (7,4,2))`. Spill + iterate.
             if (enum_ref.kind == parse::Kind::kTupleExpr) {
-                return rewriteForTuple(tree, s, -1, diag);
+                return rewriteForTuple(tree, s, widen::kNoType,
+                                       /*is_literal=*/true, /*is_lvalue=*/false, diag);
+            }
+            // Any non-name, non-literal EXPRESSION — `for (x : ref^)`, `f()`,
+            // `arr[i]`. Peek its type: a homogeneous tuple iterates (in place for
+            // an lvalue deref/index, spilled for an rvalue call), else error.
+            if (enum_ref.kind != parse::Kind::kIdentExpr) {
+                widen::TypeRef ity = peekIterableType(tree, enum_ref, diag);
+                if (widen::form(widen::strip(ity)) == widen::Type::Form::kTuple) {
+                    bool lval = (enum_ref.kind == parse::Kind::kDerefExpr
+                              || enum_ref.kind == parse::Kind::kIndexExpr);
+                    return rewriteForTuple(tree, s, ity, /*is_literal=*/false,
+                                           lval, diag);
+                }
+                diagnostic::report(diag, {enum_ref.file_id, enum_ref.tok,
+                    "A for-loop operand must be an enum, an array, or a tuple.", {}});
+                return Completion::Normal;
             }
             int enum_id = isQualified(enum_ref)
                 ? resolveQualifiedRef(tree, enum_ref, diag)
@@ -2435,7 +2497,8 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             if (tree.entries[enum_id].kind == parse::EntryKind::kLocalVar
                 && widen::form(widen::strip(tree.entries[enum_id].slids_type))
                        == widen::Type::Form::kTuple) {
-                return rewriteForTuple(tree, s, enum_id, diag);
+                return rewriteForTuple(tree, s, tree.entries[enum_id].slids_type,
+                                       /*is_literal=*/false, /*is_lvalue=*/true, diag);
             }
             // Otherwise it must be an enum: a kNamespace carrying an underlying
             // type (transparent).
@@ -2728,6 +2791,10 @@ Completion resolveStmtList(parse::Tree& tree,
     for (std::size_t i = 0; i < stmts.size(); i++) {
         if (!stmts[i]) continue;
         Completion c = resolveStmt(tree, *stmts[i], diag);
+        // Stop at the first error (the design's first-error policy): resolving
+        // later statements after one failed only spawns cascading follow-on
+        // diagnostics (e.g. a bad for-iterable leaves its body-var undeclared).
+        if (diagnostic::hasErrors(diag)) return c;
         if (c == Completion::Abrupt) {
             // 2A: every statement after an abrupt one is unreachable. Flag the
             // next real statement (if any) once, then stop — dead code declares

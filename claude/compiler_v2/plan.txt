@@ -66,7 +66,7 @@ Phase 1 — expression core (LANDED)
     resolveUserCall + emitCall with kCallStmt; void-return + print-intrinsic-
     as-expr rejected                                                   LANDED
 
-Phase 2 — declarations + flow   <-- IN PROGRESS
+Phase 2 — declarations + flow (LANDED)
   * var decls — typed init + declare-then-assign LANDED; inferred init (no
     type spelling) LANDED. inferred-init = `x = expr` with no type: resolve's
     kAssignStmt arm, on a truly-undeclared name (!isQualified && resolveName < 0),
@@ -120,7 +120,7 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     in the dead exit block (Node.non_completing, set in resolve / read in classify
     + codegen); a break-bearing const-true loop still completes; a named-const-true
     condition isn't caught (resolve predates constfold, see todo.txt). Session 4
-    (for) IN PROGRESS — the LONG-FORM for landed
+    (for) LANDED — the LONG-FORM for landed
     (kForLongStmt `for (varlist) (cond) {update} {body}`, the canonical for node
     that the other for shapes will desugar to): explicit-type varlist, 3 scope
     frames (for/update/body, body may shadow a for-var), body-then-update DA
@@ -155,7 +155,7 @@ Phase 2 — declarations + flow   <-- IN PROGRESS
     switches) + named (`break name;`) break/continue, resolved to a hop count and
     walked over a LoopCtx linked list in codegen; no break/continue of any flavor
     in a for-update; labels on loops only (named-switch-break distant-future).
-    Phase 2 FLOW COMPLETE; for-array landed in Phase 4, for-tuple/class pending.
+    Phase 2 FLOW COMPLETE; for-array + for-tuple landed in Phase 4, for-class pending (Phase 5).
   * return — LANDED (kReturnStmt + return-correctness check from Phase 1).
 
 Phase 3 — functions

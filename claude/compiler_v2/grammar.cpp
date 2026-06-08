@@ -1792,11 +1792,11 @@ struct Parser {
     std::unique_ptr<parse::Node> parseEnumFor(int stmt_file, int stmt_tok,
             std::string vtype, std::string vname, int v_file, int v_tok,
             int vname_tok, std::unique_ptr<parse::Node> enum_ref) {
-        if (enum_ref->kind != parse::Kind::kIdentExpr
-            && enum_ref->kind != parse::Kind::kTupleExpr) {
-            error("Expected an enum name, an array/tuple, or a range after ':'.");
-            return nullptr;
-        }
+        // The operand after ':' is any expression (parseUnary already parsed it):
+        // an enum NAME, an array/tuple VARIABLE, a tuple LITERAL, or any other
+        // expression resolving to a homogeneous tuple (a deref `ref^`, an index,
+        // a function call, ...). resolve dispatches on its resolved TYPE and
+        // rejects a non-iterable there.
         if (!expect(token::Kind::kRParen, ")")) return nullptr;
         if (peek().kind != token::Kind::kLBrace) {
             error("Expected '{' for the for-loop body.");

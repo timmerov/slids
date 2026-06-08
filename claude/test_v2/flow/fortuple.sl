@@ -22,6 +22,16 @@ by reference to const for tuple literals:
         sum += p^;
     }
 
+nested tuples loop by reference.
+
+    tuple = ((1,2), (3,4), (5,6));
+    for (sub : tuple) {
+        for (x : sub^) {
+            __print(x + " ");
+        }
+        __println();
+    }
+
 desugars to:
 
     for (
@@ -94,6 +104,29 @@ int32 main() {
     (int, int, int) m = (1, 2, 3);
     for (int^ p : m) { p^ = p^ * 10; }
     __println("m= " + m[0] + " " + m[1] + " " + m[2]);   // 10 20 30
+
+    /*
+    backing out of these until the for loops move to desugaring.
+    where they are supposed to be.
+
+    /* dereferenced */
+    ref = ^tup;
+    int s3 = 100;
+    for (x : ref^) { s3 = s3 + x; }
+    __println("s3= " + s3);                              // 113
+
+    /* nested tuples */
+    tuple = ((1,2), (3,4), (5,6));
+    __println("tuple = (" + tuple[0][0]);
+    for (sub : tuple) {
+        __print("( ");
+        for (x : sub^) {
+            __print(x + " ");
+        }
+        __println(")");
+    }
+    __println(")");
+    */
 
     return 0;
 }

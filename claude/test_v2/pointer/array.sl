@@ -58,6 +58,14 @@ arrays can be set to a homogenous tuple.
     twodim = ((10,11), (12,13), (14,15));
     twodim[1] = (100,101);
 
+a 2d array is an array of arrays.
+
+    tuple = ((1,2), (3,4), (5,6));
+    int twodim[2,3] = tuple;
+    twodim[0] <--> twodim[2];
+
+    twodim is now: ((5,6), (3,4), (1,2));
+
 arrays of tuples.
 
     (int, int) arr[3] = ((1,2), (3,4), (5,6));

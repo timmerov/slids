@@ -33,6 +33,45 @@ BUGS (found, deferred)
     carve-out; lands with the cross-TU / .slh-propagation work (plan Phase 8).
     prerequisite: group with general work on import.
 
+  * ARRAY = TUPLE-VALUE EMITS INVALID LL — `int a[3]; a = tupleVar;` (a whole-array
+    assign from a tuple VALUE, not a literal) is ACCEPTED by slidsc but emits
+    invalid IR: the tuple is an LLVM struct `{i32,i32,i32}` and the array is
+    `[3 x i32]`, and codegen whole-value load+stores across the mismatch —
+    `store { i32,i32,i32 } %v, ptr %a` into a `[3 x i32]` alloca, which llc
+    rejects ("defined with type '{ i32, i32, i32 }' but expected '[3 x i32]'").
+    The "ARRAY FROM A TUPLE VALUE" reach goal below WRONGLY claims this "falls to
+    the normal path + rejects" — it does NOT reject, it mis-emits (violates the
+    no-invalid-LL rule). Same root for `tuple = arrayVar` (the reverse). FIX (now,
+    independent of the reach goal): classify must REJECT an array<->tuple whole
+    assignment whose two sides have different forms until the value-form copy is
+    actually implemented. The array-from-tuple path only gates on a kTupleExpr
+    LITERAL (isArrayFromTuple), so a tuple VALUE slips past into the generic
+    same-"type"? assignment with no shape/representation bridge. prerequisite: none.
+
+
+  * FOR-ENUM `_$end` NOT UNIQUIFIED — NESTED TYPELESS ENUM LOOPS CLOBBER — the
+    for-enum -> for-long rewrite (resolve.cpp ~2562) names its synthesized bound
+    the bare `_$end`, unlike every other synthesized loop helper, which carries a
+    per-loop token suffix (ranged-for `_$end$<dotdot_tok>` grammar.cpp ~1739;
+    for-array `_$idx$<atok>` resolve.cpp ~1472; for-tuple `_$ftmp/_$idx/_$iter
+    $<itok>` ~1669). `_$end` takes `return_type = var_type`, so a TYPELESS enum
+    loop var (`for (a : Color)`) makes `_$end` typeless too. In the for-long
+    resolve, a typeless varlist decl WITH an initializer routes through the
+    reuse-or-fresh kAssignStmt path (resolve.cpp ~2352) — so a nested loop's inner
+    `_$end = Inner:last` resolves the name OUTWARD, finds the enclosing for-scope's
+    `_$end`, and REASSIGNS it instead of declaring fresh, corrupting the outer
+    loop's terminating bound. Triggers on nested typeless for-enums over DIFFERENT
+    enums (same-enum nesting masks it by coincident `last`; a typed loop var is
+    safe — typed `_$end` declares fresh per frame). This is exactly the clobber
+    the ranged-for uniquification (grammar.cpp ~1736-1738 comment) was added to
+    prevent. FIX: name it `_$end$<en_tok>` (and the two reference sites — cond at
+    ~2576, update ident at ~2588-area). prerequisite: none; one-line-ish.
+    Root cause is structural: this lowering lives in RESOLVE (a stage/product-split
+    breach — readme.txt:640 reserves for-shape desugaring for the desugar stage),
+    so its synthesized vardecls flow through resolve's name reuse-or-fresh logic,
+    which IS the clobber mechanism. A desugar-stage lowering would mint
+    guaranteed-unique temps and never touch name resolution.
+
 
 REACH GOALS
 
@@ -63,10 +102,12 @@ REACH GOALS
   * ARRAY FROM A TUPLE VALUE — `a = tupleVar` / `int a[3] = tupleVar` where the
     rhs is a tuple VARIABLE, not a literal. The landed array-from-tuple gates on a
     tuple LITERAL (kTupleExpr) so it can flatten the leaf NODES + elide the
-    aggregate; a tuple value falls to the normal path and is rejected. To support
-    it: detect (array lvalue, tuple-typed value rhs), then flatten via
-    extractvalue per slot (recursing nested tuples) and store each into the array
-    slots — no node-level leaves to elide, so it copies through the value.
+    aggregate; a tuple value falls to the normal path and is NOT rejected — it
+    mis-emits invalid LL (see the BUG above, "ARRAY = TUPLE-VALUE EMITS INVALID
+    LL"; the rejection is the immediate fix, this is the feature). To support it:
+    detect (array lvalue, tuple-typed value rhs), then flatten via extractvalue
+    per slot (recursing nested tuples) and store each into the array slots — no
+    node-level leaves to elide, so it copies through the value.
     prerequisite: the homogeneous array-from-tuple (LANDED).
 
   * ARRAYS OF TUPLES — `(int,int) arr[3] = ((1,2),(3,4),(5,6))`: an array whose
