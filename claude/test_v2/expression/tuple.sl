@@ -18,7 +18,7 @@ tuples may be nested.
     other = pair;
     Class c = (123, "Maple");
     Class c(456, "Main");
-    array[2][3] = ((1,2), (3,4), (5,6));
+    array[3][2] = ((1,2), (3,4), (5,6));
 
     ##type(pair) is (Dir, bool)
     (Dir, bool) function( (Dir, bool)^ tuple );

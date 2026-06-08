@@ -644,22 +644,41 @@ struct Parser {
 
     // Field access, indexing, postfix-^/^^, postfix-++/-- all slot in here as
     // their phases land. Today: postfix-call, postfix-deref, postfix-++/--.
+    // Parse one subscript bracket onto `base`. A bracket may hold a comma-list
+    // `a[x,y]` — the "natural order" form — and a comma TRANSPOSES
+    // (`a[a0,..,z]` -> `a[z]...[a0]`), so the indices apply REVERSED as a chained
+    // subscript: `a[x,y]` == `a[y][x]`. Positioned at `[`; consumes through `]`.
+    // Shared by the expression-postfix and lvalue-store paths.
+    std::unique_ptr<parse::Node> parseSubscript(std::unique_ptr<parse::Node> base) {
+        int op_file = peek().file_id;
+        int op_tok = pos;
+        advance();   // [
+        std::vector<std::unique_ptr<parse::Node>> indices;
+        while (true) {
+            auto index = parseExpr();
+            if (!index) return nullptr;
+            indices.push_back(std::move(index));
+            if (peek().kind != token::Kind::kComma) break;
+            advance();   // ,
+        }
+        if (!expect(token::Kind::kRBracket, "]")) return nullptr;
+        for (std::size_t k = indices.size(); k-- > 0; ) {
+            auto node = newNodeAt(parse::Kind::kIndexExpr, op_file, op_tok);
+            node->children.push_back(std::move(base));
+            node->children.push_back(std::move(indices[k]));
+            base = std::move(node);
+        }
+        return base;
+    }
+
     std::unique_ptr<parse::Node> parsePostfix(std::unique_ptr<parse::Node> base) {
         // Postfix chain: subscript `[i]` and dereference `^`, left to right.
         // A bare `^` whose following token begins an operand is binary XOR, not
         // deref — leave it for parseBitXor.
         while (true) {
             if (peek().kind == token::Kind::kLBracket) {
-                int op_file = peek().file_id;
-                int op_tok = pos;
-                advance();   // [
-                auto index = parseExpr();
-                if (!index) return nullptr;
-                if (!expect(token::Kind::kRBracket, "]")) return nullptr;
-                auto node = newNodeAt(parse::Kind::kIndexExpr, op_file, op_tok);
-                node->children.push_back(std::move(base));
-                node->children.push_back(std::move(index));
-                base = std::move(node);
+                base = parseSubscript(std::move(base));
+                if (!base) return nullptr;
                 continue;
             }
             if (peek().kind == token::Kind::kBitXor
@@ -1029,28 +1048,40 @@ struct Parser {
         node->qualifier_toks = std::move(toks);
         node->global_qualified = global;
         // Fixed-size array dimensions follow the NAME: `int arr[5]`,
-        // `int grid[3][5]`. Each bracket holds a constant size; the dims append
-        // to the type spelling in declaration order (e.g. "int[3][5]"). The
-        // leftmost dim is the innermost (reversed from the memory nesting). A
-        // dim that is a const-EXPRESSION rather than a literal (`arr[N]`,
-        // `arr[sizeof(int)]`) parses as an expression, bakes a provisional `[1]`
-        // into the spelling, and is folded + baked for real in constfold.
+        // `int grid[3][5]` (standard row-major: the leftmost dim is the
+        // OUTERMOST). A single bracket may hold a comma-list `int grid[3,5]`,
+        // the "natural order" form; a comma TRANSPOSES (`[a,..,z]` -> `[z]...[a]`),
+        // so each bracket's dims are appended REVERSED. A dim that is a
+        // const-EXPRESSION rather than a literal (`arr[N]`, `arr[sizeof(int)]`)
+        // parses as an expression, bakes a provisional `[1]` into the spelling,
+        // and is folded + baked for real in constfold.
         std::vector<std::unique_ptr<parse::Node>> dim_exprs;
         bool any_dim_expr = false;
         while (peek().kind == token::Kind::kLBracket) {
             advance();   // [
-            if (peek().kind == token::Kind::kIntLiteral) {
-                type += "[" + peek().text + "]";
-                advance();   // size
-                dim_exprs.push_back(nullptr);
-            } else {
-                auto dim = parseExpr();
-                if (!dim) return nullptr;
-                type += "[1]";              // provisional; constfold bakes the size
-                dim_exprs.push_back(std::move(dim));
-                any_dim_expr = true;
+            std::vector<std::string> bracket_spell;
+            std::vector<std::unique_ptr<parse::Node>> bracket_expr;
+            while (true) {
+                if (peek().kind == token::Kind::kIntLiteral) {
+                    bracket_spell.push_back(peek().text);
+                    advance();   // size
+                    bracket_expr.push_back(nullptr);
+                } else {
+                    auto dim = parseExpr();
+                    if (!dim) return nullptr;
+                    bracket_spell.push_back("1");   // provisional; constfold bakes it
+                    bracket_expr.push_back(std::move(dim));
+                    any_dim_expr = true;
+                }
+                if (peek().kind != token::Kind::kComma) break;
+                advance();   // ,
             }
             if (!expect(token::Kind::kRBracket, "]")) return nullptr;
+            // Append this bracket's dims reversed (the comma transpose).
+            for (std::size_t k = bracket_spell.size(); k-- > 0; ) {
+                type += "[" + bracket_spell[k] + "]";
+                dim_exprs.push_back(std::move(bracket_expr[k]));
+            }
         }
         if (any_dim_expr) node->dim_exprs = std::move(dim_exprs);
         node->return_type = widen::internOrNone(type);
@@ -1131,18 +1162,12 @@ struct Parser {
             lhs->global_qualified = global;
             while (peek().kind == token::Kind::kLBracket
                    || peek().kind == token::Kind::kBitXor) {
-                int op_file = peek().file_id;
-                int op_tok = pos;
                 if (peek().kind == token::Kind::kLBracket) {
-                    advance();   // [
-                    auto index = parseExpr();
-                    if (!index) return nullptr;
-                    if (!expect(token::Kind::kRBracket, "]")) return nullptr;
-                    auto ix = newNodeAt(parse::Kind::kIndexExpr, op_file, op_tok);
-                    ix->children.push_back(std::move(lhs));
-                    ix->children.push_back(std::move(index));
-                    lhs = std::move(ix);
+                    lhs = parseSubscript(std::move(lhs));   // comma-aware (transposes)
+                    if (!lhs) return nullptr;
                 } else {
+                    int op_file = peek().file_id;
+                    int op_tok = pos;
                     advance();   // ^
                     auto d = newNodeAt(parse::Kind::kDerefExpr, op_file, op_tok);
                     d->children.push_back(std::move(lhs));

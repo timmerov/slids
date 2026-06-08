@@ -46,8 +46,12 @@ std::string llvmForRef(widen::TypeRef ref) {
         case widen::Type::Form::kAnyptr:
             return "ptr";
         case widen::Type::Form::kArray: {
+            // Standard row-major: the FIRST source dim is the OUTERMOST LLVM
+            // array, so `int[R][C]` -> `[R x [C x i32]]`. Wrap last-dim-first.
             std::string ll = llvmForRef(t.elem);
-            for (int d : t.dims) ll = "[" + std::to_string(d) + " x " + ll + "]";
+            for (auto it = t.dims.rbegin(); it != t.dims.rend(); ++it) {
+                ll = "[" + std::to_string(*it) + " x " + ll + "]";
+            }
             return ll;
         }
         case widen::Type::Form::kTuple: {
@@ -672,11 +676,13 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
         return "null";
     }
     // Evaluate every index FIRST (each emits its own instructions), then emit
-    // the single GEP line — otherwise an index's loads land mid-GEP.
+    // the single GEP line — otherwise an index's loads land mid-GEP. Standard
+    // row-major: the leftmost SOURCE subscript is the OUTERMOST GEP index, so
+    // walk the chain innermost-first (its reverse) and evaluate left-to-right.
     std::vector<std::string> idx_vals;
-    for (ast::Node const* ix : chain) {
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
         idx_vals.push_back(
-            emitExpr(*ix->children[1], syms, pool, out, diag, widen::intern("int64")));
+            emitExpr(*(*it)->children[1], syms, pool, out, diag, widen::intern("int64")));
     }
     std::string gep = newTmp("elt");
     out << "  " << gep << " = getelementptr inbounds " << it->second.llvm_type

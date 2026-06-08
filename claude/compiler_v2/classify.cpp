@@ -167,8 +167,8 @@ bool isArrayType(widen::TypeRef t) {
     return widen::form(widen::strip(t)) == widen::Type::Form::kArray;
 }
 
-// The leftmost (innermost) dimension's size — the dimension one subscript
-// consumes. `int[3][5]` -> 3.
+// The leftmost (outermost, standard row-major) dimension's size — the dimension
+// one subscript consumes. `int[3][5]` -> 3 (3 rows of int[5]).
 int arrayFirstDim(widen::TypeRef t) {
     return widen::get(widen::strip(t)).dims.front();
 }
@@ -1318,15 +1318,38 @@ void collectTupleLeafNodes(parse::Node& n, std::vector<parse::Node*>& out) {
     }
 }
 
+// True if the tuple literal `n` matches the array shape dims[i..]: a tuple of
+// dims[i] children, each matching dims[i+1..]; at the last dim every child must
+// be a scalar (not a nested tuple). This enforces the declared row × col nesting
+// (standard order: dims[0] is the outermost), so a transposed or flat literal is
+// rejected even when its leaf count happens to match.
+bool tupleMatchesArrayShape(parse::Node const& n,
+                            std::vector<int> const& dims, std::size_t i) {
+    if (n.kind != parse::Kind::kTupleExpr) return false;
+    if (static_cast<int>(n.children.size()) != dims[i]) return false;
+    bool last = (i + 1 == dims.size());
+    for (auto const& c : n.children) {
+        if (!c) return false;
+        if (last) {
+            if (c->kind == parse::Kind::kTupleExpr) return false;
+        } else if (!tupleMatchesArrayShape(*c, dims, i + 1)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Validate (and type) an array-from-tuple init/assign: the tuple's flattened
-// leaf count must equal the array's total element count, and each leaf
-// initializes one element under the normal per-element widen/flex rules.
+// leaf count must equal the array's total element count, its NESTING must match
+// the declared dimensions, and each leaf initializes one element under the
+// normal per-element widen/flex rules.
 void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
                             parse::Node& rhs, diagnostic::Sink& diag) {
     widen::TypeRef a = widen::strip(declType);
     widen::TypeRef elem = widen::get(a).elem;
+    std::vector<int> const& dims = widen::get(a).dims;
     long total = 1;
-    for (int d : widen::get(a).dims) total *= d;
+    for (int d : dims) total *= d;
     std::vector<parse::Node*> leaves;
     collectTupleLeafNodes(rhs, leaves);
     if (static_cast<long>(leaves.size()) != total) {
@@ -1334,6 +1357,12 @@ void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
             "Tuple has " + std::to_string(leaves.size())
             + " elements but array '" + widen::spellOrEmpty(declType)
             + "' has " + std::to_string(total) + ".", {}});
+        return;
+    }
+    if (!tupleMatchesArrayShape(rhs, dims, 0)) {
+        diagnostic::report(diag, {rhs.file_id, rhs.tok,
+            "Array initializer shape does not match the dimensions of '"
+            + widen::spellOrEmpty(declType) + "'.", {}});
         return;
     }
     // Each leaf is an element initializer — re-infer in the element's context so a

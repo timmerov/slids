@@ -14,33 +14,55 @@ a caret ^ before an indexed array variable is an iterator.
     int[] iter = ^arr[3];
 
 multi dimensional arrays are row major in memory.
-however, the order of the dimensions is backwards from standard.
-cause sometimes the standard is stupid.
+the order of the dimensions is standard.
 
     /* 5 chunks of 3 ints */
-    int twodim[3][5];
+    int twodim[5][3];
+
+    /* this accesses memory sequentially. */
+    for (y : 0..5) {
+        for (x : 0..3) {
+            /* standard reading of a grid is y,x */
+            twodim[y][x] = x*x + y;
+        }
+    }
+
+the standard order is not a natural reading for accessing grids.
+this is equivalent to the previous example.
+
+    /* 3 columns, 5 rows */
+    int twodim[3,5];
 
     /* this accesses memory sequentially. */
     for (y : 0..5) {
         for (x : 0..3) {
             /* natural reading of a grid is x,y */
-            twodim[x][y] = x*x + y;
+            twodim[x,y] = x*x + y;
         }
     }
+
+multiple comma separated array dimensions transpose order in a
+declaration and when indexed.
+this desugaring applies across index-able types - array, tuple, container classes.
+it is type blind.
+
+    [a,..,z] desugars to [z][...][a]
+
 
 arrays can be set to a homogenous tuple.
 
     int arr[3] = (1,2,3);
     arr = (4,5,6);
 
-    int twodim[2][3] = ((1,2), (3,4), (5,6));
+    int twodim[2,3] = ((1,2), (3,4), (5,6));
     twodim = ((10,11), (12,13), (14,15));
     twodim[1] = (100,101);
 
 arrays of tuples.
 
     (int, int) arr[3] = ((1,2), (3,4), (5,6));
-    six = arr[1][2];
+    six = arr[2][1];
+    six = arr[1,2];
 */
 
 /*
@@ -50,17 +72,22 @@ claude says:
   the brackets follow the NAME (vs `T[]`, the iterator type suffix).
 - `name[i]` subscripts -> an element lvalue (read or write); the index is a
   runtime integer. `^name[i]` is the element's address, an iterator (`T[]`).
-- multi-dim is reversed: `int twodim[3][5]` is 5 chunks of 3 ints (LLVM
-  `[5 x [3 x i32]]`). `twodim[a][b]` -> a is the INNER index (0..3), b the OUTER
-  (0..5); flat = b*3 + a, so the inner index varies fastest in memory.
+- multi-dim is STANDARD row-major: `int twodim[5][3]` is 5 chunks of 3 ints
+  (LLVM `[5 x [3 x i32]]`). `twodim[a][b]` -> a is the OUTER index (the row,
+  0..5), b the INNER (the col, 0..3); flat = a*3 + b, so the LAST index varies
+  fastest in memory. subscript[k] consumes dims[k] (positional); only the LLVM
+  layout + GEP index order define the row-major-ness.
+- the comma form is the "natural order" transpose: a comma list desugars
+  `[a,..,z] -> [z]...[a]` purely in the grammar (type-blind), so `g[x,y]` ==
+  `g[y][x]` and a declaration `int g[3,5]` == `int g[5][3]`.
 - an array may be SET from a homogeneous tuple, at its declaration or by a
   whole-array assign: `int a[3] = (1,2,3)`, `a = (4,5,6)`. a multi-dim array
-  takes a NESTED tuple in storage/outer order, which maps straight onto the
-  reversed layout: `int td[2][3] = ((1,2),(3,4),(5,6))` gives td[0][0]=1,
-  td[1][0]=2, td[0][1]=3, ... It lowers ELEMENT-WISE (the tuple aggregate is
-  elided — a literal's slot expressions feed the array slots directly) and each
-  slot WIDENS into the element type (the same apparatus a class initializer uses).
-  The tuple's flattened leaf count must equal the array's element count.
+  takes a NESTED tuple whose SHAPE matches the declared dimensions (row × col):
+  `int td[3][2] = ((1,2),(3,4),(5,6))` gives td[0][0]=1, td[0][1]=2, td[1][0]=3,
+  ... classifyArrayFromTuple checks the leaf count AND the nesting shape (a
+  transposed / flat literal is rejected, even with a matching leaf count). It
+  lowers ELEMENT-WISE in row-major order (the tuple aggregate elided), each slot
+  WIDENING into the element type.
   (Reach, in todo: sub-array assign `td[1] = (100,101)`, and arrays OF tuples
   `(int,int) a[3] = ((1,2),(3,4),(5,6))`.)
 */
@@ -83,22 +110,35 @@ int32 main() {
     int[] iter = ^arr[3];
     __println("iter^= " + iter^);                // 9
 
-    /* two-dimensional: twodim[x][y] -> x inner (0..3), y outer (0..5). */
-    int twodim[3][5];
+    /* two-dimensional, standard row-major: int[5][3] is 5 rows of 3, indexed
+       twodim[row][col] (row 0..5, col 0..3). */
+    int twodim[5][3];
     for (y : 0..5) {
         for (x : 0..3) {
-            twodim[x][y] = x * x + y;
+            twodim[y][x] = x * x + y;
         }
     }
     __println("twodim[0][0]= " + twodim[0][0]);  // 0
-    __println("twodim[2][0]= " + twodim[2][0]);  // 4
-    __println("twodim[0][4]= " + twodim[0][4]);  // 4
-    __println("twodim[2][4]= " + twodim[2][4]);  // 8
-    __println("twodim[1][3]= " + twodim[1][3]);  // 4
+    __println("twodim[0][2]= " + twodim[0][2]);  // 4
+    __println("twodim[4][0]= " + twodim[4][0]);  // 4
+    __println("twodim[4][2]= " + twodim[4][2]);  // 8
+    __println("twodim[3][1]= " + twodim[3][1]);  // 4
 
-    /* ^twodim[x][y] is an iterator to that element. */
-    int[] it2 = ^twodim[1][3];
+    /* ^twodim[row][col] is an iterator to that element. */
+    int[] it2 = ^twodim[3][1];
     __println("it2^= " + it2^);                  // 4
+
+    /* the comma form transposes: grid[x,y] == grid[y][x], and a comma
+       declaration int[3,5] == int[5][3]. */
+    int grid[3,5];                               // == int[5][3]
+    for (y : 0..5) {
+        for (x : 0..3) {
+            grid[x,y] = x * x + y;               // == grid[y][x]
+        }
+    }
+    __println("grid[2,3]= " + grid[2,3]);        // x=2,y=3 -> 7
+    __println("grid[3][2]= " + grid[3][2]);      // same element, chained -> 7
+    __println("grideq= " + (grid[2,3] == grid[3][2]));   // true
 
     /* const-EXPRESSION dimensions: a const, sizeof, an arithmetic expression, and
        a const dim in a multi-dim array. They fold in constfold and bake into the
@@ -113,7 +153,7 @@ int32 main() {
     int ea[N + 1];                               // int[5]
     ea[4] = 9;
     __println("ea[4]= " + ea[4] + " size= " + sizeof(ea));      // 9, 20
-    int cg[N][3];                                // int[4][3] (3 chunks of 4)
+    int cg[N][3];                                // int[4][3] (4 rows of 3)
     cg[3][2] = 5;
     __println("cg[3][2]= " + cg[3][2] + " size= " + sizeof(cg)); // 5, 48
 
@@ -124,16 +164,20 @@ int32 main() {
     t1 = (4, 5, 6);                              // whole-array assign from a tuple
     __println("t1b= " + t1[0] + " " + t1[1] + " " + t1[2]);      // 4 5 6
 
-    /* multi-dim from nested tuples: the tuple is in storage/outer order, so it
-       maps straight onto the reversed-dimension layout. */
-    int td[2][3] = ((1,2), (3,4), (5,6));
+    /* multi-dim from a nested tuple: the literal's shape (rows × cols) must match
+       the declared dimensions; it lowers row-major. */
+    int td[3][2] = ((1,2), (3,4), (5,6));
     __println("td[0][0]= " + td[0][0]);          // 1
-    __println("td[1][0]= " + td[1][0]);          // 2
-    __println("td[0][1]= " + td[0][1]);          // 3
-    __println("td[1][2]= " + td[1][2]);          // 6
+    __println("td[0][1]= " + td[0][1]);          // 2
+    __println("td[1][0]= " + td[1][0]);          // 3
+    __println("td[2][1]= " + td[2][1]);          // 6
     td = ((10,11), (12,13), (14,15));            // multi-dim whole-array assign
     __println("td2[0][0]= " + td[0][0]);         // 10
-    __println("td2[1][2]= " + td[1][2]);         // 15
+    __println("td2[2][1]= " + td[2][1]);         // 15
+
+    /* a comma-declared array from a tuple: int[2,3] == int[3][2] (3 rows of 2). */
+    int ct[2,3] = ((1,2), (3,4), (5,6));
+    __println("ct= " + ct[0][0] + " " + ct[2][1]);  // 1 6
 
     /* per-slot WIDENING: int8 / int leaves widen into the int64 element type. */
     int8 e0 = 5;
@@ -152,20 +196,28 @@ int32 main() {
 //    return arr[0];
 //}
 
-/* the inner dimension of `int twodim[3][5]` is 3 — index 3 is out of bounds */
+/* the first (row) dimension of `int twodim[3][5]` is 3 — index 3 is out of bounds */
 //-EXPECT-ERROR: Array index 3 is out of bounds
-//int neg_oob_2d_inner() {
+//int neg_oob_2d_row() {
 //    int twodim[3][5];
 //    twodim[3][0] = 0;
 //    return twodim[0][0];
 //}
 
-/* the outer dimension is 5 — index 5 is out of bounds */
+/* the second (col) dimension is 5 — index 5 is out of bounds */
 //-EXPECT-ERROR: Array index 5 is out of bounds
-//int neg_oob_2d_outer() {
+//int neg_oob_2d_col() {
 //    int twodim[3][5];
 //    twodim[0][5] = 0;
 //    return twodim[0][0];
+//}
+
+/* an initializer whose tuple SHAPE doesn't match the declared dimensions is an
+   error even when the leaf count matches (a 3×2 literal into a 2×3 array). */
+//-EXPECT-ERROR: Array initializer shape does not match
+//int neg_shape_mismatch() {
+//    int a[2][3] = ((1,2), (3,4), (5,6));
+//    return a[0][0];
 //}
 
 /* a char-constant index is bounds-checked too ('A' is 65). */
