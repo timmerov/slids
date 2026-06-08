@@ -1243,6 +1243,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
         case parse::Kind::kDoWhileStmt:
         case parse::Kind::kForLongStmt:
         case parse::Kind::kForEnumStmt:
+        case parse::Kind::kForRangedStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
         case parse::Kind::kSwitchStmt:
@@ -2445,6 +2446,56 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 s.non_completing = true;
                 return Completion::Abrupt;
             }
+            return Completion::Normal;
+        }
+        case parse::Kind::kForRangedStmt: {
+            // [0]=loop-var decl (init=start), [1]=end, [2]=step|null, [3]=body.
+            // text=cmp, name=op. UNDERSTOOD here in scope (loop var registered,
+            // bounds + body resolved, definite-assignment run) but NOT lowered —
+            // desugar builds the kForLongStmt with fresh `_$end`/`_$step` ids.
+            // Mirrors the kForLongStmt DA: the bounds run once (inits escape to S'),
+            // the body is possibly-zero (after = S'), break/continue target here.
+            assert(s.children.size() == 4
+                && "kForRangedStmt needs var+end+step+body");
+            parse::pushFrame(tree);                            // for-scope
+            std::vector<int> saved_body_locals = std::move(tree.body_locals);
+            tree.body_locals.clear();
+            // Loop var: a typeless decl WITH an initializer reuses an enclosing
+            // local or declares a fresh inferred one (the kAssignStmt path, exactly
+            // as the kForLongStmt varlist does — resolveStmt flips an undeclared
+            // name back to a fresh kVarDeclStmt, a reuse stays a kAssignStmt); an
+            // explicitly-typed decl declares fresh. The loop var always has `start`.
+            parse::Node& lv = *s.children[0];
+            if (lv.kind == parse::Kind::kVarDeclStmt && !lv.is_const
+                && lv.return_type == widen::kNoType && !isQualified(lv)
+                && !lv.children.empty()) {
+                lv.kind = parse::Kind::kAssignStmt;
+            }
+            resolveStmt(tree, lv, diag);
+            // The cond/update read the loop var on every pass, so it is never an
+            // unused local — mark it read (the body alone may not touch it).
+            if (lv.resolved_entry_id >= 0) {
+                tree.read_locals.insert(lv.resolved_entry_id);
+            }
+            // end + step run once before the loop (reads on the entry set); their
+            // values become the desugar-minted `_$end`/`_$step` locals.
+            resolveExpr(tree, *s.children[1], diag);
+            if (s.children[2]) resolveExpr(tree, *s.children[2], diag);
+            std::set<int> after = tree.initialized_locals;     // S'
+            // Body from S', break/continue target this loop.
+            tree.loop_stack.push_back({});
+            tree.loop_stack.back().name = s.label.empty() ? "for" : s.label;
+            resolveStmt(tree, *s.children[3], diag);
+            tree.loop_stack.pop_back();
+            // Possibly-zero body: after = S' (body inits don't escape). The update
+            // `var = var op step` reads only already-initialized locals, so the
+            // continue-accum intersection a long-for does for its update is moot.
+            sweepUnusedLocals(tree, diag);
+            tree.body_locals = std::move(saved_body_locals);
+            parse::popFrame(tree);
+            tree.initialized_locals = std::move(after);
+            // A ranged condition is `var cmp end` (idents, never a constant), so —
+            // unlike a long-for — it is never constant-true / non-completing.
             return Completion::Normal;
         }
         case parse::Kind::kForEnumStmt: {

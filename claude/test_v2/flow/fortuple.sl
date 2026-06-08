@@ -50,7 +50,7 @@ desugars to:
 
     for (
         intptr _$idx# = 0,
-        type[] _$iter# = <type[]> ^tuple[0],
+        type[] _$iter# = <type[]> <void> ^tuple[0],
         type^ ref
     ) (
         _$idx# < tuple._$size

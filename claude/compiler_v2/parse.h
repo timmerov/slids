@@ -66,6 +66,14 @@ enum class Kind {
                    // [1] = enum-ref (kIdentExpr), [2] = body. resolve rewrites it
                    // in place into a kForLongStmt over the enum's first..last
                    // members; never survives to constfold/classify/codegen.
+    kForRangedStmt,// `for ([type] var : start .. [cmp] end [op step]) {body}` —
+                   // the short ranged form, kept intact through resolve/constfold/
+                   // classify (which UNDERSTAND it in scope) and lowered to a
+                   // kForLongStmt by desugar. children[0] = loop-var decl (init =
+                   // start), [1] = end expr, [2] = step expr (or null => +1),
+                   // [3] = body (kBlockStmt). text = cmp ("<"/"<="/">"/">="/"!="),
+                   // name = op ("+"/"-"/"*"/"/"/"<<"/">>"). range_dotdot_tok = the
+                   // `..` token (empty-range caret); label = the loop's `:label`.
     kBreakStmt,    // break; — exits the nearest enclosing loop OR switch.
     kContinueStmt, // continue; — jumps to the nearest enclosing loop's test
                    // (switch frames are transparent to continue).
@@ -154,9 +162,10 @@ struct Node {
     int tok = -1;                // index into token::List::tokens for error attribution
     int name_tok = -1;           // ident token for named constructs (VarDecl, FunctionDef/Decl, Param)
     int resolved_entry_id = -1;  // classify: ident / lhs / callee -> Tree::entries index
-    int range_dotdot_tok = -1;   // kForLongStmt synthesized from a ranged-for: the
-                                 // `..` token (>= 0 marks range-derived; the caret
-                                 // for the "Invalid range." empty-range check)
+    int range_dotdot_tok = -1;   // kForRangedStmt (and the kForLongStmt an enum-for
+                                 // lowers to): the `..` token (>= 0 marks
+                                 // range-derived; the caret for the "Invalid
+                                 // range." empty-range check)
     // A loop's explicit `:label` (empty = the keyword default for/while), parsed
     // after the body. On a kBreakStmt/kContinueStmt: `text` holds a numbered
     // argument (digits), `name` a named argument (label, incl. the for/while

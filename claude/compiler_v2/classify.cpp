@@ -283,6 +283,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kDoWhileStmt:
         case parse::Kind::kForLongStmt:
         case parse::Kind::kForEnumStmt:
+        case parse::Kind::kForRangedStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
         case parse::Kind::kSwitchStmt:
@@ -1056,6 +1057,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kDoWhileStmt:
         case parse::Kind::kForLongStmt:
         case parse::Kind::kForEnumStmt:
+        case parse::Kind::kForRangedStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
         case parse::Kind::kSwitchStmt:
@@ -1867,6 +1869,31 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             return;
         }
+        case parse::Kind::kForRangedStmt: {
+            // [0]=loop-var decl (init=start), [1]=end, [2]=step|null, [3]=body.
+            // text=cmp. Type the loop var first, then flow its type into the bound
+            // and step so they coerce to it (matching the kForLongStmt path, where
+            // the synthesized `_$end`/`_$step` inherit the loop var's type).
+            assert(s.children.size() == 4
+                && "kForRangedStmt needs var+end+step+body");
+            classifyStmt(tree, *s.children[0], fn_return_type, diag);
+            widen::TypeRef lvt = widen::kNoType;
+            if (s.children[0]->resolved_entry_id >= 0) {
+                lvt = parse::entryType(tree, s.children[0]->resolved_entry_id);
+            }
+            inferExpr(tree, *s.children[1], lvt, diag);
+            if (s.children[2]) inferExpr(tree, *s.children[2], lvt, diag);
+            classifyStmt(tree, *s.children[3], fn_return_type, diag);
+            // Empty-range check: both bounds constant and `start cmp end` false ->
+            // the body never runs. start = the loop-var init; end = children[1].
+            if (s.range_dotdot_tok >= 0 && !s.children[0]->children.empty()
+                && rangeFirstTestFalse(*s.children[0]->children[0],
+                                       *s.children[1], s.text)) {
+                diagnostic::report(diag, {s.file_id, s.range_dotdot_tok,
+                    "Invalid range.", {}});
+            }
+            return;
+        }
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
             // Nothing to type-infer; resolve handled loop-legality.
@@ -2004,6 +2031,7 @@ bool containsBreak(parse::Node const& s) {
     if (s.kind == parse::Kind::kBreakStmt) return true;
     if (s.kind == parse::Kind::kWhileStmt || s.kind == parse::Kind::kDoWhileStmt
         || s.kind == parse::Kind::kForLongStmt || s.kind == parse::Kind::kForEnumStmt
+        || s.kind == parse::Kind::kForRangedStmt
         || s.kind == parse::Kind::kSwitchStmt) {
         return false;   // a nested loop/switch captures its own breaks
     }

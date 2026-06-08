@@ -47,6 +47,10 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kWhileStmt:     return ast::Kind::kWhileStmt;
         case parse::Kind::kDoWhileStmt:   return ast::Kind::kDoWhileStmt;
         case parse::Kind::kForLongStmt:   return ast::Kind::kForLongStmt;
+        case parse::Kind::kForRangedStmt:
+            // Intercepted by copyNode and lowered to a kForLongStmt; never reaches
+            // toAstKind (which has no short-for ast kind to map to).
+            assert(false && "toAstKind: kForRangedStmt should be lowered by copyNode");
         case parse::Kind::kForEnumStmt:
             // Rewritten to a kForLongStmt during resolve; never copied to the ast.
             assert(false && "toAstKind: kForEnumStmt should be lowered in resolve");
@@ -156,7 +160,22 @@ std::string functionSymbol(parse::Node const& p, parse::Tree const& tree) {
     return p.name;
 }
 
-std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tree) {
+// next_id is a single program-wide counter, seeded by run() at the (frozen)
+// parse::Tree::entries size, threaded through every copy so the helper locals a
+// lowered short-for mints get globally-unique resolved_entry_ids that never
+// collide across two loops.
+std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tree,
+                                    int& next_id);
+std::unique_ptr<ast::Node> lowerForRanged(parse::Node const& p,
+                                          parse::Tree const& tree, int& next_id);
+
+std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tree,
+                                    int& next_id) {
+    // A short ranged-for is lowered to the canonical kForLongStmt here (toAstKind
+    // has no short-for ast kind); the loop's helper locals get fresh ids.
+    if (p.kind == parse::Kind::kForRangedStmt) {
+        return lowerForRanged(p, tree, next_id);
+    }
     auto node = std::make_unique<ast::Node>();
     node->kind = toAstKind(p.kind);
     node->name = p.name;
@@ -191,13 +210,130 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
         if (c->kind == parse::Kind::kAliasDecl) continue;      // resolve-only
         if (c->kind == parse::Kind::kNamespaceDecl) continue;  // members hoisted
         if (c->kind == parse::Kind::kEnumDecl) continue;       // resolve-lowered
-        node->children.push_back(copyNode(*c, tree));
+        node->children.push_back(copyNode(*c, tree, next_id));
     }
     for (auto const& pp : p.params) {
-        node->params.push_back(copyNode(*pp, tree));
+        node->params.push_back(copyNode(*pp, tree, next_id));
     }
     if (auto rewritten = tryDesugarAugAssign(*node)) return rewritten;
     return node;
+}
+
+// Lower a kForRangedStmt to the canonical kForLongStmt. The loop-var decl, end
+// and step clauses are copied (already resolved + typed by the earlier stages);
+// the `_$end`/`_$step` bound and step locals are synthesized HERE with FRESH
+// resolved_entry_ids drawn from next_id (past parse::Tree::entries — those ids
+// have no backing entry). The cond and update are built and hand-stamped (the
+// tryDesugarAugAssign discipline) because classify never sees them.
+//
+// INVARIANT: no stage downstream of resolve may index parse::Tree::entries by a
+// LOCAL's id — these fresh ids have no entry. Sound today only because codegen
+// is node-driven (its SymTab is keyed by id, reading return_type/inferred_type
+// off the node) and optimize/layout are stubs. A future pass that does
+// entries[node.resolved_entry_id] for a local would deref a non-existent entry.
+std::unique_ptr<ast::Node> lowerForRanged(parse::Node const& p,
+                                          parse::Tree const& tree, int& next_id) {
+    // p.children: [0]=loop-var decl (init=start), [1]=end, [2]=step|null,
+    // [3]=body. p.text = cmp, p.name = op.
+    parse::Node const& lvp = *p.children[0];
+    int lv_id = lvp.resolved_entry_id;
+    // The loop var's type drives the bound/step allocas and the cond/update ops.
+    // Read it off the entry (correct for a fresh decl AND a reuse, where the decl
+    // is a kAssignStmt whose return_type isn't the loop var type).
+    widen::TypeRef T = (lv_id >= 0) ? tree.entries[lv_id].slids_type
+                                    : widen::kNoType;
+    std::string vname = lvp.name;
+    int file = p.file_id;
+    int tok = (p.range_dotdot_tok >= 0) ? p.range_dotdot_tok : p.tok;
+
+    auto ident = [&](std::string const& nm, int id) {
+        auto n = std::make_unique<ast::Node>();
+        n->kind = ast::Kind::kIdentExpr;
+        n->name = nm; n->resolved_entry_id = id; n->inferred_type = T;
+        n->file_id = file; n->tok = tok;
+        return n;
+    };
+    auto helperDecl = [&](std::string const& nm, int id,
+                          std::unique_ptr<ast::Node> init) {
+        auto n = std::make_unique<ast::Node>();
+        n->kind = ast::Kind::kVarDeclStmt;
+        n->name = nm; n->resolved_entry_id = id; n->return_type = T;
+        n->file_id = file; n->tok = tok; n->name_tok = tok;
+        n->children.push_back(std::move(init));
+        return n;
+    };
+
+    // varlist[0]: the loop var (copied — a reuse stays a kAssignStmt / store-only,
+    // a fresh decl an alloca-backed kVarDeclStmt; copyNode handles both).
+    auto lv = copyNode(lvp, tree, next_id);
+
+    // varlist[1]: `_$end = <end>` — fresh id (evaluate before threading the init).
+    int end_id = next_id++;
+    auto end_init = copyNode(*p.children[1], tree, next_id);
+    auto end_decl = helperDecl("_$end", end_id, std::move(end_init));
+
+    // varlist[2] (optional): `_$step = <step>` — fresh id. A null step means +1.
+    int step_id = -1;
+    std::unique_ptr<ast::Node> step_decl;
+    if (p.children[2]) {
+        step_id = next_id++;
+        auto step_init = copyNode(*p.children[2], tree, next_id);
+        step_decl = helperDecl("_$step", step_id, std::move(step_init));
+    }
+
+    // cond: `var cmp _$end` — a bool result computed over the operand type T.
+    auto cond = std::make_unique<ast::Node>();
+    cond->kind = ast::Kind::kBinaryExpr;
+    cond->text = p.text;
+    cond->inferred_type = widen::intern("bool");
+    cond->op_type = T;
+    cond->file_id = file; cond->tok = tok;
+    cond->children.push_back(ident(vname, lv_id));
+    cond->children.push_back(ident("_$end", end_id));
+
+    // update block: `{ var = var op step }`; step = _$step ident or the literal 1.
+    std::unique_ptr<ast::Node> step_val;
+    if (step_id >= 0) {
+        step_val = ident("_$step", step_id);
+    } else {
+        step_val = std::make_unique<ast::Node>();
+        step_val->kind = ast::Kind::kIntLiteral;
+        step_val->text = "1";
+        step_val->inferred_type = T;
+        step_val->file_id = file; step_val->tok = tok;
+    }
+    auto bin = std::make_unique<ast::Node>();
+    bin->kind = ast::Kind::kBinaryExpr;
+    bin->text = p.name;
+    bin->inferred_type = T;
+    bin->op_type = T;
+    bin->file_id = file; bin->tok = tok;
+    bin->children.push_back(ident(vname, lv_id));
+    bin->children.push_back(std::move(step_val));
+    auto assign = std::make_unique<ast::Node>();
+    assign->kind = ast::Kind::kAssignStmt;
+    assign->name = vname;
+    assign->resolved_entry_id = lv_id;
+    assign->file_id = file; assign->tok = tok;
+    assign->children.push_back(std::move(bin));
+    auto update = std::make_unique<ast::Node>();
+    update->kind = ast::Kind::kBlockStmt;
+    update->file_id = file; update->tok = tok;
+    update->children.push_back(std::move(assign));
+
+    auto body = copyNode(*p.children[3], tree, next_id);
+
+    // Assemble: [0]=cond, [1]=update, [2]=body, [3..]=varlist.
+    auto out = std::make_unique<ast::Node>();
+    out->kind = ast::Kind::kForLongStmt;
+    out->file_id = p.file_id; out->tok = p.tok;
+    out->children.push_back(std::move(cond));
+    out->children.push_back(std::move(update));
+    out->children.push_back(std::move(body));
+    out->children.push_back(std::move(lv));
+    out->children.push_back(std::move(end_decl));
+    if (step_decl) out->children.push_back(std::move(step_decl));
+    return out;
 }
 
 // Collect a namespace's member function definitions (recursing into nested
@@ -454,8 +590,12 @@ void lowerStatementList(std::vector<std::unique_ptr<ast::Node>>& stmts) {
 
 void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
     (void)diag;
+    // One program-wide id counter, seeded past every real entry. resolve/classify
+    // are done and constfold doesn't append, so entries.size() is frozen here; the
+    // counter is never restarted per loop, so two lowered short-fors can't collide.
+    int next_id = static_cast<int>(in.entries.size());
     for (auto const& n : in.nodes) {
-        out.nodes.push_back(copyNode(*n, in));
+        out.nodes.push_back(copyNode(*n, in, next_id));
     }
     // Hoist namespace member functions to program scope as plain (symbol-renamed)
     // functions; the namespace wrappers were dropped by copyNode. Member consts
@@ -469,7 +609,7 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
             std::vector<parse::Node const*> fns;
             collectNamespaceFunctions(*ns, fns);
             for (parse::Node const* f : fns) {
-                prog->children.push_back(copyNode(*f, in));
+                prog->children.push_back(copyNode(*f, in, next_id));
             }
         }
     }

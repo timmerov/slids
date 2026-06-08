@@ -1686,10 +1686,10 @@ struct Parser {
     }
 
     // Ranged-for: `for (type var : start .. [cmp] end [op step]) {body}`.
-    // Desugars (at parse) to a kForLongStmt — the canonical for node — tagged
-    // with the `..` token for the empty-range "Invalid range." check. The loop
-    // var has an explicit type this round; `_$end` / `_$step` are synthesized
-    // hidden vars (`$` is not a legal identifier char, so they can't collide).
+    // Builds a kForRangedStmt holding the raw clauses; resolve/constfold/classify
+    // understand it in scope and desugar lowers it to the canonical kForLongStmt
+    // (synthesizing the `_$end`/`_$step` bound/step locals there, with fresh ids).
+    // The `..` token rides along for the empty-range "Invalid range." check.
     std::unique_ptr<parse::Node> parseRangeFor(int stmt_file, int stmt_tok,
             std::string vtype, std::string vname, int v_file, int v_tok,
             int vname_tok, std::unique_ptr<parse::Node> start) {
@@ -1732,55 +1732,23 @@ struct Parser {
             return nullptr;
         }
 
-        // varlist: [ type var = start, type _$end = end, (type _$step = step) ]
-        // The synthesized bound/step names are made UNIQUE per loop (keyed on the
-        // `..` token) so a nested ranged-for's typeless `_$end`/`_$step` does not
-        // reuse the enclosing loop's same-named local (which clobbered its bound).
-        std::string endName = "_$end$" + std::to_string(dotdot_tok);
-        std::string stepName = "_$step$" + std::to_string(dotdot_tok);
-        std::vector<std::unique_ptr<parse::Node>> varlist;
+        // Short form: the loop-var decl (init = start), then the raw end / step
+        // clauses. The `_$end`/`_$step` bound and step locals are NOT synthesized
+        // here — desugar mints them with fresh ids while lowering to kForLongStmt,
+        // so the old name-reuse `_$end` clobber can't arise. A missing step op
+        // defaults to `+` (a +1 step); a null step child carries that default.
         auto vd = newNodeAt(parse::Kind::kVarDeclStmt, v_file, v_tok);
-        vd->name = vname; vd->name_tok = vname_tok; vd->return_type = widen::internOrNone(vtype);
+        vd->name = vname; vd->name_tok = vname_tok;
+        vd->return_type = widen::internOrNone(vtype);
         vd->children.push_back(std::move(start));
-        varlist.push_back(std::move(vd));
 
-        auto ed = newNodeAt(parse::Kind::kVarDeclStmt, v_file, dotdot_tok);
-        ed->name = endName; ed->name_tok = dotdot_tok; ed->return_type = widen::internOrNone(vtype);
-        ed->children.push_back(std::move(end));
-        varlist.push_back(std::move(ed));
-
-        std::unique_ptr<parse::Node> step_val;
-        if (step) {
-            auto sd = newNodeAt(parse::Kind::kVarDeclStmt, v_file, dotdot_tok);
-            sd->name = stepName; sd->name_tok = dotdot_tok; sd->return_type = widen::internOrNone(vtype);
-            sd->children.push_back(std::move(step));
-            varlist.push_back(std::move(sd));
-            step_val = makeIdent(stepName, v_file, dotdot_tok);
-        } else {
-            op = "+";   // default step is +1
-            auto one = newNodeAt(parse::Kind::kIntLiteral, v_file, dotdot_tok);
-            one->text = "1";
-            step_val = std::move(one);
-        }
-
-        // cond: `var cmp _$end`
-        auto cond = makeBinary(cmp, makeIdent(vname, v_file, vname_tok),
-                               makeIdent(endName, v_file, dotdot_tok),
-                               v_file, dotdot_tok);
-        // update: `{ var = var op step_val }`
-        auto rhs = makeBinary(op, makeIdent(vname, v_file, vname_tok),
-                              std::move(step_val), v_file, dotdot_tok);
-        auto assign = newNodeAt(parse::Kind::kAssignStmt, v_file, vname_tok);
-        assign->name = vname; assign->name_tok = vname_tok;
-        assign->children.push_back(std::move(rhs));
-        auto update = newNodeAt(parse::Kind::kBlockStmt, v_file, dotdot_tok);
-        update->children.push_back(std::move(assign));
-
-        auto node = newNodeAt(parse::Kind::kForLongStmt, stmt_file, stmt_tok);
-        node->children.push_back(std::move(cond));     // [0]
-        node->children.push_back(std::move(update));   // [1]
-        node->children.push_back(std::move(body));     // [2]
-        for (auto& d : varlist) node->children.push_back(std::move(d));  // [3..]
+        auto node = newNodeAt(parse::Kind::kForRangedStmt, stmt_file, stmt_tok);
+        node->text = cmp;                          // comparison operator
+        node->name = op.empty() ? "+" : op;        // step operator (default +)
+        node->children.push_back(std::move(vd));   // [0] loop-var decl (init=start)
+        node->children.push_back(std::move(end));  // [1] end expr
+        node->children.push_back(std::move(step)); // [2] step expr (null => +1)
+        node->children.push_back(std::move(body)); // [3] body block
         node->range_dotdot_tok = dotdot_tok;
         node->label = std::move(label);
         return node;
