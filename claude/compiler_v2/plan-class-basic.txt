@@ -1,0 +1,271 @@
+compiler_v2 — PLAN: BASIC CLASSES (Phase 5 core)
+
+The foundational class landing: a class with fields, methods, an explicit
+constructor, and a destructor — plus the ctor/dtor CALL-IF-NEEDED model. This is
+the bones Phase 5's later pieces (operator overloading, the for-each protocol,
+the overloadable move/swap operators) bolt onto, and the bones Phases 6-9 extend
+(const methods, reopens/derived/virtual, cross-TU, templates). Those are OUT of
+this plan; see the DEFERRED section.
+
+Authority: tests are canon and go first (a class test file lands before the
+compiler change). plan.txt remains the master roadmap; this file is the Phase 5
+detail that plan.txt:440 points at. The model below is v1's, ported — v1's
+virtual classes work acceptably and its ctor/dtor analysis is already the
+"call-if-needed" design we want (decision A).
+
+
+================================================================================
+0. SCOPE
+================================================================================
+
+IN (this plan):
+  * class definition: fields, methods (nested slids), explicit ctor `_(...)`,
+    destructor `~()`.
+  * inferred field types (`Foo(name = const_expr)`).
+  * the ctor/dtor CALL-IF-NEEDED model + the needs-ctor / needs-dtor predicates
+    + the has-explicit / must-inline split.
+  * construction (recursive descent for explicit-ctor classes; inline field-init
+    for trivial/implicit classes, reusing the landed tuple construction path).
+  * destruction + the destructor-balance invariant (reverse-order teardown on
+    every scope exit).
+
+NOT in this plan (later Phase-5 sessions or later phases):
+  * operator overloading per slid                          (Phase 5, next session)
+  * for-each protocol (op[]+size OR begin/end/next) + for-class   (Phase 5)
+  * overloadable move/swap (`op<--` / `op<-->`) + class-field resource semantics
+    (Phase 5; the primitive/pointer/tuple forms already landed in Phase 4)
+  * const correctness — const methods, const self, const-overload     (Phase 6)
+  * reopens, hoisted classes, DERIVED classes, VIRTUAL methods + virtual dtors,
+    inheritance contracts, unnamed instances                          (Phase 7)
+  * .slh -> .sl propagation, C interop, globals                       (Phase 8)
+  * template classes                                                   (Phase 9)
+
+The ctor/dtor predicate below is written in its FULL form (base + virtual
+clauses included) so it is forward-compatible, but those two clauses are INERT
+until Phase 7 brings inheritance and virtual — basic classes have no base and
+are never virtual, so for this plan the predicate reduces to the explicit-ctor /
+dtor / class-typed-field clauses.
+
+
+================================================================================
+1. THE CTOR/DTOR MODEL — CALL IF NEEDED  (decision A)
+================================================================================
+
+The criterion is simple: call the ctor/dtor iff there is work to do. "Has a
+ctor/dtor" means AFTER synthesis, not as-written — synthesis can give work to a
+class that wrote nothing (a class-typed field needs its field's ctor run), and a
+written-but-empty ctor/dtor may still be inert (no call). The don't-need list is
+short; a small computed predicate decides it. This is v1's design ported
+(`synthesizeCtorNeeds`, codegen_semantic.cpp:534; the gate consumers at
+codegen_init.cpp:121,280 and codegen.cpp:703).
+
+Rejected alternative (B, "always synthesize + call, let LLVM drop the empties"):
+the v2 pipeline is slidsc -> `llc --filetype=obj` -> g++. llc is a backend (isel
++ regalloc); it does NOT run the inliner, and `optimize.cpp` is a stub. An
+always-emitted call to an empty ctor would survive into the binary — real call
+overhead + an emitted empty symbol + noisy IR (against the byte-identical-IR
+discipline). B only becomes correct-without-bloat once a real `opt`-class pass
+sits behind optimize.cpp; at that point the predicate stops mattering and can be
+dropped. Until then, A.
+
+--- needs_ctor(C) — must construction be called? ------------------------------
+  needs_ctor(C)  iff  any of:
+    * C has an explicit ctor with a non-empty body            [user work]
+    * C has a destructor (a dtor forces the ctor to pair)     [pairing]
+    * C is virtual                  -> ctor installs the vptr  [Phase 7]
+    * C has a base whose needs_ctor is true                   [Phase 7]
+    * C has a class-typed field whose needs_ctor is true
+        (incl. an anonymous-tuple field with a class-typed slot — walk slots)
+
+--- needs_dtor(C) — must destruction be called? ------------------------------
+  needs_dtor(C)  iff  any of:
+    * C has a non-empty user-written dtor body
+    * C is virtual                  -> empty user dtor STILL called (vtable slot;
+                                       polymorphic destruction through a base ptr)
+    * C has a base whose needs_dtor is true                   [Phase 7]
+    * C has a class-typed field whose needs_dtor is true (walk anon-tuple slots)
+
+Both predicates are TRANSITIVE over the base/field graph and are computed to a
+FIXPOINT (field/base order is not guaranteed; iterate until stable). v1 collapses
+the two into one `needs_ctor_fn` flag plus a separate `has_dtor`; v2 may keep
+them as two parallel predicates (cleaner — the dtor has the extra "virtual always
+calls even when empty" clause the ctor doesn't) or mirror v1. Either is fine; the
+predicates share the same transitive shape.
+
+--- the explicit / inline split ----------------------------------------------
+  has_explicit_ctor(C) : the user wrote `_(...)` (and/or `~()`).
+  must_inline_ctor(C)  = !has_explicit_ctor(C) && needs_ctor(C).
+
+  Three buckets fall out:
+    1. trivial          (!needs_ctor && !needs_dtor): no symbol, no call.
+       Construction is pure field-init, inlined at the site exactly like an
+       anonymous tuple. This IS the tuple-like / fieldwise class.
+    2. must_inline      (needs work, no user ctor): a derived class or a class
+       with a class-typed field, but no user-written `_()`. The synthesized
+       field-init / base-ctor / field-ctor walk is INLINED at each construction
+       site — no emitted symbol.
+    3. has_explicit     (user wrote `_()` / `~()`): emit real symbols
+       `C__$ctor` / `C__$ctor_body` / `C__$dtor` and CALL them. Needed because a
+       stable callable point is what the destructor-balance invariant references
+       (see section 5) and what cross-TU import will declare (Phase 8).
+
+  The don't-need list (no call, no symbol) is exactly bucket 1.
+
+
+================================================================================
+2. CLASS SHAPE & GRAMMAR
+================================================================================
+
+A class is a slid whose body holds field declarations and nested slids
+(methods). Per [[project_class_body_definitions_only]], loose executable code in
+a class body is a parse error — the body is definitions only.
+
+  * FIELDS — name-anchored declarations (`int x;`, `int x[3];`, `Other o;`).
+  * METHODS — nested slids; reuse the Phase-3 nested-function machinery's
+    parse/resolve, but a method is NOT lambda-lifted — it takes an implicit
+    `self` (the receiver) instead of a capture environment.
+  * CTOR — `_(params) { body }`. The bare-underscore name marks the ctor.
+  * DTOR — `~() { body }`. No params.
+
+GRAMMAR must pivot on STRUCTURAL form, never on naming convention
+([[feedback_no_naming_convention_parsing]]): the ctor is `_` the identifier, the
+dtor is the `~` + `()` shape — not "UpperCamel class / lowerCamel method".
+
+PREREQUISITE (gates everything): `ClassName^` / `Alias^` variable declarations
+do not parse yet (plan.txt:334, todo.txt). Without pointer-to-class decls,
+`Cat^ c = new Cat`, class-typed by-ref params (`T^`/`T[]`), and class-typed
+fields-by-ref are all dead. Land the type-position parse of a user-named type
+followed by `^`/`[]` FIRST. This is also the "is-this-a-type" lookahead that
+unblocks `(Foo = v)` conversions (todo.txt:51) — do them together.
+
+
+================================================================================
+3. STAGE OWNERSHIP  (v2 is stage-strict; one error pipe; no silent defaults)
+================================================================================
+
+  GRAMMAR  — parse the class def: fields, nested-slid methods, `_()` ctor,
+             `~()` dtor. Produce the class/method/field nodes. No type or
+             layout decisions here.
+  RESOLVE  — register the class as a named type (a kSlid-leaf TypeRef) and as a
+             scope for its members; resolve field TYPES (structural
+             resolveTypeRef -> interned TypeRef); resolve method bodies with
+             `self` bound; resolve ctor/dtor bodies; wrong-kind diagnostics.
+  CONSTFOLD— fold field-init const expressions (inferred field types feed off
+             the folded const, mirroring named constants).
+  CLASSIFY — type-check field inits + method/ctor/dtor bodies; INFER field types
+             (`Foo(name = const_expr)`) and write back; check construction-site
+             arg shapes against the ctor signature.
+  LAYOUT   — THIS is layout.cpp's first real job (today a stub). Compute field
+             layout (offsets/indices, the SlidInfo equivalent: field_types,
+             own_field_count, base_field_count) and run the needs_ctor /
+             needs_dtor FIXPOINT + the has_explicit / must_inline classification.
+             Everything downstream reads these flags; they must be final here.
+  CODEGEN  — emit the `%struct.C` type; for has_explicit classes emit
+             `C__$ctor` / `C__$ctor_body` / `C__$dtor`; lower construction at
+             each site (call vs inline per the bucket); lower destruction on
+             scope exit (the balance walk); skip symbol + call for trivial
+             classes.
+
+
+================================================================================
+4. CONSTRUCTION LOWERING
+================================================================================
+
+Reuse the landed tuple construction engine ([[project_v2_tuples_resume]],
+[[project_v2_array_types]]) as the substrate — a fieldwise class IS a named
+tuple, and the per-field / per-slot recursive fill (emitConstructAt-equivalent:
+no arg -> default-construct; same-type arg -> copy; non-matching arg -> recurse
+using it as the field's ctor input) already exists. Do NOT re-implement per-field
+construction ([[feedback_synthesize_over_duplicate]]).
+
+  * TRIVIAL / MUST_INLINE — inline the field-init walk at the construction site:
+      (base ctor [Phase 7]) -> (vptr store [Phase 7]) -> own class-typed field
+      ctors in declaration order -> primitive/pointer field inits. No symbol.
+  * HAS_EXPLICIT — emit `C__$ctor` (entry: runs base + field init in Itanium
+    recursive-descent order, then tail-calls `C__$ctor_body`) and
+    `C__$ctor_body` (the synthesized field-init walk followed by the user `_()`
+    body). The construction site emits a CALL to `C__$ctor`.
+
+Itanium order within a ctor: base sub-object, then own vptr (Phase 7), then own
+fields in declaration order, then the user body.
+
+
+================================================================================
+5. DESTRUCTION & THE BALANCE INVARIANT
+================================================================================
+
+INVARIANT: every constructed class object is destroyed exactly once, in REVERSE
+declaration/construction order, on every path that leaves its scope (normal fall-
+through, `return`, and `break`/`continue` that exit the scope). This is why
+has_explicit classes need a stable `C__$dtor` symbol — a single callable teardown
+point that scope-exit and `delete` both reference; you cannot get reliable
+reverse-order teardown if destruction is smeared inline across exit paths.
+
+Mechanism (new in codegen; mirrors v1's dtor_vars stack):
+  * a SCOPE STACK of live class-typed locals/temps, each carrying its variable /
+    GEP target and class type (including a class-typed tuple slot -> a GEP into
+    the tuple at that index, the v1 tuple_index >= 0 case).
+  * on scope exit, walk the stack in REVERSE; for each entry whose class has
+    needs_dtor, emit a `C__$dtor` call (has_explicit) or an inlined field-dtor
+    walk (must_inline); skip trivial classes.
+  * `delete p` runs the dtor (has_explicit -> call `C__$dtor`; must_inline ->
+    inline walk) BEFORE free, then stores null — today's kDeleteStmt frees + nulls
+    but runs no dtor (plan.txt:331); wire the dtor in here.
+
+A dtor's own walk: user `~()` body first, then own class-typed fields in REVERSE
+declaration order, then base dtor (Phase 7) — the mirror of construction.
+
+
+================================================================================
+6. INFERRED FIELD TYPES
+================================================================================
+
+`Foo(name = const_expr)` — a field whose type is inferred from a const-expression
+initializer, the field-level analogue of inferred-init locals and inferred-type
+constants ([[project_v2_named_constants]], [[reference_literal_type_inference]]).
+constfold folds the initializer; classify infers the field's TypeRef from the
+folded value and writes it into the field's layout entry (normalize a literal-
+inferred type to its preferred spelling, like inferred locals). Layout then sees
+a fully-typed field list.
+
+
+================================================================================
+7. LANDING ORDER (sessions)
+================================================================================
+
+  S0. PREREQUISITE PARSE UNBLOCK — `ClassName^` / `Alias^` decls + the
+      is-this-a-type lookahead (also unblocks `(Foo = v)`). Gate for all of S1+.
+  S1. CLASS SHELL — grammar (fields + nested-slid methods, no ctor/dtor yet);
+      resolve registers the type + members; layout computes plain field layout;
+      codegen emits `%struct.C` + a trivial fieldwise class (bucket 1) with
+      inline field-init at the site. Methods callable with `self`. NO ctor/dtor
+      symbols yet — the trivial bucket is the whole story this session.
+  S2. EXPLICIT CTOR — `_(...)`; has_explicit bucket; emit `C__$ctor` /
+      `C__$ctor_body`; construction-site arg-shape check in classify; the
+      needs_ctor predicate (explicit-ctor + class-typed-field clauses; base /
+      virtual clauses stubbed inert).
+  S3. DTOR + BALANCE INVARIANT — `~()`; `C__$dtor`; the scope-stack reverse-order
+      teardown; wire dtor into kDeleteStmt; the needs_dtor predicate. The
+      must_inline bucket (class-typed field, no user ctor) falls out here.
+  S4. INFERRED FIELD TYPES — `Foo(name = const_expr)`.
+
+Each session: test file lands first (canon), discuss, then the compiler change.
+Verify the build relinked (a failed -Wswitch-enum arm leaves a stale slidsc) and
+the new parse::Kind reaches every switch in one pass
+([[feedback_check_build_before_run]]).
+
+
+================================================================================
+8. DEFERRED (explicitly NOT this plan)
+================================================================================
+
+  * operator overloading; for-each protocol + for-class; overloadable move/swap
+    (`op<--`/`op<-->`) — remaining Phase 5, later sessions.
+  * sizeof of a class type (today -1 "Cannot take sizeof"), `new T(value)`
+    initializer, class/user-type conversion targets `(String=...)`/`(Foo=v)` —
+    flip on once the ctor exists (plan.txt:315,330; todo.txt:51).
+  * for-tuple / for-array over CLASS elements (by-value needs the copy ctor;
+    by-ref needs class-typed tuples/arrays) — todo.txt:21,83.
+  * const correctness (Phase 6); reopens/hoist/derived/virtual/contracts/unnamed
+    (Phase 7); cross-TU + .slh propagation + globals (Phase 8); templates
+    (Phase 9).

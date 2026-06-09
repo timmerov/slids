@@ -117,8 +117,7 @@ DEFERRED FEATURES (later; may not be on the plan)
     expression STRIPS const). A bare/qualified TYPE NAME operand (alias / enum /
     qualified enum type) resolves to its underlying, and an enum MEMBER reports
     `const Enum` — both LANDED. See [[reference_stringify]]. OPEN: an aliased-
-    FUNCTION `##type(Fn)` (waits on function aliases), and the `#` 5-tuple
-    (Phase 5, blocked on tuples + `^`).
+    FUNCTION `##type(Fn)` (waits on function aliases).
 
   * STRONG-CONST WIDENING ENFORCEMENT — LANDED at every assignment site. A strong
     const is a TYPED value (widen within family; REJECT narrowing / sign-change),

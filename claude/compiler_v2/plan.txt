@@ -461,8 +461,9 @@ Phase 5 — classes
     return_type; a VALUE -> the value path; neither -> a diagnostic), classify
     short-circuits when return_type is stamped. An enum MEMBER reports
     `const Enum` (`##type(Dir:kNorth)` -> `const Dir`, via each named-enum
-    member's alias_label). The `#x` 5-tuple REMAINS (Phase 5, blocked on tuples
-    + `^`); aliased-FUNCTION `##type(Fn)` waits on function aliases (todo.txt).
+    member's alias_label). The `#x` 5-tuple LANDED (`(##file, ##line, ##type(x),
+    ##name(x), ^x)`, desugars in grammar parseUnary); aliased-FUNCTION
+    `##type(Fn)` waits on function aliases (todo.txt).
     Canon: test_v2/misc/macros.sl, alias.sl, constfold/enum.sl.
 
 Phase 6 — const correctness

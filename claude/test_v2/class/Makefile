@@ -7,6 +7,8 @@ BIN_DIR   = ../../bin
 BUILD_DIR = ../../build/test_v2/class
 
 SAMPLES = \
+	construct \
+	empty \
 	field \
 	hoisted \
 	incomplete \
