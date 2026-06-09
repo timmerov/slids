@@ -50,6 +50,18 @@ int code(ch = 'z') {
     return ch;
 }
 
+/* an array RETURN type (the direct `int[3]` form — the only way to return an
+   array) and an array-typed param (via an alias, since a param's dims can't sit on
+   the name in type position). */
+alias A3 = int[3];
+int[3] makeA3() {
+    int r[3] = (3, 4, 5);
+    return r;
+}
+int sumA3(A3 a) {
+    return a[0] + a[1] + a[2];
+}
+
 int32 main() {
     __println("sum3(1) = " + sum3(1));              // 111
     __println("sum3(1, 2) = " + sum3(1, 2));        // 103
@@ -59,6 +71,9 @@ int32 main() {
     announce();                                     // n=42
     announce(7);                                    // n=7
     __println("code() = " + code());                // 122
+    int m[3] = makeA3();
+    __println("makeA3 = " + m[0] + " " + m[2]);     // 3 5
+    __println("sumA3 = " + sumA3(m));               // 12
     return 0;
 }
 
@@ -84,4 +99,11 @@ int32 main() {
 //-EXPECT-ERROR: A parameter default must be a constant expression.
 //int neg_const(int a, b = one()) {
 //    return a + b;
+//}
+
+/* an array size in TYPE position is rejected for a parameter too — use an alias
+   (a param can't carry name-anchored dims). */
+//-EXPECT-ERROR: An array size belongs on the declared name
+//int neg_array_param(int[3] p) {
+//    return p[0];
 //}

@@ -230,6 +230,20 @@ int32 main() {
     }
     __println(" )");
 
+    /* whole-array swap (plain elements) — a whole-value exchange of the arrays. */
+    int s1[3] = (1, 2, 3);
+    int s2[3] = (4, 5, 6);
+    s1 <--> s2;
+    __println("s1 = " + s1[0] + " " + s1[1] + " " + s1[2]);   // 4 5 6
+    __println("s2 = " + s2[0] + " " + s2[1] + " " + s2[2]);   // 1 2 3
+
+    /* whole-array swap of a POINTER array — the pointers exchange (no nulling). */
+    int^ b1[3] = (^x3, ^x4, ^x5);
+    int^ b2[3] = (^x5, ^x4, ^x3);
+    b1 <--> b2;
+    __println("b1 = " + b1[0]^ + " " + b1[2]^);   // 99 42
+    __println("b2 = " + b2[0]^ + " " + b2[2]^);   // 42 99
+
     /* compile errors — each uncommented in isolation by the negative runner. */
 
     /* swap requires exactly the same type — no widening. */

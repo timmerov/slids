@@ -2021,9 +2021,15 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                         std::vector<int>(at.dims.begin() + 1, at.dims.end()));
                 slots.assign(at.dims.front(), e);
             }
+            // Both a tuple and an array (expression iterable) route here; name the
+            // iterable correctly in diagnostics.
+            char const* noun =
+                (widen::form(itup) == widen::Type::Form::kArray) ? "array" : "tuple";
             if (!slots.empty()) {
                 for (std::size_t i = 1; i < slots.size(); i++) {
                     if (widen::deepStrip(slots[i]) != widen::deepStrip(slots[0])) {
+                        // (Homogeneity can only fail for a real tuple — an array's
+                        // synthesized slots are identical.)
                         diagnostic::report(diag, {it_ref.file_id, it_ref.tok,
                             "A for-loop over a tuple requires a homogeneous tuple.",
                             {}});
@@ -2042,8 +2048,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 if (elem_aggregate && var_decl.return_type != widen::kNoType
                     && !by_ref) {
                     diagnostic::report(diag, {var_decl.file_id, var_decl.name_tok,
-                        "A for-loop over a tuple with non-primitive elements must "
-                        "use a reference loop variable.", {}});
+                        std::string("A for-loop over a ") + noun + " with "
+                        "non-primitive elements must use a reference loop variable.",
+                        {}});
                 }
                 // An EXPLICITLY by-reference loop var (`T^ p`) must reference the
                 // element type — mirrors the for-array by-ref check. (A typeless
@@ -2057,7 +2064,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                         diagnostic::report(diag, {var_decl.file_id, var_decl.name_tok,
                             "Loop variable type '"
                                 + widen::spellOrEmpty(var_decl.return_type)
-                                + "' does not match the tuple element type '"
+                                + "' does not match the " + noun + " element type '"
                                 + widen::spell(elem) + "'.", {}});
                     }
                 }

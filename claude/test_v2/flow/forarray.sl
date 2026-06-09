@@ -234,6 +234,25 @@ int32 main() {
 //    }
 //}
 
+/* a non-primitive (sub-array) element forces a reference loop variable; a declared
+   by-value loop var over a 2-D array's rows is rejected. */
+//-EXPECT-ERROR: with non-primitive elements must use a reference
+//void neg_byval_subarray() {
+//    int matrix[2][3];
+//    for (int sub : matrix) {
+//    }
+//}
+
+/* an array EXPRESSION iterable (a sub-array slice) is named as an ARRAY — not a
+   tuple — in a by-ref element mismatch. */
+//-EXPECT-ERROR: does not match the array element type
+//void neg_expr_byref() {
+//    int matrix[2][3] = ((1,2,3),(4,5,6));
+//    for (char^ p : matrix[0]) {
+//        p^ = ' ';
+//    }
+//}
+
 /* the right-hand side must be an array (or enum / tuple), not a scalar. */
 //-EXPECT-ERROR: is not an enum, array, or tuple
 //void neg_scalar() {

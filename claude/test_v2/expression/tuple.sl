@@ -171,5 +171,21 @@ int32 main() {
     }
     __println(")");
 
+    /* a MULTI-DIM array slot (int[2][3]): the slot's own 2-D indexing composes
+       with the tuple-slot read. */
+    (int[2][3], int[4]) t3 = ( ((1,2,3),(4,5,6)), (7,8,9,10) );
+    __println("t3= " + t3[0][0][0] + " " + t3[0][1][2] + " " + t3[1][3]);  // 1 6 10
+
     return 0;
 }
+
+/* compile errors — each uncommented in isolation by the negative runner. */
+
+/* a non-literal dimension in an array TYPE (here a tuple slot) is rejected; only
+   literal dims are allowed in type position (a const-expr dim needs Phase 2). */
+//-EXPECT-ERROR: An array type dimension must be an integer literal
+//int neg_array_type_nonliteral() {
+//    int n = 3;
+//    (int[n], int[4]) t;
+//    return 0;
+//}

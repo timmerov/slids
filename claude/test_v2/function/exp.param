@@ -6,3 +6,5 @@ with_expr(10, 20) = 30
 n=42
 n=7
 code() = 122
+makeA3 = 3 5
+sumA3 = 12

@@ -274,6 +274,10 @@ int32 main() {
     }
     __println(")");
 
+    /* a MULTI-DIM array of tuples: 2 rows of 3, each element a (int,int). */
+    (int,int) m7[2][3] = ( ((1,2),(3,4),(5,6)), ((7,8),(9,10),(11,12)) );
+    __println("m7= " + m7[0][0][0] + " " + m7[1][2][1] + " " + m7[0][2][0]); // 1 12 5
+
     return 0;
 }
 
@@ -423,4 +427,19 @@ int32 main() {
 //    int a[F];
 //    a[0] = 1;
 //    return a[0];
+//}
+
+/* an array size in TYPE position (not on the name) is rejected in a declaration;
+   write `int x[N]`. */
+//-EXPECT-ERROR: An array size belongs on the declared name
+//int neg_array_type_local() {
+//    int[3] x = (1,2,3);
+//    return x[0];
+//}
+
+/* the same rule for a const declaration. */
+//-EXPECT-ERROR: An array size belongs on the declared name
+//int neg_array_type_const() {
+//    const int[3] c = (1,2,3);
+//    return c[0];
 //}

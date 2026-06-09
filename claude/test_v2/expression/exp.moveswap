@@ -19,3 +19,7 @@ g1p = 20 g2p = 10
 ap = 7
 a1 = ( nullptr nullptr nullptr )
 a2 = ( 42 37 99 )
+s1 = 4 5 6
+s2 = 1 2 3
+b1 = 99 42
+b2 = 42 99

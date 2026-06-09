@@ -669,8 +669,13 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
         if (chain.size() == 1) return slot_gep;   // just the slot
         // The slot is an ARRAY further indexed (`t2[0][i]`): GEP the remaining
         // array indices (outer-to-inner, row-major) into the slot's storage.
-        widen::TypeRef slot_ty =
-            widen::get(widen::strip(node->inferred_type)).slots[k];
+        std::vector<widen::TypeRef> const& tslots =
+            widen::get(widen::strip(node->inferred_type)).slots;
+        assert(k >= 0 && k < static_cast<long>(tslots.size())
+            && "emitElementAddr: tuple slot index out of range");
+        widen::TypeRef slot_ty = tslots[k];
+        assert(widen::form(widen::strip(slot_ty)) == widen::Type::Form::kArray
+            && "emitElementAddr: indexing a non-array tuple slot (classify validated)");
         std::string slot_ll = llvmForRef(slot_ty);
         std::vector<std::string> idx_vals;
         for (std::size_t j = chain.size() - 1; j > 0; ) {
@@ -1145,6 +1150,10 @@ std::string emitArrayLiteralValue(widen::TypeRef arrType, ast::Node const& rhs,
     std::string elem_ll = llvmForRef(elem);
     std::vector<ast::Node const*> elems;
     collectArrayElementNodesAst(rhs, dims, 0, elems);
+    long total = 1;
+    for (int d : dims) total *= d;
+    assert(static_cast<long>(elems.size()) == total
+        && "emitArrayLiteralValue: element count != array size (classify validated)");
     std::string acc = "undef";
     for (std::size_t i = 0; i < elems.size(); i++) {
         std::string v = emitExpr(*elems[i], syms, pool, out, diag, elem);

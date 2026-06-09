@@ -110,6 +110,10 @@ int32 main() {
     /* a string literal: content bytes + the terminating null. */
     __println("string= " + sizeof("Hello, World!")); // 14
 
+    /* an array TYPE spelling as the operand (not a variable): total bytes. */
+    __println("arrtype= "  + sizeof(int[3]));         // 12
+    __println("arrtype2= " + sizeof(int[2][3]));      // 24
+
     /* an alias, a bare enum, and a namespace-qualified enum type all resolve to
        their underlying. */
     __println("alias= "     + sizeof(Integer));       // 8
