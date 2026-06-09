@@ -159,5 +159,17 @@ int32 main() {
     (int,int,int,int) t1 = a1;
     __println("t1=("+t1[0]+","+t1[1]+","+t1[2]+","+t1[3]+")");
 
+    /* tuple of arrays. */
+    (int[3], int[4]) t2 = ((1,2,3), (4,5,6,7));
+    __print(##type(t2) + " t2 = ( (");
+    for (i : 0..3) {
+        __print(" " + t2[0][i]);
+    }
+    __print(" ) (");
+    for (i : 0..4) {
+        __print(" " + t2[i, 1]);
+    }
+    __println(")");
+
     return 0;
 }

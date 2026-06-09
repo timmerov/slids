@@ -139,7 +139,14 @@ struct Parser {
     // `seg_toks` (optional out): for a qualified identifier type, the token index
     // of each `:`-separated segment, so resolve can caret the offending segment
     // (a flat spelling string otherwise loses them). Left empty for a primitive.
-    std::string parseType(std::vector<int>* seg_toks = nullptr) {
+    // reject_array_dims: at a DECLARATION (local / global / field / constant /
+    // param / for-var), a top-level sized array type is rejected — the size goes on
+    // the NAME (`int x[3]`). Composition contexts (tuple slot, alias / enum RHS,
+    // sizeof / cast operand, return type) leave it false and accept `int[3]`. An
+    // array TYPE still reaches a declaration via an alias (`Vec3 x`) — its spelling
+    // has no top-level dims — or as a tuple slot.
+    std::string parseType(std::vector<int>* seg_toks = nullptr,
+                          bool reject_array_dims = false) {
         std::string type;
         if (peek().kind == token::Kind::kLParen) {
             // Anonymous tuple type `(T0, T1, ...)`. A size-1 `(T)` collapses to T
@@ -192,12 +199,42 @@ struct Parser {
             error("Expected type.");
             return "";
         }
-        // A pointer suffix: `T[]` (iterator) or `T^` (reference). Mutually
-        // exclusive — a type carries at most one category modifier.
-        if (peek().kind == token::Kind::kLBracket) {
-            advance();
-            if (!expect(token::Kind::kRBracket, "]")) return "";
-            type += "[]";
+        // A bracket / pointer suffix: `T[]` (iterator), sized fixed-array dims
+        // `T[N]` / `T[N][M]` / the comma form `T[a,b]` -> `[b][a]`, or `T^`
+        // (reference). Array dims CHAIN; `[]` and `^` are single category modifiers.
+        if (peek().kind == token::Kind::kLBracket
+            && peekKind(1) == token::Kind::kRBracket) {
+            advance(); advance();   // `[` `]`
+            type += "[]";           // iterator
+        } else if (peek().kind == token::Kind::kLBracket) {
+            // Sized fixed-array dims. LITERAL dims only in type position (a const-
+            // EXPRESSION dim in a type needs the nested dim-fold path — deferred).
+            if (reject_array_dims) {
+                error("An array size belongs on the declared name; "
+                      "write 'T name[N]', not 'T[N] name'.");
+                return "";
+            }
+            while (peek().kind == token::Kind::kLBracket) {
+                advance();   // [
+                std::vector<std::string> dims;
+                while (true) {
+                    if (peek().kind != token::Kind::kIntLiteral) {
+                        error("An array type dimension must be an integer literal.");
+                        return "";
+                    }
+                    if (std::strtoll(peek().text.c_str(), nullptr, 10) <= 0) {
+                        error("Array size must be a positive integer constant.");
+                        return "";
+                    }
+                    dims.push_back(peek().text);
+                    advance();   // size
+                    if (peek().kind != token::Kind::kComma) break;
+                    advance();   // ,
+                }
+                if (!expect(token::Kind::kRBracket, "]")) return "";
+                for (std::size_t k = dims.size(); k-- > 0; )   // comma transpose
+                    type += "[" + dims[k] + "]";
+            }
         } else if (peek().kind == token::Kind::kBitXor) {
             advance();
             type += "^";
@@ -285,7 +322,7 @@ struct Parser {
         v_file = peek().file_id;
         v_tok = pos;
         if (isTypeStart(peek().kind) || looksLikeQualifiedTypedDecl()) {
-            vtype = parseType();
+            vtype = parseType(nullptr, /*reject_array_dims=*/true);
             if (fatal) return false;
         } else {
             vtype.clear();   // typeless: the next identifier IS the name
@@ -1025,7 +1062,7 @@ struct Parser {
         std::string type;
         std::vector<int> type_seg_toks;
         if (!typeless) {
-            type = parseType(&type_seg_toks);
+            type = parseType(&type_seg_toks, /*reject_array_dims=*/true);
             if (fatal) return nullptr;
         }
         if (peek().kind != token::Kind::kIdentifier
@@ -2089,7 +2126,7 @@ struct Parser {
             if (isTypeStart(peek().kind) || looksLikeQualifiedTypedDecl()
                 || (peek().kind == token::Kind::kLParen
                     && looksLikeTupleTypeDecl())) {
-                p_type = parseType();
+                p_type = parseType(nullptr, /*reject_array_dims=*/true);
                 if (fatal) return nullptr;
             }
             if (peek().kind != token::Kind::kIdentifier) {

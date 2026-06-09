@@ -387,6 +387,10 @@ int argConvertCost(parse::Node const& a, std::string const& param) {
 void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
 void checkStrongConstAssign(widen::TypeRef dest, parse::Node const& rhs,
                             diagnostic::Sink& diag);
+// Validate + type a tuple literal initializing an ARRAY (defined after inferExpr);
+// reused for an array-typed TUPLE SLOT.
+void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
+                            parse::Node& rhs, diagnostic::Sink& diag);
 
 void inferExpr(parse::Tree& tree, parse::Node& e,
                widen::TypeRef context, diagnostic::Sink& diag) {
@@ -527,7 +531,17 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             for (std::size_t i = 0; i < e.children.size(); i++) {
                 widen::TypeRef slot_ctx =
                     ctx_slots.empty() ? widen::kNoType : ctx_slots[i];
-                inferExpr(tree, *e.children[i], slot_ctx, diag);
+                // An ARRAY-typed slot taking a tuple LITERAL is array-from-tuple,
+                // not a nested tuple: validate it as such and type the slot as the
+                // array (so construction builds an array value, not a sub-tuple).
+                if (slot_ctx != widen::kNoType
+                    && widen::form(widen::strip(slot_ctx)) == widen::Type::Form::kArray
+                    && e.children[i]->kind == parse::Kind::kTupleExpr) {
+                    classifyArrayFromTuple(tree, slot_ctx, *e.children[i], diag);
+                    e.children[i]->inferred_type = slot_ctx;
+                } else {
+                    inferExpr(tree, *e.children[i], slot_ctx, diag);
+                }
                 slots.push_back(e.children[i]->inferred_type);
             }
             e.inferred_type = widen::internTuple(slots);

@@ -28,6 +28,12 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
 
 namespace {
 
+// Forward: build an `[N x T]` aggregate VALUE from a tuple literal (for an
+// array-typed tuple slot). Defined below, after collectArrayElementNodesAst.
+std::string emitArrayLiteralValue(widen::TypeRef arrType, ast::Node const& rhs,
+                                  SymTab const& syms, strings::Pool& pool,
+                                  std::ostream& out, diagnostic::Sink& diag);
+
 // The LLVM type for an interned slids type, read off the structured Type — no
 // spelling decomposition. A primitive maps by (cat, bits): float/double for the
 // float category, iN otherwise (bool -> i1). Every pointer flavor is `ptr`. A
@@ -657,17 +663,36 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
         auto tit = syms.find(node->resolved_entry_id);
         assert(tit != syms.end() && "emitElementAddr: tuple not in SymTab");
         long k = std::strtol(chain.back()->children[1]->text.c_str(), nullptr, 10);
-        std::string gep = newTmp("slot");
-        out << "  " << gep << " = getelementptr inbounds " << tit->second.llvm_type
+        std::string slot_gep = newTmp("slot");
+        out << "  " << slot_gep << " = getelementptr inbounds " << tit->second.llvm_type
             << ", ptr " << tit->second.alloca_name << ", i32 0, i32 " << k << "\n";
-        return gep;
+        if (chain.size() == 1) return slot_gep;   // just the slot
+        // The slot is an ARRAY further indexed (`t2[0][i]`): GEP the remaining
+        // array indices (outer-to-inner, row-major) into the slot's storage.
+        widen::TypeRef slot_ty =
+            widen::get(widen::strip(node->inferred_type)).slots[k];
+        std::string slot_ll = llvmForRef(slot_ty);
+        std::vector<std::string> idx_vals;
+        for (std::size_t j = chain.size() - 1; j > 0; ) {
+            j--;
+            idx_vals.push_back(emitExpr(*chain[j]->children[1], syms, pool, out,
+                                        diag, widen::intern("int64")));
+        }
+        std::string agep = newTmp("elt");
+        out << "  " << agep << " = getelementptr inbounds " << slot_ll
+            << ", ptr " << slot_gep << ", i64 0";
+        for (auto const& iv : idx_vals) out << ", i64 " << iv;
+        out << "\n";
+        return agep;
     }
     // Fixed-size array base: GEP into the aggregate at its alloca.
     assert(node->kind == ast::Kind::kIdentExpr && node->resolved_entry_id >= 0
         && "emitElementAddr: array subscript base must be a variable");
     auto it = syms.find(node->resolved_entry_id);
     assert(it != syms.end() && "emitElementAddr: array not in SymTab");
-    int dims = (int)widen::get(it->second.slids_type).dims.size();
+    // strip(): an alias-of-array (`alias V = float[3]`) carries its dims on the
+    // underlying, not the kAlias wrapper.
+    int dims = (int)widen::get(widen::strip(it->second.slids_type)).dims.size();
     if ((int)chain.size() > dims) {   // over-index (also caught in classify)
         diagnostic::report(diag, {index_expr.file_id, index_expr.tok,
             "An array subscript indexes past the last dimension.", {}});
@@ -890,8 +915,16 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                 widen::get(widen::strip(expr.inferred_type)).slots;
             std::string acc = "undef";
             for (std::size_t i = 0; i < expr.children.size(); i++) {
-                std::string v = emitExpr(*expr.children[i], syms, pool, out, diag,
-                                         slots[i]);
+                // An ARRAY-typed slot built from a tuple literal is an array value
+                // (`[N x T]`), not a nested tuple — build it element-wise.
+                std::string v;
+                if (widen::form(widen::strip(slots[i])) == widen::Type::Form::kArray
+                    && expr.children[i]->kind == ast::Kind::kTupleExpr) {
+                    v = emitArrayLiteralValue(slots[i], *expr.children[i],
+                                              syms, pool, out, diag);
+                } else {
+                    v = emitExpr(*expr.children[i], syms, pool, out, diag, slots[i]);
+                }
                 std::string tmp = newTmp("tup");
                 out << "  " << tmp << " = insertvalue " << llty << " " << acc
                     << ", " << llvmForRef(slots[i]) << " " << v << ", " << i << "\n";
@@ -1096,6 +1129,39 @@ void collectArrayElementNodesAst(ast::Node const& n, std::vector<int> const& dim
     if (i == dims.size()) { out.push_back(&n); return; }
     for (auto const& c : n.children) if (c)
         collectArrayElementNodesAst(*c, dims, i + 1, out);
+}
+
+// Build an `[N x T]` aggregate VALUE from a tuple literal — for an array-typed
+// TUPLE SLOT, which needs the array as an SSA value (not stored into an alloca).
+// Element-aware like emitArrayFromTuple; the flat index decomposes into the dim
+// indices so a multi-dim slot inserts at the right nested position.
+std::string emitArrayLiteralValue(widen::TypeRef arrType, ast::Node const& rhs,
+                                  SymTab const& syms, strings::Pool& pool,
+                                  std::ostream& out, diagnostic::Sink& diag) {
+    widen::Type const& at = widen::get(widen::strip(arrType));
+    widen::TypeRef elem = at.elem;
+    std::vector<int> dims = at.dims;
+    std::string arr_ll = llvmForRef(arrType);
+    std::string elem_ll = llvmForRef(elem);
+    std::vector<ast::Node const*> elems;
+    collectArrayElementNodesAst(rhs, dims, 0, elems);
+    std::string acc = "undef";
+    for (std::size_t i = 0; i < elems.size(); i++) {
+        std::string v = emitExpr(*elems[i], syms, pool, out, diag, elem);
+        std::vector<long> ix(dims.size());        // flat index -> dim indices
+        long rem = static_cast<long>(i);
+        for (int k = static_cast<int>(dims.size()) - 1; k >= 0; k--) {
+            ix[k] = rem % dims[k];
+            rem /= dims[k];
+        }
+        std::string tmp = newTmp("arr");
+        out << "  " << tmp << " = insertvalue " << arr_ll << " " << acc
+            << ", " << elem_ll << " " << v;
+        for (long x : ix) out << ", " << x;
+        out << "\n";
+        acc = tmp;
+    }
+    return acc;
 }
 
 // Initialize / assign an array from a tuple LITERAL, element-wise. Each dims-deep
