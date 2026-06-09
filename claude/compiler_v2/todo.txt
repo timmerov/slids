@@ -33,6 +33,55 @@ BUGS (found, deferred)
     carve-out; lands with the cross-TU / .slh-propagation work (plan Phase 8).
     prerequisite: group with general work on import.
 
+  * ARRAY PARAMETER NEEDS AN ALIAS — a function parameter can't carry array
+    dimensions on the NAME: `int f(int a[3])` -> "Expected ',' or ')' in parameter
+    list". The parameter parser stops after `Type name` and never runs the post-name
+    `[N]` dim loop that the var-decl path has (grammar.cpp:1085+). A direct array-
+    TYPE param (`int[3] a`) is rejected by the name-anchored declaration rule
+    (reject_array_dims), so today the ONLY way to take an array param is via an
+    alias (`alias A3 = int[3]; int f(A3 a)`). Found while adding array-param/return
+    test coverage (the alias form + array RETURN `int[3] f()` both work). Fix: thread
+    the name-dims parsing into the parameter parser, mirroring the var-decl path, so
+    `int f(int a[3])` parses to an int[3] param. prerequisite: none.
+
+  * COMPOSED-TYPE INDEXING DOESN'T RECURSE (alias-element arrays; array->tuple->
+    array chains) — `emitElementAddr` (codegen) dispatches ONCE on the base type
+    (array OR tuple) and applies the WHOLE index chain as that one kind, instead of
+    walking the chain segment-by-segment and re-dispatching on the CURRENT type. Two
+    symptoms, ONE root cause:
+      - alias-element arrays: `alias Vec2 = int[2]; Vec2 va[3]` is a NESTED
+        kArray(elem=int[2], dims=[3]) — rank 1 as the indexer counts it — so
+        `va[i][j]` over-indexes ("indexes past the last dimension"). (A name-anchored
+        `int va[3][2]` is a FLAT kArray(int,[3,2]) and works.)
+      - array->tuple->array: `(int[3],int[4]) t[2]` then `t[i][slot][k]` — t[i] is an
+        array index (element a tuple), [slot] a tuple slot (an array), [k] an array
+        index. The base t is an array, so all 3 indices are applied as t's array dims
+        (dims=[2], rank 1) -> over-index.
+    USER FEEDBACK: once again, claude is lobbying for a hack instead of addressing
+    the root cause. v1 had this bug; sad it reappears in v2. The proposed flatten-
+    array-of-array at internArray (normalize `Vec2 va[3]` -> int[3][2]) is a HACK:
+    it destroys the alias name and only fixes the alias-element symptom, leaving the
+    array->tuple->array chain broken.
+    TWO DISTINCT BUGS, both in codegen's emitElementAddr:
+      (A) you don't know how many dimensions a type has — the RANK count is
+          `get(strip(T)).dims.size()` (codegen.cpp:700), the TOP-LEVEL dims vector
+          only, so a nested/composed type undercounts (Vec2 va[3]: reads 1, real
+          rank 2) and the `chain.size() > dims` check fires a FALSE over-index. NOTE:
+          classify does NOT have this bug — arrayElementType (classify.cpp:180) walks
+          ONE level per subscript, recursing into the element, so it types va[i][j]
+          and t[i][slot][k] correctly. The codegen rank check is a misplaced, buggy
+          DUPLICATE of a semantic check classify already does right.
+      (B) you don't know how to index those dimensions — emitElementAddr dispatches
+          ONCE on the base type and applies the whole chain as that one kind, so it
+          can't emit a mixed GEP chain (array dim -> struct slot -> array dim). (A)
+          masks (B): fix the count alone and the GEP would then MIS-address.
+    ROOT CAUSE FIX: make emitElementAddr walk the index chain innermost->outermost
+    the way classify already walks the TYPE — track the current type, re-dispatch
+    per segment (array dim -> array GEP; tuple slot -> struct GEP), advance to the
+    resulting element type, continue. Both the bound/rank check and the GEP emission
+    fall out of that walk; handles arbitrary composition; resolves BOTH symptoms.
+    prerequisite: none; touches the index-addressing walk (codegen.cpp:636+).
+
   * ARRAY = TUPLE-VALUE EMITS INVALID LL — `int a[3]; a = tupleVar;` (a whole-array
     assign from a tuple VALUE, not a literal) is ACCEPTED by slidsc but emits
     invalid IR: the tuple is an LLVM struct `{i32,i32,i32}` and the array is

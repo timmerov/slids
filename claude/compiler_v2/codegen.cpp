@@ -655,78 +655,60 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
             << ", i64 " << idx << "\n";
         return gep;
     }
-    // Tuple-slot base: GEP the struct field at the (constant) slot index.
-    if (widen::form(widen::strip(node->inferred_type))
-        == widen::Type::Form::kTuple) {
-        assert(node->kind == ast::Kind::kIdentExpr && node->resolved_entry_id >= 0
-            && "emitElementAddr: tuple slot base must be a variable");
-        auto tit = syms.find(node->resolved_entry_id);
-        assert(tit != syms.end() && "emitElementAddr: tuple not in SymTab");
-        long k = std::strtol(chain.back()->children[1]->text.c_str(), nullptr, 10);
-        std::string slot_gep = newTmp("slot");
-        out << "  " << slot_gep << " = getelementptr inbounds " << tit->second.llvm_type
-            << ", ptr " << tit->second.alloca_name << ", i32 0, i32 " << k << "\n";
-        if (chain.size() == 1) return slot_gep;   // just the slot
-        // The slot is an ARRAY further indexed (`t2[0][i]`): GEP the remaining
-        // array indices (outer-to-inner, row-major) into the slot's storage.
-        std::vector<widen::TypeRef> const& tslots =
-            widen::get(widen::strip(node->inferred_type)).slots;
-        assert(k >= 0 && k < static_cast<long>(tslots.size())
-            && "emitElementAddr: tuple slot index out of range");
-        widen::TypeRef slot_ty = tslots[k];
-        assert(widen::form(widen::strip(slot_ty)) == widen::Type::Form::kArray
-            && "emitElementAddr: indexing a non-array tuple slot (classify validated)");
-        std::string slot_ll = llvmForRef(slot_ty);
-        std::vector<std::string> idx_vals;
-        for (std::size_t j = chain.size() - 1; j > 0; ) {
-            j--;
-            idx_vals.push_back(emitExpr(*chain[j]->children[1], syms, pool, out,
-                                        diag, widen::intern("int64")));
-        }
-        std::string agep = newTmp("elt");
-        out << "  " << agep << " = getelementptr inbounds " << slot_ll
-            << ", ptr " << slot_gep << ", i64 0";
-        for (auto const& iv : idx_vals) out << ", i64 " << iv;
-        out << "\n";
-        return agep;
-    }
-    // Fixed-size array base: GEP into the aggregate at its alloca.
+    // Array / tuple base: walk the index chain from the BASE outward, dispatching
+    // on the CURRENT type each step — array dim -> array GEP, tuple slot -> struct
+    // GEP — and advancing `cur` to the result. This composes nested arrays (an
+    // alias-element array), arrays of tuples, and array-typed tuple slots in ANY
+    // order, and is where a class `op[]` (a method call advancing `cur`) plugs in
+    // at Phase 5. A genuine over-index is caught in classify (it walks the type the
+    // same way), so a non-indexable `cur` mid-chain is unreachable here.
     assert(node->kind == ast::Kind::kIdentExpr && node->resolved_entry_id >= 0
-        && "emitElementAddr: array subscript base must be a variable");
-    auto it = syms.find(node->resolved_entry_id);
-    assert(it != syms.end() && "emitElementAddr: array not in SymTab");
-    // strip(): an alias-of-array (`alias V = float[3]`) carries its dims on the
-    // underlying, not the kAlias wrapper.
-    int dims = (int)widen::get(widen::strip(it->second.slids_type)).dims.size();
-    if ((int)chain.size() > dims) {   // over-index (also caught in classify)
-        diagnostic::report(diag, {index_expr.file_id, index_expr.tok,
-            "An array subscript indexes past the last dimension.", {}});
-        return "null";
+        && "emitElementAddr: array/tuple subscript base must be a variable");
+    auto bit = syms.find(node->resolved_entry_id);
+    assert(bit != syms.end() && "emitElementAddr: base not in SymTab");
+    std::string addr = bit->second.alloca_name;
+    widen::TypeRef cur = bit->second.slids_type;
+    // The FIRST subscript is chain.back(), the LAST is chain.front() (source order).
+    for (std::size_t j = chain.size(); j-- > 0; ) {
+        ast::Node const& idx_node = *chain[j]->children[1];
+        widen::TypeRef cs = widen::strip(cur);
+        widen::Type::Form f = widen::form(cs);
+        if (f == widen::Type::Form::kArray) {
+            std::string idx = emitExpr(idx_node, syms, pool, out, diag,
+                                       widen::intern("int64"));
+            std::string gep = newTmp("elt");
+            out << "  " << gep << " = getelementptr inbounds " << llvmForRef(cur)
+                << ", ptr " << addr << ", i64 0, i64 " << idx << "\n";
+            addr = gep;
+            std::vector<int> const& dd = widen::get(cs).dims;
+            cur = (dd.size() <= 1)
+                ? widen::get(cs).elem
+                : widen::internArray(widen::get(cs).elem,
+                      std::vector<int>(dd.begin() + 1, dd.end()));
+        } else if (f == widen::Type::Form::kTuple) {
+            long k = std::strtol(idx_node.text.c_str(), nullptr, 10);
+            std::vector<widen::TypeRef> const& slots = widen::get(cs).slots;
+            assert(k >= 0 && k < static_cast<long>(slots.size())
+                && "emitElementAddr: tuple slot index out of range");
+            std::string gep = newTmp("slot");
+            out << "  " << gep << " = getelementptr inbounds " << llvmForRef(cur)
+                << ", ptr " << addr << ", i32 0, i32 " << k << "\n";
+            addr = gep;
+            cur = slots[k];
+        } else {
+            assert(false && "emitElementAddr: indexing a non-indexable type "
+                            "(classify validates the rank)");
+        }
     }
-    // A PARTIAL index (`a[i]` on a 2-D array) addresses a SUB-ARRAY slice — the GEP
-    // below stops at the indexed dim, yielding a `ptr` to the inner array. That is
-    // valid only as a STORE TARGET (the caller sets allow_partial); in a value/read
-    // context the slice has no scalar value to load.
-    if ((int)chain.size() < dims && !allow_partial) {
+    // A PARTIAL index leaves `cur` an ARRAY (a sub-array slice) — valid only as a
+    // store target / address (allow_partial); a value/read context has no scalar.
+    // A tuple or scalar `cur` is a complete index (e.g. `a7[0]` -> a tuple value).
+    if (widen::form(widen::strip(cur)) == widen::Type::Form::kArray && !allow_partial) {
         diagnostic::report(diag, {index_expr.file_id, index_expr.tok,
             "An array subscript must index every dimension.", {}});
         return "null";
     }
-    // Evaluate every index FIRST (each emits its own instructions), then emit
-    // the single GEP line — otherwise an index's loads land mid-GEP. Standard
-    // row-major: the leftmost SOURCE subscript is the OUTERMOST GEP index, so
-    // walk the chain innermost-first (its reverse) and evaluate left-to-right.
-    std::vector<std::string> idx_vals;
-    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-        idx_vals.push_back(
-            emitExpr(*(*it)->children[1], syms, pool, out, diag, widen::intern("int64")));
-    }
-    std::string gep = newTmp("elt");
-    out << "  " << gep << " = getelementptr inbounds " << it->second.llvm_type
-        << ", ptr " << it->second.alloca_name << ", i64 0";
-    for (auto const& iv : idx_vals) out << ", i64 " << iv;
-    out << "\n";
-    return gep;
+    return addr;
 }
 
 // True if `ty` is, or (for a tuple) transitively contains, a pointer / iterator
@@ -1154,9 +1136,14 @@ std::string emitArrayLiteralValue(widen::TypeRef arrType, ast::Node const& rhs,
     for (int d : dims) total *= d;
     assert(static_cast<long>(elems.size()) == total
         && "emitArrayLiteralValue: element count != array size (classify validated)");
+    bool elem_array = widen::form(widen::strip(elem)) == widen::Type::Form::kArray;
     std::string acc = "undef";
     for (std::size_t i = 0; i < elems.size(); i++) {
-        std::string v = emitExpr(*elems[i], syms, pool, out, diag, elem);
+        // An ARRAY-typed element (a nested array) is built as an array value, not a
+        // tuple — recurse; otherwise the leaf scalar / tuple value.
+        std::string v = (elem_array && elems[i]->kind == ast::Kind::kTupleExpr)
+            ? emitArrayLiteralValue(elem, *elems[i], syms, pool, out, diag)
+            : emitExpr(*elems[i], syms, pool, out, diag, elem);
         std::vector<long> ix(dims.size());        // flat index -> dim indices
         long rem = static_cast<long>(i);
         for (int k = static_cast<int>(dims.size()) - 1; k >= 0; k--) {
@@ -1184,10 +1171,14 @@ void emitArrayFromTuple(std::string const& alloca_name, widen::TypeRef arrType,
     widen::Type const& at = widen::get(widen::strip(arrType));
     widen::TypeRef elem = at.elem;
     std::string elem_ll = llvmForRef(elem);
+    bool elem_array = widen::form(widen::strip(elem)) == widen::Type::Form::kArray;
     std::vector<ast::Node const*> elems;
     collectArrayElementNodesAst(rhs, at.dims, 0, elems);
     for (std::size_t i = 0; i < elems.size(); i++) {
-        std::string v = emitExpr(*elems[i], syms, pool, out, diag, elem);
+        // A nested ARRAY element is built as an array value (not a tuple).
+        std::string v = (elem_array && elems[i]->kind == ast::Kind::kTupleExpr)
+            ? emitArrayLiteralValue(elem, *elems[i], syms, pool, out, diag)
+            : emitExpr(*elems[i], syms, pool, out, diag, elem);
         std::string gep = newTmp("aelt");
         out << "  " << gep << " = getelementptr " << elem_ll << ", ptr "
             << alloca_name << ", i64 " << i << "\n";

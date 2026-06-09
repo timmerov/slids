@@ -176,6 +176,11 @@ int32 main() {
     (int[2][3], int[4]) t3 = ( ((1,2,3),(4,5,6)), (7,8,9,10) );
     __println("t3= " + t3[0][0][0] + " " + t3[0][1][2] + " " + t3[1][3]);  // 1 6 10
 
+    /* an ARRAY of tuples-of-arrays: a mixed array->tuple-slot->array index chain,
+       handled by the per-segment index walk. */
+    (int[3],int[4]) t4[2] = ( ((1,2,3),(4,5,6,7)), ((8,9,10),(11,12,13,14)) );
+    __println("t4= " + t4[0][0][1] + " " + t4[1][1][3] + " " + t4[0][1][0]); // 2 14 4
+
     return 0;
 }
 

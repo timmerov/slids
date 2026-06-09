@@ -278,6 +278,12 @@ int32 main() {
     (int,int) m7[2][3] = ( ((1,2),(3,4),(5,6)), ((7,8),(9,10),(11,12)) );
     __println("m7= " + m7[0][0][0] + " " + m7[1][2][1] + " " + m7[0][2][0]); // 1 12 5
 
+    /* an alias-of-array as the ELEMENT type: `Vec2 va[3]` is a nested array; the
+       index walk descends into the element, no flattening (alias preserved). */
+    alias Vec2 = int[2];
+    Vec2 va[3] = ((1,2), (3,4), (5,6));
+    __println("va= " + va[0][0] + " " + va[2][1] + " " + va[1][0]);          // 1 6 3
+
     return 0;
 }
 

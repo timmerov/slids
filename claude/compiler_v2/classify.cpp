@@ -1385,8 +1385,16 @@ void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
     // literal flexes into it), then validate `a[i] = el`. A SCALAR element obeys
     // the pointer-cast / strong-const rules (typed narrowing is codegen's convert);
     // a TUPLE element must match the element tuple type (slot-wise, after flex).
+    bool elem_array = widen::form(widen::strip(elem)) == widen::Type::Form::kArray;
     bool elem_tuple = widen::form(widen::strip(elem)) == widen::Type::Form::kTuple;
     for (parse::Node* el : elems) {
+        // A nested ARRAY element is itself an array-from-tuple — validate it as such
+        // and type it as the array (so construction builds an array value).
+        if (elem_array && el->kind == parse::Kind::kTupleExpr) {
+            classifyArrayFromTuple(tree, elem, *el, diag);
+            el->inferred_type = elem;
+            continue;
+        }
         inferExpr(tree, *el, elem, diag);
         if (elem_tuple) {
             if (el->inferred_type != widen::kNoType
