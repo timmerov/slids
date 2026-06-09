@@ -2751,6 +2751,14 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         if (p && !p->children.empty() && p->children[0]) {
             resolveExpr(tree, *p->children[0], diag);
         }
+        // A const-expression array dim on a param (`int a[N]`) is likewise a
+        // constant expression in the enclosing scope — resolve so constfold can
+        // fold + bake it (it re-syncs param_types after).
+        if (p) {
+            for (auto& d : p->dim_exprs) {
+                if (d) resolveExpr(tree, *d, diag);
+            }
+        }
     }
     int saved_floor = tree.capture_floor;
     parse::Node* saved_capture_node = tree.capture_node;
@@ -2794,6 +2802,11 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         e.tok = p->name_tok;
         p->resolved_entry_id = parse::addEntry(tree, std::move(e));
         tree.initialized_locals.insert(p->resolved_entry_id);
+        // An ARRAY param arrives initialized too — seed the monotonic may-set so a
+        // read isn't a use-before-init (a direct `int a[3]` / `int a[N]`; the alias
+        // form `A3 a` reads as non-array so it uses initialized_locals above).
+        if (isArrayType(p->return_type))
+            tree.assigned_arrays.insert(p->resolved_entry_id);
     }
     // Forward-decl pre-pass for kConst: pre-create entries so const init
     // expressions can reference later-declared consts in the same body.

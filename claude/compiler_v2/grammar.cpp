@@ -242,6 +242,47 @@ struct Parser {
         return type;
     }
 
+    // Parse fixed-size array dims that FOLLOW a declared name (`name[5]`,
+    // `grid[3][5]`, comma form `g[3,5]` -> `[5][3]`). Appends each `[dim]` to
+    // `type`; a const-EXPRESSION dim bakes a provisional `[1]` and pushes a dim_expr
+    // (folded + baked for real in constfold). Returns false (after error()) on a
+    // malformed / non-positive literal dim. Shared by var-decls and parameters.
+    bool parseNameDims(std::string& type,
+                       std::vector<std::unique_ptr<parse::Node>>& dim_exprs,
+                       bool& any_dim_expr) {
+        while (peek().kind == token::Kind::kLBracket) {
+            advance();   // [
+            std::vector<std::string> bracket_spell;
+            std::vector<std::unique_ptr<parse::Node>> bracket_expr;
+            while (true) {
+                if (peek().kind == token::Kind::kIntLiteral) {
+                    if (std::strtoll(peek().text.c_str(), nullptr, 10) <= 0) {
+                        error("Array size must be a positive integer constant.");
+                        return false;
+                    }
+                    bracket_spell.push_back(peek().text);
+                    advance();   // size
+                    bracket_expr.push_back(nullptr);
+                } else {
+                    auto dim = parseExpr();
+                    if (!dim) return false;
+                    bracket_spell.push_back("1");   // provisional; constfold bakes it
+                    bracket_expr.push_back(std::move(dim));
+                    any_dim_expr = true;
+                }
+                if (peek().kind != token::Kind::kComma) break;
+                advance();   // ,
+            }
+            if (!expect(token::Kind::kRBracket, "]")) return false;
+            // Append this bracket's dims reversed (the comma transpose).
+            for (std::size_t k = bracket_spell.size(); k-- > 0; ) {
+                type += "[" + bracket_spell[k] + "]";
+                dim_exprs.push_back(std::move(bracket_expr[k]));
+            }
+        }
+        return true;
+    }
+
     // Pure lookahead: do the tokens from the current position form a (qualified)
     // identifier TYPE spelling, with an optional pointer suffix, immediately
     // followed by an identifier? That is a typed var decl whose type is an
@@ -1084,50 +1125,11 @@ struct Parser {
         node->qualifier = std::move(segs);
         node->qualifier_toks = std::move(toks);
         node->global_qualified = global;
-        // Fixed-size array dimensions follow the NAME: `int arr[5]`,
-        // `int grid[3][5]` (standard row-major: the leftmost dim is the
-        // OUTERMOST). A single bracket may hold a comma-list `int grid[3,5]`,
-        // the "natural order" form; a comma TRANSPOSES (`[a,..,z]` -> `[z]...[a]`),
-        // so each bracket's dims are appended REVERSED. A dim that is a
-        // const-EXPRESSION rather than a literal (`arr[N]`, `arr[sizeof(int)]`)
-        // parses as an expression, bakes a provisional `[1]` into the spelling,
-        // and is folded + baked for real in constfold.
+        // Fixed-size array dimensions follow the NAME (`int arr[5]`,
+        // `int grid[3][5]`, comma form `int g[3,5]`) — see parseNameDims.
         std::vector<std::unique_ptr<parse::Node>> dim_exprs;
         bool any_dim_expr = false;
-        while (peek().kind == token::Kind::kLBracket) {
-            advance();   // [
-            std::vector<std::string> bracket_spell;
-            std::vector<std::unique_ptr<parse::Node>> bracket_expr;
-            while (true) {
-                if (peek().kind == token::Kind::kIntLiteral) {
-                    // A LITERAL dim is a known constant — validate its positivity
-                    // here (a const-EXPRESSION dim is validated, after folding, in
-                    // constfold's bakeNodeDims). It bakes straight into the
-                    // spelling, so it carries no dim_expr.
-                    if (std::strtoll(peek().text.c_str(), nullptr, 10) <= 0) {
-                        error("Array size must be a positive integer constant.");
-                        return nullptr;
-                    }
-                    bracket_spell.push_back(peek().text);
-                    advance();   // size
-                    bracket_expr.push_back(nullptr);
-                } else {
-                    auto dim = parseExpr();
-                    if (!dim) return nullptr;
-                    bracket_spell.push_back("1");   // provisional; constfold bakes it
-                    bracket_expr.push_back(std::move(dim));
-                    any_dim_expr = true;
-                }
-                if (peek().kind != token::Kind::kComma) break;
-                advance();   // ,
-            }
-            if (!expect(token::Kind::kRBracket, "]")) return nullptr;
-            // Append this bracket's dims reversed (the comma transpose).
-            for (std::size_t k = bracket_spell.size(); k-- > 0; ) {
-                type += "[" + bracket_spell[k] + "]";
-                dim_exprs.push_back(std::move(bracket_expr[k]));
-            }
-        }
+        if (!parseNameDims(type, dim_exprs, any_dim_expr)) return nullptr;
         if (any_dim_expr) node->dim_exprs = std::move(dim_exprs);
         node->return_type = widen::internOrNone(type);
         node->return_type_seg_toks = std::move(type_seg_toks);
@@ -2136,10 +2138,16 @@ struct Parser {
             std::string p_name = peek().text;
             int p_name_tok = pos;
             advance();
+            // Name-anchored array dims (`int f(int a[3])`), same form as a var decl
+            // (the param TYPE rejects sized dims, so dims only sit on the name).
+            std::vector<std::unique_ptr<parse::Node>> p_dims;
+            bool p_any_dim = false;
+            if (!parseNameDims(p_type, p_dims, p_any_dim)) return nullptr;
             auto p = newNodeAt(parse::Kind::kParam, p_file, p_tok);
             p->name = std::move(p_name);
             p->name_tok = p_name_tok;
             p->return_type = widen::internOrNone(p_type);
+            if (p_any_dim) p->dim_exprs = std::move(p_dims);
             if (peek().kind == token::Kind::kEquals) {
                 advance();   // =
                 auto def = parseExpr();

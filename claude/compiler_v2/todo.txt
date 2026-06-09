@@ -16,17 +16,6 @@ BUGS (found, deferred)
     carve-out; lands with the cross-TU / .slh-propagation work (plan Phase 8).
     prerequisite: group with general work on import.
 
-  * ARRAY PARAMETER NEEDS AN ALIAS — a function parameter can't carry array
-    dimensions on the NAME: `int f(int a[3])` -> "Expected ',' or ')' in parameter
-    list". The parameter parser stops after `Type name` and never runs the post-name
-    `[N]` dim loop that the var-decl path has (grammar.cpp:1085+). A direct array-
-    TYPE param (`int[3] a`) is rejected by the name-anchored declaration rule
-    (reject_array_dims), so today the ONLY way to take an array param is via an
-    alias (`alias A3 = int[3]; int f(A3 a)`). Found while adding array-param/return
-    test coverage (the alias form + array RETURN `int[3] f()` both work). Fix: thread
-    the name-dims parsing into the parameter parser, mirroring the var-decl path, so
-    `int f(int a[3])` parses to an int[3] param. prerequisite: none.
-
 REACH GOALS
 
   * FOR-TUPLE OVER CLASS ELEMENTS — `for (p : classTuple)` where the element is a

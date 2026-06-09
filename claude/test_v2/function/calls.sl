@@ -78,6 +78,26 @@ int32 doubled(int32 x) {
     return sum(x, x);          // call in return position
 }
 
+// array params + an array return: an array arg passes the aggregate. An array
+// PARAM carries its size on the NAME (`int a[3]`, the same form as a var decl) or
+// via an alias (`A3 a`), with a literal or a const-EXPRESSION dim; `int[3] f()` is
+// the only way to RETURN an array.
+const int A3LEN = 3;
+alias A3 = int[3];
+int[3] makeA3() {
+    int r[3] = (3, 4, 5);
+    return r;
+}
+int sumA3(A3 a) {              // alias param
+    return a[0] + a[1] + a[2];
+}
+int arrSum(int a[3]) {        // name-anchored, literal dim
+    return a[0] + a[1] + a[2];
+}
+int arrSumN(int a[A3LEN]) {   // name-anchored, const-expression dim
+    return a[0] + a[1] + a[2];
+}
+
 /*
 orphan function declared but not defined.
 valid in a header.
@@ -119,6 +139,13 @@ int32 main() {
     __println("e= " + e);
     __println("d= " + doubled(21));  // call (return-position result) as print arg
     __println("fwd= " + fwd_decl(9));  // forward-declared above, defined below
+
+    // array args + an array return
+    int m[3] = makeA3();
+    __println("makeA3= " + m[0] + " " + m[2]);   // 3 5
+    __println("sumA3= " + sumA3(m));             // 12
+    __println("arrSum= " + arrSum(m));           // 12
+    __println("arrSumN= " + arrSumN(m));         // 12
 
     //-EXPECT-ERROR: expects 2 arguments, got 1
     //add(1);
@@ -208,4 +235,18 @@ int32 fwd_decl(int32 n) {
 //}
 //int twice(int a) {
 //    return a + 1;
+//}
+
+/* an array size in TYPE position is rejected for a parameter, same as a var decl —
+   the size belongs on the NAME (`int p[3]`). */
+//-EXPECT-ERROR: An array size belongs on the declared name
+//int neg_array_param(int[3] p) {
+//    return p[0];
+//}
+
+/* a name-anchored param dim must be a CONSTANT expression — a function call is not
+   foldable, so the size is rejected. */
+//-EXPECT-ERROR: Array size must be an integer constant
+//int neg_param_dim_nonconst(int a[helper()]) {
+//    return a[0];
 //}

@@ -1097,6 +1097,26 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
         // not yet folded is left for a later round.
         bakeNodeDims(*slot, tree, /*final=*/false, changed, diag);
     }
+    // A const-EXPRESSION array dim on a PARAMETER (`int f(int a[N])`) bakes into the
+    // param's return_type + entry, same as a var decl.
+    if (slot->kind == parse::Kind::kParam) {
+        bakeNodeDims(*slot, tree, /*final=*/false, changed, diag);
+    }
+    // After a function's params are walked (post-order), re-sync the signature's
+    // param_types from the params' (now-baked) return types — resolve built
+    // param_types from the provisional `[1]` before a const-expr param dim folded.
+    if ((slot->kind == parse::Kind::kFunctionDef
+         || slot->kind == parse::Kind::kFunctionDecl)
+        && slot->resolved_entry_id >= 0) {
+        auto& fe = tree.entries[slot->resolved_entry_id];
+        for (std::size_t i = 0;
+             i < slot->params.size() && i < fe.param_types.size(); i++) {
+            if (slot->params[i]->return_type != fe.param_types[i]) {
+                fe.param_types[i] = slot->params[i]->return_type;
+                changed = true;
+            }
+        }
+    }
     assignNominal(*slot);
 }
 
