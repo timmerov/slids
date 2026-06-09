@@ -99,16 +99,14 @@ void print(TupleClass^ tpl) {
         "b=(" + tpl^.s_[0] + "," + tpl^.s_[1] + "," + tpl^.s_[2] + ")");
 }
 
-/*
 CtorDtor(int c_) {
     _() {
-        __println("CtorDtor:ctor");
+        __println("CtorDtor:ctor: " + c_);
     }
     ~() {
-        __println("CtorDtor:dtor");
+        __println("CtorDtor:dtor " + c_);
     }
 }
-*/
 
 int32 main() {
 
@@ -197,16 +195,14 @@ int32 main() {
     Three th1(10, 20, 30);
     __println("th1: a=" + th1.a_ + " b=" + th1.b_ + " c=" + th1.c_);
 
-    /*
     {
-        __println("expect 3 ctors below.");
-        CtorDtor cd1;
-        CtorDtor cd2;
-        CtorDtor cd3;
-        __println("expect 3 ctors above and 3 dtors below.");
+        __println("expect ctors 1,2,3 below.");
+        CtorDtor cd1(1);
+        CtorDtor cd2(2);
+        CtorDtor cd3(3);
+        __println("expect ctors 1,2,3 above and dtors 3,2,1 below.");
     }
-    __println("expect 3 dtors above.");
-    */
+    __println("expect dtors 3,2,1 above.");
 
     return 0;
 }

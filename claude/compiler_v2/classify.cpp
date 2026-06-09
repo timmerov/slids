@@ -2660,6 +2660,14 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             for (auto& init : ch->children) {
                 if (init) inferExpr(tree, *init, ch->return_type, diag);
             }
+        } else if (ch->kind == parse::Kind::kClassDef) {
+            // Type-check ctor/dtor member bodies (self-bound; field refs are
+            // already kFieldExpr from resolve).
+            for (auto& m : ch->children) {
+                if (m && (m->name == "_$ctor" || m->name == "_$dtor")) {
+                    classifyFunctionBody(tree, *m, diag);
+                }
+            }
         }
     }
 }

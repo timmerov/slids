@@ -69,6 +69,8 @@ char openCharFor(char close) {
 
 void skipWhitespaceAndComments(Stream& s) {
     int depth = 0;
+    int open_line = 0, open_col = 0;   // the outermost unclosed `/*`, for the
+                                       // "Unterminated block comment." caret
     bool in_line = false;
     while (s.pos < (int)s.source->size()) {
         char c = peek(s);
@@ -105,6 +107,7 @@ void skipWhitespaceAndComments(Stream& s) {
             continue;
         }
         if (c == '/' && d == '*') {
+            if (depth == 0) { open_line = s.line; open_col = s.col; }
             depth++;
             advance(s); advance(s);
             continue;
@@ -145,7 +148,10 @@ void skipWhitespaceAndComments(Stream& s) {
         }
         break;
     }
-    if (depth > 0) setFatal(s, s.line, s.col, 1, "Unterminated block comment.");
+    // Caret the OPENING `/*` (length 2), not the useless end of file where the
+    // scan finally runs out — that is where the user fixes the missing `*/`.
+    if (depth > 0)
+        setFatal(s, open_line, open_col, 2, "Unterminated block comment.");
 }
 
 token::Token readCharLiteral(Stream& s) {

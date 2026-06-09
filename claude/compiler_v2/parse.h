@@ -337,6 +337,12 @@ struct Tree {
     // pre-pass; read by classify + desugar.
     std::map<std::string, ClassInfo> classes;
 
+    // Transient — while resolving a ctor/dtor body: the field names of the
+    // enclosing class. An UNRESOLVED bare name matching one is rewritten to
+    // `self^.field` (locals shadow fields, so this is only a fallback). nullptr
+    // outside a class member body.
+    std::vector<std::string> const* method_fields = nullptr;
+
     // Transient scope state — valid only during classify's run.
     std::vector<int> frame_id_stack;
     std::vector<std::size_t> frame_entries_start_stack;

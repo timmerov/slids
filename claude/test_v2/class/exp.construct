@@ -20,3 +20,12 @@ MyFirstClass: a=19 b=1
 one0: x=42
 th0: a=0 b=2 c=3
 th1: a=10 b=20 c=30
+expect ctors 1,2,3 below.
+CtorDtor:ctor: 1
+CtorDtor:ctor: 2
+CtorDtor:ctor: 3
+expect ctors 1,2,3 above and dtors 3,2,1 below.
+CtorDtor:dtor 3
+CtorDtor:dtor 2
+CtorDtor:dtor 1
+expect dtors 3,2,1 above.

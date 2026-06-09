@@ -872,6 +872,15 @@ TypeRef internSlid(std::string const& name, std::vector<TypeRef> const& slots) {
     return ref;
 }
 
+void setSlidLifecycle(std::string const& name, bool needs_ctor, bool needs_dtor) {
+    Type t;
+    t.form = Type::Form::kSlid;
+    t.name = name;
+    TypeRef ref = internStruct(std::move(t));
+    arena().types[ref].needs_ctor = needs_ctor;
+    arena().types[ref].needs_dtor = needs_dtor;
+}
+
 TypeRef strip(TypeRef ref) {
     while (get(ref).form == Type::Form::kAlias) ref = get(ref).underlying;
     return ref;

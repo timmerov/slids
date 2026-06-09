@@ -61,6 +61,30 @@ DEFERRED FEATURES (later; may not be on the plan)
         lookahead Phase 5 brings.
     typeconv.sl keeps the `(String=...)` example commented. prerequisite: classes.
 
+  * CLASS-FIELD INIT FROM A SIZE-1 TUPLE — the "vexing parse" (Phase 5). CONTEXT,
+    the class structure: a class IS a named tuple. `Name(field-list){body}` interns
+    a kSlid that CARRIES its field slot types (the layout rides on the type, so
+    codegen needs no symbol table), a ClassInfo holds the field names/defaults
+    (parse-side only), `.field` lowers to a slot index, and construction reuses the
+    tuple aggregate path. Two init forms feed it: the CALL form
+    `Name(arg0, arg1, ...)` — each arg is ONE field's value, so a tuple arg stays
+    WHOLE and a class-typed field constructs from it recursively (its own defaults
+    fill the rest) — and the `=` form `Name x = tuple` — the init tuple is the
+    FIELD tuple, SPREAD slot-to-field. They coincide for a multi-field class
+    (`= (6,7)` == `(6, 7)`) and DIVERGE when one argument is itself a tuple bound
+    for a single (class) field: the call form keeps it whole, `=` spreads.
+    THE GAP: a SIZE-1 init tuple is INEXPRESSIBLE in the `=` form — `( X )` is a
+    grouping paren that COLLAPSES to `X` (size-1 tuples collapse to their slot
+    everywhere). So `Outer x = ( (13,17) )` (Outer has one class field) collapses
+    to `= (13,17)`, a 2-slot tuple spread into 1 field -> "1 field(s) but 2
+    initializer(s)". No `=`-spelling passes a whole tuple to a lone field; the
+    CALL form `Outer x( (13,17) )` is the only way (parseCallArgs preserves the
+    argument boundary the collapsing parens destroy). PUNTED: use the call /
+    initializer-list form for a single-field-from-tuple init; canon construct.sl
+    keeps the `= ( (13,17) )` case commented with a "vexing parse" note. A real fix
+    needs a non-collapsing 1-tuple syntax, which touches grouping parens globally —
+    not worth it. prerequisite: a 1-tuple spelling (none planned).
+
   * CONVERSION OF AN OUT-OF-INT64-RANGE FLOAT LITERAL — tryFoldConvert does NOT
     fold a float-literal operand whose truncation falls outside int64 (|v| >=
     2^63); `(int = 1e30)` is lowered at runtime where `fptosi` of an out-of-range

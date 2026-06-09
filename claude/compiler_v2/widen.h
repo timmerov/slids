@@ -50,8 +50,10 @@ struct Type {
     TypeRef elem = kNoType;                // kArray element
     TypeRef underlying = kNoType;          // kAlias — the type it transparently names
     std::vector<int> dims;                 // kArray dims, source order
-    std::vector<TypeRef> slots;            // kTuple
+    std::vector<TypeRef> slots;            // kTuple / kSlid (field types)
     int slid_entry_id = -1;                // kSlid (resolved later)
+    bool needs_ctor = false;               // kSlid: has a constructor hook to call
+    bool needs_dtor = false;               // kSlid: has a destructor hook to call
 };
 
 // Intern a slids type spelling, returning a stable handle. Round-trips exactly:
@@ -84,6 +86,10 @@ TypeRef internAlias(std::string const& name, TypeRef underlying);
 // handle per class); resolve calls this once the field list is known to attach
 // the layout. Codegen reads get(ref).slots for the struct definition.
 TypeRef internSlid(std::string const& name, std::vector<TypeRef> const& slots);
+
+// Mark a class's lifecycle hooks on its (already-interned) kSlid type, so
+// codegen knows where to emit constructor / destructor calls.
+void setSlidLifecycle(std::string const& name, bool needs_ctor, bool needs_dtor);
 
 // Peel any alias layers, returning the first non-alias handle (the underlying
 // structure). Predicates that switch on form() use this to see through aliases.

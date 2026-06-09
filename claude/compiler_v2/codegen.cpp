@@ -1107,12 +1107,43 @@ bool containsBreak(ast::Node const& s);
 // break/continue (possibly nested inside if-arms/blocks) reaches the right
 // blocks. nullptr outside any loop (resolve already rejected break/continue
 // there). continue -> header (re-test), break -> exit (after the loop).
+struct DtorScope;   // fwd
+
 struct LoopCtx {
     std::string header_label;
     std::string exit_label;
     LoopCtx const* outer = nullptr;   // enclosing loop/switch — a labeled/numbered
                                       // break/continue walks `loop_levels` hops out
+    DtorScope const* scope = nullptr; // the scope active OUTSIDE this loop — a
+                                      // break/continue destroys every scope it
+                                      // unwinds down to (but not including) this one
 };
+
+// A live destructible: the address of a class instance + the class name (its
+// dtor symbol is `<class>__$dtor`). Tracked per lexical scope, destroyed in
+// REVERSE declaration order on every exit (the destructor-balance invariant).
+struct DtorObj { std::string addr; std::string class_name; };
+struct DtorScope {
+    std::vector<DtorObj> objs;
+    DtorScope const* outer = nullptr;
+};
+
+// Emit the dtor calls for ONE scope, in reverse declaration order.
+void emitScopeDtors(DtorScope const& s, std::ostream& out) {
+    for (auto it = s.objs.rbegin(); it != s.objs.rend(); ++it) {
+        out << "  call void @" << it->class_name << "__$dtor(ptr "
+            << it->addr << ")\n";
+    }
+}
+
+// Emit dtors for every scope from `from` up to but NOT including `stop`
+// (innermost first). `stop == nullptr` unwinds the whole chain (a return).
+void emitUnwindDtors(DtorScope const* from, DtorScope const* stop,
+                     std::ostream& out) {
+    for (DtorScope const* s = from; s && s != stop; s = s->outer) {
+        emitScopeDtors(*s, out);
+    }
+}
 
 // Collect an array's ELEMENT value-nodes from a tuple literal, descending exactly
 // dims.size() levels (the ARRAY dims). At that depth each node is one element,
@@ -1315,6 +1346,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
               strings::Pool& pool,
               widen::TypeRef fn_return_type,
               LoopCtx const* loop,
+              DtorScope* scope,
               std::ostream& out, diagnostic::Sink& diag) {
     // Stop at the first error: once any error is recorded, emit no further
     // statements. Codegen must not keep producing IR past a semantic failure —
@@ -1370,6 +1402,22 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                     std::string src = emitLvalueAddr(*stmt.children[0], syms, pool,
                                                      out, diag);
                     emitNullLeaves(src, stmt.children[0]->inferred_type, out);
+                }
+            }
+            // Class lifecycle: every field is initialized before the constructor
+            // hook runs (the store above). Then register the instance so its
+            // destructor runs at scope exit, in reverse declaration order.
+            {
+                widen::TypeRef st = widen::strip(it->second.slids_type);
+                if (widen::form(st) == widen::Type::Form::kSlid) {
+                    widen::Type const& ct = widen::get(st);
+                    if (ct.needs_ctor) {
+                        out << "  call void @" << ct.name << "__$ctor(ptr "
+                            << it->second.alloca_name << ")\n";
+                    }
+                    if (ct.needs_dtor && scope) {
+                        scope->objs.push_back({it->second.alloca_name, ct.name});
+                    }
                 }
             }
             return;
@@ -1536,26 +1584,35 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             return;
         }
         case ast::Kind::kReturnStmt: {
-            // Bare `return;` (no child) in a void function -> `ret void`.
+            // Materialize the return value FIRST, then destroy every in-scope
+            // class instance (innermost-out — the whole chain), then return.
             if (stmt.children.empty()) {
+                emitUnwindDtors(scope, nullptr, out);
                 out << "  ret void\n";
                 return;
             }
             std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
                                        fn_return_type);
+            emitUnwindDtors(scope, nullptr, out);
             std::string llty = llvmForRef(fn_return_type);
             out << "  ret " << llty << " " << val << "\n";
             return;
         }
         case ast::Kind::kBlockStmt: {
-            // A nested scope is transparent at codegen: emit its statements in
-            // order (allocas were hoisted to the entry block; the SymTab is
-            // entry-id-keyed, so a nested-scope local is reachable while live
-            // without any scope bookkeeping here). Thread the loop context so a
-            // break/continue nested in this block reaches the enclosing loop.
+            // A nested lexical scope. Push a dtor scope so class instances declared
+            // here are destroyed (reverse declaration order) when control leaves
+            // the block. Allocas are still hoisted to the entry block; the SymTab
+            // is entry-id-keyed, so this only adds destruction bookkeeping. Thread
+            // the loop context so a break/continue reaches the enclosing loop.
+            DtorScope block_scope{{}, scope};
             for (auto const& ch : stmt.children) {
-                if (ch) emitStmt(*ch, syms, pool, fn_return_type, loop, out, diag);
+                if (ch) emitStmt(*ch, syms, pool, fn_return_type, loop,
+                                 &block_scope, out, diag);
             }
+            // Normal fall-through exit destroys this scope. If the block ended
+            // abruptly (return/break/continue), that statement already unwound
+            // this scope and emitting after a terminator is invalid IR — skip.
+            if (!endsTerminated(stmt.children)) emitScopeDtors(block_scope, out);
             return;
         }
         case ast::Kind::kIfStmt: {
@@ -1588,12 +1645,12 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 << ", label %" << (has_else ? else_lbl : merge_lbl) << "\n";
 
             out << then_lbl << ":\n";
-            emitStmt(*stmt.children[1], syms, pool, fn_return_type, loop, out, diag);
+            emitStmt(*stmt.children[1], syms, pool, fn_return_type, loop, scope, out, diag);
             if (then_falls) out << "  br label %" << merge_lbl << "\n";
 
             if (has_else) {
                 out << else_lbl << ":\n";
-                emitStmt(*stmt.children[2], syms, pool, fn_return_type, loop, out, diag);
+                emitStmt(*stmt.children[2], syms, pool, fn_return_type, loop, scope, out, diag);
                 if (else_falls) out << "  br label %" << merge_lbl << "\n";
             }
 
@@ -1621,8 +1678,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 << ", label %" << exit_lbl << "\n";
 
             out << body_lbl << ":\n";
-            LoopCtx ctx{head_lbl, exit_lbl, loop};
-            emitStmt(*stmt.children[1], syms, pool, fn_return_type, &ctx, out, diag);
+            LoopCtx ctx{head_lbl, exit_lbl, loop, scope};
+            emitStmt(*stmt.children[1], syms, pool, fn_return_type, &ctx, scope, out, diag);
             if (!endsTerminated(stmt.children[1]->children)) {
                 out << "  br label %" << head_lbl << "\n";   // back-edge
             }
@@ -1644,8 +1701,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
 
             out << "  br label %" << body_lbl << "\n";
             out << body_lbl << ":\n";
-            LoopCtx ctx{cond_lbl, exit_lbl, loop};   // continue -> cond, break -> exit
-            emitStmt(*stmt.children[1], syms, pool, fn_return_type, &ctx, out, diag);
+            LoopCtx ctx{cond_lbl, exit_lbl, loop, scope};   // continue -> cond, break -> exit
+            emitStmt(*stmt.children[1], syms, pool, fn_return_type, &ctx, scope, out, diag);
             if (!endsTerminated(stmt.children[1]->children)) {
                 out << "  br label %" << cond_lbl << "\n";
             }
@@ -1672,7 +1729,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             for (std::size_t i = 3; i < stmt.children.size(); i++) {
                 if (stmt.children[i]) {
                     emitStmt(*stmt.children[i], syms, pool, fn_return_type, loop,
-                             out, diag);
+                             scope, out, diag);
                 }
             }
             std::string head_lbl = newLabel("for_head");
@@ -1690,8 +1747,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 << ", label %" << exit_lbl << "\n";
 
             out << body_lbl << ":\n";
-            LoopCtx ctx{upd_lbl, exit_lbl, loop};   // continue -> update, break -> exit
-            emitStmt(*stmt.children[2], syms, pool, fn_return_type, &ctx, out, diag);
+            LoopCtx ctx{upd_lbl, exit_lbl, loop, scope};   // continue -> update, break -> exit
+            emitStmt(*stmt.children[2], syms, pool, fn_return_type, &ctx, scope, out, diag);
             if (!endsTerminated(stmt.children[2]->children)) {
                 out << "  br label %" << upd_lbl << "\n";
             }
@@ -1700,7 +1757,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             // The update can't break/continue/return (resolve-enforced), so it
             // always falls through back to the head. Pass the enclosing loop ctx
             // (a nested loop inside the update carries its own).
-            emitStmt(*stmt.children[1], syms, pool, fn_return_type, loop, out, diag);
+            emitStmt(*stmt.children[1], syms, pool, fn_return_type, loop, scope, out, diag);
             out << "  br label %" << head_lbl << "\n";
 
             out << exit_lbl << ":\n";
@@ -1716,6 +1773,9 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 assert(t->outer && "loop_levels exceeds the loop/switch context depth");
                 t = t->outer;
             }
+            // Destroy every class instance in the scopes this jump unwinds — down
+            // to (but not including) the scope outside the target loop.
+            emitUnwindDtors(scope, t->scope, out);
             out << "  br label %" << t->exit_label << "\n";
             return;
         }
@@ -1726,6 +1786,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 assert(t->outer && "loop_levels exceeds the loop/switch context depth");
                 t = t->outer;
             }
+            emitUnwindDtors(scope, t->scope, out);
             out << "  br label %" << t->header_label << "\n";
             return;
         }
@@ -1772,8 +1833,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 ast::Node const& body = *stmt.children[k + 1]->children[1];
                 out << blk[k] << ":\n";
                 LoopCtx swctx{loop ? loop->header_label : std::string(), exit_lbl,
-                              loop};
-                emitStmt(body, syms, pool, fn_return_type, &swctx, out, diag);
+                              loop, scope};
+                emitStmt(body, syms, pool, fn_return_type, &swctx, scope, out, diag);
                 if (containsBreak(body)) exit_reachable = true;
                 if (!endsTerminated(body.children)) {
                     std::string next = (k + 1 < n) ? blk[k + 1] : exit_lbl;
@@ -2027,8 +2088,13 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
         out << "  " << regname << " = alloca " << llty << "\n";
         syms[d->resolved_entry_id] = {regname, llty, d->return_type};
     }
+    // The function body is the outermost dtor scope: a class instance declared
+    // at top level is destroyed at the function's exit. An explicit `return`
+    // unwinds this scope itself; the implicit fall-through below does it here.
+    DtorScope root_scope;
     for (auto const& s : fn.children) {
-        emitStmt(*s, syms, pool, fn.return_type, /*loop=*/nullptr, out, diag);
+        emitStmt(*s, syms, pool, fn.return_type, /*loop=*/nullptr, &root_scope,
+                 out, diag);
     }
     // A void function that falls through its body needs an implicit `ret void`
     // terminator — without it the block is unterminated and llc rejects the IR.
@@ -2040,6 +2106,7 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     if (!endsInReturn(fn.children)) {
         assert(widen::form(fn.return_type) == widen::Type::Form::kVoid
             && "emitFunction: non-void function reached codegen without a trailing return");
+        emitScopeDtors(root_scope, out);   // destroy function-scope instances
         out << "  ret void\n";
     }
     out << "}\n";

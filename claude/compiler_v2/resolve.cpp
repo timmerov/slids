@@ -508,6 +508,14 @@ void sweepUnusedLocals(parse::Tree& tree, diagnostic::Sink& diag) {
     for (int id : tree.body_locals) {
         if (tree.read_locals.count(id) > 0) continue;
         parse::Entry const& e = tree.entries[id];
+        // A class instance with a constructor / destructor is USED by its mere
+        // existence — the hooks run at construction / scope exit (the demo
+        // `{ CtorDtor cd1(1); ... }` is exactly this). Don't flag it as unused.
+        widen::TypeRef st = widen::strip(e.slids_type);
+        if (widen::form(st) == widen::Type::Form::kSlid
+            && (widen::get(st).needs_ctor || widen::get(st).needs_dtor)) {
+            continue;
+        }
         bool was_set = tree.initialized_locals.count(id) > 0
                     || tree.assigned_arrays.count(id) > 0;
         diagnostic::report(diag, {e.file_id, e.tok,
@@ -932,6 +940,32 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                     return;
                 }
                 if (id < 0) {
+                    // Inside a ctor/dtor body, a bare name matching a class field
+                    // is `self^.field`. Locals shadow fields (we only reach here
+                    // when no local/const/etc. resolved), so rewrite this node to
+                    // a kFieldExpr over `self^` and resolve that.
+                    if (tree.method_fields) {
+                        bool is_field = false;
+                        for (auto const& f : *tree.method_fields)
+                            if (f == e.name) { is_field = true; break; }
+                        if (is_field) {
+                            auto self_id = std::make_unique<parse::Node>();
+                            self_id->kind = parse::Kind::kIdentExpr;
+                            self_id->name = "self";
+                            self_id->file_id = e.file_id;
+                            self_id->tok = e.tok;
+                            auto deref = std::make_unique<parse::Node>();
+                            deref->kind = parse::Kind::kDerefExpr;
+                            deref->file_id = e.file_id;
+                            deref->tok = e.tok;
+                            deref->children.push_back(std::move(self_id));
+                            e.kind = parse::Kind::kFieldExpr;   // e.name stays the field
+                            e.children.clear();
+                            e.children.push_back(std::move(deref));
+                            resolveExpr(tree, *e.children[0], diag, unevaluated);
+                            return;
+                        }
+                    }
                     if (namespaceMemberExists(tree, e.name)) {
                         diagnostic::report(diag, {e.file_id, e.tok,
                             "'" + e.name + "' needs a namespace qualifier.", {}});
@@ -3024,9 +3058,39 @@ void registerClass(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag)
         info.field_params.push_back(p.get());   // stable; default read live later
         field_locs.push_back({p->file_id, p->name_tok});
     }
+    // Constructor / destructor presence (parsed as `_$ctor`/`_$dtor` member
+    // kFunctionDefs). They are the explicit-hook bucket: the type carries the
+    // flags so codegen emits the ctor/dtor calls at construction / scope exit.
+    bool has_ctor = false, has_dtor = false;
+    for (auto& m : node.children) {
+        if (!m) continue;
+        if (m->name == "_$ctor") has_ctor = true;
+        else if (m->name == "_$dtor") has_dtor = true;
+    }
+    info.needs_ctor = has_ctor;
+    info.needs_dtor = has_dtor;
     info.type = widen::internSlid(node.name, info.field_types);
+    widen::setSlidLifecycle(node.name, has_ctor, has_dtor);
     node.return_type = info.type;   // stamp the class node with its own type
     tree.classes.emplace(node.name, std::move(info));
+}
+
+// Resolve a class's ctor/dtor member bodies. Each is a kFunctionDef carrying an
+// implicit `self` (Class^) param; a bare field name in the body resolves to
+// `self^.field` (method_fields drives the kIdentExpr fallback rewrite). Runs
+// after file-scope entries exist so the bodies can call file-scope functions.
+void resolveClassMemberBodies(parse::Tree& tree, parse::Node& node,
+                              diagnostic::Sink& diag) {
+    auto it = tree.classes.find(node.name);
+    if (it == tree.classes.end()) return;
+    std::vector<std::string> const* saved = tree.method_fields;
+    tree.method_fields = &it->second.field_names;
+    for (auto& m : node.children) {
+        if (m && (m->name == "_$ctor" || m->name == "_$dtor")) {
+            resolveFunctionBody(tree, *m, diag, /*nested=*/false);
+        }
+    }
+    tree.method_fields = saved;
 }
 
 // Resolve a class's field-default expressions (their ident references), after
@@ -3272,6 +3336,13 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     for (auto& ch : program->children) {
         if (!ch || ch->kind != parse::Kind::kFunctionDef) continue;
         resolveFunctionBody(tree, *ch, diag);
+    }
+
+    // Pass 2-class — resolve class ctor/dtor member bodies (self-bound).
+    for (auto& ch : program->children) {
+        if (ch && ch->kind == parse::Kind::kClassDef) {
+            resolveClassMemberBodies(tree, *ch, diag);
+        }
     }
 
     // Pass 2-ns — resolve namespace member bodies (const inits + function

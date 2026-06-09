@@ -2223,9 +2223,11 @@ struct Parser {
     }
 
     // `Name(field-list) { body }` — a class definition. The field list is the
-    // named tuple (parsed as params); the body holds member definitions only
-    // (no naked code). Members (methods, ctor/dtor) are a later feature, so the
-    // trivial bucket here requires an empty body.
+    // named tuple (parsed as params); the body holds member definitions. Today
+    // the only members are the constructor `_(){...}` and destructor `~(){...}`
+    // (no author params; they must appear together). Each is parsed as a
+    // kFunctionDef carrying an implicit `self` (`Name^`) param, stored in
+    // node->children; resolve binds bare field names to self.
     std::unique_ptr<parse::Node> parseClassDef() {
         int cls_file = peek().file_id;
         int cls_tok = pos;
@@ -2235,23 +2237,77 @@ struct Parser {
         if (!expect(token::Kind::kLParen, "(")) return nullptr;
 
         auto node = newNodeAt(parse::Kind::kClassDef, cls_file, cls_tok);
-        node->name = std::move(name);
+        node->name = name;
         node->name_tok = name_tok;
 
         if (!parseParamList(node.get())) return nullptr;
         if (!expect(token::Kind::kLBrace, "{")) return nullptr;
+
+        std::string self_type = name + "^";
+        bool has_ctor = false, has_dtor = false;
         while (!fatal && peek().kind != token::Kind::kRBrace) {
             if (peek().kind == token::Kind::kEndOfFile
                 || peek().kind == token::Kind::kEndOfInput) {
                 error("Expected '}'.");
                 return nullptr;
             }
-            // The body is definitions only; class members (methods, ctor/dtor)
-            // land in a later feature.
-            error("Class members are not yet supported.");
-            return nullptr;
+            bool is_ctor = (peek().kind == token::Kind::kIdentifier
+                            && peek().text == "_");
+            bool is_dtor = (peek().kind == token::Kind::kBitNot);
+            if (!is_ctor && !is_dtor) {
+                error("A class body holds only a constructor '_()' and a "
+                      "destructor '~()'.");
+                return nullptr;
+            }
+            int m_file = peek().file_id;
+            int m_tok = pos;
+            advance();   // `_` or `~`
+            if (is_ctor && has_ctor) { error("Duplicate constructor."); return nullptr; }
+            if (is_dtor && has_dtor) { error("Duplicate destructor."); return nullptr; }
+            if (!expect(token::Kind::kLParen, "(")) return nullptr;
+            if (peek().kind != token::Kind::kRParen) {
+                error("A constructor or destructor takes no parameters.");
+                return nullptr;
+            }
+            advance();   // )
+            if (!expect(token::Kind::kLBrace, "{")) return nullptr;
+
+            auto member = newNodeAt(parse::Kind::kFunctionDef, m_file, m_tok);
+            member->name = is_ctor ? "_$ctor" : "_$dtor";
+            member->name_tok = m_tok;
+            member->return_type = widen::internOrNone("void");
+            auto self = newNodeAt(parse::Kind::kParam, m_file, m_tok);
+            self->name = "self";
+            self->name_tok = m_tok;
+            self->return_type = widen::internOrNone(self_type);
+            member->params.push_back(std::move(self));
+
+            std::string saved_func = current_func;
+            current_func = name + (is_ctor ? "._" : ".~");
+            while (!fatal && peek().kind != token::Kind::kRBrace) {
+                if (peek().kind == token::Kind::kEndOfFile
+                    || peek().kind == token::Kind::kEndOfInput) {
+                    error("Expected '}'.");
+                    return nullptr;
+                }
+                auto stmt = parseStmt();
+                if (!stmt) return nullptr;
+                member->children.push_back(std::move(stmt));
+            }
+            if (!expect(token::Kind::kRBrace, "}")) return nullptr;
+            current_func = std::move(saved_func);
+
+            if (is_ctor) has_ctor = true; else has_dtor = true;
+            node->children.push_back(std::move(member));
         }
         if (!expect(token::Kind::kRBrace, "}")) return nullptr;
+        // A constructor and destructor are hooks for the same scope boundary;
+        // one without the other is a contract error.
+        if (has_ctor != has_dtor) {
+            error(has_ctor ? "A constructor requires a matching destructor."
+                           : "A destructor requires a matching constructor.");
+            return nullptr;
+        }
         return node;
     }
 

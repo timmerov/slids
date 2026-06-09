@@ -1046,6 +1046,26 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
             }
         }
     }
+    // Lift each class's ctor/dtor member bodies to top-level functions named
+    // <Class>__$ctor / <Class>__$dtor (the bodies are self-bound — resolve
+    // rewrote bare field refs to `self^.field`, lowered to slot indices on copy).
+    // Codegen calls these symbols at construction / scope exit.
+    for (std::size_t i = 0; i < in.nodes.size(); i++) {
+        if (!in.nodes[i] || in.nodes[i]->kind != parse::Kind::kProgram) continue;
+        ast::Node* prog = out.nodes[i].get();
+        for (auto const& c : in.nodes[i]->children) {
+            if (!c || c->kind != parse::Kind::kClassDef) continue;
+            for (auto const& m : c->children) {
+                if (!m) continue;
+                bool is_ctor = (m->name == "_$ctor");
+                bool is_dtor = (m->name == "_$dtor");
+                if (!is_ctor && !is_dtor) continue;
+                auto fn = copyNode(*m, in, next_id);
+                fn->name = c->name + (is_ctor ? "__$ctor" : "__$dtor");
+                prog->children.push_back(std::move(fn));
+            }
+        }
+    }
     // PPID lowering: walk each function body's statements, extract ++/--, and
     // splice statement-level pre/post bumps as sibling statements around each
     // statement (post-bumps land after the statement's store).
