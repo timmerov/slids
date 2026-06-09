@@ -8,8 +8,9 @@ the overloadable move/swap operators) bolt onto, and the bones Phases 6-9 extend
 this plan; see the DEFERRED section.
 
 Authority: tests are canon and go first (a class test file lands before the
-compiler change). plan.txt remains the master roadmap; this file is the Phase 5
-detail that plan.txt:440 points at. The model below is v1's, ported — v1's
+compiler change). Canon test files for this plan live in test_v2/class/ (added
+to the test_v2 Makefile's SUBDIRS). plan.txt remains the master roadmap; this
+file is the Phase 5 detail that plan.txt:440 points at. The model below is v1's, ported — v1's
 virtual classes work acceptably and its ctor/dtor analysis is already the
 "call-if-needed" design we want (decision A).
 
