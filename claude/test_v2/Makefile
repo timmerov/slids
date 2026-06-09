@@ -1,5 +1,6 @@
 
 SUBDIRS = \
+	class \
 	constfold \
 	expression \
 	flow \
