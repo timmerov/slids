@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -42,6 +43,18 @@ enum class Kind {
                    // leading namespace segments, global_qualified for `::`
     kNamespaceDecl,// Name { members }; name = namespace, children = member decls.
                    // Consumed by resolve+desugar; never reaches codegen.
+    kClassDef,     // Name(field-list){body} — a class. name = class, params =
+                   // kParam fields (children[0] = optional default value), children
+                   // = body member defs (definitions only; empty in the trivial
+                   // bucket). resolve records a ClassInfo + interns the named-tuple
+                   // type; desugar drops the node (construction lowers at the use
+                   // site). A class "is a namespace + a named tuple".
+    kFieldExpr,    // postfix `base.name` — a named field of a class lvalue.
+                   // children[0] = base (a class lvalue), name = field name.
+                   // classify infers it to the field type (via the class's
+                   // ClassInfo); desugar lowers it to a kIndexExpr over the field's
+                   // slot index, so it never reaches codegen (a class is a named
+                   // tuple — slot access by name).
     kEnumDecl,     // enum [type] [Name] ( members ); name = enum (empty =
                    // anonymous), return_type = underlying type (default int),
                    // children = kVarDeclStmt members (is_const, optional init).
@@ -287,12 +300,42 @@ struct Entry {
                                     // weak. Substitution stamps it onto the literal.
 };
 
+// A class's field layout — the named-tuple half of "a class is a namespace + a
+// named tuple". Built by resolve from a kClassDef node, keyed by class name in
+// Tree::classes. Parse-side only: classify reads it to type field access and to
+// fill defaults at construction; desugar reads it to map a field name to its
+// slot index. Codegen never needs it (the layout also rides on the kSlid type).
+struct ClassInfo {
+    std::string name;
+    std::vector<std::string> field_names;
+    std::vector<widen::TypeRef> field_types;
+    // The kParam node for each field (STABLE across stages). Its children[0] is
+    // the author default expression, read LIVE at construction time — constfold
+    // may REPLACE a default node in place (folding `BASE+5`->`15`), so a cached
+    // pointer to the default itself would dangle; the kParam node does not move.
+    std::vector<Node*> field_params;
+    widen::TypeRef type = widen::kNoType; // the interned kSlid{name, slots}
+    int def_file_id = -1;                // the class def's location (for the
+    int def_tok = -1;                    // "first defined here" dup note)
+    bool needs_ctor = false;             // layout: false in the trivial bucket
+    bool needs_dtor = false;
+    int fieldIndex(std::string const& f) const {
+        for (std::size_t i = 0; i < field_names.size(); ++i)
+            if (field_names[i] == f) return static_cast<int>(i);
+        return -1;
+    }
+};
+
 struct Tree {
     std::vector<std::unique_ptr<Node>> nodes;
 
     // Symbol table — populated by classify, consumed by later stages.
     std::vector<Entry> entries;
     int next_frame_id = 0;
+
+    // Class layouts by name (see ClassInfo). Populated by resolve's class
+    // pre-pass; read by classify + desugar.
+    std::map<std::string, ClassInfo> classes;
 
     // Transient scope state — valid only during classify's run.
     std::vector<int> frame_id_stack;

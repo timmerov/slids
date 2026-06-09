@@ -60,8 +60,12 @@ std::string llvmForRef(widen::TypeRef ref) {
             }
             return ll;
         }
-        case widen::Type::Form::kTuple: {
-            // Anonymous tuple -> an LLVM literal struct: { llvm(t0), llvm(t1) }.
+        case widen::Type::Form::kTuple:
+        case widen::Type::Form::kSlid: {
+            // A tuple or a class -> an LLVM literal struct over its slot/field
+            // types: { llvm(t0), llvm(t1) }. A class IS a named tuple, so it
+            // lowers identically (the name is a compile-time concept, erased
+            // here); every aggregate path is shared.
             std::string s = "{ ";
             for (std::size_t i = 0; i < t.slots.size(); i++) {
                 if (i) s += ", ";
@@ -72,7 +76,6 @@ std::string llvmForRef(widen::TypeRef ref) {
         case widen::Type::Form::kAlias:
             return llvmForRef(t.underlying);   // transparent — lower the underlying
         case widen::Type::Form::kNone:
-        case widen::Type::Form::kSlid:
             break;   // not lowerable (kNone = no type reached codegen)
     }
     assert(false && "llvmForRef: classify let through an unknown type");
@@ -685,11 +688,14 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
                 ? widen::get(cs).elem
                 : widen::internArray(widen::get(cs).elem,
                       std::vector<int>(dd.begin() + 1, dd.end()));
-        } else if (f == widen::Type::Form::kTuple) {
+        } else if (f == widen::Type::Form::kTuple
+                || f == widen::Type::Form::kSlid) {
+            // A tuple slot or a class field (a class is a named tuple) -> a
+            // struct GEP by the constant slot/field index.
             long k = std::strtol(idx_node.text.c_str(), nullptr, 10);
             std::vector<widen::TypeRef> const& slots = widen::get(cs).slots;
             assert(k >= 0 && k < static_cast<long>(slots.size())
-                && "emitElementAddr: tuple slot index out of range");
+                && "emitElementAddr: tuple/field slot index out of range");
             std::string gep = newTmp("slot");
             out << "  " << gep << " = getelementptr inbounds " << llvmForRef(cur)
                 << ", ptr " << addr << ", i32 0, i32 " << k << "\n";
@@ -868,11 +874,12 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             return it->second.alloca_name;
         }
         case ast::Kind::kIndexExpr: {
-            // A tuple slot read `tup[k]`: emit the aggregate value, extract slot k
-            // (classify guaranteed k is a constant in range).
+            // A tuple / class-field slot read `tup[k]` (a class is a named tuple,
+            // so `base.field` lowers here): emit the aggregate value, extract slot
+            // k (classify guaranteed k is a constant in range).
             ast::Node const& ibase = *expr.children[0];
-            if (widen::form(widen::strip(ibase.inferred_type))
-                == widen::Type::Form::kTuple) {
+            widen::Type::Form ibf = widen::form(widen::strip(ibase.inferred_type));
+            if (ibf == widen::Type::Form::kTuple || ibf == widen::Type::Form::kSlid) {
                 std::string agg = emitExpr(ibase, syms, pool, out, diag,
                                            ibase.inferred_type);
                 long idx = std::strtol(expr.children[1]->text.c_str(), nullptr, 10);

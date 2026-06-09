@@ -36,6 +36,16 @@ ast::Kind toAstKind(parse::Kind k) {
             // Consumed by resolve; members are hoisted, the wrapper dropped.
             assert(false && "toAstKind: namespace should be dropped before copy");
             __builtin_unreachable();
+        case parse::Kind::kClassDef:
+            // Consumed by resolve (ClassInfo + the kSlid type); construction
+            // lowers at the use site. The node is dropped on copy.
+            assert(false && "toAstKind: class should be dropped before copy");
+            __builtin_unreachable();
+        case parse::Kind::kFieldExpr:
+            // Intercepted by copyNode and lowered to a kIndexExpr over the field's
+            // slot index; never reaches toAstKind.
+            assert(false && "toAstKind: kFieldExpr should be lowered by copyNode");
+            __builtin_unreachable();
         case parse::Kind::kEnumDecl:
             // Consumed by resolve (lowered to alias+namespace+consts / bare
             // consts); members folded by constfold. The node is dropped on copy.
@@ -180,6 +190,8 @@ std::unique_ptr<ast::Node> lowerForArray(parse::Node const& p,
                                          parse::Tree const& tree, int& next_id);
 std::unique_ptr<ast::Node> lowerForTuple(parse::Node const& p,
                                          parse::Tree const& tree, int& next_id);
+std::unique_ptr<ast::Node> lowerFieldExpr(parse::Node const& p,
+                                          parse::Tree const& tree, int& next_id);
 
 std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tree,
                                     int& next_id) {
@@ -193,6 +205,11 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     }
     if (p.kind == parse::Kind::kForTupleStmt) {
         return lowerForTuple(p, tree, next_id);
+    }
+    // `base.field` lowers to a slot index over the class's named tuple — a class
+    // is a named tuple, so field access IS tuple-slot access.
+    if (p.kind == parse::Kind::kFieldExpr) {
+        return lowerFieldExpr(p, tree, next_id);
     }
     auto node = std::make_unique<ast::Node>();
     node->kind = toAstKind(p.kind);
@@ -227,6 +244,7 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
                           // null slot (a switch default clause's absent label)
         if (c->kind == parse::Kind::kAliasDecl) continue;      // resolve-only
         if (c->kind == parse::Kind::kNamespaceDecl) continue;  // members hoisted
+        if (c->kind == parse::Kind::kClassDef) continue;       // resolve-recorded
         if (c->kind == parse::Kind::kEnumDecl) continue;       // resolve-lowered
         node->children.push_back(copyNode(*c, tree, next_id));
     }
@@ -966,6 +984,39 @@ void lowerStatementList(std::vector<std::unique_ptr<ast::Node>>& stmts) {
         for (auto& b : post) lowered.push_back(makeBumpStmt(std::move(b)));
     }
     stmts = std::move(lowered);
+}
+
+// Lower `base.field` to `base[slot]` — a class is a named tuple, so a field is a
+// slot read by its declaration index. The base keeps its kSlid type; codegen
+// handles a kSlid base in the index path exactly like a tuple slot.
+std::unique_ptr<ast::Node> lowerFieldExpr(parse::Node const& p,
+                                          parse::Tree const& tree, int& next_id) {
+    assert(!p.children.empty() && p.children[0] && "kFieldExpr needs a base");
+    parse::Node const& base = *p.children[0];
+    // classify validated the base is a class and the field exists, so these hold
+    // (no silent index-0 fallback for an unresolved field).
+    widen::TypeRef bt = widen::strip(base.inferred_type);
+    assert(widen::form(bt) == widen::Type::Form::kSlid
+        && "lowerFieldExpr: base must be a class");
+    auto it = tree.classes.find(widen::get(bt).name);
+    assert(it != tree.classes.end() && "lowerFieldExpr: class is registered");
+    int idx = it->second.fieldIndex(p.name);
+    assert(idx >= 0 && "lowerFieldExpr: field resolved by classify");
+    auto node = std::make_unique<ast::Node>();
+    node->kind = ast::Kind::kIndexExpr;
+    node->inferred_type = p.inferred_type;   // the field type (classify stamped)
+    node->file_id = p.file_id;
+    node->tok = p.tok;
+    node->children.push_back(copyNode(base, tree, next_id));
+    auto idxn = std::make_unique<ast::Node>();
+    idxn->kind = ast::Kind::kIntLiteral;
+    idxn->text = std::to_string(idx);
+    idxn->inferred_type = widen::intern("int");
+    idxn->nominal_type = widen::intern("int");
+    idxn->file_id = p.file_id;
+    idxn->tok = p.tok;
+    node->children.push_back(std::move(idxn));
+    return node;
 }
 
 }  // namespace

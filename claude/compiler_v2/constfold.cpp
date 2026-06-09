@@ -167,6 +167,8 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kSizeofExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kParam:
+        case parse::Kind::kClassDef:
+        case parse::Kind::kFieldExpr:
             return;  // non-literal: no nominal type
     }
 }

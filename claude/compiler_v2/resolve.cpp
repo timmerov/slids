@@ -30,12 +30,27 @@ bool isReferenceType(widen::TypeRef t) {
     return widen::form(t) == widen::Type::Form::kPointer;
 }
 
+// A type whose leaf (through alias / pointer / iterator / array wrappers) is a
+// kSlid naming a registered class — a known type even though widen::isKnownType
+// (which knows only built-ins) says otherwise.
+bool leafIsKnownClass(parse::Tree const& tree, widen::TypeRef t) {
+    using F = widen::Type::Form;
+    for (;;) {
+        widen::Type const& ty = widen::get(t);
+        if (ty.form == F::kAlias) { t = ty.underlying; continue; }
+        if (ty.form == F::kPointer || ty.form == F::kIterator) { t = ty.pointee; continue; }
+        if (ty.form == F::kArray) { t = ty.elem; continue; }
+        if (ty.form == F::kSlid) return tree.classes.count(ty.name) > 0;
+        return false;
+    }
+}
+
 // Reject the declared / return / parameter type if it's not a known spelling.
 // Caret points at the construct's own tok (the type-name token's position),
 // which together with surrounding source context tells the user where the
 // unknown name appears.
-void requireKnownType(widen::TypeRef t, int file_id, int tok,
-                      diagnostic::Sink& diag) {
+void requireKnownType(parse::Tree const& tree, widen::TypeRef t,
+                      int file_id, int tok, diagnostic::Sink& diag) {
     // `void` has no stride: it may only be a reference (`void^`), never an
     // iterator (`void[]`) or array (`void[N]`) — i.e. an iterator/array wrapping
     // a void element directly. strip() sees through an alias to the same end.
@@ -52,7 +67,7 @@ void requireKnownType(widen::TypeRef t, int file_id, int tok,
             return;
         }
     }
-    if (widen::isKnownType(t)) return;
+    if (widen::isKnownType(t) || leafIsKnownClass(tree, t)) return;
     diagnostic::report(diag, {file_id, tok,
         "Unknown type '" + widen::spell(t) + "'.", {}});
 }
@@ -231,7 +246,7 @@ void resolveDeclType(parse::Tree& tree, widen::TypeRef& type_ref,
     bool reported = false;
     type_ref = resolveTypeRef(tree, type_ref, visiting, reported,
                               file_id, tok, diag, seg_toks);
-    if (!reported) requireKnownType(type_ref, file_id, tok, diag);
+    if (!reported) requireKnownType(tree, type_ref, file_id, tok, diag);
 }
 
 // Register `alias Name = Type;` as a kAlias entry in the current frame.
@@ -1012,11 +1027,13 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
             return;
         case parse::Kind::kAddrOfExpr: {
             // `^lvalue` — address-of. A bare variable yields a reference (`T^`);
-            // an indexed element yields an iterator (`T[]`). Walk any subscript
-            // chain (resolving each index as a read) down to the base variable.
+            // an indexed element yields an iterator (`T[]`); a class field yields
+            // a reference. Walk any subscript / field chain (resolving each index
+            // as a read) down to the base variable.
             parse::Node* base = e.children[0].get();
-            while (base->kind == parse::Kind::kIndexExpr) {
-                if (base->children[1])
+            while (base->kind == parse::Kind::kIndexExpr
+                || base->kind == parse::Kind::kFieldExpr) {
+                if (base->kind == parse::Kind::kIndexExpr && base->children[1])
                     resolveExpr(tree, *base->children[1], diag, unevaluated);
                 base = base->children[0].get();
             }
@@ -1071,6 +1088,12 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
             for (auto& ch : e.children) {
                 if (ch) resolveExpr(tree, *ch, diag, unevaluated);
             }
+            return;
+        case parse::Kind::kFieldExpr:
+            // `base.field` — resolve the base lvalue. The field NAME is a member
+            // of the base's class, resolved by classify against the ClassInfo
+            // (which knows the field set); resolve only walks the base.
+            if (e.children[0]) resolveExpr(tree, *e.children[0], diag, unevaluated);
             return;
         case parse::Kind::kCastExpr: {
             // `<Type^> operand` — resolve the operand as a read, then substitute
@@ -1235,6 +1258,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
         case parse::Kind::kNamespaceDecl:
+        case parse::Kind::kClassDef:
         case parse::Kind::kEnumDecl:
         case parse::Kind::kReturnStmt:
         case parse::Kind::kBlockStmt:
@@ -1853,14 +1877,22 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             for (auto& ch : s.children) {
                 if (ch) resolveExpr(tree, *ch, diag);
             }
-            if (!s.children.empty() && s.resolved_entry_id >= 0
+            if (s.resolved_entry_id >= 0
                 && tree.entries[s.resolved_entry_id].kind
                        == parse::EntryKind::kLocalVar) {
-                tree.initialized_locals.insert(s.resolved_entry_id);
-                // A whole-array initializer (`int a[3] = (1,2,3)`) assigns the
-                // entire array — mark it in the array may-set too.
-                if (isArrayType(tree.entries[s.resolved_entry_id].slids_type))
-                    tree.assigned_arrays.insert(s.resolved_entry_id);
+                // A class is always constructed on declaration (its fields take
+                // default / zero values), so a class-typed decl is definitely
+                // initialized even with no explicit initializer.
+                bool is_class = widen::form(widen::strip(
+                    tree.entries[s.resolved_entry_id].slids_type))
+                        == widen::Type::Form::kSlid;
+                if (!s.children.empty() || is_class) {
+                    tree.initialized_locals.insert(s.resolved_entry_id);
+                    // A whole-array initializer (`int a[3] = (1,2,3)`) assigns the
+                    // entire array — mark it in the array may-set too.
+                    if (isArrayType(tree.entries[s.resolved_entry_id].slids_type))
+                        tree.assigned_arrays.insert(s.resolved_entry_id);
+                }
             }
             return Completion::Normal;
         }
@@ -2698,6 +2730,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
         case parse::Kind::kTupleExpr:
+        case parse::Kind::kFieldExpr:
         case parse::Kind::kCastExpr:
         case parse::Kind::kConvertExpr:
         case parse::Kind::kNewExpr:
@@ -2706,6 +2739,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         case parse::Kind::kCallExpr:
         case parse::Kind::kCaseClause:
         case parse::Kind::kParam:
+        case parse::Kind::kClassDef:
             assert(false && "resolveStmt: not a statement kind");
             return Completion::Normal;
     }
@@ -2950,6 +2984,62 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
     parse::popFrame(tree);
 }
 
+// Register a class definition `Name(fields){body}`: build its ClassInfo (the
+// named-tuple field layout) and intern the slotful kSlid type so every `Name` /
+// `Name^` reference shares one handle that carries the layout. Field default
+// expressions are resolved later (resolveClassFieldDefaults), once file-scope
+// consts they may reference exist.
+void registerClass(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag) {
+    if (tree.classes.count(node.name)) {
+        parse::ClassInfo const& prev = tree.classes.at(node.name);
+        diagnostic::report(diag, {node.file_id, node.name_tok,
+            "Duplicate definition of class '" + node.name + "'.",
+            {{prev.def_file_id, prev.def_tok, "first defined here"}}});
+        return;
+    }
+    parse::ClassInfo info;
+    info.name = node.name;
+    info.def_file_id = node.file_id;
+    info.def_tok = node.name_tok;
+    // First-seen location of each field name, for the duplicate-field note.
+    std::vector<std::pair<int, int>> field_locs;   // (file_id, name_tok)
+    for (auto& p : node.params) {
+        if (!p) continue;
+        int dup = info.fieldIndex(p->name);
+        if (dup >= 0) {
+            diagnostic::report(diag, {p->file_id, p->name_tok,
+                "Duplicate field '" + p->name + "' in class '" + node.name + "'.",
+                {{field_locs[dup].first, field_locs[dup].second,
+                  "first declared here"}}});
+            continue;
+        }
+        if (p->return_type == widen::kNoType) {
+            diagnostic::report(diag, {p->file_id, p->name_tok,
+                "Field '" + p->name + "' needs an explicit type.", {}});
+            continue;
+        }
+        resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
+        info.field_names.push_back(p->name);
+        info.field_types.push_back(p->return_type);
+        info.field_params.push_back(p.get());   // stable; default read live later
+        field_locs.push_back({p->file_id, p->name_tok});
+    }
+    info.type = widen::internSlid(node.name, info.field_types);
+    node.return_type = info.type;   // stamp the class node with its own type
+    tree.classes.emplace(node.name, std::move(info));
+}
+
+// Resolve a class's field-default expressions (their ident references), after
+// file-scope consts exist. constfold folds them to literals for construction.
+void resolveClassFieldDefaults(parse::Tree& tree, parse::Node& node,
+                               diagnostic::Sink& diag) {
+    for (auto& p : node.params) {
+        if (p && !p->children.empty() && p->children[0]) {
+            resolveExpr(tree, *p->children[0], diag);
+        }
+    }
+}
+
 }  // namespace
 
 void run(parse::Tree& tree, diagnostic::Sink& diag) {
@@ -2995,6 +3085,15 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     for (auto& ch : program->children) {
         if (ch && ch->kind == parse::Kind::kNamespaceDecl) {
             registerNamespaceTree(tree, *ch, kGlobalFrame, diag);
+        }
+    }
+
+    // Pass 1a-class — register every file-scope class (its field layout + the
+    // named kSlid type) before any body, so a decl `Class c` / param `Class^`
+    // resolves and carries the layout.
+    for (auto& ch : program->children) {
+        if (ch && ch->kind == parse::Kind::kClassDef) {
+            registerClass(tree, *ch, diag);
         }
     }
 
@@ -3114,6 +3213,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         }
         if (ch->kind == parse::Kind::kAliasDecl) continue;     // handled above
         if (ch->kind == parse::Kind::kNamespaceDecl) continue; // handled above
+        if (ch->kind == parse::Kind::kClassDef) continue;      // handled above
         if (ch->kind == parse::Kind::kEnumDecl) continue;      // handled above
         // Mutable globals + other top-level shapes not supported today.
         // Grammar rejects them; if one slips through, it's a grammar bug.
@@ -3157,6 +3257,14 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         if (isQualified(*ch)) continue;   // inline member init resolved above
         for (auto& init : ch->children) {
             if (init) resolveExpr(tree, *init, diag);
+        }
+    }
+
+    // Pass 1b-class — resolve class field-default expressions now that every
+    // file-scope const/entry exists (a default may reference one).
+    for (auto& ch : program->children) {
+        if (ch && ch->kind == parse::Kind::kClassDef) {
+            resolveClassFieldDefaults(tree, *ch, diag);
         }
     }
 

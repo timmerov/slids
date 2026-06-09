@@ -759,6 +759,22 @@ struct Parser {
                 if (!base) return nullptr;
                 continue;
             }
+            if (peek().kind == token::Kind::kDot) {
+                int op_file = peek().file_id;
+                int op_tok = pos;
+                advance();   // .
+                if (peek().kind != token::Kind::kIdentifier) {
+                    error("Expected a field name after '.'.");
+                    return nullptr;
+                }
+                auto node = newNodeAt(parse::Kind::kFieldExpr, op_file, op_tok);
+                node->children.push_back(std::move(base));
+                node->name = peek().text;
+                node->name_tok = pos;
+                advance();   // field name
+                base = std::move(node);
+                continue;
+            }
             if (peek().kind == token::Kind::kBitXor
                 && !startsPrimary(peekKind(1))) {
                 int op_file = peek().file_id;
@@ -1144,6 +1160,18 @@ struct Parser {
             auto init = parseExpr();
             if (!init) return nullptr;
             node->children.push_back(std::move(init));
+        } else if (peek().kind == token::Kind::kLParen) {
+            // `Type name(args)` — construction init: the arg expressions fill the
+            // field tuple left to right (missing fields take their default /
+            // zero). Modeled as a kTupleExpr init so classify shares the
+            // `= (tuple)` class-construction normalization; `()` is the
+            // all-default form.
+            int t_file = peek().file_id;
+            int t_tok = pos;
+            advance();   // (
+            auto tup = newNodeAt(parse::Kind::kTupleExpr, t_file, t_tok);
+            if (!parseCallArgs(*tup)) return nullptr;
+            node->children.push_back(std::move(tup));
         } else if (is_const) {
             error("Constant declaration requires an initializer.");
             return nullptr;
@@ -2095,7 +2123,136 @@ struct Parser {
             && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
         if (peekKind(o) != token::Kind::kIdentifier) return false;   // fn name
         o++;
-        return peekKind(o) == token::Kind::kLParen;
+        if (peekKind(o) != token::Kind::kLParen) return false;
+        // `Type name (` is shared with a variable CONSTRUCTION `Type name(args);`.
+        // Scan to the matching `)` and look past it: a `{` body is always a
+        // function def; a `;` is a function (forward decl) only when the parens
+        // hold a PARAMETER list (type-led), not construction arguments
+        // (expressions) or an empty `()`.
+        int open = o;
+        int depth = 0;
+        int close = -1;
+        for (int i = open; ; i++) {
+            token::Kind k = peekKind(i);
+            if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput
+                || k == token::Kind::kError) return false;
+            if (k == token::Kind::kLParen) depth++;
+            else if (k == token::Kind::kRParen && --depth == 0) { close = i; break; }
+        }
+        token::Kind after = peekKind(close + 1);
+        if (after == token::Kind::kLBrace) return true;        // definition
+        if (after != token::Kind::kSemicolon) return false;
+        token::Kind first = peekKind(open + 1);
+        if (first == token::Kind::kRParen) return false;       // `()` -> construction
+        if (isTypeStart(first)) return true;                   // `(int ...)` -> params
+        if (first == token::Kind::kLParen) {
+            // `( ( ... ) ...` is a tuple-TYPE param `((int,int) name)` — followed
+            // by a param name — or a tuple-EXPR construction arg `((13,17))` —
+            // followed by `,` / `)`. Scan the inner tuple to its matching `)`.
+            int d = 0, inner_close = -1;
+            for (int i = open + 1; ; i++) {
+                token::Kind k = peekKind(i);
+                if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput
+                    || k == token::Kind::kError) break;
+                if (k == token::Kind::kLParen) d++;
+                else if (k == token::Kind::kRParen && --d == 0) { inner_close = i; break; }
+            }
+            return inner_close >= 0
+                && peekKind(inner_close + 1) == token::Kind::kIdentifier;
+        }
+        if (first == token::Kind::kIdentifier
+            && peekKind(open + 2) == token::Kind::kIdentifier) return true;  // `Type name`
+        return false;                                          // expression args
+    }
+
+    // Parse a parenthesized parameter / field list — the `(` already consumed —
+    // filling node->params with kParam nodes (each `[type] name [= default]`,
+    // default in children[0]). Consumes the closing `)`. Shared by a function
+    // def's parameters and a class def's field list (a class field is a slid
+    // param). Returns false on a parse error.
+    bool parseParamList(parse::Node* node) {
+        while (peek().kind != token::Kind::kRParen) {
+            int p_file = peek().file_id;
+            int p_tok = pos;
+            // `[type] name [= constexpr]` — the type is optional; a typeless
+            // param infers its type from its default value (resolve/classify
+            // enforce that a typeless param HAS a default, and required-before-
+            // optional ordering).
+            std::string p_type;
+            if (isTypeStart(peek().kind) || looksLikeQualifiedTypedDecl()
+                || (peek().kind == token::Kind::kLParen
+                    && looksLikeTupleTypeDecl())) {
+                p_type = parseType(nullptr, /*reject_array_dims=*/true);
+                if (fatal) return false;
+            }
+            if (peek().kind != token::Kind::kIdentifier) {
+                error("Expected parameter name.");
+                return false;
+            }
+            std::string p_name = peek().text;
+            int p_name_tok = pos;
+            advance();
+            // Name-anchored array dims (`int f(int a[3])`), same form as a var decl
+            // (the param TYPE rejects sized dims, so dims only sit on the name).
+            std::vector<std::unique_ptr<parse::Node>> p_dims;
+            bool p_any_dim = false;
+            if (!parseNameDims(p_type, p_dims, p_any_dim)) return false;
+            auto p = newNodeAt(parse::Kind::kParam, p_file, p_tok);
+            p->name = std::move(p_name);
+            p->name_tok = p_name_tok;
+            p->return_type = widen::internOrNone(p_type);
+            if (p_any_dim) p->dim_exprs = std::move(p_dims);
+            if (peek().kind == token::Kind::kEquals) {
+                advance();   // =
+                auto def = parseExpr();
+                if (!def) return false;
+                p->children.push_back(std::move(def));   // children[0] = default
+            }
+            node->params.push_back(std::move(p));
+            if (peek().kind == token::Kind::kComma) {
+                advance();
+                continue;
+            }
+            if (peek().kind != token::Kind::kRParen) {
+                error("Expected ',' or ')' in parameter list.");
+                return false;
+            }
+        }
+        if (!expect(token::Kind::kRParen, ")")) return false;
+        return true;
+    }
+
+    // `Name(field-list) { body }` — a class definition. The field list is the
+    // named tuple (parsed as params); the body holds member definitions only
+    // (no naked code). Members (methods, ctor/dtor) are a later feature, so the
+    // trivial bucket here requires an empty body.
+    std::unique_ptr<parse::Node> parseClassDef() {
+        int cls_file = peek().file_id;
+        int cls_tok = pos;
+        std::string name = peek().text;
+        int name_tok = pos;
+        advance();   // class name
+        if (!expect(token::Kind::kLParen, "(")) return nullptr;
+
+        auto node = newNodeAt(parse::Kind::kClassDef, cls_file, cls_tok);
+        node->name = std::move(name);
+        node->name_tok = name_tok;
+
+        if (!parseParamList(node.get())) return nullptr;
+        if (!expect(token::Kind::kLBrace, "{")) return nullptr;
+        while (!fatal && peek().kind != token::Kind::kRBrace) {
+            if (peek().kind == token::Kind::kEndOfFile
+                || peek().kind == token::Kind::kEndOfInput) {
+                error("Expected '}'.");
+                return nullptr;
+            }
+            // The body is definitions only; class members (methods, ctor/dtor)
+            // land in a later feature.
+            error("Class members are not yet supported.");
+            return nullptr;
+        }
+        if (!expect(token::Kind::kRBrace, "}")) return nullptr;
+        return node;
     }
 
     std::unique_ptr<parse::Node> parseFunctionDef() {
@@ -2117,54 +2274,7 @@ struct Parser {
         node->name_tok = name_tok;
         node->return_type = widen::internOrNone(ret_type);
 
-        while (peek().kind != token::Kind::kRParen) {
-            int p_file = peek().file_id;
-            int p_tok = pos;
-            // `[type] name [= constexpr]` — the type is optional; a typeless
-            // param infers its type from its default value (resolve/classify
-            // enforce that a typeless param HAS a default, and required-before-
-            // optional ordering).
-            std::string p_type;
-            if (isTypeStart(peek().kind) || looksLikeQualifiedTypedDecl()
-                || (peek().kind == token::Kind::kLParen
-                    && looksLikeTupleTypeDecl())) {
-                p_type = parseType(nullptr, /*reject_array_dims=*/true);
-                if (fatal) return nullptr;
-            }
-            if (peek().kind != token::Kind::kIdentifier) {
-                error("Expected parameter name.");
-                return nullptr;
-            }
-            std::string p_name = peek().text;
-            int p_name_tok = pos;
-            advance();
-            // Name-anchored array dims (`int f(int a[3])`), same form as a var decl
-            // (the param TYPE rejects sized dims, so dims only sit on the name).
-            std::vector<std::unique_ptr<parse::Node>> p_dims;
-            bool p_any_dim = false;
-            if (!parseNameDims(p_type, p_dims, p_any_dim)) return nullptr;
-            auto p = newNodeAt(parse::Kind::kParam, p_file, p_tok);
-            p->name = std::move(p_name);
-            p->name_tok = p_name_tok;
-            p->return_type = widen::internOrNone(p_type);
-            if (p_any_dim) p->dim_exprs = std::move(p_dims);
-            if (peek().kind == token::Kind::kEquals) {
-                advance();   // =
-                auto def = parseExpr();
-                if (!def) return nullptr;
-                p->children.push_back(std::move(def));   // children[0] = default
-            }
-            node->params.push_back(std::move(p));
-            if (peek().kind == token::Kind::kComma) {
-                advance();
-                continue;
-            }
-            if (peek().kind != token::Kind::kRParen) {
-                error("Expected ',' or ')' in parameter list.");
-                return nullptr;
-            }
-        }
-        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+        if (!parseParamList(node.get())) return nullptr;
 
         if (peek().kind == token::Kind::kSemicolon) {
             advance();
@@ -2208,6 +2318,11 @@ struct Parser {
             } else if (peek().kind == token::Kind::kIdentifier
                        && peekKind(1) == token::Kind::kLBrace) {
                 child = parseNamespaceDecl();
+            } else if (peek().kind == token::Kind::kIdentifier
+                       && peekKind(1) == token::Kind::kLParen) {
+                // `Name(` with no leading return type is a class definition; a
+                // function is `Type Name(` (a return type precedes the name).
+                child = parseClassDef();
             } else {
                 child = parseFunctionDef();
             }

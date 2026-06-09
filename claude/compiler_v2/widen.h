@@ -80,6 +80,11 @@ TypeRef internArray(TypeRef elem, std::vector<int> const& dims);
 // by resolve (which has the symbol table that knows name -> underlying).
 TypeRef internAlias(std::string const& name, TypeRef underlying);
 
+// A named class/slid type carrying its field-slot types. Interned by name (one
+// handle per class); resolve calls this once the field list is known to attach
+// the layout. Codegen reads get(ref).slots for the struct definition.
+TypeRef internSlid(std::string const& name, std::vector<TypeRef> const& slots);
+
 // Peel any alias layers, returning the first non-alias handle (the underlying
 // structure). Predicates that switch on form() use this to see through aliases.
 TypeRef strip(TypeRef ref);

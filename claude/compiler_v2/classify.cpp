@@ -291,6 +291,8 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kSwitchStmt:
         case parse::Kind::kCaseClause:
         case parse::Kind::kParam:
+        case parse::Kind::kClassDef:
+        case parse::Kind::kFieldExpr:
             assert(false && "defaultLiteralType: not a literal kind");
             __builtin_unreachable();
     }
@@ -560,6 +562,38 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 return;
             }
             e.inferred_type = pointeeType(operand.inferred_type);
+            return;
+        }
+        case parse::Kind::kFieldExpr: {
+            // `base.field` -> a named field of a class lvalue. The base resolves
+            // to a class type (a kSlid carrying its slots); look the field up in
+            // the class's ClassInfo to get its slot type. desugar lowers this to
+            // a slot index.
+            assert(e.children.size() == 1 && "kFieldExpr needs a base");
+            parse::Node& base = *e.children[0];
+            inferExpr(tree, base, widen::kNoType, diag);
+            widen::TypeRef bt = widen::strip(base.inferred_type);
+            if (bt == widen::kNoType) return;   // base already reported
+            if (widen::form(bt) != widen::Type::Form::kSlid) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "Cannot access field '" + e.name + "' of non-class value of "
+                    "type '" + widen::spellOrEmpty(base.inferred_type) + "'.", {}});
+                return;
+            }
+            auto it = tree.classes.find(widen::get(bt).name);
+            if (it == tree.classes.end()) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "Unknown class type '" + widen::get(bt).name + "'.", {}});
+                return;
+            }
+            int idx = it->second.fieldIndex(e.name);
+            if (idx < 0) {
+                diagnostic::report(diag, {e.file_id, e.name_tok,
+                    "Class '" + it->second.name + "' has no field '" + e.name
+                    + "'.", {}});
+                return;
+            }
+            e.inferred_type = it->second.field_types[idx];
             return;
         }
         case parse::Kind::kSizeofExpr: {
@@ -1085,6 +1119,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kSwitchStmt:
         case parse::Kind::kCaseClause:
         case parse::Kind::kParam:
+        case parse::Kind::kClassDef:
             assert(false && "inferExpr: not an expression kind");
             return;
     }
@@ -1494,11 +1529,222 @@ bool checkArrayValueAssign(widen::TypeRef dest, parse::Node const& rhs,
     return true;
 }
 
+// Deep-clone an expression subtree (a field default reused at a construction
+// site). parse::Node holds unique_ptr children, so it can't be copy-constructed.
+std::unique_ptr<parse::Node> cloneExpr(parse::Node const& n) {
+    auto c = std::make_unique<parse::Node>();
+    c->kind = n.kind;
+    c->name = n.name;
+    c->text = n.text;
+    c->return_type = n.return_type;
+    c->nominal_type = n.nominal_type;
+    c->inferred_type = n.inferred_type;
+    c->op_type = n.op_type;
+    c->alias_label = n.alias_label;
+    c->strong_type = n.strong_type;
+    c->file_id = n.file_id;
+    c->tok = n.tok;
+    c->name_tok = n.name_tok;
+    c->resolved_entry_id = n.resolved_entry_id;
+    c->qualifier = n.qualifier;
+    c->qualifier_toks = n.qualifier_toks;
+    c->global_qualified = n.global_qualified;
+    for (auto const& ch : n.children) {
+        c->children.push_back(ch ? cloneExpr(*ch) : nullptr);
+    }
+    return c;
+}
+
+// A zero-valued node for a field with no init slot and no author default: the
+// "appropriate zero value" — 0 / 0.0 / false / nullptr / (for a class field) a
+// recursively default-constructed tuple.
+std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty,
+                                            int file_id, int tok,
+                                            diagnostic::Sink& diag);
+
+// Normalize a class var-decl initializer into a per-field construction tuple:
+// each field takes its init slot (left to right), else the author default, else
+// zero. The result is a kTupleExpr typed as the class; codegen fills the struct.
+void classifyClassInit(parse::Tree& tree, parse::Node& s,
+                       parse::ClassInfo const& info, diagnostic::Sink& diag);
+
+// Build a fully-constructed value for class `info` from an optional init value
+// (a scalar / tuple / same-class value), filling the field defaults / zeros.
+// Returns the construction tuple (typed as the class). Mutually recursive with
+// classifyClassInit (a class-typed field constructs its sub-class the same way).
+std::unique_ptr<parse::Node> constructClass(parse::Tree& tree,
+                                            parse::ClassInfo const& info,
+                                            std::unique_ptr<parse::Node> init,
+                                            int file_id, int tok,
+                                            diagnostic::Sink& diag) {
+    auto holder = std::make_unique<parse::Node>();
+    holder->kind = parse::Kind::kVarDeclStmt;
+    holder->file_id = file_id;
+    holder->tok = tok;
+    if (init) holder->children.push_back(std::move(init));
+    classifyClassInit(tree, *holder, info, diag);
+    return std::move(holder->children[0]);
+}
+
+void classifyClassInit(parse::Tree& tree, parse::Node& s,
+                       parse::ClassInfo const& info, diagnostic::Sink& diag) {
+    std::size_t n = info.field_names.size();
+    std::vector<std::unique_ptr<parse::Node>> provided;
+    if (!s.children.empty() && s.children[0]) {
+        parse::Node& init = *s.children[0];
+        if (init.kind == parse::Kind::kTupleExpr) {
+            for (auto& ch : init.children) provided.push_back(std::move(ch));
+        } else {
+            provided.push_back(std::move(s.children[0]));
+        }
+    }
+    if (provided.size() > n) {
+        // Caret the first EXTRA initializer (the offender), not the decl.
+        parse::Node const& extra = *provided[n];
+        diagnostic::report(diag, {extra.file_id, extra.tok,
+            "Class '" + info.name + "' has " + std::to_string(n)
+            + " field(s) but " + std::to_string(provided.size())
+            + " initializer(s) were given.", {}});
+        provided.resize(n);
+    }
+    auto tup = std::make_unique<parse::Node>();
+    tup->kind = parse::Kind::kTupleExpr;
+    tup->file_id = s.file_id;
+    tup->tok = s.tok;
+    for (std::size_t i = 0; i < n; i++) {
+        widen::TypeRef ft = info.field_types[i];
+        widen::TypeRef fts = widen::strip(ft);
+        // Read the author default LIVE off the stable kParam node (constfold may
+        // have replaced the default expression in place since resolve).
+        parse::Node* fparam = info.field_params[i];
+        parse::Node* fdefault = (fparam && !fparam->children.empty())
+            ? fparam->children[0].get() : nullptr;
+        std::unique_ptr<parse::Node> provVal;
+        if (i < provided.size() && provided[i]) provVal = std::move(provided[i]);
+
+        // A CLASS field is constructed (not raw-filled): a value already of the
+        // field's class type is a copy; a scalar / tuple is the field's
+        // constructor input, recursively filled with the sub-class's defaults; no
+        // value default-constructs it.
+        if (widen::form(fts) == widen::Type::Form::kSlid
+            && tree.classes.count(widen::get(fts).name)) {
+            parse::ClassInfo const& sub = tree.classes.at(widen::get(fts).name);
+            std::unique_ptr<parse::Node> slot;
+            if (provVal) {
+                inferExpr(tree, *provVal, ft, diag);
+                if (widen::deepStrip(provVal->inferred_type) == widen::deepStrip(ft)) {
+                    slot = std::move(provVal);   // same-class value -> copy
+                } else {
+                    slot = constructClass(tree, sub, std::move(provVal),
+                                          s.file_id, s.tok, diag);
+                }
+            } else if (fdefault) {
+                slot = constructClass(tree, sub, cloneExpr(*fdefault),
+                                      s.file_id, s.tok, diag);
+            } else {
+                slot = constructClass(tree, sub, nullptr, s.file_id, s.tok, diag);
+            }
+            tup->children.push_back(std::move(slot));
+            continue;
+        }
+
+        // A non-class field: provided slot / author default / zero.
+        std::unique_ptr<parse::Node> slot;
+        if (provVal) slot = std::move(provVal);
+        else if (fdefault) slot = cloneExpr(*fdefault);
+        else slot = classZeroValue(tree, ft, s.file_id, s.tok, diag);
+        inferExpr(tree, *slot, ft, diag);
+        checkStrongConstAssign(ft, *slot, diag);
+        // Reject an aggregate-vs-scalar mismatch — the case codegen would turn
+        // into invalid IR: a class/tuple/array VALUE into a scalar field (e.g.
+        // copy-init `T b = a;`). Numeric / pointer fits ride the strong-const +
+        // codegen-convert path, as for a var decl.
+        auto isAgg = [](widen::TypeRef t) {
+            widen::Type::Form f = widen::form(widen::strip(t));
+            return f == widen::Type::Form::kSlid
+                || f == widen::Type::Form::kTuple
+                || f == widen::Type::Form::kArray;
+        };
+        widen::TypeRef vt = slot->inferred_type;
+        if (vt != widen::kNoType && isAgg(ft) != isAgg(vt)) {
+            diagnostic::report(diag, {slot->file_id, slot->tok,
+                "Cannot initialize field '" + info.field_names[i] + "' of type '"
+                + widen::spellOrEmpty(ft) + "' from a value of type '"
+                + widen::spellOrEmpty(vt) + "'.", {}});
+        }
+        tup->children.push_back(std::move(slot));
+    }
+    tup->inferred_type = info.type;
+    s.children.clear();
+    s.children.push_back(std::move(tup));
+}
+
+std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty,
+                                            int file_id, int tok,
+                                            diagnostic::Sink& diag) {
+    widen::TypeRef st = widen::strip(ty);
+    widen::Type const& t = widen::get(st);
+    auto n = std::make_unique<parse::Node>();
+    n->file_id = file_id;
+    n->tok = tok;
+    using F = widen::Type::Form;
+    if (t.form == F::kSlid) {
+        // A class-typed field with no value -> recursively default-construct it.
+        auto it = tree.classes.find(t.name);
+        if (it != tree.classes.end()) {
+            classifyClassInit(tree, *n, it->second, diag);
+            // classifyClassInit set n->children to [tuple]; lift the tuple up.
+            auto tuple = std::move(n->children[0]);
+            return tuple;
+        }
+        // An unregistered class — unreachable (resolve validated the field type),
+        // so fall through to the diagnostic rather than silently zeroing.
+    } else if (t.form == F::kPointer || t.form == F::kIterator
+               || t.form == F::kAnyptr) {
+        n->kind = parse::Kind::kNullptrLiteral;
+        return n;
+    } else if (t.form == F::kPrimitive) {
+        if (t.cat == widen::Category::kFloat) {
+            n->kind = parse::Kind::kFloatLiteral;
+            n->text = "0.0";
+            return n;
+        }
+        if (t.cat == widen::Category::kBool) {
+            n->kind = parse::Kind::kBoolLiteral;
+            n->text = "false";
+            return n;
+        }
+        // signed / unsigned integer (incl. char) -> 0
+        n->kind = parse::Kind::kIntLiteral;
+        n->text = "0";
+        return n;
+    }
+    // Any other field type (array, tuple, void, an unregistered class) has no
+    // defined zero here — report rather than silently emit an int 0.
+    diagnostic::report(diag, {file_id, tok,
+        "Cannot default-construct a field of type '" + widen::spell(ty)
+        + "'.", {}});
+    n->kind = parse::Kind::kIntLiteral;   // placeholder; the error short-circuits codegen
+    n->text = "0";
+    return n;
+}
+
 void classifyStmt(parse::Tree& tree, parse::Node& s,
                   widen::TypeRef fn_return_type,
                   diagnostic::Sink& diag) {
     switch (s.kind) {
         case parse::Kind::kVarDeclStmt: {
+            // A class-typed local is constructed: normalize the init (slot /
+            // default / zero) into a typed construction tuple. The pointer /
+            // array / strong-const init rules below don't apply.
+            if (widen::form(widen::strip(s.return_type)) == widen::Type::Form::kSlid) {
+                auto it = tree.classes.find(
+                    widen::get(widen::strip(s.return_type)).name);
+                if (it != tree.classes.end()) {
+                    classifyClassInit(tree, s, it->second, diag);
+                    return;
+                }
+            }
             if (!s.children.empty()) {
                 inferExpr(tree, *s.children[0], s.return_type, diag);
                 // Inferred-init: a typeless decl (empty return_type, promoted from
@@ -2215,6 +2461,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kDerefExpr:
         case parse::Kind::kIndexExpr:
         case parse::Kind::kTupleExpr:
+        case parse::Kind::kFieldExpr:
         case parse::Kind::kCastExpr:
         case parse::Kind::kConvertExpr:
         case parse::Kind::kNewExpr:
@@ -2222,6 +2469,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kStringifyType:
         case parse::Kind::kCallExpr:
         case parse::Kind::kParam:
+        case parse::Kind::kClassDef:
             assert(false && "classifyStmt: not a statement kind");
             return;
     }

@@ -855,6 +855,23 @@ TypeRef internAlias(std::string const& name, TypeRef underlying) {
     return internStruct(std::move(t));
 }
 
+// A named class/slid type, carrying its field-slot types (the named-tuple half
+// of "a class is a namespace + a named tuple"). A kSlid is interned by name
+// alone (structKey == "S" + name), so there is exactly one handle per class
+// name; resolve calls this once the field list is resolved to ATTACH the slot
+// types to that unique handle. Every prior reference (grammar spellings, a
+// `Class^` pointee) shares the handle, so they all gain the layout without a
+// rewrite, and codegen (which has no symbol table) reads the layout off the
+// type. Idempotent: re-attaching the same slots is a no-op.
+TypeRef internSlid(std::string const& name, std::vector<TypeRef> const& slots) {
+    Type t;
+    t.form = Type::Form::kSlid;
+    t.name = name;
+    TypeRef ref = internStruct(std::move(t));
+    arena().types[ref].slots = slots;
+    return ref;
+}
+
 TypeRef strip(TypeRef ref) {
     while (get(ref).form == Type::Form::kAlias) ref = get(ref).underlying;
     return ref;
