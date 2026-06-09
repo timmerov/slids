@@ -629,7 +629,7 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
 // index, exactly the reversed-dimension layout.
 std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
                             strings::Pool& pool, std::ostream& out,
-                            diagnostic::Sink& diag) {
+                            diagnostic::Sink& diag, bool allow_partial = false) {
     std::vector<ast::Node const*> chain;   // outermost .. innermost kIndexExpr
     ast::Node const* node = &index_expr;
     while (node->kind == ast::Kind::kIndexExpr) {
@@ -667,10 +667,17 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
         && "emitElementAddr: array subscript base must be a variable");
     auto it = syms.find(node->resolved_entry_id);
     assert(it != syms.end() && "emitElementAddr: array not in SymTab");
-    // Every dimension must be indexed — a partial index (`grid[0]` on a 2-D
-    // array) would yield a sub-array, which has no scalar value to load/store.
     int dims = (int)widen::get(it->second.slids_type).dims.size();
-    if ((int)chain.size() != dims) {
+    if ((int)chain.size() > dims) {   // over-index (also caught in classify)
+        diagnostic::report(diag, {index_expr.file_id, index_expr.tok,
+            "An array subscript indexes past the last dimension.", {}});
+        return "null";
+    }
+    // A PARTIAL index (`a[i]` on a 2-D array) addresses a SUB-ARRAY slice — the GEP
+    // below stops at the indexed dim, yielding a `ptr` to the inner array. That is
+    // valid only as a STORE TARGET (the caller sets allow_partial); in a value/read
+    // context the slice has no scalar value to load.
+    if ((int)chain.size() < dims && !allow_partial) {
         diagnostic::report(diag, {index_expr.file_id, index_expr.tok,
             "An array subscript must index every dimension.", {}});
         return "null";
@@ -860,8 +867,11 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                 return widen::convert(tmp, expr.inferred_type, dest_type,
                                       expr.file_id, expr.tok, out, diag);
             }
-            // `arr[i]` rvalue: address the element, load it.
-            std::string addr = emitElementAddr(expr, syms, pool, out, diag);
+            // `arr[i]` rvalue: address the element, load it. A PARTIAL index yields
+            // a SUB-ARRAY value (allow_partial) — the load reads the whole `[N x T]`
+            // slice; classify rejects assigning it to a non-matching type.
+            std::string addr = emitElementAddr(expr, syms, pool, out, diag,
+                                               /*allow_partial=*/true);
             std::string llty = llvmForRef(expr.inferred_type);
             std::string tmp = newTmp("idx");
             out << "  " << tmp << " = load " << llty << ", ptr " << addr << "\n";
@@ -1227,6 +1237,10 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
               widen::TypeRef fn_return_type,
               LoopCtx const* loop,
               std::ostream& out, diagnostic::Sink& diag) {
+    // Stop at the first error: once any error is recorded, emit no further
+    // statements. Codegen must not keep producing IR past a semantic failure —
+    // and reporting one clear error beats a cascade of follow-ons.
+    if (diagnostic::hasErrors(diag)) return;
     switch (stmt.kind) {
         case ast::Kind::kVarDeclStmt: {
             // Consts are substituted away by constfold and have no runtime form.
@@ -1323,9 +1337,14 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             assert(stmt.children.size() == 2 && "kStoreStmt needs lvalue + rhs");
             ast::Node const& lvalue = *stmt.children[0];
             widen::TypeRef elem = lvalue.inferred_type;
+            // A sub-array store target (`grid[1] = ...`) is a PARTIAL index — allow
+            // it to address the slice (a full/scalar index is the common case).
+            bool sub_array = widen::form(widen::strip(elem))
+                                 == widen::Type::Form::kArray;
             std::string addr;
             if (lvalue.kind == ast::Kind::kIndexExpr) {
-                addr = emitElementAddr(lvalue, syms, pool, out, diag);
+                addr = emitElementAddr(lvalue, syms, pool, out, diag,
+                                       /*allow_partial=*/sub_array);
             } else {
                 assert(lvalue.kind == ast::Kind::kDerefExpr
                     && "kStoreStmt: lvalue must be a deref or index");
@@ -1333,8 +1352,23 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 addr = emitExpr(ptr_expr, syms, pool, out, diag,
                                 ptr_expr.inferred_type);
             }
-            std::string val = emitExpr(*stmt.children[1], syms, pool, out, diag,
-                                       elem);
+            ast::Node const& rhs = *stmt.children[1];
+            // A SUB-ARRAY store target (a partial array index is array-typed): fill
+            // the slice from a tuple LITERAL / tuple VALUE via the array<->tuple
+            // bridge — `addr` is the slice's pointer. An array-value source falls
+            // through to the whole-value store (matched `[N x T]`).
+            if (widen::form(widen::strip(elem)) == widen::Type::Form::kArray) {
+                if (rhs.kind == ast::Kind::kTupleExpr) {
+                    emitArrayFromTuple(addr, elem, rhs, syms, pool, out, diag);
+                    return;
+                }
+                if (widen::form(widen::strip(rhs.inferred_type))
+                        == widen::Type::Form::kTuple) {
+                    emitArrayFromTupleValue(addr, elem, rhs, syms, pool, out, diag);
+                    return;
+                }
+            }
+            std::string val = emitExpr(rhs, syms, pool, out, diag, elem);
             std::string llty = llvmForRef(elem);
             out << "  store " << llty << " " << val << ", ptr " << addr << "\n";
             return;
@@ -1953,6 +1987,7 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     for (auto const& n : tree.nodes) {
         if (n->kind != ast::Kind::kProgram) continue;
         for (auto const& fn : n->children) {
+            if (diagnostic::hasErrors(diag)) break;   // stop at the first error
             if (fn->kind == ast::Kind::kFunctionDef) {
                 emitFunction(*fn, pool, body, diag);
                 collectNestedFunctions(*fn, nested);
@@ -1970,6 +2005,7 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     }
     // Lift each nested function to a top-level function.
     for (ast::Node const* fn : nested) {
+        if (diagnostic::hasErrors(diag)) break;   // stop at the first error
         emitFunction(*fn, pool, body, diag);
     }
 

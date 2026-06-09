@@ -1463,6 +1463,24 @@ void classifyTupleFromArrayValue(widen::TypeRef declType, parse::Node& rhs,
     }
 }
 
+// An array VALUE rhs — a whole array, or a partial-index SUB-ARRAY slice
+// (`a6[2]`) — assigns by whole-value copy, so the target must be the SAME array
+// type. Returns true if the rhs was array-typed (handled here: a match is silent,
+// a mismatch reported); false if the rhs isn't an array (the caller falls through
+// to the pointer / strong-const checks). Run AFTER the array<->tuple arms so a
+// tuple source is routed there first.
+bool checkArrayValueAssign(widen::TypeRef dest, parse::Node const& rhs,
+                           diagnostic::Sink& diag) {
+    if (widen::form(widen::strip(rhs.inferred_type)) != widen::Type::Form::kArray)
+        return false;
+    if (widen::deepStrip(dest) != widen::deepStrip(rhs.inferred_type)) {
+        diagnostic::report(diag, {rhs.file_id, rhs.tok,
+            "Cannot assign '" + widen::spellOrEmpty(rhs.inferred_type)
+            + "' to '" + widen::spellOrEmpty(dest) + "'.", {}});
+    }
+    return true;
+}
+
 void classifyStmt(parse::Tree& tree, parse::Node& s,
                   widen::TypeRef fn_return_type,
                   diagnostic::Sink& diag) {
@@ -1529,6 +1547,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                         classifyArrayFromTupleValue(s.return_type, *s.children[0], diag);
                     } else if (isTupleFromArrayValue(s.return_type, *s.children[0])) {
                         classifyTupleFromArrayValue(s.return_type, *s.children[0], diag);
+                    } else if (checkArrayValueAssign(s.return_type, *s.children[0], diag)) {
+                        // array VALUE rhs — handled (matched, or mismatch reported).
                     } else {
                         checkPtrAssign(s.return_type, *s.children[0], diag);
                         checkStrongConstAssign(s.return_type, *s.children[0], diag);
@@ -1558,6 +1578,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     classifyArrayFromTupleValue(lref, *s.children[0], diag);
                 } else if (isTupleFromArrayValue(lref, *s.children[0])) {
                     classifyTupleFromArrayValue(lref, *s.children[0], diag);
+                } else if (checkArrayValueAssign(lref, *s.children[0], diag)) {
+                    // array VALUE rhs — handled (matched, or mismatch reported).
                 } else {
                     checkPtrAssign(lref, *s.children[0], diag);
                     checkStrongConstAssign(lref, *s.children[0], diag);
@@ -1672,13 +1694,23 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             parse::Node& lvalue = *s.children[0];
             inferExpr(tree, lvalue, widen::kNoType, diag);
             inferExpr(tree, *s.children[1], lvalue.inferred_type, diag);
-            // A store into a pointer-typed slot (an element of a references array,
-            // or a deref whose pointee is itself a pointer) obeys the same
-            // implicit-cast rules as a plain assignment — storing an unrelated
-            // pointer here would otherwise reach codegen and emit invalid IR. A
-            // strong-const literal stored here obeys the typed-value widen rules.
-            checkPtrAssign(lvalue.inferred_type, *s.children[1], diag);
-            checkStrongConstAssign(lvalue.inferred_type, *s.children[1], diag);
+            // A SUB-ARRAY store target (a partial array index is array-typed, e.g.
+            // `grid[1] = (7,8)`) takes a tuple/array source element-wise, exactly
+            // like an array init/assign. Otherwise a store into a pointer-typed slot
+            // (an element of a references array, or a deref whose pointee is itself a
+            // pointer) obeys the implicit-cast rules — storing an unrelated pointer
+            // would reach codegen and emit invalid IR — and a strong-const literal
+            // obeys the typed-value widen rules.
+            if (isArrayFromTuple(lvalue.inferred_type, *s.children[1])) {
+                classifyArrayFromTuple(tree, lvalue.inferred_type, *s.children[1], diag);
+            } else if (isArrayFromTupleValue(lvalue.inferred_type, *s.children[1])) {
+                classifyArrayFromTupleValue(lvalue.inferred_type, *s.children[1], diag);
+            } else if (checkArrayValueAssign(lvalue.inferred_type, *s.children[1], diag)) {
+                // array VALUE rhs (`grid[0] = grid[2]`) — matched, or mismatch reported.
+            } else {
+                checkPtrAssign(lvalue.inferred_type, *s.children[1], diag);
+                checkStrongConstAssign(lvalue.inferred_type, *s.children[1], diag);
+            }
             return;
         }
         case parse::Kind::kMoveStmt: {

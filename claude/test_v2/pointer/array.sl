@@ -250,6 +250,22 @@ int32 main() {
     }
     __println(" )");
 
+    /* assign a sub array. */
+    int a6[2,3] = ((1,2), (3,4), (5,6));
+    tuple = (7,8);
+    a6[0] = a6[2];
+    a6[1] = tuple;
+    a6[2] = (9,10);
+    __print("a6 = (");
+    for (y : 0..3) {
+        __print(" (");
+        for (x : 0..2) {
+            __print(" " + a6[x,y]);
+        }
+        __print(" )");
+    }
+    __println(" )");
+
     return 0;
 }
 
@@ -301,8 +317,9 @@ int32 main() {
 //    return arr['A'];
 //}
 
-/* every dimension must be indexed — a partial index has no scalar value. */
-//-EXPECT-ERROR: An array subscript must index every dimension
+/* a partial index yields a SUB-ARRAY value; assigning it to a scalar is a type
+   mismatch. */
+//-EXPECT-ERROR: Cannot assign 'int[5]' to 'int'
 //int neg_partial_index() {
 //    int twodim[3][5];
 //    twodim[0][0] = 1;
