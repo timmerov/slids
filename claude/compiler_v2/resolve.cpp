@@ -1435,13 +1435,8 @@ Completion understandForArray(parse::Tree& tree, parse::Node& s, int arr_id,
         ? aelem
         : widen::internArray(aelem, std::vector<int>(adims.begin() + 1, adims.end()));
     int afile = arr_ref.file_id, atok = arr_ref.tok;
-    if (widen::form(widen::strip(elemRef)) == widen::Type::Form::kArray) {
-        diagnostic::report(diag, {afile, atok,
-            "A for-loop over an array requires a one-dimensional array.",
-            {{tree.entries[arr_id].file_id, tree.entries[arr_id].tok,
-              "array declared here"}}});
-        return Completion::Normal;
-    }
+    // A multi-dim array iterates its OUTER dim; each element is the (N-1)-D
+    // sub-array `elemRef` — a non-primitive element, forced by-ref below.
     int vfile = var_decl.file_id, vtok = var_decl.name_tok;
     // Resolve the loop var's declared type (alias leaf) so it matches the
     // already-resolved element type and the desugared binding carries the alias.
@@ -1470,6 +1465,23 @@ Completion understandForArray(parse::Tree& tree, parse::Node& s, int arr_id,
                 return Completion::Normal;
             }
         }
+    }
+    // A NON-PRIMITIVE element (a sub-array of a multi-dim array, a tuple, or a
+    // slid) can't be bound by value — it must be iterated by REFERENCE. A typeless
+    // loop var is FORCED to a reference (`^arr[i]`); a declared by-value one errors.
+    widen::Type::Form ef = widen::form(widen::strip(elemRef));
+    bool elem_aggregate = (ef == widen::Type::Form::kArray
+                        || ef == widen::Type::Form::kTuple
+                        || ef == widen::Type::Form::kSlid);
+    if (elem_aggregate && !by_ref) {
+        if (var_decl.return_type != widen::kNoType) {
+            diagnostic::report(diag, {vfile, vtok,
+                "A for-loop over an array with non-primitive elements must use a "
+                "reference loop variable.", {}});
+            return Completion::Normal;
+        }
+        var_decl.return_type = widen::internPointer(elemRef);   // -> `^arr[i]`
+        by_ref = true;
     }
     // Stamp the ident (classify asserts resolve did) and apply the definite-
     // assignment side effects the desugared element binding used to carry:
@@ -2401,7 +2413,11 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 widen::TypeRef ity = peekIterableType(tree, enum_ref, diag);
                 bool lval = (enum_ref.kind == parse::Kind::kDerefExpr
                           || enum_ref.kind == parse::Kind::kIndexExpr);
-                if (widen::form(widen::strip(ity)) == widen::Type::Form::kTuple) {
+                // A tuple OR array EXPRESSION iterable (`sub^`, `t[i]`) routes
+                // through the iterator-based for-tuple path — an array is a
+                // homogeneous tuple (the loop var binds each element in place).
+                if (widen::form(widen::strip(ity)) == widen::Type::Form::kTuple
+                    || widen::form(widen::strip(ity)) == widen::Type::Form::kArray) {
                     return understandForTuple(tree, s, ity, /*is_literal=*/false,
                                            lval, diag);
                 }

@@ -371,11 +371,15 @@ std::unique_ptr<ast::Node> lowerForArray(parse::Node const& p,
     int arr_id = arrp.resolved_entry_id;
     widen::TypeRef arr_type = arrp.inferred_type;          // classify stamped it
     widen::TypeRef arrS = widen::strip(arr_type);
-    widen::TypeRef elem = widen::get(arrS).elem;           // 1-D (resolve validated)
     std::vector<int> adims = widen::get(arrS).dims;
     // resolve validated a fixed-size array (>= 1 dim); desugar runs error-free.
     assert(!adims.empty() && "lowerForArray: array has at least one dimension");
-    int size = adims.front();
+    int size = adims.front();                              // the OUTER dim
+    // Each element is the (N-1)-D sub-array — one subscript strips the first dim.
+    widen::TypeRef elem = (adims.size() <= 1)
+        ? widen::get(arrS).elem
+        : widen::internArray(widen::get(arrS).elem,
+                             std::vector<int>(adims.begin() + 1, adims.end()));
     // By reference iff the loop var is a reference WHOSE POINTEE is the element
     // (a declared `T^ v : T[]`, or the classify forced-by-ref). A typeless var, or
     // a `T^ v` over a POINTER-element array (`int^ v : int^[]`, where the pointee
@@ -527,12 +531,23 @@ std::unique_ptr<ast::Node> lowerForTuple(parse::Node const& p,
                 || itp.kind == parse::Kind::kIndexExpr);
 
     widen::TypeRef tup_type = itp.inferred_type;
-    std::vector<widen::TypeRef> slots = widen::get(widen::strip(tup_type)).slots;
-    int N = static_cast<int>(slots.size());
-    // resolve/classify validated a (homogeneous) tuple (>= 2 slots); desugar runs
-    // only on classify-clean trees.
-    assert(!slots.empty() && "lowerForTuple: iterable is a tuple");
-    widen::TypeRef T = slots[0];                          // homogeneous element
+    widen::TypeRef itS = widen::strip(tup_type);
+    // resolve/classify validated a (homogeneous) tuple (>= 2 slots) or an array;
+    // desugar runs only on classify-clean trees. An array is N copies of the
+    // (N-1)-D sub-array (or base element for 1-D).
+    int N; widen::TypeRef T;
+    if (widen::form(itS) == widen::Type::Form::kArray) {
+        widen::Type const& at = widen::get(itS);
+        N = at.dims.front();
+        T = (at.dims.size() <= 1) ? at.elem
+            : widen::internArray(at.elem,
+                std::vector<int>(at.dims.begin() + 1, at.dims.end()));
+    } else {
+        std::vector<widen::TypeRef> slots = widen::get(itS).slots;
+        assert(!slots.empty() && "lowerForTuple: iterable is a tuple or array");
+        N = static_cast<int>(slots.size());
+        T = slots[0];                                     // homogeneous element
+    }
     widen::TypeRef iter_type = widen::internIterator(T);  // T[]
     // The binding's declared type: as-written (typed / by-ref) or the element
     // (typeless fresh, off the entry — classify forces a reference for a

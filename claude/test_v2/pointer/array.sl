@@ -266,6 +266,14 @@ int32 main() {
     }
     __println(" )");
 
+    /* array of tuples. */
+    (int,int) a7[3] = ((11,12), (13,14), (15,16));
+    __print("a7 = (");
+    for (y : 0..3) {
+        __print("(" + a7[y][0] + ","+ a7[1,y] + ")");
+    }
+    __println(")");
+
     return 0;
 }
 

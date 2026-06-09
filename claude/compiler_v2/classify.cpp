@@ -1332,71 +1332,60 @@ bool isArrayFromTuple(widen::TypeRef declType, parse::Node const& rhs) {
         && rhs.kind == parse::Kind::kTupleExpr;
 }
 
-// Flatten a tuple literal's leaf NODES in source / storage order (recursing into
-// nested tuple literals), so a homogeneous (possibly nested) tuple maps onto the
-// array's flat element slots.
-void collectTupleLeafNodes(parse::Node& n, std::vector<parse::Node*>& out) {
-    if (n.kind == parse::Kind::kTupleExpr) {
-        for (auto& c : n.children) if (c) collectTupleLeafNodes(*c, out);
-    } else {
+// Collect the array's ELEMENT initializer nodes from a (possibly nested) tuple
+// literal, descending exactly dims.size() levels of nesting — the ARRAY dims. At
+// that depth each node is ONE element, taken WHOLE: a scalar for a primitive
+// element, or a tuple for a tuple element (an array OF tuples is NOT flattened
+// further — each element stays an aggregate). Returns false if the nesting doesn't
+// match the declared dims (a wrong child count, or a transposed / flat literal),
+// enforcing the row × col shape (standard order: dims[0] is the outermost).
+bool collectArrayElementNodes(parse::Node& n, std::vector<int> const& dims,
+                              std::size_t i, std::vector<parse::Node*>& out) {
+    if (i == dims.size()) {           // element depth — take this node whole
         out.push_back(&n);
+        return true;
     }
-}
-
-// True if the tuple literal `n` matches the array shape dims[i..]: a tuple of
-// dims[i] children, each matching dims[i+1..]; at the last dim every child must
-// be a scalar (not a nested tuple). This enforces the declared row × col nesting
-// (standard order: dims[0] is the outermost), so a transposed or flat literal is
-// rejected even when its leaf count happens to match.
-bool tupleMatchesArrayShape(parse::Node const& n,
-                            std::vector<int> const& dims, std::size_t i) {
     if (n.kind != parse::Kind::kTupleExpr) return false;
     if (static_cast<int>(n.children.size()) != dims[i]) return false;
-    bool last = (i + 1 == dims.size());
-    for (auto const& c : n.children) {
-        if (!c) return false;
-        if (last) {
-            if (c->kind == parse::Kind::kTupleExpr) return false;
-        } else if (!tupleMatchesArrayShape(*c, dims, i + 1)) {
-            return false;
-        }
+    for (auto& c : n.children) {
+        if (!c || !collectArrayElementNodes(*c, dims, i + 1, out)) return false;
     }
     return true;
 }
 
-// Validate (and type) an array-from-tuple init/assign: the tuple's flattened
-// leaf count must equal the array's total element count, its NESTING must match
-// the declared dimensions, and each leaf initializes one element under the
-// normal per-element widen/flex rules.
+// Validate (and type) an array-from-tuple init/assign: the literal's NESTING must
+// match the declared dimensions, and each dims-deep node initializes one element.
 void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
                             parse::Node& rhs, diagnostic::Sink& diag) {
     widen::TypeRef a = widen::strip(declType);
     widen::TypeRef elem = widen::get(a).elem;
     std::vector<int> const& dims = widen::get(a).dims;
-    long total = 1;
-    for (int d : dims) total *= d;
-    std::vector<parse::Node*> leaves;
-    collectTupleLeafNodes(rhs, leaves);
-    if (static_cast<long>(leaves.size()) != total) {
-        diagnostic::report(diag, {rhs.file_id, rhs.tok,
-            "Tuple has " + std::to_string(leaves.size())
-            + " elements but array '" + widen::spellOrEmpty(declType)
-            + "' has " + std::to_string(total) + ".", {}});
-        return;
-    }
-    if (!tupleMatchesArrayShape(rhs, dims, 0)) {
+    std::vector<parse::Node*> elems;
+    if (!collectArrayElementNodes(rhs, dims, 0, elems)) {
         diagnostic::report(diag, {rhs.file_id, rhs.tok,
             "Array initializer shape does not match the dimensions of '"
             + widen::spellOrEmpty(declType) + "'.", {}});
         return;
     }
-    // Each leaf is an element initializer — re-infer in the element's context so a
-    // literal flexes into it, then run the same assignment checks `a[i] = leaf`
-    // would (pointer-cast + strong-const; typed narrowing is codegen's convert).
-    for (parse::Node* lf : leaves) {
-        inferExpr(tree, *lf, elem, diag);
-        checkPtrAssign(elem, *lf, diag);
-        checkStrongConstAssign(elem, *lf, diag);
+    // Each node initializes ONE element — re-infer in the element's context (a
+    // literal flexes into it), then validate `a[i] = el`. A SCALAR element obeys
+    // the pointer-cast / strong-const rules (typed narrowing is codegen's convert);
+    // a TUPLE element must match the element tuple type (slot-wise, after flex).
+    bool elem_tuple = widen::form(widen::strip(elem)) == widen::Type::Form::kTuple;
+    for (parse::Node* el : elems) {
+        inferExpr(tree, *el, elem, diag);
+        if (elem_tuple) {
+            if (el->inferred_type != widen::kNoType
+                && widen::deepStrip(el->inferred_type) != widen::deepStrip(elem)) {
+                diagnostic::report(diag, {el->file_id, el->tok,
+                    "Array element type '" + widen::spellOrEmpty(el->inferred_type)
+                    + "' does not match the declared element type '"
+                    + widen::spellOrEmpty(elem) + "'.", {}});
+            }
+        } else {
+            checkPtrAssign(elem, *el, diag);
+            checkStrongConstAssign(elem, *el, diag);
+        }
     }
 }
 
@@ -2006,8 +1995,19 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             inferExpr(tree, it_ref, context, diag);
             widen::TypeRef itup = widen::strip(it_ref.inferred_type);
+            // A tuple gives its slots directly; an ARRAY iterates as a homogeneous
+            // tuple — N copies of the (N-1)-D sub-array (or base element for 1-D).
+            std::vector<widen::TypeRef> slots;
             if (widen::form(itup) == widen::Type::Form::kTuple) {
-                std::vector<widen::TypeRef> slots = widen::get(itup).slots;
+                slots = widen::get(itup).slots;
+            } else if (widen::form(itup) == widen::Type::Form::kArray) {
+                widen::Type const& at = widen::get(itup);
+                widen::TypeRef e = (at.dims.size() <= 1) ? at.elem
+                    : widen::internArray(at.elem,
+                        std::vector<int>(at.dims.begin() + 1, at.dims.end()));
+                slots.assign(at.dims.front(), e);
+            }
+            if (!slots.empty()) {
                 for (std::size_t i = 1; i < slots.size(); i++) {
                     if (widen::deepStrip(slots[i]) != widen::deepStrip(slots[0])) {
                         diagnostic::report(diag, {it_ref.file_id, it_ref.tok,

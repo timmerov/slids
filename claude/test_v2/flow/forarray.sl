@@ -200,11 +200,24 @@ int32 main() {
     }
     __println("osum= " + osum);            // 42
 
+    /* nested for over 2d array. */
+    int a3[2,3] = ((1,2), (3,4), (5,6));
+    __print("a3=(");
+    for (sub : a3) {
+        __print(" (");
+        for (x : sub^) {
+            __print(" " + x);
+        }
+        __print(" )");
+    }
+    __println(" )");
+
     return 0;
 }
 
-/* the array must be one-dimensional. */
-//-EXPECT-ERROR: requires a one-dimensional array
+/* a 2-D array iterates rows (each a sub-array `int[5]`); a by-ref loop var must
+   reference the element, so `int^` (a reference to an int) is the wrong type. */
+//-EXPECT-ERROR: Loop variable type 'int^' does not match the array element type 'int[5]'
 //void neg_2d() {
 //    int grid[3][5];
 //    for (int^ it : grid) {

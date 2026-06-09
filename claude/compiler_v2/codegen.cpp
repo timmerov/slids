@@ -842,7 +842,11 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             assert(expr.children.size() == 1 && "kAddrOfExpr needs 1 operand");
             ast::Node const& operand = *expr.children[0];
             if (operand.kind == ast::Kind::kIndexExpr) {
-                return emitElementAddr(operand, syms, pool, out, diag);
+                // `^arr[i]` — the element GEP. A PARTIAL index yields a reference to
+                // a SUB-ARRAY slice (`^a3[i]` -> int[2]^), used by a multi-dim
+                // for-loop's by-ref binding; allow it.
+                return emitElementAddr(operand, syms, pool, out, diag,
+                                       /*allow_partial=*/true);
             }
             assert(operand.kind == ast::Kind::kIdentExpr
                 && operand.resolved_entry_id >= 0
@@ -1083,30 +1087,32 @@ struct LoopCtx {
                                       // break/continue walks `loop_levels` hops out
 };
 
-// Collect a tuple literal's leaf value-nodes in storage order (recurse nested).
-void collectTupleLeafNodesAst(ast::Node const& n,
-                              std::vector<ast::Node const*>& out) {
-    if (n.kind == ast::Kind::kTupleExpr) {
-        for (auto const& c : n.children) if (c) collectTupleLeafNodesAst(*c, out);
-    } else {
-        out.push_back(&n);
-    }
+// Collect an array's ELEMENT value-nodes from a tuple literal, descending exactly
+// dims.size() levels (the ARRAY dims). At that depth each node is one element,
+// taken WHOLE — a scalar, or a tuple for a tuple element (NOT flattened). Mirrors
+// classify's collectArrayElementNodes (classify validated the shape).
+void collectArrayElementNodesAst(ast::Node const& n, std::vector<int> const& dims,
+                                 std::size_t i, std::vector<ast::Node const*>& out) {
+    if (i == dims.size()) { out.push_back(&n); return; }
+    for (auto const& c : n.children) if (c)
+        collectArrayElementNodesAst(*c, dims, i + 1, out);
 }
 
-// Initialize / assign an array from a tuple LITERAL, element-wise. A homogeneous
-// (possibly nested) tuple's leaves in storage order map onto the array's flat
-// slots; each leaf is emitted in the element type's context (a literal flexes, a
-// typed value widens) and stored at flat offset i — no tuple aggregate is built.
+// Initialize / assign an array from a tuple LITERAL, element-wise. Each dims-deep
+// node is emitted in the ELEMENT type's context (a scalar flexes/widens; a tuple
+// element builds its aggregate) and stored at flat offset i — the array's element
+// type drives the GEP stride, so a tuple element stays a `{...}` aggregate.
 void emitArrayFromTuple(std::string const& alloca_name, widen::TypeRef arrType,
                         ast::Node const& rhs, SymTab const& syms,
                         strings::Pool& pool, std::ostream& out,
                         diagnostic::Sink& diag) {
-    widen::TypeRef elem = widen::get(widen::strip(arrType)).elem;
+    widen::Type const& at = widen::get(widen::strip(arrType));
+    widen::TypeRef elem = at.elem;
     std::string elem_ll = llvmForRef(elem);
-    std::vector<ast::Node const*> leaves;
-    collectTupleLeafNodesAst(rhs, leaves);
-    for (std::size_t i = 0; i < leaves.size(); i++) {
-        std::string v = emitExpr(*leaves[i], syms, pool, out, diag, elem);
+    std::vector<ast::Node const*> elems;
+    collectArrayElementNodesAst(rhs, at.dims, 0, elems);
+    for (std::size_t i = 0; i < elems.size(); i++) {
+        std::string v = emitExpr(*elems[i], syms, pool, out, diag, elem);
         std::string gep = newTmp("aelt");
         out << "  " << gep << " = getelementptr " << elem_ll << ", ptr "
             << alloca_name << ", i64 " << i << "\n";
