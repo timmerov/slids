@@ -17,3 +17,5 @@ dy = 9 dz = 3
 vqnull = true vvset = true
 g1p = 20 g2p = 10
 ap = 7
+a1 = ( nullptr nullptr nullptr )
+a2 = ( 42 37 99 )

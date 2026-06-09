@@ -758,13 +758,28 @@ void emitNullLeaves(std::string const& addr, widen::TypeRef ty,
                 << ", ptr " << addr << ", i32 0, i32 " << i << "\n";
             emitNullLeaves(gep, slots[i], out);
         }
+        return;
+    }
+    if (f == widen::Type::Form::kArray) {
+        // Null each element that has pointer leaves: flat-walk the (row-major
+        // contiguous) array and recurse per element. A pointer-free element array
+        // (`int[3]`) has nothing to null and is skipped.
+        widen::TypeRef elem = widen::get(s).elem;
+        if (!typeHasPointer(elem)) return;
+        std::string elem_ll = llvmForRef(elem);
+        long total = 1;
+        for (int d : widen::get(s).dims) total *= d;
+        for (long i = 0; i < total; i++) {
+            std::string gep = newTmp("nleaf");
+            out << "  " << gep << " = getelementptr " << elem_ll
+                << ", ptr " << addr << ", i64 " << i << "\n";
+            emitNullLeaves(gep, elem, out);
+        }
+        return;
     }
     // Any other form is a leaf with nothing to null: a primitive (the common
-    // case — reached, intended), or — once they can be tuple slots — an array of
-    // pointers or a class with pointer fields. Those are NOT constructible inside
-    // a tuple today (an array type as a slot is a parse error; classes are Phase
-    // 5), so this falls through cleanly; revisit when they land (an array would
-    // need a per-element walk, a class its move operator). user notified, accepts
+    // case — reached, intended), or a class with pointer fields once classes land
+    // (Phase 5 — its own move operator handles its leaves). user notified, accepts
     // state.
 }
 

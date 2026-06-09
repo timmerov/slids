@@ -205,6 +205,31 @@ int32 main() {
     int^ ap <-- ^ay;
     __println("ap = " + ap^);                       // 7
 
+    /* move an array of pointers. */
+    int x3 = 42;
+    int x4 = 37;
+    int x5 = 99;
+    int^ a1[3] = (^x3, ^x4, ^x5);
+    int^ a2[3] <-- a1;
+    __print("a1 = (");
+    for (int^ ref : a1) {
+        if (ref == nullptr) {
+            __print(" nullptr");
+        } else {
+            __print(" " + ref^);
+        }
+    }
+    __println(" )");
+    __print("a2 = (");
+    for (int^ ref : a2) {
+        if (ref == nullptr) {
+            __print(" nullptr");
+        } else {
+            __print(" " + ref^);
+        }
+    }
+    __println(" )");
+
     /* compile errors — each uncommented in isolation by the negative runner. */
 
     /* swap requires exactly the same type — no widening. */

@@ -1453,14 +1453,22 @@ Completion understandForArray(parse::Tree& tree, parse::Node& s, int arr_id,
     }
     bool by_ref = isReferenceType(var_decl.return_type);
     if (by_ref) {
-        // A by-ref loop var `T^` must reference the element type.
+        // A by-ref loop var `T^` references the element type T (pointee == elem).
         widen::TypeRef pointeeRef = widen::get(widen::strip(var_decl.return_type)).pointee;
         if (widen::strip(pointeeRef) != widen::strip(elemRef)) {
-            diagnostic::report(diag, {vfile, vtok,
-                "Loop variable type '" + widen::spellOrEmpty(var_decl.return_type)
-                    + "' does not match the array element type '"
-                    + widen::spell(elemRef) + "'.", {}});
-            return Completion::Normal;
+            // The loop var is a reference whose pointee ISN'T the element. If the
+            // loop var type IS the element type, this is a by-VALUE copy of a
+            // reference-typed element (`int^ v : int^[]` — a by-ref binding would
+            // need `int^^ v`); otherwise it's a genuine mismatch.
+            if (widen::deepStrip(var_decl.return_type) == widen::deepStrip(elemRef)) {
+                by_ref = false;
+            } else {
+                diagnostic::report(diag, {vfile, vtok,
+                    "Loop variable type '" + widen::spellOrEmpty(var_decl.return_type)
+                        + "' does not match the array element type '"
+                        + widen::spell(elemRef) + "'.", {}});
+                return Completion::Normal;
+            }
         }
     }
     // Stamp the ident (classify asserts resolve did) and apply the definite-

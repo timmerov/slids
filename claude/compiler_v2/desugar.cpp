@@ -376,10 +376,14 @@ std::unique_ptr<ast::Node> lowerForArray(parse::Node const& p,
     // resolve validated a fixed-size array (>= 1 dim); desugar runs error-free.
     assert(!adims.empty() && "lowerForArray: array has at least one dimension");
     int size = adims.front();
-    // by-ref is a property of the DECLARED type (`T^ v`), not the element type —
-    // a typeless var over a pointer-element array is by VALUE, not by ref.
+    // By reference iff the loop var is a reference WHOSE POINTEE is the element
+    // (a declared `T^ v : T[]`, or the classify forced-by-ref). A typeless var, or
+    // a `T^ v` over a POINTER-element array (`int^ v : int^[]`, where the pointee
+    // `int` isn't the element `int^`), is by VALUE — it copies the pointer element.
     bool by_ref = lvp.return_type != widen::kNoType
-        && widen::form(widen::strip(lvp.return_type)) == widen::Type::Form::kPointer;
+        && widen::form(widen::strip(lvp.return_type)) == widen::Type::Form::kPointer
+        && widen::deepStrip(widen::get(widen::strip(lvp.return_type)).pointee)
+               == widen::deepStrip(elem);
     bool reuse = (lvp.kind == parse::Kind::kAssignStmt);
     // The binding's declared type: as-written (typed / by-ref) or the element
     // (typeless fresh, off the entry resolve typed — always resolved). Reuse needs
