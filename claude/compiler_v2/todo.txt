@@ -8,23 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * BAKEDIMS CLOBBERS ALIAS RESOLUTION — constfold's bakeNodeDims rebuilds an
-    array's type spelling from `n.return_type` (widen::spellOrEmpty), which is the
-    GRAMMAR spelling with the element alias UNRESOLVED (e.g. `Integer[1]`), then
-    stamps the rebuilt `Integer[3]` onto the entry — clobbering the `int[3]`
-    resolve had already substituted. So an alias-element array with a
-    const-EXPRESSION dim (`alias Integer = int; Integer nums[N];`) ends up typed
-    `Integer[...]` (alias un-stripped), and a downstream use (`Integer[] it =
-    ^nums[0]`) hits a spurious "Cannot implicitly cast 'Integer[]' to 'Integer[]'".
-    A LITERAL-dim alias array is fine (the dim bakes at grammar, resolve strips the
-    whole spelling, bakeNodeDims early-returns on empty dim_exprs). Exposed (then
-    side-stepped) while fixing the literal-zero-dim check: routing literal dims
-    through dim_exprs made EVERY alias array hit it, so the fix stayed at the
-    grammar instead. Real fix: bakeNodeDims should rebuild onto the ALIAS-RESOLVED
-    base — read the entry's slids_type (resolve's output) for the base type, not
-    n.return_type — or have resolve re-resolve n.return_type post-bake.
-    prerequisite: none; small, but touches the constfold dim-baking path.
-
   * ORPHAN-CHECK vs IMPORT FORWARD-DECLS — resolve's Pass 3 errors on any
     function declared-but-never-defined ("Function 'X' is declared but never
     defined.") — but a `.slh` header legitimately declares-only (defined in the
@@ -44,78 +27,7 @@ BUGS (found, deferred)
     the name-dims parsing into the parameter parser, mirroring the var-decl path, so
     `int f(int a[3])` parses to an int[3] param. prerequisite: none.
 
-  * COMPOSED-TYPE INDEXING DOESN'T RECURSE (alias-element arrays; array->tuple->
-    array chains) — `emitElementAddr` (codegen) dispatches ONCE on the base type
-    (array OR tuple) and applies the WHOLE index chain as that one kind, instead of
-    walking the chain segment-by-segment and re-dispatching on the CURRENT type. Two
-    symptoms, ONE root cause:
-      - alias-element arrays: `alias Vec2 = int[2]; Vec2 va[3]` is a NESTED
-        kArray(elem=int[2], dims=[3]) — rank 1 as the indexer counts it — so
-        `va[i][j]` over-indexes ("indexes past the last dimension"). (A name-anchored
-        `int va[3][2]` is a FLAT kArray(int,[3,2]) and works.)
-      - array->tuple->array: `(int[3],int[4]) t[2]` then `t[i][slot][k]` — t[i] is an
-        array index (element a tuple), [slot] a tuple slot (an array), [k] an array
-        index. The base t is an array, so all 3 indices are applied as t's array dims
-        (dims=[2], rank 1) -> over-index.
-    USER FEEDBACK: once again, claude is lobbying for a hack instead of addressing
-    the root cause. v1 had this bug; sad it reappears in v2. The proposed flatten-
-    array-of-array at internArray (normalize `Vec2 va[3]` -> int[3][2]) is a HACK:
-    it destroys the alias name and only fixes the alias-element symptom, leaving the
-    array->tuple->array chain broken.
-    TWO DISTINCT BUGS, both in codegen's emitElementAddr:
-      (A) you don't know how many dimensions a type has — the RANK count is
-          `get(strip(T)).dims.size()` (codegen.cpp:700), the TOP-LEVEL dims vector
-          only, so a nested/composed type undercounts (Vec2 va[3]: reads 1, real
-          rank 2) and the `chain.size() > dims` check fires a FALSE over-index. NOTE:
-          classify does NOT have this bug — arrayElementType (classify.cpp:180) walks
-          ONE level per subscript, recursing into the element, so it types va[i][j]
-          and t[i][slot][k] correctly. The codegen rank check is a misplaced, buggy
-          DUPLICATE of a semantic check classify already does right.
-      (B) you don't know how to index those dimensions — emitElementAddr dispatches
-          ONCE on the base type and applies the whole chain as that one kind, so it
-          can't emit a mixed GEP chain (array dim -> struct slot -> array dim). (A)
-          masks (B): fix the count alone and the GEP would then MIS-address.
-    ROOT CAUSE FIX: make emitElementAddr walk the index chain innermost->outermost
-    the way classify already walks the TYPE — track the current type, re-dispatch
-    per segment (array dim -> array GEP; tuple slot -> struct GEP), advance to the
-    resulting element type, continue. Both the bound/rank check and the GEP emission
-    fall out of that walk; handles arbitrary composition; resolves BOTH symptoms.
-    prerequisite: none; touches the index-addressing walk (codegen.cpp:636+).
-
-  * ARRAY = TUPLE-VALUE EMITS INVALID LL — `int a[3]; a = tupleVar;` (a whole-array
-    assign from a tuple VALUE, not a literal) is ACCEPTED by slidsc but emits
-    invalid IR: the tuple is an LLVM struct `{i32,i32,i32}` and the array is
-    `[3 x i32]`, and codegen whole-value load+stores across the mismatch —
-    `store { i32,i32,i32 } %v, ptr %a` into a `[3 x i32]` alloca, which llc
-    rejects ("defined with type '{ i32, i32, i32 }' but expected '[3 x i32]'").
-    The "ARRAY FROM A TUPLE VALUE" reach goal below WRONGLY claims this "falls to
-    the normal path + rejects" — it does NOT reject, it mis-emits (violates the
-    no-invalid-LL rule). Same root for `tuple = arrayVar` (the reverse). FIX (now,
-    independent of the reach goal): classify must REJECT an array<->tuple whole
-    assignment whose two sides have different forms until the value-form copy is
-    actually implemented. The array-from-tuple path only gates on a kTupleExpr
-    LITERAL (isArrayFromTuple), so a tuple VALUE slips past into the generic
-    same-"type"? assignment with no shape/representation bridge. prerequisite: none.
-
-
 REACH GOALS
-
-  * WHOLE-ARRAY MOVE / SWAP — `dst <-- arr` / `a <--> b` where the operands are
-    ENTIRE arrays (not elements). moveswap.sl marks it "to be revisited". Move /
-    swap LANDED for primitives / pointers / tuples (element operands `arr[i]` work);
-    a whole array needs a per-element walk (swap = element-wise SSA exchange or a
-    memcpy-through-temp; move = copy + null each pointer element). Also the null
-    walk (codegen emitNullLeaves) does NOT yet recurse into an ARRAY leaf — wire
-    that here too (today an array can't be a tuple slot, so it can't arise).
-    prerequisite: the homogeneous-array machinery (LANDED). See [[project_v2_move_swap]].
-
-  * ARRAY-FROM-TUPLE, SUB-ARRAY ASSIGN — `td[1] = (100,101)` assigns one ROW of
-    a multi-dim array from a tuple. Needs a PARTIAL-index lvalue (a sub-array
-    slice), which today errors "An array subscript must index every dimension."
-    Same bucket as nested-for over a 2-D array (a partial index yields a
-    sub-array). Deferred from the array-from-tuple landing (plan Phase 4, which
-    did 1-D init/assign + multi-dim init/assign). prerequisite: partial-index
-    array lvalues.
 
   * FOR-TUPLE OVER CLASS ELEMENTS — `for (p : classTuple)` where the element is a
     CLASS. The forced-by-ref rule for non-primitive elements has LANDED: a
@@ -125,26 +37,6 @@ REACH GOALS
     What remains needs classes: by-VALUE iteration over a class element (a copy
     needs a constructor — not available) + the class copy/move machinery, and
     by-ref iteration once class-typed tuples exist. prerequisite: classes (Phase 5).
-
-  * ARRAY FROM A TUPLE VALUE — `a = tupleVar` / `int a[3] = tupleVar` where the
-    rhs is a tuple VARIABLE, not a literal. The landed array-from-tuple gates on a
-    tuple LITERAL (kTupleExpr) so it can flatten the leaf NODES + elide the
-    aggregate; a tuple value falls to the normal path and is NOT rejected — it
-    mis-emits invalid LL (see the BUG above, "ARRAY = TUPLE-VALUE EMITS INVALID
-    LL"; the rejection is the immediate fix, this is the feature). To support it:
-    detect (array lvalue, tuple-typed value rhs), then flatten via extractvalue
-    per slot (recursing nested tuples) and store each into the array slots — no
-    node-level leaves to elide, so it copies through the value.
-    prerequisite: the homogeneous array-from-tuple (LANDED).
-
-  * ARRAYS OF TUPLES — `(int,int) arr[3] = ((1,2),(3,4),(5,6))`: an array whose
-    ELEMENT type is a tuple. A DIFFERENT mapping than the homogeneous flatten —
-    the outer tuple maps to elements, each kept as a tuple aggregate (no flatten).
-    Indexing is `arr[array-index][slot-index]` (standard order — the array
-    subscript outer, the tuple slot inner; array.sl spec block `six = arr[2][1]`
-    / the comma `arr[1,2]`). Deferred from the array-from-tuple landing.
-    prerequisite: the homogeneous array-from-tuple (LANDED) + element-is-a-tuple
-    layout.
 
   * DROP THE ENUM QUALIFIER IN CONTEXT — when a variable's declared type is an
     enum, a bare member name on the rhs should resolve against that enum's
@@ -157,6 +49,15 @@ REACH GOALS
 
 
 DEFERRED FEATURES (later; may not be on the plan)
+
+  * CONST-EXPRESSION ARRAY DIM IN A TYPE (Phase 2) — array TYPE spellings (`int[N]`
+    in type position — tuple slots, alias RHS, params via alias, returns) LANDED but
+    take only LITERAL dims; a const-EXPRESSION dim inside a type (`(int[N], int[4])`,
+    `alias V = int[N]`) is rejected ("An array type dimension must be an integer
+    literal"). The dim_exprs / bakeNodeDims fold is var-decl-NODE-anchored, so a dim
+    in a nested type position has no node to hang on. Needs the const-dim fold moved
+    to type level. Top-level `int name[N]` const dims still work via the name path.
+    prerequisite: none (array-TYPE grammar + the per-segment index walk both LANDED).
 
   * CLASS / USER-TYPE CONVERSION TARGET (Phase 5) — `(Type = expr)` value
     conversions LANDED for primitives (kConvertExpr; see [[project_v2_type_conversions]]).
@@ -190,10 +91,12 @@ DEFERRED FEATURES (later; may not be on the plan)
     protocol (op[]/size or begin/end/next, Phase 5). Lowers to a kForLongStmt in
     desugar like the others. Not landable until classes exist.
 
-  * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — the canon says by-value iteration
-    requires a primitive element type (a reference works for all). With only
-    primitive element types today the rule never fires, so it isn't enforced;
-    add the check when slid/class array elements exist (Phase 5).
+  * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
+    primitive element type (a reference works for all). The ARRAY / sub-array
+    variant LANDED this session (multi-dim for-array: a sub-array element forces a
+    reference loop var; a declared by-value one errors "must use a reference loop
+    variable"). Only the CLASS-element variant remains, when class array elements
+    exist (Phase 5).
 
   * NAMED-CONST-TRUE LOOP NOT FLAGGED — the constant-true-loop special case
     (3B revisited: a constant-true loop with no break is non-completing — its

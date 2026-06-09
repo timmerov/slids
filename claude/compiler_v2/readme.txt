@@ -84,14 +84,26 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     skipped slot); slot-wise arith + scalar broadcast (`(1,2,3)+7`); params /
     returns / references (`{i32,i32}` by value, `(T,T)^` = ptr). Codegen builds
     the aggregate via insertvalue; classify slot-types via internTuple.
-  * ARRAY from a homogeneous tuple: `int a[3]=(1,2,3)`, `a=(4,5,6)`, multi-dim
+  * ARRAY from a tuple: `int a[3]=(1,2,3)`, `a=(4,5,6)`, multi-dim
     `int td[3][2]=((1,2),(3,4),(5,6))` (a NESTED tuple whose SHAPE — row × col —
-    matches the standard-order dims). Element-wise row-major, tuple aggregate
-    ELIDED, each slot widens into the element type (resolve marks assigned_arrays;
-    classify checks the leaf count AND the nesting shape via tupleMatchesArrayShape
-    [a transposed / flat literal rejected: "Array initializer shape does not match
-    the dimensions of '<T>'"]; codegen flat-GEP per leaf — layout-agnostic, so the
-    leaf order IS the row-major store order).
+    matches the standard-order dims). ELEMENT-AWARE: collectArrayElementNodes
+    descends EXACTLY dims.size() levels and stops at the ELEMENT — so a scalar
+    element flattens to leaves, but a tuple/array element stays an aggregate (this
+    is how ARRAYS OF TUPLES `(int,int) a[3]` and TUPLE-OF-ARRAYS slots work; it
+    replaced the old flatten-to-scalars + tupleMatchesArrayShape). A wrong nesting
+    is "Array initializer shape does not match the dimensions of '<T>'"; each leaf
+    widens into the element type. Also: array↔tuple VALUE copy both directions
+    (`(int,int,int,int) t = a1` / `int a4[4] = t4`, extractvalue/insertvalue, per-
+    slot widen); PARTIAL-index lvalues (sub-array assign `td[1]=(100,101)` + sub-
+    array value read). See [[project_v2_array_types]].
+  * ARRAY TYPES (`int[N]`): parseType parses sized dims (LITERAL only in type
+    position), so array types compose — tuple slots `(int[3],int[4])`, alias RHS,
+    params (via alias), returns `int[3] f()`. Variable decls stay name-anchored
+    `int x[3]` (reject_array_dims rejects a top-level sized-array type at decl
+    sites). INDEXING is a per-segment walk in emitElementAddr: dispatch on the
+    CURRENT type each step (array dim -> GEP; tuple slot -> struct GEP), composing
+    alias-element nested arrays + array->tuple->array chains; the old codegen rank
+    check (a buggy duplicate of classify's per-level over-index) was deleted.
   * FOR-TUPLE `for (v : tuple)` over a HOMOGENEOUS tuple: resolve understands it
     (understandForTuple, retagging the kForEnumStmt carrier to kForTupleStmt) and
     desugar lowers it (lowerForTuple) to a kForLongStmt walking an iterator

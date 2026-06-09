@@ -284,6 +284,16 @@ int32 main() {
     Vec2 va[3] = ((1,2), (3,4), (5,6));
     __println("va= " + va[0][0] + " " + va[2][1] + " " + va[1][0]);          // 1 6 3
 
+    /* the same array initialized from element VALUES (not literals) — each whole
+       element is loaded and stored. */
+    Vec2 av = (7, 8);
+    Vec2 vv[2] = (av, av);
+    __println("vv= " + vv[0][0] + " " + vv[1][1]);                           // 7 8
+
+    /* reading a nested-array ELEMENT as a whole sub-array value. */
+    int row[2] = va[0];
+    __println("row= " + row[0] + " " + row[1]);                             // 1 2
+
     return 0;
 }
 
@@ -448,4 +458,30 @@ int32 main() {
 //int neg_array_type_const() {
 //    const int[3] c = (1,2,3);
 //    return c[0];
+//}
+
+/* an array-VALUE element whose type doesn't match the array's element type. */
+//-EXPECT-ERROR: does not match the declared element type
+//int neg_array_value_elem() {
+//    alias Vec2 = int[2];
+//    Vec2 a = (1,2);
+//    int wrong[5] = (5,6,7,8,9);
+//    Vec2 va[2] = (a, wrong);
+//    return va[0][0];
+//}
+
+/* a tuple-VALUE element whose arity doesn't match the array's tuple element. */
+//-EXPECT-ERROR: does not match the declared element type
+//int neg_tuple_value_elem() {
+//    (int,int,int) bad = (1,2,3);
+//    (int,int) at[2] = (bad, bad);
+//    return at[0][0];
+//}
+
+/* a nested array-element initializer whose SHAPE doesn't match the element. */
+//-EXPECT-ERROR: Array initializer shape does not match
+//int neg_nested_elem_shape() {
+//    alias Vec2 = int[2];
+//    Vec2 va[2] = ((1,2,3), (4,5));
+//    return va[0][0];
 //}

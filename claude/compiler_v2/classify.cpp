@@ -1396,7 +1396,9 @@ void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
             continue;
         }
         inferExpr(tree, *el, elem, diag);
-        if (elem_tuple) {
+        if (elem_tuple || elem_array) {
+            // A non-literal aggregate (tuple / array) VALUE element must match the
+            // element type (an array literal was routed through the recursion above).
             if (el->inferred_type != widen::kNoType
                 && widen::deepStrip(el->inferred_type) != widen::deepStrip(elem)) {
                 diagnostic::report(diag, {el->file_id, el->tok,

@@ -228,14 +228,32 @@ Phase 4 — types beyond primitives
     into the element type. Whole-array definite-assignment is a monotonic
     may-set [a subscript write assigns the array; read-before-any-write errors];
     arrays join the unused-local sweep.)
+  * array TYPES + composition + the index walk (LANDED — see
+    [[project_v2_array_types]] / project_v2_array_types.md memory)
+    (`int[N]` is now a first-class TYPE [parseType parses sized dims; LITERAL only
+    in type position, const-expr-in-type deferred to "Phase 2"], usable in tuple
+    slots `(int[3],int[4])`, alias RHS `alias V=float[3]`, params [via alias] and
+    RETURNS `int[3] f()`. Variable decls STAY name-anchored `int x[3]` —
+    reject_array_dims rejects a top-level sized-array type at every declaration site.
+    array↔tuple VALUE copy both directions [extractvalue/insertvalue, per-slot
+    widen]; array-from-tuple is ELEMENT-AWARE [collectArrayElementNodes descends
+    dims.size() levels — a tuple/array element stays an aggregate, REPLACING the old
+    flatten + tupleMatchesArrayShape]; ARRAYS OF TUPLES + TUPLE OF ARRAYS;
+    PARTIAL-index lvalues [sub-array assign `td[1]=(100,101)` + sub-array value read];
+    whole-array move/swap. The INDEX WALK: emitElementAddr walks the chain per
+    segment dispatching on the CURRENT type [array dim->GEP, tuple slot->struct GEP],
+    DELETING the redundant codegen rank check [classify owns over-index]; composes
+    alias-element nested arrays + array->tuple->array; the seam class op[] plugs into
+    at Phase 5. STOP-AT-FIRST-ERROR added to codegen.)
   * for-array (`for (var : arr)`)                                  LANDED
     (DESUGAR-stage lowering to kForLongStmt: resolve UNDERSTANDS it
     [understandForArray, retags kForArrayStmt], desugar's lowerForArray builds a
     fresh `_$idx` walking 0..len-1, the loop var bound at the body top — by
     reference [`T^ v`], by value [`T v`], or typeless [by value;
-    reuse-an-enclosing-local-or-fresh]. One-dimensional only; a by-ref var's base
-    type must equal the element type [alias-resolved first, so `for (Int^ v :
-    intArr)` with `alias Int = int` matches].)
+    reuse-an-enclosing-local-or-fresh]. MULTI-DIM landed: a 2-D array iterates rows
+    [a sub-array element forces by-ref]; a NESTED for over `sub^` works via the
+    for-tuple iterator path [an array is a homogeneous tuple]. A by-ref var's base
+    type must equal the element type [alias-resolved first].)
   * for-tuple (`for (v : tuple)`)                                   LANDED
     (DESUGAR-stage, like for-array: resolve understands [understandForTuple, from
     the kForEnumStmt carrier → kForTupleStmt], desugar's lowerForTuple walks a
