@@ -12,7 +12,7 @@ as a widen call-out.
 PIPELINE — current shape
 
     lex -> numeric -> grammar -> resolve -> constfold -> classify
-        -> desugar -> optimize -> layout -> codegen
+        -> desugar -> optimize -> codegen
 
   resolve owns: parse::Entry vector population, frame push/pop, ident
   resolution (resolved_entry_id stamping), wrong-kind diagnostics

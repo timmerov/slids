@@ -13,13 +13,15 @@ PIPELINE (each stage consumes its predecessor's output, produces its successor's
       => resolve   => parse::Tree annotated (symbol refs; const idents substituted)
       => constfold => parse::Tree (literal sub-trees collapsed + nominal-typed)
       => classify  => parse::Tree annotated (types: inferred_type + op_type)
-      => desugar   => ast::Tree
+      => desugar   => ast::Tree (mangled names baked in by functionSymbol)
       => optimize  => ast::Tree annotated (perf rewrites in place)
-      => layout    => ast::Tree annotated (mangled names + offsets)
       => codegen   => .ll text
 
 main.cpp drives the chain per TU and runs `diagnostic::hasErrors(diag)` between
-layout and codegen to short-circuit on errors.
+each stage to short-circuit on errors. There is no separate layout stage: LLVM
+owns the struct layout (codegen GEPs fields by INDEX, sizes via the GEP-null /
+ptrtoint helper), name mangling happens at the parse->ast seam (desugar), and the
+per-class derived facts (needs_ctor/dtor) are computed in resolve.
 
 DESIGN PRINCIPLES
 
@@ -724,8 +726,12 @@ STAGE FILES (.h / .cpp pairs)
   optimize  ast -> ast in place. Slids-aware perf rewrites LLVM can't do
             (compound-fuse, NRVO, identity-temp adoption, build-into-target).
             (TODO stub.)
-  layout    ast -> ast in place. LLVM mangled names, field offsets, struct
-            sizes, vtable layouts. (TODO stub.)
+            (No layout stage: every job the original plan gave it lands in a
+            stage with the right inputs — field offsets = codegen index-GEP, struct
+            sizes = the GEP-null/ptrtoint `__$sizeof` helper, mangled names =
+            desugar, needs_ctor/dtor = resolve, vtables [Phase 7] = resolve slot
+            assignment + codegen emission. An ast-only pass has neither the entry
+            table nor the class graph, so it can't own any of them.)
   codegen   ast -> .ll text. Reads inferred_type / op_type stamped by
             classify (no longer derives or recomputes types). SymTab keyed
             by parse::Tree::entries index; every ident / lvalue node carries
@@ -784,8 +790,8 @@ STAGE FILES (.h / .cpp pairs)
             emitFunction's trailing-return terminator decision uses a separate
             ast-side endsInReturn / endsInReturnNode (return only) that recurses
             into a trailing block and a both-arms-return if, mirroring classify.
-            Mangled names and field offsets land
-            with layout.
+            Mangled names are baked in by desugar (functionSymbol); field offsets
+            are the index-GEP here in codegen (LLVM owns the byte offset).
               Pointers & arrays (Phase 4). References (`T^`) and iterators
             (`T[]`) are both LLVM `ptr`; `anyptr` (nullptr) too. kAddrOfExpr
             `^var` is the operand's alloca register (no load); kDerefExpr loads
@@ -873,9 +879,10 @@ PRODUCT FILES (.h / .cpp pairs)
   ast       ast node types (separate set from parse) + tree storage +
             build/walk/annotate APIs. Nodes carry nominal_type +
             inferred_type + op_type + resolved_entry_id + params +
-            param_types propagated from parse; future: mangled names +
-            layout offsets (populated by layout) + back-pointers to parse
-            for source attribution.
+            param_types propagated from parse; a call/def `name` carries the
+            mangled symbol (baked in by desugar's functionSymbol). No
+            layout-offset fields — LLVM owns the byte offset (codegen index-GEP).
+            file_id / tok back-pointers attribute to source.
 
 PLUMBING
 

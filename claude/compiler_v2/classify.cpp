@@ -624,10 +624,28 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 }
                 // An empty type rides an already-reported upstream error (an
                 // un-typeable operand); fall to 0 silently rather than cascade.
-                // A slid type (typeByteSize -1) is not statically sized — report;
-                // unreachable until classes (Phase 5 / cross-TU) exist.
                 size = ty.empty() ? 0 : widen::typeByteSize(ty);
                 if (size < 0) {
+                    // A class's size is not a compile-time constant — it is the
+                    // real struct layout LLVM owns. Rewrite to a call to the class's
+                    // `<Name>__$sizeof()` helper (GEP-null/ptrtoint, the v1 design);
+                    // codegen emits that function per class. Result is a runtime
+                    // intptr, NOT foldable (so it can't init a const).
+                    widen::TypeRef st = e.return_type != widen::kNoType
+                        ? widen::strip(e.return_type)
+                        : widen::strip(e.children[0]->inferred_type);
+                    if (widen::form(st) == widen::Type::Form::kSlid
+                        && tree.classes.count(widen::get(st).name)) {
+                        widen::TypeRef iptr = widen::intern("intptr");
+                        e.kind = parse::Kind::kCallExpr;
+                        e.name = widen::get(st).name + "__$sizeof";
+                        e.return_type = iptr;   // emitCall reads this for the ret llty
+                        e.children.clear();
+                        e.param_types.clear();
+                        e.inferred_type = iptr;
+                        return;
+                    }
+                    // void / an unregistered slid has no size at all.
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Cannot take sizeof of '" + ty + "'.", {}});
                     size = 0;

@@ -26,5 +26,8 @@ qualified= 4
 sum= 12
 const= 4
 const2= 10
+Simple:ctor: -1
+simple_size = 16 16 16
 uninit= 4
 uninit2= 4
+Simple:dtor: -1

@@ -1217,7 +1217,18 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                         + ", not a value or a type.", {}});
                 return;
             }
-            // id < 0: a qualified ref already reported its own resolution failure
+            // id < 0: a registered CLASS is a type (it lives in tree.classes, not
+            // the entry table) — measure it as that type, like an alias. Stamp the
+            // kSlid on return_type and drop the operand so it reads as a type sizeof.
+            if (!qualified) {
+                auto cit = tree.classes.find(operand.name);
+                if (cit != tree.classes.end()) {
+                    e.return_type = cit->second.type;
+                    e.children.clear();
+                    return;
+                }
+            }
+            // a qualified ref already reported its own resolution failure
             // (resolveQualifiedRef); only a bare unresolved name needs reporting.
             if (!qualified) {
                 diagnostic::report(diag, {operand.file_id, operand.tok,

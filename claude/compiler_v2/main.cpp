@@ -11,7 +11,6 @@
 #include "desugar.h"
 #include "diagnostic.h"
 #include "grammar.h"
-#include "layout.h"
 #include "lex.h"
 #include "numeric.h"
 #include "optimize.h"
@@ -67,8 +66,6 @@ int main(int argc, char** argv) {
     desugar::run(parse_tree, ast_tree, diag);
     if (diagnostic::hasErrors(diag)) return bail();
     optimize::run(ast_tree, diag);
-    if (diagnostic::hasErrors(diag)) return bail();
-    layout::run(ast_tree, diag);
     if (diagnostic::hasErrors(diag)) return bail();
 
     std::ostringstream codegen_buf;

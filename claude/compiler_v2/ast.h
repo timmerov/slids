@@ -104,6 +104,9 @@ struct Node {
 
 struct Tree {
     std::vector<std::unique_ptr<Node>> nodes;
+    // Class kSlid types carried from parse, so codegen can emit each class's
+    // `<Name>__$sizeof()` helper (GEP-null/ptrtoint — LLVM owns the layout).
+    std::vector<widen::TypeRef> classes;
 };
 
 }  // namespace ast

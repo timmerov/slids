@@ -1076,6 +1076,12 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
             lowerStatementList(fn->children);
         }
     }
+    // Carry the class kSlid types so codegen can emit each `<Name>__$sizeof()`
+    // helper (the parse-side class graph isn't otherwise visible to codegen).
+    for (auto const& [name, info] : in.classes) {
+        (void)name;
+        if (info.type != widen::kNoType) out.classes.push_back(info.type);
+    }
 }
 
 }  // namespace desugar

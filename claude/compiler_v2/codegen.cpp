@@ -2236,6 +2236,20 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         if (diagnostic::hasErrors(diag)) break;   // stop at the first error
         emitFunction(*fn, pool, body, diag);
     }
+    // Per-class size helper. LLVM owns the struct layout, so the byte size is the
+    // GEP-null/ptrtoint of the struct type — emitted as `<Name>__$sizeof()` (v1's
+    // design), which sizeof(Class) (and new/delete) call. A function rather than an
+    // inline expression so it resolves at link time for cross-TU classes (Phase 8).
+    for (widen::TypeRef ct : tree.classes) {
+        if (diagnostic::hasErrors(diag)) break;
+        std::string llty = llvmForRef(ct);
+        std::string name = widen::get(ct).name;
+        body << "define internal i64 @" << name << "__$sizeof() {\n";
+        body << "  %g = getelementptr " << llty << ", ptr null, i32 1\n";
+        body << "  %s = ptrtoint ptr %g to i64\n";
+        body << "  ret i64 %s\n";
+        body << "}\n\n";
+    }
 
     out << "target triple = \"x86_64-pc-linux-gnu\"\n\n";
     strings::emit(pool, out);
