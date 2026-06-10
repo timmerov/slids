@@ -17,6 +17,22 @@ df1: neg=7 base=8 last=9
 ot.inner: a=0 b=1
 MyFirstClass: a=13 b=17
 MyFirstClass: a=19 b=1
+expect ctors 100,200 after.
+CtorDtor:ctor: 100
+CtorDtor:ctor: 200
+expect ctors 100,200 before and dtors 200,100 after.
+CtorDtor:dtor: 200
+CtorDtor:dtor: 100
+expect dtors 200,100 before.
+expect Leaf/Middle/Deep ctors after.
+Leaf:ctor 5
+Middle:ctor
+Deep:ctor
+expect ctors above, dtors Deep/Middle/Leaf below.
+Deep:dtor
+Middle:dtor
+Leaf:dtor 5
+expect dtors above.
 one0: x=42
 th0: a=0 b=2 c=3
 th1: a=10 b=20 c=30
@@ -25,7 +41,9 @@ CtorDtor:ctor: 1
 CtorDtor:ctor: 2
 CtorDtor:ctor: 3
 expect ctors 1,2,3 above and dtors 3,2,1 below.
-CtorDtor:dtor 3
-CtorDtor:dtor 2
-CtorDtor:dtor 1
+CtorDtor:dtor: 3
+CtorDtor:dtor: 2
+CtorDtor:dtor: 1
 expect dtors 3,2,1 above.
+ForwardCtorDtor:ctor: 57
+ForwardCtorDtor:dtor: 57

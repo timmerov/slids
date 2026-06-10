@@ -438,13 +438,23 @@ Phase 4 — types beyond primitives
     constfold/constant.sl (kSS, kWP1-5, kChFit/kChBig/...).
 
 Phase 5 — classes
-  * class definitions (fields, ctor, dtor, methods)
-  * inferred field types (`Foo(name = const_expr)`)
+  * class definitions (fields, ctor, dtor) — LANDED. A class is a named tuple
+    (kSlid carrying its field-slot types); construction reuses the tuple aggregate
+    path; `.field` lowers to a slot index. ctor/dtor are scope HOOKS (field-init
+    first, then the ctor; dtor at scope exit), self-bound, call-if-needed, with
+    forward declarations. Full detail: plan-class-basic.txt + readme "CLASSES +
+    CTOR/DTOR" + [[project_v2_classes]]. METHODS still pending.
+  * inferred field types (`Foo(name = const_expr)`) — LANDED.
+  * destructor balance invariant — LANDED. Reverse-order teardown on every exit
+    (block / return / break / continue) via a DtorScope chain threaded through
+    codegen's emitStmt alongside the loop context, gated by completion; TRANSITIVE
+    + Itanium-recursive over class-typed fields (resolve needs-fixpoint +
+    emitConstructHooks/emitDestructHooks). Deferred (todo): array/tuple-of-hook
+    field; the non-block-exit + loop-var tests; delete-runs-dtor.
   * operator overloading per slid
   * move / swap — the OVERLOADABLE class operators (`op<--`/`op<-->`) + resource
     semantics + class fields inside a moved/swapped tuple (the primitive / pointer
     / tuple forms landed in Phase 4 — [[project_v2_move_swap]])
-  * destructor balance invariant
   * for-each protocol (op[]+size OR begin/end/next)
   * stringification operators (`##name`, `##type`, `#`) — the 7 `##` macros
     (##file / ##line / ##func / ##name(x) / ##date / ##time / ##type(x)) LANDED,

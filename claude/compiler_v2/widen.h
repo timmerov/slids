@@ -52,8 +52,10 @@ struct Type {
     std::vector<int> dims;                 // kArray dims, source order
     std::vector<TypeRef> slots;            // kTuple / kSlid (field types)
     int slid_entry_id = -1;                // kSlid (resolved later)
-    bool needs_ctor = false;               // kSlid: has a constructor hook to call
-    bool needs_dtor = false;               // kSlid: has a destructor hook to call
+    bool has_ctor = false;                 // kSlid: an explicit `_(){}` -> a
+    bool has_dtor = false;                 //   <Name>__$ctor/__$dtor symbol exists
+    bool needs_ctor = false;               // kSlid: TRANSITIVE — explicit, or a
+    bool needs_dtor = false;               //   field whose class needs it (run hooks)
 };
 
 // Intern a slids type spelling, returning a stable handle. Round-trips exactly:
@@ -87,9 +89,13 @@ TypeRef internAlias(std::string const& name, TypeRef underlying);
 // the layout. Codegen reads get(ref).slots for the struct definition.
 TypeRef internSlid(std::string const& name, std::vector<TypeRef> const& slots);
 
-// Mark a class's lifecycle hooks on its (already-interned) kSlid type, so
-// codegen knows where to emit constructor / destructor calls.
-void setSlidLifecycle(std::string const& name, bool needs_ctor, bool needs_dtor);
+// Mark a class's EXPLICIT lifecycle hooks (a `_(){}` / `~(){}` definition, so
+// the <Name>__$ctor/__$dtor symbols exist). Seeds needs_ctor/needs_dtor = has_*.
+void setSlidLifecycle(std::string const& name, bool has_ctor, bool has_dtor);
+
+// Set a class's TRANSITIVE needs (explicit OR a field-class needs it), computed
+// by resolve's fixpoint after all classes are registered.
+void setSlidNeeds(std::string const& name, bool needs_ctor, bool needs_dtor);
 
 // Peel any alias layers, returning the first non-alias handle (the underlying
 // structure). Predicates that switch on form() use this to see through aliases.

@@ -117,6 +117,57 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     param (`dump(#x)`) materializes it in a temp — emitCall brackets such a call
     in @llvm.stacksave/stackrestore so a materializing call in a loop doesn't leak.
 
+
+CLASSES + CTOR/DTOR (landed this phase; spans every stage)
+
+  * A class IS a named tuple. `Name(field-list){body}` (grammar parseClassDef: an
+    identifier directly followed by `(` at file scope — a function is `Type name(`).
+    The field list reuses the param-list parser (kParam nodes, defaults in
+    children[0]). resolve registerClass builds a ClassInfo (field names / types /
+    the stable kParam nodes / def location) and interns the kSlid type CARRYING its
+    field slot types (widen::internSlid) — so the whole tuple aggregate path
+    (construct, store, slot access, llvmForRef -> literal struct) is reused and
+    codegen needs NO symbol table; the layout rides on the type. requireKnownType
+    accepts a registered-class leaf.
+  * `.field` is a kFieldExpr (grammar postfix `.name`); classify types it via the
+    ClassInfo; desugar lowers it to a kIndexExpr over the field's slot index, so it
+    never reaches codegen (slot access by name). `^field` address-of walks
+    kFieldExpr chains (resolve) and emitElementAddr GEPs a kSlid slot.
+  * CONSTRUCTION (classify classifyClassInit) normalizes every init form to a
+    per-field tuple: each field = init-tuple slot, else the author default (read
+    LIVE off the kParam node — constfold may have replaced it), else zero
+    (classZeroValue: 0 / 0.0 / false / nullptr; an unhandled field type errors). A
+    class-typed field constructs RECURSIVELY (constructClass): a scalar/tuple is the
+    sub-class's ctor input filled with ITS defaults; a same-class value copies. The
+    `=` form SPREADS its tuple slot-to-field; the call form keeps each arg whole. A
+    size-1 init tuple is inexpressible (`( x )` collapses) — punted (todo). A class
+    var-decl is definitely-initialized (DA) even with no initializer.
+  * CTOR/DTOR are scope HOOKS, not the constructor — fields are initialized first,
+    the ctor runs after, the dtor at scope exit. `_(){}` / `~(){}` parse as
+    kFunctionDef with an implicit `self` (`Name^`) param; a bare field name in the
+    body rewrites to `self^.field` (resolve method_fields fallback — locals shadow).
+    desugar lifts them to top-level `<Name>__$ctor` / `__$dtor`. Optional but must
+    PAIR; FORWARD declarations (`_();`) allowed but must be defined; no author
+    params. The kSlid type carries has_ctor/has_dtor (the explicit symbol exists)
+    vs needs_ctor/needs_dtor (TRANSITIVE).
+  * CALL-IF-NEEDED + ITANIUM RECURSIVE DESCENT: a trivial class emits no calls.
+    needs_ctor/needs_dtor is transitive over the field graph (resolve fixpoint after
+    all classes register — a by-value field whose class needs hooks propagates up).
+    emitConstructHooks runs each class-typed field's hooks in declaration order then
+    the class's own ctor; emitDestructHooks runs the class's own dtor then field
+    dtors in REVERSE, to any depth. The unused-local sweep exempts a hook-bearing
+    class (the instance IS the use). [DEFERRED: an array-/tuple-of-hook-class field —
+    the fixpoint + walkers descend only DIRECT kSlid fields.]
+  * DESTRUCTOR-BALANCE INVARIANT: every instance destroyed once, in reverse
+    declaration order, on EVERY exit. A DtorScope chain is threaded through emitStmt
+    alongside the LoopCtx: a needs_dtor var registers in the current scope; a block
+    emits its scope's dtors at normal fall-through end (skipped when the block ends
+    abrupt — endsTerminated, so nothing is emitted after a terminator); a `return`
+    unwinds the whole chain (the value is materialized first); `break`/`continue`
+    unwind down to the target loop's boundary scope (LoopCtx.scope). [DEFERRED
+    tests: the return/break/continue arms + the loop-VARIABLE case; delete-runs-dtor.]
+
+
 STAGE FILES (.h / .cpp pairs)
 
   lex       text -> tokens. Wraps the scanner in an ImportWrapper that

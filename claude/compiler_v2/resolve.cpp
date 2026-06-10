@@ -3160,6 +3160,32 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             registerClass(tree, *ch, diag);
         }
     }
+    // Transitive lifecycle: a class needs a ctor/dtor if a by-value field's class
+    // does (its hooks must run when the container is built / torn down). Fixpoint
+    // over the field graph, then publish to the kSlid type flags codegen reads.
+    {
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (auto& [cname, info] : tree.classes) {
+                for (widen::TypeRef ft : info.field_types) {
+                    widen::TypeRef fs = widen::strip(ft);
+                    if (widen::form(fs) != widen::Type::Form::kSlid) continue;
+                    auto fit = tree.classes.find(widen::get(fs).name);
+                    if (fit == tree.classes.end()) continue;
+                    if (fit->second.needs_ctor && !info.needs_ctor) {
+                        info.needs_ctor = true; changed = true;
+                    }
+                    if (fit->second.needs_dtor && !info.needs_dtor) {
+                        info.needs_dtor = true; changed = true;
+                    }
+                }
+            }
+        }
+        for (auto& [cname, info] : tree.classes) {
+            widen::setSlidNeeds(cname, info.needs_ctor, info.needs_dtor);
+        }
+    }
 
     // Pass 1a — collect entries at program scope WITHOUT walking init
     // expressions. This lets globals reference each other regardless of

@@ -1122,17 +1122,57 @@ struct LoopCtx {
 // A live destructible: the address of a class instance + the class name (its
 // dtor symbol is `<class>__$dtor`). Tracked per lexical scope, destroyed in
 // REVERSE declaration order on every exit (the destructor-balance invariant).
-struct DtorObj { std::string addr; std::string class_name; };
+struct DtorObj { std::string addr; widen::TypeRef type; };
 struct DtorScope {
     std::vector<DtorObj> objs;
     DtorScope const* outer = nullptr;
 };
 
-// Emit the dtor calls for ONE scope, in reverse declaration order.
+// Itanium recursive descent. Construct: build each class-typed field (its hooks,
+// in declaration order), THEN run this class's own ctor hook. The fields are
+// already laid down in memory (field-init); this runs the HOOKS.
+void emitConstructHooks(std::string const& addr, widen::TypeRef type,
+                        std::ostream& out) {
+    widen::TypeRef cs = widen::strip(type);
+    widen::Type const& ct = widen::get(cs);
+    std::string llty = llvmForRef(cs);
+    for (std::size_t i = 0; i < ct.slots.size(); i++) {
+        widen::TypeRef st = widen::strip(ct.slots[i]);
+        if (widen::form(st) == widen::Type::Form::kSlid && widen::get(st).needs_ctor) {
+            std::string gep = newTmp("ctorfld");
+            out << "  " << gep << " = getelementptr inbounds " << llty
+                << ", ptr " << addr << ", i32 0, i32 " << i << "\n";
+            emitConstructHooks(gep, ct.slots[i], out);
+        }
+    }
+    if (ct.has_ctor) out << "  call void @" << ct.name << "__$ctor(ptr "
+                         << addr << ")\n";
+}
+
+// Destruct: run this class's own dtor hook FIRST, then tear down each class-typed
+// field in REVERSE declaration order — the mirror of construction.
+void emitDestructHooks(std::string const& addr, widen::TypeRef type,
+                       std::ostream& out) {
+    widen::TypeRef cs = widen::strip(type);
+    widen::Type const& ct = widen::get(cs);
+    if (ct.has_dtor) out << "  call void @" << ct.name << "__$dtor(ptr "
+                         << addr << ")\n";
+    std::string llty = llvmForRef(cs);
+    for (std::size_t i = ct.slots.size(); i-- > 0; ) {
+        widen::TypeRef st = widen::strip(ct.slots[i]);
+        if (widen::form(st) == widen::Type::Form::kSlid && widen::get(st).needs_dtor) {
+            std::string gep = newTmp("dtorfld");
+            out << "  " << gep << " = getelementptr inbounds " << llty
+                << ", ptr " << addr << ", i32 0, i32 " << i << "\n";
+            emitDestructHooks(gep, ct.slots[i], out);
+        }
+    }
+}
+
+// Emit the destructors for ONE scope, in reverse declaration order.
 void emitScopeDtors(DtorScope const& s, std::ostream& out) {
     for (auto it = s.objs.rbegin(); it != s.objs.rend(); ++it) {
-        out << "  call void @" << it->class_name << "__$dtor(ptr "
-            << it->addr << ")\n";
+        emitDestructHooks(it->addr, it->type, out);
     }
 }
 
@@ -1412,11 +1452,10 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 if (widen::form(st) == widen::Type::Form::kSlid) {
                     widen::Type const& ct = widen::get(st);
                     if (ct.needs_ctor) {
-                        out << "  call void @" << ct.name << "__$ctor(ptr "
-                            << it->second.alloca_name << ")\n";
+                        emitConstructHooks(it->second.alloca_name, st, out);
                     }
                     if (ct.needs_dtor && scope) {
-                        scope->objs.push_back({it->second.alloca_name, ct.name});
+                        scope->objs.push_back({it->second.alloca_name, st});
                     }
                 }
             }

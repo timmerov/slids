@@ -8,7 +8,7 @@ BUILD_DIR = ../../build/test_v2/function
 
 SAMPLES = \
 	calls \
-	nested \
+	nested_fn \
 	overload \
 	param
 

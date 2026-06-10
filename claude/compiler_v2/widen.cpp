@@ -872,7 +872,18 @@ TypeRef internSlid(std::string const& name, std::vector<TypeRef> const& slots) {
     return ref;
 }
 
-void setSlidLifecycle(std::string const& name, bool needs_ctor, bool needs_dtor) {
+void setSlidLifecycle(std::string const& name, bool has_ctor, bool has_dtor) {
+    Type t;
+    t.form = Type::Form::kSlid;
+    t.name = name;
+    TypeRef ref = internStruct(std::move(t));
+    arena().types[ref].has_ctor = has_ctor;
+    arena().types[ref].has_dtor = has_dtor;
+    arena().types[ref].needs_ctor = has_ctor;   // seed; fixpoint widens
+    arena().types[ref].needs_dtor = has_dtor;
+}
+
+void setSlidNeeds(std::string const& name, bool needs_ctor, bool needs_dtor) {
     Type t;
     t.form = Type::Form::kSlid;
     t.name = name;

@@ -2244,7 +2244,8 @@ struct Parser {
         if (!expect(token::Kind::kLBrace, "{")) return nullptr;
 
         std::string self_type = name + "^";
-        bool has_ctor = false, has_dtor = false;
+        bool ctor_decl = false, ctor_def = false;
+        bool dtor_decl = false, dtor_def = false;
         while (!fatal && peek().kind != token::Kind::kRBrace) {
             if (peek().kind == token::Kind::kEndOfFile
                 || peek().kind == token::Kind::kEndOfInput) {
@@ -2262,15 +2263,28 @@ struct Parser {
             int m_file = peek().file_id;
             int m_tok = pos;
             advance();   // `_` or `~`
-            if (is_ctor && has_ctor) { error("Duplicate constructor."); return nullptr; }
-            if (is_dtor && has_dtor) { error("Duplicate destructor."); return nullptr; }
             if (!expect(token::Kind::kLParen, "(")) return nullptr;
             if (peek().kind != token::Kind::kRParen) {
                 error("A constructor or destructor takes no parameters.");
                 return nullptr;
             }
             advance();   // )
-            if (!expect(token::Kind::kLBrace, "{")) return nullptr;
+            // `_();` is a forward declaration; `_(){...}` is the definition. A
+            // declaration emits no member node — it only obligates a definition.
+            if (peek().kind == token::Kind::kSemicolon) {
+                advance();   // ;
+                if (is_ctor) ctor_decl = true; else dtor_decl = true;
+                continue;
+            }
+            if (peek().kind != token::Kind::kLBrace) {
+                error("Expected ';' (forward declaration) or '{' (definition) "
+                      "after a constructor or destructor.");
+                return nullptr;
+            }
+            advance();   // {
+            // Caret the duplicate `_`/`~` (m_tok), not the body just consumed.
+            if (is_ctor && ctor_def) { errorAt(m_tok, "Duplicate constructor."); return nullptr; }
+            if (is_dtor && dtor_def) { errorAt(m_tok, "Duplicate destructor."); return nullptr; }
 
             auto member = newNodeAt(parse::Kind::kFunctionDef, m_file, m_tok);
             member->name = is_ctor ? "_$ctor" : "_$dtor";
@@ -2297,15 +2311,28 @@ struct Parser {
             if (!expect(token::Kind::kRBrace, "}")) return nullptr;
             current_func = std::move(saved_func);
 
-            if (is_ctor) has_ctor = true; else has_dtor = true;
+            if (is_ctor) ctor_def = true; else dtor_def = true;
             node->children.push_back(std::move(member));
         }
         if (!expect(token::Kind::kRBrace, "}")) return nullptr;
         // A constructor and destructor are hooks for the same scope boundary;
-        // one without the other is a contract error.
+        // one without the other is a contract error. Caret the class name (the
+        // `}` is already consumed, so the current position is the next token).
+        bool has_ctor = ctor_decl || ctor_def;
+        bool has_dtor = dtor_decl || dtor_def;
         if (has_ctor != has_dtor) {
-            error(has_ctor ? "A constructor requires a matching destructor."
-                           : "A destructor requires a matching constructor.");
+            errorAt(name_tok,
+                    has_ctor ? "A constructor requires a matching destructor."
+                             : "A destructor requires a matching constructor.");
+            return nullptr;
+        }
+        // A forward declaration obligates a definition later in the body.
+        if (ctor_decl && !ctor_def) {
+            errorAt(name_tok, "A forward-declared constructor must be defined.");
+            return nullptr;
+        }
+        if (dtor_decl && !dtor_def) {
+            errorAt(name_tok, "A forward-declared destructor must be defined.");
             return nullptr;
         }
         return node;

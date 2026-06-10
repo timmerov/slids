@@ -14,6 +14,8 @@ SAMPLES = \
 	incomplete \
 	inheritance \
 	method \
+	namespace_cls \
+	nested_cls \
 	operator \
 	virtual
 

@@ -49,7 +49,24 @@ specialized class features are handled elsewhere.
 /*
 claude says:
 
-tbd
+a class IS a named tuple. the kSlid type carries its own field-slot types, so
+the whole tuple aggregate path (construct, store, slot access) is reused and
+codegen needs no symbol table — the layout rides on the type. `.field` is just
+slot access by name (lowered to a slot index in desugar).
+
+construction is field-init (slot from an init tuple, else the author default,
+else zero) — recursively for a class-typed field, where a scalar/tuple is the
+sub-class's constructor input filled out with its own defaults. the `=` form
+spreads its tuple across fields; the call form keeps each arg whole. a size-1
+init tuple is inexpressible (`( x )` collapses) — punted to the call form.
+
+ctor/dtor are NOT the constructor. fields are initialized first; the ctor is a
+hook that runs after, the dtor a hook at scope exit. they are call-if-needed:
+a trivial class emits no calls at all. forward declarations are allowed but
+must be defined. the destructor-balance invariant — every instance destroyed
+once, in reverse declaration order, on every exit (block end / return / break /
+continue) — rides a scope chain threaded through codegen alongside the loop
+context, gated by completion so we never emit after a terminator.
 */
 
 MyFirstClass(
@@ -104,8 +121,56 @@ CtorDtor(int c_) {
         __println("CtorDtor:ctor: " + c_);
     }
     ~() {
-        __println("CtorDtor:dtor " + c_);
+        __println("CtorDtor:dtor: " + c_);
     }
+}
+
+ForwardCtorDtor(int d_) {
+    /* ctor/dtor forward declaration. */
+    _();
+    ~();
+
+    /* ctor/dtor forward re-declaration. */
+    _();
+    ~();
+
+    /* ctor/dtor definition. */
+    _() {
+        __println("ForwardCtorDtor:ctor: " + d_);
+    }
+    ~() {
+        __println("ForwardCtorDtor:dtor: " + d_);
+    }
+
+    /* ctor/dtor aft-ward declaration. weird but allowed. */
+    _();
+    ~();
+}
+
+SynthesizedCtorDtor(
+    CtorDtor field1_,
+    CtorDtor field12_
+) {
+    /* no explicit ctor/dtor. */
+}
+
+/*
+a 3-deep hook chain. each level has BOTH an explicit ctor/dtor AND a class-typed
+field — so a field's ctor runs before the level's own ctor, and the level's own
+dtor runs before the field's dtor. construction descends Leaf->Middle->Deep;
+destruction unwinds the mirror Deep->Middle->Leaf.
+*/
+Leaf(int v_) {
+    _() { __println("Leaf:ctor " + v_); }
+    ~() { __println("Leaf:dtor " + v_); }
+}
+Middle(Leaf leaf_) {
+    _() { __println("Middle:ctor"); }
+    ~() { __println("Middle:dtor"); }
+}
+Deep(Middle mid_) {
+    _() { __println("Deep:ctor"); }
+    ~() { __println("Deep:dtor"); }
 }
 
 int32 main() {
@@ -187,6 +252,33 @@ int32 main() {
     Outer ot4 = 19;
     print(^ot4.inner_);
 
+    /*
+    ensure a class with no explicit ctor/dtor
+    has a synthesized ctor/dtor that calls the
+    ctors of its fields in declaration order
+    and the dtors of its fields in reversed order.
+    */
+    {
+        __println("expect ctors 100,200 after.");
+
+        SynthesizedCtorDtor scd(100, 200);
+
+        __println("expect ctors 100,200 before and dtors 200,100 after.");
+    }
+    __println("expect dtors 200,100 before.");
+
+    /*
+    a 3-deep chain where every level has an explicit ctor/dtor AND a hook field.
+    Deep dp(5) threads 5 down to Leaf.v_. ctors run innermost-out
+    (Leaf, Middle, Deep); dtors run the mirror (Deep, Middle, Leaf).
+    */
+    {
+        __println("expect Leaf/Middle/Deep ctors after.");
+        Deep dp(5);
+        __println("expect ctors above, dtors Deep/Middle/Leaf below.");
+    }
+    __println("expect dtors above.");
+
     // gap 5: one-field and three-field classes.
     One one0;
     __println("one0: x=" + one0.x_);
@@ -203,6 +295,10 @@ int32 main() {
         __println("expect ctors 1,2,3 above and dtors 3,2,1 below.");
     }
     __println("expect dtors 3,2,1 above.");
+
+    {
+        ForwardCtorDtor fcd1 = 57;
+    }
 
     return 0;
 }
@@ -245,4 +341,71 @@ one at a time and asserts the marked error substring.
 //int32 neg_narrow() {
 //    Narrow bad(300);
 //    return bad.small_;
+//}
+
+//-EXPECT-ERROR: requires a matching destructor
+//NoDtor(int x_) {
+//    _() {
+//    }
+//}
+
+//-EXPECT-ERROR: requires a matching constructor
+//NoCtor(int x_) {
+//    ~() {
+//    }
+//}
+
+//-EXPECT-ERROR: takes no parameters
+//CtorParam(int x_) {
+//    _(int y) {
+//    }
+//    ~() {
+//    }
+//}
+
+//-EXPECT-ERROR: takes no parameters
+//DtorParam(int x_) {
+//    _() {
+//    }
+//    ~(int y) {
+//    }
+//}
+
+//-EXPECT-ERROR: Duplicate constructor
+//DupCtor(int x_) {
+//    _() {
+//    }
+//    _() {
+//    }
+//    ~() {
+//    }
+//}
+
+//-EXPECT-ERROR: Duplicate destructor
+//DupDtor(int x_) {
+//    _() {
+//    }
+//    ~() {
+//    }
+//    ~() {
+//    }
+//}
+
+//-EXPECT-ERROR: must be defined
+//ForwardNoDef(int x_) {
+//    _();
+//    ~() { }
+//}
+
+//-EXPECT-ERROR: must be defined
+//ForwardNoDef(int x_) {
+//    _() { }
+//    ~();
+//}
+
+//-EXPECT-ERROR: holds only a constructor
+//BadMember(int x_) {
+//    int method() {
+//        return 0;
+//    }
 //}

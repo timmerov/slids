@@ -1,5 +1,19 @@
 compiler_v2 — PLAN: BASIC CLASSES (Phase 5 core)
 
+STATUS — LANDED (this is now a record, not a plan). Class definitions, fields,
+inferred field types, the six init forms + recursive class-field construction,
+`.field` access, ctor/dtor (self-bound hooks, call-if-needed, forward decls), and
+the full destructor-balance invariant (transitive + Itanium-recursive over
+class-typed fields, on every exit) all shipped. Stage-by-stage detail moved to
+readme.txt "CLASSES + CTOR/DTOR"; the standing-record memory is [[project_v2_classes]].
+MODEL CORRECTION (vs the §4/§5 below, which were written pre-implementation): the
+ctor does NOT construct — field-init (the tuple fill) happens FIRST and always;
+the ctor is a trailing HOOK, the dtor a scope-exit hook. So construction stays the
+tuple aggregate path; the hooks are separate calls (emitConstructHooks /
+emitDestructHooks), NOT field-init inside `__$ctor_body`. STILL OPEN: methods,
+operator overloading, for-each/for-class, move/swap operators. Deferred items
+(array/tuple-of-hook field, delete-runs-dtor, non-block-exit tests) -> todo.txt.
+
 The foundational class landing: a class with fields, methods, an explicit
 constructor, and a destructor — plus the ctor/dtor CALL-IF-NEEDED model. This is
 the bones Phase 5's later pieces (operator overloading, the for-each protocol,

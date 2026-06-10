@@ -375,6 +375,10 @@ SESSION 6 — labels (labeled / numbered break+continue) — LANDED. Phase 2 flo
     hops (asserted in range) to the target frame's exit (break) / header
     (continue). A switch's swctx inherits the enclosing loop's header so a
     continue passing through still re-tests the right loop.
+    [Phase 5 reused this: the destructor-balance invariant threads a PARALLEL
+    DtorScope chain through emitStmt next to LoopCtx; LoopCtx gained a `scope`
+    pointer (the scope outside the loop) so a break/continue unwinds the right
+    dtors. See readme "CLASSES + CTOR/DTOR".]
   * tests: test_v2/flow/label.sl — 20 positives (named/numbered break, for/while
     default-keyword targeting, numbered/named continue, break/continue-in-switch
     targeting the loop, shadowing, do-while/ranged/enum/long-for labels, break
