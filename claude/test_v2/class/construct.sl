@@ -173,6 +173,16 @@ Deep(Middle mid_) {
     ~() { __println("Deep:dtor"); }
 }
 
+/* class with field class defined later. */
+Now(Later later_) {
+    _() { __println("Now:ctor: " + later_.x_); }
+    ~() { __println("Now:dtor: " + later_.x_); }
+}
+Later(int x_) {
+    _() { __println("Later:ctor: " + x_); }
+    ~() { __println("Later:dtor: " + x_); }
+}
+
 int32 main() {
 
     MyFirstClass cls0;
@@ -331,6 +341,10 @@ int32 main() {
     __println("expect dtors 13,12,11 above.");
     */
 
+    {
+        Now now(97);
+    }
+
     return 0;
 }
 
@@ -433,3 +447,13 @@ one at a time and asserts the marked error substring.
 //    _() { }
 //    ~();
 //}
+
+/* a class cannot contain itself by value — infinite size. (A reference '^' field
+   breaks the cycle and is fine, as the forward-ref Now/Later above shows.) */
+//-EXPECT-ERROR: contains itself by value
+//SelfCycle(SelfCycle s_) { }
+
+/* mutual by-value containment is infinite too (the cycle is transitive). */
+//-EXPECT-ERROR: contains itself by value
+//MutA(MutB b_) { }
+//MutB(MutA a_) { }

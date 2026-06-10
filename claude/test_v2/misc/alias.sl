@@ -114,12 +114,12 @@ int32 main() {
 
     /* `Ident^ Ident` is read as a reference decl, not a bare XOR statement (which
        is not a statement form) — so `a^ b` looks for a type named `a`. */
-    //-EXPECT-ERROR: Unknown type 'a^'
+    //-EXPECT-ERROR: 'a' is a variable, not a type
     //int a = 1;
     //a ^ b;
 
     /* `Ident[] Ident` (empty brackets) likewise reads as an iterator decl. */
-    //-EXPECT-ERROR: Unknown type 'a[]'
+    //-EXPECT-ERROR: 'a' is a variable, not a type
     //int a = 1;
     //a[] b;
 

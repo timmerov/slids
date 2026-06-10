@@ -124,6 +124,21 @@ int fwd_nested(int x) {
     return z;
 }
 
+/* call nested function with local class. */
+void fn_local_class() {
+
+    LocalClass obj(42);
+    nested_fn(^obj);
+    obj.x_ = 37;
+    nested_fn(obj);
+
+    void nested_fn(LocalClass^ lc) {
+        __println("fn_local_class:nested_fn: " + obj.x_);
+    }
+
+    LocalClass(int x_) { }
+}
+
 int32 main() {
     __println("basic(5) = " + basic(5));              // 10
     __println("read_cap(5) = " + read_cap(5));        // 15
@@ -134,6 +149,7 @@ int32 main() {
     __println("void_nested(-5) = " + void_nested(-5));    // -1
     __println("with_def(5) = " + with_def(5));            // 15
     __println("fwd_nested(5) = " + fwd_nested(5));        // 6
+    fn_local_class();                                     // 42 then 37
     return 0;
 }
 

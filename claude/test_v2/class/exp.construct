@@ -56,3 +56,7 @@ CtorDtor:dtor: 38
 CtorDtor:dtor: 37
 CtorDtor:dtor: 36
 dtors 38,37,36 before.
+Later:ctor: 97
+Now:ctor: 97
+Now:dtor: 97
+Later:dtor: 97

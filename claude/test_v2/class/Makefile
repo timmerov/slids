@@ -17,6 +17,7 @@ SAMPLES = \
 	namespace_cls \
 	nested_cls \
 	operator \
+	self \
 	virtual
 
 .PHONY: all clean negatives positives $(SAMPLES)

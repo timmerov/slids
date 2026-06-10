@@ -15,6 +15,16 @@ required parameters first, followed by optional parameters.
         __println(a + b + c);
     }
 
+non-primitive parameters are passed by reference.
+for convenience, pass by value syntax is accepted.
+under the hood, it's pass by reference.
+
+note:
+
+technically, non-primitive parameters are passed by reference to const.
+unless explicitly marked as mutable.
+but const correctness hasn't landed yet.
+
 */
 
 /*
@@ -50,6 +60,16 @@ int code(ch = 'z') {
     return ch;
 }
 
+/* class as parameter */
+Class(int x_) {
+}
+void classparam(Class^ ref) {
+    nestedclassparam(ref);
+    void nestedclassparam(Class^ ref) {
+        __println("called nested function with class parameter: " + ref^.x_);
+    }
+}
+
 int32 main() {
     __println("sum3(1) = " + sum3(1));              // 111
     __println("sum3(1, 2) = " + sum3(1, 2));        // 103
@@ -59,6 +79,12 @@ int32 main() {
     announce();                                     // n=42
     announce(7);                                    // n=7
     __println("code() = " + code());                // 122
+
+    Class cls(42);
+    classparam(^cls);
+    cls.x_ = 37;
+    classparam(cls);
+
     return 0;
 }
 
