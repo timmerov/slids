@@ -255,6 +255,8 @@ enum class EntryKind {
     kConst,
     kAlias,        // type alias; slids_type = target spelling (may be another alias)
     kNamespace,    // namespace name; ns_frame_id identifies its member set
+    kClass,        // class name; a type (slids_type = its kSlid) AND a namespace
+                   // (ns_frame_id holds its member aliases/consts/enums).
 };
 
 struct Entry {

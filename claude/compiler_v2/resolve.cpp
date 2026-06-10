@@ -161,6 +161,25 @@ std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
     return resolved + suffix;
 }
 
+// Display name for a class/namespace member: "Owner:member", walking owner
+// frames outward (a member alias `Float` of class `Space` -> "Space:Float"). A
+// non-member entry (owner_ns_frame < 0) keeps its bare name. Used so a member
+// type names itself qualified wherever it surfaces (e.g. ##type).
+std::string memberQualifiedName(parse::Tree const& tree, int entry_id) {
+    std::string name = tree.entries[entry_id].name;
+    int owner = tree.entries[entry_id].owner_ns_frame;
+    while (owner >= 0) {
+        int oid = -1;
+        for (std::size_t i = 0; i < tree.entries.size(); ++i) {
+            if (tree.entries[i].ns_frame_id == owner) { oid = (int)i; break; }
+        }
+        if (oid < 0) break;
+        name = tree.entries[oid].name + ":" + name;
+        owner = tree.entries[oid].owner_ns_frame;
+    }
+    return name;
+}
+
 // Structurally resolve a DECLARED type: walk the handle, and for each named leaf
 // (kSlid) that is an alias / enum-facet / qualified type, replace it with a
 // transparent kAlias(name, resolved-underlying) — preserving the as-written name
@@ -224,7 +243,11 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
             widen::TypeRef u =
                 resolveTypeRef(tree, target, visiting, reported, file_id, tok, diag);
             visiting.erase(name);
-            return widen::internAlias(name, u);
+            // A class/namespace member alias names itself qualified ("Space:Float")
+            // wherever it surfaces, even when written bare inside its own scope.
+            std::string disp = tree.entries[id].owner_ns_frame >= 0
+                ? memberQualifiedName(tree, id) : name;
+            return widen::internAlias(disp, u);
         }
         case F::kPrimitive:
         case F::kVoid:
@@ -375,11 +398,32 @@ std::string qualPrefixText(std::vector<std::string> const& segments, bool global
     return s;
 }
 
+// The namespace/class frame a segment entry names, or -1 if the entry is not a
+// frame root. A namespace and a class both expose their member set via
+// ns_frame_id; a type-alias to a class (or namespace/enum) sees through to that
+// frame (so `alias Time = Space; Time:Count` resolves).
+int entryNamespaceFrame(parse::Tree const& tree, int id) {
+    if (id < 0) return -1;
+    parse::Entry const& e = tree.entries[id];
+    if (e.kind == parse::EntryKind::kNamespace
+        || e.kind == parse::EntryKind::kClass) {
+        return e.ns_frame_id;
+    }
+    if (e.kind == parse::EntryKind::kAlias) {
+        widen::TypeRef leaf = widen::deepStrip(e.slids_type);
+        if (widen::form(leaf) == widen::Type::Form::kSlid) {
+            return entryNamespaceFrame(tree, resolveName(tree, widen::get(leaf).name));
+        }
+    }
+    return -1;
+}
+
 // Walk a chain of namespace segments to the frame it names. `segments`/`toks`
-// are parallel; each segment must resolve to a namespace. The caret lands on the
-// offending segment's token, and the message names the chain resolved so far —
-// the SOLE chain walker, shared by qualified refs, inline member decls, and
-// bare aliases, so all three word identically. Returns -1 on a diagnosed error.
+// are parallel; each segment must resolve to a namespace or class. The caret
+// lands on the offending segment's token, and the message names the chain
+// resolved so far — the SOLE chain walker, shared by qualified refs, inline
+// member decls, and bare aliases, so all three word identically. Returns -1 on a
+// diagnosed error.
 int resolveNamespaceSegments(parse::Tree const& tree,
                              std::vector<std::string> const& segments,
                              std::vector<int> const& toks, bool global,
@@ -390,24 +434,24 @@ int resolveNamespaceSegments(parse::Tree const& tree,
         cur = kGlobalFrame;
         i = 0;
     } else {
-        int id = resolveName(tree, segments[0]);
-        if (id < 0 || tree.entries[id].kind != parse::EntryKind::kNamespace) {
+        int frame = entryNamespaceFrame(tree, resolveName(tree, segments[0]));
+        if (frame < 0) {
             diagnostic::report(diag, {file_id, toks[0],
                 "'" + segments[0] + "' is not a namespace.", {}});
             return -1;
         }
-        cur = tree.entries[id].ns_frame_id;
+        cur = frame;
         i = 1;
     }
     for (; i < segments.size(); ++i) {
-        int id = findMemberLive(tree, cur, segments[i]);
-        if (id < 0 || tree.entries[id].kind != parse::EntryKind::kNamespace) {
+        int frame = entryNamespaceFrame(tree, findMemberLive(tree, cur, segments[i]));
+        if (frame < 0) {
             diagnostic::report(diag, {file_id, toks[i],
                 "'" + segments[i] + "' is not a namespace member of '"
                 + qualPrefixText(segments, global, i) + "'.", {}});
             return -1;
         }
-        cur = tree.entries[id].ns_frame_id;
+        cur = frame;
     }
     return cur;
 }
@@ -474,15 +518,22 @@ std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
     int frame = resolveNamespaceSegments(tree, path, ptoks, global, file_id, diag);
     if (frame < 0) { reported = true; return ""; }
     int id = findMemberLive(tree, frame, segs.back());
-    if (id < 0 || tree.entries[id].kind != parse::EntryKind::kNamespace
-        || tree.entries[id].slids_type == widen::kNoType) {
+    // A member type is either an enum facet (a kNamespace carrying a non-empty
+    // underlying) or a member type-alias (`Space:Float`). Both spell to their
+    // underlying; the caller re-wraps with the written qualified name as label.
+    bool is_enum_facet = id >= 0
+        && tree.entries[id].kind == parse::EntryKind::kNamespace
+        && tree.entries[id].slids_type != widen::kNoType;
+    bool is_member_alias = id >= 0
+        && tree.entries[id].kind == parse::EntryKind::kAlias;
+    if (!is_enum_facet && !is_member_alias) {
         diagnostic::report(diag, {file_id, toks.back(),
             "'" + segs.back() + "' is not a type in '"
             + qualPrefixText(segs, global, segs.size() - 1) + "'.", {}});
         reported = true;
         return "";
     }
-    return widen::spell(tree.entries[id].slids_type);
+    return widen::spell(widen::deepStrip(tree.entries[id].slids_type));
 }
 
 // ---- Namespace registration -------------------------------------------------
@@ -718,6 +769,15 @@ void resolveBareAlias(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag)
     int frame = resolveNamespaceSegments(tree, segs, toks, s.global_qualified,
                                          s.file_id, diag);
     if (frame < 0) return;
+    // A class is a type, not an importable namespace: `alias Space;` is rejected
+    // even though the class exposes a member set (the path resolved to a class).
+    for (parse::Entry const& e : tree.entries) {
+        if (e.ns_frame_id == frame && e.kind == parse::EntryKind::kClass) {
+            diagnostic::report(diag, {s.file_id, s.name_tok,
+                "A class is a type, not an importable namespace.", {}});
+            return;
+        }
+    }
     tree.open_ns_frames.push_back(frame);
 }
 
@@ -1001,6 +1061,11 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                     "'" + e.name + "' is a namespace, not a value.", {}});
                 return;
             }
+            if (tree.entries[id].kind == parse::EntryKind::kClass) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "'" + e.name + "' is a type, not a value.", {}});
+                return;
+            }
             // Definite-assignment: reading a local before it is written is a
             // compile error (a value-before-init footgun). Only kLocalVar is
             // tracked — consts are substituted away, params are pre-seeded.
@@ -1193,6 +1258,14 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                                : resolveName(tree, operand.name);
             if (id >= 0) {
                 parse::EntryKind k = tree.entries[id].kind;
+                if (k == parse::EntryKind::kClass) {
+                    // A class name is a type; measure it via its slotful kSlid
+                    // (classify lowers to the runtime __$sizeof). Drop the operand
+                    // so it reads as a type sizeof.
+                    e.return_type = tree.entries[id].slids_type;
+                    e.children.clear();
+                    return;
+                }
                 bool is_type = (k == parse::EntryKind::kAlias)
                     || (k == parse::EntryKind::kNamespace
                         && tree.entries[id].slids_type != widen::kNoType);   // enum facet
@@ -1257,6 +1330,11 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                                : resolveName(tree, operand.name);
             if (id >= 0) {
                 parse::EntryKind k = tree.entries[id].kind;
+                if (k == parse::EntryKind::kClass) {
+                    // A class name is a type; ##type reports the class itself.
+                    e.return_type = tree.entries[id].slids_type;
+                    return;
+                }
                 bool is_type = (k == parse::EntryKind::kAlias)
                     || (k == parse::EntryKind::kNamespace
                         && tree.entries[id].slids_type != widen::kNoType);   // enum facet
@@ -3051,6 +3129,73 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
     parse::popFrame(tree);
 }
 
+// Register a class's body members (aliases, consts, enums) into its namespace
+// frame. Aliases first, so a const/enum member can name a sibling alias type;
+// member types resolve globally (findInLiveScopes) once the alias entry is live.
+// Const inits and enum member inits are resolved later (resolveClassMemberInits).
+void registerClassMembers(parse::Tree& tree, parse::Node& node, int frame,
+                          diagnostic::Sink& diag) {
+    auto isDup = [&](parse::Node& m) {
+        if (findMemberDeclared(tree, frame, m.name) >= 0) {
+            diagnostic::report(diag, {m.file_id, m.name_tok,
+                "Duplicate declaration of '" + m.name + "'.", {}});
+            return true;
+        }
+        return false;
+    };
+    for (auto& m : node.children) {
+        if (!m || m->kind != parse::Kind::kAliasDecl) continue;
+        if (isDup(*m)) continue;
+        resolveDeclType(tree, m->return_type, m->file_id, m->tok, diag);
+        parse::Entry e;
+        e.kind = parse::EntryKind::kAlias;
+        e.name = m->name;
+        e.slids_type = m->return_type;
+        e.file_id = m->file_id;
+        e.tok = m->name_tok;
+        e.owner_ns_frame = frame;
+        m->resolved_entry_id = parse::addEntry(tree, std::move(e));
+    }
+    for (auto& m : node.children) {
+        if (!m) continue;
+        if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
+            if (isDup(*m)) continue;
+            resolveDeclType(tree, m->return_type, m->file_id, m->tok, diag);
+            parse::Entry e;
+            e.kind = parse::EntryKind::kConst;
+            e.name = m->name;
+            e.slids_type = m->return_type;
+            e.file_id = m->file_id;
+            e.tok = m->name_tok;
+            e.owner_ns_frame = frame;
+            m->resolved_entry_id = parse::addEntry(tree, std::move(e));
+        } else if (m->kind == parse::Kind::kEnumDecl) {
+            registerEnum(tree, *m, frame, diag);
+        }
+    }
+}
+
+// Resolve a class's member const inits and enum member inits, once file-scope
+// entries (which an init may reference) exist. The class frame is opened so a
+// member init can reference a sibling member bare.
+void resolveClassMemberInits(parse::Tree& tree, parse::Node& node,
+                             diagnostic::Sink& diag) {
+    if (node.resolved_entry_id < 0) return;
+    int frame = tree.entries[node.resolved_entry_id].ns_frame_id;
+    tree.open_ns_frames.push_back(frame);
+    for (auto& m : node.children) {
+        if (!m) continue;
+        if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
+            for (auto& init : m->children) {
+                if (init) resolveExpr(tree, *init, diag);
+            }
+        } else if (m->kind == parse::Kind::kEnumDecl) {
+            resolveEnumMemberInits(tree, *m, diag);
+        }
+    }
+    tree.open_ns_frames.pop_back();
+}
+
 // Register a class definition `Name(fields){body}`: build its ClassInfo (the
 // named-tuple field layout) and intern the slotful kSlid type so every `Name` /
 // `Name^` reference shares one handle that carries the layout. Field default
@@ -3105,6 +3250,22 @@ void registerClass(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag)
     info.type = widen::internSlid(node.name, info.field_types);
     widen::setSlidLifecycle(node.name, has_ctor, has_dtor);
     node.return_type = info.type;   // stamp the class node with its own type
+
+    // The class doubles as a namespace: a kClass entry exposes its member set
+    // (aliases / consts / enums, qualified `Class:member`) via ns_frame_id, and
+    // carries its own kSlid as slids_type so the name resolves as a type too.
+    // Members live at file scope, like namespace members.
+    int cls_frame = parse::allocFrameId(tree);
+    parse::Entry e;
+    e.kind = parse::EntryKind::kClass;
+    e.name = node.name;
+    e.ns_frame_id = cls_frame;
+    e.slids_type = info.type;
+    e.file_id = node.file_id;
+    e.tok = node.name_tok;
+    node.resolved_entry_id = parse::addEntry(tree, std::move(e));
+    registerClassMembers(tree, node, cls_frame, diag);
+
     tree.classes.emplace(node.name, std::move(info));
 }
 
@@ -3172,18 +3333,14 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     parse::pushFrame(tree);   // program frame
 
     // Pass 1a-alias — register all file-scope value aliases first, so any decl
-    // below (in any order) can resolve through them, then validate each target.
-    // Bare `alias Ns;` (no target) is a namespace import, handled at use scope.
+    // below (in any order) can resolve through them. Targets are validated after
+    // enums / namespaces / classes register (an alias may target one of those —
+    // `alias Time = Space;`). Bare `alias Ns;` (no target) is a namespace import,
+    // handled at use scope.
     for (auto& ch : program->children) {
         if (ch && ch->kind == parse::Kind::kAliasDecl
             && ch->return_type != widen::kNoType) {
             registerAlias(tree, *ch, diag);
-        }
-    }
-    for (auto& ch : program->children) {
-        if (ch && ch->kind == parse::Kind::kAliasDecl
-            && ch->return_type != widen::kNoType) {
-            resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
         }
     }
 
@@ -3213,6 +3370,16 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             registerClass(tree, *ch, diag);
         }
     }
+
+    // Pass 1a-alias-validate — now that enums, namespaces, and classes exist,
+    // validate each alias target (an alias may name any of them).
+    for (auto& ch : program->children) {
+        if (ch && ch->kind == parse::Kind::kAliasDecl
+            && ch->return_type != widen::kNoType) {
+            resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
+        }
+    }
+
     // Transitive lifecycle: a class needs a ctor/dtor if a by-value field's class
     // does (its hooks must run when the container is built / torn down). Fixpoint
     // over the field graph, then publish to the kSlid type flags codegen reads.
@@ -3398,6 +3565,14 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         if (isQualified(*ch)) continue;   // inline member init resolved above
         for (auto& init : ch->children) {
             if (init) resolveExpr(tree, *init, diag);
+        }
+    }
+
+    // Pass 1b-class-members — resolve class member const inits and enum member
+    // inits now that every file-scope entry exists (an init may reference one).
+    for (auto& ch : program->children) {
+        if (ch && ch->kind == parse::Kind::kClassDef) {
+            resolveClassMemberInits(tree, *ch, diag);
         }
     }
 

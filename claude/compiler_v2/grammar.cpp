@@ -2297,12 +2297,29 @@ struct Parser {
                 error("Expected '}'.");
                 return nullptr;
             }
+            // Member definitions — the namespace facet of a class. A class body
+            // holds aliases, constants, and enums (qualified `Class:member`), as
+            // well as the constructor / destructor. A method would be a member
+            // too, but methods are not yet supported; a non-member (free)
+            // function is never a class member.
+            token::Kind mk = peek().kind;
+            if (mk == token::Kind::kConst || mk == token::Kind::kAlias
+                || mk == token::Kind::kEnum) {
+                std::unique_ptr<parse::Node> m =
+                    (mk == token::Kind::kConst) ? parseVarDeclStmt()
+                  : (mk == token::Kind::kAlias) ? parseAliasDecl()
+                                                : parseEnumDecl();
+                if (!m) return nullptr;
+                node->children.push_back(std::move(m));
+                continue;
+            }
             bool is_ctor = (peek().kind == token::Kind::kIdentifier
                             && peek().text == "_");
             bool is_dtor = (peek().kind == token::Kind::kBitNot);
             if (!is_ctor && !is_dtor) {
-                error("A class body holds only a constructor '_()' and a "
-                      "destructor '~()'.");
+                error("A class body holds the constructor '_()', the destructor "
+                      "'~()', and member definitions (aliases, constants, "
+                      "enums).");
                 return nullptr;
             }
             int m_file = peek().file_id;

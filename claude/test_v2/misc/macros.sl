@@ -18,6 +18,7 @@ these are the values at the site where #x is used.
 macros and aliases.
 ##type of an type alias returns the underlying type.
 ##type of an function alias returns the underlying function name.
+##type returns a decorated and fully qualified type - includes const/mutable and namespace/class/enum path.
 
 notes:
 date and time are the time the .sl file is compiled.

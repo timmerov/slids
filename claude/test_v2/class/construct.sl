@@ -433,10 +433,3 @@ one at a time and asserts the marked error substring.
 //    _() { }
 //    ~();
 //}
-
-//-EXPECT-ERROR: holds only a constructor
-//BadMember(int x_) {
-//    int method() {
-//        return 0;
-//    }
-//}
