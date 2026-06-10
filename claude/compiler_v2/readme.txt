@@ -249,11 +249,26 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     (calls / sizeof) so def and use agree, and living only in emitted LLVM. (This
     is the "defer name mangling to codegen" rule: scope is disambiguated by the
     entry-id/frame stack, never by a stored canonical name — v1's fatal trap.)
+  * TWO-PHASE REGISTRATION (so a field may FORWARD-reference a sibling class).
+    registerClassName (Phase 1) makes every class name a known type — a kClass
+    entry + a SLOTLESS interned handle + a placeholder ClassInfo — then
+    registerClassBody (Phase 2) resolves field types (forward refs now validate)
+    and attaches the slots. The kSlid handle is stable slotless->slotful (structKey
+    excludes slots), so a field that referenced the forward class shares the very
+    handle that later gains its layout. File scope: Pass 1a-class is a names loop
+    then a bodies loop. Local scope: registerLocalClasses does both phases per
+    sibling set (idempotent across the top-of-body / resolveStmtList pre-passes).
+  * BY-VALUE CYCLE CHECK (checkClassByValueAcyclic). A class whose by-value field
+    graph cycles back to itself has INFINITE size — classify's recursive
+    construction and codegen's struct lowering would recurse forever (a SIGSEGV).
+    After Phase 2, a DFS over by-value field deps (kSlid, or an array / tuple of
+    one; a `^` / `[]` breaks the cycle) rejects `Foo(Foo f_)`, mutual `A(B)`/`B(A)`,
+    array/3-hop cycles. (The two-phase made these reachable; before, the forward
+    name was simply Unknown.)
   * TRANSITIVE LIFECYCLE FOR A LOCAL CLASS. The file-scope needs-fixpoint runs
-    before any body resolves, so a local class isn't swept by it. registerClass
-    instead computes a local class's needs in a single pass from its fields'
-    already-published needs (no forward refs within a scope) — so a local
-    `Outer(Inner i_)` runs Inner's ctor/dtor.
+    before any body resolves, so a local class isn't swept by it. registerLocalClasses
+    runs the same fixpoint over its sibling set after Phase 2, so a local
+    `Outer(Inner i_)` (forward or not) runs Inner's ctor/dtor.
   * CLASS-VALUE ASSIGNABILITY (checkSlidAssign). A class value is assignable only
     to the SAME class. classify's checkSlidAssign is the terminal reject the
     assign/decl/call/return dispatch otherwise lacked: a class meeting a primitive
@@ -261,6 +276,15 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     assignment, call ARGUMENT (both the single-candidate and multi-overload paths),
     and RETURN. (Same-class is a fine copy; pointer cases are checkPtrAssign's;
     two non-classes flex per codegen's numeric rules.)
+  * NAME COLLISIONS + TYPE-NAME DIAGNOSTICS. A class name collides with ANY
+    same-name entry (another class, an alias / enum / namespace, a const, a
+    function) — reportNameCollision carets the source-LATER declaration as the
+    duplicate (registration order need not match source order, so it compares
+    positions). requireKnownType, when a type name resolves to a non-type entry,
+    reports "'X' is a namespace / function / constant / variable, not a type"
+    instead of a blunt "Unknown type" (the precise form fires where the entry is
+    already registered — e.g. a body var decl; a class FIELD validates before
+    file-scope functions/consts register, so those stay "Unknown type").
 
 
 STAGE FILES (.h / .cpp pairs)

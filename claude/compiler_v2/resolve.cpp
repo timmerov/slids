@@ -32,6 +32,18 @@ bool isReferenceType(widen::TypeRef t) {
 
 int resolveName(parse::Tree const& tree, std::string const& name);
 
+// Report a name collision, careting the source-LATER declaration as the duplicate
+// and the earlier as "first declared here". Registration order need not match
+// source order (e.g. classes register before file-scope consts/functions), so
+// compare positions. `(ef,et)` = the existing entry, `(nf,nt)` = the new one.
+void reportNameCollision(diagnostic::Sink& diag, std::string const& msg,
+                         int ef, int et, int nf, int nt) {
+    if (ef != nf || et <= nt)
+        diagnostic::report(diag, {nf, nt, msg, {{ef, et, "first declared here"}}});
+    else
+        diagnostic::report(diag, {ef, et, msg, {{nf, nt, "first declared here"}}});
+}
+
 // A type whose leaf (through alias / pointer / iterator / array wrappers) is a
 // kSlid naming a registered class — a known type even though widen::isKnownType
 // (which knows only built-ins) says otherwise.
@@ -3284,11 +3296,16 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     int decl_frame = parse::currentFrameId(tree);
     int def_id = (decl_frame == kGlobalFrame) ? -1 : decl_frame;
     int prev_id = parse::findInFrame(tree, decl_frame, node.name);
-    if (prev_id >= 0 && tree.entries[prev_id].kind == parse::EntryKind::kClass) {
+    if (prev_id >= 0) {
+        // Any same-name entry already in this frame collides — another class
+        // (aliases/enums/namespaces register before classes), or, when classes
+        // register first, a later const/function reports the mirror case itself.
         parse::Entry const& prev = tree.entries[prev_id];
-        diagnostic::report(diag, {node.file_id, node.name_tok,
-            "Duplicate definition of class '" + node.name + "'.",
-            {{prev.file_id, prev.tok, "first defined here"}}});
+        std::string msg = prev.kind == parse::EntryKind::kClass
+            ? "Duplicate definition of class '" + node.name + "'."
+            : "Duplicate declaration of '" + node.name + "'.";
+        reportNameCollision(diag, msg, prev.file_id, prev.tok,
+                            node.file_id, node.name_tok);
         return;
     }
     // Slotless handle now; registerClassBody re-interns with the field slots (same
@@ -3689,6 +3706,25 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
                 ch->resolved_entry_id = existing;
                 continue;
             }
+            // No matching-signature function. A same-name NON-function entry (a
+            // class / alias / enum / namespace / const) is a collision, not an
+            // overload — find one and report.
+            int clash = -1;
+            for (int id : tree.live_entry_ids) {
+                parse::Entry const& pe = tree.entries[id];
+                if (pe.name == ch->name && pe.owner_ns_frame < 0
+                    && pe.parent_frame_id == parse::currentFrameId(tree)
+                    && pe.kind != parse::EntryKind::kFunction) {
+                    clash = id;
+                    break;
+                }
+            }
+            if (clash >= 0) {
+                parse::Entry const& prev = tree.entries[clash];
+                reportNameCollision(diag, "Duplicate declaration of '" + ch->name + "'.",
+                                    prev.file_id, prev.tok, ch->file_id, ch->name_tok);
+                continue;
+            }
             parse::Entry e;
             e.kind = parse::EntryKind::kFunction;
             e.name = ch->name;
@@ -3713,21 +3749,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             int existing = parse::findInFrame(tree, parse::currentFrameId(tree), ch->name);
             if (existing >= 0) {
                 parse::Entry const& prev = tree.entries[existing];
-                // Caret the source-LATER declaration as the duplicate and the
-                // earlier as "first declared here". Registration order (classes
-                // register before file-scope consts) need not match source order,
-                // so compare positions rather than assume `prev` came first.
-                bool prev_first = prev.file_id != ch->file_id
-                               || prev.tok <= ch->name_tok;
-                if (prev_first) {
-                    diagnostic::report(diag, {ch->file_id, ch->name_tok,
-                        "Duplicate declaration of '" + ch->name + "'.",
-                        {{prev.file_id, prev.tok, "first declared here"}}});
-                } else {
-                    diagnostic::report(diag, {prev.file_id, prev.tok,
-                        "Duplicate declaration of '" + ch->name + "'.",
-                        {{ch->file_id, ch->name_tok, "first declared here"}}});
-                }
+                reportNameCollision(diag, "Duplicate declaration of '" + ch->name + "'.",
+                                    prev.file_id, prev.tok, ch->file_id, ch->name_tok);
                 continue;
             }
             parse::Entry e;

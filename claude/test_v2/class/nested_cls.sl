@@ -204,6 +204,22 @@ int32 main() {
         delete hp;
     }
 
+    // a local class field may FORWARD-reference a sibling defined later (the
+    // two-phase name/body registration), with the field's hooks running
+    // transitively (Held's ctor before Holder's, dtors in reverse).
+    {
+        Holder(Held h_) {
+            _() { __println("Holder:ctor: " + h_.v_); }
+            ~() { __println("Holder:dtor: " + h_.v_); }
+        }
+        Held(int v_) {
+            _() { __println("Held:ctor: " + v_); }
+            ~() { __println("Held:dtor: " + v_); }
+        }
+        Holder hh(7);
+        __println("hh.h.v = " + hh.h_.v_);
+    }
+
     return 0;
 }
 

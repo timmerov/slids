@@ -474,9 +474,17 @@ Phase 5 — classes
     NOT a mangled name (names stay bare; the disambiguated ctor/dtor/sizeof symbol
     is minted at codegen by classSymbol — [[project_defer_name_mangling]]);
     per-local transitive needs. checkSlidAssign rejects a class value at a
-    mismatched var-decl/assign/call-arg/return. Detail: readme + the standing
-    memory [[project_v2_local_classes]]. OPEN: a local class in a nested-fn
-    signature (resolution ordering -> todo.txt).
+    mismatched var-decl/assign/call-arg/return. A local class may be named in a
+    nested function's SIGNATURE (top-of-body classes register before the nested-fn
+    pre-pass), and nested-fn BODIES resolve after the host body so they FORWARD-
+    capture host locals. Detail: readme + [[project_v2_local_classes]].
+  * class registration is TWO-PHASE (names then bodies) — LANDED. A class field may
+    forward-reference a sibling class defined later; the kSlid handle is stable
+    slotless->slotful (structKey excludes slots). A by-value field cycle (self /
+    mutual / through array / N-hop) is rejected (checkClassByValueAcyclic) — else
+    infinite size SIGSEGVs codegen. A class name collides with ANY same-name entry
+    (reportNameCollision, source-order carets); requireKnownType names a non-type
+    precisely ("'X' is a namespace/function/constant/variable, not a type").
   * operator overloading per slid
   * move / swap — the OVERLOADABLE class operators (`op<--`/`op<-->`) + resource
     semantics + class fields inside a moved/swapped tuple (the primitive / pointer

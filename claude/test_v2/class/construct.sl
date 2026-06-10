@@ -457,3 +457,33 @@ one at a time and asserts the marked error substring.
 //-EXPECT-ERROR: contains itself by value
 //MutA(MutB b_) { }
 //MutB(MutA a_) { }
+
+/* the cycle is detected through an ARRAY field too. */
+//-EXPECT-ERROR: contains itself by value
+//SelfArr(SelfArr a_[2]) { }
+
+/* ...and around a longer chain (A -> B -> C -> A). */
+//-EXPECT-ERROR: contains itself by value
+//CycA(CycB b_) { }
+//CycB(CycC c_) { }
+//CycC(CycA a_) { }
+
+/* a class name collides with a same-name FUNCTION (a class is not an overload). */
+//-EXPECT-ERROR: Duplicate declaration of 'Clash'
+//int Clash() { return 0; }
+//Clash(int x_) { }
+
+/* ...with an ALIAS. */
+//-EXPECT-ERROR: Duplicate declaration of 'Clash'
+//alias Clash = int;
+//Clash(int x_) { }
+
+/* ...with a file-scope CONST (the class is the source-later duplicate). */
+//-EXPECT-ERROR: Duplicate declaration of 'Clash'
+//const int Clash = 5;
+//Clash(int x_) { }
+
+/* a class field whose type names a non-type (a namespace) is rejected precisely. */
+//-EXPECT-ERROR: is a namespace, not a type
+//NsHolder { }
+//FieldNs(NsHolder n_) { }

@@ -123,6 +123,18 @@ int32 main() {
     //int a = 1;
     //a[] b;
 
+    /* a name that resolves to a NON-type entry is reported by what it is, not as
+       an "Unknown type": a namespace, a function, a constant. */
+    //-EXPECT-ERROR: 'Space' is a namespace, not a type
+    //Space ns;
+
+    //-EXPECT-ERROR: 'doubled' is a function, not a type
+    //doubled fn;
+
+    //-EXPECT-ERROR: 'kc' is a constant, not a type
+    //const int kc = 5;
+    //kc cv;
+
     return 0;
 }
 

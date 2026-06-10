@@ -8,6 +8,17 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
+  * CLASS COPY-INIT AT A DECL — `Class a = sameClassValue` (initialize a class
+    local from another value of the SAME class — e.g. the result of a function
+    that returns a class by value) is mishandled: classify routes the decl through
+    classifyClassInit, which treats the rhs as a FIELD-init argument, so a 1-field
+    class reports "Cannot initialize field 'x_' ... from a value of type 'Class'."
+    A plain ASSIGN `a = b` works (checkSlidAssign allows same-class), and
+    `= scalar` / `= tuple` construct — only whole-class copy-INITIALIZATION at a
+    decl is wrong. Surfaces when a nested function RETURNS a local class by value.
+    Needs the class copy path (whole-value copy vs field-init). prerequisite: class
+    copy/move.
+
 
 DEFERRED TESTS
 

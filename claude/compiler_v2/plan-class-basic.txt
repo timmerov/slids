@@ -24,10 +24,16 @@ distinct by a def_id in structKey rather than a mangled name — names stay bare
 the disambiguated ctor/dtor/sizeof symbol is minted at codegen by classSymbol
 ([[project_defer_name_mangling]]); per-local transitive needs; and checkSlidAssign
 (a class value is rejected at a mismatched var-decl / assign / call-arg / return).
-STILL OPEN: methods, operator overloading, for-each/for-class, move/swap operators;
-+ a local class in a NESTED-FUNCTION signature (resolution ordering -> todo.txt).
-Deferred items (array/tuple-of-hook FIELD construction, non-block-exit tests) ->
-todo.txt.
+Class registration is now TWO-PHASE (names then bodies), so a class field may
+FORWARD-reference a sibling defined later; a by-value field cycle (self / mutual /
+through array / N-hop) is rejected (checkClassByValueAcyclic) instead of SIGSEGVing
+codegen. Name collisions are caught against ANY same-name entry (source-order
+carets); a non-type type-name reads "'X' is a namespace/function/constant/variable,
+not a type". A local class may be named in a nested fn's SIGNATURE, and nested-fn
+bodies resolve after the host body (FORWARD capture of host locals).
+STILL OPEN: methods, operator overloading, for-each/for-class, move/swap operators.
+Deferred items (array/tuple-of-hook FIELD construction, class copy-init at a decl,
+non-block-exit tests) -> todo.txt.
 
 The foundational class landing: a class with fields, methods, an explicit
 constructor, and a destructor — plus the ctor/dtor CALL-IF-NEEDED model. This is

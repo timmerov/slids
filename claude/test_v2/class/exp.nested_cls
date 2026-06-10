@@ -25,4 +25,9 @@ Geo:Real e=2 S=1
 sizeof Heap = 4
 Heap:ctor: 11
 Heap:dtor: 11
+Held:ctor: 7
+Holder:ctor: 7
+hh.h.v = 7
+Holder:dtor: 7
+Held:dtor: 7
 main:Function:dtor: 10
