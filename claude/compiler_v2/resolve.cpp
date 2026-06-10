@@ -503,6 +503,22 @@ void resolveEnumMemberInits(parse::Tree& tree, parse::Node& node,
 // decl. Gated by the caller on hasErrors so a value-before-init / dup diagnostic
 // isn't trailed by spurious unused reports. Shared by the per-function and
 // per-block scope exits.
+// A type whose ctor/dtor hooks run on construction/destruction — a hook-bearing
+// class, OR an array / tuple that CONTAINS one (the elements' hooks fire). Such a
+// value is USED by its mere existence, so the unused-local sweep must skip it.
+bool typeHasHooks(widen::TypeRef t) {
+    using F = widen::Type::Form;
+    widen::TypeRef s = widen::strip(t);
+    F f = widen::form(s);
+    if (f == F::kSlid)  return widen::get(s).needs_ctor || widen::get(s).needs_dtor;
+    if (f == F::kArray) return typeHasHooks(widen::get(s).elem);
+    if (f == F::kTuple) {
+        for (widen::TypeRef slot : widen::get(s).slots)
+            if (typeHasHooks(slot)) return true;
+    }
+    return false;
+}
+
 void sweepUnusedLocals(parse::Tree& tree, diagnostic::Sink& diag) {
     if (diagnostic::hasErrors(diag)) return;
     for (int id : tree.body_locals) {
@@ -510,12 +526,9 @@ void sweepUnusedLocals(parse::Tree& tree, diagnostic::Sink& diag) {
         parse::Entry const& e = tree.entries[id];
         // A class instance with a constructor / destructor is USED by its mere
         // existence — the hooks run at construction / scope exit (the demo
-        // `{ CtorDtor cd1(1); ... }` is exactly this). Don't flag it as unused.
-        widen::TypeRef st = widen::strip(e.slids_type);
-        if (widen::form(st) == widen::Type::Form::kSlid
-            && (widen::get(st).needs_ctor || widen::get(st).needs_dtor)) {
-            continue;
-        }
+        // `{ CtorDtor cd1(1); ... }` is exactly this); likewise an array / tuple
+        // of such a class. Don't flag it as unused.
+        if (typeHasHooks(e.slids_type)) continue;
         bool was_set = tree.initialized_locals.count(id) > 0
                     || tree.assigned_arrays.count(id) > 0;
         diagnostic::report(diag, {e.file_id, e.tok,
@@ -3104,6 +3117,26 @@ void resolveClassFieldDefaults(parse::Tree& tree, parse::Node& node,
     }
 }
 
+// Does a field type carry a ctor (or dtor) need into its container — a hook class,
+// OR an array / tuple of one (recursive)? Reads the ClassInfo needs being computed
+// by the transitive fixpoint (NOT the widen flags, which are published after).
+bool fieldContributesNeed(parse::Tree const& tree, widen::TypeRef ft, bool ctor) {
+    using F = widen::Type::Form;
+    widen::TypeRef s = widen::strip(ft);
+    F f = widen::form(s);
+    if (f == F::kSlid) {
+        auto it = tree.classes.find(widen::get(s).name);
+        if (it == tree.classes.end()) return false;
+        return ctor ? it->second.needs_ctor : it->second.needs_dtor;
+    }
+    if (f == F::kArray) return fieldContributesNeed(tree, widen::get(s).elem, ctor);
+    if (f == F::kTuple) {
+        for (widen::TypeRef slot : widen::get(s).slots)
+            if (fieldContributesNeed(tree, slot, ctor)) return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 void run(parse::Tree& tree, diagnostic::Sink& diag) {
@@ -3169,14 +3202,12 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             changed = false;
             for (auto& [cname, info] : tree.classes) {
                 for (widen::TypeRef ft : info.field_types) {
-                    widen::TypeRef fs = widen::strip(ft);
-                    if (widen::form(fs) != widen::Type::Form::kSlid) continue;
-                    auto fit = tree.classes.find(widen::get(fs).name);
-                    if (fit == tree.classes.end()) continue;
-                    if (fit->second.needs_ctor && !info.needs_ctor) {
+                    // A by-value field that IS a hook class, or an array / tuple
+                    // OF one, makes its container need the matching hook.
+                    if (!info.needs_ctor && fieldContributesNeed(tree, ft, true)) {
                         info.needs_ctor = true; changed = true;
                     }
-                    if (fit->second.needs_dtor && !info.needs_dtor) {
+                    if (!info.needs_dtor && fieldContributesNeed(tree, ft, false)) {
                         info.needs_dtor = true; changed = true;
                     }
                 }

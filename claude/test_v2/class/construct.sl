@@ -287,6 +287,7 @@ int32 main() {
     Three th1(10, 20, 30);
     __println("th1: a=" + th1.a_ + " b=" + th1.b_ + " c=" + th1.c_);
 
+    /* ctor/dtor order. */
     {
         __println("expect ctors 1,2,3 below.");
         CtorDtor cd1(1);
@@ -299,6 +300,26 @@ int32 main() {
     {
         ForwardCtorDtor fcd1 = 57;
     }
+
+    /* array of ctor classes. */
+    {
+        /* ctors 36,37,38 after. */
+        CtorDtor arr[3] = (36, 37, 38);
+        /* ctors 36,37,38 before dtors 38,37,36 after. */
+    }
+    /* dtors 38,37,36 before. */
+
+    /* nameless class. */
+    /* deferred.
+    {
+        __println("expect ctors 11,12,13 below.");
+        CtorDtor(11);
+        CtorDtor(12);
+        CtorDtor(13);
+        __println("expect ctors 11,12,13 above and dtors 13,12,11 below.");
+    }
+    __println("expect dtors 13,12,11 above.");
+    */
 
     return 0;
 }

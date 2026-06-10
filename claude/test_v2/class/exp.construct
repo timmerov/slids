@@ -47,3 +47,9 @@ CtorDtor:dtor: 1
 expect dtors 3,2,1 above.
 ForwardCtorDtor:ctor: 57
 ForwardCtorDtor:dtor: 57
+CtorDtor:ctor: 36
+CtorDtor:ctor: 37
+CtorDtor:ctor: 38
+CtorDtor:dtor: 38
+CtorDtor:dtor: 37
+CtorDtor:dtor: 36

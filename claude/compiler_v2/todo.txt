@@ -11,15 +11,19 @@ BUGS (found, deferred)
 
 DEFERRED TESTS
 
-  * CTOR/DTOR THROUGH AN ARRAY / TUPLE FIELD — a class with a by-value field that
-    is an ARRAY-of-hook-class (`CtorDtor[2]`) or a TUPLE-containing-a-hook-class
-    (`(CtorDtor, int)`) must run the element's ctor/dtor. Today it does NOT: the
-    transitive-needs fixpoint (resolve) and emitConstructHooks/emitDestructHooks
-    (codegen) only walk DIRECT kSlid fields (`strip(ft)==kSlid`) — an array/tuple
-    field is skipped, so the container is treated as trivial and the elements'
-    hooks never fire. Both an IMPL gap and a coverage gap. Tests go in array.sl /
-    tuple.sl. Fix: have the fixpoint + the hook walkers descend array elem / tuple
-    slots, and GEP per element.
+  * CTOR/DTOR THROUGH AN ARRAY / TUPLE class FIELD — an array/tuple-of-hook-class
+    LOCAL works now (`CtorDtor arr[3] = (36,37,38)` runs ctors 36,37,38 / dtors
+    38,37,36 — classify constructs each class element via constructClass; the
+    needs-fixpoint + emitConstructHooks/emitDestructHooks descend array elem /
+    tuple slots; the var-decl arm runs the hooks after the array field-init).
+    STILL OPEN: a class FIELD of array/tuple-of-hook type (`Box(CtorDtor items_[2])`)
+    — `Box bx;` errors "Cannot default-construct a field of type 'CtorDtor[2]'."
+    classZeroValue / classifyClassInit only CONSTRUCT a direct kSlid field; an
+    array/tuple field has no default-construction path (the needs-fixpoint already
+    descends it, so the hooks WOULD fire once construction lands). Fix:
+    classZeroValue builds an N-element array (each element default-constructed) /
+    a per-slot tuple, routed through the array-from-tuple slot path. Tests go in
+    array.sl / tuple.sl.
 
   * DELETE RUNS THE DESTRUCTOR — `delete p` for a heap class with a dtor must run
     the dtor before free(); today kDeleteStmt only frees + nulls (carried from the

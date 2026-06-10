@@ -393,6 +393,12 @@ void checkStrongConstAssign(widen::TypeRef dest, parse::Node const& rhs,
 // reused for an array-typed TUPLE SLOT.
 void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
                             parse::Node& rhs, diagnostic::Sink& diag);
+// Build a constructed value for a class from an optional init (defined later).
+std::unique_ptr<parse::Node> constructClass(parse::Tree& tree,
+                                            parse::ClassInfo const& info,
+                                            std::unique_ptr<parse::Node> init,
+                                            int file_id, int tok,
+                                            diagnostic::Sink& diag);
 
 void inferExpr(parse::Tree& tree, parse::Node& e,
                widen::TypeRef context, diagnostic::Sink& diag) {
@@ -1422,7 +1428,23 @@ void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
     // a TUPLE element must match the element tuple type (slot-wise, after flex).
     bool elem_array = widen::form(widen::strip(elem)) == widen::Type::Form::kArray;
     bool elem_tuple = widen::form(widen::strip(elem)) == widen::Type::Form::kTuple;
+    widen::TypeRef elem_s = widen::strip(elem);
+    bool elem_class = widen::form(elem_s) == widen::Type::Form::kSlid
+        && tree.classes.count(widen::get(elem_s).name) > 0;
     for (parse::Node* el : elems) {
+        // A CLASS element is CONSTRUCTED from its init value (a scalar / tuple is
+        // the element's ctor input), recursively — exactly like a class-typed
+        // field. Rewrite the element node in place to the construction tuple.
+        if (elem_class) {
+            parse::ClassInfo const& sub = tree.classes.at(widen::get(elem_s).name);
+            int el_file = el->file_id, el_tok = el->tok;
+            auto init = std::make_unique<parse::Node>(std::move(*el));
+            auto built = constructClass(tree, sub, std::move(init),
+                                        el_file, el_tok, diag);
+            *el = std::move(*built);
+            el->inferred_type = elem;
+            continue;
+        }
         // A nested ARRAY element is itself an array-from-tuple — validate it as such
         // and type it as the array (so construction builds an array value).
         if (elem_array && el->kind == parse::Kind::kTupleExpr) {

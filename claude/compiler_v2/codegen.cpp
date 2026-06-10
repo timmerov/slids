@@ -1128,39 +1128,86 @@ struct DtorScope {
     DtorScope const* outer = nullptr;
 };
 
-// Itanium recursive descent. Construct: build each class-typed field (its hooks,
-// in declaration order), THEN run this class's own ctor hook. The fields are
-// already laid down in memory (field-init); this runs the HOOKS.
+// Does this type run ctor (or dtor) hooks — a hook-bearing class, or an array /
+// tuple CONTAINING one (recursive)?
+bool typeNeedsHook(widen::TypeRef t, bool ctor) {
+    using F = widen::Type::Form;
+    widen::TypeRef s = widen::strip(t);
+    F f = widen::form(s);
+    if (f == F::kSlid)  return ctor ? widen::get(s).needs_ctor : widen::get(s).needs_dtor;
+    if (f == F::kArray) return typeNeedsHook(widen::get(s).elem, ctor);
+    if (f == F::kTuple) {
+        for (widen::TypeRef slot : widen::get(s).slots)
+            if (typeNeedsHook(slot, ctor)) return true;
+    }
+    return false;
+}
+
+// The element type of an array with the OUTERMOST dim stripped (the per-element
+// type the hook walk recurses on).
+widen::TypeRef arrayElemOf(widen::TypeRef arr) {
+    widen::Type const& a = widen::get(widen::strip(arr));
+    if (a.dims.size() <= 1) return a.elem;
+    return widen::internArray(a.elem,
+                              std::vector<int>(a.dims.begin() + 1, a.dims.end()));
+}
+
+// Itanium recursive descent. Construct: build each contained class (its hooks, in
+// declaration / element order), THEN run a class's own ctor hook. Memory is
+// already laid down (field-init); this runs the HOOKS. Descends class fields,
+// tuple slots, AND array elements.
 void emitConstructHooks(std::string const& addr, widen::TypeRef type,
                         std::ostream& out) {
     widen::TypeRef cs = widen::strip(type);
     widen::Type const& ct = widen::get(cs);
     std::string llty = llvmForRef(cs);
-    for (std::size_t i = 0; i < ct.slots.size(); i++) {
-        widen::TypeRef st = widen::strip(ct.slots[i]);
-        if (widen::form(st) == widen::Type::Form::kSlid && widen::get(st).needs_ctor) {
+    if (ct.form == widen::Type::Form::kArray) {
+        widen::TypeRef et = arrayElemOf(cs);
+        if (typeNeedsHook(et, true)) {
+            for (int i = 0; i < ct.dims[0]; i++) {
+                std::string gep = newTmp("ctorelt");
+                out << "  " << gep << " = getelementptr inbounds " << llty
+                    << ", ptr " << addr << ", i64 0, i64 " << i << "\n";
+                emitConstructHooks(gep, et, out);
+            }
+        }
+        return;
+    }
+    for (std::size_t i = 0; i < ct.slots.size(); i++) {     // kSlid / kTuple slots
+        if (typeNeedsHook(ct.slots[i], true)) {
             std::string gep = newTmp("ctorfld");
             out << "  " << gep << " = getelementptr inbounds " << llty
                 << ", ptr " << addr << ", i32 0, i32 " << i << "\n";
             emitConstructHooks(gep, ct.slots[i], out);
         }
     }
-    if (ct.has_ctor) out << "  call void @" << ct.name << "__$ctor(ptr "
-                         << addr << ")\n";
+    if (ct.form == widen::Type::Form::kSlid && ct.has_ctor)
+        out << "  call void @" << ct.name << "__$ctor(ptr " << addr << ")\n";
 }
 
-// Destruct: run this class's own dtor hook FIRST, then tear down each class-typed
-// field in REVERSE declaration order — the mirror of construction.
+// Destruct: a class's own dtor hook FIRST, then tear down contained classes in
+// REVERSE order — the mirror of construction (fields, slots, AND array elements).
 void emitDestructHooks(std::string const& addr, widen::TypeRef type,
                        std::ostream& out) {
     widen::TypeRef cs = widen::strip(type);
     widen::Type const& ct = widen::get(cs);
-    if (ct.has_dtor) out << "  call void @" << ct.name << "__$dtor(ptr "
-                         << addr << ")\n";
     std::string llty = llvmForRef(cs);
-    for (std::size_t i = ct.slots.size(); i-- > 0; ) {
-        widen::TypeRef st = widen::strip(ct.slots[i]);
-        if (widen::form(st) == widen::Type::Form::kSlid && widen::get(st).needs_dtor) {
+    if (ct.form == widen::Type::Form::kArray) {
+        widen::TypeRef et = arrayElemOf(cs);
+        if (typeNeedsHook(et, false)) {
+            for (int i = ct.dims[0]; i-- > 0; ) {
+                std::string gep = newTmp("dtorelt");
+                out << "  " << gep << " = getelementptr inbounds " << llty
+                    << ", ptr " << addr << ", i64 0, i64 " << i << "\n";
+                emitDestructHooks(gep, et, out);
+            }
+        }
+        return;
+    }
+    if (ct.form == widen::Type::Form::kSlid && ct.has_dtor)
+        out << "  call void @" << ct.name << "__$dtor(ptr " << addr << ")\n";
+    for (std::size_t i = ct.slots.size(); i-- > 0; ) {      // kSlid / kTuple slots
+        if (typeNeedsHook(ct.slots[i], false)) {
             std::string gep = newTmp("dtorfld");
             out << "  " << gep << " = getelementptr inbounds " << llty
                 << ", ptr " << addr << ", i32 0, i32 " << i << "\n";
@@ -1405,58 +1452,54 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             auto it = syms.find(stmt.resolved_entry_id);
             assert(it != syms.end()
                 && "kVarDeclStmt: alloca not hoisted to entry block");
+            // FIELD-INIT. Note this is an if/else CHAIN (no early return) so the
+            // lifecycle-hook block below ALWAYS runs after the init — an array of a
+            // hook class fills via emitArrayFromTuple, then still needs its
+            // elements' ctors fired.
             if (!stmt.children.empty()) {
-                if (widen::form(widen::strip(it->second.slids_type))
-                        == widen::Type::Form::kArray
+                widen::Type::Form dform = widen::form(widen::strip(it->second.slids_type));
+                widen::Type::Form sform = widen::form(widen::strip(stmt.children[0]->inferred_type));
+                if (dform == widen::Type::Form::kArray
                     && stmt.children[0]->kind == ast::Kind::kTupleExpr) {
                     emitArrayFromTuple(it->second.alloca_name, it->second.slids_type,
                                        *stmt.children[0], syms, pool, out, diag);
-                    return;
-                }
-                if (widen::form(widen::strip(it->second.slids_type))
-                        == widen::Type::Form::kArray
-                    && widen::form(widen::strip(stmt.children[0]->inferred_type))
-                           == widen::Type::Form::kTuple) {
+                } else if (dform == widen::Type::Form::kArray
+                           && sform == widen::Type::Form::kTuple) {
                     emitArrayFromTupleValue(it->second.alloca_name,
                                             it->second.slids_type,
                                             *stmt.children[0], syms, pool, out, diag);
-                    return;
-                }
-                if (widen::form(widen::strip(it->second.slids_type))
-                        == widen::Type::Form::kTuple
-                    && widen::form(widen::strip(stmt.children[0]->inferred_type))
-                           == widen::Type::Form::kArray) {
+                } else if (dform == widen::Type::Form::kTuple
+                           && sform == widen::Type::Form::kArray) {
                     emitTupleFromArrayValue(it->second.alloca_name,
                                             it->second.slids_type,
                                             *stmt.children[0], syms, pool, out, diag);
-                    return;
-                }
-                std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
-                                           it->second.slids_type);
-                out << "  store " << it->second.llvm_type << " " << val
-                    << ", ptr " << it->second.alloca_name << "\n";
-                // A move-init (`T x <-- y`) nulls the source's pointer leaves
-                // after the copy, leaving the source in a valid state. An rvalue
-                // source has no storage to null.
-                if (stmt.move_init && isAstLvalue(*stmt.children[0])) {
-                    std::string src = emitLvalueAddr(*stmt.children[0], syms, pool,
-                                                     out, diag);
-                    emitNullLeaves(src, stmt.children[0]->inferred_type, out);
+                } else {
+                    std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
+                                               it->second.slids_type);
+                    out << "  store " << it->second.llvm_type << " " << val
+                        << ", ptr " << it->second.alloca_name << "\n";
+                    // A move-init (`T x <-- y`) nulls the source's pointer leaves
+                    // after the copy, leaving the source in a valid state. An rvalue
+                    // source has no storage to null.
+                    if (stmt.move_init && isAstLvalue(*stmt.children[0])) {
+                        std::string src = emitLvalueAddr(*stmt.children[0], syms, pool,
+                                                         out, diag);
+                        emitNullLeaves(src, stmt.children[0]->inferred_type, out);
+                    }
                 }
             }
             // Class lifecycle: every field is initialized before the constructor
-            // hook runs (the store above). Then register the instance so its
+            // hook runs (the field-init above). Then register the instance so its
             // destructor runs at scope exit, in reverse declaration order.
             {
+                // Run construction hooks and register for destruction — for a
+                // class, OR an array / tuple containing one (typeNeedsHook recurses).
                 widen::TypeRef st = widen::strip(it->second.slids_type);
-                if (widen::form(st) == widen::Type::Form::kSlid) {
-                    widen::Type const& ct = widen::get(st);
-                    if (ct.needs_ctor) {
-                        emitConstructHooks(it->second.alloca_name, st, out);
-                    }
-                    if (ct.needs_dtor && scope) {
-                        scope->objs.push_back({it->second.alloca_name, st});
-                    }
+                if (typeNeedsHook(st, /*ctor=*/true)) {
+                    emitConstructHooks(it->second.alloca_name, st, out);
+                }
+                if (typeNeedsHook(st, /*ctor=*/false) && scope) {
+                    scope->objs.push_back({it->second.alloca_name, st});
                 }
             }
             return;
