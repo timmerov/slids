@@ -47,9 +47,12 @@ CtorDtor:dtor: 1
 expect dtors 3,2,1 above.
 ForwardCtorDtor:ctor: 57
 ForwardCtorDtor:dtor: 57
+ctors 36,37,38 after.
 CtorDtor:ctor: 36
 CtorDtor:ctor: 37
 CtorDtor:ctor: 38
+ctors 36,37,38 before dtors 38,37,36 after.
 CtorDtor:dtor: 38
 CtorDtor:dtor: 37
 CtorDtor:dtor: 36
+dtors 38,37,36 before.

@@ -303,11 +303,21 @@ int32 main() {
 
     /* array of ctor classes. */
     {
-        /* ctors 36,37,38 after. */
+        __println("ctors 36,37,38 after.");
         CtorDtor arr[3] = (36, 37, 38);
-        /* ctors 36,37,38 before dtors 38,37,36 after. */
+        __println("ctors 36,37,38 before dtors 38,37,36 after.");
     }
-    /* dtors 38,37,36 before. */
+    __println("dtors 38,37,36 before.");
+
+    /* tuple of ctor classes. */
+    /* deferred.
+    {
+        __println("ctors 14,24,34 after.");
+        tuple = (CtorDtor(14), CtorDtor(24), CtorDtor(34));
+        __println("ctors 14,24,34 before dtors 34,24,14 after.");
+    }
+    __println("dtors 34,24,14 before.");
+    */
 
     /* nameless class. */
     /* deferred.

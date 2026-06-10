@@ -46,6 +46,15 @@ claude says:
 
 alias Big = int64;
 
+Simple(int x_ = 0) {
+    _() {
+        __println("Simple:ctor: " + x_);
+    }
+    ~() {
+        __println("Simple:dtor: " + x_);
+    }
+}
+
 int32 main() {
     /* heap single: new T -> T^. */
     int^ ref = new int;
@@ -102,6 +111,17 @@ int32 main() {
     ab^ = 11;
     __println("alias elem= " + ab^);                 // 11
     delete ab;
+
+    /*
+    ref = new Simple(1);
+    delete ref;
+
+    arr = new Simple[3];
+    arr[0].x_ = 10;
+    arr[1].x_ = 11;
+    arr[2].x_ = 12;
+    delete arr;
+    */
 
     /* compile errors — each uncommented in isolation by the negative runner. */
 

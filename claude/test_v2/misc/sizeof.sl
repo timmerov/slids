@@ -73,6 +73,18 @@ Space {
     enum Compass ( north, east, south, west );
 }
 
+Simple(
+    int x_ = -1,
+    float64 y_ = 3.14
+) {
+    _() {
+        __println("Simple:ctor: " + x_);
+    }
+    ~() {
+        __println("Simple:dtor: " + x_);
+    }
+}
+
 int32 main() {
     /* primitive widths. */
     __println("char= "    + sizeof(char));            // 1
@@ -130,6 +142,14 @@ int32 main() {
     const cm = sizeof(int16) + sizeof(int64);
     __println("const= "  + cn);                       // 4
     __println("const2= " + cm);                       // 10
+
+    /*
+    deferred.
+    Simple simple;
+    const intptr simple_size1 = sizeof(Simple);
+    const intptr simple_size2 = sizeof(simple);
+    __println("simple_size = " + simple_size1 + " " + simple_size2);
+    */
 
     /* compile errors — each uncommented in isolation by the negative runner. */
 
