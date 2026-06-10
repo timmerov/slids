@@ -737,6 +737,18 @@ std::unique_ptr<ast::Node> lowerForTuple(parse::Node const& p,
     return out;
 }
 
+// Collect every class definition reachable from `node` — at file scope and
+// nested in function bodies (a local class). Recurses uniformly so a class in a
+// nested function (or in a ctor/dtor body) is found too.
+void collectClassDefs(parse::Node const& node,
+                      std::vector<parse::Node const*>& acc) {
+    for (auto const& c : node.children) {
+        if (!c) continue;
+        if (c->kind == parse::Kind::kClassDef) acc.push_back(c.get());
+        collectClassDefs(*c, acc);
+    }
+}
+
 // Collect a namespace's member function definitions (recursing into nested
 // namespaces) so they can be hoisted to program scope.
 void collectNamespaceFunctions(parse::Node const& ns,
@@ -999,7 +1011,7 @@ std::unique_ptr<ast::Node> lowerFieldExpr(parse::Node const& p,
     widen::TypeRef bt = widen::strip(base.inferred_type);
     assert(widen::form(bt) == widen::Type::Form::kSlid
         && "lowerFieldExpr: base must be a class");
-    auto it = tree.classes.find(widen::get(bt).name);
+    auto it = tree.classes.find(bt);
     assert(it != tree.classes.end() && "lowerFieldExpr: class is registered");
     int idx = it->second.fieldIndex(p.name);
     assert(idx >= 0 && "lowerFieldExpr: field resolved by classify");
@@ -1050,19 +1062,26 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
     // Lift each class's ctor/dtor member bodies to top-level functions named
     // <Class>__$ctor / <Class>__$dtor (the bodies are self-bound — resolve
     // rewrote bare field refs to `self^.field`, lowered to slot indices on copy).
-    // Codegen calls these symbols at construction / scope exit.
+    // Codegen calls these symbols at construction / scope exit. Classes defined
+    // in a function body (local classes) are collected recursively, and the
+    // symbol uses the class's (possibly scope-mangled) canonical type name so
+    // same-named local classes don't collide.
     for (std::size_t i = 0; i < in.nodes.size(); i++) {
         if (!in.nodes[i] || in.nodes[i]->kind != parse::Kind::kProgram) continue;
         ast::Node* prog = out.nodes[i].get();
-        for (auto const& c : in.nodes[i]->children) {
-            if (!c || c->kind != parse::Kind::kClassDef) continue;
+        std::vector<parse::Node const*> classdefs;
+        collectClassDefs(*in.nodes[i], classdefs);
+        for (parse::Node const* c : classdefs) {
+            // The lifted symbol base is minted from the class handle (bare name +
+            // def_id for a local), matching codegen's call/struct/sizeof sites.
+            std::string sym = widen::classSymbol(widen::strip(c->return_type));
             for (auto const& m : c->children) {
                 if (!m) continue;
                 bool is_ctor = (m->name == "_$ctor");
                 bool is_dtor = (m->name == "_$dtor");
                 if (!is_ctor && !is_dtor) continue;
                 auto fn = copyNode(*m, in, next_id);
-                fn->name = c->name + (is_ctor ? "__$ctor" : "__$dtor");
+                fn->name = sym + (is_ctor ? "__$ctor" : "__$dtor");
                 prog->children.push_back(std::move(fn));
             }
         }
@@ -1079,8 +1098,8 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
     }
     // Carry the class kSlid types so codegen can emit each `<Name>__$sizeof()`
     // helper (the parse-side class graph isn't otherwise visible to codegen).
-    for (auto const& [name, info] : in.classes) {
-        (void)name;
+    for (auto const& [ctype, info] : in.classes) {
+        (void)ctype;
         if (info.type != widen::kNoType) out.classes.push_back(info.type);
     }
 }

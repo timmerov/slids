@@ -192,3 +192,43 @@ on hasErrors), so exactly one diagnostic — not a doubled report.
 //    __println("u = " + u);
 //    return 0;
 //}
+
+/*
+a class VALUE has no conversion to an unrelated type: it is assignable only to
+the same class. Assigning one to a primitive (or to a different class) is a type
+error, not a silent struct-into-scalar store — checked at the decl AND a bare
+assignment.
+*/
+
+/* a class value cannot initialize a primitive variable. */
+//-EXPECT-ERROR: Cannot implicitly convert 'C' to 'int'
+//C(int x_) { _(){} ~(){} }
+//int32 neg_class_init_int() {
+//    C v(1);
+//    int y = v;
+//    __println("y = " + y);
+//    return 0;
+//}
+
+/* the same mismatch through a bare assignment, not just a decl. */
+//-EXPECT-ERROR: Cannot implicitly convert 'C' to 'int'
+//C(int x_) { _(){} ~(){} }
+//int32 neg_class_assign_int() {
+//    C v(1);
+//    int y = 0;
+//    y = v;
+//    __println("y = " + y);
+//    return 0;
+//}
+
+/* two unrelated classes don't convert either. */
+//-EXPECT-ERROR: Cannot implicitly convert 'B' to 'A'
+//A(int x_) { _(){} ~(){} }
+//B(int x_) { _(){} ~(){} }
+//int32 neg_class_to_class() {
+//    A a(1);
+//    B b(2);
+//    a = b;
+//    __println("done");
+//    return 0;
+//}

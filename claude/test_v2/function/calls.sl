@@ -250,3 +250,21 @@ int32 fwd_decl(int32 n) {
 //int neg_param_dim_nonconst(int a[helper()]) {
 //    return a[0];
 //}
+
+/* a class value has no conversion to a mismatched PARAMETER type — the same reject
+   as a var-decl/assignment, now applied at the call site. */
+//-EXPECT-ERROR: Cannot implicitly convert 'C' to 'int'
+//C(int x_) { _(){} ~(){} }
+//int takesInt(int n) { return n; }
+//int neg_class_arg() {
+//    C v(1);
+//    return takesInt(v);
+//}
+
+/* ...and at a RETURN whose value's type doesn't match the function's return type. */
+//-EXPECT-ERROR: Cannot implicitly convert 'C' to 'int'
+//C(int x_) { _(){} ~(){} }
+//int neg_class_return() {
+//    C v(1);
+//    return v;
+//}

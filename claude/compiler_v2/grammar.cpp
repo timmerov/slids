@@ -2079,6 +2079,11 @@ struct Parser {
         // A nested function definition (`type name (params) {body}`) — checked
         // before the var-decl / name-led dispatches it would otherwise hit.
         if (looksLikeFunctionDef()) return parseFunctionDef();
+        // A local class definition (`Name(fields) {body}`, no return type) — the
+        // body `{` after the matching `)` distinguishes it from a call
+        // (`name(args);`, which ends in `;`). Checked after the function-def look
+        // (a function has a leading return type, so the shapes don't overlap).
+        if (looksLikeClassDef()) return parseClassDef();
         if (isTypeStart(t.kind)) return parseVarDeclStmt();
         if (t.kind == token::Kind::kPlusPlus
             || t.kind == token::Kind::kMinusMinus) return parseIncDecStmt();
@@ -2145,6 +2150,26 @@ struct Parser {
         node->children[0] = std::move(rhs);
         if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
         return node;
+    }
+
+    // Pure lookahead: `Name ( ... ) {` with no leading return type — a class
+    // definition in statement position. The body `{` after the matching `)` is
+    // what separates it from a call `name(...);` (which ends in `;`). Consumes
+    // nothing.
+    bool looksLikeClassDef() const {
+        if (peekKind(0) != token::Kind::kIdentifier) return false;
+        if (peekKind(1) != token::Kind::kLParen) return false;
+        int depth = 0;
+        for (int i = 1; ; i++) {
+            token::Kind k = peekKind(i);
+            if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput)
+                return false;
+            if (k == token::Kind::kLParen) depth++;
+            else if (k == token::Kind::kRParen) {
+                if (--depth == 0)
+                    return peekKind(i + 1) == token::Kind::kLBrace;
+            }
+        }
     }
 
     // Pure lookahead: do the tokens form `<return-type> <name> (` — a (nested)

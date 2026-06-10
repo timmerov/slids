@@ -14,9 +14,20 @@ emitDestructHooks), NOT field-init inside `__$ctor_body`. ALSO LANDED since (bui
 on this base, detail in readme "CLASSES: NEW / DELETE / SIZEOF"): sizeof(Class) via
 the per-class `__$sizeof()` helper; new/delete for classes (construct + ctor, the
 new[]/delete[] count cookie, placement); explicit `lvalue.~()`; `.field` writes +
-deref/iterator field access. STILL OPEN: methods, operator overloading,
-for-each/for-class, move/swap operators. Deferred items (array/tuple-of-hook FIELD
-construction, non-block-exit tests) -> todo.txt.
+deref/iterator field access. ALSO LANDED (detail in readme "CLASSES: AS A
+NAMESPACE + LOCAL", standing-record memories [[project_v2_class_as_namespace]] /
+[[project_v2_local_classes]]): CLASS-AS-NAMESPACE (a kClass entry; member
+alias/const/enum; qualified `Class:member`; alias-to-class transparency; `alias
+Class;` rejected); LOCAL CLASSES (defined in any function body / nested block via
+resolveStmtList's pre-pass; use-before-def; shadowing local + file-scope), kept
+distinct by a def_id in structKey rather than a mangled name — names stay bare,
+the disambiguated ctor/dtor/sizeof symbol is minted at codegen by classSymbol
+([[project_defer_name_mangling]]); per-local transitive needs; and checkSlidAssign
+(a class value is rejected at a mismatched var-decl / assign / call-arg / return).
+STILL OPEN: methods, operator overloading, for-each/for-class, move/swap operators;
++ a local class in a NESTED-FUNCTION signature (resolution ordering -> todo.txt).
+Deferred items (array/tuple-of-hook FIELD construction, non-block-exit tests) ->
+todo.txt.
 
 The foundational class landing: a class with fields, methods, an explicit
 constructor, and a destructor — plus the ctor/dtor CALL-IF-NEEDED model. This is

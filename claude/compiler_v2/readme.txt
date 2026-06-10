@@ -175,11 +175,13 @@ CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
   * SIZEOF(Class) — LLVM owns the struct layout, so a class's size is NOT a
     compile-time constant. codegen emits a per-class `define internal i64
     @<Name>__$sizeof()` = `getelementptr <struct>, ptr null, i32 1` + `ptrtoint`
-    (v1's design — resolves at link time for cross-TU). resolve recognizes a bare
-    class name as a TYPE operand (it lives in tree.classes, not the entry table);
-    classify rewrites `sizeof(Class)` to a CALL of that helper (a runtime intptr,
-    NOT foldable — can't init a const). The class kSlid types are threaded
-    parse->ast via a new `ast::Tree.classes` (desugar populates it).
+    (v1's design — resolves at link time for cross-TU). The helper symbol is
+    widen::classSymbol(handle) (bare name for file-scope, disambiguated for a
+    local). resolve recognizes a bare class name as a TYPE operand (its kClass
+    entry redirects to the registered kSlid); classify rewrites `sizeof(Class)` to
+    a CALL of that helper (a runtime intptr, NOT foldable — can't init a const).
+    The class kSlid types are threaded parse->ast via a new `ast::Tree.classes`
+    (desugar populates it).
   * NEW T / NEW T(args) — a class is sized by `call @<Name>__$sizeof()` (not the
     typeByteSize literal). `new T(args)`: grammar parses the trailing `(args)` onto
     kNewExpr children[2] (distinct from the leading `new(addr)` placement and `[n]`);
@@ -208,6 +210,57 @@ CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
     element. So `ptr^.field`, `iter[i].field`, and `arr[i].field` compose for any
     field/shape, READ or WRITE. The name-led lvalue chain also parses `.field` as a
     store target (field WRITES, previously only ctor-body `self^.field`).
+
+
+CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stages)
+
+  * A CLASS IS ALSO A NAMESPACE. Every class gets a `kClass` ENTRY (a new
+    EntryKind) carrying an ns_frame_id (its member set) AND its kSlid as
+    slids_type (so the name is a type too). Its body holds member DEFINITIONS —
+    aliases, consts, enums (NOT free functions). Qualify them by the class name:
+    `Space:Float` (a member type-alias), `Space:kPi` (a member const),
+    `Space:Count:kOne` (an enum member — the enum keeps its name in the path). A
+    type-alias to a class sees through to both facets (`alias Time = Space;` then
+    `Time:Count` (type) and `Time:Count:kZero` (value) both resolve). `alias
+    Space;` (bare namespace import) is REJECTED — a class is a type, not an
+    importable namespace. resolveNamespaceSegments accepts a class frame and
+    follows an alias to it; resolveQualifiedType accepts a member alias as a type
+    leaf; a member type names itself qualified for ##type (memberQualifiedName).
+  * LOCAL CLASSES — a class may be defined in ANY function body, and in any nested
+    block within one (if / else / loop / switch case). resolveStmtList runs a
+    local-class pre-pass over EACH scope's statements before resolving them, so a
+    use may precede the definition in that scope, and the class registers in that
+    block's frame (drops at scope exit). Shadowing falls out of innermost-first
+    lexical lookup — a local class shadows any same-named class in an enclosing
+    scope, local or file-scope; the shadowed one is unreachable (`::` is global;
+    see todo.txt). resolveTypeRef redirects every class-name reference to the one
+    registered kSlid HANDLE. A local class is a FULL class: members, a hook-class
+    field (whose ctor/dtor run — see below), sizeof, new/delete; its ctor/dtor
+    lift to module-level functions like a file-scope class's.
+  * IDENTITY BY def_id, NOT A MANGLED NAME. Two same-named local classes (or a
+    local shadowing a file-scope one) must be distinct types. The kSlid carries a
+    `def_id` (its defining FRAME id; -1 for file-scope) included in structKey
+    (`"S"+name` for file-scope, `"S"+name+"#"+def_id` for a local), so they intern
+    to distinct handles while the NAME stays bare everywhere a human or a map sees
+    it (diagnostics, ##type, spell()). tree.classes is keyed by the kSlid HANDLE
+    (not a name string). The ONE place a class name is disambiguated is
+    `widen::classSymbol(handle)` — bare name for file-scope (IR unchanged), `name
+    + ".<frame>"` for a local — minted at desugar (ctor/dtor defs) and codegen
+    (calls / sizeof) so def and use agree, and living only in emitted LLVM. (This
+    is the "defer name mangling to codegen" rule: scope is disambiguated by the
+    entry-id/frame stack, never by a stored canonical name — v1's fatal trap.)
+  * TRANSITIVE LIFECYCLE FOR A LOCAL CLASS. The file-scope needs-fixpoint runs
+    before any body resolves, so a local class isn't swept by it. registerClass
+    instead computes a local class's needs in a single pass from its fields'
+    already-published needs (no forward refs within a scope) — so a local
+    `Outer(Inner i_)` runs Inner's ctor/dtor.
+  * CLASS-VALUE ASSIGNABILITY (checkSlidAssign). A class value is assignable only
+    to the SAME class. classify's checkSlidAssign is the terminal reject the
+    assign/decl/call/return dispatch otherwise lacked: a class meeting a primitive
+    or a different class -> "Cannot implicitly convert ...". Runs at var-decl,
+    assignment, call ARGUMENT (both the single-candidate and multi-overload paths),
+    and RETURN. (Same-class is a fine copy; pointer cases are checkPtrAssign's;
+    two non-classes flex per codegen's numeric rules.)
 
 
 STAGE FILES (.h / .cpp pairs)

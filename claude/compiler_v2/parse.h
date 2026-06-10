@@ -311,7 +311,8 @@ struct Entry {
 // fill defaults at construction; desugar reads it to map a field name to its
 // slot index. Codegen never needs it (the layout also rides on the kSlid type).
 struct ClassInfo {
-    std::string name;
+    std::string name;          // the bare source name (a local class disambiguates
+                               // by its type's def_id, not by its name).
     std::vector<std::string> field_names;
     std::vector<widen::TypeRef> field_types;
     // The kParam node for each field (STABLE across stages). Its children[0] is
@@ -338,9 +339,10 @@ struct Tree {
     std::vector<Entry> entries;
     int next_frame_id = 0;
 
-    // Class layouts by name (see ClassInfo). Populated by resolve's class
+    // Class layouts keyed by the class's interned kSlid handle (which is unique
+    // per definition via def_id — see ClassInfo). Populated by resolve's class
     // pre-pass; read by classify + desugar.
-    std::map<std::string, ClassInfo> classes;
+    std::map<widen::TypeRef, ClassInfo> classes;
 
     // Transient — while resolving a ctor/dtor body: the field names of the
     // enclosing class. An UNRESOLVED bare name matching one is rewritten to

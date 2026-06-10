@@ -1,0 +1,28 @@
+main:Function:ctor: 10
+foo:NestedFunction:ctor: 20
+foo:NestedFunction:dtor: 20
+shadow:Function:ctor: 30
+shadow:Function:dtor: 30
+main:Block:ctor: 40
+main:Block:dtor: 40
+main:If:ctor: 50
+main:If:dtor: 50
+main:Else:ctor: 60
+main:Else:dtor: 60
+main:While:ctor: 70
+main:While:dtor: 70
+main:WhilePost:ctor: 80
+main:WhilePost:dtor: 80
+main:For:ctor: 90
+main:For:dtor: 90
+main:Switch:ctor: 100
+main:Switch:dtor: 100
+Inner:ctor: 0
+outer.i = 0
+Inner:dtor: 0
+LOCAL:Shadowed: 8
+Geo:Real e=2 S=1
+sizeof Heap = 4
+Heap:ctor: 11
+Heap:dtor: 11
+main:Function:dtor: 10

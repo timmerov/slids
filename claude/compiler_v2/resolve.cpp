@@ -40,7 +40,7 @@ bool leafIsKnownClass(parse::Tree const& tree, widen::TypeRef t) {
         if (ty.form == F::kAlias) { t = ty.underlying; continue; }
         if (ty.form == F::kPointer || ty.form == F::kIterator) { t = ty.pointee; continue; }
         if (ty.form == F::kArray) { t = ty.elem; continue; }
-        if (ty.form == F::kSlid) return tree.classes.count(ty.name) > 0;
+        if (ty.form == F::kSlid) return tree.classes.count(t) > 0;
         return false;
     }
 }
@@ -173,7 +173,10 @@ std::string memberQualifiedName(parse::Tree const& tree, int entry_id) {
         for (std::size_t i = 0; i < tree.entries.size(); ++i) {
             if (tree.entries[i].ns_frame_id == owner) { oid = (int)i; break; }
         }
-        if (oid < 0) break;
+        // Every owner frame is owned by a kClass/kNamespace entry; a member with
+        // an owner_ns_frame that names no entry is a builder invariant violation,
+        // not a quietly-shortened name.
+        assert(oid >= 0 && "memberQualifiedName: owner frame has no entry");
         name = tree.entries[oid].name + ":" + name;
         owner = tree.entries[oid].owner_ns_frame;
     }
@@ -227,6 +230,13 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
                 return widen::internAlias(name, u);
             }
             int id = parse::findInLiveScopes(tree, name);
+            // A class name resolves to its registered kSlid handle. The handle
+            // carries the def_id (scope distinction) and the layout; the bare
+            // written-name kSlid `t` is just a placeholder. Always redirect so
+            // every reference — file-scope or local — shares the one real handle.
+            if (id >= 0 && tree.entries[id].kind == parse::EntryKind::kClass) {
+                return tree.entries[id].slids_type;
+            }
             bool is_alias = id >= 0 && tree.entries[id].kind == parse::EntryKind::kAlias;
             bool is_enum  = id >= 0
                 && tree.entries[id].kind == parse::EntryKind::kNamespace
@@ -539,6 +549,8 @@ std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
 // ---- Namespace registration -------------------------------------------------
 void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
                          diagnostic::Sink& diag, bool nested = false);
+void resolveLocalClass(parse::Tree& tree, parse::Node& cls,
+                       diagnostic::Sink& diag);
 void registerNamespaceTree(parse::Tree& tree, parse::Node& node,
                            int parent_ns, diagnostic::Sink& diag);
 void resolveNamespaceBodies(parse::Tree& tree, parse::Node& node,
@@ -1292,17 +1304,8 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                         + ", not a value or a type.", {}});
                 return;
             }
-            // id < 0: a registered CLASS is a type (it lives in tree.classes, not
-            // the entry table) — measure it as that type, like an alias. Stamp the
-            // kSlid on return_type and drop the operand so it reads as a type sizeof.
-            if (!qualified) {
-                auto cit = tree.classes.find(operand.name);
-                if (cit != tree.classes.end()) {
-                    e.return_type = cit->second.type;
-                    e.children.clear();
-                    return;
-                }
-            }
+            // id < 0: every class has a kClass entry (handled above), so a bare
+            // unresolved name here is genuinely unknown.
             // a qualified ref already reported its own resolution failure
             // (resolveQualifiedRef); only a bare unresolved name needs reporting.
             if (!qualified) {
@@ -2858,6 +2861,16 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // pre-pass; no body to resolve. (Never defined -> the pass-3 orphan
             // check reports it, like a file-scope declaration.)
             return Completion::Normal;
+        case parse::Kind::kClassDef:
+            // A local class: registered and member-resolved by resolveStmtList's
+            // pre-pass before this statement is reached. The no-op here RELIES on
+            // that, so assert it — a kClassDef arriving unregistered means a body
+            // path bypassed the pre-pass (the Finding-1 silent-drop), not a case
+            // to swallow quietly.
+            assert(s.resolved_entry_id >= 0
+                   && "kClassDef reached resolveStmt unregistered — a body path "
+                      "skipped resolveStmtList's local-class pre-pass");
+            return Completion::Normal;
         case parse::Kind::kProgram:
         case parse::Kind::kStringLiteral:
         case parse::Kind::kIntLiteral:
@@ -2884,7 +2897,6 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         case parse::Kind::kCallExpr:
         case parse::Kind::kCaseClause:
         case parse::Kind::kParam:
-        case parse::Kind::kClassDef:
             assert(false && "resolveStmt: not a statement kind");
             return Completion::Normal;
     }
@@ -2895,6 +2907,17 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
 Completion resolveStmtList(parse::Tree& tree,
                            std::vector<std::unique_ptr<parse::Node>>& stmts,
                            diagnostic::Sink& diag) {
+    // Local-class pre-pass: register every class defined DIRECTLY in this scope
+    // (its entry + members land in the current frame, so they shadow and drop
+    // with the scope) before resolving statements — so a use may precede the
+    // definition. Every scoped body (function body, bare block, if/else arm,
+    // loop body, switch case) resolves its statements through here, so a local
+    // class works in any of them.
+    for (auto& s : stmts) {
+        if (s && s->kind == parse::Kind::kClassDef) {
+            resolveLocalClass(tree, *s, diag);
+        }
+    }
     for (std::size_t i = 0; i < stmts.size(); i++) {
         if (!stmts[i]) continue;
         Completion c = resolveStmt(tree, *stmts[i], diag);
@@ -3095,6 +3118,8 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         }
         ch->resolved_entry_id = parse::addEntry(tree, std::move(e));
     }
+    // (Local classes in this body are registered by resolveStmtList's pre-pass,
+    // which runs for every scope — including nested blocks/if/loops/switch.)
     resolveStmtList(tree, fn.children, diag);
     if (!nested) {
         // Now every nested function's captures are known: a host-level call must
@@ -3196,21 +3221,33 @@ void resolveClassMemberInits(parse::Tree& tree, parse::Node& node,
     tree.open_ns_frames.pop_back();
 }
 
+bool fieldContributesNeed(parse::Tree const& tree, widen::TypeRef ft, bool ctor);
+
 // Register a class definition `Name(fields){body}`: build its ClassInfo (the
 // named-tuple field layout) and intern the slotful kSlid type so every `Name` /
 // `Name^` reference shares one handle that carries the layout. Field default
 // expressions are resolved later (resolveClassFieldDefaults), once file-scope
 // consts they may reference exist.
 void registerClass(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag) {
-    if (tree.classes.count(node.name)) {
-        parse::ClassInfo const& prev = tree.classes.at(node.name);
+    // A LOCAL class (defined in a function body, not at file scope) disambiguates
+    // by its defining FRAME id, carried as the kSlid's def_id — NOT by a mangled
+    // name. The name stays bare everywhere (lookup, diagnostics, ##type); two
+    // same-named local classes (or a local shadowing a file-scope one) become
+    // distinct TYPE HANDLES via def_id, and codegen mints the unique symbol from
+    // it at emit time. A duplicate is a same-named class already declared in THIS
+    // frame (a kClass entry), so the dup check is lexical, not by canonical name.
+    int decl_frame = parse::currentFrameId(tree);
+    int def_id = (decl_frame == kGlobalFrame) ? -1 : decl_frame;
+    int prev_id = parse::findInFrame(tree, decl_frame, node.name);
+    if (prev_id >= 0 && tree.entries[prev_id].kind == parse::EntryKind::kClass) {
+        parse::Entry const& prev = tree.entries[prev_id];
         diagnostic::report(diag, {node.file_id, node.name_tok,
             "Duplicate definition of class '" + node.name + "'.",
-            {{prev.def_file_id, prev.def_tok, "first defined here"}}});
+            {{prev.file_id, prev.tok, "first defined here"}}});
         return;
     }
     parse::ClassInfo info;
-    info.name = node.name;
+    info.name = node.name;           // bare; def_id carries the scope distinction
     info.def_file_id = node.file_id;
     info.def_tok = node.name_tok;
     // First-seen location of each field name, for the duplicate-field note.
@@ -3247,9 +3284,23 @@ void registerClass(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag)
     }
     info.needs_ctor = has_ctor;
     info.needs_dtor = has_dtor;
-    info.type = widen::internSlid(node.name, info.field_types);
-    widen::setSlidLifecycle(node.name, has_ctor, has_dtor);
+    info.type = widen::internSlid(node.name, info.field_types, def_id);
+    widen::setSlidLifecycle(info.type, has_ctor, has_dtor);
     node.return_type = info.type;   // stamp the class node with its own type
+
+    // A LOCAL class registers AFTER the file-scope transitive-needs fixpoint, so
+    // that sweep won't reach it. But everything a local field can name is already
+    // registered with published needs (file-scope classes are done; earlier local
+    // classes too — no forward refs within a scope), so its transitive needs
+    // resolve in a single pass here. Without this, a local class with a hook-class
+    // field silently skips that field's ctor/dtor.
+    if (def_id >= 0) {
+        for (widen::TypeRef ft : info.field_types) {
+            if (!info.needs_ctor && fieldContributesNeed(tree, ft, true))  info.needs_ctor = true;
+            if (!info.needs_dtor && fieldContributesNeed(tree, ft, false)) info.needs_dtor = true;
+        }
+        widen::setSlidNeeds(info.type, info.needs_ctor, info.needs_dtor);
+    }
 
     // The class doubles as a namespace: a kClass entry exposes its member set
     // (aliases / consts / enums, qualified `Class:member`) via ns_frame_id, and
@@ -3266,7 +3317,7 @@ void registerClass(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag)
     node.resolved_entry_id = parse::addEntry(tree, std::move(e));
     registerClassMembers(tree, node, cls_frame, diag);
 
-    tree.classes.emplace(node.name, std::move(info));
+    tree.classes.emplace(info.type, std::move(info));   // keyed by the kSlid handle
 }
 
 // Resolve a class's ctor/dtor member bodies. Each is a kFunctionDef carrying an
@@ -3275,12 +3326,21 @@ void registerClass(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag)
 // after file-scope entries exist so the bodies can call file-scope functions.
 void resolveClassMemberBodies(parse::Tree& tree, parse::Node& node,
                               diagnostic::Sink& diag) {
-    auto it = tree.classes.find(node.name);
+    // Keyed by the class's kSlid handle, stamped onto node.return_type by
+    // registerClass.
+    auto it = tree.classes.find(widen::strip(node.return_type));
     if (it == tree.classes.end()) return;
     std::vector<std::string> const* saved = tree.method_fields;
     tree.method_fields = &it->second.field_names;
     for (auto& m : node.children) {
         if (m && (m->name == "_$ctor" || m->name == "_$dtor")) {
+            // Resolve the implicit `self` (Class^) param type — for a LOCAL class
+            // its bare written name redirects to the scope-mangled kSlid, so a
+            // field access through self^ finds the class in tree.classes.
+            for (auto& p : m->params) {
+                if (p && p->return_type != widen::kNoType)
+                    resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
+            }
             resolveFunctionBody(tree, *m, diag, /*nested=*/false);
         }
     }
@@ -3298,6 +3358,18 @@ void resolveClassFieldDefaults(parse::Tree& tree, parse::Node& node,
     }
 }
 
+// A class defined inside a function body: register it in the current (body)
+// frame and resolve its members in one shot — the file-scope split into ordered
+// program passes isn't available here, but a body's enclosing entries already
+// exist, so registration + member resolution can run back to back.
+void resolveLocalClass(parse::Tree& tree, parse::Node& cls,
+                       diagnostic::Sink& diag) {
+    registerClass(tree, cls, diag);
+    resolveClassFieldDefaults(tree, cls, diag);
+    resolveClassMemberInits(tree, cls, diag);
+    resolveClassMemberBodies(tree, cls, diag);
+}
+
 // Does a field type carry a ctor (or dtor) need into its container — a hook class,
 // OR an array / tuple of one (recursive)? Reads the ClassInfo needs being computed
 // by the transitive fixpoint (NOT the widen flags, which are published after).
@@ -3306,7 +3378,7 @@ bool fieldContributesNeed(parse::Tree const& tree, widen::TypeRef ft, bool ctor)
     widen::TypeRef s = widen::strip(ft);
     F f = widen::form(s);
     if (f == F::kSlid) {
-        auto it = tree.classes.find(widen::get(s).name);
+        auto it = tree.classes.find(s);
         if (it == tree.classes.end()) return false;
         return ctor ? it->second.needs_ctor : it->second.needs_dtor;
     }
@@ -3400,8 +3472,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
                 }
             }
         }
-        for (auto& [cname, info] : tree.classes) {
-            widen::setSlidNeeds(cname, info.needs_ctor, info.needs_dtor);
+        for (auto& [ctype, info] : tree.classes) {
+            widen::setSlidNeeds(ctype, info.needs_ctor, info.needs_dtor);
         }
     }
 

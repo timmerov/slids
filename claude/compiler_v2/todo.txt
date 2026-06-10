@@ -64,6 +64,17 @@ DEFERRED TESTS
 
 DEFERRED FEATURES (later; may not be on the plan)
 
+  * LOCAL CLASS IN A NESTED-FUNCTION SIGNATURE — a class defined in a function
+    body cannot be named in the signature of a NESTED function in the same body:
+    `void use(Loc^ p) {...}` where Loc is a local class errors "Unknown type
+    'Loc'". CAUSE: the nested-function signature pre-pass (resolveFunctionBody)
+    runs BEFORE resolveStmtList's local-class pre-pass, so the class isn't
+    registered yet when the param/return type resolves. Var decls, blocks, and
+    direct use of a local class all work — only crossing into a nested fn's
+    SIGNATURE fails. FIX: register a body's local classes before its
+    nested-function signatures (or two-phase the body pre-pass). prerequisite:
+    local classes in function bodies (landed).
+
   * CONST-EXPRESSION ARRAY DIM IN A TYPE (Phase 2) — array TYPE spellings (`int[N]`
     in type position — tuple slots, alias RHS, params via alias, returns) LANDED but
     take only LITERAL dims; a const-EXPRESSION dim inside a type (`(int[N], int[4])`,
@@ -232,6 +243,19 @@ REACH GOALS
     pending this. Needs type-directed name resolution (the lvalue/assignment
     target type steering the rhs lookup) — no other feature needs it yet.
     prerequisite: lvalues.
+
+  * ACCESS A SHADOWED LOCAL CLASS — a class defined in a function body may be
+    shadowed by a same-named class in a nested function (allowed; bare lookup is
+    innermost-first, so the inner one wins and the outer becomes unreachable — see
+    nested_cls.sl). There is no syntax to name the shadowed (enclosing-scope) one.
+    `::` is NOT it: `::` starts resolution at GLOBAL scope, but a local class lives
+    in its function's body frame, not file scope, so `::` overshoots it. Nor can
+    `::main:Function` work — `main` is a function, not a namespace, so it can't be
+    a qualifier segment. The meaning of `::` is fixed (global) and will not change.
+    Reaching an outer shadowed local class would need a DISTINCT "enclosing scope"
+    qualifier, with its multi-level semantics (skip-one vs nearest-match-outward)
+    still to be decided. No current need; the shadowed class is simply accepted as
+    unreachable. prerequisite: local classes in function bodies.
 
 
 ASPIRATIONAL FEATURES (someday; low priority, may never land)

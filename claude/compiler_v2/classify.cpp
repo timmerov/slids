@@ -390,6 +390,8 @@ int argConvertCost(parse::Node const& a, std::string const& param) {
 void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
 void checkStrongConstAssign(widen::TypeRef dest, parse::Node const& rhs,
                             diagnostic::Sink& diag);
+void checkSlidAssign(widen::TypeRef lvalue_type, parse::Node const& rhs,
+                     diagnostic::Sink& diag);
 // Validate + type a tuple literal initializing an ARRAY (defined after inferExpr);
 // reused for an array-typed TUPLE SLOT.
 void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
@@ -587,7 +589,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     "type '" + widen::spellOrEmpty(base.inferred_type) + "'.", {}});
                 return;
             }
-            auto it = tree.classes.find(widen::get(bt).name);
+            auto it = tree.classes.find(bt);
             if (it == tree.classes.end()) {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Unknown class type '" + widen::get(bt).name + "'.", {}});
@@ -636,10 +638,10 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                         ? widen::strip(e.return_type)
                         : widen::strip(e.children[0]->inferred_type);
                     if (widen::form(st) == widen::Type::Form::kSlid
-                        && tree.classes.count(widen::get(st).name)) {
+                        && tree.classes.count(st)) {
                         widen::TypeRef iptr = widen::intern("intptr");
                         e.kind = parse::Kind::kCallExpr;
-                        e.name = widen::get(st).name + "__$sizeof";
+                        e.name = widen::classSymbol(st) + "__$sizeof";
                         e.return_type = iptr;   // emitCall reads this for the ret llty
                         e.children.clear();
                         e.param_types.clear();
@@ -694,7 +696,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             }
             widen::TypeRef es = widen::strip(e.return_type);
             bool is_class = widen::form(es) == widen::Type::Form::kSlid
-                && tree.classes.count(widen::get(es).name) > 0;
+                && tree.classes.count(es) > 0;
             // A primitive / array / pointer has a static byte size; a CLASS is sized
             // at runtime via its __$sizeof() helper, so it IS allocatable. void / an
             // unregistered slid has no size at all.
@@ -716,7 +718,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 // on children[2] for codegen to field-init at the heap pointer — a
                 // single object from the args; each ARRAY element default-constructed
                 // (the same default value laid into every slot, then its ctor run).
-                parse::ClassInfo const& info = tree.classes.at(widen::get(es).name);
+                parse::ClassInfo const& info = tree.classes.at(es);
                 std::unique_ptr<parse::Node> init;
                 if (!is_array && e.children.size() > 2) init = std::move(e.children[2]);
                 auto built = constructClass(tree, info, std::move(init),
@@ -1228,6 +1230,7 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
                 ? s.param_types[i] : widen::kNoType;
             inferExpr(tree, *s.children[i], destRef, diag);
             checkStrongConstAssign(destRef, *s.children[i], diag);
+            checkSlidAssign(destRef, *s.children[i], diag);
         }
         return;
     }
@@ -1277,8 +1280,10 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     for (std::size_t i = 0; i < s.children.size(); i++) {
         if (!s.children[i]) continue;
         inferExpr(tree, *s.children[i], s.param_types[i], diag);
-        if (i < s.param_types.size())
+        if (i < s.param_types.size()) {
             checkStrongConstAssign(s.param_types[i], *s.children[i], diag);
+            checkSlidAssign(s.param_types[i], *s.children[i], diag);
+        }
     }
 }
 
@@ -1386,6 +1391,28 @@ void checkPtrAssign(widen::TypeRef lvalue_type, parse::Node const& rhs,
         + "'; an explicit cast is required.", {}});
 }
 
+// A class (kSlid) VALUE is assignable only to the SAME class. A class meeting an
+// unrelated type — a primitive, or a different class — has no conversion (codegen
+// would otherwise store a struct into a scalar slot). This is the terminal reject
+// the assign/decl dispatch otherwise lacks: pointer cases are checkPtrAssign's,
+// same-class is a fine copy, and two non-classes flex/widen per codegen's numeric
+// rules — so only a class-vs-mismatch falls through to here, the silent default
+// that let `int y = classVal` compile. (A class LVALUE at a decl is constructed
+// via classifyClassInit upstream and never reaches this dispatch.)
+void checkSlidAssign(widen::TypeRef lvalue_type, parse::Node const& rhs,
+                     diagnostic::Sink& diag) {
+    if (rhs.inferred_type == widen::kNoType || lvalue_type == widen::kNoType) return;
+    if (isPtrLikeType(lvalue_type) || isPtrLikeType(rhs.inferred_type)) return;
+    using F = widen::Type::Form;
+    widen::TypeRef l = widen::strip(lvalue_type);
+    widen::TypeRef r = widen::strip(rhs.inferred_type);
+    if (widen::form(l) != F::kSlid && widen::form(r) != F::kSlid) return;
+    if (l == r) return;   // same class -> a copy
+    diagnostic::report(diag, {rhs.file_id, rhs.tok,
+        "Cannot implicitly convert '" + widen::spellOrEmpty(rhs.inferred_type)
+        + "' to '" + widen::spellOrEmpty(lvalue_type) + "'.", {}});
+}
+
 // A strong-const LITERAL rhs is a TYPED value, not a flexing literal: assigning it
 // to `dest` must be a same-type or widen-within-family conversion, exactly as a
 // variable of the strong type would be — `const int sc=5; int8 a=sc;` narrows and
@@ -1478,13 +1505,13 @@ void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
     bool elem_tuple = widen::form(widen::strip(elem)) == widen::Type::Form::kTuple;
     widen::TypeRef elem_s = widen::strip(elem);
     bool elem_class = widen::form(elem_s) == widen::Type::Form::kSlid
-        && tree.classes.count(widen::get(elem_s).name) > 0;
+        && tree.classes.count(elem_s) > 0;
     for (parse::Node* el : elems) {
         // A CLASS element is CONSTRUCTED from its init value (a scalar / tuple is
         // the element's ctor input), recursively — exactly like a class-typed
         // field. Rewrite the element node in place to the construction tuple.
         if (elem_class) {
-            parse::ClassInfo const& sub = tree.classes.at(widen::get(elem_s).name);
+            parse::ClassInfo const& sub = tree.classes.at(elem_s);
             int el_file = el->file_id, el_tok = el->tok;
             auto init = std::make_unique<parse::Node>(std::move(*el));
             auto built = constructClass(tree, sub, std::move(init),
@@ -1697,8 +1724,8 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
         // constructor input, recursively filled with the sub-class's defaults; no
         // value default-constructs it.
         if (widen::form(fts) == widen::Type::Form::kSlid
-            && tree.classes.count(widen::get(fts).name)) {
-            parse::ClassInfo const& sub = tree.classes.at(widen::get(fts).name);
+            && tree.classes.count(fts)) {
+            parse::ClassInfo const& sub = tree.classes.at(fts);
             std::unique_ptr<parse::Node> slot;
             if (provVal) {
                 inferExpr(tree, *provVal, ft, diag);
@@ -1760,7 +1787,7 @@ std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty
     using F = widen::Type::Form;
     if (t.form == F::kSlid) {
         // A class-typed field with no value -> recursively default-construct it.
-        auto it = tree.classes.find(t.name);
+        auto it = tree.classes.find(st);
         if (it != tree.classes.end()) {
             classifyClassInit(tree, *n, it->second, diag);
             // classifyClassInit set n->children to [tuple]; lift the tuple up.
@@ -1808,8 +1835,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // default / zero) into a typed construction tuple. The pointer /
             // array / strong-const init rules below don't apply.
             if (widen::form(widen::strip(s.return_type)) == widen::Type::Form::kSlid) {
-                auto it = tree.classes.find(
-                    widen::get(widen::strip(s.return_type)).name);
+                auto it = tree.classes.find(widen::strip(s.return_type));
                 if (it != tree.classes.end()) {
                     classifyClassInit(tree, s, it->second, diag);
                     return;
@@ -1881,6 +1907,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     } else {
                         checkPtrAssign(s.return_type, *s.children[0], diag);
                         checkStrongConstAssign(s.return_type, *s.children[0], diag);
+                        checkSlidAssign(s.return_type, *s.children[0], diag);
                     }
                 }
             }
@@ -1912,6 +1939,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 } else {
                     checkPtrAssign(lref, *s.children[0], diag);
                     checkStrongConstAssign(lref, *s.children[0], diag);
+                    checkSlidAssign(lref, *s.children[0], diag);
                 }
             }
             return;
@@ -2140,7 +2168,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             widen::TypeRef rs = widen::strip(recv.inferred_type);
             if (recv.inferred_type != widen::kNoType
                 && !(widen::form(rs) == widen::Type::Form::kSlid
-                     && tree.classes.count(widen::get(rs).name) > 0)) {
+                     && tree.classes.count(rs) > 0)) {
                 diagnostic::report(diag, {s.file_id, s.tok,
                     "A destructor call '.~()' requires a class object; got '"
                     + widen::spellOrEmpty(recv.inferred_type) + "'.", {}});
@@ -2178,6 +2206,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 if (ch) {
                     inferExpr(tree, *ch, fn_return_type, diag);
                     checkStrongConstAssign(fn_return_type, *ch, diag);
+                    checkSlidAssign(fn_return_type, *ch, diag);
                 }
             }
             return;
@@ -2529,6 +2558,16 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kFunctionDecl:
             // A nested forward declaration carries no body to type-check.
             return;
+        case parse::Kind::kClassDef:
+            // A local class: type-check its ctor/dtor member bodies (self-bound;
+            // field refs are already kFieldExpr from resolve), like a file-scope
+            // class. Construction lowers at the use site.
+            for (auto& m : s.children) {
+                if (m && (m->name == "_$ctor" || m->name == "_$dtor")) {
+                    classifyFunctionBody(tree, *m, diag);
+                }
+            }
+            return;
         case parse::Kind::kProgram:
         case parse::Kind::kStringLiteral:
         case parse::Kind::kIntLiteral:
@@ -2554,7 +2593,6 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kStringifyType:
         case parse::Kind::kCallExpr:
         case parse::Kind::kParam:
-        case parse::Kind::kClassDef:
             assert(false && "classifyStmt: not a statement kind");
             return;
     }

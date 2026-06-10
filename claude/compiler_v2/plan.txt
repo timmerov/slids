@@ -464,6 +464,19 @@ Phase 5 — classes
     (kDtorCallStmt) runs the dtor with no free. Also: `.field` WRITES + field access
     through deref/iterator (emitElementAddr generalized). Detail in readme "CLASSES:
     NEW / DELETE / SIZEOF" + the Phase-4 sizeof / memory-mgmt entries.
+  * class as a NAMESPACE — LANDED. A kClass entry; the body holds member
+    aliases/consts/enums; qualified `Class:member`; alias-to-class transparency
+    (`alias Time = Space; Time:Count`); `alias Class;` rejected. Detail: readme
+    "CLASSES: AS A NAMESPACE + LOCAL" + [[project_v2_class_as_namespace]].
+  * LOCAL classes (defined in a function body / nested block) — LANDED. A
+    resolveStmtList pre-pass registers each scope's classes (use-before-def +
+    block-scoped); shadowing local + file-scope; identity by a def_id in structKey,
+    NOT a mangled name (names stay bare; the disambiguated ctor/dtor/sizeof symbol
+    is minted at codegen by classSymbol — [[project_defer_name_mangling]]);
+    per-local transitive needs. checkSlidAssign rejects a class value at a
+    mismatched var-decl/assign/call-arg/return. Detail: readme + the standing
+    memory [[project_v2_local_classes]]. OPEN: a local class in a nested-fn
+    signature (resolution ordering -> todo.txt).
   * operator overloading per slid
   * move / swap — the OVERLOADABLE class operators (`op<--`/`op<-->`) + resource
     semantics + class fields inside a moved/swapped tuple (the primitive / pointer

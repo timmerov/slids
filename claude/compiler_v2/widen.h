@@ -51,7 +51,13 @@ struct Type {
     TypeRef underlying = kNoType;          // kAlias — the type it transparently names
     std::vector<int> dims;                 // kArray dims, source order
     std::vector<TypeRef> slots;            // kTuple / kSlid (field types)
-    int slid_entry_id = -1;                // kSlid (resolved later)
+    int def_id = -1;                       // kSlid: scope disambiguator — the
+                                           // defining frame id for a LOCAL class,
+                                           // else -1 (file-scope). Part of identity
+                                           // (structKey), so two same-named local
+                                           // classes are distinct handles. The NAME
+                                           // stays bare; the unique LLVM symbol is
+                                           // minted from this at codegen, never stored.
     bool has_ctor = false;                 // kSlid: an explicit `_(){}` -> a
     bool has_dtor = false;                 //   <Name>__$ctor/__$dtor symbol exists
     bool needs_ctor = false;               // kSlid: TRANSITIVE — explicit, or a
@@ -84,18 +90,28 @@ TypeRef internArray(TypeRef elem, std::vector<int> const& dims);
 // by resolve (which has the symbol table that knows name -> underlying).
 TypeRef internAlias(std::string const& name, TypeRef underlying);
 
-// A named class/slid type carrying its field-slot types. Interned by name (one
-// handle per class); resolve calls this once the field list is known to attach
-// the layout. Codegen reads get(ref).slots for the struct definition.
-TypeRef internSlid(std::string const& name, std::vector<TypeRef> const& slots);
+// A named class/slid type carrying its field-slot types. `def_id` is the scope
+// disambiguator (a LOCAL class's defining frame id; -1 for file-scope) — part of
+// identity, so two same-named local classes get distinct handles while the name
+// stays bare. resolve calls this once the field list is known to attach the
+// layout. Codegen reads get(ref).slots for the struct definition.
+TypeRef internSlid(std::string const& name, std::vector<TypeRef> const& slots,
+                   int def_id = -1);
 
 // Mark a class's EXPLICIT lifecycle hooks (a `_(){}` / `~(){}` definition, so
-// the <Name>__$ctor/__$dtor symbols exist). Seeds needs_ctor/needs_dtor = has_*.
-void setSlidLifecycle(std::string const& name, bool has_ctor, bool has_dtor);
+// the ctor/dtor symbols exist). Seeds needs_ctor/needs_dtor = has_*. Takes the
+// class handle (from internSlid) so it sets the right def-id'd type.
+void setSlidLifecycle(TypeRef ref, bool has_ctor, bool has_dtor);
 
 // Set a class's TRANSITIVE needs (explicit OR a field-class needs it), computed
-// by resolve's fixpoint after all classes are registered.
-void setSlidNeeds(std::string const& name, bool needs_ctor, bool needs_dtor);
+// by resolve's fixpoint after all classes are registered. Takes the class handle.
+void setSlidNeeds(TypeRef ref, bool needs_ctor, bool needs_dtor);
+
+// The disambiguated LLVM symbol base for a class kSlid handle (file-scope = bare
+// name; local = name + ".<frame>"). The ONE place a class name is mangled, and
+// only into emitted symbols — desugar (ctor/dtor defs) and codegen (calls / sizeof
+// / struct) both call it so definition and use agree.
+std::string classSymbol(TypeRef ref);
 
 // Peel any alias layers, returning the first non-alias handle (the underlying
 // structure). Predicates that switch on form() use this to see through aliases.

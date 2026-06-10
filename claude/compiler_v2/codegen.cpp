@@ -971,7 +971,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                 std::string elem_size;
                 if (is_class) {
                     std::string sz = newTmp("esz");
-                    out << "  " << sz << " = call i64 @" << widen::get(es).name
+                    out << "  " << sz << " = call i64 @" << widen::classSymbol(es)
                         << "__$sizeof()\n";
                     elem_size = sz;
                 } else {
@@ -1281,7 +1281,7 @@ void emitConstructHooks(std::string const& addr, widen::TypeRef type,
         }
     }
     if (ct.form == widen::Type::Form::kSlid && ct.has_ctor)
-        out << "  call void @" << ct.name << "__$ctor(ptr " << addr << ")\n";
+        out << "  call void @" << widen::classSymbol(cs) << "__$ctor(ptr " << addr << ")\n";
 }
 
 // Destruct: a class's own dtor hook FIRST, then tear down contained classes in
@@ -1304,7 +1304,7 @@ void emitDestructHooks(std::string const& addr, widen::TypeRef type,
         return;
     }
     if (ct.form == widen::Type::Form::kSlid && ct.has_dtor)
-        out << "  call void @" << ct.name << "__$dtor(ptr " << addr << ")\n";
+        out << "  call void @" << widen::classSymbol(cs) << "__$dtor(ptr " << addr << ")\n";
     for (std::size_t i = ct.slots.size(); i-- > 0; ) {      // kSlid / kTuple slots
         if (typeNeedsHook(ct.slots[i], false)) {
             std::string gep = newTmp("dtorfld");
@@ -2417,7 +2417,7 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     for (widen::TypeRef ct : tree.classes) {
         if (diagnostic::hasErrors(diag)) break;
         std::string llty = llvmForRef(ct);
-        std::string name = widen::get(ct).name;
+        std::string name = widen::classSymbol(ct);
         body << "define internal i64 @" << name << "__$sizeof() {\n";
         body << "  %g = getelementptr " << llty << ", ptr null, i32 1\n";
         body << "  %s = ptrtoint ptr %g to i64\n";

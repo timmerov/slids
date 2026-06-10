@@ -697,7 +697,11 @@ std::string structKey(Type const& t) {
         case F::kVoid:      return "V";
         case F::kAnyptr:    return "A";
         case F::kPrimitive: return "P" + t.name;
-        case F::kSlid:      return "S" + t.name;
+        // A class is identified by name AND def_id (scope disambiguator). def_id
+        // < 0 (file-scope) adds nothing, so file-scope keys stay "S"+name exactly
+        // as before; a LOCAL class's defining-frame id splits same-named classes.
+        case F::kSlid:      return "S" + t.name
+                                + (t.def_id < 0 ? "" : "#" + std::to_string(t.def_id));
         case F::kAlias:     return "L" + t.name + "=" + std::to_string(t.underlying);
         case F::kPointer:   return "p" + std::to_string(t.pointee);
         case F::kIterator:  return "i" + std::to_string(t.pointee);
@@ -863,33 +867,39 @@ TypeRef internAlias(std::string const& name, TypeRef underlying) {
 // `Class^` pointee) shares the handle, so they all gain the layout without a
 // rewrite, and codegen (which has no symbol table) reads the layout off the
 // type. Idempotent: re-attaching the same slots is a no-op.
-TypeRef internSlid(std::string const& name, std::vector<TypeRef> const& slots) {
+TypeRef internSlid(std::string const& name, std::vector<TypeRef> const& slots,
+                   int def_id) {
     Type t;
     t.form = Type::Form::kSlid;
     t.name = name;
+    t.def_id = def_id;
     TypeRef ref = internStruct(std::move(t));
     arena().types[ref].slots = slots;
     return ref;
 }
 
-void setSlidLifecycle(std::string const& name, bool has_ctor, bool has_dtor) {
-    Type t;
-    t.form = Type::Form::kSlid;
-    t.name = name;
-    TypeRef ref = internStruct(std::move(t));
+void setSlidLifecycle(TypeRef ref, bool has_ctor, bool has_dtor) {
     arena().types[ref].has_ctor = has_ctor;
     arena().types[ref].has_dtor = has_dtor;
     arena().types[ref].needs_ctor = has_ctor;   // seed; fixpoint widens
     arena().types[ref].needs_dtor = has_dtor;
 }
 
-void setSlidNeeds(std::string const& name, bool needs_ctor, bool needs_dtor) {
-    Type t;
-    t.form = Type::Form::kSlid;
-    t.name = name;
-    TypeRef ref = internStruct(std::move(t));
+void setSlidNeeds(TypeRef ref, bool needs_ctor, bool needs_dtor) {
     arena().types[ref].needs_ctor = needs_ctor;
     arena().types[ref].needs_dtor = needs_dtor;
+}
+
+// The LLVM symbol base for a class (`<Name>__$ctor` etc. append to it). Minted
+// HERE — the only place a class name is disambiguated — from the bare name plus
+// the def_id (a local class's defining frame). File-scope (def_id < 0) stays the
+// bare name, so its IR is unchanged; a local class gets a `.<frame>` suffix that
+// exists only in the emitted symbol, never on the type, a map key, or a message.
+std::string classSymbol(TypeRef ref) {
+    Type const& t = get(ref);
+    assert(t.form == Type::Form::kSlid
+           && "classSymbol: not a class handle (caller must strip to the kSlid)");
+    return t.def_id < 0 ? t.name : t.name + "." + std::to_string(t.def_id);
 }
 
 TypeRef strip(TypeRef ref) {
