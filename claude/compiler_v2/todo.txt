@@ -25,11 +25,6 @@ DEFERRED TESTS
     a per-slot tuple, routed through the array-from-tuple slot path. Tests go in
     array.sl / tuple.sl.
 
-  * DELETE RUNS THE DESTRUCTOR — `delete p` for a heap class with a dtor must run
-    the dtor before free(); today kDeleteStmt only frees + nulls (carried from the
-    new/delete work, which deferred dtors to Phase 5). IMPL + coverage gap. Test
-    in new.sl. Fix: emitDestructHooks(p, elem-type) before the free.
-
   * DESTRUCTION ON NON-BLOCK EXITS — every ctor/dtor test exits a scope by BLOCK
     fall-through. The destructor-balance invariant's return / break / continue arms
     (emitUnwindDtors) are implemented but UNTESTED: a hook instance at function

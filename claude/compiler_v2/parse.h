@@ -35,6 +35,9 @@ enum class Kind {
     kDeleteStmt,   // delete p; — frees the pointer and nulls it. children[0] = the
                    // pointer lvalue (a variable). Phase 4: lowers to free() + store
                    // null; destructors land with classes (Phase 5).
+    kDtorCallStmt, // lvalue.~(); — explicit destructor call (placement cleanup):
+                   // runs the dtor on the receiver, NO free. children[0] = the class
+                   // lvalue (the object whose destructor runs).
     kCallStmt,
     kCallExpr,     // value-producing call; name = callee, children = args
     kExprStmt,     // expression evaluated for effect, value discarded; children[0] = expr

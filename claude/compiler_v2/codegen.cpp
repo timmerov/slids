@@ -34,6 +34,13 @@ std::string emitArrayLiteralValue(widen::TypeRef arrType, ast::Node const& rhs,
                                   SymTab const& syms, strings::Pool& pool,
                                   std::ostream& out, diagnostic::Sink& diag);
 
+// Forward: ctor/dtor hooks + the needs predicate (defined below) — new T(args)
+// runs the ctor at the freshly-allocated object, delete runs the dtor before free,
+// and new[]/delete[] gate the count cookie on whether the element needs a dtor.
+void emitConstructHooks(std::string const& addr, widen::TypeRef type,
+                        std::ostream& out);
+bool typeNeedsHook(widen::TypeRef type, bool ctor);
+
 // The LLVM type for an interned slids type, read off the structured Type — no
 // spelling decomposition. A primitive maps by (cat, bits): float/double for the
 // float category, iN otherwise (bool -> i1). Every pointer flavor is `ptr`. A
@@ -645,38 +652,46 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
         chain.push_back(node);
         node = node->children[0].get();
     }
-    // Iterator base: the base expression is a `ptr` value (the sequence start);
-    // GEP by element type. Iterators are one-dimensional (a single subscript).
-    if (isIteratorType(node->inferred_type)) {
-        std::string ptr = emitExpr(*node, syms, pool, out, diag,
-                                   node->inferred_type);
-        std::string idx = emitExpr(*chain.back()->children[1], syms, pool, out,
-                                   diag, widen::intern("int64"));
-        std::string elem_ll = llvmForRef(pointeeTypeC(node->inferred_type));
-        std::string gep = newTmp("elt");
-        out << "  " << gep << " = getelementptr " << elem_ll << ", ptr " << ptr
-            << ", i64 " << idx << "\n";
-        return gep;
+    // The base is an ADDRESS holding the object: a variable's alloca, or — for a
+    // deref `ptr^...` — the pointer VALUE (the object lives at the pointee). The
+    // index walk below dispatches on the CURRENT type each step — array dim, tuple/
+    // field slot, or iterator (load the sequence pointer, GEP by element) — and
+    // advances `cur`. This composes nested arrays (alias-element), arrays of
+    // tuples, array-typed tuple slots, AND deref/iterator field access in ANY
+    // order, and is where a class `op[]` plugs in. A genuine over-index is caught
+    // in classify, so a non-indexable `cur` mid-chain is unreachable here.
+    std::string addr;
+    widen::TypeRef cur;
+    if (node->kind == ast::Kind::kDerefExpr) {
+        addr = emitExpr(*node->children[0], syms, pool, out, diag,
+                        node->children[0]->inferred_type);
+        cur = node->inferred_type;   // the pointee
+    } else {
+        assert(node->kind == ast::Kind::kIdentExpr && node->resolved_entry_id >= 0
+            && "emitElementAddr: subscript base must be a variable or a deref");
+        auto bit = syms.find(node->resolved_entry_id);
+        assert(bit != syms.end() && "emitElementAddr: base not in SymTab");
+        addr = bit->second.alloca_name;
+        cur = bit->second.slids_type;
     }
-    // Array / tuple base: walk the index chain from the BASE outward, dispatching
-    // on the CURRENT type each step — array dim -> array GEP, tuple slot -> struct
-    // GEP — and advancing `cur` to the result. This composes nested arrays (an
-    // alias-element array), arrays of tuples, and array-typed tuple slots in ANY
-    // order, and is where a class `op[]` (a method call advancing `cur`) plugs in
-    // at Phase 5. A genuine over-index is caught in classify (it walks the type the
-    // same way), so a non-indexable `cur` mid-chain is unreachable here.
-    assert(node->kind == ast::Kind::kIdentExpr && node->resolved_entry_id >= 0
-        && "emitElementAddr: array/tuple subscript base must be a variable");
-    auto bit = syms.find(node->resolved_entry_id);
-    assert(bit != syms.end() && "emitElementAddr: base not in SymTab");
-    std::string addr = bit->second.alloca_name;
-    widen::TypeRef cur = bit->second.slids_type;
     // The FIRST subscript is chain.back(), the LAST is chain.front() (source order).
     for (std::size_t j = chain.size(); j-- > 0; ) {
         ast::Node const& idx_node = *chain[j]->children[1];
         widen::TypeRef cs = widen::strip(cur);
         widen::Type::Form f = widen::form(cs);
-        if (f == widen::Type::Form::kArray) {
+        if (f == widen::Type::Form::kIterator) {
+            // `addr` holds the sequence pointer — load it, GEP by element type.
+            std::string ptr = newTmp("itp");
+            out << "  " << ptr << " = load ptr, ptr " << addr << "\n";
+            std::string idx = emitExpr(idx_node, syms, pool, out, diag,
+                                       widen::intern("int64"));
+            widen::TypeRef pe = widen::get(cs).pointee;
+            std::string gep = newTmp("elt");
+            out << "  " << gep << " = getelementptr " << llvmForRef(pe) << ", ptr "
+                << ptr << ", i64 " << idx << "\n";
+            addr = gep;
+            cur = pe;
+        } else if (f == widen::Type::Form::kArray) {
             std::string idx = emitExpr(idx_node, syms, pool, out, diag,
                                        widen::intern("int64"));
             std::string gep = newTmp("elt");
@@ -942,30 +957,113 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kNewExpr: {
             // new T -> malloc(sizeof(T)); new T[n] -> malloc(n * sizeof(T));
             // new(addr) T[n] -> the address itself (no allocation). All yield a
-            // `ptr` (the result is T^ / T[]). Phase 4: primitives, so no ctor runs.
+            // `ptr` (the result is T^ / T[]). A single CLASS object is constructed
+            // in place (field-init + ctor hook); its size is the runtime __$sizeof().
+            widen::TypeRef es = widen::strip(expr.return_type);
+            bool is_class = widen::form(es) == widen::Type::Form::kSlid;
             std::string p;
             if (expr.children[1]) {            // placement: result is the address
                 ast::Node const& addr = *expr.children[1];
                 p = emitExpr(addr, syms, pool, out, diag, addr.inferred_type);
             } else {
-                long long elem = widen::typeByteSize(expr.return_type);
-                // classify rejected an unsized element ("Cannot allocate") and
-                // main short-circuits, so a -1 here means a missed gate — assert
-                // rather than emit malloc(i64 -1).
-                assert(elem >= 0 && "kNewExpr: unsized element reached codegen");
-                std::string bytes;
+                // Element byte size: a class is sized at runtime by its __$sizeof()
+                // helper; everything else has a compile-time size.
+                std::string elem_size;
+                if (is_class) {
+                    std::string sz = newTmp("esz");
+                    out << "  " << sz << " = call i64 @" << widen::get(es).name
+                        << "__$sizeof()\n";
+                    elem_size = sz;
+                } else {
+                    long long elem = widen::typeByteSize(expr.return_type);
+                    // classify rejected an unsized element ("Cannot allocate") and
+                    // main short-circuits, so a -1 here means a missed gate.
+                    assert(elem >= 0 && "kNewExpr: unsized element reached codegen");
+                    elem_size = std::to_string(elem);
+                }
                 if (expr.children[0]) {        // array: n * elem-size
                     std::string n = emitExpr(*expr.children[0], syms, pool, out,
                                              diag, widen::intern("int64"));
-                    std::string mul = newTmp("nbytes");
-                    out << "  " << mul << " = mul i64 " << n << ", "
-                        << elem << "\n";
-                    bytes = mul;
+                    if (is_class) {
+                        // A class array: EVERY element is field-initialized (the
+                        // default value laid into the slot). A HOOK class additionally
+                        // prepends an 8-byte count COOKIE (so delete can loop the dtor)
+                        // and runs the ctor per element. The cookie/hook are gated on
+                        // needs; the field-init is not (a trivial class still has
+                        // field defaults).
+                        bool needs = typeNeedsHook(es, /*ctor=*/false);
+                        std::string db = newTmp("nbytes");
+                        out << "  " << db << " = mul i64 " << n << ", "
+                            << elem_size << "\n";
+                        if (needs) {
+                            std::string tot = newTmp("ntot");
+                            out << "  " << tot << " = add i64 8, " << db << "\n";
+                            std::string mptr = newTmp("newarr");
+                            out << "  " << mptr << " = call ptr @malloc(i64 " << tot
+                                << ")\n";
+                            out << "  store i64 " << n << ", ptr " << mptr << "\n";
+                            p = newTmp("newdata");
+                            out << "  " << p << " = getelementptr i8, ptr " << mptr
+                                << ", i64 8\n";
+                        } else {
+                            p = newTmp("new");
+                            out << "  " << p << " = call ptr @malloc(i64 " << db
+                                << ")\n";
+                        }
+                        std::string defv = emitExpr(*expr.children[2], syms, pool,
+                                                    out, diag, expr.return_type);
+                        std::string ll = llvmForRef(expr.return_type);
+                        std::string pre = newLabel("newc_pre");
+                        std::string cnd = newLabel("newc_cond");
+                        std::string bdy = newLabel("newc_body");
+                        std::string fin = newLabel("newc_end");
+                        out << "  br label %" << pre << "\n";
+                        out << pre << ":\n";
+                        out << "  br label %" << cnd << "\n";
+                        out << cnd << ":\n";
+                        std::string i = newTmp("ci");
+                        std::string inx = newTmp("cinext");
+                        out << "  " << i << " = phi i64 [ 0, %" << pre << " ], [ "
+                            << inx << ", %" << bdy << " ]\n";
+                        std::string cmp = newTmp("ccmp");
+                        out << "  " << cmp << " = icmp ult i64 " << i << ", " << n
+                            << "\n";
+                        out << "  br i1 " << cmp << ", label %" << bdy
+                            << ", label %" << fin << "\n";
+                        out << bdy << ":\n";
+                        std::string elem = newTmp("celem");
+                        out << "  " << elem << " = getelementptr " << ll << ", ptr "
+                            << p << ", i64 " << i << "\n";
+                        out << "  store " << ll << " " << defv << ", ptr " << elem
+                            << "\n";
+                        if (needs) emitConstructHooks(elem, expr.return_type, out);
+                        out << "  " << inx << " = add i64 " << i << ", 1\n";
+                        out << "  br label %" << cnd << "\n";
+                        out << fin << ":\n";
+                    } else {
+                        std::string mul = newTmp("nbytes");
+                        out << "  " << mul << " = mul i64 " << n << ", "
+                            << elem_size << "\n";
+                        p = newTmp("new");
+                        out << "  " << p << " = call ptr @malloc(i64 " << mul
+                            << ")\n";
+                    }
                 } else {
-                    bytes = std::to_string(elem);
+                    p = newTmp("new");
+                    out << "  " << p << " = call ptr @malloc(i64 " << elem_size
+                        << ")\n";
                 }
-                p = newTmp("new");
-                out << "  " << p << " = call ptr @malloc(i64 " << bytes << ")\n";
+            }
+            // A single class object is constructed in place: field-init from the
+            // construction tuple (children[2]), then run the ctor hook. (The array
+            // form's per-element construction lands with the new[] cookie work.)
+            if (is_class && !expr.children[0]
+                && expr.children.size() > 2 && expr.children[2]) {
+                std::string val = emitExpr(*expr.children[2], syms, pool, out,
+                                           diag, expr.return_type);
+                out << "  store " << llvmForRef(expr.return_type) << " " << val
+                    << ", ptr " << p << "\n";
+                emitConstructHooks(p, expr.return_type, out);
             }
             return widen::convert(p, expr.inferred_type, dest_type,
                                   expr.file_id, expr.tok, out, diag);
@@ -1075,6 +1173,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kSwapStmt:
         case ast::Kind::kDestructureStmt:
         case ast::Kind::kDeleteStmt:
+        case ast::Kind::kDtorCallStmt:
         case ast::Kind::kCallStmt:
         case ast::Kind::kExprStmt:
         case ast::Kind::kReturnStmt:
@@ -1650,8 +1749,83 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             std::string p = newTmp("del");
             out << "  " << p << " = load ptr, ptr " << it->second.alloca_name
                 << "\n";
-            out << "  call void @free(ptr " << p << ")\n";
+            widen::TypeRef pts = widen::strip(it->second.slids_type);
+            widen::Type::Form pf = widen::form(pts);
+            widen::TypeRef pointee = (pf == widen::Type::Form::kPointer
+                                   || pf == widen::Type::Form::kIterator)
+                ? widen::get(pts).pointee : widen::kNoType;
+            bool needs = pointee != widen::kNoType
+                && typeNeedsHook(pointee, /*ctor=*/false);
+            if (pf == widen::Type::Form::kIterator && needs) {
+                // Array of a hook class: the element count is in an 8-byte cookie at
+                // ptr-8 (laid down by new[]). Destroy each element in REVERSE, then
+                // free the cookie (the original allocation). Null-guarded — free(null)
+                // is safe but reading ptr-8 is not.
+                std::string nn = newTmp("dnn");
+                std::string dbody = newLabel("del_body");
+                std::string dend = newLabel("del_end");
+                out << "  " << nn << " = icmp ne ptr " << p << ", null\n";
+                out << "  br i1 " << nn << ", label %" << dbody << ", label %"
+                    << dend << "\n";
+                out << dbody << ":\n";
+                std::string hdr = newTmp("dhdr");
+                out << "  " << hdr << " = getelementptr i8, ptr " << p
+                    << ", i64 -8\n";
+                std::string cnt = newTmp("dcnt");
+                out << "  " << cnt << " = load i64, ptr " << hdr << "\n";
+                std::string ll = llvmForRef(pointee);
+                std::string cnd = newLabel("deld_cond");
+                std::string lb = newLabel("deld_body");
+                std::string le = newLabel("deld_end");
+                out << "  br label %" << cnd << "\n";
+                out << cnd << ":\n";
+                std::string i = newTmp("di");
+                std::string iprev = newTmp("diprev");
+                out << "  " << i << " = phi i64 [ " << cnt << ", %" << dbody
+                    << " ], [ " << iprev << ", %" << lb << " ]\n";
+                std::string cmp = newTmp("dcmp");
+                out << "  " << cmp << " = icmp ugt i64 " << i << ", 0\n";
+                out << "  br i1 " << cmp << ", label %" << lb << ", label %"
+                    << le << "\n";
+                out << lb << ":\n";
+                out << "  " << iprev << " = sub i64 " << i << ", 1\n";
+                std::string elem = newTmp("delem");
+                out << "  " << elem << " = getelementptr " << ll << ", ptr " << p
+                    << ", i64 " << iprev << "\n";
+                emitDestructHooks(elem, pointee, out);
+                out << "  br label %" << cnd << "\n";
+                out << le << ":\n";
+                out << "  call void @free(ptr " << hdr << ")\n";
+                out << "  br label %" << dend << "\n";
+                out << dend << ":\n";
+            } else {
+                // Single object (T^): run the dtor before freeing. Null-guard the
+                // dtor — free(null) is a safe no-op, but running the dtor on null
+                // would deref it. (`delete p` on an already-null pointer is legal.)
+                if (pf == widen::Type::Form::kPointer && needs) {
+                    std::string nn = newTmp("dnn");
+                    std::string db = newLabel("del_body");
+                    std::string de = newLabel("del_end");
+                    out << "  " << nn << " = icmp ne ptr " << p << ", null\n";
+                    out << "  br i1 " << nn << ", label %" << db << ", label %"
+                        << de << "\n";
+                    out << db << ":\n";
+                    emitDestructHooks(p, pointee, out);
+                    out << "  br label %" << de << "\n";
+                    out << de << ":\n";
+                }
+                out << "  call void @free(ptr " << p << ")\n";
+            }
             out << "  store ptr null, ptr " << it->second.alloca_name << "\n";
+            return;
+        }
+        case ast::Kind::kDtorCallStmt: {
+            // lvalue.~(); — run the receiver's destructor in place, NO free
+            // (placement cleanup; the buffer is reclaimed separately). The receiver
+            // is a class lvalue; its address is what the dtor runs on.
+            ast::Node const& recv = *stmt.children[0];
+            std::string addr = emitLvalueAddr(recv, syms, pool, out, diag);
+            emitDestructHooks(addr, recv.inferred_type, out);
             return;
         }
         case ast::Kind::kCallStmt: {

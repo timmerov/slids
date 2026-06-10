@@ -586,6 +586,7 @@ struct Parser {
                 if (!addr) return nullptr;
                 if (!expect(token::Kind::kRParen, ")")) return nullptr;
             }
+            int elem_tok = pos;   // the element-type token, for "Cannot allocate"
             std::string elem = parseAllocElementType();
             if (elem.empty()) return nullptr;
             std::unique_ptr<parse::Node> size;
@@ -595,10 +596,25 @@ struct Parser {
                 if (!size) return nullptr;
                 if (!expect(token::Kind::kRBracket, "]")) return nullptr;
             }
+            // new T(args) -> constructor args (a kTupleExpr, like a class var-decl
+            // init `Type name(args)`). The trailing `(args)` is distinct from the
+            // LEADING new(addr) placement and from `[n]`; classify routes it through
+            // the class construction path.
+            std::unique_ptr<parse::Node> ctor_args;
+            if (peek().kind == token::Kind::kLParen) {
+                int a_file = peek().file_id;
+                int a_tok = pos;
+                advance();   // (
+                auto tup = newNodeAt(parse::Kind::kTupleExpr, a_file, a_tok);
+                if (!parseCallArgs(*tup)) return nullptr;
+                ctor_args = std::move(tup);
+            }
             auto node = newNodeAt(parse::Kind::kNewExpr, new_file, new_tok);
             node->return_type = widen::internOrNone(elem);
-            node->children.push_back(std::move(size));   // [0] (may be null)
-            node->children.push_back(std::move(addr));   // [1] (may be null)
+            node->name_tok = elem_tok;   // caret target for the allocate check
+            node->children.push_back(std::move(size));        // [0] (may be null)
+            node->children.push_back(std::move(addr));        // [1] (may be null)
+            node->children.push_back(std::move(ctor_args));   // [2] (may be null)
             return node;
         }
         if (t.kind == token::Kind::kSizeof) {
@@ -1223,12 +1239,13 @@ struct Parser {
         };
 
         token::Kind next = peek().kind;
-        if (next == token::Kind::kBitXor || next == token::Kind::kLBracket) {
-            // Lvalue-expression store: `name[i]... = rhs` or `name^ = rhs`. The
-            // bare name becomes a kIdentExpr, then the postfix chain (subscripts
-            // and derefs, left to right) wraps it into the store target. (A `^`
-            // here is unambiguously deref — a trailing operand would be XOR, not
-            // a statement.)
+        if (next == token::Kind::kBitXor || next == token::Kind::kLBracket
+            || next == token::Kind::kDot) {
+            // Lvalue-expression store: `name[i]... = rhs`, `name.field = rhs`, or
+            // `name^ = rhs`. The bare name becomes a kIdentExpr, then the postfix
+            // chain (subscripts, field accesses, and derefs, left to right) wraps
+            // it into the store target. (A `^` here is unambiguously deref — a
+            // trailing operand would be XOR, not a statement.)
             auto lhs = newNodeAt(parse::Kind::kIdentExpr, stmt_file, stmt_tok);
             lhs->name = name;
             lhs->name_tok = name_tok;
@@ -1236,10 +1253,38 @@ struct Parser {
             lhs->qualifier_toks = toks;
             lhs->global_qualified = global;
             while (peek().kind == token::Kind::kLBracket
-                   || peek().kind == token::Kind::kBitXor) {
+                   || peek().kind == token::Kind::kBitXor
+                   || peek().kind == token::Kind::kDot) {
                 if (peek().kind == token::Kind::kLBracket) {
                     lhs = parseSubscript(std::move(lhs));   // comma-aware (transposes)
                     if (!lhs) return nullptr;
+                } else if (peek().kind == token::Kind::kDot) {
+                    int op_file = peek().file_id;
+                    int op_tok = pos;
+                    advance();   // .
+                    if (peek().kind == token::Kind::kBitNot) {
+                        // `.~()` — explicit destructor call (placement cleanup, no
+                        // free). A STATEMENT, not an lvalue: the receiver so far is
+                        // the object whose dtor runs.
+                        advance();   // ~
+                        if (!expect(token::Kind::kLParen, "(")) return nullptr;
+                        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+                        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+                        auto node = newNodeAt(parse::Kind::kDtorCallStmt,
+                                              stmt_file, stmt_tok);
+                        node->children.push_back(std::move(lhs));
+                        return node;
+                    }
+                    if (peek().kind != token::Kind::kIdentifier) {
+                        error("Expected a field name after '.'.");
+                        return nullptr;
+                    }
+                    auto f = newNodeAt(parse::Kind::kFieldExpr, op_file, op_tok);
+                    f->children.push_back(std::move(lhs));
+                    f->name = peek().text;
+                    f->name_tok = pos;
+                    advance();   // field name
+                    lhs = std::move(f);
                 } else {
                     int op_file = peek().file_id;
                     int op_tok = pos;

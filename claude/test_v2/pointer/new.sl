@@ -46,13 +46,18 @@ claude says:
 
 alias Big = int64;
 
-Simple(int x_ = 0) {
+Simple(int x_ = -2) {
     _() {
         __println("Simple:ctor: " + x_);
     }
     ~() {
         __println("Simple:dtor: " + x_);
     }
+}
+
+// a TRIVIAL class (no ctor/dtor) with two field defaults — exercises field-init
+// without the cookie/hook machinery, and multi-field construction.
+Plain(int a_ = 9, int b_ = 8) {
 }
 
 int32 main() {
@@ -112,16 +117,60 @@ int32 main() {
     __println("alias elem= " + ab^);                 // 11
     delete ab;
 
-    /*
-    ref = new Simple(1);
-    delete ref;
+    /* new/delete a single object. */
+    __println("ctor 1 after");
+    simple_ref = new Simple(1);
+    delete simple_ref;
+    __println("dtor 1 before");
 
-    arr = new Simple[3];
-    arr[0].x_ = 10;
-    arr[1].x_ = 11;
-    arr[2].x_ = 12;
-    delete arr;
-    */
+    /* new/delete an array of objects. */
+    __println("ctor -2 -2 -2 after");
+    simple_arr = new Simple[3];
+    simple_arr[0].x_ = 10;
+    simple_arr[1].x_ = 11;
+    simple_arr[2].x_ = 12;
+    delete simple_arr;
+    __println("dtor 12 11 10 before");
+
+    /* placment new a single object and direct call the dtor. */
+    __println("ctor 20 after");
+    raw_ptr = new int8[sizeof(Simple)];
+    simple_place = new(raw_ptr) Simple(20);
+    simple_place^.~();
+    delete raw_ptr;
+    __println("dtor 20 before");
+
+    /* a TRIVIAL class: field-init only (no ctor/dtor output), plain free. */
+    pl = new Plain(1, 2);                              // multi-field construct
+    __println("plain single: " + pl^.a_ + " " + pl^.b_);   // 1 2
+    delete pl;
+    pls = new Plain[2];                                // array: field defaults, no cookie
+    __println("plain array: " + pls[0].a_ + " " + pls[1].b_); // 9 8
+    delete pls;
+
+    /* a no-args single new: default-construct. */
+    __println("default ctor after");
+    sd = new Simple;
+    delete sd;
+    __println("default dtor before");                 // ctor/dtor -2
+
+    /* field WRITES through different lvalue bases. */
+    Plain pv;
+    pv.a_ = 7;                                         // plain class value: cls.field
+    __println("pv.a= " + pv.a_);                      // 7
+    sp = new Simple(5);
+    sp^.x_ = 99;                                       // pointer deref: ptr^.field
+    delete sp;                                         // dtor 99
+
+    /* null single-delete is a safe no-op (not a crash). */
+    Simple^ snull = nullptr;
+    delete snull;
+    __println("survived null delete");
+
+    /* new T[0] — a zero-count array allocates, constructs nothing, frees. */
+    z = new Simple[0];
+    delete z;
+    __println("empty array ok");
 
     /* compile errors — each uncommented in isolation by the negative runner. */
 
@@ -161,6 +210,21 @@ int32 main() {
     //-EXPECT-ERROR: Cannot allocate 'void'
     //void^ wp = new void[4];
     //__println("x= " + (wp == nullptr));
+
+    /* constructor args belong to a class, not a primitive. */
+    //-EXPECT-ERROR: Only a class takes constructor arguments
+    //int^ cp = new int(5);
+    //__println("x= " + cp^);
+
+    /* an array allocation default-constructs its elements — no ctor args. */
+    //-EXPECT-ERROR: An array allocation cannot take constructor arguments
+    //ap = new Simple[2](1);
+    //delete ap;
+
+    /* an explicit destructor call needs a class receiver. */
+    //-EXPECT-ERROR: A destructor call '.~()' requires a class object
+    //int32 ni = 0;
+    //ni.~();
 
     return 0;
 }

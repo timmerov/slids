@@ -274,6 +274,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kConvertExpr:
         case parse::Kind::kNewExpr:
         case parse::Kind::kDeleteStmt:
+        case parse::Kind::kDtorCallStmt:
         case parse::Kind::kSizeofExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kReturnStmt:
@@ -691,9 +692,37 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                         + "'.", {}});
                 }
             }
-            if (widen::typeByteSize(e.return_type) < 0) {   // sees through alias
-                diagnostic::report(diag, {e.file_id, e.tok,
+            widen::TypeRef es = widen::strip(e.return_type);
+            bool is_class = widen::form(es) == widen::Type::Form::kSlid
+                && tree.classes.count(widen::get(es).name) > 0;
+            // A primitive / array / pointer has a static byte size; a CLASS is sized
+            // at runtime via its __$sizeof() helper, so it IS allocatable. void / an
+            // unregistered slid has no size at all.
+            if (widen::typeByteSize(e.return_type) < 0 && !is_class) {
+                diagnostic::report(diag, {e.file_id, e.name_tok,
                     "Cannot allocate '" + elem + "'.", {}});
+            }
+            // Constructor args (children[2]) belong to a SINGLE class object.
+            parse::Node* args = (e.children.size() > 2) ? e.children[2].get() : nullptr;
+            if (args && (!is_class || is_array)) {
+                diagnostic::report(diag, {args->file_id, args->tok,
+                    is_array
+                      ? "An array allocation cannot take constructor arguments."
+                      : "Only a class takes constructor arguments; '" + elem
+                            + "' cannot.", {}});
+            } else if (is_class) {
+                // Construct the heap object: normalize the args (or defaults) into a
+                // per-field construction tuple, exactly like a class var-decl. Stored
+                // on children[2] for codegen to field-init at the heap pointer — a
+                // single object from the args; each ARRAY element default-constructed
+                // (the same default value laid into every slot, then its ctor run).
+                parse::ClassInfo const& info = tree.classes.at(widen::get(es).name);
+                std::unique_ptr<parse::Node> init;
+                if (!is_array && e.children.size() > 2) init = std::move(e.children[2]);
+                auto built = constructClass(tree, info, std::move(init),
+                                            e.file_id, e.tok, diag);
+                if (e.children.size() <= 2) e.children.resize(3);
+                e.children[2] = std::move(built);
             }
             e.inferred_type = is_array ? widen::internIterator(e.return_type)
                                        : widen::internPointer(e.return_type);
@@ -1123,6 +1152,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kSwapStmt:
         case parse::Kind::kDestructureStmt:
         case parse::Kind::kDeleteStmt:
+        case parse::Kind::kDtorCallStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
@@ -2099,6 +2129,21 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 diagnostic::report(diag, {s.file_id, s.tok,
                     "Cannot delete a non-pointer value of type '"
                     + widen::spellOrEmpty(operand.inferred_type) + "'.", {}});
+            }
+            return;
+        }
+        case parse::Kind::kDtorCallStmt: {
+            // lvalue.~(); — the receiver must be a CLASS lvalue (the object whose
+            // dtor runs). resolve resolved it; type it and require a class.
+            parse::Node& recv = *s.children[0];
+            inferExpr(tree, recv, widen::kNoType, diag);
+            widen::TypeRef rs = widen::strip(recv.inferred_type);
+            if (recv.inferred_type != widen::kNoType
+                && !(widen::form(rs) == widen::Type::Form::kSlid
+                     && tree.classes.count(widen::get(rs).name) > 0)) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "A destructor call '.~()' requires a class object; got '"
+                    + widen::spellOrEmpty(recv.inferred_type) + "'.", {}});
             }
             return;
         }

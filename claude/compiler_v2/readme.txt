@@ -167,7 +167,47 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     abrupt — endsTerminated, so nothing is emitted after a terminator); a `return`
     unwinds the whole chain (the value is materialized first); `break`/`continue`
     unwind down to the target loop's boundary scope (LoopCtx.scope). [DEFERRED
-    tests: the return/break/continue arms + the loop-VARIABLE case; delete-runs-dtor.]
+    tests: the return/break/continue arms + the loop-VARIABLE case.]
+
+
+CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
+
+  * SIZEOF(Class) — LLVM owns the struct layout, so a class's size is NOT a
+    compile-time constant. codegen emits a per-class `define internal i64
+    @<Name>__$sizeof()` = `getelementptr <struct>, ptr null, i32 1` + `ptrtoint`
+    (v1's design — resolves at link time for cross-TU). resolve recognizes a bare
+    class name as a TYPE operand (it lives in tree.classes, not the entry table);
+    classify rewrites `sizeof(Class)` to a CALL of that helper (a runtime intptr,
+    NOT foldable — can't init a const). The class kSlid types are threaded
+    parse->ast via a new `ast::Tree.classes` (desugar populates it).
+  * NEW T / NEW T(args) — a class is sized by `call @<Name>__$sizeof()` (not the
+    typeByteSize literal). `new T(args)`: grammar parses the trailing `(args)` onto
+    kNewExpr children[2] (distinct from the leading `new(addr)` placement and `[n]`);
+    classify routes it through constructClass (the same field-init tuple as a class
+    var-decl); codegen mallocs, field-inits the construction tuple at the pointer,
+    then emitConstructHooks runs the ctor. PLACEMENT `new(addr) T(args)` reuses the
+    same construct at the buffer address (no malloc).
+  * NEW T[n] (the new[] COOKIE) — a class array always field-inits each element (the
+    default value laid into the slot); a HOOK class additionally prepends an 8-byte
+    count COOKIE (the returned pointer is malloc+8) and runs the ctor per element.
+    The cookie + ctor-hook gate on needs; the field-init does not (a trivial class
+    still has field defaults). A primitive array stays a plain malloc.
+  * DELETE — single (T^): null-guarded dtor (free(null) is safe; the dtor on null
+    derefs), then free. Array (T[]) of a hook class: read the count at ptr-8, run the
+    dtor on each element in REVERSE, free ptr-8. A primitive / trivial-class pointer
+    is a plain free. Gated on typeNeedsHook(pointee).
+  * EXPLICIT DESTRUCTOR `lvalue.~()` — a kDtorCallStmt (grammar: `.` then `~` in the
+    name-led lvalue chain — a destructor call, not a field). codegen runs
+    emitDestructHooks on the receiver's address with NO free / no null (placement
+    cleanup; the buffer is reclaimed separately). classify requires a class receiver.
+    (Double-destruct of a scope-managed value via `value.~()` is the author's
+    problem — not guarded.)
+  * FIELD ACCESS through deref / iterator — `.field` lowers to a slot kIndexExpr;
+    emitElementAddr's per-segment walk roots on a variable's alloca OR a deref `ptr^`
+    (the pointer value), and an ITERATOR step loads the sequence pointer + GEPs by
+    element. So `ptr^.field`, `iter[i].field`, and `arr[i].field` compose for any
+    field/shape, READ or WRITE. The name-led lvalue chain also parses `.field` as a
+    store target (field WRITES, previously only ctor-body `self^.field`).
 
 
 STAGE FILES (.h / .cpp pairs)
@@ -598,8 +638,11 @@ STAGE FILES (.h / .cpp pairs)
             sizeof lowering: the kSizeofExpr cases constfold left (a deref / index /
             arithmetic operand, or a slid type) become a kIntLiteral of type
             `intptr` — widen::typeByteSize of the type/value operand, or content+1
-            for a string literal; a slid type (-1) reports "Cannot take sizeof of
-            'X'." (the foldable operands already became literals in constfold).
+            for a string literal. A CLASS operand (typeByteSize -1 but a registered
+            class) is the exception: its size is the real struct layout LLVM owns, so
+            it rewrites to a CALL to `<Name>__$sizeof()` (a runtime intptr, NOT
+            foldable — can't init a const). void / an unregistered slid still reports
+            "Cannot take sizeof of 'X'."
             ##type(x) lowering: a kStringifyType node becomes a kStringLiteral whose
             text is the operand's resolved type — alias_label ?: inferred_type, plus
             the const qualifier (a kIdentExpr operand resolving to a kConst -> "const
@@ -683,13 +726,17 @@ STAGE FILES (.h / .cpp pairs)
             / "A move target" must be an lvalue); a move's RHS is a plain read, so
             an rvalue source is allowed. DA: a move lhs is a pure write (need not
             be pre-init); a swap reads+writes both (both must be init).
-            kNewExpr (Phase 4): a heap element must be statically sized
-            (widen::typeByteSize >= 0 — a primitive; a slid -> "Cannot allocate");
-            an array size must be integer-class; a placement address must be a
-            buffer-class pointer (isBufferClassPtr, the cast set void^/int8^/uint8^).
-            The result type is element + (array ? "[]" : "^"). kDeleteStmt's
-            operand must be a pointer type. Future: overload resolution when
-            multiple Function entries share a name.
+            kNewExpr: a heap element must be sized — a primitive (compile-time
+            typeByteSize) OR a CLASS (runtime __$sizeof, so it IS allocatable); void
+            / unsized -> "Cannot allocate" (carets the element type, name_tok). An
+            array size must be integer-class; a placement address must be a
+            buffer-class pointer (isBufferClassPtr, the cast set void^/int8^/uint8^);
+            `new T(args)` ctor args (children[2]) belong to a single class (rejected
+            on a primitive / array). The result type is element + (array ? "[]" :
+            "^"). kDeleteStmt's operand must be a pointer type. See the feature
+            section "CLASSES: NEW / DELETE / SIZEOF" for the construct/destruct
+            lowering. Future: overload resolution when multiple Function entries
+            share a name.
   desugar   parse tree -> ast (separate node-type set). Today: identity
             copy that propagates every annotation classify and constfold
             stamped (nominal_type, inferred_type, op_type, resolved_entry_id,

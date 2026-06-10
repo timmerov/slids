@@ -312,8 +312,10 @@ Phase 4 — types beyond primitives
     literal — in CONSTFOLD for the statically-known operands [type / string /
     nullptr / address-of / plain ident] so it can initialize a const or feed a
     const expression, in CLASSIFY for the residual [deref / index / arithmetic].
-    A slid type [-1] errors "Cannot take sizeof of 'X'." until classes [Phase 5/8]
-    bring the runtime `getelementptr null,1`/`ptrtoint` form. test_v2/misc/sizeof.sl.
+    A CLASS operand [Phase 5] rewrites to a CALL of a per-class `<Name>__$sizeof()`
+    helper [LLVM owns the layout: `getelementptr null,1`/`ptrtoint`, v1's design] —
+    a runtime intptr, NOT foldable [can't init a const]; void / an unregistered slid
+    still errors "Cannot take sizeof of 'X'." test_v2/misc/sizeof.sl.
     A value operand is UNEVALUATED — sizeof reads only its type, so an
     uninitialized local needs no definite assignment [an "unevaluated context"
     mode threaded through resolveExpr suppresses use-before-init but keeps the
@@ -327,12 +329,15 @@ Phase 4 — types beyond primitives
     must be statically sized [widen::typeByteSize >= 0; void/slid -> "Cannot
     allocate"], array size integer-class, placement addr buffer-class, delete
     operand a pointer. malloc/free declared in the preamble. test_v2/pointer/new.sl.
-    DEFERRED: `new T(value)` initializer needs tuples; constructors / destructors
-    (delete runs none today) land with classes [Phase 5]. Grammar TODO seam: `(`
-    after `new` = placement only while no type spelling starts with `(`; revisit
-    when tuples / `(const T)^` land. Pre-existing blocker for the idiomatic
-    `T^ p = new T` with a non-primitive T: `Alias^`/`ClassName^` decls don't parse
-    yet [todo.txt].)
+    CLASS new/delete LANDED [Phase 5]: a class is sized by `call @<Name>__$sizeof()`;
+    `new T(args)` parses ctor args [children[2]] -> constructClass + emitConstructHooks
+    [runs the ctor]; `new T[n]` field-inits each element + the new[]/delete[] COUNT
+    COOKIE [8-byte header, returned ptr = malloc+8] + a ctor loop [hook class];
+    `delete` runs the dtor [single null-guarded; array reverse-loops via the cookie,
+    frees ptr-8]; placement constructs at the buffer; explicit `lvalue.~()`
+    [kDtorCallStmt] runs the dtor with no free. Grammar TODO seam: `(` after `new` =
+    placement only while no type spelling starts with `(`; revisit when tuples /
+    `(const T)^` land.)
   * anonymous tuples (`(T1, T2, ...)`) — LANDED (Form::kTuple + slots, NOT a
     string mechanism). kTupleExpr through all stages. Landed: construct +
     whole-copy + const-index read (runtime tuple index rejected); slot write
@@ -450,7 +455,15 @@ Phase 5 — classes
     codegen's emitStmt alongside the loop context, gated by completion; TRANSITIVE
     + Itanium-recursive over class-typed fields (resolve needs-fixpoint +
     emitConstructHooks/emitDestructHooks). Deferred (todo): array/tuple-of-hook
-    field; the non-block-exit + loop-var tests; delete-runs-dtor.
+    FIELD construction; the non-block-exit + loop-var tests.
+  * new/delete/sizeof for classes + explicit `.~()` — LANDED. sizeof(Class) =
+    `call @<Name>__$sizeof()` (LLVM owns the layout, v1's design); `new T(args)`
+    constructs + runs the ctor; `new T[n]` field-inits + the new[]/delete[] count
+    cookie + ctor/dtor loops; `delete` runs the dtor (single null-guarded, array
+    reverse via the cookie); placement constructs at the buffer; `lvalue.~()`
+    (kDtorCallStmt) runs the dtor with no free. Also: `.field` WRITES + field access
+    through deref/iterator (emitElementAddr generalized). Detail in readme "CLASSES:
+    NEW / DELETE / SIZEOF" + the Phase-4 sizeof / memory-mgmt entries.
   * operator overloading per slid
   * move / swap — the OVERLOADABLE class operators (`op<--`/`op<-->`) + resource
     semantics + class fields inside a moved/swapped tuple (the primitive / pointer

@@ -165,6 +165,12 @@ int32 main() {
     //-EXPECT-ERROR: Cannot take sizeof of 'void'
     //__println("e= " + sizeof(void));
 
+    /* sizeof(Class) is a runtime value (the __$sizeof() call), not foldable, so it
+       cannot initialize a const. */
+    //-EXPECT-ERROR: not a constant expression
+    //const intptr cs = sizeof(Simple);
+    //__println("e= " + cs);
+
     /* a value operand is unevaluated: sizeof reads only the TYPE, so an
        uninitialized local needs no definite assignment, and the use-before-init
        suppression recurses through arithmetic. */

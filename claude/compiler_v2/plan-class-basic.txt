@@ -10,9 +10,13 @@ MODEL CORRECTION (vs the §4/§5 below, which were written pre-implementation): 
 ctor does NOT construct — field-init (the tuple fill) happens FIRST and always;
 the ctor is a trailing HOOK, the dtor a scope-exit hook. So construction stays the
 tuple aggregate path; the hooks are separate calls (emitConstructHooks /
-emitDestructHooks), NOT field-init inside `__$ctor_body`. STILL OPEN: methods,
-operator overloading, for-each/for-class, move/swap operators. Deferred items
-(array/tuple-of-hook field, delete-runs-dtor, non-block-exit tests) -> todo.txt.
+emitDestructHooks), NOT field-init inside `__$ctor_body`. ALSO LANDED since (built
+on this base, detail in readme "CLASSES: NEW / DELETE / SIZEOF"): sizeof(Class) via
+the per-class `__$sizeof()` helper; new/delete for classes (construct + ctor, the
+new[]/delete[] count cookie, placement); explicit `lvalue.~()`; `.field` writes +
+deref/iterator field access. STILL OPEN: methods, operator overloading,
+for-each/for-class, move/swap operators. Deferred items (array/tuple-of-hook FIELD
+construction, non-block-exit tests) -> todo.txt.
 
 The foundational class landing: a class with fields, methods, an explicit
 constructor, and a destructor — plus the ctor/dtor CALL-IF-NEEDED model. This is

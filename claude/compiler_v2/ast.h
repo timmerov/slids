@@ -21,6 +21,7 @@ enum class Kind {
     kDestructureStmt,// `(a, b, ) = tuple;` children[0]=rhs, [1..]=target lvalues
                     // (a NULL child is a skipped slot).
     kDeleteStmt,    // delete p; — free + null the pointer. children[0]=lvalue var.
+    kDtorCallStmt,  // lvalue.~(); — explicit destructor call (no free). [0]=lvalue.
     kCallStmt,
     kCallExpr,
     kExprStmt,

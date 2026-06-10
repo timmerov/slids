@@ -1168,6 +1168,8 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
             resolveDeclType(tree, e.return_type, e.file_id, e.tok, diag);
             if (e.children[0]) resolveExpr(tree, *e.children[0], diag, unevaluated);  // size
             if (e.children[1]) resolveExpr(tree, *e.children[1], diag, unevaluated);  // addr
+            if (e.children.size() > 2 && e.children[2])
+                resolveExpr(tree, *e.children[2], diag, unevaluated);                 // ctor-args
             return;
         }
         case parse::Kind::kSizeofExpr: {
@@ -1312,6 +1314,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
         case parse::Kind::kSwapStmt:
         case parse::Kind::kDestructureStmt:
         case parse::Kind::kDeleteStmt:
+        case parse::Kind::kDtorCallStmt:
         case parse::Kind::kCallStmt:
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
@@ -2081,6 +2084,12 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 diagnostic::report(diag, {operand.file_id, operand.tok,
                     "The operand of 'delete' must be a pointer variable.", {}});
             }
+            return Completion::Normal;
+        }
+        case parse::Kind::kDtorCallStmt: {
+            // lvalue.~(); — explicit destructor call (placement cleanup, no free).
+            // Resolve the receiver as a read; classify checks it is a class lvalue.
+            resolveExpr(tree, *s.children[0], diag);
             return Completion::Normal;
         }
         case parse::Kind::kCallStmt: {

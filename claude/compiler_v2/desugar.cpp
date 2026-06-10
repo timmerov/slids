@@ -25,6 +25,7 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kSwapStmt:      return ast::Kind::kSwapStmt;
         case parse::Kind::kDestructureStmt: return ast::Kind::kDestructureStmt;
         case parse::Kind::kDeleteStmt:    return ast::Kind::kDeleteStmt;
+        case parse::Kind::kDtorCallStmt:  return ast::Kind::kDtorCallStmt;
         case parse::Kind::kCallStmt:      return ast::Kind::kCallStmt;
         case parse::Kind::kCallExpr:      return ast::Kind::kCallExpr;
         case parse::Kind::kExprStmt:      return ast::Kind::kExprStmt;
