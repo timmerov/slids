@@ -1051,25 +1051,46 @@ std::unique_ptr<ast::Node> lowerMethodCall(parse::Node const& p,
                                            parse::Tree const& tree, int& next_id) {
     assert(!p.children.empty() && p.children[0] && "method call needs a receiver");
     parse::Node const& recv = *p.children[0];
-    widen::TypeRef cls = widen::strip(recv.inferred_type);
+    widen::TypeRef cls = widen::strip(recv.inferred_type);   // receiver's class (self type)
     assert(widen::form(cls) == widen::Type::Form::kSlid
         && "lowerMethodCall: receiver must be a class");
 
+    // The symbol is minted from the method's DEFINING class (its owner frame's
+    // class handle, via the threaded entry id), NOT the receiver's type — so an
+    // inherited method called on a derived receiver names the base's symbol. They
+    // coincide without inheritance; the fallback keeps a stray null id safe.
+    widen::TypeRef defCls = cls;
+    if (p.resolved_entry_id >= 0) {
+        int cid = parse::classEntryForFrame(
+            tree, tree.entries[p.resolved_entry_id].owner_ns_frame);
+        if (cid >= 0) defCls = widen::strip(tree.entries[cid].slids_type);
+    }
+
     auto call = std::make_unique<ast::Node>();
     call->kind = ast::Kind::kCallStmt;
-    call->name = widen::classSymbol(cls) + "__" + p.name;
+    call->name = widen::classSymbol(defCls) + "__" + p.name;
     call->return_type = p.return_type;   // emitCall reads return_type
     call->param_types = p.param_types;   // [self, user...] — classify cached it
     call->file_id = p.file_id;
     call->tok = p.tok;
     call->name_tok = p.name_tok;
 
-    auto self = std::make_unique<ast::Node>();   // self = ^receiver  (Class^)
-    self->kind = ast::Kind::kAddrOfExpr;
-    self->inferred_type = widen::internPointer(cls);
-    self->file_id = recv.file_id;
-    self->tok = recv.tok;
-    self->children.push_back(copyNode(recv, tree, next_id));
+    // self = the receiver's ADDRESS. For `ptr^.m()` the receiver is a deref, whose
+    // object address IS the pointer operand — pass it directly (an addr-of of a
+    // deref isn't a codegen lvalue). Otherwise `^receiver` (a variable's alloca, or
+    // a field/element GEP — a field lowers to an index, which addr-of handles).
+    std::unique_ptr<ast::Node> self;
+    if (recv.kind == parse::Kind::kDerefExpr && !recv.children.empty()
+        && recv.children[0]) {
+        self = copyNode(*recv.children[0], tree, next_id);   // the pointer itself
+    } else {
+        self = std::make_unique<ast::Node>();
+        self->kind = ast::Kind::kAddrOfExpr;
+        self->inferred_type = widen::internPointer(cls);
+        self->file_id = recv.file_id;
+        self->tok = recv.tok;
+        self->children.push_back(copyNode(recv, tree, next_id));
+    }
     call->children.push_back(std::move(self));
 
     for (std::size_t i = 1; i < p.children.size(); i++)

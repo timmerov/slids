@@ -380,7 +380,9 @@ void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
 // ---- Namespace lookup --------------------------------------------------------
 // The global root is namespace frame 0 (the program frame). Its members are the
 // file-scope entries (parent_frame_id == 0, not themselves namespace members).
-constexpr int kGlobalFrame = 0;
+using parse::kGlobalFrame;
+// Member-by-frame lookup lives in parse (shared with classify); use it unqualified.
+using parse::findMemberDeclared;
 
 int findMemberLive(parse::Tree const& tree, int ns_frame,
                    std::string const& name);
@@ -450,22 +452,6 @@ int findMemberLive(parse::Tree const& tree, int ns_frame,
     return -1;
 }
 
-// Find a member `name` declared in `ns_frame` among ALL entries (live or not).
-// Used to distinguish "declared but not visible" from "no such member".
-int findMemberDeclared(parse::Tree const& tree, int ns_frame,
-                       std::string const& name) {
-    for (std::size_t id = 0; id < tree.entries.size(); ++id) {
-        parse::Entry const& e = tree.entries[id];
-        if (e.name != name) continue;
-        if (ns_frame == kGlobalFrame) {
-            if (e.parent_frame_id == kGlobalFrame && e.owner_ns_frame < 0)
-                return static_cast<int>(id);
-        } else if (e.owner_ns_frame == ns_frame) {
-            return static_cast<int>(id);
-        }
-    }
-    return -1;
-}
 
 // Human-readable form of a qualifier chain (e.g. "Space:Nested", or "::" for a
 // bare global qualifier) for the leaf "has no member" diagnostic.
@@ -1598,6 +1584,17 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
 void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     if (resolveCallTarget(tree, s, diag)) {
         parse::Entry const& callee = tree.entries[s.resolved_entry_id];
+        // A bare call that resolved to a class METHOD (its owner frame is a class)
+        // has no receiver, so it can't supply the implicit `self` — lowering it as
+        // a self-less call crashes codegen. Reject cleanly; calling a sibling method
+        // through `self` is deferred.
+        if (callee.kind == parse::EntryKind::kFunction
+            && callee.owner_ns_frame >= 0
+            && parse::classEntryForFrame(tree, callee.owner_ns_frame) >= 0) {
+            diagnostic::report(diag, {s.file_id, s.tok,
+                "Method '" + s.name + "' must be called on an object.", {}});
+            return;
+        }
         bool callee_nested = callee.kind == parse::EntryKind::kFunction
                           && callee.parent_frame_id != kGlobalFrame;
         if (tree.capture_floor >= 0 && tree.capture_node) {
@@ -3360,9 +3357,11 @@ void registerClassMembers(parse::Tree& tree, parse::Node& node, int frame,
     for (parse::Node* c : nested) registerClassBody(tree, *c, diag);
     for (parse::Node* c : nested) checkClassByValueAcyclic(tree, *c, diag);
     // Methods — named member functions (NOT the _$ctor/_$dtor hooks). Register a
-    // kFunction member so `obj.method` resolves; param_types are the USER params
-    // (self, params[0], is implicit and prepended at the call). Bodies resolve in
-    // resolveClassMemberBodies. The frame is open, so param/return types may name
+    // kFunction member so `obj.method` resolves. param_types holds the FULL param
+    // list INCLUDING the implicit `self` at [0], so it stays aligned with the node's
+    // params (a later write-back of resolved param types is index-aligned). The
+    // method-call site checks args against param_types[1..]. Bodies resolve in
+    // resolveClassMemberBodies; the frame is open so param/return types may name
     // sibling members.
     for (auto& m : node.children) {
         if (!m || m->kind != parse::Kind::kFunctionDef) continue;
@@ -3370,10 +3369,13 @@ void registerClassMembers(parse::Tree& tree, parse::Node& node, int frame,
         if (isDup(*m)) continue;
         resolveDeclType(tree, m->return_type, m->file_id, m->tok, diag);
         std::vector<widen::TypeRef> ptypes;
-        for (std::size_t i = 1; i < m->params.size(); ++i) {   // skip self
+        for (std::size_t i = 0; i < m->params.size(); ++i) {   // incl. self at [0]
             auto& p = m->params[i];
             if (!p) continue;
-            if (p->return_type != widen::kNoType)
+            // self's `Class^` resolves in Phase 2 (resolveClassMemberBodies), and the
+            // write-back updates the entry; resolving it here would fail (the class
+            // body isn't ready). Resolve only the USER params now.
+            if (i >= 1 && p->return_type != widen::kNoType)
                 resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
             ptypes.push_back(p->return_type);
         }

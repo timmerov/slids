@@ -19,6 +19,15 @@ BUGS (found, deferred)
     Needs the class copy path (whole-value copy vs field-init). prerequisite: class
     copy/move.
 
+  * NON-CLASS ARG TYPE MISMATCH PASSES SILENTLY AT A CALL — a wrong-typed argument
+    that is NOT a class (e.g. a `char[]` to an `int` param) is accepted silently at
+    BOTH a function call and a method call. The per-arg check (checkStrongConstAssign
+    + checkSlidAssign) rejects a class->primitive and a const violation, but a plain
+    non-class width/convert mismatch (char[]->int, and likely other cross-family
+    pairs) is not rejected at the call site — only literals are fit-checked. Should
+    reject like a var-decl/assignment does. General (not method-specific); found via
+    the methods arg-check audit.
+
 
 DEFERRED TESTS
 
@@ -74,6 +83,20 @@ DEFERRED TESTS
 
 
 DEFERRED FEATURES (later; may not be on the plan)
+
+  * METHODS — follow-ups (the statement-call form + plain-`=` field writes LANDED).
+    - EXPRESSION-FORM CALL: a value-returning method used as a value
+      (`int x = obj.m()`) doesn't parse; only the statement form `obj.m(args);` is
+      wired. Needs the call shape in the expression parser (parsePostfix) + a
+      kMethodCallExpr (or reuse) classified/lowered like the statement form.
+    - COMPOUND FIELD WRITES in a member body: `x_ += 1`, `x_++` aren't field-
+      rewritten (only plain `x_ = ...` is — buildSelfField on the assignment LHS).
+      The aug-assign / inc-dec statement paths need the same self^.field rewrite
+      (e.g. desugar `x_ += v` to `x_ = x_ + v` so it hits the plain-assign rewrite).
+    - SIBLING METHOD CALL VIA `self` (deferred to a later session): calling one
+      method from another. Today `self^.m()` / `self.m()` parse-errors ("Expected
+      statement"), and a BARE `m()` now errors cleanly ("Method 'm' must be called
+      on an object.") instead of crashing. Needs `self` as a usable receiver.
 
   * CONST-EXPRESSION ARRAY DIM IN A TYPE (Phase 2) — array TYPE spellings (`int[N]`
     in type position — tuple slots, alias RHS, params via alias, returns) LANDED but

@@ -298,6 +298,27 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     assignment, call ARGUMENT (both the single-candidate and multi-overload paths),
     and RETURN. (Same-class is a fine copy; pointer cases are checkPtrAssign's;
     two non-classes flex per codegen's numeric rules.)
+  * METHODS — a named function in a class body is a method: a ctor/dtor with a user
+    name. Grammar parses it like any function and injects an implicit `self`
+    (Class^) at params[0]; the body is a FULL function body (local consts/classes,
+    unused-local sweep, nested functions, return checks), with bare field names
+    rewritten to `self^.field` for READS and WRITES (buildSelfField — one place mints
+    `self^.field`, shared by the kIdentExpr read path and the assignment-LHS write
+    path; a bare `x_ = v` becomes a self^.field store, not a phantom local). resolve/
+    classify reach a method through the SAME ctor/dtor sites (the forEachHoistedClass
+    walker, now filtered on kFunctionDef). The method entry's param_types hold the
+    FULL list (self at [0], aligned with the node's params so the resolved-type
+    write-back stays index-correct); it lifts to `<Class>__method(self, ...)`. A call
+    `obj.method(args)` parses to kMethodCallStmt (children[0] = receiver); classify
+    resolves the method via the receiver's class frame (classEntryForType +
+    findMemberDeclared — the shared member lookup), type-checks args against
+    param_types[1..], and threads the method entry id; desugar lowers it to a normal
+    call of the lifted symbol minted from the method's OWN DEFINING class (not the
+    receiver's, so an inherited call will name the base), with the receiver's address
+    prepended as self (for `ptr^.m()` self IS the pointer — an addr-of of a deref is
+    not a codegen lvalue). A bare call resolving to a method errors ("Method 'm' must
+    be called on an object.") — sibling calls via `self` are deferred. Statement form
+    only; expression form + compound field writes (`x_ += 1`) are todo.txt.
   * NAME COLLISIONS + TYPE-NAME DIAGNOSTICS. A class name collides with ANY
     same-name entry (another class, an alias / enum / namespace, a const, a
     function) — reportNameCollision carets the source-LATER declaration as the

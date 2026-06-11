@@ -1,3 +1,11 @@
 Method:ctor: 77
 Method:print: 78
+Pt:shift: 11,22
+Inner:show: 7
+Loc:emit: 3
+Use:scaleUp: 10
+Use:absorb: 13
+Use:viaNested: 169
+Use:scaleUp: 338
+Use:scaleUp: 4
 Method:dtor: 79

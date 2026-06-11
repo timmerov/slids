@@ -428,6 +428,8 @@ struct Tree {
     int  for_update_floor = -1;
 };
 
+constexpr int kGlobalFrame = 0;   // the file/program scope frame id
+
 // Symbol-table APIs. All storage + walking lives here; classify only decides
 // what to add and what to look up.
 int  pushFrame(Tree& t);                                  // returns new frame id
@@ -437,6 +439,13 @@ int  currentFrameId(Tree const& t);
 int  addEntry(Tree& t, Entry e);                          // returns entry id
 int  findInLiveScopes(Tree const& t, std::string const& name);   // -1 if none
 int  findInFrame(Tree const& t, int frame_id, std::string const& name);
+// A namespace/class MEMBER by name in its owning frame (owner_ns_frame == ns_frame;
+// at kGlobalFrame, a file-scope non-member). Returns entry id or -1.
+int  findMemberDeclared(Tree const& t, int ns_frame, std::string const& name);
+// The kClass entry for a class TYPE (slids_type match) / for its member FRAME
+// (ns_frame_id match). The one place a class type <-> its entry is bridged.
+int  classEntryForType(Tree const& t, widen::TypeRef classType);
+int  classEntryForFrame(Tree const& t, int ns_frame);
 widen::TypeRef entryType(Tree const& t, int entry_id);
 
 // THE canonical walk over a class and its HOISTED descendants (a class's hoisted

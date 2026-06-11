@@ -448,7 +448,16 @@ Phase 5 — classes
     path; `.field` lowers to a slot index. ctor/dtor are scope HOOKS (field-init
     first, then the ctor; dtor at scope exit), self-bound, call-if-needed, with
     forward declarations. Full detail: plan-class-basic.txt + readme "CLASSES +
-    CTOR/DTOR" + [[project_v2_classes]]. METHODS still pending.
+    CTOR/DTOR" + [[project_v2_classes]].
+  * METHODS — LANDED (statement-call form). A named function in a class body is a
+    self-bound member (a ctor/dtor with a user name): grammar injects `self` at
+    params[0], the body is a full function body, and bare field READS *and* WRITES
+    rewrite to `self^.field` (buildSelfField, shared). `obj.method(args)` is a
+    kMethodCallStmt resolved via the receiver's class frame (shared member lookup),
+    args type-checked, lowered to the lifted `<Class>__method(self, ...)` minted
+    from the method's DEFINING class. Detail: readme "METHODS" + [[project_v2_methods]].
+    OPEN (todo.txt): expression-form call, compound field writes, sibling call via
+    `self`.
   * inferred field types (`Foo(name = const_expr)`) — LANDED.
   * destructor balance invariant — LANDED. Reverse-order teardown on every exit
     (block / return / break / continue) via a DtorScope chain threaded through

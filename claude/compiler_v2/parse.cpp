@@ -56,6 +56,38 @@ int findInFrame(Tree const& t, int frame_id, std::string const& name) {
     return -1;
 }
 
+int findMemberDeclared(Tree const& t, int ns_frame, std::string const& name) {
+    for (std::size_t id = 0; id < t.entries.size(); ++id) {
+        Entry const& e = t.entries[id];
+        if (e.name != name) continue;
+        if (ns_frame == kGlobalFrame) {
+            if (e.parent_frame_id == kGlobalFrame && e.owner_ns_frame < 0)
+                return static_cast<int>(id);
+        } else if (e.owner_ns_frame == ns_frame) {
+            return static_cast<int>(id);
+        }
+    }
+    return -1;
+}
+
+int classEntryForType(Tree const& t, widen::TypeRef classType) {
+    for (std::size_t id = 0; id < t.entries.size(); ++id) {
+        Entry const& e = t.entries[id];
+        if (e.kind == EntryKind::kClass && e.slids_type == classType)
+            return static_cast<int>(id);
+    }
+    return -1;
+}
+
+int classEntryForFrame(Tree const& t, int ns_frame) {
+    for (std::size_t id = 0; id < t.entries.size(); ++id) {
+        Entry const& e = t.entries[id];
+        if (e.kind == EntryKind::kClass && e.ns_frame_id == ns_frame)
+            return static_cast<int>(id);
+    }
+    return -1;
+}
+
 widen::TypeRef entryType(Tree const& t, int entry_id) {
     assert(entry_id >= 0 && entry_id < static_cast<int>(t.entries.size())
         && "entryType: out of range");

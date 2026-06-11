@@ -37,8 +37,14 @@ members but not its fields; member-TYPE lookup is now SCOPE-AWARE (resolveName w
 the enclosing frame OPEN during member-type/body resolution — names register
 first), replacing the findInLiveScopes leniency, so a bare member type out of scope
 fails ("needs a namespace qualifier").
-STILL OPEN: methods, operator overloading, for-each/for-class, move/swap operators.
+METHODS LANDED (statement-call form): a named function in a class body is a
+self-bound member (ctor/dtor with a user name); bare field reads AND writes rewrite
+to self^.field; `obj.method(args)` resolves via the receiver's class frame and lifts
+to `<Class>__method(self, ...)` minted from the DEFINING class. Detail: readme
+"METHODS" + [[project_v2_methods]].
+STILL OPEN: operator overloading, for-each/for-class, move/swap operators.
 Deferred items (array/tuple-of-hook FIELD construction, class copy-init at a decl,
+methods' expression-form call + compound field writes + sibling-call-via-self,
 non-block-exit tests) -> todo.txt.
 
 The foundational class landing: a class with fields, methods, an explicit

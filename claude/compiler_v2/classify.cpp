@@ -2218,39 +2218,43 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     + widen::spellOrEmpty(recv.inferred_type) + "'.", {}});
                 return;
             }
-            int class_frame = -1;
-            for (auto const& e : tree.entries) {
-                if (e.kind == parse::EntryKind::kClass && e.slids_type == rs) {
-                    class_frame = e.ns_frame_id; break;
-                }
-            }
-            int methodId = -1;
-            for (std::size_t i = 0; class_frame >= 0 && i < tree.entries.size(); i++) {
-                parse::Entry const& e = tree.entries[i];
-                if (e.owner_ns_frame == class_frame && e.name == s.name
-                    && e.kind == parse::EntryKind::kFunction) { methodId = (int)i; break; }
-            }
-            if (methodId < 0) {
+            // Resolve the method as a member of the receiver's class frame (shared
+            // member lookup). A same-name NON-method member is not a method.
+            int classId = parse::classEntryForType(tree, rs);
+            int methodId = classId < 0 ? -1
+                : parse::findMemberDeclared(tree, tree.entries[classId].ns_frame_id, s.name);
+            if (methodId < 0
+                || tree.entries[methodId].kind != parse::EntryKind::kFunction) {
                 diagnostic::report(diag, {s.file_id, s.name_tok,
                     "Class '" + widen::spell(rs) + "' has no method '" + s.name + "'.", {}});
                 return;
             }
+            // Thread the resolved method onto the node — desugar mints the symbol
+            // from the method's OWN defining class, not the receiver's (so a base
+            // method called on a derived receiver still names the base symbol).
+            s.resolved_entry_id = methodId;
             parse::Entry const& m = tree.entries[methodId];
+            // param_types = [self, user...]; children = [receiver, args...]. The
+            // user-arg count is param_types.size()-1, and arg children[i] aligns
+            // with param_types[i] (i>=1) — same shape the lowered call emits.
             std::size_t nargs = s.children.size() - 1;
-            if (nargs != m.param_types.size()) {
+            std::size_t nuser = m.param_types.empty() ? 0 : m.param_types.size() - 1;
+            if (nargs != nuser) {
                 diagnostic::report(diag, {s.file_id, s.name_tok,
-                    "Method '" + s.name + "' expects "
-                    + std::to_string(m.param_types.size()) + " arguments, got "
-                    + std::to_string(nargs) + ".", {}});
+                    "Method '" + s.name + "' expects " + std::to_string(nuser)
+                    + " arguments, got " + std::to_string(nargs) + ".", {}});
                 return;
             }
-            for (std::size_t i = 1; i < s.children.size(); i++)
-                if (s.children[i]) inferExpr(tree, *s.children[i], m.param_types[i - 1], diag);
-            // Cache the FULL lowered-call signature (implicit self + user params) so
-            // codegen's emitCall arity check holds for the desugared call.
-            s.param_types.clear();
-            s.param_types.push_back(widen::internPointer(rs));
-            for (widen::TypeRef pt : m.param_types) s.param_types.push_back(pt);
+            for (std::size_t i = 1; i < s.children.size(); i++) {
+                if (!s.children[i]) continue;
+                // Type-check each arg against its param, like classifyCall — infer
+                // with the param as context, then reject a const / class / convert
+                // mismatch (else a wrong-typed arg passed silently).
+                inferExpr(tree, *s.children[i], m.param_types[i], diag);
+                checkStrongConstAssign(m.param_types[i], *s.children[i], diag);
+                checkSlidAssign(m.param_types[i], *s.children[i], diag);
+            }
+            s.param_types = m.param_types;    // [self, user...] — emitCall arity check
             s.return_type = m.slids_type;     // emitCall reads return_type
             s.inferred_type = m.slids_type;
             return;
