@@ -1,0 +1,18 @@
+Outer:ctor: 1
+Outer:dtor: 1
+Inner:ctor: 2
+Inner:dtor: 2
+Item:ctor: 0
+box.i = 0
+Item:dtor: 0
+sizeof Item = 4
+Item:ctor: 5
+Item:dtor: 5
+Leaf:ctor: 8
+Side:right = 1
+Leaf:dtor: 8
+FILE:Node: 1
+HOISTED:Node: 2
+Reader: 99 99
+Sub:ctor: 3
+Sub:dtor: 3

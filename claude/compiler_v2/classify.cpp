@@ -316,6 +316,19 @@ void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
 void classifyNamespace(parse::Tree& tree, parse::Node& node,
                        diagnostic::Sink& diag);
 
+// Type-check a class's ctor/dtor bodies, recursing into HOISTED classes (whose
+// ctor/dtor must be typed too, else desugar lowers an un-typed field access).
+void classifyClassMemberBodies(parse::Tree& tree, parse::Node& node,
+                               diagnostic::Sink& diag) {
+    for (auto& m : node.children) {
+        if (!m) continue;
+        if (m->name == "_$ctor" || m->name == "_$dtor")
+            classifyFunctionBody(tree, *m, diag);
+        else if (m->kind == parse::Kind::kClassDef)
+            classifyClassMemberBodies(tree, *m, diag);
+    }
+}
+
 // Walk a left-leaning '+' chain in a print-intrinsic argument. Each leaf
 // segment infers in isolation — '+' here is print's concatenation marker,
 // not the arith operator.
@@ -2560,13 +2573,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             return;
         case parse::Kind::kClassDef:
             // A local class: type-check its ctor/dtor member bodies (self-bound;
-            // field refs are already kFieldExpr from resolve), like a file-scope
-            // class. Construction lowers at the use site.
-            for (auto& m : s.children) {
-                if (m && (m->name == "_$ctor" || m->name == "_$dtor")) {
-                    classifyFunctionBody(tree, *m, diag);
-                }
-            }
+            // field refs are already kFieldExpr from resolve), recursing into
+            // hoisted classes. Construction lowers at the use site.
+            classifyClassMemberBodies(tree, s, diag);
             return;
         case parse::Kind::kProgram:
         case parse::Kind::kStringLiteral:
@@ -2785,12 +2794,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             }
         } else if (ch->kind == parse::Kind::kClassDef) {
             // Type-check ctor/dtor member bodies (self-bound; field refs are
-            // already kFieldExpr from resolve).
-            for (auto& m : ch->children) {
-                if (m && (m->name == "_$ctor" || m->name == "_$dtor")) {
-                    classifyFunctionBody(tree, *m, diag);
-                }
-            }
+            // already kFieldExpr from resolve), recursing into hoisted classes.
+            classifyClassMemberBodies(tree, *ch, diag);
         }
     }
 }

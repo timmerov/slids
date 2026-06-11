@@ -468,6 +468,16 @@ Phase 5 — classes
     aliases/consts/enums; qualified `Class:member`; alias-to-class transparency
     (`alias Time = Space; Time:Count`); `alias Class;` rejected. Detail: readme
     "CLASSES: AS A NAMESPACE + LOCAL" + [[project_v2_class_as_namespace]].
+  * HOISTED classes (a class in another class's BODY) — LANDED. A namespace-member
+    of the host, reached as `Outer:Inner` / `Outer:Inner:Innerger` (any depth);
+    registerClassMembers kClassDef arm (member_of = host frame); resolveQualifiedType
+    kClass leaf returns the HANDLE (no spelling round-trip). Sees host namespace
+    members (bare + qualified), NOT host fields. The lookup is SCOPE-AWARE
+    (resolveName, not the findInLiveScopes leniency): member TYPES resolve with the
+    enclosing frame OPEN (registerNamespaceTree/registerClassMembers/Body +
+    resolveClassMemberBodies push their frame; names register first), so a bare
+    member type out of scope FAILS ("needs a namespace qualifier"). Built per the
+    name-then-resolve / opaque-body model. Detail: readme + [[project_v2_class_as_namespace]].
   * LOCAL classes (defined in a function body / nested block) — LANDED. A
     resolveStmtList pre-pass registers each scope's classes (use-before-def +
     block-scoped); shadowing local + file-scope; identity by a def_id in structKey,

@@ -2342,9 +2342,19 @@ struct Parser {
                             && peek().text == "_");
             bool is_dtor = (peek().kind == token::Kind::kBitNot);
             if (!is_ctor && !is_dtor) {
+                // A HOISTED class — a class defined in the body, a namespace-member
+                // of the host (reached as `Host:Inner`), like its alias/const/enum
+                // members. Checked AFTER ctor/dtor, since `_()` also matches
+                // looksLikeClassDef (a name `(` `)` `{`).
+                if (looksLikeClassDef()) {
+                    auto m = parseClassDef();
+                    if (!m) return nullptr;
+                    node->children.push_back(std::move(m));
+                    continue;
+                }
                 error("A class body holds the constructor '_()', the destructor "
-                      "'~()', and member definitions (aliases, constants, "
-                      "enums).");
+                      "'~()', and member definitions (aliases, constants, enums, "
+                      "classes).");
                 return nullptr;
             }
             int m_file = peek().file_id;

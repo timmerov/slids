@@ -147,5 +147,9 @@ int32 main() {
     //-EXPECT-ERROR: 'Space:Nested' has no member 'kFive'
     //int e6 = Space:Nested:kFive;
 
+    /* compile error: cannot instantiate a namespace. */
+    //-EXPECT-ERROR: 'Space' is a namespace, not a type.
+    //Space space;
+
     return 0;
 }

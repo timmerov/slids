@@ -32,6 +32,20 @@ bool isReferenceType(widen::TypeRef t) {
 
 int resolveName(parse::Tree const& tree, std::string const& name);
 
+// Is `name` a namespace/class member that is a TYPE (a hoisted class, a member
+// alias, or an enum facet) — so qualifying it would actually yield a type? Used to
+// hint "needs a qualifier" ONLY when the qualifier helps (not for a member const /
+// function, where the qualified form still isn't a type).
+bool namespaceMemberTypeExists(parse::Tree const& tree, std::string const& name) {
+    using K = parse::EntryKind;
+    for (parse::Entry const& e : tree.entries) {
+        if (e.owner_ns_frame < 0 || e.name != name) continue;
+        if (e.kind == K::kClass || e.kind == K::kAlias) return true;
+        if (e.kind == K::kNamespace && e.slids_type != widen::kNoType) return true;
+    }
+    return false;
+}
+
 // Report a name collision, careting the source-LATER declaration as the duplicate
 // and the earlier as "first declared here". Registration order need not match
 // source order (e.g. classes register before file-scope consts/functions), so
@@ -108,6 +122,15 @@ void requireKnownType(parse::Tree const& tree, widen::TypeRef t,
                     "'" + lt.name + "' is a " + what + ", not a type.", {}});
                 return;
             }
+            // Out of scope here, but it IS a member TYPE somewhere (a hoisted
+            // class, a member alias/enum) — it just needs its `Host:` qualifier.
+            // (A member const/function of that name wouldn't be a type even
+            // qualified, so it doesn't earn the hint.)
+            if (id < 0 && namespaceMemberTypeExists(tree, lt.name)) {
+                diagnostic::report(diag, {file_id, tok,
+                    "'" + lt.name + "' needs a namespace qualifier.", {}});
+                return;
+            }
         }
     }
     diagnostic::report(diag, {file_id, tok,
@@ -118,7 +141,8 @@ void requireKnownType(parse::Tree const& tree, widen::TypeRef t,
 std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
                                  int file_id, int tok, bool& reported,
                                  diagnostic::Sink& diag,
-                                 std::vector<int> const* seg_toks = nullptr);
+                                 std::vector<int> const* seg_toks = nullptr,
+                                 widen::TypeRef* out_handle = nullptr);
 
 // Split a type spelling into its resolvable leaf NAME and the modifier SUFFIX
 // (`^` / `[]` / `[N]...`) that rides back along once the leaf resolves —
@@ -264,14 +288,20 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
         case F::kSlid: {
             std::string name = widen::get(t).name;
             if (name.find(':') != std::string::npos) {   // qualified (Space:Dir)
-                std::string under = resolveQualifiedType(
-                    tree, name, file_id, tok, reported, diag, seg_toks);
-                if (under.empty()) return t;   // error already reported
-                widen::TypeRef u = resolveTypeRef(
-                    tree, widen::intern(under), visiting, reported, file_id, tok, diag);
-                return widen::internAlias(name, u);
+                widen::TypeRef handle = widen::kNoType;
+                resolveQualifiedType(tree, name, file_id, tok, reported, diag,
+                                     seg_toks, &handle);
+                if (handle == widen::kNoType) return t;   // error already reported
+                // Use the HANDLE directly — never re-intern the spelling (a class's
+                // def_id can't survive a spelling round-trip).
+                return widen::internAlias(name, handle);
             }
-            int id = parse::findInLiveScopes(tree, name);
+            // SCOPE-AWARE: resolveName (open-ns chain + lexical-with-owner<0), NOT
+            // findInLiveScopes (any live entry). A namespaced member type (a host
+            // class's alias/enum, a hoisted class) resolves bare ONLY where its
+            // frame is open — inside the host (member types + bodies open it), so
+            // `Inner`/`Innerger` at file scope are out of scope and fail.
+            int id = resolveName(tree, name);
             // A class name resolves to its registered kSlid handle. The handle
             // carries the def_id (scope distinction) and the layout; the bare
             // written-name kSlid `t` is just a placeholder. Always redirect so
@@ -544,7 +574,8 @@ bool isQualified(parse::Node const& n) {
 std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
                                  int file_id, int tok, bool& reported,
                                  diagnostic::Sink& diag,
-                                 std::vector<int> const* seg_toks) {
+                                 std::vector<int> const* seg_toks,
+                                 widen::TypeRef* out_handle) {
     std::vector<std::string> segs;
     bool global = false;
     std::size_t i = 0;
@@ -570,22 +601,29 @@ std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
     int frame = resolveNamespaceSegments(tree, path, ptoks, global, file_id, diag);
     if (frame < 0) { reported = true; return ""; }
     int id = findMemberLive(tree, frame, segs.back());
-    // A member type is either an enum facet (a kNamespace carrying a non-empty
-    // underlying) or a member type-alias (`Space:Float`). Both spell to their
-    // underlying; the caller re-wraps with the written qualified name as label.
+    // A member type is an enum facet (a kNamespace carrying a non-empty underlying),
+    // a member type-alias (`Space:Float`), or a hoisted CLASS (`Outer:Inner`). The
+    // caller re-wraps with the written qualified name as label. CRITICAL: a class's
+    // identity rides its def_id, which a spelling cannot carry — so out_handle
+    // returns the real underlying HANDLE; the caller MUST use it (never re-intern
+    // the returned spelling, which would lose the def_id).
     bool is_enum_facet = id >= 0
         && tree.entries[id].kind == parse::EntryKind::kNamespace
         && tree.entries[id].slids_type != widen::kNoType;
     bool is_member_alias = id >= 0
         && tree.entries[id].kind == parse::EntryKind::kAlias;
-    if (!is_enum_facet && !is_member_alias) {
+    bool is_member_class = id >= 0
+        && tree.entries[id].kind == parse::EntryKind::kClass;
+    if (!is_enum_facet && !is_member_alias && !is_member_class) {
         diagnostic::report(diag, {file_id, toks.back(),
             "'" + segs.back() + "' is not a type in '"
             + qualPrefixText(segs, global, segs.size() - 1) + "'.", {}});
         reported = true;
         return "";
     }
-    return widen::spell(widen::deepStrip(tree.entries[id].slids_type));
+    widen::TypeRef under = widen::deepStrip(tree.entries[id].slids_type);
+    if (out_handle) *out_handle = under;
+    return widen::spell(under);
 }
 
 // ---- Namespace registration -------------------------------------------------
@@ -770,7 +808,10 @@ void registerNamespaceTree(parse::Tree& tree, parse::Node& node,
     node.resolved_entry_id = ns;   // stash the ns frame for the body pass
     // Register type-introducing members (enums, nested namespaces) first, so a
     // const / function member's type may name a sibling enum regardless of
-    // declaration order — mirrors the file-scope pass ordering.
+    // declaration order — mirrors the file-scope pass ordering. The frame is OPEN
+    // while member TYPES resolve, so a sibling type resolves bare via the scope
+    // frame stack (resolveName), not the findInLiveScopes leniency.
+    tree.open_ns_frames.push_back(ns);
     for (auto& m : node.children) {
         if (m && (m->kind == parse::Kind::kEnumDecl
                   || m->kind == parse::Kind::kNamespaceDecl)) {
@@ -783,6 +824,7 @@ void registerNamespaceTree(parse::Tree& tree, parse::Node& node,
             registerMemberSignature(tree, *m, ns, diag);
         }
     }
+    tree.open_ns_frames.pop_back();
 }
 
 // Resolve member bodies of an already-registered namespace: const inits,
@@ -3212,10 +3254,17 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
     parse::popFrame(tree);
 }
 
-// Register a class's body members (aliases, consts, enums) into its namespace
-// frame. Aliases first, so a const/enum member can name a sibling alias type;
-// member types resolve globally (findInLiveScopes) once the alias entry is live.
-// Const inits and enum member inits are resolved later (resolveClassMemberInits).
+void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag,
+                       int member_of);
+void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag);
+void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
+                              diagnostic::Sink& diag);
+
+// Register a class's body members (aliases, consts, enums, HOISTED classes) into
+// its namespace frame. Aliases first, so a const/enum member can name a sibling
+// alias type; then consts/enums; then nested classes two-phase (names then bodies,
+// so a nested class field may forward-ref a sibling). Const/enum inits and the
+// nested classes' ctor/dtor bodies are resolved later (resolveClassMember*).
 void registerClassMembers(parse::Tree& tree, parse::Node& node, int frame,
                           diagnostic::Sink& diag) {
     auto isDup = [&](parse::Node& m) {
@@ -3226,6 +3275,11 @@ void registerClassMembers(parse::Tree& tree, parse::Node& node, int frame,
         }
         return false;
     };
+    // Open THIS class's frame while resolving member TYPES (an alias target, a
+    // nested-class field) so a sibling member resolves bare via the scope frame
+    // stack — not the findInLiveScopes leniency. The names were registered before
+    // their types in the two-phase, so forward references resolve too.
+    tree.open_ns_frames.push_back(frame);
     for (auto& m : node.children) {
         if (!m || m->kind != parse::Kind::kAliasDecl) continue;
         if (isDup(*m)) continue;
@@ -3256,6 +3310,16 @@ void registerClassMembers(parse::Tree& tree, parse::Node& node, int frame,
             registerEnum(tree, *m, frame, diag);
         }
     }
+    // Hoisted classes — two-phase among the sibling set (names then bodies), each
+    // a member of this frame. Their ctor/dtor bodies resolve in resolveClassMemberBodies.
+    std::vector<parse::Node*> nested;
+    for (auto& m : node.children) {
+        if (m && m->kind == parse::Kind::kClassDef) nested.push_back(m.get());
+    }
+    for (parse::Node* c : nested) registerClassName(tree, *c, diag, frame);
+    for (parse::Node* c : nested) registerClassBody(tree, *c, diag);
+    for (parse::Node* c : nested) checkClassByValueAcyclic(tree, *c, diag);
+    tree.open_ns_frames.pop_back();
 }
 
 // Resolve a class's member const inits and enum member inits, once file-scope
@@ -3274,6 +3338,8 @@ void resolveClassMemberInits(parse::Tree& tree, parse::Node& node,
             }
         } else if (m->kind == parse::Kind::kEnumDecl) {
             resolveEnumMemberInits(tree, *m, diag);
+        } else if (m->kind == parse::Kind::kClassDef) {
+            resolveClassMemberInits(tree, *m, diag);   // hoisted class's member inits
         }
     }
     tree.open_ns_frames.pop_back();
@@ -3292,10 +3358,17 @@ bool fieldContributesNeed(parse::Tree const& tree, widen::TypeRef ft, bool ctor)
 // Phase 1: register the class NAME. A LOCAL class disambiguates by its defining
 // FRAME id (the kSlid's def_id), NOT a mangled name — the name stays bare
 // everywhere. A duplicate is a same-named class already declared in THIS frame.
-void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag) {
+// `member_of >= 0`: a HOISTED class — a namespace-member of that host class frame
+// (owner_ns_frame = member_of, def_id = member_of so `Host:Inner` is distinct,
+// dup-checked among the host's members); reached only via `Host:Inner`, not bare.
+void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag,
+                       int member_of = -1) {
     int decl_frame = parse::currentFrameId(tree);
-    int def_id = (decl_frame == kGlobalFrame) ? -1 : decl_frame;
-    int prev_id = parse::findInFrame(tree, decl_frame, node.name);
+    int def_id = member_of >= 0 ? member_of
+               : (decl_frame == kGlobalFrame) ? -1 : decl_frame;
+    int prev_id = member_of >= 0
+        ? findMemberDeclared(tree, member_of, node.name)
+        : parse::findInFrame(tree, decl_frame, node.name);
     if (prev_id >= 0) {
         // Any same-name entry already in this frame collides — another class
         // (aliases/enums/namespaces register before classes), or, when classes
@@ -3318,6 +3391,7 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     e.name = node.name;
     e.ns_frame_id = cls_frame;
     e.slids_type = type;
+    e.owner_ns_frame = member_of;   // -1 lexical, else a member of the host frame
     e.file_id = node.file_id;
     e.tok = node.name_tok;
     node.resolved_entry_id = parse::addEntry(tree, std::move(e));
@@ -3339,6 +3413,11 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     widen::TypeRef type = node.return_type;
     parse::ClassInfo& info = tree.classes.at(widen::strip(type));
     int def_id = widen::get(widen::strip(type)).def_id;
+    // Open this class's OWN frame while resolving its FIELD types, so a field may
+    // name one of the class's hoisted members bare (`Outer(Inner i_)`) — the same
+    // scope the ctor/dtor bodies see. The members were registered in Phase 1.
+    int self_frame = tree.entries[node.resolved_entry_id].ns_frame_id;
+    tree.open_ns_frames.push_back(self_frame);
     std::vector<std::pair<int, int>> field_locs;   // first-seen loc per field name
     for (auto& p : node.params) {
         if (!p) continue;
@@ -3361,6 +3440,7 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
         info.field_params.push_back(p.get());   // stable; default read live later
         field_locs.push_back({p->file_id, p->name_tok});
     }
+    tree.open_ns_frames.pop_back();
     // Constructor / destructor presence (parsed as `_$ctor`/`_$dtor` members).
     bool has_ctor = false, has_dtor = false;
     for (auto& m : node.children) {
@@ -3384,6 +3464,13 @@ void resolveClassMemberBodies(parse::Tree& tree, parse::Node& node,
     // registerClass.
     auto it = tree.classes.find(widen::strip(node.return_type));
     if (it == tree.classes.end()) return;
+    // Open this class's frame so a ctor/dtor body (and a HOISTED class's body) can
+    // reach the class's OWN namespace members bare — its aliases/consts/enums and
+    // nested classes (`Inner`, `Outerger`). Recurses into nested classes with this
+    // frame still open, so they see the host's members too.
+    int frame = node.resolved_entry_id >= 0
+        ? tree.entries[node.resolved_entry_id].ns_frame_id : -1;
+    if (frame >= 0) tree.open_ns_frames.push_back(frame);
     std::vector<std::string> const* saved = tree.method_fields;
     tree.method_fields = &it->second.field_names;
     for (auto& m : node.children) {
@@ -3399,6 +3486,11 @@ void resolveClassMemberBodies(parse::Tree& tree, parse::Node& node,
         }
     }
     tree.method_fields = saved;
+    for (auto& m : node.children) {
+        if (m && m->kind == parse::Kind::kClassDef)
+            resolveClassMemberBodies(tree, *m, diag);   // hoisted class's ctor/dtor
+    }
+    if (frame >= 0) tree.open_ns_frames.pop_back();
 }
 
 // Resolve a class's field-default expressions (their ident references), after

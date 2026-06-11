@@ -237,6 +237,28 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     registered kSlid HANDLE. A local class is a FULL class: members, a hook-class
     field (whose ctor/dtor run — see below), sizeof, new/delete; its ctor/dtor
     lift to module-level functions like a file-scope class's.
+  * HOISTED CLASSES — a class defined in another class's BODY is a namespace-MEMBER
+    of the host (like its alias/const/enum members), reached as `Outer:Inner` (and
+    `Outer:Inner:Innerger`, any depth). registerClassMembers gains a kClassDef arm
+    (registerClassName/Body with member_of = the host frame; def_id = host frame, so
+    `Outer:Inner` is a distinct identity); resolveQualifiedType accepts a kClass
+    leaf and returns the HANDLE via an out-param (NEVER a spelling round-trip — a
+    class's def_id can't survive one). A hoisted class is NOT bound to a host
+    object: it sees the host's namespace members (`Inner`'s body reads `Outerger`
+    bare, `Outer:Outerger` qualified) but NOT the host's fields (a bare host field
+    is Unresolved). classify recurses into hoisted ctor/dtor (classifyClassMemberBodies).
+  * SCOPE-AWARE MEMBER RESOLUTION (name-then-resolve, frames open) — NOT a leniency.
+    A type name resolves via resolveName (open-ns chain + lexical-with-owner<0), NOT
+    findInLiveScopes (any live entry). For that to be correct, member TYPES must
+    resolve with the enclosing frame OPEN: registerNamespaceTree / registerClassMembers
+    / registerClassBody / resolveClassMemberBodies each push their frame around the
+    member-type / body resolution (names were registered first — type-introducing
+    members before consts — so forward refs resolve). Result: a member type resolves
+    bare only where its frame is open (inside the host); a bare member type at file
+    scope FAILS — "'Inner' needs a namespace qualifier" when it IS a member-type
+    elsewhere (namespaceMemberTypeExists — class/alias/enum, NOT a const/function),
+    else "Unknown type". (This replaced the findInLiveScopes leniency that resolved
+    any live member regardless of scope.)
   * IDENTITY BY def_id, NOT A MANGLED NAME. Two same-named local classes (or a
     local shadowing a file-scope one) must be distinct types. The kSlid carries a
     `def_id` (its defining FRAME id; -1 for file-scope) included in structKey

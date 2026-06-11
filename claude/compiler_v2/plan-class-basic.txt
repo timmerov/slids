@@ -30,7 +30,13 @@ through array / N-hop) is rejected (checkClassByValueAcyclic) instead of SIGSEGV
 codegen. Name collisions are caught against ANY same-name entry (source-order
 carets); a non-type type-name reads "'X' is a namespace/function/constant/variable,
 not a type". A local class may be named in a nested fn's SIGNATURE, and nested-fn
-bodies resolve after the host body (FORWARD capture of host locals).
+bodies resolve after the host body (FORWARD capture of host locals). HOISTED
+classes (a class in another class's body) are namespace-MEMBERS of the host
+(`Outer:Inner` / `Outer:Inner:Innerger`, any depth), see the host's namespace
+members but not its fields; member-TYPE lookup is now SCOPE-AWARE (resolveName with
+the enclosing frame OPEN during member-type/body resolution — names register
+first), replacing the findInLiveScopes leniency, so a bare member type out of scope
+fails ("needs a namespace qualifier").
 STILL OPEN: methods, operator overloading, for-each/for-class, move/swap operators.
 Deferred items (array/tuple-of-hook FIELD construction, class copy-init at a decl,
 non-block-exit tests) -> todo.txt.
