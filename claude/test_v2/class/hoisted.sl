@@ -178,10 +178,11 @@ int32 main() {
 //    }
 //}
 
-/* a by-value cycle through host/hoisted nesting is infinite size. */
+/* a by-value cycle between two sibling hoisted classes is infinite size. */
 //-EXPECT-ERROR: contains itself by value
-//Cyc(CycIn i_) {
-//    CycIn(Cyc o_) { }
+//CycHost(int x_) {
+//    A(B b_) { }
+//    B(A a_) { }
 //}
 
 /* a free (non-member) function is not a class member, hoisted body included. */

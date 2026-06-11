@@ -13,6 +13,11 @@
 namespace diagnostic {
 
 void report(Sink& sink, Record const& record) {
+    // Halt at the FIRST diagnostic — one error per compile. Later diagnostics are
+    // suppressed: they are frequently cascades of the first, and every stage
+    // already gates further work on hasErrors, so this just keeps the report to the
+    // single actionable error. Notes ride on the first record, so they survive.
+    if (!sink.records.empty()) return;
     sink.records.push_back(record);
 }
 

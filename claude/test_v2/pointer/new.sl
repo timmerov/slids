@@ -179,7 +179,7 @@ int32 main() {
     //__println("x= " + (nvp == nullptr));
 
     //-EXPECT-ERROR: A placement address must be a buffer-class pointer
-    //int32 yy = 0;
+    //int yy = 0;
     //int^ ypp = ^yy;
     //int[] qp = new(ypp) int[2];
     //qp[0] = 1;

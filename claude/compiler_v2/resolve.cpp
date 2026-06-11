@@ -3327,22 +3327,30 @@ void registerClassMembers(parse::Tree& tree, parse::Node& node, int frame,
 // member init can reference a sibling member bare.
 void resolveClassMemberInits(parse::Tree& tree, parse::Node& node,
                              diagnostic::Sink& diag) {
-    if (node.resolved_entry_id < 0) return;
-    int frame = tree.entries[node.resolved_entry_id].ns_frame_id;
-    tree.open_ns_frames.push_back(frame);
-    for (auto& m : node.children) {
-        if (!m) continue;
-        if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
-            for (auto& init : m->children) {
-                if (init) resolveExpr(tree, *init, diag);
+    // Each class opens its frame (so a member init may reference a sibling member
+    // bare), resolves its const/enum-member inits, then descends into its hoisted
+    // classes with the frame still open. The canonical walker owns the recursion.
+    auto classFrame = [&](parse::Node& cls) -> int {
+        return cls.resolved_entry_id >= 0
+            ? tree.entries[cls.resolved_entry_id].ns_frame_id : -1;
+    };
+    parse::forEachHoistedClass(node,
+        [&](parse::Node& cls) {
+            if (classFrame(cls) < 0) return;
+            tree.open_ns_frames.push_back(classFrame(cls));
+            for (auto& m : cls.children) {
+                if (!m) continue;
+                if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
+                    for (auto& init : m->children)
+                        if (init) resolveExpr(tree, *init, diag);
+                } else if (m->kind == parse::Kind::kEnumDecl) {
+                    resolveEnumMemberInits(tree, *m, diag);
+                }
             }
-        } else if (m->kind == parse::Kind::kEnumDecl) {
-            resolveEnumMemberInits(tree, *m, diag);
-        } else if (m->kind == parse::Kind::kClassDef) {
-            resolveClassMemberInits(tree, *m, diag);   // hoisted class's member inits
-        }
-    }
-    tree.open_ns_frames.pop_back();
+        },
+        [&](parse::Node& cls) {
+            if (classFrame(cls) >= 0) tree.open_ns_frames.pop_back();
+        });
 }
 
 bool fieldContributesNeed(parse::Tree const& tree, widen::TypeRef ft, bool ctor);
@@ -3460,37 +3468,41 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
 // after file-scope entries exist so the bodies can call file-scope functions.
 void resolveClassMemberBodies(parse::Tree& tree, parse::Node& node,
                               diagnostic::Sink& diag) {
-    // Keyed by the class's kSlid handle, stamped onto node.return_type by
-    // registerClass.
-    auto it = tree.classes.find(widen::strip(node.return_type));
-    if (it == tree.classes.end()) return;
-    // Open this class's frame so a ctor/dtor body (and a HOISTED class's body) can
-    // reach the class's OWN namespace members bare — its aliases/consts/enums and
-    // nested classes (`Inner`, `Outerger`). Recurses into nested classes with this
-    // frame still open, so they see the host's members too.
-    int frame = node.resolved_entry_id >= 0
-        ? tree.entries[node.resolved_entry_id].ns_frame_id : -1;
-    if (frame >= 0) tree.open_ns_frames.push_back(frame);
-    std::vector<std::string> const* saved = tree.method_fields;
-    tree.method_fields = &it->second.field_names;
-    for (auto& m : node.children) {
-        if (m && (m->name == "_$ctor" || m->name == "_$dtor")) {
-            // Resolve the implicit `self` (Class^) param type — for a LOCAL class
-            // its bare written name redirects to the scope-mangled kSlid, so a
-            // field access through self^ finds the class in tree.classes.
-            for (auto& p : m->params) {
-                if (p && p->return_type != widen::kNoType)
-                    resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
+    // Walk this class and its HOISTED descendants via the canonical walker. Each
+    // class OPENS ITS FRAME on enter (so a ctor/dtor body — and a hoisted class's
+    // body — reach the class's own members bare, and a hoisted class also sees its
+    // host's, since the host frame stays open across the descent) and pops on exit.
+    // A class with no registered frame is a duplicate — skip it (its members aren't
+    // registered either, so the descent does nothing).
+    auto classFrame = [&](parse::Node& cls) -> int {
+        return cls.resolved_entry_id >= 0
+            ? tree.entries[cls.resolved_entry_id].ns_frame_id : -1;
+    };
+    parse::forEachHoistedClass(node,
+        [&](parse::Node& cls) {
+            int frame = classFrame(cls);
+            if (frame < 0) return;
+            tree.open_ns_frames.push_back(frame);
+            auto it = tree.classes.find(widen::strip(cls.return_type));
+            std::vector<std::string> const* saved = tree.method_fields;
+            tree.method_fields = &it->second.field_names;
+            for (auto& m : cls.children) {
+                if (m && (m->name == "_$ctor" || m->name == "_$dtor")) {
+                    // Resolve the implicit `self` (Class^) param type — its bare
+                    // written name redirects to the scoped kSlid, so a field access
+                    // through self^ finds the class in tree.classes.
+                    for (auto& p : m->params) {
+                        if (p && p->return_type != widen::kNoType)
+                            resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
+                    }
+                    resolveFunctionBody(tree, *m, diag, /*nested=*/false);
+                }
             }
-            resolveFunctionBody(tree, *m, diag, /*nested=*/false);
-        }
-    }
-    tree.method_fields = saved;
-    for (auto& m : node.children) {
-        if (m && m->kind == parse::Kind::kClassDef)
-            resolveClassMemberBodies(tree, *m, diag);   // hoisted class's ctor/dtor
-    }
-    if (frame >= 0) tree.open_ns_frames.pop_back();
+            tree.method_fields = saved;
+        },
+        [&](parse::Node& cls) {
+            if (classFrame(cls) >= 0) tree.open_ns_frames.pop_back();
+        });
 }
 
 // Resolve a class's field-default expressions (their ident references), after

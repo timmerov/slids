@@ -320,13 +320,13 @@ void classifyNamespace(parse::Tree& tree, parse::Node& node,
 // ctor/dtor must be typed too, else desugar lowers an un-typed field access).
 void classifyClassMemberBodies(parse::Tree& tree, parse::Node& node,
                                diagnostic::Sink& diag) {
-    for (auto& m : node.children) {
-        if (!m) continue;
-        if (m->name == "_$ctor" || m->name == "_$dtor")
-            classifyFunctionBody(tree, *m, diag);
-        else if (m->kind == parse::Kind::kClassDef)
-            classifyClassMemberBodies(tree, *m, diag);
-    }
+    parse::forEachHoistedClass(node,
+        [&](parse::Node& cls) {
+            for (auto& m : cls.children)
+                if (m && (m->name == "_$ctor" || m->name == "_$dtor"))
+                    classifyFunctionBody(tree, *m, diag);
+        },
+        [](parse::Node&) {});
 }
 
 // Walk a left-leaning '+' chain in a print-intrinsic argument. Each leaf

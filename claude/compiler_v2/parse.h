@@ -436,4 +436,20 @@ int  findInLiveScopes(Tree const& t, std::string const& name);   // -1 if none
 int  findInFrame(Tree const& t, int frame_id, std::string const& name);
 widen::TypeRef entryType(Tree const& t, int entry_id);
 
+// THE canonical walk over a class and its HOISTED descendants (a class's hoisted
+// classes are exactly its kClassDef-kind children, recursively). One place owns
+// the recursion so a new per-class step or nesting rule lands once — resolve,
+// classify, and any future stage call this rather than re-rolling the descent.
+// `enter(cls)` runs before descending into cls's nested classes; `exit(cls)` after
+// (so a frame opened in enter stays open across the descent and pops in exit).
+template <class Enter, class Exit>
+void forEachHoistedClass(Node& cls, Enter enter, Exit exit) {
+    enter(cls);
+    for (auto& m : cls.children) {
+        if (m && m->kind == Kind::kClassDef)
+            forEachHoistedClass(*m, enter, exit);
+    }
+    exit(cls);
+}
+
 }  // namespace parse
