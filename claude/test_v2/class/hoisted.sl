@@ -185,14 +185,6 @@ int32 main() {
 //    B(A a_) { }
 //}
 
-/* a free (non-member) function is not a class member, hoisted body included. */
-//-EXPECT-ERROR: A class body holds the constructor
-//HasFn(int x_) {
-//    Bad(int y_) {
-//        int helper() { return 0; }
-//    }
-//}
-
 /* two hoisted classes of the same name in one host collide. */
 //-EXPECT-ERROR: Duplicate definition of class 'Dup'
 //DupHost(int x_) {

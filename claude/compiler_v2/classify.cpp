@@ -259,6 +259,7 @@ std::string defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kSwapStmt:
         case parse::Kind::kDestructureStmt:
         case parse::Kind::kCallStmt:
+        case parse::Kind::kMethodCallStmt:
         case parse::Kind::kCallExpr:
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
@@ -316,14 +317,15 @@ void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
 void classifyNamespace(parse::Tree& tree, parse::Node& node,
                        diagnostic::Sink& diag);
 
-// Type-check a class's ctor/dtor bodies, recursing into HOISTED classes (whose
-// ctor/dtor must be typed too, else desugar lowers an un-typed field access).
+// Type-check a class's member-function bodies — ctor, dtor, and methods (all
+// kFunctionDef, all self-bound) — recursing into HOISTED classes (whose bodies
+// must be typed too, else desugar lowers an un-typed field access).
 void classifyClassMemberBodies(parse::Tree& tree, parse::Node& node,
                                diagnostic::Sink& diag) {
     parse::forEachHoistedClass(node,
         [&](parse::Node& cls) {
             for (auto& m : cls.children)
-                if (m && (m->name == "_$ctor" || m->name == "_$dtor"))
+                if (m && m->kind == parse::Kind::kFunctionDef)
                     classifyFunctionBody(tree, *m, diag);
         },
         [](parse::Node&) {});
@@ -1169,6 +1171,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kDeleteStmt:
         case parse::Kind::kDtorCallStmt:
         case parse::Kind::kCallStmt:
+        case parse::Kind::kMethodCallStmt:
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
         case parse::Kind::kNamespaceDecl:
@@ -2198,6 +2201,58 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // Pick the overload (if any) and infer each arg with the chosen
             // param type as context.
             classifyCall(tree, s, diag);
+            return;
+        }
+        case parse::Kind::kMethodCallStmt: {
+            // obj.method(args) — infer the receiver, resolve the method on its
+            // class's member frame, arity-check + infer the args. desugar reads the
+            // receiver's class off children[0].inferred_type to mint the symbol.
+            parse::Node& recv = *s.children[0];
+            inferExpr(tree, recv, widen::kNoType, diag);
+            if (recv.inferred_type == widen::kNoType) return;
+            widen::TypeRef rs = widen::strip(recv.inferred_type);
+            if (!(widen::form(rs) == widen::Type::Form::kSlid
+                  && tree.classes.count(rs) > 0)) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "A method call requires a class object; got '"
+                    + widen::spellOrEmpty(recv.inferred_type) + "'.", {}});
+                return;
+            }
+            int class_frame = -1;
+            for (auto const& e : tree.entries) {
+                if (e.kind == parse::EntryKind::kClass && e.slids_type == rs) {
+                    class_frame = e.ns_frame_id; break;
+                }
+            }
+            int methodId = -1;
+            for (std::size_t i = 0; class_frame >= 0 && i < tree.entries.size(); i++) {
+                parse::Entry const& e = tree.entries[i];
+                if (e.owner_ns_frame == class_frame && e.name == s.name
+                    && e.kind == parse::EntryKind::kFunction) { methodId = (int)i; break; }
+            }
+            if (methodId < 0) {
+                diagnostic::report(diag, {s.file_id, s.name_tok,
+                    "Class '" + widen::spell(rs) + "' has no method '" + s.name + "'.", {}});
+                return;
+            }
+            parse::Entry const& m = tree.entries[methodId];
+            std::size_t nargs = s.children.size() - 1;
+            if (nargs != m.param_types.size()) {
+                diagnostic::report(diag, {s.file_id, s.name_tok,
+                    "Method '" + s.name + "' expects "
+                    + std::to_string(m.param_types.size()) + " arguments, got "
+                    + std::to_string(nargs) + ".", {}});
+                return;
+            }
+            for (std::size_t i = 1; i < s.children.size(); i++)
+                if (s.children[i]) inferExpr(tree, *s.children[i], m.param_types[i - 1], diag);
+            // Cache the FULL lowered-call signature (implicit self + user params) so
+            // codegen's emitCall arity check holds for the desugared call.
+            s.param_types.clear();
+            s.param_types.push_back(widen::internPointer(rs));
+            for (widen::TypeRef pt : m.param_types) s.param_types.push_back(pt);
+            s.return_type = m.slids_type;     // emitCall reads return_type
+            s.inferred_type = m.slids_type;
             return;
         }
         case parse::Kind::kReturnStmt: {

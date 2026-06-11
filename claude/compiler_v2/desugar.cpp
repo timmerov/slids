@@ -47,6 +47,10 @@ ast::Kind toAstKind(parse::Kind k) {
             // slot index; never reaches toAstKind.
             assert(false && "toAstKind: kFieldExpr should be lowered by copyNode");
             __builtin_unreachable();
+        case parse::Kind::kMethodCallStmt:
+            // Intercepted by copyNode and lowered to a kCallStmt; never reaches here.
+            assert(false && "toAstKind: method call should be lowered by copyNode");
+            __builtin_unreachable();
         case parse::Kind::kEnumDecl:
             // Consumed by resolve (lowered to alias+namespace+consts / bare
             // consts); members folded by constfold. The node is dropped on copy.
@@ -193,6 +197,8 @@ std::unique_ptr<ast::Node> lowerForTuple(parse::Node const& p,
                                          parse::Tree const& tree, int& next_id);
 std::unique_ptr<ast::Node> lowerFieldExpr(parse::Node const& p,
                                           parse::Tree const& tree, int& next_id);
+std::unique_ptr<ast::Node> lowerMethodCall(parse::Node const& p,
+                                           parse::Tree const& tree, int& next_id);
 
 std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tree,
                                     int& next_id) {
@@ -211,6 +217,11 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     // is a named tuple, so field access IS tuple-slot access.
     if (p.kind == parse::Kind::kFieldExpr) {
         return lowerFieldExpr(p, tree, next_id);
+    }
+    // `obj.method(args)` lowers to a normal call of the lifted <Class>__method with
+    // the receiver's address prepended as `self`.
+    if (p.kind == parse::Kind::kMethodCallStmt) {
+        return lowerMethodCall(p, tree, next_id);
     }
     auto node = std::make_unique<ast::Node>();
     node->kind = toAstKind(p.kind);
@@ -1032,6 +1043,41 @@ std::unique_ptr<ast::Node> lowerFieldExpr(parse::Node const& p,
     return node;
 }
 
+// Lower `obj.method(args)` to a normal call of the lifted <Class>__method, with the
+// receiver's ADDRESS prepended as the implicit `self`. children[0] = receiver,
+// children[1..] = args (classify validated the method + arity). The symbol matches
+// the lift's `classSymbol(class) + "__" + method`.
+std::unique_ptr<ast::Node> lowerMethodCall(parse::Node const& p,
+                                           parse::Tree const& tree, int& next_id) {
+    assert(!p.children.empty() && p.children[0] && "method call needs a receiver");
+    parse::Node const& recv = *p.children[0];
+    widen::TypeRef cls = widen::strip(recv.inferred_type);
+    assert(widen::form(cls) == widen::Type::Form::kSlid
+        && "lowerMethodCall: receiver must be a class");
+
+    auto call = std::make_unique<ast::Node>();
+    call->kind = ast::Kind::kCallStmt;
+    call->name = widen::classSymbol(cls) + "__" + p.name;
+    call->return_type = p.return_type;   // emitCall reads return_type
+    call->param_types = p.param_types;   // [self, user...] — classify cached it
+    call->file_id = p.file_id;
+    call->tok = p.tok;
+    call->name_tok = p.name_tok;
+
+    auto self = std::make_unique<ast::Node>();   // self = ^receiver  (Class^)
+    self->kind = ast::Kind::kAddrOfExpr;
+    self->inferred_type = widen::internPointer(cls);
+    self->file_id = recv.file_id;
+    self->tok = recv.tok;
+    self->children.push_back(copyNode(recv, tree, next_id));
+    call->children.push_back(std::move(self));
+
+    for (std::size_t i = 1; i < p.children.size(); i++)
+        if (p.children[i])
+            call->children.push_back(copyNode(*p.children[i], tree, next_id));
+    return call;
+}
+
 }  // namespace
 
 void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
@@ -1076,12 +1122,13 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
             // def_id for a local), matching codegen's call/struct/sizeof sites.
             std::string sym = widen::classSymbol(widen::strip(c->return_type));
             for (auto const& m : c->children) {
-                if (!m) continue;
-                bool is_ctor = (m->name == "_$ctor");
-                bool is_dtor = (m->name == "_$dtor");
-                if (!is_ctor && !is_dtor) continue;
+                if (!m || m->kind != parse::Kind::kFunctionDef) continue;
                 auto fn = copyNode(*m, in, next_id);
-                fn->name = sym + (is_ctor ? "__$ctor" : "__$dtor");
+                // ctor/dtor lift to the hook symbols; a METHOD lifts to
+                // <Class>__<method> (self is already params[0]). All self-bound.
+                if (m->name == "_$ctor")      fn->name = sym + "__$ctor";
+                else if (m->name == "_$dtor") fn->name = sym + "__$dtor";
+                else                          fn->name = sym + "__" + m->name;
                 prog->children.push_back(std::move(fn));
             }
         }

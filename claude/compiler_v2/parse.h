@@ -39,6 +39,9 @@ enum class Kind {
                    // runs the dtor on the receiver, NO free. children[0] = the class
                    // lvalue (the object whose destructor runs).
     kCallStmt,
+    kMethodCallStmt, // obj.method(args); — name = method, children[0] = receiver
+                     // lvalue, children[1..] = args. Desugar lowers to a normal
+                     // call of the lifted <Class>__method with `^receiver` prepended.
     kCallExpr,     // value-producing call; name = callee, children = args
     kExprStmt,     // expression evaluated for effect, value discarded; children[0] = expr
     kAliasDecl,    // alias Name = Type; name = alias, return_type = target spelling

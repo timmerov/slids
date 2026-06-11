@@ -1089,6 +1089,38 @@ void noteCapture(parse::Tree& tree, int id) {
     tree.capture_node->captures.push_back(id);
 }
 
+// Inside a member-function body (ctor / dtor / method), is `name` one of the class
+// fields? (method_fields is the field-name list; null outside a member body.)
+bool isMethodField(parse::Tree const& tree, std::string const& name) {
+    if (!tree.method_fields) return false;
+    for (auto const& f : *tree.method_fields) if (f == name) return true;
+    return false;
+}
+
+// Build `self^.field` — a kFieldExpr over a deref of the implicit `self` param.
+// The one place this shape is minted, shared by the field READ rewrite (in
+// resolveExpr) and the field WRITE rewrite (a bare assignment target).
+std::unique_ptr<parse::Node> buildSelfField(std::string const& field,
+                                            int file_id, int tok) {
+    auto self_id = std::make_unique<parse::Node>();
+    self_id->kind = parse::Kind::kIdentExpr;
+    self_id->name = "self";
+    self_id->file_id = file_id;
+    self_id->tok = tok;
+    auto deref = std::make_unique<parse::Node>();
+    deref->kind = parse::Kind::kDerefExpr;
+    deref->file_id = file_id;
+    deref->tok = tok;
+    deref->children.push_back(std::move(self_id));
+    auto fe = std::make_unique<parse::Node>();
+    fe->kind = parse::Kind::kFieldExpr;
+    fe->name = field;
+    fe->file_id = file_id;
+    fe->tok = tok;
+    fe->children.push_back(std::move(deref));
+    return fe;
+}
+
 void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                  bool unevaluated) {
     switch (e.kind) {
@@ -1110,31 +1142,16 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                     return;
                 }
                 if (id < 0) {
-                    // Inside a ctor/dtor body, a bare name matching a class field
-                    // is `self^.field`. Locals shadow fields (we only reach here
-                    // when no local/const/etc. resolved), so rewrite this node to
-                    // a kFieldExpr over `self^` and resolve that.
-                    if (tree.method_fields) {
-                        bool is_field = false;
-                        for (auto const& f : *tree.method_fields)
-                            if (f == e.name) { is_field = true; break; }
-                        if (is_field) {
-                            auto self_id = std::make_unique<parse::Node>();
-                            self_id->kind = parse::Kind::kIdentExpr;
-                            self_id->name = "self";
-                            self_id->file_id = e.file_id;
-                            self_id->tok = e.tok;
-                            auto deref = std::make_unique<parse::Node>();
-                            deref->kind = parse::Kind::kDerefExpr;
-                            deref->file_id = e.file_id;
-                            deref->tok = e.tok;
-                            deref->children.push_back(std::move(self_id));
-                            e.kind = parse::Kind::kFieldExpr;   // e.name stays the field
-                            e.children.clear();
-                            e.children.push_back(std::move(deref));
-                            resolveExpr(tree, *e.children[0], diag, unevaluated);
-                            return;
-                        }
+                    // Inside a member body, a bare name matching a class field is
+                    // `self^.field`. Locals shadow fields (we only reach here when
+                    // no local/const/etc. resolved), so rewrite this READ node to a
+                    // kFieldExpr over `self^` (buildSelfField) and resolve that.
+                    if (isMethodField(tree, e.name)) {
+                        auto fe = buildSelfField(e.name, e.file_id, e.tok);
+                        e.kind = parse::Kind::kFieldExpr;   // e.name stays the field
+                        e.children = std::move(fe->children);
+                        resolveExpr(tree, *e.children[0], diag, unevaluated);
+                        return;
                     }
                     if (namespaceMemberExists(tree, e.name)) {
                         diagnostic::report(diag, {e.file_id, e.tok,
@@ -1482,6 +1499,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
         case parse::Kind::kDeleteStmt:
         case parse::Kind::kDtorCallStmt:
         case parse::Kind::kCallStmt:
+        case parse::Kind::kMethodCallStmt:
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
         case parse::Kind::kNamespaceDecl:
@@ -2124,6 +2142,21 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             return Completion::Normal;
         }
         case parse::Kind::kAssignStmt: {
+            // A bare assignment target matching a class FIELD (no local shadows it)
+            // is a field STORE through `self^.field` — the write-side mirror of the
+            // read rewrite. Without this it would fall into the inferred-init path
+            // below and invent a phantom local that shadows the field. Becomes a
+            // kStoreStmt [self^.field, rhs]; the rhs's own field reads rewrite too.
+            if (!isQualified(s) && resolveName(tree, s.name) < 0
+                && isMethodField(tree, s.name)) {
+                auto lvalue = buildSelfField(s.name, s.file_id, s.name_tok);
+                s.kind = parse::Kind::kStoreStmt;
+                s.children.insert(s.children.begin(), std::move(lvalue));
+                resolveStoreTarget(tree, *s.children[0], diag);
+                if (s.children.size() > 1 && s.children[1])
+                    resolveExpr(tree, *s.children[1], diag);
+                return Completion::Normal;
+            }
             // Inferred-init: a typeless assign to an UNDECLARED bare name declares
             // a fresh local whose type classify infers from the rhs (write-back).
             // A reassign (target already a local) and a wrong-kind target (const /
@@ -2270,6 +2303,13 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             } else {
                 resolveUserCall(tree, s, diag);
             }
+            return Completion::Normal;
+        }
+        case parse::Kind::kMethodCallStmt: {
+            // Resolve the receiver (children[0]) and the args (children[1..]); the
+            // method name binds in classify against the receiver's class type.
+            for (auto& ch : s.children)
+                if (ch) resolveExpr(tree, *ch, diag);
             return Completion::Normal;
         }
         case parse::Kind::kAliasDecl: {
@@ -3319,6 +3359,35 @@ void registerClassMembers(parse::Tree& tree, parse::Node& node, int frame,
     for (parse::Node* c : nested) registerClassName(tree, *c, diag, frame);
     for (parse::Node* c : nested) registerClassBody(tree, *c, diag);
     for (parse::Node* c : nested) checkClassByValueAcyclic(tree, *c, diag);
+    // Methods — named member functions (NOT the _$ctor/_$dtor hooks). Register a
+    // kFunction member so `obj.method` resolves; param_types are the USER params
+    // (self, params[0], is implicit and prepended at the call). Bodies resolve in
+    // resolveClassMemberBodies. The frame is open, so param/return types may name
+    // sibling members.
+    for (auto& m : node.children) {
+        if (!m || m->kind != parse::Kind::kFunctionDef) continue;
+        if (m->name == "_$ctor" || m->name == "_$dtor") continue;
+        if (isDup(*m)) continue;
+        resolveDeclType(tree, m->return_type, m->file_id, m->tok, diag);
+        std::vector<widen::TypeRef> ptypes;
+        for (std::size_t i = 1; i < m->params.size(); ++i) {   // skip self
+            auto& p = m->params[i];
+            if (!p) continue;
+            if (p->return_type != widen::kNoType)
+                resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
+            ptypes.push_back(p->return_type);
+        }
+        parse::Entry e;
+        e.kind = parse::EntryKind::kFunction;
+        e.name = m->name;
+        e.slids_type = m->return_type;
+        e.param_types = std::move(ptypes);
+        e.file_id = m->file_id;
+        e.tok = m->name_tok;
+        e.defined = true;
+        e.owner_ns_frame = frame;
+        m->resolved_entry_id = parse::addEntry(tree, std::move(e));
+    }
     tree.open_ns_frames.pop_back();
 }
 
@@ -3487,10 +3556,12 @@ void resolveClassMemberBodies(parse::Tree& tree, parse::Node& node,
             std::vector<std::string> const* saved = tree.method_fields;
             tree.method_fields = &it->second.field_names;
             for (auto& m : cls.children) {
-                if (m && (m->name == "_$ctor" || m->name == "_$dtor")) {
-                    // Resolve the implicit `self` (Class^) param type — its bare
-                    // written name redirects to the scoped kSlid, so a field access
-                    // through self^ finds the class in tree.classes.
+                // Every member FUNCTION — ctor, dtor, AND methods — is self-bound:
+                // resolve its params (incl. the implicit `self`, whose bare name
+                // redirects to the scoped kSlid so a field access through self^ finds
+                // the class) and its body, with method_fields driving the field
+                // rewrite. A method is a ctor/dtor with a user name.
+                if (m && m->kind == parse::Kind::kFunctionDef) {
                     for (auto& p : m->params) {
                         if (p && p->return_type != widen::kNoType)
                             resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);

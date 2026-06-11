@@ -1294,6 +1294,20 @@ struct Parser {
                     lhs = std::move(d);
                 }
             }
+            // `obj.method(args);` — a method call. The chain's last step is the
+            // method name; its base is the receiver. (A `(` after any other lvalue
+            // chain falls through to the `=` error below.)
+            if (peek().kind == token::Kind::kLParen
+                && lhs->kind == parse::Kind::kFieldExpr) {
+                advance();   // (
+                auto call = newNodeAt(parse::Kind::kMethodCallStmt, stmt_file, stmt_tok);
+                call->name = lhs->name;
+                call->name_tok = lhs->name_tok;
+                call->children.push_back(std::move(lhs->children[0]));   // receiver
+                if (!parseCallArgs(*call)) return nullptr;               // args -> children[1..]
+                if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+                return call;
+            }
             if (peek().kind == token::Kind::kArrowLeft
                 || peek().kind == token::Kind::kArrowBoth) {
                 return finishMoveSwap(std::move(lhs), stmt_file, stmt_tok);
@@ -2352,9 +2366,23 @@ struct Parser {
                     node->children.push_back(std::move(m));
                     continue;
                 }
+                // A METHOD — a named function member (`void print() {...}`). Like
+                // ctor/dtor it is self-bound: inject the implicit `self` (Class^) as
+                // the first param. The body is a full function body (parseFunctionDef).
+                if (looksLikeFunctionDef()) {
+                    auto m = parseFunctionDef();
+                    if (!m) return nullptr;
+                    auto self = newNodeAt(parse::Kind::kParam, m->file_id, m->name_tok);
+                    self->name = "self";
+                    self->name_tok = m->name_tok;
+                    self->return_type = widen::internOrNone(self_type);
+                    m->params.insert(m->params.begin(), std::move(self));
+                    node->children.push_back(std::move(m));
+                    continue;
+                }
                 error("A class body holds the constructor '_()', the destructor "
-                      "'~()', and member definitions (aliases, constants, enums, "
-                      "classes).");
+                      "'~()', member definitions (aliases, constants, enums, "
+                      "classes), and methods.");
                 return nullptr;
             }
             int m_file = peek().file_id;
