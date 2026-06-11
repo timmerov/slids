@@ -20,7 +20,7 @@ negatives:
 	@../run_negatives.sh $(addsuffix .sl,$(SAMPLES))
 
 positives: all
-	@../run_positives.sh call $(SAMPLES)
+	@../run_positives.sh function $(SAMPLES)
 
 define SAMPLE_RULES
 $(1): $(BIN_DIR)/$(1)

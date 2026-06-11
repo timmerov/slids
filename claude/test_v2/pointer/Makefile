@@ -21,7 +21,7 @@ negatives:
 	@../run_negatives.sh $(addsuffix .sl,$(SAMPLES))
 
 positives: all
-	@../run_positives.sh lexer $(SAMPLES)
+	@../run_positives.sh pointer $(SAMPLES)
 
 define SAMPLE_RULES
 $(1): $(BIN_DIR)/$(1)

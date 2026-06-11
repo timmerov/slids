@@ -28,7 +28,7 @@ negatives:
 	@../run_negatives.sh $(addsuffix .sl,$(SAMPLES))
 
 positives: all
-	@../run_positives.sh parser $(SAMPLES)
+	@../run_positives.sh misc $(SAMPLES)
 
 define SAMPLE_RULES
 $(1): $(BIN_DIR)/$(1)

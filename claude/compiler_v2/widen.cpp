@@ -566,7 +566,13 @@ bool commonType(std::string const& t1, std::string const& t2, std::string& out) 
     if (t1 == t2) { out = t1; return true; }
     TypeKind k1, k2;
     if (!classify(t1, k1) || !classify(t2, k2)) return false;
-    if (k1.cat == k2.cat && k1.bits == k2.bits) { out = t1; return true; }
+    if (k1.cat == k2.cat && k1.bits == k2.bits) {
+        // Same category and width but possibly different spellings (no-width `int`
+        // vs explicit `int32`): prefer the explicit-width spelling, order-
+        // independently — the shortcut `out = t1` would leak operand order.
+        out = spellCommon(k1.cat, k1.bits, t1, t2);
+        return true;
+    }
 
     bool int1 = k1.cat == Category::kBool
              || k1.cat == Category::kSignedInt
