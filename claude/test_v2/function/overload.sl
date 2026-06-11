@@ -61,6 +61,9 @@ int32 withdef(float32 a) {
     return 999;
 }
 
+/* parameter mismatch */
+void intparam(int x) { }
+
 int32 main() {
     __println("area(5) = " + area(5));              // 25
     __println("area(3, 4) = " + area(3, 4));        // 12
@@ -80,6 +83,10 @@ int32 main() {
     __println("withdef(5) = " + withdef(5));        // 105 (int overload, b=100)
     __println("withdef(5, 6) = " + withdef(5, 6));  // 11
     __println("withdef(2.5) = " + withdef(2.5));    // 999 (float overload)
+
+    /* missed compile error - bad ll */
+    intparam("passed string");
+
     return 0;
 }
 
