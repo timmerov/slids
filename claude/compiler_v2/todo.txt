@@ -19,14 +19,28 @@ BUGS (found, deferred)
     Needs the class copy path (whole-value copy vs field-init). prerequisite: class
     copy/move.
 
-  * NON-CLASS ARG TYPE MISMATCH PASSES SILENTLY AT A CALL — a wrong-typed argument
-    that is NOT a class (e.g. a `char[]` to an `int` param) is accepted silently at
-    BOTH a function call and a method call. The per-arg check (checkStrongConstAssign
-    + checkSlidAssign) rejects a class->primitive and a const violation, but a plain
-    non-class width/convert mismatch (char[]->int, and likely other cross-family
-    pairs) is not rejected at the call site — only literals are fit-checked. Should
-    reject like a var-decl/assignment does. General (not method-specific); found via
-    the methods arg-check audit.
+  * ASSIGNMENT RELATION — UNIFY THE CHECK. The one implicit-conversion relation is
+    now spec'd in readme.txt (the ASSIGNMENT RELATION section + the integer / float /
+    pointer / tuple-array sub-matrices). Code implements it as DIVERGENT FRAGMENTS:
+    checkStrongConstAssign / checkSlidAssign / checkPtrAssign / checkArrayValueAssign
+    plus classifyClassInit's bespoke isAgg, each site running a different SUBSET.
+    Collapse into ONE checkValueAssign(tree, dest, rhs, diag) called at EVERY
+    assignment-family site: decl-init, assign, store, move, single + overload call
+    args, method args, return, field-init, and the per-element pairs from destructure
+    + array/tuple lowering. Swap (<-->) stays EXACT-type, outside the relation.
+    SYMPTOMS of the fragmentation (all currently leaked): a non-class width/convert
+    mismatch (char[]->int) passes silently at BOTH a function and a method call (the
+    per-arg check ran only checkStrongConstAssign + checkSlidAssign, dropping
+    checkPtrAssign + the array path) — overload.sl:88; tuple/array->scalar and
+    scalar->array slip past too. Found via overload.sl + the methods arg-check audit.
+    SUB-SEAM — checkArrayValueAssign exact-match -> per-element. An array-VALUE copy
+    is exact-deepStrip today; the relation says shape-match + per-element COMPATIBILITY
+    (`int8[4] -> int[4]` should work, each int8 widening to int). Requires codegen to
+    lower an aggregate assign to per-element converts; a whole memcpy is only the
+    degenerate all-identical case.
+    The CLASS row of the relation is op= (still unlanded — see CLASS COPY-INIT above);
+    STRONG-CONST WIDENING (below) is the strong-literal arm already landed at the
+    scalar assignment sites.
 
 
 DEFERRED TESTS

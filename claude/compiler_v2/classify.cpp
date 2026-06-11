@@ -384,11 +384,35 @@ bool sameClass(std::string const& a, std::string const& b) {
     return ka.cat == kb.cat && ka.bits == kb.bits;
 }
 
+// A NON-PRIMITIVE value (class / tuple / array) passed as a function or method
+// ARGUMENT is auto-promoted to a reference: it is passed by reference even when
+// written by value (codegen materializes the value + passes its address — see
+// emitCall/isValueByRef). When the parameter is a reference (`T^`) and the arg is
+// a non-primitive value, the arg is therefore checked against the POINTEE `T`, not
+// the reference. Returns that pointee, or kNoType when no promotion applies (a
+// primitive, an already-pointer arg, or a non-reference parameter). Promotion is
+// argument-passing only; it does not apply at decls, assigns, stores, or returns.
+widen::TypeRef autoRefPointee(widen::TypeRef param, parse::Node const& arg) {
+    using F = widen::Type::Form;
+    if (widen::form(widen::strip(param)) != F::kPointer) return widen::kNoType;
+    F af = widen::form(widen::strip(arg.inferred_type));
+    if (af != F::kSlid && af != F::kTuple && af != F::kArray) return widen::kNoType;
+    return widen::get(widen::strip(param)).pointee;
+}
+
 // Conversion cost of argument `a` to parameter type `param` for overload ranking:
 // 0 = exact (same class), 1 = a widening (literal flex, or within-family widen),
 // -1 = not convertible (narrowing / cross-family / un-typeable).
 int argConvertCost(parse::Node const& a, std::string const& param) {
     std::string at = widen::spellOrEmpty(widen::strip(a.inferred_type));   // see through alias
+    // A non-primitive value auto-promotes to a reference param: viable when the
+    // arg type matches the param's pointee (exact, mirroring the value checks).
+    widen::TypeRef pr = widen::internOrNone(param);
+    if (pr != widen::kNoType) {
+        widen::TypeRef pointee = autoRefPointee(pr, a);
+        if (pointee != widen::kNoType)
+            return sameClass(at, widen::spellOrEmpty(widen::strip(pointee))) ? 0 : -1;
+    }
     if (at.empty()) return -1;
     if (sameClass(at, param)) return 0;
     if (isLiteralKind(a.kind)) {
@@ -411,6 +435,10 @@ void checkSlidAssign(widen::TypeRef lvalue_type, parse::Node const& rhs,
 // reused for an array-typed TUPLE SLOT.
 void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
                             parse::Node& rhs, diagnostic::Sink& diag);
+// The one ASSIGNMENT RELATION (defined just before classifyStmt): the canonical
+// post-inference check run at every assignment-family site.
+void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
+                      diagnostic::Sink& diag);
 // Build a constructed value for a class from an optional init (defined later).
 std::unique_ptr<parse::Node> constructClass(parse::Tree& tree,
                                             parse::ClassInfo const& info,
@@ -1245,8 +1273,9 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             widen::TypeRef destRef = (i < s.param_types.size())
                 ? s.param_types[i] : widen::kNoType;
             inferExpr(tree, *s.children[i], destRef, diag);
-            checkStrongConstAssign(destRef, *s.children[i], diag);
-            checkSlidAssign(destRef, *s.children[i], diag);
+            widen::TypeRef byref = autoRefPointee(destRef, *s.children[i]);
+            checkValueAssign(tree, byref != widen::kNoType ? byref : destRef,
+                             *s.children[i], diag);
         }
         return;
     }
@@ -1297,8 +1326,9 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
         if (!s.children[i]) continue;
         inferExpr(tree, *s.children[i], s.param_types[i], diag);
         if (i < s.param_types.size()) {
-            checkStrongConstAssign(s.param_types[i], *s.children[i], diag);
-            checkSlidAssign(s.param_types[i], *s.children[i], diag);
+            widen::TypeRef byref = autoRefPointee(s.param_types[i], *s.children[i]);
+            checkValueAssign(tree, byref != widen::kNoType ? byref : s.param_types[i],
+                             *s.children[i], diag);
         }
     }
 }
@@ -1555,8 +1585,8 @@ void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
                     + widen::spellOrEmpty(elem) + "'.", {}});
             }
         } else {
-            checkPtrAssign(elem, *el, diag);
-            checkStrongConstAssign(elem, *el, diag);
+            // A SCALAR element re-enters the relation against the element type.
+            checkValueAssign(tree, elem, *el, diag);
         }
     }
 }
@@ -1767,24 +1797,9 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
         else if (fdefault) slot = cloneExpr(*fdefault);
         else slot = classZeroValue(tree, ft, s.file_id, s.tok, diag);
         inferExpr(tree, *slot, ft, diag);
-        checkStrongConstAssign(ft, *slot, diag);
-        // Reject an aggregate-vs-scalar mismatch — the case codegen would turn
-        // into invalid IR: a class/tuple/array VALUE into a scalar field (e.g.
-        // copy-init `T b = a;`). Numeric / pointer fits ride the strong-const +
-        // codegen-convert path, as for a var decl.
-        auto isAgg = [](widen::TypeRef t) {
-            widen::Type::Form f = widen::form(widen::strip(t));
-            return f == widen::Type::Form::kSlid
-                || f == widen::Type::Form::kTuple
-                || f == widen::Type::Form::kArray;
-        };
-        widen::TypeRef vt = slot->inferred_type;
-        if (vt != widen::kNoType && isAgg(ft) != isAgg(vt)) {
-            diagnostic::report(diag, {slot->file_id, slot->tok,
-                "Cannot initialize field '" + info.field_names[i] + "' of type '"
-                + widen::spellOrEmpty(ft) + "' from a value of type '"
-                + widen::spellOrEmpty(vt) + "'.", {}});
-        }
+        // The field's init obeys the full assignment relation (pointer, strong-const,
+        // class, and the aggregate-vs-scalar / array / tuple gates).
+        checkValueAssign(tree, ft, *slot, diag);
         tup->children.push_back(std::move(slot));
     }
     tup->inferred_type = info.type;
@@ -1840,6 +1855,67 @@ std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty
     n->kind = parse::Kind::kIntLiteral;   // placeholder; the error short-circuits codegen
     n->text = "0";
     return n;
+}
+
+// The ONE assignment relation: may a source VALUE (`rhs`, already inferred by the
+// caller) flow into a target SLOT of type `dest`, and with what implicit
+// conversion? This is the canonical chain — the cross-shape array<->tuple arms, the
+// array/tuple VALUE gates, then the pointer / strong-const / class terminal checks —
+// run at EVERY assignment-family site (decl-init, assign, store, move, call/method
+// args, return, field-init, per-element). inferExpr is the caller's job, BEFORE
+// this; the helper is the post-inference check only. (Swap and class CONSTRUCTION
+// sit outside the relation — they do not call this.)
+void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
+                      diagnostic::Sink& diag) {
+    if (dest == widen::kNoType) return;
+    if (isArrayFromTuple(dest, rhs)) {
+        classifyArrayFromTuple(tree, dest, rhs, diag);
+    } else if (isArrayFromTupleValue(dest, rhs)) {
+        classifyArrayFromTupleValue(dest, rhs, diag);
+    } else if (isTupleFromArrayValue(dest, rhs)) {
+        classifyTupleFromArrayValue(dest, rhs, diag);
+    } else if (checkArrayValueAssign(dest, rhs, diag)) {
+        // array VALUE rhs — handled (matched, or mismatch reported).
+    } else {
+        // No cross-shape arm fired and the rhs is not an array value. A tuple/array
+        // DEST, or a tuple VALUE rhs, that reaches here is an aggregate-vs-scalar or
+        // tuple-vs-tuple case the arms do not cover — gate it before the scalar /
+        // pointer / class checks, which would silently accept the mismatch.
+        auto isAgg = [](widen::TypeRef t) {
+            widen::Type::Form f = widen::form(widen::strip(t));
+            return f == widen::Type::Form::kTuple || f == widen::Type::Form::kArray;
+        };
+        bool destAgg = isAgg(dest);
+        bool rhsAgg = isAgg(rhs.inferred_type);
+        if (destAgg && rhsAgg) {
+            // Both tuple/array; the arms leave only tuple <- tuple. A tuple LITERAL
+            // already flexed its slots into `dest` via inferExpr (leave it); a tuple
+            // VALUE must match the target exactly (per-element compat is a later
+            // step — see plan-assignment.txt).
+            if (rhs.kind != parse::Kind::kTupleExpr
+                && rhs.inferred_type != widen::kNoType
+                && widen::deepStrip(dest) != widen::deepStrip(rhs.inferred_type)) {
+                diagnostic::report(diag, {rhs.file_id, rhs.tok,
+                    "Cannot assign '" + widen::spellOrEmpty(rhs.inferred_type)
+                    + "' to '" + widen::spellOrEmpty(dest) + "'.", {}});
+            }
+        } else if (destAgg != rhsAgg) {
+            // A tuple/array on one side, a scalar / pointer / class on the other:
+            // no conversion exists (codegen would store a struct into a scalar slot,
+            // or vice-versa). A kNoType rhs rides an already-reported upstream error.
+            if (rhs.inferred_type != widen::kNoType) {
+                diagnostic::report(diag, {rhs.file_id, rhs.tok,
+                    "Cannot assign '" + widen::spellOrEmpty(rhs.inferred_type)
+                    + "' to '" + widen::spellOrEmpty(dest) + "'.", {}});
+            }
+        } else {
+            // Neither side is a tuple/array: scalar / pointer / class. The terminal
+            // checks — pointer implicit-cast, strong-const widen, class same-type.
+            checkPtrAssign(dest, rhs, diag);
+            checkStrongConstAssign(dest, rhs, diag);
+            checkSlidAssign(dest, rhs, diag);
+        }
+    }
 }
 
 void classifyStmt(parse::Tree& tree, parse::Node& s,
@@ -1907,25 +1983,10 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                         }
                     }
                 }
-                // An array initialized from a tuple literal (`int a[3]=(1,2,3)`)
-                // is checked element-wise; otherwise a typed pointer init obeys
-                // the implicit-cast rules (a typeless init took the rhs type above,
-                // so nothing to cast) and a strong-const literal the widen rules.
-                if (s.return_type != widen::kNoType) {
-                    if (isArrayFromTuple(s.return_type, *s.children[0])) {
-                        classifyArrayFromTuple(tree, s.return_type, *s.children[0], diag);
-                    } else if (isArrayFromTupleValue(s.return_type, *s.children[0])) {
-                        classifyArrayFromTupleValue(s.return_type, *s.children[0], diag);
-                    } else if (isTupleFromArrayValue(s.return_type, *s.children[0])) {
-                        classifyTupleFromArrayValue(s.return_type, *s.children[0], diag);
-                    } else if (checkArrayValueAssign(s.return_type, *s.children[0], diag)) {
-                        // array VALUE rhs — handled (matched, or mismatch reported).
-                    } else {
-                        checkPtrAssign(s.return_type, *s.children[0], diag);
-                        checkStrongConstAssign(s.return_type, *s.children[0], diag);
-                        checkSlidAssign(s.return_type, *s.children[0], diag);
-                    }
-                }
+                // The initializer obeys the assignment relation (a typeless init
+                // took the rhs type above, so its dest is kNoType and the helper is
+                // a no-op).
+                checkValueAssign(tree, s.return_type, *s.children[0], diag);
             }
             return;
         }
@@ -1941,22 +2002,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             for (auto& ch : s.children) {
                 if (ch) inferExpr(tree, *ch, lref, diag);
             }
-            // A whole-array assign from a tuple literal (`a = (4,5,6)`) is
-            // element-wise; otherwise pointer/strong-const assignment rules.
+            // The rhs obeys the assignment relation against the lvalue type.
             if (!s.children.empty() && s.children[0]) {
-                if (isArrayFromTuple(lref, *s.children[0])) {
-                    classifyArrayFromTuple(tree, lref, *s.children[0], diag);
-                } else if (isArrayFromTupleValue(lref, *s.children[0])) {
-                    classifyArrayFromTupleValue(lref, *s.children[0], diag);
-                } else if (isTupleFromArrayValue(lref, *s.children[0])) {
-                    classifyTupleFromArrayValue(lref, *s.children[0], diag);
-                } else if (checkArrayValueAssign(lref, *s.children[0], diag)) {
-                    // array VALUE rhs — handled (matched, or mismatch reported).
-                } else {
-                    checkPtrAssign(lref, *s.children[0], diag);
-                    checkStrongConstAssign(lref, *s.children[0], diag);
-                    checkSlidAssign(lref, *s.children[0], diag);
-                }
+                checkValueAssign(tree, lref, *s.children[0], diag);
             }
             return;
         }
@@ -2067,23 +2115,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             parse::Node& lvalue = *s.children[0];
             inferExpr(tree, lvalue, widen::kNoType, diag);
             inferExpr(tree, *s.children[1], lvalue.inferred_type, diag);
-            // A SUB-ARRAY store target (a partial array index is array-typed, e.g.
-            // `grid[1] = (7,8)`) takes a tuple/array source element-wise, exactly
-            // like an array init/assign. Otherwise a store into a pointer-typed slot
-            // (an element of a references array, or a deref whose pointee is itself a
-            // pointer) obeys the implicit-cast rules — storing an unrelated pointer
-            // would reach codegen and emit invalid IR — and a strong-const literal
-            // obeys the typed-value widen rules.
-            if (isArrayFromTuple(lvalue.inferred_type, *s.children[1])) {
-                classifyArrayFromTuple(tree, lvalue.inferred_type, *s.children[1], diag);
-            } else if (isArrayFromTupleValue(lvalue.inferred_type, *s.children[1])) {
-                classifyArrayFromTupleValue(lvalue.inferred_type, *s.children[1], diag);
-            } else if (checkArrayValueAssign(lvalue.inferred_type, *s.children[1], diag)) {
-                // array VALUE rhs (`grid[0] = grid[2]`) — matched, or mismatch reported.
-            } else {
-                checkPtrAssign(lvalue.inferred_type, *s.children[1], diag);
-                checkStrongConstAssign(lvalue.inferred_type, *s.children[1], diag);
-            }
+            // The stored rhs obeys the assignment relation against the pointee /
+            // element type (a SUB-ARRAY target like `grid[1] = (7,8)` takes a
+            // tuple/array source element-wise; a pointer-typed slot obeys the
+            // implicit-cast rules; a strong-const literal the widen rules).
+            checkValueAssign(tree, lvalue.inferred_type, *s.children[1], diag);
             return;
         }
         case parse::Kind::kMoveStmt: {
@@ -2097,8 +2133,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             parse::Node& lhs = *s.children[0];
             inferExpr(tree, lhs, widen::kNoType, diag);
             inferExpr(tree, *s.children[1], lhs.inferred_type, diag);
-            checkPtrAssign(lhs.inferred_type, *s.children[1], diag);
-            checkStrongConstAssign(lhs.inferred_type, *s.children[1], diag);
+            // The COPY half of the move obeys the assignment relation.
+            checkValueAssign(tree, lhs.inferred_type, *s.children[1], diag);
             return;
         }
         case parse::Kind::kSwapStmt: {
@@ -2251,8 +2287,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 // with the param as context, then reject a const / class / convert
                 // mismatch (else a wrong-typed arg passed silently).
                 inferExpr(tree, *s.children[i], m.param_types[i], diag);
-                checkStrongConstAssign(m.param_types[i], *s.children[i], diag);
-                checkSlidAssign(m.param_types[i], *s.children[i], diag);
+                widen::TypeRef byref = autoRefPointee(m.param_types[i], *s.children[i]);
+                checkValueAssign(tree, byref != widen::kNoType ? byref : m.param_types[i],
+                                 *s.children[i], diag);
             }
             s.param_types = m.param_types;    // [self, user...] — emitCall arity check
             s.return_type = m.slids_type;     // emitCall reads return_type
@@ -2277,8 +2314,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             for (auto& ch : s.children) {
                 if (ch) {
                     inferExpr(tree, *ch, fn_return_type, diag);
-                    checkStrongConstAssign(fn_return_type, *ch, diag);
-                    checkSlidAssign(fn_return_type, *ch, diag);
+                    checkValueAssign(tree, fn_return_type, *ch, diag);
                 }
             }
             return;

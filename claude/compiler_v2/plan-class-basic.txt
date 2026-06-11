@@ -23,7 +23,9 @@ resolveStmtList's pre-pass; use-before-def; shadowing local + file-scope), kept
 distinct by a def_id in structKey rather than a mangled name — names stay bare,
 the disambiguated ctor/dtor/sizeof symbol is minted at codegen by classSymbol
 ([[project_defer_name_mangling]]); per-local transitive needs; and checkSlidAssign
-(a class value is rejected at a mismatched var-decl / assign / call-arg / return).
+(a class value is rejected at a mismatched var-decl / assign / call-arg / return —
+the class row of the ASSIGNMENT RELATION in readme.txt, which the unlanded op= will
+own; see the unify-the-check item in todo.txt).
 Class registration is now TWO-PHASE (names then bodies), so a class field may
 FORWARD-reference a sibling defined later; a by-value field cycle (self / mutual /
 through array / N-hop) is rejected (checkClassByValueAcyclic) instead of SIGSEGVing

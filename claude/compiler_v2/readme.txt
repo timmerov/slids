@@ -34,6 +34,11 @@ DESIGN PRINCIPLES
     N-error threshold without changing report sites.
   * No silent defaults. Every default arm is documented no-op, unreachable
     assert, or error path. Enforced by `-Werror -Wswitch-enum`.
+  * One assignment relation. Every assignment-like operation — decl-init,
+    assign, store, move, call/method args, return, field-init, and the
+    element/slot pairs from destructure + array/tuple recursion — routes
+    through ONE check (classify) and ONE lowering (codegen). Swap is the lone
+    exception (exact type). See ASSIGNMENT RELATION.
 
 TYPE REPRESENTATION (the carrier; not a stage)
 
@@ -73,6 +78,162 @@ TYPE REPRESENTATION (the carrier; not a stage)
     Form::kNone, so every predicate returns false/none on it AND a form==kVoid
     test can never mistake a no-type for void — a stray no-type surfaces loudly
     (e.g. llvmForRef assert) rather than silently lowering as void.
+
+ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codegen)
+
+  The single relation governing whether a source value may flow into a target
+  slot, and with what implicit conversion. Rows = target, columns = source.
+  Each cell is: a delegated sub-rule, a terminal accept, recurse, op=, or error.
+
+    target \ source | integer | float | pointer | nullptr | tup/arr | class
+    ----------------+---------+-------+---------+---------+---------+------
+    integer         | widen   | error | error   | error   | error   | error
+    float           | error   | widen | error   | error   | error   | error
+    intptr          | widen   | error | accept  | accept  | error   | error
+    pointer         | error   | error | ptr     | accept  | error   | error
+    void^           | error   | error | accept  | accept  | error   | error
+    tuple / array   | error   | error | error   | error   | recurse | error
+    class           | op=     | op=   | op=     | op=     | op=     | op=
+
+  * widen  — the established numeric rules: a weak literal flexes; a strong-const
+    or typed value widens WITHIN family only (narrow / sign-cross / int<->float
+    cross-family reject). intptr is in the integer family here.
+  * ptr    — pointer rules (classify ptrImplicitOk): a typed pointer target needs
+    a MATCHING pointee, or an iterator->reference demote of the same pointee.
+    Unrelated pointees are an error (an explicit cast is required).
+  * accept — terminal. intptr <- pointer/nullptr lowers to ptrtoint; pointer/
+    void^ <- nullptr is the null store. void^ <- ANY pointer is the universal
+    erase (the `to == void^` arm) — accept-in, cast-out: a void^ SOURCE into a
+    typed pointer falls under `ptr` and is rejected.
+  * recurse — the aggregate x aggregate block: match slot/element count, then each
+    element/slot pair RE-ENTERS this matrix. Self-similar to any depth.
+  * op=    — the class row delegates wholly to the class assignment operator. Not
+    landed, so every class-target cell is an ERROR until op= is defined/synthesized.
+  * error  — everything else.
+
+  intptr-as-source falls in the integer column, so `pointer <- intptr` is an error
+  (implicit); the intptr<->pointer accept is one-directional (intptr <- pointer).
+
+  Construction (a class ctor at a decl / `new`) is a SEPARATE operation, not this
+  matrix — class <- tuple as a ctor lives outside it. Swap (`<-->`) is also outside:
+  it requires the EXACT same type both ways, since it cannot convert both directions.
+
+  INTEGER (the `widen` cell, integer family) -- per target, the source kinds
+  accepted. Shorthand: N = the row's width, M = any valid width < N (signed widths
+  8/16/32/64; unsigned 1/8/16/32/64, where uint1 = bool, uint8 = char). intM / uintM
+  = the SET of signed / unsigned types narrower than N; intN / uintN = width N.
+  flexK / uflexK = a literal whose single nominal type is intK / uintK. Folded:
+  char = uint8, int = signed 32, uint = unsigned 32, intptr = signed 64 (int64 ==
+  intptr). int = the intN row at N=32, uint = the uintN row at N=32.
+
+    target |  N      | accepted
+    -------+---------+----------------------------------------------------
+    bool   |  1      | bool, uflex1 ¹
+    char   |  8      | bool, char, uint8, uflex1, uflex8, flex8 (0..127) ²
+    int8   |  8      | bool, int8, uflex1, flex8
+    intN   |  16..64 | bool, char, intM, intN, uintM, flexM, flexN, uflexM
+    intptr |  64     | bool, char, intM, intN, uintM, flexM, flexN, uflexM
+    uintN  |  8..64  | bool, char, uintM, uintN, uflexM, uflexN, flex+ ³
+
+  Inferred targets -- the source passes through to its own spelling (a weak literal
+  presents at the preferred no-width spelling when it fits the 32-bit default, else
+  at its nominal width):
+
+    target          |  N      | accepted
+    ----------------+---------+----------------------------------
+    inferred bool   |  1      | bool
+    inferred char   |  8      | char
+    inferred int8   |  8      | int8
+    inferred int    |  32     | int, flexM, flex32
+    inferred uint   |  32     | uint, uflexM, uflex32
+    inferred intN   |  16..32 | intN
+    inferred uintN  |  8..32  | uintN
+    inferred int64  |  64     | int64, flex64
+    inferred uint64 |  64     | uint64, uflex64
+    inferred intptr |  64     | intptr
+
+  * uflex1 -- literal with nominal uint1 (value 0 or 1); the only literal that fits
+    bool. On the wider rows it is just the smallest uflexM.
+  * flex8 (0..127) -- flex8 is signed int8 (-128..127); only its non-negative half
+    fits char (unsigned 8). A value-clip, not a width boundary.
+  * flex+ -- a signed-kind literal reaches an unsigned target only by VALUE (non-
+    negative, in range): `uint x = 5` ok, `uint x = -1` errors. The nominal category
+    cannot express it.
+
+  int8 stands apart from intN: at N=8 it accepts neither char (uint8 -> int8 is a
+  same-width unsigned -> signed, rejected) nor any narrower width -- only bool,
+  itself, flex8, and uflex1. Every intN with N>8 admits char outright. The width
+  cells compress into M<N; the three footnoted cells are the value/sign seams where
+  a nominal category stops lining up with a width boundary.
+
+  FLOAT (the `widen` cell, float family) -- per target, the source kinds accepted;
+  for an INFERRED target, the sources that resolve to that spelling. float / float32
+  / float64 are the strong types (no-width / 32 / 64); flex is a weak float literal.
+
+    target           | accepted sources
+    -----------------+----------------------------------------
+    float32          | flex32, float, float32
+    float64          | flex32, flex64, float, float32, float64
+    inferred float   | flex32, float
+    inferred float32 | float32
+    inferred float64 | flex64, float64
+
+  * flex32 -- a float literal whose value fits float32 (nominal type float32).
+  * flex64 -- a float literal whose value is too large for float32 (nominal type
+    float64).
+
+  POINTER (the `ptr` cell, expanded) -- keys on the POINTEE. Shorthand: T = the
+  target's pointee; U = any DIFFERENT pointee (U != T). Kinds: T^ reference, T[]
+  iterator, void^ the universal reference, intptr the integer bridge, nullptr the
+  null literal (internally anyptr).
+
+    target | accepted
+    -------+--------------------------------------------------
+    T^     | T^, T[], nullptr
+    T[]    | T[], nullptr
+    void^  | T^, T[], U^, U[], void^, nullptr   (= any pointer)
+    intptr | T^, T[], U^, U[], void^, nullptr   (= any pointer) ⁴
+
+  Inferred target -- the source passes through to its own type:
+
+    inferred T^    | T^
+    inferred T[]   | T[]
+    inferred void^ | void^
+
+  * iterator -> reference is one-way: T[] -> T^ accepts (demote, loses arithmetic),
+    so T[] is in the T^ row; the reverse T^ -> T[] rejects (no implicit arithmetic
+    gain), so T^ is absent from the T[] row.
+  * pointee must match: U^ / U[] reject for T^ / T[]; only void^ / intptr take any
+    pointee (U^ -> T^ needs an explicit cast, the chain-through-void^ rule).
+  * void^ is accept-in, cast-out: any pointer erases TO void^, but a void^ SOURCE
+    into a typed T^ / T[] falls under the pointee rule and rejects. Only void^ is the
+    implicit universal sink; int8^ / uint8^ -- "buffer-class" for EXPLICIT casts and
+    placement-new -- are ordinary T^ here.
+  * ⁴ intptr <- pointer is ptrtoint, one-way: accepts any pointer; the reverse
+    pointer <- intptr is not implicit (integer column, rejects).
+  * nullptr is source-only -- it fits any pointer target but, having no pointee,
+    cannot drive an inferred declaration, so it has no inferred row.
+
+  TUPLE / ARRAY (the `recurse` cell) -- no grid: one rule covers all four
+  aggregate x aggregate combos (tuple<-tuple, array<-tuple, tuple<-array,
+  array<-array):
+
+    SHAPE must match, and each slot/element pair must be COMPATIBLE -- every pair
+    RE-ENTERS this matrix, source-slot -> target-element.
+
+  Shape = same slot/element count (and matching dims for multi-dim arrays / nested
+  tuples). Compatibility is DIRECTIONAL, like the scalar matrices:
+
+    (bool, char, int8, uint16) -> int[4]   works  -- each slot widens to int
+    int[4] -> (bool, char, int8, uint16)   rejects -- each int narrows / sign-flips
+
+  * scalar <-> aggregate is an error (the aggregate/scalar boundary).
+  * per-element compatibility means an aggregate assign LOWERS to per-element
+    assignments, each running its own conversion (the tuple->int[4] above is four
+    distinct converts) -- NOT a whole-aggregate copy. A single memcpy is only the
+    degenerate case where every element is already identical. The current exact-
+    deepStrip array-value rule (checkArrayValueAssign) is the known-wrong seam: it
+    rejects `int8[4] -> int[4]`, which this rule accepts.
 
 ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
 

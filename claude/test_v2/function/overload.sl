@@ -84,8 +84,8 @@ int32 main() {
     __println("withdef(5, 6) = " + withdef(5, 6));  // 11
     __println("withdef(2.5) = " + withdef(2.5));    // 999 (float overload)
 
-    /* missed compile error - bad ll */
-    intparam("passed string");
+    //-EXPECT-ERROR: Cannot implicitly cast 'char[]' to 'int'
+    //intparam("passed string");
 
     return 0;
 }
