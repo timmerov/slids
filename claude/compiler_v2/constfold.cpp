@@ -750,27 +750,34 @@ std::string truncateConstValue(std::string const& val, int bits, bool is_signed)
 // to that width (register semantics, no demotion-to-flex). Two WEAK operands keep
 // the no-width matrix + value-widening (they have no fixed width to truncate to).
 std::unique_ptr<parse::Node> emitIntResult(parse::Node& node, parse::Node& lhs,
-                                           parse::Node& rhs, std::string val) {
+                                           parse::Node& rhs, std::string val,
+                                           diagnostic::Sink& diag) {
     if (isStrongConstOperand(lhs) || isStrongConstOperand(rhs)) {
         widen::TypeRef lt = operandTypeRef(lhs), rt = operandTypeRef(rhs);
+        if (lt == widen::kNoType || rt == widen::kNoType) return nullptr;   // unparseable
         // A weak operand flexes into the strong partner's type when its value fits.
-        if (!isStrongConstOperand(lhs) && lt != widen::kNoType && rt != widen::kNoType
-            && widen::intLiteralFits(lhs.text, widen::spell(rt)))
+        if (!isStrongConstOperand(lhs) && widen::intLiteralFits(lhs.text, widen::spell(rt)))
             lt = rt;
-        else if (!isStrongConstOperand(rhs) && lt != widen::kNoType && rt != widen::kNoType
-            && widen::intLiteralFits(rhs.text, widen::spell(lt)))
+        else if (!isStrongConstOperand(rhs) && widen::intLiteralFits(rhs.text, widen::spell(lt)))
             rt = lt;
+        // A strong operand is committed to the strong path — it does NOT fall back to
+        // the weak no-width matrix. When the operands have no common type (a >64-bit
+        // sign mix, e.g. int64 + uint64), REPORT it here (the strong types are in hand)
+        // rather than silently folding — matching what the variable path emits.
         widen::TypeRef rType;
         widen::TypeKind tk;
-        if (lt != widen::kNoType && rt != widen::kNoType
-            && widen::commonType(lt, rt, rType) && widen::classify(rType, tk)) {
-            bool is_signed = (tk.cat == widen::Category::kSignedInt);
-            std::string tv = truncateConstValue(val, tk.bits, is_signed);
-            auto out = makeLitAt(node, literalKindForType(rType), std::move(tv));
-            out->strong_type = rType;
-            return out;
+        if (!widen::commonType(lt, rt, rType)) {
+            diagnostic::report(diag, {node.file_id, node.tok,
+                "No common type for '" + widen::spell(lt) + "' and '" + widen::spell(rt)
+                + "'; use an explicit type conversion.", {}});
+            return nullptr;
         }
-        // fall through to the weak path on any classification failure
+        if (!widen::classify(rType, tk)) return nullptr;
+        bool is_signed = (tk.cat == widen::Category::kSignedInt);
+        std::string tv = truncateConstValue(val, tk.bits, is_signed);
+        auto out = makeLitAt(node, literalKindForType(rType), std::move(tv));
+        out->strong_type = rType;
+        return out;
     }
     parse::Kind base = baseConstKind(lhs.kind, rhs.kind);
     parse::Kind kind = promoteConstKind(base, val);
@@ -805,11 +812,11 @@ std::unique_ptr<parse::Node> foldUnsignedArith(parse::Node& node,
             return nullptr;
         }
         return emitIntResult(node, lhs, rhs,
-                             std::to_string((op == "/") ? (a / b) : (a % b)));
+                             std::to_string((op == "/") ? (a / b) : (a % b)), diag);
     }
     if (op == "&" || op == "|" || op == "^") {
         uint64_t r = (op == "&") ? (a & b) : (op == "|") ? (a | b) : (a ^ b);
-        return emitIntResult(node, lhs, rhs, std::to_string(r));
+        return emitIntResult(node, lhs, rhs, std::to_string(r), diag);
     }
     uint64_t r;
     bool ovf;
@@ -818,7 +825,7 @@ std::unique_ptr<parse::Node> foldUnsignedArith(parse::Node& node,
     else if (op == "*") ovf = __builtin_mul_overflow(a, b, &r);
     else return nullptr;
     if (ovf) { reportConstOverflow(node, diag); return nullptr; }
-    return emitIntResult(node, lhs, rhs, std::to_string(r));
+    return emitIntResult(node, lhs, rhs, std::to_string(r), diag);
 }
 
 // D4 — int-class arith/bitwise. Computes the value, then settles kind + strength
@@ -842,10 +849,10 @@ std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
         if (a == INT64_MIN && b == -1) {
             std::string val = (op == "/")
                 ? std::to_string(static_cast<uint64_t>(INT64_MAX) + 1ULL) : "0";
-            return emitIntResult(node, lhs, rhs, std::move(val));
+            return emitIntResult(node, lhs, rhs, std::move(val), diag);
         }
         return emitIntResult(node, lhs, rhs,
-                             std::to_string((op == "/") ? (a / b) : (a % b)));
+                             std::to_string((op == "/") ? (a / b) : (a % b)), diag);
     }
 
     if (op == "&" || op == "|" || op == "^") {
@@ -853,7 +860,7 @@ std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
         if      (op == "&") r = a & b;
         else if (op == "|") r = a | b;
         else /*    ^   */   r = a ^ b;
-        return emitIntResult(node, lhs, rhs, std::to_string(r));
+        return emitIntResult(node, lhs, rhs, std::to_string(r), diag);
     }
 
     // + - * with rule-6 overflow detection.
@@ -865,7 +872,7 @@ std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
     else return nullptr;
 
     if (!overflow) {
-        return emitIntResult(node, lhs, rhs, std::to_string(r));
+        return emitIntResult(node, lhs, rhs, std::to_string(r), diag);
     }
     // Retry in uint64; a result that also overflows uint64 fits no integer type.
     uint64_t ua = static_cast<uint64_t>(a);
@@ -876,7 +883,7 @@ std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
     else if (op == "-") u_overflow = __builtin_sub_overflow(ua, ub, &ur);
     else /*    *   */   u_overflow = __builtin_mul_overflow(ua, ub, &ur);
     if (u_overflow) { reportConstOverflow(node, diag); return nullptr; }
-    return emitIntResult(node, lhs, rhs, std::to_string(ur));
+    return emitIntResult(node, lhs, rhs, std::to_string(ur), diag);
 }
 
 // Binary fold dispatcher. Both operands must be literals; per-shape arms

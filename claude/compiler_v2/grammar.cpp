@@ -1561,12 +1561,17 @@ struct Parser {
         //   enum type (        -> anonymous, explicit type
         //   enum type Name (   -> named, explicit type
         std::string underlying = "int";
+        // An explicit underlying type: point the node's error-attribution token at
+        // it (the enum node's tok is read ONLY by registerEnum's underlying-type
+        // validation), so "Unknown type" carets the type name, not the `enum` kw.
         if (isTypeStart(peek().kind)) {
+            node->tok = pos;
             underlying = parseType();
             if (fatal) return nullptr;
         } else if (peek().kind == token::Kind::kIdentifier
                    && peekKind(1) == token::Kind::kIdentifier) {
             // `ident ident (` -> first ident is an (identifier) type spelling.
+            node->tok = pos;
             underlying = parseType();
             if (fatal) return nullptr;
         }

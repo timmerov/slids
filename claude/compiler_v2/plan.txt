@@ -41,7 +41,11 @@ Phase 0 — foundations (LANDED)
     literal; unary fold; binary fold across all op families (int arith/bitwise
     with rule-6 overflow-to-uint64, int shifts, int comparisons, float
     arith/shift/comparison); named-constant iterative substitution + capture
-    with fixpoint check. NOT constfold's job: algebraic identities (see
+    with fixpoint check. Result KIND/value = STRONG-truncate / WEAK-widen (a
+    strong/fixed-width operand truncates to its width like the variable path; a
+    weak no-width literal flexes/widens; `~` width-preserving; no-common-type
+    reported, not silently folded — see const_truncate_model memory). commonType
+    ported to TypeRef. NOT constfold's job: algebraic identities (see
     OPTIMIZE — LLVM's instcombine).
   * diagnostic sink + source rendering
   * single-source error pipeline (main.cpp early-out between stages)

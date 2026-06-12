@@ -40,6 +40,16 @@ enum conceptually/mechanically resolves to a type alias and a namespace.
     ##type(Demo)        returns "int"
     ##type(Demo:kMix)   returns "const Demo"
 
+float-type enums must have explicit constant values.
+they cannot auto-increment.
+
+    enum float MathConst (
+        kPi = 3.14,
+        kE = 2.718,
+        kPhi = 1.618,
+        kOops  <-- compile error
+    )
+
 future todo:
 re-open enums.
 names cannot collide.
@@ -102,11 +112,20 @@ enum Lit ( l0 = 5, l1 );
 /* a wide underlying holds a value beyond int32's range. */
 enum int64 Wide ( wBig = 5000000000 );
 
-/* float member inits referencing a file-scope const, including a forward ref. */
+/* float member inits referencing a file-scope const, including a forward ref.
+   every float member needs an explicit value (no auto-increment). */
 const float fPi = 3.5;
-enum float FConst ( fA = fPi, fB );
+enum float FConst ( fA = fPi, fB = 4.5 );
 enum float FFwd ( fF = fLater );
 const float fLater = 9.5;
+
+/* a float-ALIAS underlying still requires explicit values (the float check is
+   structural — it sees through the alias). */
+alias Real = float;
+enum Real FA ( ra = 1.5, rb = 2.5 );
+
+/* a float64 underlying. */
+enum float64 FD ( da = 1.25, db = 2.5 );
 
 /* reverse direction: a file-scope const init reads an enum member. */
 const int kFromMember = Direction:kEast;
@@ -269,6 +288,8 @@ int32 main() {
     __println("fA = "   + FConst:fA);
     __println("fB = "   + FConst:fB);
     __println("fF = "   + FFwd:fF);
+    __println("ra = "   + FA:ra + " rb = " + FA:rb);   // float-alias enum
+    __println("da = "   + FD:da + " db = " + FD:db);   // float64 enum
     __println("kFromMember = " + kFromMember);
     __println("q0 = "   + Fwd2:q0);
     __println("q1 = "   + Fwd2:q1);
@@ -342,6 +363,19 @@ file-scope negative cases — whole enum decls, so they sit outside main
 /* an explicit float value exceeds the float32 underlying. */
 //-EXPECT-ERROR: does not fit declared type 'float'
 //enum float FBig ( a = 1e40 );
+
+/* a float enum member with no explicit value — floats cannot auto-increment. */
+//-EXPECT-ERROR: Enum member 'kOops' of a float type requires an explicit value
+//enum float MathConst ( kPi = 3.14, kE = 2.718, kPhi = 1.618, kOops );
+
+/* the no-value rule sees through a float ALIAS (the check is structural). */
+//-EXPECT-ERROR: Enum member 'b' of a float type requires an explicit value
+//alias RealN = float;
+//enum RealN E ( a = 1.0, b );
+
+/* even the FIRST member of a float enum needs an explicit value. */
+//-EXPECT-ERROR: Enum member 'a' of a float type requires an explicit value
+//enum float First ( a );
 
 /* two members of one enum collide. */
 //-EXPECT-ERROR: Duplicate declaration of 'kX'

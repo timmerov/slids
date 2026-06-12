@@ -53,6 +53,30 @@ BUGS (found, deferred)
     path to retire the wrapper entirely. Full test_v2 suite (positives + 66 negatives)
     unchanged by the port.
 
+  * REMAINING STRING-TYPE DECISIONS — convert to structured TypeRef checks (same v1
+    string-pattern the commonType port retired; all correct today, just debt). Two
+    flavours. (Human-edge spelling — preferredSpelling, alias labels, diagnostic text
+    — is legitimate and stays.)
+    CATEGORY-DETECTABLE (decide on a string spelling that maps to a classify category;
+    -> `classify(ref, k) && k.cat == ...`):
+      - [DONE] isFloatUnderlying (resolve.cpp) — now structural `classify(deepStrip(t),k)
+        && k.cat==kFloat`; this fixed a live bug (a float-ALIAS enum underlying was
+        mis-detected as non-float).
+      - classify.cpp ~941 — `ot=="bool"` gating an operator error -> kBool.
+      - string `classify(a,ka)` in constResultStrong (constfold.cpp ~467) and sameClass
+        (classify.cpp ~388) — classify the SPELLING; constResultStrong already holds
+        aRef/bRef (from the commonType port), so classify those refs directly.
+    NAME-BASED IDENTITY (char vs uint8, intptr vs int64 are structurally identical, so
+    the decision is genuinely name-keyed — but should compare the interned HANDLE,
+    `ref == widen::intern("char"/"intptr")`, not spell() a string and `==` it):
+      - literalKindForType(std::string) (constfold.cpp ~976) — `t=="char"`,
+        `t.compare(0,4,"uint")`, etc. (a TypeRef overload of the same name now exists
+        alongside it; the string one is used by tryCaptureConst — unify on the ref form).
+      - constfold.cpp ~1193 — `spellOrEmpty(deepStrip(return_type))=="char"` for the
+        char-vs-uint literal kind.
+      - classify.cpp ~832 — `to_c!="bool" && to_c!="intptr"` (pointer-conversion target).
+      - widen.cpp ~460 — `spell(dest_ref)=="intptr"` (ptrtoint target).
+
   * STRONG-TRUNCATE / WEAK-WIDEN CONST FOLD — LANDED. const-fold now mirrors the
     variable path: a STRONG (fixed-width) operand — char, bool, intptr, or a typed
     intN/uintN const — makes the result fixed-width and TRUNCATES the value to that

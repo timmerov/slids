@@ -904,8 +904,10 @@ void resolveInlineQualifiedDecl(parse::Tree& tree, parse::Node& s,
 // 1.0 (float) from 0, with an explicit literal resetting the running counter
 // (C rules).
 
-bool isFloatUnderlying(std::string const& t) {
-    return t == "float" || t == "float32" || t == "float64";
+// Structural — sees through an alias underlying (`alias F = float; enum F ...`).
+bool isFloatUnderlying(widen::TypeRef t) {
+    widen::TypeKind k;
+    return widen::classify(widen::deepStrip(t), k) && k.cat == widen::Category::kFloat;
 }
 
 std::string enumFloatText(double d) {
@@ -947,7 +949,7 @@ std::unique_ptr<parse::Node> cloneExpr(parse::Node const& src) {
 // frame, bare-visible).
 void registerEnumMembers(parse::Tree& tree, parse::Node& node, int ns_frame,
                          diagnostic::Sink& diag) {
-    bool is_float = isFloatUnderlying(widen::spellOrEmpty(node.return_type));
+    bool is_float = isFloatUnderlying(node.return_type);
     // Auto-increment, C rules. A member with no init takes the previous value
     // plus one; an explicit init resets the run. Because an explicit init may
     // be a not-yet-folded expression (`kB = 1 + 2`), we synthesize an implicit
@@ -977,6 +979,15 @@ void registerEnumMembers(parse::Tree& tree, parse::Node& node, int ns_frame,
         if (!m->children.empty()) {
             anchor = m->children[0].get();
             steps = 0;
+        } else if (is_float) {
+            // A float enum cannot auto-increment — every member needs an explicit
+            // value (+1.0 per step is meaningless for floats).
+            diagnostic::report(diag, {m->file_id, m->name_tok,
+                "Enum member '" + m->name + "' of a float type requires an explicit "
+                "value.", {}});
+            steps++;
+            ordinal++;
+            continue;
         } else if (anchor == nullptr) {
             m->children.push_back(makeOffsetLiteral(ordinal, m->file_id, m->tok));
         } else {

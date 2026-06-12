@@ -653,7 +653,13 @@ STAGE FILES (.h / .cpp pairs)
             value or an alias."). registerEnumMembers also stamps each NAMED-enum
             member's alias_label with the enum name (an anonymous enum has no name
             -> no label -> bare `const int`), so `##type(Enum:member)` reads
-            `const Enum`. The kSizeofExpr arm shares that type-vs-value dispatch: a
+            `const Enum`. Integer/char enums auto-increment (C rules); a FLOAT
+            underlying (detected STRUCTURALLY via classify(deepStrip), so a float
+            ALIAS counts) cannot auto-increment -- a member with no explicit value is
+            rejected ("Enum member 'X' of a float type requires an explicit value.").
+            The underlying-type "Unknown type" diagnostic carets the TYPE NAME, not the
+            `enum` keyword (grammar points the enum node's tok at the underlying token,
+            which is the only thing that reads it). The kSizeofExpr arm shares that type-vs-value dispatch: a
             type operand (return_type from grammar) is alias-resolved + validated;
             an ident naming a type stamps the underlying on return_type; any other
             ident / expression is resolved as a value in an UNEVALUATED context
@@ -845,24 +851,32 @@ STAGE FILES (.h / .cpp pairs)
             Assigns nominal_type to every literal per fold.sl:16-23
             (bool=uint1, char=uint8, integer/unsigned by smallest-bit-
             tier, float by float32-round-trip). Folds unary on literal
-            (rules 1a-1f) and binary on two literals across all op
-            families: int arith / bitwise (signed int64 with rule-6
-            overflow-to-uint64), int shifts (count >= width → 0; uint64
-            reinterpret to avoid UB), int comparisons (int64 path with
-            uint64 fallback), float arith / shift / comparison (double
-            + %.17g canonical text; pow2 mul/div lowering for float
-            shifts). Substitutes kIdentExpr -> literal node in place
+            (rules 1a-1f; `~` is WIDTH-PRESERVING — complements within the
+            operand's kind, keeping the kind incl. bool, masking to a strong
+            operand's declared width or a weak literal's 64-bit computation
+            width) and binary on two literals across all op families: int
+            arith / bitwise (signed int64 with rule-6 overflow-to-uint64),
+            int shifts (count >= width → 0; uint64 reinterpret to avoid UB),
+            int comparisons (int64 path with uint64 fallback), float arith /
+            shift / comparison (double + %.17g canonical text; pow2 mul/div
+            lowering for float shifts). Substitutes kIdentExpr -> literal node in place
             when the resolved entry is a kConst with a captured value.
             Captures const-decl values back onto kConst entries when
             the rhs folds to a single literal — floats round through
             the declared type for precision capture (3.14 -> float32
             stored as 3.1400001049...); ints/bools/chars store rhs text
             verbatim with range validation against declared type.
-            Const strength model (typeless consts): strong_type on nodes /
-            const_strong_type on entries — a combineStrong helper + makeLitAt
-            propagate strength through arith/bitwise folds (a strong/typed-const
-            operand makes the result strong + takes its type, both-strong uses
-            widen::commonType, a bool/comparison result is weak); trySubstituteConst
+            Const KIND/value model (STRONG-truncate / WEAK-widen, so a folded
+            const == the same expression on VARIABLES): with ANY strong operand
+            (char/bool/intptr or a typed const) emitIntResult flexes a weak literal
+            into the strong partner, takes the shared widen::commonType (TypeRef),
+            and TRUNCATES the value to the result width (register semantics, no
+            demotion-to-flex; emitShiftResult truncates to the lhs width). Two WEAK
+            operands keep the old no-width matrix (baseConstKind/promoteConstKind +
+            value-widening). A strong no-common-type (int64+uint64, a >64-bit sign
+            mix) is REPORTED ("No common type..."), not silently folded. Full model:
+            const_truncate_model memory. strong_type on nodes / const_strong_type on
+            entries carry strength; trySubstituteConst
             stamps strong_type onto a substituted literal from entry.const_strong_type
             AND carries entry.alias_label onto it (so a const's type label survives
             substitution — needed for the inferred-var case);

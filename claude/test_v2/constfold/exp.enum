@@ -32,6 +32,8 @@ wBig = 5000000000
 fA = 3.5
 fB = 4.5
 fF = 9.5
+ra = 1.5 rb = 2.5
+da = 1.25 db = 2.5
 kFromMember = 2
 q0 = 1
 q1 = 1
