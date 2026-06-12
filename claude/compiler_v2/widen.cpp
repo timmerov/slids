@@ -562,52 +562,59 @@ std::string convert(std::string const& src_val,
     return convert(src_val, s, d, file_id, tok, out, diag);
 }
 
-bool commonType(std::string const& t1, std::string const& t2, std::string& out) {
+// Common type as TYPE-REFS (the primary). Operands are stripped (alias-transparent).
+// The result is the preferred HANDLE for the common (cat, bits): the no-width handle
+// when either operand contributed one, else the explicit-width handle — `spellCommon`
+// picks the canonical name, which is then interned to a handle. No spelling crosses
+// the call boundary.
+bool commonType(TypeRef t1, TypeRef t2, TypeRef& out) {
+    t1 = strip(t1);
+    t2 = strip(t2);
     if (t1 == t2) { out = t1; return true; }
     TypeKind k1, k2;
     if (!classify(t1, k1) || !classify(t2, k2)) return false;
+
+    Category cat;
+    int bits;
     if (k1.cat == k2.cat && k1.bits == k2.bits) {
-        // Same category and width but possibly different spellings (no-width `int`
-        // vs explicit `int32`): prefer the explicit-width spelling, order-
-        // independently — the shortcut `out = t1` would leak operand order.
-        out = spellCommon(k1.cat, k1.bits, t1, t2);
-        return true;
-    }
-
-    bool int1 = k1.cat == Category::kBool
-             || k1.cat == Category::kSignedInt
-             || k1.cat == Category::kUnsignedInt;
-    bool int2 = k2.cat == Category::kBool
-             || k2.cat == Category::kSignedInt
-             || k2.cat == Category::kUnsignedInt;
-
-    if (int1 && int2) {
-        // bool classifies as kBool (1-bit, unsigned-like); s1/s2 false for it.
-        bool s1 = (k1.cat == Category::kSignedInt);
-        bool s2 = (k2.cat == Category::kSignedInt);
-        Category cat;
-        int bits;
-        if (s1 == s2) {
-            cat = s1 ? Category::kSignedInt : Category::kUnsignedInt;
+        cat = k1.cat;
+        bits = k1.bits;
+    } else {
+        bool int1 = k1.cat == Category::kBool || k1.cat == Category::kSignedInt
+                 || k1.cat == Category::kUnsignedInt;
+        bool int2 = k2.cat == Category::kBool || k2.cat == Category::kSignedInt
+                 || k2.cat == Category::kUnsignedInt;
+        if (int1 && int2) {
+            // bool classifies as kBool (1-bit, unsigned-like); s1/s2 false for it.
+            bool s1 = (k1.cat == Category::kSignedInt);
+            bool s2 = (k2.cat == Category::kSignedInt);
+            if (s1 == s2) {
+                cat = s1 ? Category::kSignedInt : Category::kUnsignedInt;
+                bits = std::max(k1.bits, k2.bits);
+            } else {
+                int signed_bits   = s1 ? k1.bits : k2.bits;
+                int unsigned_bits = s1 ? k2.bits : k1.bits;
+                bits = std::max(signed_bits, unsigned_bits + 1);
+                if (bits > 64) return false;
+                cat = Category::kSignedInt;
+            }
+        } else if (k1.cat == Category::kFloat && k2.cat == Category::kFloat) {
+            cat = Category::kFloat;
             bits = std::max(k1.bits, k2.bits);
         } else {
-            int signed_bits   = s1 ? k1.bits : k2.bits;
-            int unsigned_bits = s1 ? k2.bits : k1.bits;
-            bits = std::max(signed_bits, unsigned_bits + 1);
-            if (bits > 64) return false;
-            cat = Category::kSignedInt;
+            return false;   // int-class and float never silently mix.
         }
-        out = spellCommon(cat, bits, t1, t2);
-        return true;
     }
+    out = intern(spellCommon(cat, bits, spell(t1), spell(t2)));
+    return true;
+}
 
-    if (k1.cat == Category::kFloat && k2.cat == Category::kFloat) {
-        out = spellCommon(Category::kFloat, std::max(k1.bits, k2.bits), t1, t2);
-        return true;
-    }
-
-    // int-class and float never silently mix.
-    return false;
+// String wrapper for the remaining name-based callers (e.g. argConvertCost).
+bool commonType(std::string const& t1, std::string const& t2, std::string& out) {
+    TypeRef o;
+    if (!commonType(internOrNone(t1), internOrNone(t2), o)) return false;
+    out = spell(o);
+    return true;
 }
 
 // Structured: a type is "known" if its leaf is a built-in primitive or void.

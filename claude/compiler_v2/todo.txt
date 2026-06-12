@@ -42,16 +42,16 @@ BUGS (found, deferred)
     STRONG-CONST WIDENING (below) is the strong-literal arm already landed at the
     scalar assignment sites.
 
-  * PORT commonType TO widen::TypeRef — commonType (widen.cpp) is the last name-based
-    string island in the type system: callers spell their operands, it runs on (cat,
-    bits) parsed back out of the strings, returns a spelling, and the caller re-interns
-    it (classify.cpp binary path ~1162, the tuple-slot loop, return-type op, etc.). It
-    works, but it round-trips TypeRef -> string -> TypeRef at every arithmetic/comparison
-    site, exactly the v1 type-string pattern the migration retired everywhere else.
-    Convert it to take + return widen::TypeRef directly (the spellCommon no-width-vs-
-    explicit-handle preference moves to ref selection: char/int -> the `int` handle, not
-    a spelled "int"). defaultLiteralType already mints the preferred handle as a TypeRef;
-    this finishes the path so no spelling is produced between the operands and the result.
+  * PORT commonType TO widen::TypeRef — MOSTLY LANDED. commonType now has a TypeRef-
+    first signature (operands stripped; returns the preferred handle; spellCommon picks
+    the canonical name, interned once); the std::string overload is a thin wrapper. All
+    the type-combining callers were moved to the TypeRef form, dropping the
+    spell -> commonType -> reintern round-trip: classify binary / tuple-slot / augassign
+    return sites, and constfold combineStrong / constResultStrong / floatResultStrong.
+    REMAINING: argConvertCost (classify.cpp ~427) still calls the string wrapper because
+    its `param` arrives as a spelling (overload ranking is name-based); de-string that
+    path to retire the wrapper entirely. Full test_v2 suite (positives + 66 negatives)
+    unchanged by the port.
 
   * UNARY ~ MUST BE WIDTH-PRESERVING. fold.sl rule 1e: the result of `~` keeps the
     operand's kind and NOMINAL WIDTH — it is a bitwise complement WITHIN that width.

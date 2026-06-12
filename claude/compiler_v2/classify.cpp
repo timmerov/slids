@@ -1063,17 +1063,14 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     for (std::size_t i = 0; i < n; i++) {
                         widen::TypeRef ls = ltup ? lslots[i] : lref;
                         widen::TypeRef rs = rtup ? rslots[i] : rref;
-                        std::string ct;
-                        if (!widen::commonType(widen::spellOrEmpty(widen::strip(ls)),
-                                               widen::spellOrEmpty(widen::strip(rs)),
-                                               ct)) {
+                        widen::TypeRef ctr;
+                        if (!widen::commonType(ls, rs, ctr)) {
                             diagnostic::report(diag, {e.file_id, e.tok,
                                 "No common type for tuple slot "
                                 + std::to_string(i) + " ('" + widen::spellOrEmpty(ls)
                                 + "' and '" + widen::spellOrEmpty(rs) + "').", {}});
                             return;
                         }
-                        widen::TypeRef ctr = widen::internOrNone(ct);
                         if ((op == "&" || op == "|" || op == "^")
                             && isFloatType(ctr)) {
                             diagnostic::report(diag, {e.file_id, e.tok,
@@ -1163,22 +1160,18 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             std::string lt = widen::spellOrEmpty(lhs.inferred_type);   // for the message
             std::string rt = widen::spellOrEmpty(rhs.inferred_type);   // (keeps alias name)
 
-            std::string opty;   // commonType is name-based — feed it the stripped underlyings
-            bool ok = widen::commonType(widen::spellOrEmpty(widen::strip(lhs.inferred_type)),
-                                        widen::spellOrEmpty(widen::strip(rhs.inferred_type)), opty);
-            if (!ok) {
+            widen::TypeRef optyRef;
+            if (!widen::commonType(lhs.inferred_type, rhs.inferred_type, optyRef)) {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "No common type for '" + lt + "' and '"
                     + rt + "'; use an explicit type conversion.",
                     {}});
                 return;
             }
-
-            widen::TypeRef optyRef = widen::internOrNone(opty);
             if ((op == "&" || op == "|" || op == "^") && isFloatType(optyRef)) {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Bitwise '" + op + "' not defined on floating-point type '"
-                    + opty + "'.", {}});
+                    + widen::spellOrEmpty(optyRef) + "'.", {}});
                 return;
             }
 
@@ -2092,20 +2085,18 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // arith / bitwise — rhs literal flexes into lvalue's type, then
             // commonType drives the op.
             inferExpr(tree, rhs, s.return_type, diag);
-            std::string opty;
-            if (!widen::commonType(widen::spellOrEmpty(widen::strip(s.return_type)),
-                                   widen::spellOrEmpty(widen::strip(rhs.inferred_type)), opty)) {
+            widen::TypeRef optyRef;
+            if (!widen::commonType(s.return_type, rhs.inferred_type, optyRef)) {
                 diagnostic::report(diag, {s.file_id, s.tok,
                     "No common type for '" + lvalue_type + "' and '"
                     + widen::spellOrEmpty(rhs.inferred_type)
                     + "'; use an explicit type conversion.", {}});
                 return;
             }
-            widen::TypeRef optyRef = widen::internOrNone(opty);
             if ((op == "&" || op == "|" || op == "^") && isFloatType(optyRef)) {
                 diagnostic::report(diag, {s.file_id, s.tok,
                     "Bitwise '" + op + "' not defined on floating-point type '"
-                    + opty + "'.", {}});
+                    + widen::spellOrEmpty(optyRef) + "'.", {}});
                 return;
             }
             s.inferred_type = optyRef;

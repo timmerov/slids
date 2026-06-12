@@ -347,9 +347,8 @@ bool parseDouble(std::string const& t, double& v) {
 widen::TypeRef combineStrong(parse::Node const& a, parse::Node const& b) {
     if (a.strong_type == widen::kNoType) return b.strong_type;
     if (b.strong_type == widen::kNoType) return a.strong_type;
-    std::string out;
-    if (widen::commonType(widen::spell(a.strong_type), widen::spell(b.strong_type), out))
-        return widen::internOrNone(out);
+    widen::TypeRef out;
+    if (widen::commonType(a.strong_type, b.strong_type, out)) return out;
     // No common type — commonType only fails cross-family (int vs float). For
     // arith/compare that's pre-empted by tryFoldBinary's no-mix guard, so the
     // sole path here is the shift carve-out (e.g. float lhs, int rhs), where the
@@ -457,7 +456,8 @@ std::string constResultStrong(parse::Node const& lhs, parse::Node const& rhs,
     if (result == K::kBoolLiteral) return "bool";
     if (result == K::kCharLiteral) return "char";
     if (result != base) return "";                 // promoted to fit -> flex
-    std::string a = widen::spellOrEmpty(famStrong(lhs)), b = widen::spellOrEmpty(famStrong(rhs));
+    widen::TypeRef aRef = famStrong(lhs), bRef = famStrong(rhs);
+    std::string a = widen::spellOrEmpty(aRef), b = widen::spellOrEmpty(bRef);
     if (a.empty() && b.empty()) return "";          // flex + flex
     if (a.empty() || b.empty()) {                   // strong + flex
         std::string s = a.empty() ? b : a;
@@ -467,8 +467,9 @@ std::string constResultStrong(parse::Node const& lhs, parse::Node const& rhs,
     if (!widen::classify(a, ka) || !widen::classify(b, kb)) return "";
     if ((ka.cat == widen::Category::kSignedInt)
         != (kb.cat == widen::Category::kSignedInt)) return "";   // mixed sign -> flex
-    std::string out;
-    if (!widen::commonType(a, b, out)) return "";
+    widen::TypeRef outRef;
+    if (!widen::commonType(aRef, bRef, outRef)) return "";
+    std::string out = widen::spellOrEmpty(outRef);
     return widen::intLiteralFits(val, out) ? out : "";
 }
 
@@ -477,14 +478,16 @@ std::string constResultStrong(parse::Node const& lhs, parse::Node const& rhs,
 // strong -> the wider float type if it fits, else flex.
 std::string floatResultStrong(parse::Node const& lhs, parse::Node const& rhs,
                               std::string const& val) {
-    std::string a = widen::spellOrEmpty(famStrong(lhs)), b = widen::spellOrEmpty(famStrong(rhs));
+    widen::TypeRef aRef = famStrong(lhs), bRef = famStrong(rhs);
+    std::string a = widen::spellOrEmpty(aRef), b = widen::spellOrEmpty(bRef);
     if (a.empty() && b.empty()) return "";
     if (a.empty() || b.empty()) {
         std::string s = a.empty() ? b : a;
         return widen::floatLiteralFits(val, s) ? s : "";
     }
-    std::string out;
-    if (!widen::commonType(a, b, out)) return "";
+    widen::TypeRef outRef;
+    if (!widen::commonType(aRef, bRef, outRef)) return "";
+    std::string out = widen::spellOrEmpty(outRef);
     return widen::floatLiteralFits(val, out) ? out : "";
 }
 
