@@ -208,8 +208,13 @@ std::string literalTextForFit(parse::Node const& n) {
     return n.text;
 }
 
-// Per-kind default when a literal has no usable context.
-std::string defaultLiteralType(parse::Node const& n) {
+// Per-kind default TYPE-REF when a literal has no usable context: the preferred
+// handle for its kind at the minimal width that holds the value — the same handle
+// ##type reports. The 32-bit tier mints the NO-WIDTH primitive (int / uint / float),
+// not the explicit-width one (int32 / uint32 / float32), so a weak literal that
+// can't flex into its partner carries `int`, not `int32`, into the widening — they
+// are distinct TypeRefs (primitives key by name). 64-bit handles carry real width.
+widen::TypeRef defaultLiteralType(parse::Node const& n) {
     switch (n.kind) {
         case parse::Kind::kIntLiteral: {
             std::string const& s = n.text;
@@ -222,12 +227,12 @@ std::string defaultLiteralType(parse::Node const& n) {
                 && errno != ERANGE
                 && "defaultLiteralType: malformed int text from numeric");
             if (neg) {
-                if (mag <= static_cast<uint64_t>(INT32_MAX) + 1) return "int32";
-                return "int64";
+                if (mag <= static_cast<uint64_t>(INT32_MAX) + 1) return widen::intern("int");
+                return widen::intern("int64");
             }
-            if (mag <= static_cast<uint64_t>(INT32_MAX)) return "int32";
-            if (mag <= static_cast<uint64_t>(INT64_MAX)) return "int64";
-            return "uint64";
+            if (mag <= static_cast<uint64_t>(INT32_MAX)) return widen::intern("int");
+            if (mag <= static_cast<uint64_t>(INT64_MAX)) return widen::intern("int64");
+            return widen::intern("uint64");
         }
         case parse::Kind::kUintLiteral: {
             std::string const& s = n.text;
@@ -237,12 +242,12 @@ std::string defaultLiteralType(parse::Node const& n) {
             assert(!s.empty() && end != s.c_str() && *end == '\0'
                 && errno != ERANGE
                 && "defaultLiteralType: malformed uint text from numeric");
-            if (mag <= static_cast<uint64_t>(UINT32_MAX)) return "uint32";
-            return "uint64";
+            if (mag <= static_cast<uint64_t>(UINT32_MAX)) return widen::intern("uint");
+            return widen::intern("uint64");
         }
-        case parse::Kind::kCharLiteral:  return "char";
-        case parse::Kind::kBoolLiteral:  return "bool";
-        case parse::Kind::kFloatLiteral: return "float32";
+        case parse::Kind::kCharLiteral:  return widen::intern("char");
+        case parse::Kind::kBoolLiteral:  return widen::intern("bool");
+        case parse::Kind::kFloatLiteral: return widen::intern("float");
         case parse::Kind::kStringLiteral:
         case parse::Kind::kNullptrLiteral:
         case parse::Kind::kIdentExpr:
@@ -457,7 +462,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             if (literalFitsContext(e, context)) {
                 e.inferred_type = context;   // the literal takes the context type
             } else {
-                e.inferred_type = widen::internOrNone(defaultLiteralType(e));
+                e.inferred_type = defaultLiteralType(e);   // preferred handle
             }
             return;
         }

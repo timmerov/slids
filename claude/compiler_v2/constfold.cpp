@@ -205,6 +205,23 @@ bool isZeroFloatText(std::string const& s) {
     return v == 0.0;
 }
 
+// The logical operators (`!`, `&&`, `||`, `^^`) test an operand for truthiness:
+// zero-like is false, anything else true. They accept ANY literal kind plus
+// nullptr — wider than arithmetic, which is why this is NOT folded into isLiteral
+// (nullptr is truthy-testable but not a number; `nullptr + 1` must stay rejected).
+bool isLogicalOperand(parse::Node const& n) {
+    return isLiteral(n) || n.kind == parse::Kind::kNullptrLiteral;
+}
+
+// Truthiness of a logical operand (a recognized isLogicalOperand node): nullptr is
+// the null pointer, always zero-like; a float tests against 0.0; every integer-
+// class kind (int/uint/char/bool) tests its decimal text against zero.
+bool isLogicalTrue(parse::Node const& n) {
+    if (n.kind == parse::Kind::kNullptrLiteral) return false;
+    if (n.kind == parse::Kind::kFloatLiteral)   return !isZeroFloatText(n.text);
+    return !isZeroIntText(n.text);
+}
+
 // ~N as text. Operate in int64. Magnitudes out of range stay unfolded so the
 // catch-all surfaces them.
 void foldBitNotIntText(std::string& text) {
@@ -290,21 +307,12 @@ std::unique_ptr<parse::Node> tryFoldUnary(parse::Node& node, diagnostic::Sink& d
         return child;
     }
     if (op == "!") {
-        // 1b: all literal types accepted, result bool.
-        bool result;
-        if (operand.kind == parse::Kind::kIntLiteral
-         || operand.kind == parse::Kind::kUintLiteral
-         || operand.kind == parse::Kind::kCharLiteral
-         || operand.kind == parse::Kind::kBoolLiteral) {
-            result = isZeroIntText(operand.text);
-        } else if (operand.kind == parse::Kind::kFloatLiteral) {
-            result = isZeroFloatText(operand.text);
-        } else {
-            return nullptr;
-        }
+        // 1b: any literal kind plus nullptr; result bool. `!x` is true iff x is
+        // zero-like.
+        if (!isLogicalOperand(operand)) return nullptr;
         auto out = std::make_unique<parse::Node>();
         out->kind = parse::Kind::kBoolLiteral;
-        out->text = result ? "1" : "0";
+        out->text = isLogicalTrue(operand) ? "0" : "1";
         out->nominal_type = widen::intern("uint1");
         out->file_id = node.file_id;
         out->tok = node.tok;
@@ -673,6 +681,48 @@ std::unique_ptr<parse::Node> emitIntResult(parse::Node& node, parse::Node& lhs,
     return out;
 }
 
+// A folded integer result that overflows uint64 fits no integer type — a hard
+// error, distinct from the int64 -> uint64 promotion (a normal widening that
+// stays within uint64).
+void reportConstOverflow(parse::Node& node, diagnostic::Sink& diag) {
+    diagnostic::report(diag, {node.file_id, node.tok,
+        "Integer overflow in a folded constant expression; the value exceeds "
+        "uint64.", {}});
+}
+
+// D4 fallback when an operand exceeds int64 (a large unsigned literal, which is
+// always non-negative). Folds in uint64; a result that overflows uint64 is
+// reported. A negative operand alongside an unrepresentable-as-signed one is a
+// sign mix with no common value — left unfolded.
+std::unique_ptr<parse::Node> foldUnsignedArith(parse::Node& node,
+                                               parse::Node& lhs, parse::Node& rhs,
+                                               std::string const& op,
+                                               diagnostic::Sink& diag) {
+    uint64_t a, b;
+    if (!parseU64(lhs.text, a) || !parseU64(rhs.text, b)) return nullptr;
+    if (op == "/" || op == "%") {
+        if (b == 0) {
+            diagnostic::report(diag, {node.file_id, node.tok,
+                (op == "/" ? "Division by zero." : "Modulo by zero."), {}});
+            return nullptr;
+        }
+        return emitIntResult(node, lhs, rhs,
+                             std::to_string((op == "/") ? (a / b) : (a % b)));
+    }
+    if (op == "&" || op == "|" || op == "^") {
+        uint64_t r = (op == "&") ? (a & b) : (op == "|") ? (a | b) : (a ^ b);
+        return emitIntResult(node, lhs, rhs, std::to_string(r));
+    }
+    uint64_t r;
+    bool ovf;
+    if      (op == "+") ovf = __builtin_add_overflow(a, b, &r);
+    else if (op == "-") ovf = __builtin_sub_overflow(a, b, &r);
+    else if (op == "*") ovf = __builtin_mul_overflow(a, b, &r);
+    else return nullptr;
+    if (ovf) { reportConstOverflow(node, diag); return nullptr; }
+    return emitIntResult(node, lhs, rhs, std::to_string(r));
+}
+
 // D4 — int-class arith/bitwise. Computes the value, then settles kind + strength
 // per the const+const rules (rule-6 overflow-to-unsigned falls out of the
 // integer->unsigned value-fit promotion).
@@ -681,7 +731,8 @@ std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
                                                   std::string const& op,
                                                   diagnostic::Sink& diag) {
     int64_t a, b;
-    if (!parseI64(lhs.text, a) || !parseI64(rhs.text, b)) return nullptr;
+    if (!parseI64(lhs.text, a) || !parseI64(rhs.text, b))
+        return foldUnsignedArith(node, lhs, rhs, op, diag);
 
     if (op == "/" || op == "%") {
         if (b == 0) {
@@ -718,7 +769,7 @@ std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
     if (!overflow) {
         return emitIntResult(node, lhs, rhs, std::to_string(r));
     }
-    // Retry in uint64; if it also overflows, leave unfolded (catch-all surfaces).
+    // Retry in uint64; a result that also overflows uint64 fits no integer type.
     uint64_t ua = static_cast<uint64_t>(a);
     uint64_t ub = static_cast<uint64_t>(b);
     uint64_t ur;
@@ -726,7 +777,7 @@ std::unique_ptr<parse::Node> foldIntArithBitwise(parse::Node& node,
     if      (op == "+") u_overflow = __builtin_add_overflow(ua, ub, &ur);
     else if (op == "-") u_overflow = __builtin_sub_overflow(ua, ub, &ur);
     else /*    *   */   u_overflow = __builtin_mul_overflow(ua, ub, &ur);
-    if (u_overflow) return nullptr;
+    if (u_overflow) { reportConstOverflow(node, diag); return nullptr; }
     return emitIntResult(node, lhs, rhs, std::to_string(ur));
 }
 
@@ -741,6 +792,20 @@ std::unique_ptr<parse::Node> tryFoldBinary(parse::Node& node, diagnostic::Sink& 
     parse::Node& rhs = *node.children[1];
     std::string const& op = node.text;
 
+    // Logical ops (&& || ^^) test each operand for truthiness and yield a bool.
+    // They accept ANY literal kind plus nullptr — wider than the isLiteral gate
+    // below — and both operands are constant here, so there is no side effect to
+    // short-circuit past. A non-logical operand is left unfolded for classify.
+    if (op == "&&" || op == "||" || op == "^^") {
+        if (!isLogicalOperand(lhs) || !isLogicalOperand(rhs)) return nullptr;
+        bool la = isLogicalTrue(lhs);
+        bool lb = isLogicalTrue(rhs);
+        bool r = (op == "&&") ? (la && lb)
+               : (op == "||") ? (la || lb)
+               : (la != lb);                          // ^^
+        return makeLitAt(node, parse::Kind::kBoolLiteral, r ? "1" : "0");
+    }
+
     if (!isLiteral(lhs) || !isLiteral(rhs)) return nullptr;
 
     // Shifts pre-empt the same-family check: float-lhs / int-rhs is the
@@ -748,9 +813,6 @@ std::unique_ptr<parse::Node> tryFoldBinary(parse::Node& node, diagnostic::Sink& 
     if (op == "<<" || op == ">>") {
         return tryFoldShift(node, lhs, rhs, op, diag);
     }
-
-    // Logical short-circuit folds need purity tracking (PPID / calls). Defer.
-    if (op == "&&" || op == "||" || op == "^^") return nullptr;
 
     bool lhs_float = lhs.kind == parse::Kind::kFloatLiteral;
     bool rhs_float = rhs.kind == parse::Kind::kFloatLiteral;

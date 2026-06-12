@@ -110,6 +110,7 @@ const char kStar = '*';
 const char kBeta = 'A' + 1;      // char arithmetic stays char -> 'B'
 const int kNegSeven = -7;
 const int8 kByte = 5;
+const int kShadowMe = 10;        // shadowed by a function-scope const below
 
 int32 foo() {
     const float kTau = 2.0 * kPi;
@@ -148,6 +149,31 @@ int32 main() {
 
     //-EXPECT-ERROR: does not fit declared type 'int8'
     //const int8 kTooBig = 200;
+
+    /* a char-typed const whose value exceeds char range is rejected. */
+
+    //-EXPECT-ERROR: does not fit declared type 'char'
+    //const char kCharBig = 256;
+
+    /* a negative literal does not fit an unsigned const (the sign cell, distinct
+       from the magnitude overflow above). */
+
+    //-EXPECT-ERROR: does not fit declared type 'uint8'
+    //const uint8 kNegU = -1;
+
+    /* compile errors — cross-family literal into a typed const: there is no
+       int-literal -> float conversion, nor float-literal -> int. */
+
+    //-EXPECT-ERROR: does not fit declared type 'float'
+    //const float kIntToFloat = 5;
+
+    //-EXPECT-ERROR: does not fit declared type 'int'
+    //const int kFloatToInt = 3.5;
+
+    /* compile error — the declared type name is not a type. */
+
+    //-EXPECT-ERROR: Unknown type 'Bogus'
+    //const Bogus kBadType = 5;
 
     /* a strong const is a TYPED value at use sites: narrowing it is rejected like
        a variable of its type (kFortyTwo is `const int`; int -> int8 narrows),
@@ -191,6 +217,24 @@ int32 main() {
     //-EXPECT-ERROR: Initializer for 'kBad' is not a constant expression
     //int yVar = 7;
     //const kBad = yVar + 1;
+
+    /* compile error — a float mixed with an integer-class operand has no common
+       type (the float / integer-class fold is rejected). */
+
+    //-EXPECT-ERROR: No common type for floating-point and integer-class literals
+    //const kFloatIntMix = 3.5 + 2;
+
+    /* a fold whose value exceeds uint64 fits no integer type and is a compile
+       error (operand itself past int64 -> the uint64 arithmetic overflows). */
+
+    //-EXPECT-ERROR: Integer overflow in a folded constant expression
+    //const kU64Overflow = 18446744073709551615 + 1;
+
+    /* the same overflow reached the other way: both operands fit int64 but the
+       product exceeds uint64. */
+
+    //-EXPECT-ERROR: Integer overflow in a folded constant expression
+    //const kMulOverflow = 9223372036854775807 * 3;
 
     bar();
 
@@ -327,6 +371,132 @@ int32 main() {
        int64 widens); narrowing it is rejected (see the kNarrow negative). */
     int64 kWide = kFortyTwo;
     __println("kWide = " + kWide);   // 42
+
+    /* comparison operators fold to a bool const (integer and float operands;
+       spec: == != < <= > >= -> bool). */
+    const kCmpLt = 5 < 3;       // false
+    const kCmpLe = 3 <= 3;      // true
+    const kCmpGt = 5 > 3;       // true
+    const kCmpGe = 7 >= 7;      // true
+    const kCmpEq = 5 == 5;      // true
+    const kCmpNe = 4 != 4;      // false
+    const kCmpF  = 3.5 < 4.0;   // true  (float comparison)
+    __println(##type(kCmpLt) + " kCmpLt = " + kCmpLt);
+    __println(##type(kCmpLe) + " kCmpLe = " + kCmpLe);
+    __println(##type(kCmpGt) + " kCmpGt = " + kCmpGt);
+    __println(##type(kCmpGe) + " kCmpGe = " + kCmpGe);
+    __println(##type(kCmpEq) + " kCmpEq = " + kCmpEq);
+    __println(##type(kCmpNe) + " kCmpNe = " + kCmpNe);
+    __println(##type(kCmpF)  + " kCmpF = "  + kCmpF);
+
+    /* logical operators (&& || ^^ and unary !) apply to ALL literal kinds plus
+       nullptr: zero-like is false, not-zero-like is true; the result is a bool.
+       both operands are constant, so there is nothing to short-circuit past. */
+    const kLAnd   = true && false;   // false
+    const kLOr    = false || true;   // true
+    const kLXor   = true ^^ true;    // false
+    const kLInt   = 5 && 3;          // int operands     -> true
+    const kLZero  = 0 || 0;          // both zero         -> false
+    const kLFlt   = 3.5 || 0.0;      // float operands    -> true
+    const kLChar  = 'A' ^^ 0;        // char ^^ int       -> true
+    const kLPtr   = nullptr && 5;    // nullptr zero-like -> false
+    const kNotF   = !3.5;            // float not-zero    -> false
+    const kNotZero= !0;              // int zero          -> true
+    const kNotNull= !nullptr;        // nullptr zero-like -> true
+    __println(##type(kLAnd)    + " kLAnd = "    + kLAnd);
+    __println(##type(kLOr)     + " kLOr = "     + kLOr);
+    __println(##type(kLXor)    + " kLXor = "    + kLXor);
+    __println(##type(kLInt)    + " kLInt = "    + kLInt);
+    __println(##type(kLZero)   + " kLZero = "   + kLZero);
+    __println(##type(kLFlt)    + " kLFlt = "    + kLFlt);
+    __println(##type(kLChar)   + " kLChar = "   + kLChar);
+    __println(##type(kLPtr)    + " kLPtr = "    + kLPtr);
+    __println(##type(kNotF)    + " kNotF = "    + kNotF);
+    __println(##type(kNotZero) + " kNotZero = " + kNotZero);
+    __println(##type(kNotNull) + " kNotNull = " + kNotNull);
+
+    /* bool yields to a non-bool partner: the result takes the partner's kind
+       (spec: bool + K -> K). bool + char -> char, bool + int -> int. */
+    const kBoolChar = true + 'A';   // char 'B'
+    const kBoolIntP = false + 5;    // int 5
+    __println(##type(kBoolChar) + " kBoolChar = " + kBoolChar);
+    __println(##type(kBoolIntP) + " kBoolIntP = " + kBoolIntP);
+
+    /* a char arithmetic result that goes NEGATIVE promotes to int (the value-fit
+       rule's negative side; kChDown above only covered a positive in-range
+       result). */
+    const kChNeg = 'A' - 'B';       // -1 -> int
+    __println(##type(kChNeg) + " kChNeg = " + kChNeg);
+
+    /* strong + the SAME strong type (same width) keeps that strong type when the
+       value fits. */
+    const int8 kE8a = 5;
+    const int8 kE8b = 6;
+    const kSameStrong = kE8a + kE8b;   // int8 11
+    __println(##type(kSameStrong) + " kSameStrong = " + kSameStrong);
+
+    /* a fold whose value exceeds int64 max promotes the KIND to unsigned
+       (integer -> unsigned value-fit rule) -> uint64. */
+    const kToU64 = 9223372036854775807 + 9223372036854775807;   // uint64
+    __println(##type(kToU64) + " kToU64 = " + kToU64);
+
+    /* strong + strong, same sign, but the value overflows the larger type ->
+       drops to flex (the "else flex" tail of the same-sign rule). */
+    const int16 kO16a = 30000;
+    const int16 kO16b = 30000;
+    const kOverLarge = kO16a + kO16b;   // 60000 exceeds int16 -> flex int
+    __println(##type(kOverLarge) + " kOverLarge = " + kOverLarge);
+
+    /* shift takes the kind/type of the LEFT operand; the right operand need only
+       be integer-class (here a uint8 count into an int32 base). */
+    const uint8 kShCount = 2;
+    const int32 kShBase  = 1;
+    const kShiftMix = kShBase << kShCount;   // int32 4
+    __println(##type(kShiftMix) + " kShiftMix = " + kShiftMix);
+
+    /* ---- declaration mechanics ---- */
+
+    /* a const declared inside a nested block is scoped to that block. */
+    if (true) {
+        const int kBlk = 5;
+        __println(##type(kBlk) + " kBlk = " + kBlk);
+    }
+
+    /* a function-scope const SHADOWS a file-scope const of the same name (not a
+       duplicate — kShadowMe is `const int = 10` at file scope). */
+    const int kShadowMe = 99;
+    __println(##type(kShadowMe) + " kShadowMe = " + kShadowMe);
+
+    /* an explicit wide type takes a small literal (it widens into the type). */
+    const int64 kWideLit = 5;
+    __println(##type(kWideLit) + " kWideLit = " + kWideLit);
+
+    /* a char const takes a numeric literal (the int literal flexes into char). */
+    const char kCharNum = 65;            // 'A'
+    __println(##type(kCharNum) + " kCharNum = " + kCharNum);
+
+    /* boundary values fit their declared type exactly. */
+    const int8  kMin = -128;
+    const uint8 kMax = 255;
+    __println(##type(kMin) + " kMin = " + kMin);
+    __println(##type(kMax) + " kMax = " + kMax);
+
+    /* DEFERRED — unary `~` is a WIDTH-PRESERVING complement (the result keeps the
+       operand's kind and width; fold.sl rule 1e). Today `~` complements at the
+       int64/uint64 computation width and leaves the wide value, so a char `~`
+       overflows char range (rejected) and a bool/unsigned `~` reports a uint64.
+       The cases below show the intended results; uncomment + add to the golden
+       once the width-preserving `~` fold lands. See todo.txt.
+       (kBinNeg is the contrast: subtraction genuinely goes negative -> int.) */
+
+    //const kBinNeg  = 'A' - 'B';   // subtraction promotes out-of-range -> int -1
+    //const kNotChar = ~'A';        // ~65 @ uint8 = 190 -> char (today: error)
+    //const kNotBool = ~true;       // ~1 @ 1 bit  = 0   -> unsigned (today: uint64)
+    //const kNotUint = ~0xFF;       // ~0xFF @ uint8 = 0 -> uint (today: uint64)
+    //__println(##type(kBinNeg)  + " kBinNeg = "  + kBinNeg);
+    //__println(##type(kNotChar) + " kNotChar = " + kNotChar);
+    //__println(##type(kNotBool) + " kNotBool = " + kNotBool);
+    //__println(##type(kNotUint) + " kNotUint = " + kNotUint);
 
     return 0;
 }

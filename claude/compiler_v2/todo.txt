@@ -42,6 +42,36 @@ BUGS (found, deferred)
     STRONG-CONST WIDENING (below) is the strong-literal arm already landed at the
     scalar assignment sites.
 
+  * PORT commonType TO widen::TypeRef — commonType (widen.cpp) is the last name-based
+    string island in the type system: callers spell their operands, it runs on (cat,
+    bits) parsed back out of the strings, returns a spelling, and the caller re-interns
+    it (classify.cpp binary path ~1162, the tuple-slot loop, return-type op, etc.). It
+    works, but it round-trips TypeRef -> string -> TypeRef at every arithmetic/comparison
+    site, exactly the v1 type-string pattern the migration retired everywhere else.
+    Convert it to take + return widen::TypeRef directly (the spellCommon no-width-vs-
+    explicit-handle preference moves to ref selection: char/int -> the `int` handle, not
+    a spelled "int"). defaultLiteralType already mints the preferred handle as a TypeRef;
+    this finishes the path so no spelling is produced between the operands and the result.
+
+  * UNARY ~ MUST BE WIDTH-PRESERVING. fold.sl rule 1e: the result of `~` keeps the
+    operand's kind and NOMINAL WIDTH — it is a bitwise complement WITHIN that width.
+    tryFoldUnary's `~` arm (constfold.cpp) instead complements at the int64/uint64
+    computation width and leaves the wide value, so the result no longer fits the
+    operand's nominal. Two symptoms, one cause:
+      - `~` on a char overflows char range and is REJECTED: `~'A'` -> -66 instead of
+        ~65 @ uint8 = 190 (which fits char fine).
+      - `~` on a bool/unsigned reports a uint64: `~true` / `~0xFF` -> 18-quintillion
+        instead of 0 (the complement at 1 bit / 8 bits).
+    Fix: mask the complement to the operand's nominal bit-width (signed/unsigned per
+    kind). Signed-int `~` already fits its width (`~5 -> -6`, `~0 -> -1`) and is
+    unchanged. Tests waiting on this:
+      - constant.sl DEFERRED block: kNotChar (~'A' -> char 190), kNotBool
+        (~true -> 0), kNotUint (~0xFF -> 0), plus kBinNeg ('A'-'B' -> int, the
+        subtraction contrast).
+      - test_v2/misc/bug.sl: `const uint32 kTest = ~kTest1;` (kTest1 = 0xFF) should be
+        uint32 0xFFFFFF00 = 4294967040; today it errors ("value 18446744073709551360
+        does not fit declared type 'uint32'").
+
 
 DEFERRED TESTS
 

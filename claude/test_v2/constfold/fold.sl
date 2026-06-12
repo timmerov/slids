@@ -149,6 +149,25 @@ the computation type determines the kind.
 exception: if the result overflows int64 but not uint64 then the kind is unsigned.
 */
 
+/*
+claude says:
+
+the KIND of an operation's result (bool / char / unsigned / integer / float) is
+governed by the kind-combining rules specified in constant.sl, NOT by the per-
+operation notes above. kind preservation has precedence over the computation
+type: char is kept whenever either operand is char; bool and unsigned are kept
+only when both operands share the kind; otherwise the result is integer; then a
+value that no longer fits demotes. the computation types (int64/uint64/float64)
+govern only how the VALUE is computed. rules 5b ("otherwise the kind is integer")
+and 6 ("the computation type determines the kind") are superseded by this.
+
+suspect, flagged for review (NOT encoded as passing tests below):
+- unary ~ on a char REJECTS the out-of-range result (`~'A'` -> "value does not
+  fit char") instead of deferring per the "value need not fit its nominal" note.
+- unary ~ on bool/unsigned reports a uint64 nominal (by value), not the operand's
+  nominal size that rule 1e states.
+*/
+
 int32 main() {
     // D1 — float binary fold (+ - * / %)
     __println("f_add= " + (1.5 + 2.5));               // 4
@@ -201,6 +220,56 @@ int32 main() {
     float xf_tenth = 0.1;
     __println("xf_pi= "    + xf_pi);     // 3.14
     __println("xf_tenth= " + xf_tenth);  // 0.1
+
+    // D5 — unary fold VALUES (rules 1a, 1c, 1d, 1e). KIND rules, unary !, and the
+    // logical / comparison folds are covered in constant.sl.
+    __println("u_plus= " + (+5));        // 5    (1a nop)
+    __println("u_negf= " + (-3.5));      // -3.5 (1c float -> float)
+    __println("u_negi= " + (-5));        // -5   (1d -> integer)
+    __println("u_negc= " + (-'A'));      // -65  (1d char -> integer)
+    __println("u_not0= " + (~0));        // -1   (1e integer)
+    __println("u_not5= " + (~5));        // -6   (1e integer)
+
+    // D6 — bitwise fold VALUES (rule 5b)
+    __println("bw_and= " + (12 & 10));   // 8
+    __println("bw_or= "  + (12 | 3));    // 15
+    __println("bw_xor= " + (12 ^ 10));   // 6
+
+    // D7 — integer math fold VALUES (rule 6, no overflow; the overflow edges are
+    // D4 above and the >uint64 error is in constant.sl)
+    __println("m_add= " + (2 + 3));      // 5
+    __println("m_sub= " + (10 - 4));     // 6
+    __println("m_mul= " + (6 * 7));      // 42
+    __println("m_div= " + (20 / 3));     // 6
+    __println("m_mod= " + (20 % 3));     // 2
+
+    /* compile errors — invalid fold operations (the negative-test runner
+       uncomments one block at a time). float+int mix and the >uint64 integer
+       overflow are covered in constant.sl, not duplicated here. */
+
+    //-EXPECT-ERROR: Bitwise '~' not defined on floating-point literal
+    //const e1 = ~3.5;
+
+    //-EXPECT-ERROR: Bitwise '&' not defined on floating-point literal
+    //const e2 = 3.5 & 3.5;
+
+    //-EXPECT-ERROR: Division by zero
+    //const e3 = 1 / 0;
+
+    //-EXPECT-ERROR: Modulo by zero
+    //const e4 = 1 % 0;
+
+    //-EXPECT-ERROR: Division by zero
+    //const e5 = 1.0 / 0.0;
+
+    //-EXPECT-ERROR: Shift count is negative
+    //const e6 = 1 << (0 - 1);
+
+    //-EXPECT-ERROR: Shift count must be integer-class
+    //const e7 = 1 << 1.5;
+
+    //-EXPECT-ERROR: Floating-point overflow in folded expression
+    //const e8 = 1.0e308 * 100.0;
 
     return 0;
 }
