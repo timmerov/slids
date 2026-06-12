@@ -219,7 +219,7 @@ int32 main() {
     //__println("x= " + ey^);
 
     /* a non-value (tuple) source has no scalar conversion. */
-    //-EXPECT-ERROR: Cannot convert '(int32, int32)' to 'int'
+    //-EXPECT-ERROR: Cannot convert '(int, int)' to 'int'
     //int et = (int = (1, 2));
     //__println("x= " + et);
 

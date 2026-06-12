@@ -222,27 +222,6 @@ bool isLogicalTrue(parse::Node const& n) {
     return !isZeroIntText(n.text);
 }
 
-// ~N as text. Operate in int64. Magnitudes out of range stay unfolded so the
-// catch-all surfaces them.
-void foldBitNotIntText(std::string& text) {
-    std::string clean;
-    for (char c : text) if (c != '_') clean += c;
-    bool neg = !clean.empty() && clean[0] == '-';
-    if (neg) clean.erase(0, 1);
-    else if (!clean.empty() && clean[0] == '+') clean.erase(0, 1);
-    errno = 0;
-    char* end = nullptr;
-    uint64_t mag = std::strtoull(clean.c_str(), &end, 10);
-    if (end == clean.c_str() || *end != '\0' || errno == ERANGE) return;
-    if (neg) {
-        if (mag == 0) { text = "-1"; return; }
-        text = std::to_string(mag - 1);
-    } else {
-        if (mag == UINT64_MAX) return;
-        text = "-" + std::to_string(mag + 1);
-    }
-}
-
 // Unary fold per fold.sl rules 1a-1f.
 std::unique_ptr<parse::Node> tryFoldUnary(parse::Node& node, diagnostic::Sink& diag) {
     if (node.kind != parse::Kind::kUnaryExpr) return nullptr;
@@ -273,37 +252,50 @@ std::unique_ptr<parse::Node> tryFoldUnary(parse::Node& node, diagnostic::Sink& d
         return child;
     }
     if (op == "~") {
-        // 1e (bool, char, integer, unsigned): kind preserved (bool→unsigned),
-        // nominal size = operand's nominal size.
-        // 1f (float): compile error.
+        // 1e: `~` complements within the operand's KIND, keeping the kind (bool
+        // stays bool). A STRONG fixed-width operand (char=8, bool=1, or a typed
+        // intN/uintN const) complements at that width; a WEAK no-width int/unsigned
+        // literal complements at the 64-bit computation width (so `~0xFF` is the
+        // full uint64 complement, not a byte). 1f (float): compile error.
         if (operand.kind == parse::Kind::kFloatLiteral) {
             diagnostic::report(diag, {node.file_id, node.tok,
                 "Bitwise '~' not defined on floating-point literal.", {}});
             return nullptr;
         }
         if (!isIntClassLiteral(operand)) return nullptr;
-        widen::TypeRef operand_nominal = operand.nominal_type;
-        auto child = std::move(node.children[0]);
-        foldBitNotIntText(child->text);
-        // Per 1e: bool becomes unsigned, char/integer/unsigned kind preserved.
-        if (child->kind == parse::Kind::kBoolLiteral) {
-            child->kind = parse::Kind::kUintLiteral;
-        }
-        // For integer kind operand the result may carry a negative text;
-        // kIntLiteral handles signed text. For uint/char/bool→unsigned, the
-        // computation is in uint64 — store the unsigned wraparound.
-        if (child->kind == parse::Kind::kUintLiteral) {
-            // Recompute as uint64 wraparound: ~mag in uint64.
-            bool neg = false;
-            uint64_t mag = 0;
-            // After foldBitNotIntText, text is signed (e.g. -1 for ~0).
-            if (parseSignedDigits(child->text, neg, mag)) {
-                uint64_t comp = neg ? (uint64_t)(0ULL - mag) : mag;
-                child->text = std::to_string(comp);
+        int bits;
+        bool is_signed;
+        uint64_t uv;                                            // two's-complement bits
+        if (operand.kind == parse::Kind::kBoolLiteral) {
+            bits = 1; is_signed = false;
+            uv = (operand.text == "0" || operand.text == "false") ? 0ULL : 1ULL;
+        } else {
+            if (operand.kind == parse::Kind::kCharLiteral) {
+                bits = 8; is_signed = false;                    // char: strong uint8
+            } else if (operand.strong_type != widen::kNoType) {
+                widen::TypeKind tk;                             // strong intN / uintN
+                if (!widen::classify(operand.strong_type, tk)) return nullptr;
+                bits = tk.bits;
+                is_signed = (tk.cat == widen::Category::kSignedInt);
+            } else {
+                bits = 64;                                      // weak no-width -> computation type
+                is_signed = (operand.kind == parse::Kind::kIntLiteral);
             }
+            bool neg = false; uint64_t mag = 0;
+            if (!parseSignedDigits(operand.text, neg, mag)) return nullptr;
+            uv = neg ? (0ULL - mag) : mag;
         }
-        // Result nominal = operand's nominal per rule 1e.
-        child->nominal_type = operand_nominal;
+        uint64_t mask = (bits >= 64) ? ~0ULL : ((1ULL << bits) - 1ULL);
+        uint64_t masked = (~uv) & mask;
+        auto child = std::move(node.children[0]);            // kind preserved (bool stays bool)
+        if (operand.kind == parse::Kind::kBoolLiteral) {
+            child->text = masked ? "1" : "0";
+        } else if (is_signed) {                                // sign-extend from `bits`
+            uint64_t signbit = (bits >= 64) ? (1ULL << 63) : (1ULL << (bits - 1));
+            child->text = std::to_string(static_cast<int64_t>((masked ^ signbit) - signbit));
+        } else {
+            child->text = std::to_string(masked);
+        }
         return child;
     }
     if (op == "!") {

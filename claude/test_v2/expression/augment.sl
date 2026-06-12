@@ -78,11 +78,11 @@ int32 main() {
     int16  xi16n = 2;     __println("xi16n= " + xi16n);
     uint64 xu64n = 3;     __println("xu64n= " + xu64n);
 
-    //-EXPECT-ERROR: No common type for 'float32' and 'int32'; use an explicit type conversion.
+    //-EXPECT-ERROR: No common type for 'float32' and 'int'; use an explicit type conversion.
     // xf32 &= 7;
     //-EXPECT-ERROR: Cannot implicitly narrow 'int32' to 'int16'; use an explicit type conversion.
     // xi16n += xi32;
-    //-EXPECT-ERROR: Cannot implicitly convert 'int32' to 'bool'; use an explicit type conversion.
+    //-EXPECT-ERROR: Cannot implicitly convert 'int' to 'bool'; use an explicit type conversion.
     // xb += 5;
     //-EXPECT-ERROR: No common type for 'uint64' and 'int8'; use an explicit type conversion.
     // xu64n += xi8n;

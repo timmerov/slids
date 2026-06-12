@@ -444,7 +444,7 @@ negatives — one //-block uncommented per run.
 //}
 
 /* the scrutinee must be integer-class. */
-//-EXPECT-ERROR: A switch value must be integer-class; got 'float32'.
+//-EXPECT-ERROR: A switch value must be integer-class; got 'float'.
 //int neg_float_scrutinee() {
 //    switch (1.5) {
 //        case 0: break;

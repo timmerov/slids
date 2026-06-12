@@ -107,7 +107,7 @@ the result is integer.
 
 1e. unary ~ on bool, char, integer, unsigned.
 the operand is widened to its computation type.
-the kind is preserved except bool becomes unsigned.
+the kind is preserved.
 the nominal size of the result is the nominal size of the operand.
 
 1f. unary ~ on float.
