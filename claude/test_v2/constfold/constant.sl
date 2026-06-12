@@ -481,22 +481,15 @@ int32 main() {
     __println(##type(kMin) + " kMin = " + kMin);
     __println(##type(kMax) + " kMax = " + kMax);
 
-    /* DEFERRED — unary `~` is a WIDTH-PRESERVING complement (the result keeps the
-       operand's kind and width; fold.sl rule 1e). Today `~` complements at the
-       int64/uint64 computation width and leaves the wide value, so a char `~`
-       overflows char range (rejected) and a bool/unsigned `~` reports a uint64.
-       The cases below show the intended results; uncomment + add to the golden
-       once the width-preserving `~` fold lands. See todo.txt.
-       (kBinNeg is the contrast: subtraction genuinely goes negative -> int.) */
-
-    //const kBinNeg  = 'A' - 'B';   // subtraction promotes out-of-range -> int -1
-    //const kNotChar = ~'A';        // ~65 @ uint8 = 190 -> char (today: error)
-    //const kNotBool = ~true;       // ~1 @ 1 bit  = 0   -> unsigned (today: uint64)
-    //const kNotUint = ~0xFF;       // ~0xFF @ uint8 = 0 -> uint (today: uint64)
-    //__println(##type(kBinNeg)  + " kBinNeg = "  + kBinNeg);
-    //__println(##type(kNotChar) + " kNotChar = " + kNotChar);
-    //__println(##type(kNotBool) + " kNotBool = " + kNotBool);
-    //__println(##type(kNotUint) + " kNotUint = " + kNotUint);
+    /* unary `~` complements within the operand's KIND: a STRONG fixed-width operand
+       (char=8, bool=1) at that width; a WEAK no-width literal (`0xFF`) at the 64-bit
+       computation width. The kind is kept (bool stays bool). */
+    const kNotChar = ~'A';        // ~65 @ uint8 = 190 -> char
+    const kNotBool = ~true;       // ~1  @ 1 bit  = 0   -> bool false
+    const kNotUint = ~0xFF;       // weak no-width -> 64-bit complement -> uint64
+    __println(##type(kNotChar) + " kNotChar = " + kNotChar);
+    __println(##type(kNotBool) + " kNotBool = " + kNotBool);
+    __println(##type(kNotUint) + " kNotUint = " + kNotUint);
 
     return 0;
 }

@@ -491,19 +491,33 @@ std::string floatResultStrong(parse::Node const& lhs, parse::Node const& rhs,
     return widen::floatLiteralFits(val, out) ? out : "";
 }
 
-// Emit a folded SHIFT result of value `val`: kind and strength follow the LEFT
-// operand (then the value-fit promotion). A bool/char result is strong; a
-// promoted kind is flex; otherwise the lhs's strong type if the value fits, else
-// flex.
+// Forward decls — the strong-result helpers are defined just before emitIntResult.
+bool isStrongConstOperand(parse::Node const& n);
+widen::TypeRef operandTypeRef(parse::Node const& n);
+parse::Kind literalKindForType(widen::TypeRef t);
+std::string truncateConstValue(std::string const& val, int bits, bool is_signed);
+
+// Emit a folded SHIFT result of value `val`: kind and type follow the LEFT operand.
+// A STRONG (fixed-width) lhs truncates the value to its width (`'A'<<8` -> char 0);
+// a weak no-width lhs keeps the value-widening path.
 std::unique_ptr<parse::Node> emitShiftResult(parse::Node& node, parse::Node& lhs,
                                              std::string val) {
+    if (isStrongConstOperand(lhs)) {
+        widen::TypeRef lt = operandTypeRef(lhs);
+        widen::TypeKind tk;
+        if (lt != widen::kNoType && widen::classify(lt, tk)) {
+            bool is_signed = (tk.cat == widen::Category::kSignedInt);
+            std::string tv = truncateConstValue(val, tk.bits, is_signed);
+            auto out = makeLitAt(node, literalKindForType(lt), std::move(tv));
+            out->strong_type = lt;
+            return out;
+        }
+    }
     parse::Kind base = lhs.kind;
     parse::Kind kind = promoteConstKind(base, val);
     auto out = makeLitAt(node, kind, std::move(val));
     std::string st;
-    if (kind == parse::Kind::kBoolLiteral)      st = "bool";
-    else if (kind == parse::Kind::kCharLiteral) st = "char";
-    else if (kind != base)                      st = "";   // promoted -> flex
+    if (kind != base) st = "";                              // promoted -> flex
     else {
         std::string a = widen::spellOrEmpty(famStrong(lhs));
         st = (!a.empty() && widen::intLiteralFits(out->text, a)) ? a : "";
@@ -664,11 +678,100 @@ std::unique_ptr<parse::Node> foldIntCompare(parse::Node& node,
     return makeLitAt(node, parse::Kind::kBoolLiteral, r ? "1" : "0");
 }
 
-// Emit a folded integer-class result of value `val` (decimal text): the result
-// KIND comes from the operand-kind matrix promoted to hold the value, and the
-// strong/flex TYPE from constResultStrong (the const+const rules).
+// A STRONG operand is fixed-width: a char / bool literal, or any operand carrying a
+// strong_type (a typed const). A bare int / uint literal is WEAK (it flexes / widens).
+bool isStrongConstOperand(parse::Node const& n) {
+    return n.kind == parse::Kind::kCharLiteral
+        || n.kind == parse::Kind::kBoolLiteral
+        || n.strong_type != widen::kNoType;
+}
+
+// The preferred no-width default type of a WEAK int / uint literal (mirrors classify's
+// defaultLiteralType): its kind at the minimal width that holds the value.
+widen::TypeRef weakPreferredType(parse::Node const& n) {
+    bool neg = !n.text.empty() && n.text[0] == '-';
+    std::string mag_str = neg ? n.text.substr(1) : n.text;
+    errno = 0;
+    char* end = nullptr;
+    uint64_t mag = std::strtoull(mag_str.c_str(), &end, 10);
+    if (end == mag_str.c_str() || *end != '\0' || errno == ERANGE) return widen::kNoType;
+    if (n.kind == parse::Kind::kUintLiteral)
+        return widen::intern(mag <= UINT32_MAX ? "uint" : "uint64");
+    if (neg) return widen::intern(mag <= (uint64_t)INT32_MAX + 1 ? "int" : "int64");
+    if (mag <= (uint64_t)INT32_MAX) return widen::intern("int");
+    if (mag <= (uint64_t)INT64_MAX) return widen::intern("int64");
+    return widen::intern("uint64");
+}
+
+// The type an operand contributes to combining: char / bool a fixed width, a strong
+// const its declared type, a weak literal its preferred default.
+widen::TypeRef operandTypeRef(parse::Node const& n) {
+    if (n.kind == parse::Kind::kCharLiteral) return widen::intern("char");
+    if (n.kind == parse::Kind::kBoolLiteral) return widen::intern("bool");
+    if (n.strong_type != widen::kNoType) return n.strong_type;
+    return weakPreferredType(n);
+}
+
+// The literal KIND that carries a result type (char/bool keep their own kind; an
+// unsigned type is a uint literal; everything else a signed int literal).
+parse::Kind literalKindForType(widen::TypeRef t) {
+    if (t == widen::intern("char")) return parse::Kind::kCharLiteral;
+    if (t == widen::intern("bool")) return parse::Kind::kBoolLiteral;
+    widen::TypeKind tk;
+    if (widen::classify(t, tk)) {
+        if (tk.cat == widen::Category::kBool) return parse::Kind::kBoolLiteral;
+        if (tk.cat == widen::Category::kUnsignedInt) return parse::Kind::kUintLiteral;
+    }
+    return parse::Kind::kIntLiteral;
+}
+
+// Truncate a folded value (decimal text) to `bits`, reinterpreting per signedness —
+// the register semantics a fixed-width (strong) result obeys (`'A'-'B'` -> char 255).
+std::string truncateConstValue(std::string const& val, int bits, bool is_signed) {
+    bool neg = !val.empty() && val[0] == '-';
+    std::string mag_str = neg ? val.substr(1) : val;
+    errno = 0;
+    char* end = nullptr;
+    uint64_t mag = std::strtoull(mag_str.c_str(), &end, 10);
+    if (end == mag_str.c_str() || *end != '\0') return val;       // unparseable -> leave
+    uint64_t uv = neg ? (0ULL - mag) : mag;
+    uint64_t mask = (bits >= 64) ? ~0ULL : ((1ULL << bits) - 1ULL);
+    uint64_t m = uv & mask;
+    if (is_signed) {
+        uint64_t signbit = (bits >= 64) ? (1ULL << 63) : (1ULL << (bits - 1));
+        return std::to_string(static_cast<int64_t>((m ^ signbit) - signbit));
+    }
+    return std::to_string(m);
+}
+
+// Emit a folded integer-class result of value `val` (decimal text). With any STRONG
+// (fixed-width) operand the result mirrors the VARIABLE path — flex a weak literal
+// into the strong partner if it fits, take the common type, and TRUNCATE the value
+// to that width (register semantics, no demotion-to-flex). Two WEAK operands keep
+// the no-width matrix + value-widening (they have no fixed width to truncate to).
 std::unique_ptr<parse::Node> emitIntResult(parse::Node& node, parse::Node& lhs,
                                            parse::Node& rhs, std::string val) {
+    if (isStrongConstOperand(lhs) || isStrongConstOperand(rhs)) {
+        widen::TypeRef lt = operandTypeRef(lhs), rt = operandTypeRef(rhs);
+        // A weak operand flexes into the strong partner's type when its value fits.
+        if (!isStrongConstOperand(lhs) && lt != widen::kNoType && rt != widen::kNoType
+            && widen::intLiteralFits(lhs.text, widen::spell(rt)))
+            lt = rt;
+        else if (!isStrongConstOperand(rhs) && lt != widen::kNoType && rt != widen::kNoType
+            && widen::intLiteralFits(rhs.text, widen::spell(lt)))
+            rt = lt;
+        widen::TypeRef rType;
+        widen::TypeKind tk;
+        if (lt != widen::kNoType && rt != widen::kNoType
+            && widen::commonType(lt, rt, rType) && widen::classify(rType, tk)) {
+            bool is_signed = (tk.cat == widen::Category::kSignedInt);
+            std::string tv = truncateConstValue(val, tk.bits, is_signed);
+            auto out = makeLitAt(node, literalKindForType(rType), std::move(tv));
+            out->strong_type = rType;
+            return out;
+        }
+        // fall through to the weak path on any classification failure
+    }
     parse::Kind base = baseConstKind(lhs.kind, rhs.kind);
     parse::Kind kind = promoteConstKind(base, val);
     auto out = makeLitAt(node, kind, std::move(val));

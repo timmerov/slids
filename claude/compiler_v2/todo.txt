@@ -53,24 +53,22 @@ BUGS (found, deferred)
     path to retire the wrapper entirely. Full test_v2 suite (positives + 66 negatives)
     unchanged by the port.
 
-  * UNARY ~ MUST BE WIDTH-PRESERVING. fold.sl rule 1e: the result of `~` keeps the
-    operand's kind and NOMINAL WIDTH — it is a bitwise complement WITHIN that width.
-    tryFoldUnary's `~` arm (constfold.cpp) instead complements at the int64/uint64
-    computation width and leaves the wide value, so the result no longer fits the
-    operand's nominal. Two symptoms, one cause:
-      - `~` on a char overflows char range and is REJECTED: `~'A'` -> -66 instead of
-        ~65 @ uint8 = 190 (which fits char fine).
-      - `~` on a bool/unsigned reports a uint64: `~true` / `~0xFF` -> 18-quintillion
-        instead of 0 (the complement at 1 bit / 8 bits).
-    Fix: mask the complement to the operand's nominal bit-width (signed/unsigned per
-    kind). Signed-int `~` already fits its width (`~5 -> -6`, `~0 -> -1`) and is
-    unchanged. Tests waiting on this:
-      - constant.sl DEFERRED block: kNotChar (~'A' -> char 190), kNotBool
-        (~true -> 0), kNotUint (~0xFF -> 0), plus kBinNeg ('A'-'B' -> int, the
-        subtraction contrast).
-      - test_v2/misc/bug.sl: `const uint32 kTest = ~kTest1;` (kTest1 = 0xFF) should be
-        uint32 0xFFFFFF00 = 4294967040; today it errors ("value 18446744073709551360
-        does not fit declared type 'uint32'").
+  * STRONG-TRUNCATE / WEAK-WIDEN CONST FOLD — LANDED. const-fold now mirrors the
+    variable path: a STRONG (fixed-width) operand — char, bool, intptr, or a typed
+    intN/uintN const — makes the result fixed-width and TRUNCATES the value to that
+    width (register semantics); a bare int/uint/float literal is WEAK and flexes /
+    widens. Unary `~` masks the complement to the operand's width (strong) or the
+    64-bit computation width (weak no-width literal), keeping the kind (bool stays
+    bool). Binary `emitIntResult`/`emitShiftResult` flex a weak literal into the
+    strong partner, take the shared commonType (reuses the ported TypeRef commonType,
+    so const == var by construction), and truncate. Examples now: 'A'-'B' -> char 255,
+    'a'*'a' -> char 193, 'A'<<8 -> char 0, true+true -> bool false, 3u-5u -> uint
+    4294967294, int8+uint8 -> int16, ~0xFF -> uint64; weak still widens ('A'+1000 ->
+    int 1065, 5+3 -> int 8). bug.sl's `~kTest1` (uint32 0xFF) -> 4294967040.
+    NOTE: the SPEC text (constant.sl "promote the KIND to fit the value" rules + the
+    "sign mix drops strength to flex" lines + several inline `// -> int` comments;
+    fold.sl rule 6 "the computation type determines the kind") is now STALE — left for
+    the user to update (they own the spec).
 
 
 DEFERRED TESTS
