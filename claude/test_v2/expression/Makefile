@@ -10,6 +10,7 @@ SAMPLES = \
 	augment \
 	inferred \
 	inttype \
+	lvalue \
 	mixedtype \
 	moveswap \
 	noninttype \

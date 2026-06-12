@@ -23,6 +23,22 @@ augmented assignments: += -= *= /= %= &= |= ^= <<= >>= &&= ||= ^^=
 augmented assignments are handled in the desugar stage.
 */
 
+/*
+claude says:
+
+int/bool only, by design — this file stresses the core operator set without
+type-interaction noise. Broader types live in noninttype.sl; mixed types in
+mixedtype.sl; precedence in order.sl.
+
+Coverage added this pass: signed negative div/rem/shr (neg7/neg8 -> sDiv/sRem/
+sShr, so sdiv/srem/ashr are output-locked, not just IR-verified), shift-by-
+variable (shlV/shrV -> two-register shl/ashr), and compare var-vs-literal
+(eqAL..geAL).
+
+int is signed i32 throughout (sdiv/srem/ashr, slt..), confirmed against the IR.
+Nothing open here.
+*/
+
 int32 main() {
 
     int u = 5;
@@ -89,6 +105,21 @@ int32 main() {
     __println("bxorL= " + bxorL);
     __println("shlL= "  + shlL);
     __println("shrL= "  + shrL);
+
+    int sh = 2;
+    int shlV = a << sh;
+    int shrV = a >> sh;
+    __println("shlV= " + shlV);
+    __println("shrV= " + shrV);
+
+    int neg7 = -7;
+    int neg8 = -8;
+    int sShr = neg8 >> 1;
+    int sDiv = neg7 / 2;
+    int sRem = neg7 % 2;
+    __println("sShr= " + sShr);
+    __println("sDiv= " + sDiv);
+    __println("sRem= " + sRem);
 
     bool t = true;
     bool f = false;
@@ -168,6 +199,19 @@ int32 main() {
     __println("leL= " + leL);
     __println("gtL= " + gtL);
     __println("geL= " + geL);
+
+    bool eqAL = a == 12;
+    bool neAL = a != 12;
+    bool ltAL = a < 12;
+    bool leAL = a <= 12;
+    bool gtAL = a > 12;
+    bool geAL = a >= 12;
+    __println("eqAL= " + eqAL);
+    __println("neAL= " + neAL);
+    __println("ltAL= " + ltAL);
+    __println("leAL= " + leAL);
+    __println("gtAL= " + gtAL);
+    __println("geAL= " + geAL);
 
     int addEq = 100;  addEq += 5;    __println("addEq= " + addEq);
     int subEq = 100;  subEq -= 5;    __println("subEq= " + subEq);

@@ -7,6 +7,12 @@ iterators, references, classes, tuples, functions, etc.
 
 */
 
+/*
+claude says:
+
+tbd
+*/
+
 alias Integer = int;
 
 int32 main() {

@@ -23,6 +23,20 @@ type conversions may be chained.
     int^ ref = nullptr;
     x = (float64 = intptr = ref);
 
+tuples are type converted by slot iteratively and recursively.
+
+    (char, char) ch_tpl = ('A', 'B');
+    (int, int) int_tpl = ((int,int)=tpl);
+
+    int_tpl is now (65, 66)
+
+arrays are type converted by element iteratively and recursively.
+
+    char ch_arr[3] = ('a', 'b', 'c);
+    int int_arr[3] = (int[3]=ch_arr);
+
+    int_arr is now [97, 98, 99]
+
 notes:
 pointer casting reinterprets the bits without changing them.
 type conversion changes the bits.

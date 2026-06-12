@@ -23,6 +23,8 @@ swap exchanges the values.
 lhs and rhs must be exactly the same type.
 for tuples and classes, the swap operator is applied by
 slot and field iteratively and recursively.
+swap is the one assignment-like operation that does not
+follow the assignment rules.
 
     x <--> y;
     tuple1 <--> tuple2;
@@ -31,7 +33,8 @@ slot and field iteratively and recursively.
     arr[1] <--> arr[2];
     c.field1_ <--> c.field2_
 
-desugars to:
+swap is conceptually equivalent to:
+though this might not be the exact implementaton.
 
     temp = x;
     x = y;
@@ -45,14 +48,25 @@ fancy case:
 
     tuple1 is now: (1, (2, (3, nullptr)))
 
+arrays are homogeneous tuples.
+
+    int x = 42;
+    int y = 13;
+    int z = 17;
+    int^ src[3] = (^x, ^y, ^z);
+    int^ dst[3] <-- src;
+
+    src is now: [nullptr, nullptr, nullptr]
+
+miscellaneous moves with pointers.
+
+    ptr <-- nullptr;
+    intptr num <-- ptr;  // ptr is nulled.
+
 note:
 
 lhs pointer types are clobbered.
 which could be a memory leak.
-
-to be revisited:
-can we apply move and swap to entire arrays?
-
 */
 
 /*
@@ -69,8 +83,7 @@ implemented in codegen (move + swap pass through desugar untouched):
   - the null walks the rhs's structured type and GEPs into each pointer leaf,
     recursing through nested tuples (the fancy case).
 
-covered here (classes deferred to Phase 5 — `op<--`/`op<-->`, class fields;
-whole-array move/swap is the open "to be revisited" reach goal):
+covered here (classes deferred to Phase 5 — `op<--`/`op<-->`, class fields):
   - primitive move (copy, source unchanged), move from a literal rvalue, widening
     move; pointer (reference + iterator) move (source nulled); move statement.
   - pointer move with an implicit cast (`void^ v <-- int^q`); move from a
@@ -78,6 +91,8 @@ whole-array move/swap is the open "to be revisited" reach goal):
   - swap of primitives, pointers, tuples, and a tuple holding a pointer (the
     pointers EXCHANGE, not nulled — the move/swap distinction).
   - tuple move with a pointer leaf (source slot nulled) + the nested fancy case.
+  - whole-array move (plain + pointer arrays — pointer elements nulled) and
+    whole-array swap (plain + pointer arrays — pointers EXCHANGE).
   - every lvalue operand form: bare var, array element, tuple slot, deref.
   - move-init declaration (`T x <-- y`) and move statement (`a <-- b`).
 
@@ -244,6 +259,52 @@ int32 main() {
     __println("b1 = " + b1[0]^ + " " + b1[2]^);   // 99 42
     __println("b2 = " + b2[0]^ + " " + b2[2]^);   // 42 99
 
+    /* multi-dim array: whole-value move/swap + the dim-product null walk. */
+    int md1[2][2] = ((1, 2), (3, 4));
+    int md2[2][2] <-- md1;
+    __println("md2 = " + md2[0][0] + " " + md2[0][1] + " " + md2[1][0] + " " + md2[1][1]);   // 1 2 3 4
+    int me1[2][2] = ((1, 2), (3, 4));
+    int me2[2][2] = ((5, 6), (7, 8));
+    me1 <--> me2;
+    __println("me1 = " + me1[0][0] + " " + me1[1][1] + " me2 = " + me2[0][0] + " " + me2[1][1]);   // 5 8 / 1 4
+    int^ mq1[2][2] = ((^x3, ^x4), (^x5, ^x3));
+    int^ mq2[2][2] <-- mq1;
+    __println("mq2 = " + mq2[0][0]^ + " mq1null = " + (mq1[0][0] == nullptr) + " " + (mq1[1][1] == nullptr));   // 42 / true true
+
+    /* array of (int, int^): move nulls each element's pointer slot (array x tuple). */
+    (int, int^) at1[2] = ((1, ^x3), (2, ^x4));
+    (int, int^) at2[2] <-- at1;
+    __println("at2 = " + at2[0][1]^ + " " + at2[1][1]^ + " at1null = " + (at1[0][1] == nullptr) + " " + (at1[1][1] == nullptr));   // 42 37 / true true
+
+    /* iterator swap (iterators are pointers — they exchange, not null). */
+    int isa[2];
+    isa[0] = 11;
+    isa[1] = 22;
+    int[] i1 = ^isa[0];
+    int[] i2 = ^isa[1];
+    i1 <--> i2;
+    __println("i1 = " + i1[0] + " i2 = " + i2[0]);   // 22 11
+
+    /* float move + swap; move from a tuple-literal rvalue. */
+    float32 fa <-- 1.5;
+    float32 fb = 2.5;
+    float32 fc <-- fb;
+    __println("fa = " + fa + " fc = " + fc);   // 1.5 2.5
+    float32 fx = 1.0;
+    float32 fy = 2.0;
+    fx <--> fy;
+    __println("fx = " + fx + " fy = " + fy);   // 2 1
+    (int, int) trv <-- (8, 9);
+    __println("trv = " + trv[0] + " " + trv[1]);   // 8 9
+
+    /* move from nullptr; move a pointer into intptr (source pointer nulled). */
+    int^ pn0 <-- nullptr;
+    __println("pn0null = " + (pn0 == nullptr));   // true
+    int npv = 5;
+    int^ npp = ^npv;
+    intptr ipv <-- npp;
+    __println("ipvset = " + (ipv != 0) + " nppnull = " + (npp == nullptr));   // true true
+
     /* compile errors — each uncommented in isolation by the negative runner. */
 
     /* swap requires exactly the same type — no widening. */
@@ -277,6 +338,18 @@ int32 main() {
     //int64 ew = 300;
     //int8 en <-- ew;
     //__println("x= " + en);
+
+    /* a self-swap is a no-op and almost certainly a bug — rejected. */
+    //-EXPECT-ERROR: Cannot swap a value with itself
+    //int ss = 1;
+    //ss <--> ss;
+    //__println("x= " + ss);
+
+    /* a self-move would null the source it just copied from — rejected. */
+    //-EXPECT-ERROR: Cannot move a value onto itself
+    //int^ smv = nullptr;
+    //smv <-- smv;
+    //__println("x= " + (smv == nullptr));
 
     return 0;
 }

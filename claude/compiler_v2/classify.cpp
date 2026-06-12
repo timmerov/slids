@@ -1916,6 +1916,18 @@ void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
     }
 }
 
+// True when two move/swap operands name the SAME variable — both are bare
+// identifier references (kIdentExpr) resolved to the same entry. A self-swap is
+// a no-op and a self-move would null the source it just copied from, so both are
+// rejected. Indexed / deref self (`arr[i] <--> arr[i]`, `p^ <-- p^`) needs
+// structural lvalue-equality and is left to a later pass.
+bool isSameLvalue(parse::Node const& a, parse::Node const& b) {
+    return a.kind == parse::Kind::kIdentExpr
+        && b.kind == parse::Kind::kIdentExpr
+        && a.resolved_entry_id >= 0
+        && a.resolved_entry_id == b.resolved_entry_id;
+}
+
 void classifyStmt(parse::Tree& tree, parse::Node& s,
                   widen::TypeRef fn_return_type,
                   diagnostic::Sink& diag) {
@@ -2129,6 +2141,12 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             parse::Node& lhs = *s.children[0];
             inferExpr(tree, lhs, widen::kNoType, diag);
             inferExpr(tree, *s.children[1], lhs.inferred_type, diag);
+            // A self-move would null the source it just copied from — reject it.
+            if (isSameLvalue(lhs, *s.children[1])) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "Cannot move a value onto itself.", {}});
+                return;
+            }
             // The COPY half of the move obeys the assignment relation.
             checkValueAssign(tree, lhs.inferred_type, *s.children[1], diag);
             return;
@@ -2141,6 +2159,13 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             parse::Node& b = *s.children[1];
             inferExpr(tree, a, widen::kNoType, diag);
             inferExpr(tree, b, widen::kNoType, diag);
+            // A self-swap is a no-op and almost certainly a bug — reject it (the
+            // same variable trivially passes the same-type check below).
+            if (isSameLvalue(a, b)) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "Cannot swap a value with itself.", {}});
+                return;
+            }
             // Both-non-kNoType guard is cascade suppression: a kNoType operand
             // means inferExpr already reported an error, so skip the mismatch
             // report to avoid a second misleading diagnostic. user notified,

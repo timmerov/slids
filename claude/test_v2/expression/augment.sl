@@ -23,6 +23,27 @@ augmented assignments: += -= *= /= %= &= |= ^= <<= >>= &&= ||= ^^=
 augmented assignments are handled in the desugar stage.
 */
 
+/*
+claude says:
+
+Augmented assignments. The structural lowering `x op= y` -> `x = x op y` happens
+in the DESUGAR stage (desugar.cpp tryDesugarAugAssign, called from copyNode).
+classify type-checks the kAugAssignStmt and stamps return_type/inferred_type/
+op_type (the negative type errors fire there); codegen asserts a kAugAssignStmt
+can never survive desugar (emitStmt "AugAssign survived desugar", plus the
+emitExpr statement-kind guard). grammar only parses it into the node.
+
+Coverage added this pass: variable / complex rhs (xv/yv) — the whole rhs is one
+grouped operand of the lowered op (`xv *= yv+1` is 13*(3+1)=52, not 40).
+
+Open — COMPLEX-LHS op= (arr[i]+=1, p^+=1, obj.f+=1): a PARSE ERROR today, since
+the complex-lvalue store path (grammar.cpp:1315) accepts only `=`; the op=
+branch lives solely in the bare-name path. NOT scheduled in plan.txt or todo.txt
+(plan Phase 4 landed complex lvalues only as `=` store targets). Implementing it
+needs desugar to bind the lhs address to a temp for single-evaluation of a
+side-effecting lhs, then positive side-effect tests.
+*/
+
 int32 main() {
 
     // -- signed int arith --
@@ -32,6 +53,13 @@ int32 main() {
     xi32 *= 2;         __println("xi32 *=  2 → " + xi32);  // 204
     xi32 /= 4;         __println("xi32 /=  4 → " + xi32);  // 51 (sdiv)
     xi32 %= 5;         __println("xi32 %=  5 → " + xi32);  // 1  (srem)
+
+    // -- variable / complex rhs (the whole rhs is one operand of the lowered op) --
+    int32 yv = 3;     __println("yv= " + yv);
+    int32 xv = 10;    __println("xv= " + xv);
+    xv += yv;         __println("xv += yv → "    + xv);   // 13  (variable rhs, two loads)
+    xv *= yv + 1;     __println("xv *= yv+1 → "  + xv);   // 52 = 13*(3+1), not (13*3)+1
+    xv -= yv * 2;     __println("xv -= yv*2 → "  + xv);   // 46 = 52-(3*2), not (52-3)*2
 
     // -- unsigned int arith (udiv / urem differ from signed) --
     uint32 xu32 = 100;  __println("xu32= " + xu32);

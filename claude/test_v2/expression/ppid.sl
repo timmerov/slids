@@ -37,6 +37,12 @@ p++^ += 1;  -->  p^ = p^ + 1; p++;
 row[++k] += (10,20)  -->  ++k; row[k][0] += 10; row[k][1] += 20;
 */
 
+/*
+claude says:
+
+tbd
+*/
+
 int32 show2(int32 a, int32 b) {
     __println("show " + a + " " + b);
     return 0;

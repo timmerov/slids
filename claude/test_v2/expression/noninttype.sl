@@ -24,6 +24,22 @@ augmented assignments: += -= *= /= %= &= |= ^= <<= >>= &&= ||= ^^=
 augmented assignments are handled in the desugar stage.
 */
 
+/*
+claude says:
+
+One mono-typed block per type (bool, char, int8..int64, uint8..uint64, intptr,
+float32/64). char is unsigned i8 printed as a glyph; float shifts lower to
+mul/div by 2^rhs; float bitwise (& | ^) is a hard error (the negative markers).
+
+Coverage added this pass: signed-observable int8 (negative operands -> sdiv/
+srem/ashr) and unsigned-observable uint8 (high-bit 200 -> udiv/urem/lshr/ugt),
+plus char ~ via (int=~cA) -> 178 (proves char zero-extends).
+
+Open: for widths OTHER than int8/uint8 the signed-vs-unsigned op choice is
+output-invisible (every operand is small + positive) — verified correct in the
+IR but not locked by output. Add a negative / high-bit case per width to pin it.
+*/
+
 int32 main() {
 
     // bool — only logical, equality, and !
@@ -52,6 +68,7 @@ int32 main() {
     bool cLOr  = cA || cB;   __println("cLOr= "  + cLOr);
     bool cLXor = cA ^^ cB;   __println("cLXor= " + cLXor);
     bool cLNot = !cA;        __println("cLNot= " + cLNot);
+    int  cBNot = (int=~cA);  __println("cBNot= " + cBNot);
 
     // int8
     int8 i8A = 12;
@@ -79,6 +96,12 @@ int32 main() {
     bool i8LOr  = i8A || i8B; __println("i8LOr= "  + i8LOr);
     bool i8LXor = i8A ^^ i8B; __println("i8LXor= " + i8LXor);
     bool i8LNot = !i8A;       __println("i8LNot= " + i8LNot);
+    // signed-observable: negative operands distinguish sdiv/srem/ashr/slt from unsigned.
+    int8 i8N = -7;
+    int8 i8sDiv = i8N / 2;   __println("i8sDiv= " + i8sDiv);
+    int8 i8sRem = i8N % 2;   __println("i8sRem= " + i8sRem);
+    int8 i8sShr = i8N >> 1;  __println("i8sShr= " + i8sShr);
+    bool i8sLt  = i8N < i8B; __println("i8sLt= "  + i8sLt);
 
     // int16
     int16 i16A = 12;
@@ -186,6 +209,12 @@ int32 main() {
     bool u8LOr  = u8A || u8B; __println("u8LOr= "  + u8LOr);
     bool u8LXor = u8A ^^ u8B; __println("u8LXor= " + u8LXor);
     bool u8LNot = !u8A;       __println("u8LNot= " + u8LNot);
+    // unsigned-observable: high-bit operands distinguish udiv/urem/lshr/ugt from signed.
+    uint8 u8H = 200;
+    uint8 u8uDiv = u8H / 3;   __println("u8uDiv= " + u8uDiv);
+    uint8 u8uRem = u8H % 3;   __println("u8uRem= " + u8uRem);
+    uint8 u8uShr = u8H >> 1;  __println("u8uShr= " + u8uShr);
+    bool  u8uGt  = u8H > u8B; __println("u8uGt= "  + u8uGt);
 
     // uint16
     uint16 u16A = 12;

@@ -346,6 +346,14 @@ REACH GOALS
     still to be decided. No current need; the shadowed class is simply accepted as
     unreachable. prerequisite: local classes in function bodies.
 
+  * TUPLE-OF-ARRAY TYPE — a tuple whose slot type is an array (`(int, int^[2])`)
+    does not parse: the tuple-type parser rejects the `[N]` suffix on a slot type
+    ("Expected ')'"). Array-of-tuple types work (`(int, int^) a[2]`) and tuple
+    VALUES nest freely, but a tuple TYPE cannot name an array slot. Surfaced
+    writing whole-array move/swap coverage in moveswap.sl — the tuple-x-array
+    null-walk is exercised today only via array-of-tuple, not tuple-of-array.
+    Needs parseType to accept an array-dimension suffix on a tuple slot type.
+
 
 ASPIRATIONAL FEATURES (someday; low priority, may never land)
 

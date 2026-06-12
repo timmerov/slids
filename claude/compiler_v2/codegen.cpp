@@ -313,7 +313,8 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
             out << "  " << tmp << " = icmp eq " << llty << " "
                 << v << ", 0\n";
         }
-        return tmp;
+        return widen::convert(tmp, widen::intern("bool"), dest_type,
+                              expr.file_id, expr.tok, out, diag);
     }
     (void)diag;
     assert(false && "emitUnary: grammar produced an unknown unary op");
@@ -776,10 +777,10 @@ bool isAstLvalue(ast::Node const& n) {
 }
 
 // Null every addressable pointer leaf reachable from `addr` (a value of type
-// `ty`): a pointer / iterator leaf gets `store ptr null`; a tuple recurses into
-// each slot that transitively holds a pointer; a primitive is left untouched.
-// The address-level GEP recursion handles arbitrarily nested tuples (the move
-// "fancy case").
+// `ty`): a pointer / iterator leaf gets `store ptr null`; a tuple or array
+// recurses into each slot / element that transitively holds a pointer; a
+// primitive is left untouched. The address-level GEP recursion handles
+// arbitrarily nested tuples and arrays (the move "fancy case", whole-array move).
 void emitNullLeaves(std::string const& addr, widen::TypeRef ty,
                     std::ostream& out) {
     widen::TypeRef s = widen::strip(ty);
@@ -1700,8 +1701,9 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         }
         case ast::Kind::kSwapStmt: {
             // `a <--> b;` — exchange two same-type lvalues via SSA temporaries
-            // (no stack temp). A whole-value load/store handles tuples too. Both
-            // addresses and loads precede either store, so an aliased swap is safe.
+            // (no stack temp). A whole-value load/store handles tuples and arrays
+            // too. Both addresses and loads precede either store, so an aliased
+            // swap is safe.
             assert(stmt.children.size() == 2 && "kSwapStmt needs two operands");
             ast::Node const& a = *stmt.children[0];
             ast::Node const& b = *stmt.children[1];

@@ -13,6 +13,12 @@ unused report on the same code, so the two never double up.)
 */
 
 /*
+claude says:
+
+tbd
+*/
+
+/*
 params arrive initialized; reading them is fine. an unread param (unused) is
 NOT flagged — only body-declared locals are swept, params are exempt.
 */
