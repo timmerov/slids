@@ -8,7 +8,7 @@ DIR       := $(notdir $(CURDIR))
 BUILD_DIR = ../../build/test_v2/$(DIR)
 
 SAMPLES = \
-	calls \
+	call \
 	nested_fn \
 	overload \
 	param

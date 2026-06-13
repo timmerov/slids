@@ -315,6 +315,24 @@ bool literalFitsContext(parse::Node const& lit, widen::TypeRef context) {
     return widen::intLiteralFits(literalTextForFit(lit), context);
 }
 
+// The single weak/strong test. A WEAK literal (a bare / typeless-const literal, no
+// strong_type) flexes to fit wherever it lands; a STRONG-const literal (constfold
+// stamped strong_type from a fixed-width declared type) is a TYPED value and never
+// flexes — it obeys the same widen/narrow rules a variable of that type would.
+bool literalFlexes(parse::Node const& lit) {
+    return isLiteralKind(lit.kind) && lit.strong_type == widen::kNoType;
+}
+
+// The type a literal NODE takes in `context` — the one source of truth for the
+// strong/weak typing split. A strong-const literal keeps its declared (strong) type
+// (so a narrowing then errors at the assignment, exactly as a variable's would); a
+// weak literal flexes into `context` when it fits, else its preferred no-width default.
+widen::TypeRef literalContextType(parse::Node const& lit, widen::TypeRef context) {
+    if (!literalFlexes(lit)) return lit.strong_type;        // typed value: its strong type
+    if (literalFitsContext(lit, context)) return context;   // weak literal flexes in
+    return defaultLiteralType(lit);                         // weak default
+}
+
 void inferExpr(parse::Tree& tree, parse::Node& e,
                widen::TypeRef context, diagnostic::Sink& diag);
 void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
@@ -364,11 +382,14 @@ std::string binaryLabel(parse::Node const& lhs, parse::Node const& rhs) {
     return "";
 }
 
-// Literal-flex preamble for non-shift binaries: when one operand is a literal
-// and the other is not, try-flex the literal into the partner's type.
+// Literal-flex preamble for non-shift binaries: when one operand is a WEAK literal
+// and the other is not, try-flex the literal into the partner's type. A STRONG-const
+// literal (carries strong_type) does NOT flex — it is a typed value, so it keeps its
+// declared type and widens via commonType like a variable of that type would (a
+// narrowing of the result back into a narrow partner then errors at the assignment).
 void flexBinaryOperands(parse::Node& lhs, parse::Node& rhs) {
-    bool lhs_lit = isLiteralKind(lhs.kind);
-    bool rhs_lit = isLiteralKind(rhs.kind);
+    bool lhs_lit = literalFlexes(lhs);
+    bool rhs_lit = literalFlexes(rhs);
     if (lhs_lit && !rhs_lit && rhs.inferred_type != widen::kNoType) {
         if (literalFitsContext(lhs, rhs.inferred_type)) {
             lhs.inferred_type = rhs.inferred_type;
@@ -419,9 +440,11 @@ int argConvertCost(parse::Node const& a, widen::TypeRef param) {
     }
     if (at == widen::kNoType) return -1;
     if (sameClass(at, param)) return 0;
-    if (isLiteralKind(a.kind)) {
-        return literalFitsContext(a, param) ? 1 : -1;
+    if (literalFlexes(a)) {
+        return literalFitsContext(a, param) ? 1 : -1;   // weak literal flexes into param
     }
+    // A strong-const literal (and any non-literal) ranks as a typed value: exact, a
+    // within-family widen, else not viable — so a narrowing arg is rejected.
     widen::TypeRef out;
     if (widen::commonType(at, param, out) && sameClass(out, param)) return 1;
     return -1;
@@ -458,11 +481,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kCharLiteral:
         case parse::Kind::kBoolLiteral:
         case parse::Kind::kFloatLiteral: {
-            if (literalFitsContext(e, context)) {
-                e.inferred_type = context;   // the literal takes the context type
-            } else {
-                e.inferred_type = defaultLiteralType(e);   // preferred handle
-            }
+            e.inferred_type = literalContextType(e, context);
             return;
         }
         case parse::Kind::kStringLiteral: {

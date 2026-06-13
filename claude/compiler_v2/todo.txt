@@ -8,22 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
-    primitive element type (a reference works for all). The ARRAY / sub-array
-    variant LANDED this session (multi-dim for-array: a sub-array element forces a
-    reference loop var; a declared by-value one errors "must use a reference loop
-    variable"). Only the CLASS-element variant remains, when class array elements
-    exist (Phase 5).
-
-  * STRONG-CONST FLEX IN A BINARY OP — strong-const widening enforcement LANDED at
-    the assignment sites, but a strong const still FLEXES as a BINARY OPERAND (a
-    separate, broader matter): `flexBinaryOperands` flexes a strong-const literal
-    into the partner's type, so `int8 a; a += sc` (sc a strong int) treats sc as
-    int8 (and `int8 v; v + sc` types as int8), where the typed-value model would
-    make it int and reject the narrowing back into int8. Making "a strong const
-    does not flex in a binary op" re-types every binary expr with a strong-const
-    operand — its own design call, not an assignment-site fix. Decide separately.
-
   * TUPLE-OF-ARRAY TYPE — a tuple whose slot type is an array (`(int, int^[2])`)
     does not parse: the tuple-type parser rejects the `[N]` suffix on a slot type
     ("Expected ')'"). Array-of-tuple types work (`(int, int^) a[2]`) and tuple
@@ -72,6 +56,13 @@ BUGS (found, deferred)
 
 
 DEFERRED FEATURES (later; may not be on the plan)
+
+  * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
+    primitive element type (a reference works for all). The ARRAY / sub-array
+    variant LANDED this session (multi-dim for-array: a sub-array element forces a
+    reference loop var; a declared by-value one errors "must use a reference loop
+    variable"). Only the CLASS-element variant remains, when class array elements
+    exist (Phase 5).
 
   * CLASS COPY-INIT AT A DECL — `Class a = sameClassValue` (initialize a class
     local from another value of the SAME class — e.g. the result of a function

@@ -13,8 +13,7 @@ SAMPLES = \
 	hello \
 	macros \
 	namespace \
-	sizeof \
-	widen
+	sizeof
 
 .PHONY: all clean negatives positives $(SAMPLES)
 

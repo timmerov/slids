@@ -12,7 +12,8 @@ SAMPLES = \
 	mixed \
 	nonint \
 	order \
-	ppid
+	ppid \
+	widen
 
 .PHONY: all clean negatives positives $(SAMPLES)
 

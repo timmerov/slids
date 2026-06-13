@@ -72,3 +72,7 @@ r_u8_big= 1200
 r_ll_i8= 3
 r_ll_int= 300
 r_ll_big= 3000000001
+c_i8_i32= 104
+c_var_i32= 104
+c_f32_f64= 4
+c_weak= 9

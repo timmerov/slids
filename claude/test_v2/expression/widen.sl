@@ -369,6 +369,42 @@ int32 main() {
     int   r_ll_int = 100 + 200;            __println("r_ll_int= " + r_ll_int);
     int64 r_ll_big = 3_000_000_000 + 1;    __println("r_ll_big= " + r_ll_big);
 
+    // ===== strong (typed) vs weak (typeless) constants =====
+    // A TYPED const is a STRONG operand — it behaves exactly like a variable of its
+    // type: widens within family, and does NOT flex to fit a narrower partner. A
+    // TYPELESS const is WEAK — it flexes like a bare literal.
+
+    const int8    si8  = 4;
+    const int32   si32 = 100;
+    const float32 sf32 = 1.5;
+    const         wk   = 5;      // typeless -> weak
+
+    // -- strong const is a strong operand: widens within family like a variable --
+    int32   c_i8_i32  = si8  + si32;   __println("c_i8_i32= "  + c_i8_i32);
+    int32   c_var_i32 = bi8  + si32;   __println("c_var_i32= " + c_var_i32);
+    float64 c_f32_f64 = sf32 + bf64;   __println("c_f32_f64= " + c_f32_f64);
+
+    // -- a weak (typeless) const flexes into its partner, like a literal --
+    int8 c_weak = bi8 + wk;   __println("c_weak= " + c_weak);
+
+    // -- negative: a strong const does NOT flex to a narrow partner — the binary
+    //    result keeps the const's width, so narrowing it back is rejected (a typeless
+    //    const in its place would flex and compile). --
+    //-EXPECT-ERROR: Cannot implicitly narrow 'int32' to 'int8'; use an explicit type conversion.
+    // int8 c_narrow = bi8 + si32;
+    // __println("c_narrow= " + c_narrow);
+
+    // -- negative: same rule through a compound assignment (the bug.sl case) --
+    //-EXPECT-ERROR: Cannot implicitly narrow 'int32' to 'int8'; use an explicit type conversion.
+    // int8 c_aug = 0;
+    // c_aug += si32;
+    // __println("c_aug= " + c_aug);
+
+    // -- negative: a strong const narrows at a plain decl like a variable would --
+    //-EXPECT-ERROR: Cannot implicitly narrow 'int32' to 'int8'; use an explicit type conversion.
+    // int8 c_decl = si32;
+    // __println("c_decl= " + c_decl);
+
     // -- negative: no common type --
     // (each negative reads its local so the type error surfaces ahead of the
     //  unused-local check, which would otherwise mask it.)
