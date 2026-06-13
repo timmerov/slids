@@ -5,7 +5,7 @@ conceptually type conversion is an assignment to a temporary variable.
 parentheses are required.
 they type must be value type.
 it may not be a pointer type.
-the expression may be a pointer type when the type is bool, intptr,
+the expression may be a pointer when the type is bool, intptr,
 or a class that defines the approprate assignment operator.
 
     (type=expr)
@@ -217,6 +217,32 @@ int32 main() {
     int[] it = ^harr[0];                // an iterator into the array
     bool itb = (bool = it);             // non-null -> true
     __println("itb = " + itb);          // true
+
+    /* ---- signed/unsigned float<->int variant (output-locked, not just emitted) ---- */
+
+    uint8 uhi8 = 200;                   // 0xC8, high bit set
+    float64 ufhi = (float64 = uhi8);    // uitofp -> 200 (sitofp would read it as -56)
+    __println("ufhi = " + ufhi);        // 200
+
+    float64 ufval = 3000000000.0;       // in the uint range, beyond signed int
+    uint uconv = (uint = ufval);        // fptoui -> 3000000000 (a value only unsigned holds)
+    __println("uconv = " + uconv);      // 3000000000
+
+    int negfl = (int = -3.9);           // fold: truncate toward zero -> -3 (not floor -4)
+    __println("negfl = " + negfl);      // -3
+    float nf = -3.9;
+    int negfr = (int = nf);             // runtime fptosi toward zero -> -3
+    __println("negfr = " + negfr);      // -3
+
+    /* ---- char / bool as a runtime conversion source ---- */
+
+    char chs = 'A';
+    int chi = (int = chs);              // runtime char (uint8) source -> 65
+    __println("chi = " + chi);          // 65
+    bool bsrc = true;
+    int bis = (int = bsrc);             // runtime bool source -> 1
+    float64 bfs = (float64 = bsrc);     // runtime bool source -> 1.0
+    __println("bis = " + bis + " bfs = " + bfs);   // 1 1
 
     /* compile errors — each uncommented in isolation by the negative runner. */
 

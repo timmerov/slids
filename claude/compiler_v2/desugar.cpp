@@ -831,6 +831,12 @@ void lowerInPhrase(std::unique_ptr<ast::Node>& slot,
         for (auto& arg : n.children) lowerPhraseSlot(arg);
         return;
     }
+    if (n.kind == ast::Kind::kTupleExpr) {
+        // Each comma slot of a tuple literal is its OWN phrase (like a call arg),
+        // evaluated left to right — so its bumps stay inside that slot's seq.
+        for (auto& el : n.children) lowerPhraseSlot(el);
+        return;
+    }
     if (n.kind == ast::Kind::kBinaryExpr && (n.text == "&&" || n.text == "||")) {
         lowerInPhrase(n.children[0], pre, post);   // lhs: same phrase
         lowerPhraseSlot(n.children[1]);            // rhs: own conditional phrase
@@ -883,6 +889,13 @@ void lowerStatementPPID(ast::Node& stmt,
                         std::vector<std::unique_ptr<ast::Node>>& post) {
     if (stmt.kind == ast::Kind::kVarDeclStmt
         || stmt.kind == ast::Kind::kAssignStmt) {
+        if (!stmt.children.empty() && stmt.children[0]) {
+            lowerInPhrase(stmt.children[0], pre, post);
+        }
+    } else if (stmt.kind == ast::Kind::kDestructureStmt) {
+        // children[0] = the rhs tuple (its slots are sub-phrases via the kTupleExpr
+        // arm); children[1..] = plain target lvalues (a complex target with ppid is
+        // the deferred complex-lhs case).
         if (!stmt.children.empty() && stmt.children[0]) {
             lowerInPhrase(stmt.children[0], pre, post);
         }

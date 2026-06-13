@@ -7,17 +7,8 @@ BIN_DIR   = ../../bin
 BUILD_DIR = ../../build/test_v2/expression
 
 SAMPLES = \
-	augment \
-	inferred \
-	inttype \
-	lvalue \
-	mixedtype \
-	moveswap \
-	noninttype \
-	order \
-	ppid \
-	typeconv \
-	vardecl
+	anon \
+	array
 
 .PHONY: all clean negatives positives $(SAMPLES)
 

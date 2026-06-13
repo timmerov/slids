@@ -33,3 +33,9 @@ n64 = -5
 s16 = 4464
 iw = -1
 itb = true
+ufhi = 200
+uconv = 3000000000
+negfl = -3
+negfr = -3
+chi = 65
+bis = 1 bfs = 1

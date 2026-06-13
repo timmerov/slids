@@ -7,7 +7,8 @@ SUBDIRS = \
 	function \
 	lex \
 	misc \
-	pointer
+	pointer \
+	tuple
 
 .PHONY: all clean test negatives positives $(SUBDIRS)
 

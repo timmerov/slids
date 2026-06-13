@@ -8,50 +8,12 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * CLASS COPY-INIT AT A DECL — `Class a = sameClassValue` (initialize a class
-    local from another value of the SAME class — e.g. the result of a function
-    that returns a class by value) is mishandled: classify routes the decl through
-    classifyClassInit, which treats the rhs as a FIELD-init argument, so a 1-field
-    class reports "Cannot initialize field 'x_' ... from a value of type 'Class'."
-    A plain ASSIGN `a = b` works (checkSlidAssign allows same-class), and
-    `= scalar` / `= tuple` construct — only whole-class copy-INITIALIZATION at a
-    decl is wrong. Surfaces when a nested function RETURNS a local class by value.
-    Needs the class copy path (whole-value copy vs field-init). prerequisite: class
-    copy/move.
-
-  * ASSIGNMENT RELATION — UNIFY THE CHECK. The one implicit-conversion relation is
-    now spec'd in readme.txt (the ASSIGNMENT RELATION section + the integer / float /
-    pointer / tuple-array sub-matrices). Code implements it as DIVERGENT FRAGMENTS:
-    checkStrongConstAssign / checkSlidAssign / checkPtrAssign / checkArrayValueAssign
-    plus classifyClassInit's bespoke isAgg, each site running a different SUBSET.
-    Collapse into ONE checkValueAssign(tree, dest, rhs, diag) called at EVERY
-    assignment-family site: decl-init, assign, store, move, single + overload call
-    args, method args, return, field-init, and the per-element pairs from destructure
-    + array/tuple lowering. Swap (<-->) stays EXACT-type, outside the relation.
-    SYMPTOMS of the fragmentation (all currently leaked): a non-class width/convert
-    mismatch (char[]->int) passes silently at BOTH a function and a method call (the
-    per-arg check ran only checkStrongConstAssign + checkSlidAssign, dropping
-    checkPtrAssign + the array path) — overload.sl:88; tuple/array->scalar and
-    scalar->array slip past too. Found via overload.sl + the methods arg-check audit.
-    SUB-SEAM — checkArrayValueAssign exact-match -> per-element. An array-VALUE copy
-    is exact-deepStrip today; the relation says shape-match + per-element COMPATIBILITY
-    (`int8[4] -> int[4]` should work, each int8 widening to int). Requires codegen to
-    lower an aggregate assign to per-element converts; a whole memcpy is only the
-    degenerate all-identical case.
-    The CLASS row of the relation is op= (still unlanded — see CLASS COPY-INIT above);
-    STRONG-CONST WIDENING (below) is the strong-literal arm already landed at the
-    scalar assignment sites.
-
-  * PORT commonType TO widen::TypeRef — MOSTLY LANDED. commonType now has a TypeRef-
-    first signature (operands stripped; returns the preferred handle; spellCommon picks
-    the canonical name, interned once); the std::string overload is a thin wrapper. All
-    the type-combining callers were moved to the TypeRef form, dropping the
-    spell -> commonType -> reintern round-trip: classify binary / tuple-slot / augassign
-    return sites, and constfold combineStrong / constResultStrong / floatResultStrong.
-    REMAINING: argConvertCost (classify.cpp ~427) still calls the string wrapper because
-    its `param` arrives as a spelling (overload ranking is name-based); de-string that
-    path to retire the wrapper entirely. Full test_v2 suite (positives + 66 negatives)
-    unchanged by the port.
+  * RETIRE THE std::string commonType WRAPPER — the commonType TypeRef port LANDED
+    (every type-combining caller is on the TypeRef form). The only holdout is
+    argConvertCost (classify.cpp:411), whose `param` arrives as a spelling because
+    overload ranking is name-based, so it still calls the std::string commonType
+    overload (widen.cpp:613). De-string that path to drop the wrapper entirely.
+    (Same flavour as REMAINING STRING-TYPE DECISIONS.)
 
   * REMAINING STRING-TYPE DECISIONS — convert to structured TypeRef checks (same v1
     string-pattern the commonType port retired; all correct today, just debt). Two
@@ -76,23 +38,6 @@ BUGS (found, deferred)
         char-vs-uint literal kind.
       - classify.cpp ~832 — `to_c!="bool" && to_c!="intptr"` (pointer-conversion target).
       - widen.cpp ~460 — `spell(dest_ref)=="intptr"` (ptrtoint target).
-
-  * STRONG-TRUNCATE / WEAK-WIDEN CONST FOLD — LANDED. const-fold now mirrors the
-    variable path: a STRONG (fixed-width) operand — char, bool, intptr, or a typed
-    intN/uintN const — makes the result fixed-width and TRUNCATES the value to that
-    width (register semantics); a bare int/uint/float literal is WEAK and flexes /
-    widens. Unary `~` masks the complement to the operand's width (strong) or the
-    64-bit computation width (weak no-width literal), keeping the kind (bool stays
-    bool). Binary `emitIntResult`/`emitShiftResult` flex a weak literal into the
-    strong partner, take the shared commonType (reuses the ported TypeRef commonType,
-    so const == var by construction), and truncate. Examples now: 'A'-'B' -> char 255,
-    'a'*'a' -> char 193, 'A'<<8 -> char 0, true+true -> bool false, 3u-5u -> uint
-    4294967294, int8+uint8 -> int16, ~0xFF -> uint64; weak still widens ('A'+1000 ->
-    int 1065, 5+3 -> int 8). bug.sl's `~kTest1` (uint32 0xFF) -> 4294967040.
-    NOTE: the SPEC text (constant.sl "promote the KIND to fit the value" rules + the
-    "sign mix drops strength to flex" lines + several inline `// -> int` comments;
-    fold.sl rule 6 "the computation type determines the kind") is now STALE — left for
-    the user to update (they own the spec).
 
 
 DEFERRED TESTS
@@ -149,6 +94,17 @@ DEFERRED TESTS
 
 
 DEFERRED FEATURES (later; may not be on the plan)
+
+  * CLASS COPY-INIT AT A DECL — `Class a = sameClassValue` (initialize a class
+    local from another value of the SAME class — e.g. the result of a function
+    that returns a class by value) is mishandled: classify routes the decl through
+    classifyClassInit, which treats the rhs as a FIELD-init argument, so a 1-field
+    class reports "Cannot initialize field 'x_' ... from a value of type 'Class'."
+    A plain ASSIGN `a = b` works (checkSlidAssign allows same-class), and
+    `= scalar` / `= tuple` construct — only whole-class copy-INITIALIZATION at a
+    decl is wrong. Surfaces when a nested function RETURNS a local class by value.
+    Needs the class copy path (whole-value copy vs field-init). prerequisite: class
+    copy/move.
 
   * METHODS — follow-ups (the statement-call form + plain-`=` field writes LANDED).
     - EXPRESSION-FORM CALL: a value-returning method used as a value
@@ -259,34 +215,14 @@ DEFERRED FEATURES (later; may not be on the plan)
     on the (now-unreachable) after-code before classify flags it. Low value
     (`while (true)` / empty-cond are the common forms and fully handled), real cost.
 
-  * ##type — LANDED: the 7-macro set + `##type(x)`; the alias-label channel (an
-    alias/enum-typed VARIABLE reports the source spelling — `Integer x` ->
-    `Integer`, `Dir d` -> `Dir` — via a parallel alias_label, not un-erase); and
-    the const qualifier (`const int8 a` -> `const int8`; a const read inside any
-    expression STRIPS const). A bare/qualified TYPE NAME operand (alias / enum /
-    qualified enum type) resolves to its underlying, and an enum MEMBER reports
-    `const Enum` — both LANDED. See [[reference_stringify]]. OPEN: an aliased-
-    FUNCTION `##type(Fn)` (waits on function aliases).
-
-  * STRONG-CONST WIDENING ENFORCEMENT — LANDED at every assignment site. A strong
-    const is a TYPED value (widen within family; REJECT narrowing / sign-change),
-    not a flexing literal: `const int sc=5; int8 a=sc;` errors "Cannot implicitly
-    narrow 'int' to 'int8'" like an int variable would. codegen's literal path only
-    range-checks, so the check is in CLASSIFY — checkStrongConstAssign mirrors
-    widen::convert's accept/reject + wording for the same-/cross-sign integer and
-    float cases (cross-family / bool-source left to codegen, no double-report).
-    Wired at var-decl-init, assign, store (`ref^=`/`arr[i]=`), return, and call-arg
-    (BOTH the single-candidate and overload arg loops in classifyCall). Weak
-    literals still flex. Canon: constant.sl kNarrow + neg_return/neg_arg/neg_store
-    + kWide (widen positive).
-    NOT enforced (a SEPARATE, broader matter — strong consts flexing as BINARY
-    OPERANDS, not an assignment): `flexBinaryOperands` still flexes a strong-const
-    literal into the partner's type, so `int8 a; a += sc` (sc strong int) treats sc
-    as int8 (and `int8 v; v + sc` types as int8), where the typed-value model would
-    make it int and reject the narrowing back into int8. Changing this means
-    "a strong const does not flex in a binary op" — it re-types every binary expr
-    with a strong-const operand, so it's its own design call, not an assignment-site
-    fix. Decide separately.
+  * STRONG-CONST FLEX IN A BINARY OP — strong-const widening enforcement LANDED at
+    the assignment sites, but a strong const still FLEXES as a BINARY OPERAND (a
+    separate, broader matter): `flexBinaryOperands` flexes a strong-const literal
+    into the partner's type, so `int8 a; a += sc` (sc a strong int) treats sc as
+    int8 (and `int8 v; v + sc` types as int8), where the typed-value model would
+    make it int and reject the narrowing back into int8. Making "a strong const
+    does not flex in a binary op" re-types every binary expr with a strong-const
+    operand — its own design call, not an assignment-site fix. Decide separately.
 
   * ALIAS FUNCTION-RENAME — `alias Fn = LongName;` (use case: importing C
     functions with ugly names).
@@ -311,6 +247,61 @@ DEFERRED FEATURES (later; may not be on the plan)
     function is an error regardless of file. Needs the `.slh` declare-only
     carve-out; lands with the cross-TU / .slh-propagation work (plan Phase 8).
     prerequisite: group with general work on import.
+
+  * TUPLE-OF-ARRAY TYPE — a tuple whose slot type is an array (`(int, int^[2])`)
+    does not parse: the tuple-type parser rejects the `[N]` suffix on a slot type
+    ("Expected ')'"). Array-of-tuple types work (`(int, int^) a[2]`) and tuple
+    VALUES nest freely, but a tuple TYPE cannot name an array slot. Surfaced
+    writing whole-array move/swap coverage in moveswap.sl — the tuple-x-array
+    null-walk is exercised today only via array-of-tuple, not tuple-of-array.
+    Needs parseType to accept an array-dimension suffix on a tuple slot type.
+
+  * TUPLE / ARRAY TYPE CONVERSION — `(Type=expr)` is scalar-only: classify's
+    kConvertExpr requires a numeric/pointer source and a numeric target
+    (isNumericType), so a tuple or array on EITHER side is rejected ("Cannot
+    convert to '...'; the target must be a value type" / "Cannot convert
+    '(int, int)' to 'int'"). typeconv.sl's top spec describes element-wise
+    conversion — `(int, int) t = ((int,int)=tpl)` -> (65, 66), `int a[3] =
+    (int[3]=ch_arr)` -> [97, 98, 99] — but it is unbuilt (also gated by the
+    grammar leading a conversion only with a primitive type keyword, so a tuple /
+    array target does not even parse). Needs: grammar to parse a tuple/array
+    conversion target, and kConvertExpr + convertExplicit to recurse per slot /
+    element (each leaf scalar reuses the existing grid). prerequisite: group with
+    the user-named conversion-target work.
+
+  * ASSIGNMENT RELATION — PER-ELEMENT ARRAY/TUPLE COMPAT. The unify-the-check work
+    LANDED: one checkValueAssign(tree, dest, rhs, diag) runs the implicit-conversion
+    relation at every assignment-family site (decl-init, assign, store, move, single
+    + overload call args, method args, return, field-init, per-element pairs); the
+    old fragments (checkStrongConstAssign / checkSlidAssign / checkPtrAssign /
+    checkArrayValueAssign) are reached only from inside it, and a tuple/array <->
+    scalar mismatch is now rejected (the char[]->int leak at function + method calls,
+    overload.sl:88, is closed). REMAINING: an array/tuple VALUE copy is still
+    EXACT-deepStrip (checkArrayValueAssign + the tuple-value arm at classify.cpp), so
+    shape-match + per-element COMPATIBILITY does not yet work — `int8[4] -> int[4]`
+    (each element widening) is rejected instead of converted. Needs codegen to lower
+    an aggregate assign to per-element converts (a whole memcpy is only the
+    all-identical case). The CLASS row of the relation is op= — tracked under CLASS
+    COPY-INIT / op=, not here.
+
+  * UNUSED PARAMETER AS A COMPILE ERROR — NEEDS REVIEW. Today the unused-local
+    sweep (resolve) covers only body-declared locals; parameters are exempt
+    (vardecl.sl's `unused_param` compiles). Proposal: flag a parameter that is
+    never read, like an unused local. NEEDS REVIEW — params are often legitimately
+    unused (interface conformance, overload / signature symmetry, a callback that
+    ignores an arg), so this likely wants an opt-out (a name convention or an
+    explicit discard) rather than a blanket error. Decide the policy first.
+
+  * x++ AS AN LVALUE (but NOT ++x) — the PPID model lifts the bump off the lvalue,
+    so a POST-inc target is well-defined: `x++ = 42` -> `x = 42; x++` (store, THEN
+    bump — the stored value is incremented to 43). A PRE-inc target is rejected:
+    `++x = 42` would bump THEN store (`x = x+1; x = 42`), so the pre-bump is dead.
+    So `x++` may be an lvalue; `++x` may not. This also makes chained `x++ ++` well
+    defined (two bumps of x — see CHAIN POSTFIX PPID). Today parseIncDecStmt
+    (grammar.cpp:1467) commits to the bare `x++;` statement the moment it sees
+    `ident ++` and demands `;`, so the lvalue form never parses. Needs the
+    statement/lvalue parse to accept a postfix-inc lvalue + desugar to lift the bump
+    after the store.
 
 
 REACH GOALS
@@ -346,14 +337,6 @@ REACH GOALS
     still to be decided. No current need; the shadowed class is simply accepted as
     unreachable. prerequisite: local classes in function bodies.
 
-  * TUPLE-OF-ARRAY TYPE — a tuple whose slot type is an array (`(int, int^[2])`)
-    does not parse: the tuple-type parser rejects the `[N]` suffix on a slot type
-    ("Expected ')'"). Array-of-tuple types work (`(int, int^) a[2]`) and tuple
-    VALUES nest freely, but a tuple TYPE cannot name an array slot. Surfaced
-    writing whole-array move/swap coverage in moveswap.sl — the tuple-x-array
-    null-walk is exercised today only via array-of-tuple, not tuple-of-array.
-    Needs parseType to accept an array-dimension suffix on a tuple slot type.
-
 
 ASPIRATIONAL FEATURES (someday; low priority, may never land)
 
@@ -370,3 +353,12 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     deliberately left out. Needs switch blocks to carry a label (Node.label +
     parse the `:name` after a switch body, currently a parse error) and the
     numbered/named resolver to consider switch frames as named targets.
+
+  * CHAIN POSTFIX PPID — repeated postfix inc/dec, `x++ ++ ++` (and the lexer's
+    greedy `x+++++` -> `x ++ ++ +`). WELL-DEFINED in the PPID model (the bump lifts
+    off the lvalue, so `x++ ++` is two bumps of x — NOT the C `(x++)++`-needs-an-
+    lvalue problem; slids doesn't evaluate-then-rebump). Blocked GRAMMATICALLY, not
+    semantically: parsePostfix applies ONE postfix ++/-- and returns (grammar.cpp:
+    818), so a second `++` is a parse error. Low priority / low utility. Prereq:
+    `x++ AS AN LVALUE` (above) — same lift-the-bump-off-the-lvalue machinery. Needs
+    parsePostfix to LOOP ++/--.

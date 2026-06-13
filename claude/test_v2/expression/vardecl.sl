@@ -15,7 +15,38 @@ unused report on the same code, so the two never double up.)
 /*
 claude says:
 
-tbd
+two checks, both in RESOLVE: definite assignment (a local must be written before
+read; decl-init and plain assignment both count, params arrive initialized) and
+the unused-local sweep (a body-declared local never read errors — "Unused local
+variable" if never written, "set but never used" if written). A use-before-init
+on the same code gates the sweep (resolve sets hasErrors), so the two never
+double-report. Consts and params are exempt from the sweep.
+
+covered here:
+  - definite-assignment positives: typed init+read, declare-then-assign,
+    reassignment, aug-assign (reads then writes), init from a call result.
+  - "Use of uninitialized" negatives across every READ context: bare rhs, a
+    larger expression, self-referential init, aug-assign / ++ target, call arg,
+    return, print; plus per-function isolation (one function's init does not seed
+    another's same-named local).
+  - unused-local negatives: never-written vs written ("set but never used"), and
+    the use-before-init-suppresses-unused composition (exactly one diagnostic).
+  - param + const exemptions from the unused sweep.
+  - FLOW-SENSITIVE definite assignment: the if/else join is a "must" intersection
+    (intersectInit) and a while body may run zero times — so if/else-both-init
+    reads cleanly (positive), while an if-with-no-else and a while-only write each
+    leave the local uninitialized (negatives).
+  - alternate WRITE-FORMS count as the initializing write: a move (`u <-- x`) and
+    a destructure (`(a, b) = tuple`); a move also READS its source, so moving from
+    an uninitialized local is a use-before-init (negative).
+  - (assignment relation, class row — not definite assignment) a class VALUE
+    converts only to the same class: assigning one to a primitive or an unrelated
+    class errors at BOTH a decl and a bare assignment, via checkValueAssign.
+
+not here: array/aggregate definite-assignment (an element store marking the whole
+array initialized — pointer/array.sl). NOTE: a constructed-but-unread CLASS local
+is NOT swept ("set but never used" doesn't fire) — exempt as an RAII guard; that
+policy is untested-by-design and unspec'd.
 */
 
 /*
@@ -71,6 +102,22 @@ int32 main() {
     /* a sibling function whose locals share main's names resolves cleanly. */
     int i = iso();
     __println("i = " + i);
+
+    /* flow-sensitive: both branches initialize, so the post-merge read is ok. */
+    int fa;
+    if (x > 0) { fa = 10; } else { fa = 20; }
+    __println("fa = " + fa);                    // 10
+
+    /* a move counts as the initializing write of its target. */
+    int mv;
+    mv <-- x;
+    __println("mv = " + mv);                    // 5
+
+    /* a destructure counts as the initializing write for each target. */
+    int da;
+    int db;
+    (da, db) = (30, 40);
+    __println("da = " + da + " db = " + db);    // 30 40
 
     return 0;
 }
@@ -164,6 +211,35 @@ of u in neg_isolation is uninitialized despite seeded() writing its own u.
 //int32 neg_isolation() {
 //    int u;
 //    return u;
+//}
+
+/*
+flow-sensitive definite assignment: a write on only SOME paths does not initialize
+(the if/else join is a "must" intersection; a while body may run zero times).
+*/
+
+/* an if with no else leaves the local uninitialized on the fall-through path. */
+//-EXPECT-ERROR: Use of uninitialized variable 'u'
+//int32 neg_if_partial(int c) {
+//    int u;
+//    if (c > 0) { u = 1; }
+//    return u;
+//}
+
+/* a while body may run zero times, so its write does not initialize. */
+//-EXPECT-ERROR: Use of uninitialized variable 'u'
+//int32 neg_while_zero(int c) {
+//    int u;
+//    while (c > 0) { u = 1; c = 0; }
+//    return u;
+//}
+
+/* a move reads its source, which is uninitialized. */
+//-EXPECT-ERROR: Use of uninitialized variable 'u'
+//int32 neg_move_src() {
+//    int u;
+//    int v <-- u;
+//    return v;
 //}
 
 /*
