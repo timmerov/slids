@@ -159,6 +159,19 @@ int32 main() {
     //-EXPECT-ERROR: does not fit declared type 'int'
     //const int kFloatToInt = 3.5;
 
+    /* compile error — an explicit (Type=expr) conversion of a float literal whose
+       truncation falls outside the integer's range is rejected at fold time (a
+       runtime fptosi of it would be poison). The target type name flows through. */
+
+    //-EXPECT-ERROR: to 'int' is out of range
+    //const int kOverConv = (int=1e30);
+
+    //-EXPECT-ERROR: to 'int' is out of range
+    //const int kUnderConv = (int=-1e30);
+
+    //-EXPECT-ERROR: to 'int8' is out of range
+    //const int8 kNarrowConv = (int8=1e30);
+
     /* compile error — the declared type name is not a type. */
 
     //-EXPECT-ERROR: Unknown type 'Bogus'

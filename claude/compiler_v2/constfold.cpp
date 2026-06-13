@@ -1114,7 +1114,7 @@ std::unique_ptr<parse::Node> tryFoldSizeof(parse::Node& n, parse::Tree& tree) {
 // pointer operand (nullptr / an address / a non-constant) never folds — those
 // are lowered at runtime by codegen. Folding lets a conversion initialize a
 // const or size an array dimension.
-std::unique_ptr<parse::Node> tryFoldConvert(parse::Node& n) {
+std::unique_ptr<parse::Node> tryFoldConvert(parse::Node& n, diagnostic::Sink& diag) {
     assert(n.children.size() == 1 && "kConvertExpr needs 1 operand");
     parse::Node const& op = *n.children[0];
     widen::TypeKind tk;
@@ -1166,7 +1166,14 @@ std::unique_ptr<parse::Node> tryFoldConvert(parse::Node& n) {
     } else {
         double t = std::trunc(fv);
         if (t >= 9223372036854775808.0 || t < -9223372036854775808.0) {
-            return nullptr;   // out of int64 range — leave the operand to runtime
+            // The float value is statically out of the integer's range; a runtime
+            // fptosi of it would be poison (C UB). Report it here, caret on the
+            // operand, instead of leaving an unfoldable convert that the const-decl
+            // sweep mis-blames as "not a constant expression".
+            diagnostic::report(diag, {op.file_id, op.tok,
+                "Conversion of '" + op.text + "' to '" + widen::spell(n.return_type)
+                + "' is out of range.", {}});
+            return nullptr;
         }
         bits = static_cast<uint64_t>(static_cast<int64_t>(t));
     }
@@ -1259,7 +1266,7 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
             changed = true;
         }
     } else if (slot->kind == parse::Kind::kConvertExpr) {
-        if (auto folded = tryFoldConvert(*slot)) {
+        if (auto folded = tryFoldConvert(*slot, diag)) {
             slot = std::move(folded);
             changed = true;
         }
