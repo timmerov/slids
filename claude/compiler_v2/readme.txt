@@ -424,8 +424,8 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     bare, `Outer:Outerger` qualified) but NOT the host's fields (a bare host field
     is Unresolved). classify recurses into hoisted ctor/dtor (classifyClassMemberBodies).
   * SCOPE-AWARE MEMBER RESOLUTION (name-then-resolve, frames open) — NOT a leniency.
-    A type name resolves via resolveName (open-ns chain + lexical-with-owner<0), NOT
-    findInLiveScopes (any live entry). For that to be correct, member TYPES must
+    A type name resolves via resolveName (open-ns chain + lexical-with-owner<0), not
+    a frame-blind any-live-entry lookup. For that to be correct, member TYPES must
     resolve with the enclosing frame OPEN: registerNamespaceTree / registerClassMembers
     / registerClassBody / resolveClassMemberBodies each push their frame around the
     member-type / body resolution (names were registered first — type-introducing
@@ -433,8 +433,8 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     bare only where its frame is open (inside the host); a bare member type at file
     scope FAILS — "'Inner' needs a namespace qualifier" when it IS a member-type
     elsewhere (namespaceMemberTypeExists — class/alias/enum, NOT a const/function),
-    else "Unknown type". (This replaced the findInLiveScopes leniency that resolved
-    any live member regardless of scope.)
+    else "Unknown type". (resolveName is the sole resolution path — the legacy
+    frame-blind any-live-entry lookup has been removed.)
   * IDENTITY BY def_id, NOT A MANGLED NAME. Two same-named local classes (or a
     local shadowing a file-scope one) must be distinct types. The kSlid carries a
     `def_id` (its defining FRAME id; -1 for file-scope) included in structKey
@@ -631,8 +631,9 @@ STAGE FILES (.h / .cpp pairs)
             member inits then const init rhs (so globals can reference each
             other regardless of decl order); pass 2 walks function bodies. Owns type aliases: a
             pass-1a-alias pre-sweep registers file-scope `alias` decls as
-            kAlias entries; resolveTypeSpelling substitutes an alias chain to
-            its underlying (cycle-detected), and resolveDeclType rewrites every
+            kAlias entries; resolveTypeRef substitutes an alias chain to
+            its underlying (cycle-detected, structurally over the interned type
+            handle), and resolveDeclType rewrites every
             declared / return / parameter spelling in place before validating
             it (widen::isKnownType) — so downstream stages see only underlying
             types and aliases never reach the ast. requireKnownType also rejects
@@ -653,16 +654,17 @@ STAGE FILES (.h / .cpp pairs)
             flag is named `reported`. A bad segment carets the OFFENDING SEGMENT
             (not the whole type position): parseType captures per-segment tokens
             onto Node.return_type_seg_toks, threaded as a defaulted seg_toks param
-            through resolveDeclType -> resolveTypeSpelling -> resolveQualifiedType
+            through resolveDeclType -> resolveTypeRef -> resolveQualifiedType
             and wired at the var-decl declared-type + cast-target sites (a
             flat-tok fallback covers the sites that don't pass it yet).
             Owns the `##type` operand dispatch: the kStringifyType arm looks up
             the operand (resolveName for a bare name / resolveQualifiedRef for a
             qualified one — both return the entry for ANY kind, erroring only on
             a missing name) and branches on entry kind. A TYPE-NAME operand (a
-            kAlias, or an enum's kNamespace type facet) runs through
-            resolveTypeSpelling and is stamped on return_type (so `##type(Integer)`
-            / `##type(Space:Dir)` -> the underlying); a VALUE operand (kConst /
+            kAlias, or an enum's kNamespace type facet) resolves its entry's type
+            through resolveTypeRef and deep-strips to the underlying, stamped on
+            return_type (so `##type(Integer)` / `##type(Space:Dir)` -> the
+            underlying); a VALUE operand (kConst /
             kLocalVar) takes the value path; neither is rejected ("'X' is not a
             value or an alias." undefined / "'X' is a <namespace|function>, not a
             value or an alias."). registerEnumMembers also stamps each NAMED-enum
@@ -1231,7 +1233,7 @@ PRODUCT FILES (.h / .cpp pairs)
             param_types (kCallStmt/kCallExpr: cached resolved-fn param-type
             strings driving each arg's emit dest_type). Owns the symbol table:
             Entry vector + frame stack + pushFrame / popFrame / addEntry /
-            findInLiveScopes / findInFrame / entryType APIs that resolve
+            findInFrame / entryType APIs that resolve
             calls. Function entries carry param_types alongside their
             return type, plus num_required (optional-param boundary) and a
             def_tok/def_file_id pair (the first DEFINITION's position,

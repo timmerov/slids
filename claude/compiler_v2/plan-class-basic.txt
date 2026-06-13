@@ -37,7 +37,7 @@ classes (a class in another class's body) are namespace-MEMBERS of the host
 (`Outer:Inner` / `Outer:Inner:Innerger`, any depth), see the host's namespace
 members but not its fields; member-TYPE lookup is now SCOPE-AWARE (resolveName with
 the enclosing frame OPEN during member-type/body resolution — names register
-first), replacing the findInLiveScopes leniency, so a bare member type out of scope
+first), not a frame-blind any-live-entry lookup, so a bare member type out of scope
 fails ("needs a namespace qualifier").
 METHODS LANDED (statement-call form): a named function in a class body is a
 self-bound member (ctor/dtor with a user name); bare field reads AND writes rewrite

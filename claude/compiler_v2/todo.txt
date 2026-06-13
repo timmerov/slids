@@ -8,11 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * CONVERSION OF AN OUT-OF-INT64-RANGE FLOAT LITERAL — tryFoldConvert does NOT
-    fold a float-literal operand whose truncation falls outside int64 (|v| >=
-    2^63); `(int = 1e30)` is lowered at runtime where `fptosi` of an out-of-range
-    float is poison (C UB). Low value; emit a compile-time diagnostic if it bites.
-
   * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
     primitive element type (a reference works for all). The ARRAY / sub-array
     variant LANDED this session (multi-dim for-array: a sub-array element forces a

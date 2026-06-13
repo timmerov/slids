@@ -980,13 +980,13 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 inferExpr(tree, rhs, widen::kNoType, diag);
                 if (lhs.inferred_type != widen::kNoType
                     && !isCoercibleToBool(lhs.inferred_type)) {
-                    diagnostic::report(diag, {e.file_id, e.tok,
+                    diagnostic::report(diag, {lhs.file_id, lhs.tok,
                         "Operator '" + op + "' is not defined on type '"
                         + widen::spellOrEmpty(lhs.inferred_type) + "'.", {}});
                 }
                 if (rhs.inferred_type != widen::kNoType
                     && !isCoercibleToBool(rhs.inferred_type)) {
-                    diagnostic::report(diag, {e.file_id, e.tok,
+                    diagnostic::report(diag, {rhs.file_id, rhs.tok,
                         "Operator '" + op + "' is not defined on type '"
                         + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
                 }
@@ -1002,13 +1002,13 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 inferExpr(tree, rhs, widen::kNoType, diag);
                 if (lhs.inferred_type != widen::kNoType
                     && !isNumericType(lhs.inferred_type)) {
-                    diagnostic::report(diag, {e.file_id, e.tok,
+                    diagnostic::report(diag, {lhs.file_id, lhs.tok,
                         "Shift left-hand side must be numeric; got '"
                         + widen::spellOrEmpty(lhs.inferred_type) + "'.", {}});
                 }
                 if (rhs.inferred_type != widen::kNoType
                     && !isIntegerClass(rhs.inferred_type)) {
-                    diagnostic::report(diag, {e.file_id, e.tok,
+                    diagnostic::report(diag, {rhs.file_id, rhs.tok,
                         "Shift count must be integer-class; got '"
                         + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
                 }
@@ -2617,7 +2617,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     {}});
             }
             std::map<long long, parse::Node const*> seen;   // value -> first label
-            int default_tok = -1;
+            parse::Node const* first_default = nullptr;      // for the dup-default note
             for (std::size_t i = 1; i < s.children.size(); i++) {
                 parse::Node& clause = *s.children[i];
                 if (clause.children[0]) {
@@ -2659,13 +2659,14 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                         }
                     }
                 } else {
-                    if (default_tok >= 0) {
+                    if (first_default) {
                         diagnostic::report(diag, {clause.file_id, clause.tok,
                             "A switch may have only one default clause.",
-                            {{s.children[0]->file_id, default_tok,
+                            {{first_default->file_id, first_default->tok,
                               "first default here"}}});
+                    } else {
+                        first_default = &clause;
                     }
-                    default_tok = clause.tok;
                 }
                 classifyStmt(tree, *clause.children[1], fn_return_type, diag);
             }
@@ -2818,11 +2819,16 @@ void classifyFunctionSignature(parse::Tree& tree, parse::Node& fn,
             continue;
         }
         if (p.return_type == widen::kNoType) {
-            std::string t = preferredSpelling(widen::spellOrEmpty(def.inferred_type));
-            p.return_type = widen::internOrNone(t);
-            e.param_types[i] = widen::internOrNone(t);
+            // def.inferred_type is ALREADY the preferred no-width handle: a no-context
+            // literal default infers via defaultLiteralType (int / uint / float, never
+            // int32). Use the handle directly — no spell->intern round-trip (which
+            // would drop an alias label if a non-literal default ever lands here).
+            // Mirrors the var-decl inferred-init path.
+            widen::TypeRef t = def.inferred_type;
+            p.return_type = t;
+            e.param_types[i] = t;
             if (p.resolved_entry_id >= 0) {
-                tree.entries[p.resolved_entry_id].slids_type = widen::internOrNone(t);
+                tree.entries[p.resolved_entry_id].slids_type = t;
             }
         } else if (!literalFitsContext(def, p.return_type)) {
             diagnostic::report(diag, {def.file_id, def.tok,
@@ -2872,7 +2878,10 @@ void classifyNamespace(parse::Tree& tree, parse::Node& node,
             classifyNamespace(tree, *m, diag);
         } else if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
             for (auto& init : m->children) {
-                if (init) inferExpr(tree, *init, m->return_type, diag);
+                if (init) {
+                    inferExpr(tree, *init, m->return_type, diag);
+                    checkValueAssign(tree, m->return_type, *init, diag);
+                }
             }
         } else if (m->kind == parse::Kind::kFunctionDef) {
             classifyFunctionBody(tree, *m, diag);
@@ -2908,9 +2917,13 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         } else if (ch->kind == parse::Kind::kNamespaceDecl) {
             classifyNamespace(tree, *ch, diag);
         } else if (ch->kind == parse::Kind::kVarDeclStmt && ch->is_const) {
-            // Type-infer top-level const init in its declared type's context.
+            // Type-infer top-level const init in its declared type's context, then
+            // run the one assignment relation — every assignment-family site does.
             for (auto& init : ch->children) {
-                if (init) inferExpr(tree, *init, ch->return_type, diag);
+                if (init) {
+                    inferExpr(tree, *init, ch->return_type, diag);
+                    checkValueAssign(tree, ch->return_type, *init, diag);
+                }
             }
         } else if (ch->kind == parse::Kind::kClassDef) {
             // Type-check ctor/dtor member bodies (self-bound; field refs are

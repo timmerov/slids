@@ -144,89 +144,6 @@ std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
                                  std::vector<int> const* seg_toks = nullptr,
                                  widen::TypeRef* out_handle = nullptr);
 
-// Split a type spelling into its resolvable leaf NAME and the modifier SUFFIX
-// (`^` / `[]` / `[N]...`) that rides back along once the leaf resolves —
-// structurally, off the interned type, not by slicing the spelling. Mirrors the
-// legacy peel exactly: a run of OUTER iterator/array wrappers, then AT MOST ONE
-// reference; anything further in stays part of the base (so `int[3]^` -> base
-// `int[3]`, suffix `^`, which then resolves to itself).
-std::pair<std::string, std::string> splitTypeModifiers(std::string const& spelling) {
-    std::vector<widen::TypeRef> chain;   // outermost wrapper first
-    widen::TypeRef cur = widen::intern(spelling);
-    for (;;) {
-        widen::Type const& t = widen::get(cur);
-        if (t.form == widen::Type::Form::kIterator) { chain.push_back(cur); cur = t.pointee; }
-        else if (t.form == widen::Type::Form::kArray) { chain.push_back(cur); cur = t.elem; }
-        else break;
-    }
-    if (widen::form(cur) == widen::Type::Form::kPointer) {
-        chain.push_back(cur);
-        cur = widen::get(cur).pointee;
-    }
-    std::string base = widen::spell(cur);
-    std::string suffix;
-    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-        widen::Type const& t = widen::get(*it);
-        if (t.form == widen::Type::Form::kPointer)       suffix += "^";
-        else if (t.form == widen::Type::Form::kIterator) suffix += "[]";
-        else for (int d : t.dims) suffix += "[" + std::to_string(d) + "]";
-    }
-    return {base, suffix};
-}
-
-// Substitute a type-alias spelling to its underlying type, following chains
-// (`alias A = B; alias B = int` → `int`) and detecting cycles. A namespace-
-// qualified spelling (`Space:Dir`) resolves through the namespace chain. The
-// `[]` suffix rides along. A spelling that isn't an alias / enum / qualified
-// type is returned unchanged. `reported` is set when a diagnostic was already
-// emitted (a cycle, or a failed qualified resolution) so the caller skips the
-// redundant "Unknown type".
-std::string resolveTypeSpelling(parse::Tree& tree, std::string const& spelling,
-                                std::set<std::string>& visiting, bool& reported,
-                                int file_id, int tok, diagnostic::Sink& diag,
-                                std::vector<int> const* seg_toks = nullptr) {
-    // Split off the modifier suffix so the base type name resolves; the suffix
-    // (`[]` / `[N]` / `^`) rides back along on the resolved base.
-    auto bs = splitTypeModifiers(spelling);
-    std::string& base = bs.first;
-    std::string& suffix = bs.second;
-    if (base.find(':') != std::string::npos) {
-        std::string under =
-            resolveQualifiedType(tree, base, file_id, tok, reported, diag, seg_toks);
-        if (under.empty()) return base + suffix;   // error already reported
-        return under + suffix;
-    }
-    int id = parse::findInLiveScopes(tree, base);
-    // A type alias substitutes to its target. An enum's name doubles as a
-    // namespace AND a transparent type alias to the underlying (carried on the
-    // namespace entry's slids_type); treat that like an alias here. A plain
-    // namespace (empty slids_type) is not a type and falls through unchanged →
-    // requireKnownType then rejects it.
-    bool is_alias = id >= 0 && tree.entries[id].kind == parse::EntryKind::kAlias;
-    bool is_enum_type = id >= 0
-        && tree.entries[id].kind == parse::EntryKind::kNamespace
-        && tree.entries[id].slids_type != widen::kNoType;
-    if (!is_alias && !is_enum_type) {
-        return spelling;
-    }
-    if (is_enum_type) {
-        // The underlying is already a primitive spelling (validated at decl);
-        // no further chain to chase.
-        return widen::spell(tree.entries[id].slids_type) + suffix;
-    }
-    if (visiting.count(base)) {
-        reported = true;
-        diagnostic::report(diag, {file_id, tok,
-            "Type alias '" + base + "' is part of a cycle.", {}});
-        return base;
-    }
-    visiting.insert(base);
-    std::string resolved = resolveTypeSpelling(
-        tree, widen::spell(tree.entries[id].slids_type), visiting, reported, file_id, tok, diag);
-    visiting.erase(base);
-    return resolved + suffix;
-}
-
 // Display name for a class/namespace member: "Owner:member", walking owner
 // frames outward (a member alias `Float` of class `Space` -> "Space:Float"). A
 // non-member entry (owner_ns_frame < 0) keeps its bare name. Used so a member
@@ -296,8 +213,8 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
                 // def_id can't survive a spelling round-trip).
                 return widen::internAlias(name, handle);
             }
-            // SCOPE-AWARE: resolveName (open-ns chain + lexical-with-owner<0), NOT
-            // findInLiveScopes (any live entry). A namespaced member type (a host
+            // SCOPE-AWARE: resolveName (open-ns chain + lexical-with-owner<0), not a
+            // frame-blind any-live-entry lookup. A namespaced member type (a host
             // class's alias/enum, a hoisted class) resolves bare ONLY where its
             // frame is open — inside the host (member types + bodies open it), so
             // `Inner`/`Innerger` at file scope are out of scope and fail.
@@ -796,7 +713,7 @@ void registerNamespaceTree(parse::Tree& tree, parse::Node& node,
     // const / function member's type may name a sibling enum regardless of
     // declaration order — mirrors the file-scope pass ordering. The frame is OPEN
     // while member TYPES resolve, so a sibling type resolves bare via the scope
-    // frame stack (resolveName), not the findInLiveScopes leniency.
+    // frame stack (resolveName), not a frame-blind any-live-entry lookup.
     tree.open_ns_frames.push_back(ns);
     for (auto& m : node.children) {
         if (m && (m->kind == parse::Kind::kEnumDecl
@@ -1401,13 +1318,10 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                     return;
                 }
                 if (is_type) {
-                    std::string spelling = operand.global_qualified ? "::" : "";
-                    for (auto const& seg : operand.qualifier) spelling += seg + ":";
-                    spelling += operand.name;
-                    std::set<std::string> visiting;
-                    bool reported = false;
-                    e.return_type = widen::internOrNone(resolveTypeSpelling(tree, spelling, visiting,
-                        reported, operand.file_id, operand.tok, diag));
+                    // Enum facet only here (kClass / kAlias returned above): its
+                    // underlying primitive is the handle on the entry, and `id` is
+                    // already scope-resolved (line above) — use it directly.
+                    e.return_type = tree.entries[id].slids_type;
                     return;
                 }
                 if (k == parse::EntryKind::kLocalVar
@@ -1461,15 +1375,17 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                     || (k == parse::EntryKind::kNamespace
                         && tree.entries[id].slids_type != widen::kNoType);   // enum facet
                 if (is_type) {
-                    // Reconstruct the (possibly qualified) spelling for the chain /
-                    // namespace type resolver.
-                    std::string spelling = operand.global_qualified ? "::" : "";
-                    for (auto const& seg : operand.qualifier) spelling += seg + ":";
-                    spelling += operand.name;
+                    // ##type of a TYPE NAME reports its UNDERLYING (intentional: a
+                    // VALUE keeps its alias/enum label via classify's alias_label
+                    // channel; a type name flattens). Resolve the entry's type through
+                    // the canonical handle resolver — an alias target chases to its
+                    // underlying, an enum facet already holds the primitive — then
+                    // deep-strip the transparent layers; classify spells the result.
                     std::set<std::string> visiting;
                     bool reported = false;
-                    e.return_type = widen::internOrNone(resolveTypeSpelling(tree, spelling, visiting,
-                        reported, operand.file_id, operand.tok, diag));
+                    widen::TypeRef u = resolveTypeRef(tree, tree.entries[id].slids_type,
+                        visiting, reported, operand.file_id, operand.tok, diag);
+                    e.return_type = widen::deepStrip(u);
                     return;
                 }
                 if (k == parse::EntryKind::kLocalVar
@@ -3365,7 +3281,7 @@ void registerClassMembers(parse::Tree& tree, parse::Node& node, int frame,
     };
     // Open THIS class's frame while resolving member TYPES (an alias target, a
     // nested-class field) so a sibling member resolves bare via the scope frame
-    // stack — not the findInLiveScopes leniency. The names were registered before
+    // stack — not a frame-blind any-live-entry lookup. The names were registered before
     // their types in the two-phase, so forward references resolve too.
     tree.open_ns_frames.push_back(frame);
     for (auto& m : node.children) {

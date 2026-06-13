@@ -37,13 +37,6 @@ int addEntry(Tree& t, Entry e) {
     return id;
 }
 
-int findInLiveScopes(Tree const& t, std::string const& name) {
-    for (auto it = t.live_entry_ids.rbegin(); it != t.live_entry_ids.rend(); ++it) {
-        if (t.entries[*it].name == name) return *it;
-    }
-    return -1;
-}
-
 int findInFrame(Tree const& t, int frame_id, std::string const& name) {
     for (int idx : t.live_entry_ids) {
         Entry const& e = t.entries[idx];

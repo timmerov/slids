@@ -390,7 +390,7 @@ Phase 4 — types beyond primitives
     class `op<--`/`op<-->` + destructor-balance + class fields + whole-array
     move/swap is the Phase 5 / reach-goal piece. test_v2/expression/moveswap.sl.
   * type aliases — LANDED (value form `alias Name = type;`, file + function
-    scope, transparent; resolveTypeSpelling substitutes the chain; desugar drops
+    scope, transparent; resolveTypeRef substitutes the chain; desugar drops
     kAliasDecl; an alias TARGET may be a pointer type `alias IntPtr = int^;`. An
     IDENTIFIER-typed decl with a pointer SUFFIX (`Integer^ ref`, `Integer[] iter`,
     `Space:Dir^ d`, and the Phase-5 `Cat^ c`) now parses — looksLikeQualifiedTypedDecl
@@ -399,12 +399,12 @@ Phase 4 — types beyond primitives
   * qualified type names — LANDED. A type spelling may be namespace-qualified
     (`Space:Dir`, `::A:B:T`): grammar's parseType accepts a qualified name and a
     looksLikeQualifiedTypedDecl lookahead routes `Space:Dir x` to a var-decl;
-    resolveTypeSpelling resolves a `:`-bearing spelling through the shared ns
+    resolveTypeRef resolves a `:`-bearing leaf through the shared ns
     chain walker to the underlying before any downstream stage. Diagnostics:
     not-a-namespace / not-a-namespace-member / not-a-type-in — each carets the
     OFFENDING SEGMENT (parseType captures per-segment tokens onto a new
     Node.return_type_seg_toks, threaded as a defaulted seg_toks param through
-    resolveDeclType -> resolveTypeSpelling -> resolveQualifiedType; wired at the
+    resolveDeclType -> resolveTypeRef -> resolveQualifiedType; wired at the
     var-decl declared-type + cast-target sites, flat-tok fallback elsewhere).
   * constants — LANDED (file + function scope; kConst entries with captured
     values; constfold substitution + iteration + fixpoint check; sharp
@@ -506,7 +506,7 @@ Phase 5 — classes
     registerClassMembers kClassDef arm (member_of = host frame); resolveQualifiedType
     kClass leaf returns the HANDLE (no spelling round-trip). Sees host namespace
     members (bare + qualified), NOT host fields. The lookup is SCOPE-AWARE
-    (resolveName, not the findInLiveScopes leniency): member TYPES resolve with the
+    (resolveName, not a frame-blind any-live-entry lookup): member TYPES resolve with the
     enclosing frame OPEN (registerNamespaceTree/registerClassMembers/Body +
     resolveClassMemberBodies push their frame; names register first), so a bare
     member type out of scope FAILS ("needs a namespace qualifier"). Built per the
@@ -544,7 +544,7 @@ Phase 5 — classes
     -> the underlying spelling (`##type(Integer)` -> `int`, `##type(E)` -> `int`,
     `##type(Space:Dir)` -> `int`), DISTINCT from a VALUE of that type which keeps
     its label (`Integer x; ##type(x)` -> `Integer`). resolve's kStringifyType arm
-    dispatches on the operand entry kind (a TYPE -> resolveTypeSpelling onto
+    dispatches on the operand entry kind (a TYPE -> resolveTypeRef + deepStrip onto
     return_type; a VALUE -> the value path; neither -> a diagnostic), classify
     short-circuits when return_type is stamped. An enum MEMBER reports
     `const Enum` (`##type(Dir:kNorth)` -> `const Dir`, via each named-enum

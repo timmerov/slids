@@ -437,7 +437,6 @@ void popFrame(Tree& t);
 int  allocFrameId(Tree& t);                               // id only, no push (ns identity)
 int  currentFrameId(Tree const& t);
 int  addEntry(Tree& t, Entry e);                          // returns entry id
-int  findInLiveScopes(Tree const& t, std::string const& name);   // -1 if none
 int  findInFrame(Tree const& t, int frame_id, std::string const& name);
 // A namespace/class MEMBER by name in its owning frame (owner_ns_frame == ns_frame;
 // at kGlobalFrame, a file-scope non-member). Returns entry id or -1.
