@@ -464,7 +464,7 @@ std::string constResultStrong(parse::Node const& lhs, parse::Node const& rhs,
         return widen::intLiteralFits(val, s) ? s : "";
     }
     widen::TypeKind ka, kb;                          // both strong
-    if (!widen::classify(a, ka) || !widen::classify(b, kb)) return "";
+    if (!widen::classify(aRef, ka) || !widen::classify(bRef, kb)) return "";
     if ((ka.cat == widen::Category::kSignedInt)
         != (kb.cat == widen::Category::kSignedInt)) return "";   // mixed sign -> flex
     widen::TypeRef outRef;
@@ -720,6 +720,7 @@ parse::Kind literalKindForType(widen::TypeRef t) {
     widen::TypeKind tk;
     if (widen::classify(t, tk)) {
         if (tk.cat == widen::Category::kBool) return parse::Kind::kBoolLiteral;
+        if (tk.cat == widen::Category::kFloat) return parse::Kind::kFloatLiteral;
         if (tk.cat == widen::Category::kUnsignedInt) return parse::Kind::kUintLiteral;
     }
     return parse::Kind::kIntLiteral;
@@ -973,14 +974,6 @@ bool trySubstituteConst(std::unique_ptr<parse::Node>& slot, parse::Tree& tree) {
 // A const's stored value takes its DECLARED type's kind, not the initializer's:
 // `const char x = 65` prints as a char, `const bool b = 1` as `true`, and an
 // `enum char` member keeps char through its auto-incremented (int-folded) value.
-parse::Kind literalKindForType(std::string const& t) {
-    if (t == "char") return parse::Kind::kCharLiteral;
-    if (t == "bool") return parse::Kind::kBoolLiteral;
-    if (t == "float" || t == "float32" || t == "float64")
-        return parse::Kind::kFloatLiteral;
-    if (t.compare(0, 4, "uint") == 0) return parse::Kind::kUintLiteral;
-    return parse::Kind::kIntLiteral;
-}
 
 bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& diag) {
     if (!decl.is_const) return false;
@@ -1075,7 +1068,7 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
     // The stored value takes the const's DECLARED type's kind, not the folded
     // initializer's — so a char const stays char (incl. an enum char member
     // whose auto-increment folded to an int literal), a bool prints true/false.
-    entry.literal_kind = literalKindForType(widen::spell(widen::strip(entry.slids_type)));
+    entry.literal_kind = literalKindForType(widen::strip(entry.slids_type));
     return true;
 }
 
@@ -1190,7 +1183,7 @@ std::unique_ptr<parse::Node> tryFoldConvert(parse::Node& n) {
     } else {
         // char is an unsigned-8 too — keep it a char literal so it types/prints
         // as char; its text is the numeric code (the lexer's canonical form).
-        lit->kind = (widen::spellOrEmpty(widen::deepStrip(n.return_type)) == "char")
+        lit->kind = (widen::deepStrip(n.return_type) == widen::intern("char"))
                   ? K::kCharLiteral : K::kUintLiteral;
         lit->text = std::to_string(bits);
     }

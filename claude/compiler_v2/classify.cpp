@@ -815,7 +815,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             parse::Node& operand = *e.children[0];
             inferExpr(tree, operand, widen::kNoType, diag);
             std::string to = widen::spellOrEmpty(e.return_type);
-            std::string to_c = widen::spellOrEmpty(widen::deepStrip(e.return_type));
+            widen::TypeRef to_c = widen::deepStrip(e.return_type);
             if (!isNumericType(e.return_type)) {
                 if (isPtrLikeType(e.return_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
@@ -828,7 +828,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             } else if (operand.inferred_type != widen::kNoType) {
                 std::string from = widen::spellOrEmpty(operand.inferred_type);
                 if (isPtrLikeType(operand.inferred_type)) {
-                    if (to_c != "bool" && to_c != "intptr") {
+                    if (to_c != widen::intern("bool") && to_c != widen::intern("intptr")) {
                         diagnostic::report(diag, {e.file_id, e.tok,
                             "Cannot convert '" + from + "' to '" + to
                             + "'; a pointer converts only to 'bool' or 'intptr'.", {}});
@@ -937,7 +937,9 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             } else if (isIteratorType(operand.inferred_type)) {
                 // ok — an iterator steps by one element.
             } else if (!ot.empty()
-                       && (!isNumericType(operand.inferred_type) || ot == "bool")) {
+                       && (!isNumericType(operand.inferred_type)
+                           || widen::deepStrip(operand.inferred_type)
+                                  == widen::intern("bool"))) {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Operator '" + e.text + "' is not defined on type '"
                     + ot + "'.", {}});

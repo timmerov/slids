@@ -8,31 +8,224 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * REMAINING STRING-TYPE DECISIONS — convert to structured TypeRef checks (same v1
-    string-pattern the commonType port retired; all correct today, just debt). Two
-    flavours. (Human-edge spelling — preferredSpelling, alias labels, diagnostic text
-    — is legitimate and stays.)
-    CATEGORY-DETECTABLE (decide on a string spelling that maps to a classify category;
-    -> `classify(ref, k) && k.cat == ...`):
-      - [DONE] isFloatUnderlying (resolve.cpp) — now structural `classify(deepStrip(t),k)
-        && k.cat==kFloat`; this fixed a live bug (a float-ALIAS enum underlying was
-        mis-detected as non-float).
-      - classify.cpp ~941 — `ot=="bool"` gating an operator error -> kBool.
-      - string `classify(a,ka)` in constResultStrong (constfold.cpp ~467) — classify
-        the SPELLING; it already holds aRef/bRef (from the commonType port), so
-        classify those refs directly. (sameClass was de-stringed with argConvertCost
-        — it now classifies the TypeRefs and the std::string commonType wrapper is
-        retired.)
-    NAME-BASED IDENTITY (char vs uint8, intptr vs int64 are structurally identical, so
-    the decision is genuinely name-keyed — but should compare the interned HANDLE,
-    `ref == widen::intern("char"/"intptr")`, not spell() a string and `==` it):
-      - literalKindForType(std::string) (constfold.cpp ~976) — `t=="char"`,
-        `t.compare(0,4,"uint")`, etc. (a TypeRef overload of the same name now exists
-        alongside it; the string one is used by tryCaptureConst — unify on the ref form).
-      - constfold.cpp ~1193 — `spellOrEmpty(deepStrip(return_type))=="char"` for the
-        char-vs-uint literal kind.
-      - classify.cpp ~832 — `to_c!="bool" && to_c!="intptr"` (pointer-conversion target).
-      - widen.cpp ~460 — `spell(dest_ref)=="intptr"` (ptrtoint target).
+  * CONST-EXPRESSION ARRAY DIM IN A TYPE (Phase 2) — array TYPE spellings (`int[N]`
+    in type position — tuple slots, alias RHS, params via alias, returns) LANDED but
+    take only LITERAL dims; a const-EXPRESSION dim inside a type (`(int[N], int[4])`,
+    `alias V = int[N]`) is rejected ("An array type dimension must be an integer
+    literal"). The dim_exprs / bakeNodeDims fold is var-decl-NODE-anchored, so a dim
+    in a nested type position has no node to hang on. Needs the const-dim fold moved
+    to type level. Top-level `int name[N]` const dims still work via the name path.
+    prerequisite: none (array-TYPE grammar + the per-segment index walk both LANDED).
+
+  * CONVERSION OF AN OUT-OF-INT64-RANGE FLOAT LITERAL — tryFoldConvert does NOT
+    fold a float-literal operand whose truncation falls outside int64 (|v| >=
+    2^63); `(int = 1e30)` is lowered at runtime where `fptosi` of an out-of-range
+    float is poison (C UB). Low value; emit a compile-time diagnostic if it bites.
+
+  * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
+    primitive element type (a reference works for all). The ARRAY / sub-array
+    variant LANDED this session (multi-dim for-array: a sub-array element forces a
+    reference loop var; a declared by-value one errors "must use a reference loop
+    variable"). Only the CLASS-element variant remains, when class array elements
+    exist (Phase 5).
+
+  * STRONG-CONST FLEX IN A BINARY OP — strong-const widening enforcement LANDED at
+    the assignment sites, but a strong const still FLEXES as a BINARY OPERAND (a
+    separate, broader matter): `flexBinaryOperands` flexes a strong-const literal
+    into the partner's type, so `int8 a; a += sc` (sc a strong int) treats sc as
+    int8 (and `int8 v; v + sc` types as int8), where the typed-value model would
+    make it int and reject the narrowing back into int8. Making "a strong const
+    does not flex in a binary op" re-types every binary expr with a strong-const
+    operand — its own design call, not an assignment-site fix. Decide separately.
+
+  * TUPLE-OF-ARRAY TYPE — a tuple whose slot type is an array (`(int, int^[2])`)
+    does not parse: the tuple-type parser rejects the `[N]` suffix on a slot type
+    ("Expected ')'"). Array-of-tuple types work (`(int, int^) a[2]`) and tuple
+    VALUES nest freely, but a tuple TYPE cannot name an array slot. Surfaced
+    writing whole-array move/swap coverage in moveswap.sl — the tuple-x-array
+    null-walk is exercised today only via array-of-tuple, not tuple-of-array.
+    Needs parseType to accept an array-dimension suffix on a tuple slot type.
+
+  * TUPLE / ARRAY TYPE CONVERSION — `(Type=expr)` is scalar-only: classify's
+    kConvertExpr requires a numeric/pointer source and a numeric target
+    (isNumericType), so a tuple or array on EITHER side is rejected ("Cannot
+    convert to '...'; the target must be a value type" / "Cannot convert
+    '(int, int)' to 'int'"). typeconv.sl's top spec describes element-wise
+    conversion — `(int, int) t = ((int,int)=tpl)` -> (65, 66), `int a[3] =
+    (int[3]=ch_arr)` -> [97, 98, 99] — but it is unbuilt (also gated by the
+    grammar leading a conversion only with a primitive type keyword, so a tuple /
+    array target does not even parse). Needs: grammar to parse a tuple/array
+    conversion target, and kConvertExpr + convertExplicit to recurse per slot /
+    element (each leaf scalar reuses the existing grid). prerequisite: group with
+    the user-named conversion-target work.
+
+  * ASSIGNMENT RELATION — PER-ELEMENT ARRAY/TUPLE COMPAT. The unify-the-check work
+    LANDED: one checkValueAssign(tree, dest, rhs, diag) runs the implicit-conversion
+    relation at every assignment-family site (decl-init, assign, store, move, single
+    + overload call args, method args, return, field-init, per-element pairs); the
+    old fragments (checkStrongConstAssign / checkSlidAssign / checkPtrAssign /
+    checkArrayValueAssign) are reached only from inside it, and a tuple/array <->
+    scalar mismatch is now rejected (the char[]->int leak at function + method calls,
+    overload.sl:88, is closed). REMAINING: an array/tuple VALUE copy is still
+    EXACT-deepStrip (checkArrayValueAssign + the tuple-value arm at classify.cpp), so
+    shape-match + per-element COMPATIBILITY does not yet work — `int8[4] -> int[4]`
+    (each element widening) is rejected instead of converted. Needs codegen to lower
+    an aggregate assign to per-element converts (a whole memcpy is only the
+    all-identical case). The CLASS row of the relation is op= — tracked under CLASS
+    COPY-INIT / op=, not here.
+
+  * SELF-SWAP / SELF-MOVE FOR COMPLEX LVALUES — classify rejects a self-swap /
+    self-move when both operands are the same BARE variable (isSameLvalue: two
+    kIdentExpr with the same resolved_entry_id) -> "Cannot swap a value with itself"
+    / "Cannot move a value onto itself". An indexed / deref self (`arr[i] <--> arr[i]`,
+    `p^ <-- p^`) is NOT detected — that needs structural lvalue-equality (same base +
+    same index/deref chain), and a runtime index can't be compared statically anyway.
+    Low priority. Widen isSameLvalue when complex-lvalue equality is wanted.
+
+
+DEFERRED FEATURES (later; may not be on the plan)
+
+  * CLASS COPY-INIT AT A DECL — `Class a = sameClassValue` (initialize a class
+    local from another value of the SAME class — e.g. the result of a function
+    that returns a class by value) is mishandled: classify routes the decl through
+    classifyClassInit, which treats the rhs as a FIELD-init argument, so a 1-field
+    class reports "Cannot initialize field 'x_' ... from a value of type 'Class'."
+    A plain ASSIGN `a = b` works (checkSlidAssign allows same-class), and
+    `= scalar` / `= tuple` construct — only whole-class copy-INITIALIZATION at a
+    decl is wrong. Surfaces when a nested function RETURNS a local class by value.
+    Needs the class copy path (whole-value copy vs field-init). prerequisite: class
+    copy/move.
+
+  * METHODS — follow-ups (the statement-call form + plain-`=` field writes LANDED).
+    - EXPRESSION-FORM CALL: a value-returning method used as a value
+      (`int x = obj.m()`) doesn't parse; only the statement form `obj.m(args);` is
+      wired. Needs the call shape in the expression parser (parsePostfix) + a
+      kMethodCallExpr (or reuse) classified/lowered like the statement form.
+    - COMPOUND FIELD WRITES in a member body: `x_ += 1`, `x_++` aren't field-
+      rewritten (only plain `x_ = ...` is — buildSelfField on the assignment LHS).
+      The aug-assign / inc-dec statement paths need the same self^.field rewrite
+      (e.g. desugar `x_ += v` to `x_ = x_ + v` so it hits the plain-assign rewrite).
+    - SIBLING METHOD CALL VIA `self` (deferred to a later session): calling one
+      method from another. Today `self^.m()` / `self.m()` parse-errors ("Expected
+      statement"), and a BARE `m()` now errors cleanly ("Method 'm' must be called
+      on an object.") instead of crashing. Needs `self` as a usable receiver.
+
+  * CLASS / USER-TYPE CONVERSION TARGET (Phase 5) — `(Type = expr)` value
+    conversions LANDED for primitives (kConvertExpr; see [[project_v2_type_conversions]]).
+    Two slices wait on classes:
+      - a CLASS target `(String = "...")` / `(Class = Type^)` is class
+        assignment-conversion (routes through the class's `op=` / char[]-assign
+        path, exactly like `String s = "x"`), plus a pointer SOURCE to a class
+        that defines `op=(Type^)`.
+      - a USER-NAMED type as the target: the grammar only opens a conversion on a
+        primitive type KEYWORD after `(`, so `(Foo = v)` isn't recognized yet
+        (falls to parseExpr -> "Expected ')'"). Needs the is-this-a-type
+        lookahead Phase 5 brings.
+    typeconv.sl keeps the `(String=...)` example commented. prerequisite: classes.
+
+  * CLASS-FIELD INIT FROM A SIZE-1 TUPLE — the "vexing parse" (Phase 5). CONTEXT,
+    the class structure: a class IS a named tuple. `Name(field-list){body}` interns
+    a kSlid that CARRIES its field slot types (the layout rides on the type, so
+    codegen needs no symbol table), a ClassInfo holds the field names/defaults
+    (parse-side only), `.field` lowers to a slot index, and construction reuses the
+    tuple aggregate path. Two init forms feed it: the CALL form
+    `Name(arg0, arg1, ...)` — each arg is ONE field's value, so a tuple arg stays
+    WHOLE and a class-typed field constructs from it recursively (its own defaults
+    fill the rest) — and the `=` form `Name x = tuple` — the init tuple is the
+    FIELD tuple, SPREAD slot-to-field. They coincide for a multi-field class
+    (`= (6,7)` == `(6, 7)`) and DIVERGE when one argument is itself a tuple bound
+    for a single (class) field: the call form keeps it whole, `=` spreads.
+    THE GAP: a SIZE-1 init tuple is INEXPRESSIBLE in the `=` form — `( X )` is a
+    grouping paren that COLLAPSES to `X` (size-1 tuples collapse to their slot
+    everywhere). So `Outer x = ( (13,17) )` (Outer has one class field) collapses
+    to `= (13,17)`, a 2-slot tuple spread into 1 field -> "1 field(s) but 2
+    initializer(s)". No `=`-spelling passes a whole tuple to a lone field; the
+    CALL form `Outer x( (13,17) )` is the only way (parseCallArgs preserves the
+    argument boundary the collapsing parens destroy). PUNTED: use the call /
+    initializer-list form for a single-field-from-tuple init; canon construct.sl
+    keeps the `= ( (13,17) )` case commented with a "vexing parse" note. A real fix
+    needs a non-collapsing 1-tuple syntax, which touches grouping parens globally —
+    not worth it. prerequisite: a 1-tuple spelling (none planned).
+
+  * CONST-POINTER CASTS (Phase 6) — the const-correctness slice of cast.sl is
+    deferred (the A1 landing): `const Type^` (a const-qualified pointer type),
+    the `<const>` / `<mutable>` qualifier-only casts, and the mutable<->const
+    cast direction (implicit mutable->const, explicit const->mutable). v2 models
+    const as an entry KIND, not a tracked TYPE qualifier on pointers, so none of
+    these can be enforced yet. The rules are written + commented in cast.sl's
+    canon block (lines ~21, 43-54, 77-86); land them with Phase 6 when const is
+    a real qualifier. Until then those lines stay commented and untested.
+
+  * FOR-CLASS — the last colon-form for shape (ranged/array/tuple/enum all LANDED
+    and now lower in the DESUGAR stage). for-class needs classes + a for-each
+    protocol (op[]/size or begin/end/next, Phase 5). Lowers to a kForLongStmt in
+    desugar like the others. Not landable until classes exist.
+
+  * NAMED-CONST-TRUE LOOP NOT FLAGGED — the constant-true-loop special case
+    (3B revisited: a constant-true loop with no break is non-completing — its
+    after-code is unreachable + it is a return-terminator) is detected
+    SYNTACTICALLY in resolve (a bool/int/uint/char literal condition, incl. the
+    synthesized empty `()`), because resolve runs before constfold. A loop whose
+    condition is a NAMED const that folds to true (`const t = true; while (t)`) is
+    therefore not flagged — it keeps the possibly-completing behavior (no
+    unreachable-after, a trailing return is still demanded).
+    NOT a small cleanup (investigated 2026): a safe fix needs BOTH halves, both
+    in classify (post-constfold, where constTruth sees the folded named const):
+      - set Node.non_completing for a const-true-no-break loop (so endsInReturnNode
+        stops the trailing-return over-demand AND codegen emits the `unreachable`
+        exit — codegen already reads non_completing, propagated via desugar).
+      - a NEW classify-side unreachable-after pass: flag a statement following a
+        non-completing loop "Unreachable statement." Without it, codegen's block
+        loop emits ALL children, so code after the loop lands after the
+        `unreachable` -> INVALID IR. (resolve's 2A does this syntactically; classify
+        must mirror it value-aware. Only fires for the named-const case — the
+        syntactic case already errored in resolve and never reaches classify.)
+    Plus a minor wart: resolve's possibly-zero DA may report "use of uninitialized"
+    on the (now-unreachable) after-code before classify flags it. Low value
+    (`while (true)` / empty-cond are the common forms and fully handled), real cost.
+
+  * ALIAS FUNCTION-RENAME — `alias Fn = LongName;` (use case: importing C
+    functions with ugly names).
+
+  * TEMPLATED ALIAS — `alias X<...> = T;`.
+
+  * NESTED FUNCTION RESTRICTIONS TO REVISIT — three deliberate limits, each a
+    compile error today (canon nested.sl says "needs to be revisited"):
+      - DEEP NESTING — a nested function may not contain a further nested
+        function ("Nested functions may not contain further nested functions.").
+      - SIBLING CALLS — one nested function may not call another ("Calling a
+        sibling nested function is not supported."). Lambda-lift threads only the
+        host's captures, not a sibling's capture environment.
+      - NESTED OVERLOADING — nested functions do NOT overload; a same-name nested
+        pair is a "Duplicate declaration". classifyCall restricts candidates to
+        file scope (parent_frame_id == 0). Revisit if nested overloads are wanted.
+
+  * ORPHAN-CHECK vs IMPORT FORWARD-DECLS — resolve's Pass 3 errors on any
+    function declared-but-never-defined ("Function 'X' is declared but never
+    defined.") — but a `.slh` header legitimately declares-only (defined in the
+    adjacent .sl, or a link error). Today every declared-nowhere-defined
+    function is an error regardless of file. Needs the `.slh` declare-only
+    carve-out; lands with the cross-TU / .slh-propagation work (plan Phase 8).
+    prerequisite: group with general work on import.
+
+  * UNUSED PARAMETER AS A COMPILE ERROR — NEEDS REVIEW. Today the unused-local
+    sweep (resolve) covers only body-declared locals; parameters are exempt
+    (vardecl.sl's `unused_param` compiles). Proposal: flag a parameter that is
+    never read, like an unused local. NEEDS REVIEW — params are often legitimately
+    unused (interface conformance, overload / signature symmetry, a callback that
+    ignores an arg), so this likely wants an opt-out (a name convention or an
+    explicit discard) rather than a blanket error. Decide the policy first.
+
+  * x++ AS AN LVALUE (but NOT ++x) — the PPID model lifts the bump off the lvalue,
+    so a POST-inc target is well-defined: `x++ = 42` -> `x = 42; x++` (store, THEN
+    bump — the stored value is incremented to 43). A PRE-inc target is rejected:
+    `++x = 42` would bump THEN store (`x = x+1; x = 42`), so the pre-bump is dead.
+    So `x++` may be an lvalue; `++x` may not. This also makes chained `x++ ++` well
+    defined (two bumps of x — see CHAIN POSTFIX PPID). Today parseIncDecStmt
+    (grammar.cpp:1467) commits to the bare `x++;` statement the moment it sees
+    `ident ++` and demands `;`, so the lvalue form never parses. Needs the
+    statement/lvalue parse to accept a postfix-inc lvalue + desugar to lift the bump
+    after the store.
 
 
 DEFERRED TESTS
@@ -86,232 +279,6 @@ DEFERRED TESTS
     will wrongly error when `^` reference values land (Phase 4). Widen the
     shared helper then — at the helper, not the if-condition call site.
     prerequisite: pointers/iterators (Phase 4).
-
-  * IMPORT-NEGATIVE RUNNER GAP — run_negatives.sh can't reproduce a "missing a
-    SPECIFIC import" error: it compiles each case in a temp dir with `-I .` (the
-    temp dir), which lacks the suite's `.slh` files, so an import test fails on the
-    FIRST missing import (`Cannot find 'importee1.slh'`) instead of the intended one
-    (`file_does_not_exist.slh`). Pre-existing; surfaced auditing the lex negatives.
-    Needs the runner to put the source dir on the import path (e.g. `-I <srcdir>`).
-
-
-DEFERRED FEATURES (later; may not be on the plan)
-
-  * CLASS COPY-INIT AT A DECL — `Class a = sameClassValue` (initialize a class
-    local from another value of the SAME class — e.g. the result of a function
-    that returns a class by value) is mishandled: classify routes the decl through
-    classifyClassInit, which treats the rhs as a FIELD-init argument, so a 1-field
-    class reports "Cannot initialize field 'x_' ... from a value of type 'Class'."
-    A plain ASSIGN `a = b` works (checkSlidAssign allows same-class), and
-    `= scalar` / `= tuple` construct — only whole-class copy-INITIALIZATION at a
-    decl is wrong. Surfaces when a nested function RETURNS a local class by value.
-    Needs the class copy path (whole-value copy vs field-init). prerequisite: class
-    copy/move.
-
-  * METHODS — follow-ups (the statement-call form + plain-`=` field writes LANDED).
-    - EXPRESSION-FORM CALL: a value-returning method used as a value
-      (`int x = obj.m()`) doesn't parse; only the statement form `obj.m(args);` is
-      wired. Needs the call shape in the expression parser (parsePostfix) + a
-      kMethodCallExpr (or reuse) classified/lowered like the statement form.
-    - COMPOUND FIELD WRITES in a member body: `x_ += 1`, `x_++` aren't field-
-      rewritten (only plain `x_ = ...` is — buildSelfField on the assignment LHS).
-      The aug-assign / inc-dec statement paths need the same self^.field rewrite
-      (e.g. desugar `x_ += v` to `x_ = x_ + v` so it hits the plain-assign rewrite).
-    - SIBLING METHOD CALL VIA `self` (deferred to a later session): calling one
-      method from another. Today `self^.m()` / `self.m()` parse-errors ("Expected
-      statement"), and a BARE `m()` now errors cleanly ("Method 'm' must be called
-      on an object.") instead of crashing. Needs `self` as a usable receiver.
-
-  * CONST-EXPRESSION ARRAY DIM IN A TYPE (Phase 2) — array TYPE spellings (`int[N]`
-    in type position — tuple slots, alias RHS, params via alias, returns) LANDED but
-    take only LITERAL dims; a const-EXPRESSION dim inside a type (`(int[N], int[4])`,
-    `alias V = int[N]`) is rejected ("An array type dimension must be an integer
-    literal"). The dim_exprs / bakeNodeDims fold is var-decl-NODE-anchored, so a dim
-    in a nested type position has no node to hang on. Needs the const-dim fold moved
-    to type level. Top-level `int name[N]` const dims still work via the name path.
-    prerequisite: none (array-TYPE grammar + the per-segment index walk both LANDED).
-
-  * CLASS / USER-TYPE CONVERSION TARGET (Phase 5) — `(Type = expr)` value
-    conversions LANDED for primitives (kConvertExpr; see [[project_v2_type_conversions]]).
-    Two slices wait on classes:
-      - a CLASS target `(String = "...")` / `(Class = Type^)` is class
-        assignment-conversion (routes through the class's `op=` / char[]-assign
-        path, exactly like `String s = "x"`), plus a pointer SOURCE to a class
-        that defines `op=(Type^)`.
-      - a USER-NAMED type as the target: the grammar only opens a conversion on a
-        primitive type KEYWORD after `(`, so `(Foo = v)` isn't recognized yet
-        (falls to parseExpr -> "Expected ')'"). Needs the is-this-a-type
-        lookahead Phase 5 brings.
-    typeconv.sl keeps the `(String=...)` example commented. prerequisite: classes.
-
-  * CLASS-FIELD INIT FROM A SIZE-1 TUPLE — the "vexing parse" (Phase 5). CONTEXT,
-    the class structure: a class IS a named tuple. `Name(field-list){body}` interns
-    a kSlid that CARRIES its field slot types (the layout rides on the type, so
-    codegen needs no symbol table), a ClassInfo holds the field names/defaults
-    (parse-side only), `.field` lowers to a slot index, and construction reuses the
-    tuple aggregate path. Two init forms feed it: the CALL form
-    `Name(arg0, arg1, ...)` — each arg is ONE field's value, so a tuple arg stays
-    WHOLE and a class-typed field constructs from it recursively (its own defaults
-    fill the rest) — and the `=` form `Name x = tuple` — the init tuple is the
-    FIELD tuple, SPREAD slot-to-field. They coincide for a multi-field class
-    (`= (6,7)` == `(6, 7)`) and DIVERGE when one argument is itself a tuple bound
-    for a single (class) field: the call form keeps it whole, `=` spreads.
-    THE GAP: a SIZE-1 init tuple is INEXPRESSIBLE in the `=` form — `( X )` is a
-    grouping paren that COLLAPSES to `X` (size-1 tuples collapse to their slot
-    everywhere). So `Outer x = ( (13,17) )` (Outer has one class field) collapses
-    to `= (13,17)`, a 2-slot tuple spread into 1 field -> "1 field(s) but 2
-    initializer(s)". No `=`-spelling passes a whole tuple to a lone field; the
-    CALL form `Outer x( (13,17) )` is the only way (parseCallArgs preserves the
-    argument boundary the collapsing parens destroy). PUNTED: use the call /
-    initializer-list form for a single-field-from-tuple init; canon construct.sl
-    keeps the `= ( (13,17) )` case commented with a "vexing parse" note. A real fix
-    needs a non-collapsing 1-tuple syntax, which touches grouping parens globally —
-    not worth it. prerequisite: a 1-tuple spelling (none planned).
-
-  * CONVERSION OF AN OUT-OF-INT64-RANGE FLOAT LITERAL — tryFoldConvert does NOT
-    fold a float-literal operand whose truncation falls outside int64 (|v| >=
-    2^63); `(int = 1e30)` is lowered at runtime where `fptosi` of an out-of-range
-    float is poison (C UB). Low value; emit a compile-time diagnostic if it bites.
-
-  * CONST-POINTER CASTS (Phase 6) — the const-correctness slice of cast.sl is
-    deferred (the A1 landing): `const Type^` (a const-qualified pointer type),
-    the `<const>` / `<mutable>` qualifier-only casts, and the mutable<->const
-    cast direction (implicit mutable->const, explicit const->mutable). v2 models
-    const as an entry KIND, not a tracked TYPE qualifier on pointers, so none of
-    these can be enforced yet. The rules are written + commented in cast.sl's
-    canon block (lines ~21, 43-54, 77-86); land them with Phase 6 when const is
-    a real qualifier. Until then those lines stay commented and untested.
-
-  * FOR-CLASS — the last colon-form for shape (ranged/array/tuple/enum all LANDED
-    and now lower in the DESUGAR stage). for-class needs classes + a for-each
-    protocol (op[]/size or begin/end/next, Phase 5). Lowers to a kForLongStmt in
-    desugar like the others. Not landable until classes exist.
-
-  * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
-    primitive element type (a reference works for all). The ARRAY / sub-array
-    variant LANDED this session (multi-dim for-array: a sub-array element forces a
-    reference loop var; a declared by-value one errors "must use a reference loop
-    variable"). Only the CLASS-element variant remains, when class array elements
-    exist (Phase 5).
-
-  * NAMED-CONST-TRUE LOOP NOT FLAGGED — the constant-true-loop special case
-    (3B revisited: a constant-true loop with no break is non-completing — its
-    after-code is unreachable + it is a return-terminator) is detected
-    SYNTACTICALLY in resolve (a bool/int/uint/char literal condition, incl. the
-    synthesized empty `()`), because resolve runs before constfold. A loop whose
-    condition is a NAMED const that folds to true (`const t = true; while (t)`) is
-    therefore not flagged — it keeps the possibly-completing behavior (no
-    unreachable-after, a trailing return is still demanded).
-    NOT a small cleanup (investigated 2026): a safe fix needs BOTH halves, both
-    in classify (post-constfold, where constTruth sees the folded named const):
-      - set Node.non_completing for a const-true-no-break loop (so endsInReturnNode
-        stops the trailing-return over-demand AND codegen emits the `unreachable`
-        exit — codegen already reads non_completing, propagated via desugar).
-      - a NEW classify-side unreachable-after pass: flag a statement following a
-        non-completing loop "Unreachable statement." Without it, codegen's block
-        loop emits ALL children, so code after the loop lands after the
-        `unreachable` -> INVALID IR. (resolve's 2A does this syntactically; classify
-        must mirror it value-aware. Only fires for the named-const case — the
-        syntactic case already errored in resolve and never reaches classify.)
-    Plus a minor wart: resolve's possibly-zero DA may report "use of uninitialized"
-    on the (now-unreachable) after-code before classify flags it. Low value
-    (`while (true)` / empty-cond are the common forms and fully handled), real cost.
-
-  * STRONG-CONST FLEX IN A BINARY OP — strong-const widening enforcement LANDED at
-    the assignment sites, but a strong const still FLEXES as a BINARY OPERAND (a
-    separate, broader matter): `flexBinaryOperands` flexes a strong-const literal
-    into the partner's type, so `int8 a; a += sc` (sc a strong int) treats sc as
-    int8 (and `int8 v; v + sc` types as int8), where the typed-value model would
-    make it int and reject the narrowing back into int8. Making "a strong const
-    does not flex in a binary op" re-types every binary expr with a strong-const
-    operand — its own design call, not an assignment-site fix. Decide separately.
-
-  * ALIAS FUNCTION-RENAME — `alias Fn = LongName;` (use case: importing C
-    functions with ugly names).
-
-  * TEMPLATED ALIAS — `alias X<...> = T;`.
-
-  * NESTED FUNCTION RESTRICTIONS TO REVISIT — three deliberate limits, each a
-    compile error today (canon nested.sl says "needs to be revisited"):
-      - DEEP NESTING — a nested function may not contain a further nested
-        function ("Nested functions may not contain further nested functions.").
-      - SIBLING CALLS — one nested function may not call another ("Calling a
-        sibling nested function is not supported."). Lambda-lift threads only the
-        host's captures, not a sibling's capture environment.
-      - NESTED OVERLOADING — nested functions do NOT overload; a same-name nested
-        pair is a "Duplicate declaration". classifyCall restricts candidates to
-        file scope (parent_frame_id == 0). Revisit if nested overloads are wanted.
-
-  * ORPHAN-CHECK vs IMPORT FORWARD-DECLS — resolve's Pass 3 errors on any
-    function declared-but-never-defined ("Function 'X' is declared but never
-    defined.") — but a `.slh` header legitimately declares-only (defined in the
-    adjacent .sl, or a link error). Today every declared-nowhere-defined
-    function is an error regardless of file. Needs the `.slh` declare-only
-    carve-out; lands with the cross-TU / .slh-propagation work (plan Phase 8).
-    prerequisite: group with general work on import.
-
-  * TUPLE-OF-ARRAY TYPE — a tuple whose slot type is an array (`(int, int^[2])`)
-    does not parse: the tuple-type parser rejects the `[N]` suffix on a slot type
-    ("Expected ')'"). Array-of-tuple types work (`(int, int^) a[2]`) and tuple
-    VALUES nest freely, but a tuple TYPE cannot name an array slot. Surfaced
-    writing whole-array move/swap coverage in moveswap.sl — the tuple-x-array
-    null-walk is exercised today only via array-of-tuple, not tuple-of-array.
-    Needs parseType to accept an array-dimension suffix on a tuple slot type.
-
-  * TUPLE / ARRAY TYPE CONVERSION — `(Type=expr)` is scalar-only: classify's
-    kConvertExpr requires a numeric/pointer source and a numeric target
-    (isNumericType), so a tuple or array on EITHER side is rejected ("Cannot
-    convert to '...'; the target must be a value type" / "Cannot convert
-    '(int, int)' to 'int'"). typeconv.sl's top spec describes element-wise
-    conversion — `(int, int) t = ((int,int)=tpl)` -> (65, 66), `int a[3] =
-    (int[3]=ch_arr)` -> [97, 98, 99] — but it is unbuilt (also gated by the
-    grammar leading a conversion only with a primitive type keyword, so a tuple /
-    array target does not even parse). Needs: grammar to parse a tuple/array
-    conversion target, and kConvertExpr + convertExplicit to recurse per slot /
-    element (each leaf scalar reuses the existing grid). prerequisite: group with
-    the user-named conversion-target work.
-
-  * ASSIGNMENT RELATION — PER-ELEMENT ARRAY/TUPLE COMPAT. The unify-the-check work
-    LANDED: one checkValueAssign(tree, dest, rhs, diag) runs the implicit-conversion
-    relation at every assignment-family site (decl-init, assign, store, move, single
-    + overload call args, method args, return, field-init, per-element pairs); the
-    old fragments (checkStrongConstAssign / checkSlidAssign / checkPtrAssign /
-    checkArrayValueAssign) are reached only from inside it, and a tuple/array <->
-    scalar mismatch is now rejected (the char[]->int leak at function + method calls,
-    overload.sl:88, is closed). REMAINING: an array/tuple VALUE copy is still
-    EXACT-deepStrip (checkArrayValueAssign + the tuple-value arm at classify.cpp), so
-    shape-match + per-element COMPATIBILITY does not yet work — `int8[4] -> int[4]`
-    (each element widening) is rejected instead of converted. Needs codegen to lower
-    an aggregate assign to per-element converts (a whole memcpy is only the
-    all-identical case). The CLASS row of the relation is op= — tracked under CLASS
-    COPY-INIT / op=, not here.
-
-  * UNUSED PARAMETER AS A COMPILE ERROR — NEEDS REVIEW. Today the unused-local
-    sweep (resolve) covers only body-declared locals; parameters are exempt
-    (vardecl.sl's `unused_param` compiles). Proposal: flag a parameter that is
-    never read, like an unused local. NEEDS REVIEW — params are often legitimately
-    unused (interface conformance, overload / signature symmetry, a callback that
-    ignores an arg), so this likely wants an opt-out (a name convention or an
-    explicit discard) rather than a blanket error. Decide the policy first.
-
-  * x++ AS AN LVALUE (but NOT ++x) — the PPID model lifts the bump off the lvalue,
-    so a POST-inc target is well-defined: `x++ = 42` -> `x = 42; x++` (store, THEN
-    bump — the stored value is incremented to 43). A PRE-inc target is rejected:
-    `++x = 42` would bump THEN store (`x = x+1; x = 42`), so the pre-bump is dead.
-    So `x++` may be an lvalue; `++x` may not. This also makes chained `x++ ++` well
-    defined (two bumps of x — see CHAIN POSTFIX PPID). Today parseIncDecStmt
-    (grammar.cpp:1467) commits to the bare `x++;` statement the moment it sees
-    `ident ++` and demands `;`, so the lvalue form never parses. Needs the
-    statement/lvalue parse to accept a postfix-inc lvalue + desugar to lift the bump
-    after the store.
-
-  * SELF-SWAP / SELF-MOVE FOR COMPLEX LVALUES — classify rejects a self-swap /
-    self-move when both operands are the same BARE variable (isSameLvalue: two
-    kIdentExpr with the same resolved_entry_id) -> "Cannot swap a value with itself"
-    / "Cannot move a value onto itself". An indexed / deref self (`arr[i] <--> arr[i]`,
-    `p^ <-- p^`) is NOT detected — that needs structural lvalue-equality (same base +
-    same index/deref chain), and a runtime index can't be compared statically anyway.
-    Low priority. Widen isSameLvalue when complex-lvalue equality is wanted.
 
 
 REACH GOALS

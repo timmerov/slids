@@ -331,12 +331,12 @@ std::string convert(std::string const& src_val,
     };
     bool src_ptr = isPtrish(src_ref), dest_ptr = isPtrish(dest_ref);
     if (src_ptr && dest_ptr) return src_val;             // ptr ↔ ptr: no-op
-    if (src_ptr && dest_type == "intptr") {
+    if (src_ptr && deepStrip(dest_ref) == intern("intptr")) {
         std::string tmp = newWidenTmp();
         out << "  " << tmp << " = ptrtoint ptr " << src_val << " to i64\n";
         return tmp;
     }
-    if (src_type == "intptr" && dest_ptr) {
+    if (deepStrip(src_ref) == intern("intptr") && dest_ptr) {
         std::string tmp = newWidenTmp();
         out << "  " << tmp << " = inttoptr i64 " << src_val << " to ptr\n";
         return tmp;
@@ -457,7 +457,7 @@ std::string convertExplicit(std::string const& src_val,
     // gated by classify, so anything else is a missed gate.
     if (isPtrish(src_ref)) {
         std::string tmp = newWidenTmp();
-        if (spell(dest_ref) == "intptr") {
+        if (deepStrip(dest_ref) == intern("intptr")) {
             out << "  " << tmp << " = ptrtoint ptr " << src_val << " to i64\n";
         } else if (dest_tk.cat == Category::kBool) {
             out << "  " << tmp << " = icmp ne ptr " << src_val << ", null\n";
