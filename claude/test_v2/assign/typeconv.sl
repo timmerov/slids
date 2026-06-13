@@ -269,6 +269,18 @@ int32 main() {
     //int ed = (void = es);
     //__println("x= " + ed);
 
+    /* a const-EXPRESSION dim in a conversion TARGET now PARSES and bakes (`int[kC]`
+       folds to `int[3]`), but an array/tuple conversion target is still gated at
+       classify — element-wise conversion is unbuilt (see todo). The const-dim
+       plumbing reaching the gate is what this checks. */
+    //-EXPECT-ERROR: Cannot convert to 'int[3]'; the target must be a value type
+    //int neg_conv_const_dim() {
+    //    const int kC = 3;
+    //    char c[kC] = (65, 66, 67);
+    //    int a[kC] = (int[kC] = c);
+    //    return a[0];
+    //}
+
     /* the result is a STRONG typed value, so assigning it to a narrower type is
        rejected just like an int variable would be — it does not flex. */
     //-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'

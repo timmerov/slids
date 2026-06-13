@@ -222,6 +222,15 @@ int32 main() {
     }
     __println("call_spill= " + spill);           // 15
 
+    /* a const-EXPRESSION dim in the FOR-VAR's TYPE (a tuple slot): iterate a tuple
+       whose slots are themselves (int[kFN], int); the by-ref loop var's dim is
+       folded + baked onto the loop-var decl. */
+    const int kFN = 3;
+    ((int[kFN], int), (int[kFN], int)) pairs = (((1,2,3), 10), ((4,5,6), 20));
+    for ((int[kFN], int)^ e : pairs) {
+        __println("pair= " + e^[0][2] + " " + e^[1]);   // 3 10  then  6 20
+    }
+
     return 0;
 }
 

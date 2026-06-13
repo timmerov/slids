@@ -3,6 +3,8 @@ Float y = 3.14
 Whole z = 7
 Integer w = 40
 Dir d = 0
+Vec vrow= 4 50 6
+sizeof(vrow)= 12 sizeof(Vec)= 12
 p+q : Integer
 p+m : int
 p+1 : Integer

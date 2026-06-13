@@ -163,6 +163,15 @@ int32 main() {
     int32[] it2 = <int32[]> eref;
     __println("promote= " + it2^);                       // 7
 
+    /* a const-EXPRESSION dim in a CAST target type — a pointer to a tuple whose
+       slot is `int[kCast]` (`int32[N]^` array-then-`^` isn't a type; a tuple slot
+       is how a const dim rides a pointer target). Folded + baked onto the cast
+       node; the address round-trips. */
+    const int kCast = 3;
+    void^ avp = ^a;
+    void^ aback = <(int32[kCast], int32)^> avp;          // target slot has a const dim
+    __println("castN= " + (avp == aback));               // true
+
     /* buffer-class bridges any two pointers (explicit both ways). */
     int16 h = 1234;
     int16^ hp = ^h;

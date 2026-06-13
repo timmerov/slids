@@ -145,8 +145,17 @@ struct Parser {
     // sizeof / cast operand, return type) leave it false and accept `int[3]`. An
     // array TYPE still reaches a declaration via an alias (`Vec3 x`) — its spelling
     // has no top-level dims — or as a tuple slot.
+    // dim_sink (optional out): a composition context (tuple slot, var-decl /
+    // param / return / alias-RHS / sizeof / cast / conversion target) that supports
+    // const-EXPRESSION array dims passes it. A non-literal type-position dim
+    // (`int[N]`, `int[N+1]`) is then parsed as an expression, a provisional `[1]`
+    // is spelled, and the expr is pushed (a literal dim pushes a nullptr) — so the
+    // sink aligns 1:1 with every type-position array dim, in tree pre-order. With
+    // no sink, a non-literal dim is an error (the pre-fold contexts: enum underlying).
+    // constfold's bakeNodeDims folds + bakes them into the owner node's type.
     std::string parseType(std::vector<int>* seg_toks = nullptr,
-                          bool reject_array_dims = false) {
+                          bool reject_array_dims = false,
+                          std::vector<std::unique_ptr<parse::Node>>* dim_sink = nullptr) {
         std::string type;
         if (peek().kind == token::Kind::kLParen) {
             // Anonymous tuple type `(T0, T1, ...)`. A size-1 `(T)` collapses to T
@@ -159,7 +168,10 @@ struct Parser {
             }
             std::vector<std::string> elems;
             while (true) {
-                std::string e = parseType();
+                // A tuple slot is a composition context: propagate dim_sink so a
+                // const-expr dim in a slot type (`(int[N], int)`) is collected.
+                std::string e = parseType(nullptr, /*reject_array_dims=*/false,
+                                          dim_sink);
                 if (e.empty()) return "";
                 elems.push_back(e);
                 if (peek().kind != token::Kind::kComma) break;
@@ -207,8 +219,11 @@ struct Parser {
             advance(); advance();   // `[` `]`
             type += "[]";           // iterator
         } else if (peek().kind == token::Kind::kLBracket) {
-            // Sized fixed-array dims. LITERAL dims only in type position (a const-
-            // EXPRESSION dim in a type needs the nested dim-fold path — deferred).
+            // Sized fixed-array dims. A LITERAL dim bakes its size into the spelling
+            // directly; a const-EXPRESSION dim (only when a dim_sink is provided)
+            // spells a provisional `[1]` and pushes the expr to the sink for
+            // constfold to fold + bake. Mirrors parseNameDims (the name-anchored
+            // path) so the two share the bake machinery.
             if (reject_array_dims) {
                 error("An array size belongs on the declared name; "
                       "write 'T name[N]', not 'T[N] name'.");
@@ -216,24 +231,34 @@ struct Parser {
             }
             while (peek().kind == token::Kind::kLBracket) {
                 advance();   // [
-                std::vector<std::string> dims;
+                std::vector<std::string> bracket_spell;
+                std::vector<std::unique_ptr<parse::Node>> bracket_expr;
                 while (true) {
-                    if (peek().kind != token::Kind::kIntLiteral) {
+                    if (peek().kind == token::Kind::kIntLiteral) {
+                        if (std::strtoll(peek().text.c_str(), nullptr, 10) <= 0) {
+                            error("Array size must be a positive integer constant.");
+                            return "";
+                        }
+                        bracket_spell.push_back(peek().text);
+                        advance();   // size
+                        bracket_expr.push_back(nullptr);
+                    } else if (dim_sink) {
+                        auto dim = parseExpr();
+                        if (!dim) return "";
+                        bracket_spell.push_back("1");   // provisional; constfold bakes
+                        bracket_expr.push_back(std::move(dim));
+                    } else {
                         error("An array type dimension must be an integer literal.");
                         return "";
                     }
-                    if (std::strtoll(peek().text.c_str(), nullptr, 10) <= 0) {
-                        error("Array size must be a positive integer constant.");
-                        return "";
-                    }
-                    dims.push_back(peek().text);
-                    advance();   // size
                     if (peek().kind != token::Kind::kComma) break;
                     advance();   // ,
                 }
                 if (!expect(token::Kind::kRBracket, "]")) return "";
-                for (std::size_t k = dims.size(); k-- > 0; )   // comma transpose
-                    type += "[" + dims[k] + "]";
+                for (std::size_t k = bracket_spell.size(); k-- > 0; ) {  // comma transpose
+                    type += "[" + bracket_spell[k] + "]";
+                    if (dim_sink) dim_sink->push_back(std::move(bracket_expr[k]));
+                }
             }
         } else if (peek().kind == token::Kind::kBitXor) {
             advance();
@@ -359,11 +384,14 @@ struct Parser {
     // the variable name. Consumes the type (if any) and the name; never the
     // trailing ':' / '=' / ',' / ')'. Returns false on a diagnosed error.
     bool parseForVarHead(std::string& vtype, std::string& vname,
-                         int& v_file, int& v_tok, int& vname_tok) {
+                         int& v_file, int& v_tok, int& vname_tok,
+                         std::vector<std::unique_ptr<parse::Node>>& v_dims) {
         v_file = peek().file_id;
         v_tok = pos;
-        if (isTypeStart(peek().kind) || looksLikeQualifiedTypedDecl()) {
-            vtype = parseType(nullptr, /*reject_array_dims=*/true);
+        v_dims.clear();
+        if (isTypeStart(peek().kind) || looksLikeQualifiedTypedDecl()
+            || (peek().kind == token::Kind::kLParen && looksLikeTupleTypeDecl())) {
+            vtype = parseType(nullptr, /*reject_array_dims=*/true, &v_dims);
             if (fatal) return false;
         } else {
             vtype.clear();   // typeless: the next identifier IS the name
@@ -451,7 +479,9 @@ struct Parser {
     std::unique_ptr<parse::Node> parseConvertChain(int file_id) {
         int op_tok = pos;
         std::vector<int> target_seg_toks;
-        std::string target = parseType(&target_seg_toks);
+        std::vector<std::unique_ptr<parse::Node>> conv_dims;
+        std::string target = parseType(&target_seg_toks,
+                                       /*reject_array_dims=*/false, &conv_dims);
         if (target.empty()) return nullptr;
         if (!expect(token::Kind::kEquals, "=")) return nullptr;
         std::unique_ptr<parse::Node> operand =
@@ -460,6 +490,9 @@ struct Parser {
         auto node = newNodeAt(parse::Kind::kConvertExpr, file_id, op_tok);
         node->return_type = widen::internOrNone(target);
         node->return_type_seg_toks = std::move(target_seg_toks);
+        bool any_conv_dim = false;
+        for (auto& d : conv_dims) if (d) any_conv_dim = true;
+        if (any_conv_dim) node->dim_exprs = std::move(conv_dims);
         node->children.push_back(std::move(operand));
         return node;
     }
@@ -630,9 +663,14 @@ struct Parser {
             if (!expect(token::Kind::kLParen, "(")) return nullptr;
             auto node = newNodeAt(parse::Kind::kSizeofExpr, sz_file, sz_tok);
             if (isTypeStart(peek().kind)) {
-                std::string ty = parseType();
+                std::vector<std::unique_ptr<parse::Node>> sz_dims;
+                std::string ty = parseType(nullptr, /*reject_array_dims=*/false,
+                                           &sz_dims);
                 if (ty.empty()) return nullptr;
                 node->return_type = widen::internOrNone(ty);
+                bool any_sz_dim = false;
+                for (auto& d : sz_dims) if (d) any_sz_dim = true;
+                if (any_sz_dim) node->dim_exprs = std::move(sz_dims);
             } else {
                 auto operand = parseExpr();
                 if (!operand) return nullptr;
@@ -904,7 +942,9 @@ struct Parser {
             int op_tok = pos;
             advance();   // <
             std::vector<int> target_seg_toks;
-            std::string target = parseType(&target_seg_toks);
+            std::vector<std::unique_ptr<parse::Node>> cast_dims;
+            std::string target = parseType(&target_seg_toks,
+                                           /*reject_array_dims=*/false, &cast_dims);
             if (target.empty()) return nullptr;
             if (!expect(token::Kind::kGt, ">")) return nullptr;
             auto operand = parseUnary();
@@ -912,6 +952,9 @@ struct Parser {
             auto node = newNodeAt(parse::Kind::kCastExpr, op_file, op_tok);
             node->return_type = widen::internOrNone(target);
             node->return_type_seg_toks = std::move(target_seg_toks);
+            bool any_cast_dim = false;
+            for (auto& d : cast_dims) if (d) any_cast_dim = true;
+            if (any_cast_dim) node->dim_exprs = std::move(cast_dims);
             node->children.push_back(std::move(operand));
             return node;
         }
@@ -1134,8 +1177,9 @@ struct Parser {
             && peekKind(1) == token::Kind::kEquals;
         std::string type;
         std::vector<int> type_seg_toks;
+        std::vector<std::unique_ptr<parse::Node>> type_dims;
         if (!typeless) {
-            type = parseType(&type_seg_toks, /*reject_array_dims=*/true);
+            type = parseType(&type_seg_toks, /*reject_array_dims=*/true, &type_dims);
             if (fatal) return nullptr;
         }
         if (peek().kind != token::Kind::kIdentifier
@@ -1162,6 +1206,10 @@ struct Parser {
         std::vector<std::unique_ptr<parse::Node>> dim_exprs;
         bool any_dim_expr = false;
         if (!parseNameDims(type, dim_exprs, any_dim_expr)) return nullptr;
+        // Name dims are the OUTER array (appended to the type spelling); a const-
+        // expr dim in the TYPE (a tuple slot) is inner. Concatenate name-then-type
+        // so the flat list matches bakeNodeDims' pre-order tree walk.
+        for (auto& d : type_dims) { if (d) any_dim_expr = true; dim_exprs.push_back(std::move(d)); }
         if (any_dim_expr) node->dim_exprs = std::move(dim_exprs);
         node->return_type = widen::internOrNone(type);
         node->return_type_seg_toks = std::move(type_seg_toks);
@@ -1534,9 +1582,18 @@ struct Parser {
         node->global_qualified = global;
         if (peek().kind == token::Kind::kEquals) {
             advance();   // =
-            std::string target = parseType();
+            std::vector<std::unique_ptr<parse::Node>> alias_dims;
+            std::string target = parseType(nullptr, /*reject_array_dims=*/false,
+                                           &alias_dims);
             if (fatal) return nullptr;
             node->return_type = widen::internOrNone(target);
+            // A const-expr dim in the alias TARGET (`alias V = int[N]`): the alias
+            // entry's slids_type IS the target, so bakeNodeDims bakes it; constfold's
+            // alias-refresh then re-propagates the baked underlying to every use
+            // (resolve expanded the alias eagerly, capturing the provisional [1]).
+            bool any_alias_dim = false;
+            for (auto& d : alias_dims) if (d) any_alias_dim = true;
+            if (any_alias_dim) node->dim_exprs = std::move(alias_dims);
         }
         // else: bare import form — return_type left empty.
         if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
@@ -1823,7 +1880,8 @@ struct Parser {
     // The `..` token rides along for the empty-range "Invalid range." check.
     std::unique_ptr<parse::Node> parseRangeFor(int stmt_file, int stmt_tok,
             std::string vtype, std::string vname, int v_file, int v_tok,
-            int vname_tok, std::unique_ptr<parse::Node> start) {
+            int vname_tok, std::vector<std::unique_ptr<parse::Node>> v_dims,
+            std::unique_ptr<parse::Node> start) {
         // `start` is the operand before `..`, already parsed by the caller.
         int dotdot_tok = pos;
         advance();   // ..
@@ -1888,6 +1946,8 @@ struct Parser {
         auto vd = newNodeAt(parse::Kind::kVarDeclStmt, v_file, v_tok);
         vd->name = vname; vd->name_tok = vname_tok;
         vd->return_type = widen::internOrNone(vtype);
+        { bool any = false; for (auto& d : v_dims) if (d) any = true;
+          if (any) vd->dim_exprs = std::move(v_dims); }
         vd->children.push_back(std::move(start));
 
         auto node = newNodeAt(parse::Kind::kForRangedStmt, stmt_file, stmt_tok);
@@ -1907,7 +1967,8 @@ struct Parser {
     // {loop-var decl, enum-ref, body}; resolve lowers it once the enum is known.
     std::unique_ptr<parse::Node> parseEnumFor(int stmt_file, int stmt_tok,
             std::string vtype, std::string vname, int v_file, int v_tok,
-            int vname_tok, std::unique_ptr<parse::Node> enum_ref) {
+            int vname_tok, std::vector<std::unique_ptr<parse::Node>> v_dims,
+            std::unique_ptr<parse::Node> enum_ref) {
         // The operand after ':' is any expression (parseUnary already parsed it):
         // an enum NAME, an array/tuple VARIABLE, a tuple LITERAL, or any other
         // expression resolving to a homogeneous tuple (a deref `ref^`, an index,
@@ -1927,6 +1988,8 @@ struct Parser {
         }
         auto vd = newNodeAt(parse::Kind::kVarDeclStmt, v_file, v_tok);
         vd->name = vname; vd->name_tok = vname_tok; vd->return_type = widen::internOrNone(vtype);
+        { bool any = false; for (auto& d : v_dims) if (d) any = true;
+          if (any) vd->dim_exprs = std::move(v_dims); }
         auto node = newNodeAt(parse::Kind::kForEnumStmt, stmt_file, stmt_tok);
         node->children.push_back(std::move(vd));        // [0] loop-var decl
         node->children.push_back(std::move(enum_ref));  // [1] enum-ref
@@ -1952,7 +2015,8 @@ struct Parser {
         // First decl's `[type] name` (type optional — typeless infers / reuses).
         int v_file, v_tok, vname_tok;
         std::string vtype, vname;
-        if (!parseForVarHead(vtype, vname, v_file, v_tok, vname_tok)) {
+        std::vector<std::unique_ptr<parse::Node>> v_dims;
+        if (!parseForVarHead(vtype, vname, v_file, v_tok, vname_tok, v_dims)) {
             return nullptr;
         }
         if (peek().kind == token::Kind::kColon) {
@@ -1962,11 +2026,11 @@ struct Parser {
             if (peek().kind == token::Kind::kDotDot) {
                 return parseRangeFor(stmt_file, stmt_tok, std::move(vtype),
                                      std::move(vname), v_file, v_tok, vname_tok,
-                                     std::move(operand));
+                                     std::move(v_dims), std::move(operand));
             }
             return parseEnumFor(stmt_file, stmt_tok, std::move(vtype),
                                 std::move(vname), v_file, v_tok, vname_tok,
-                                std::move(operand));
+                                std::move(v_dims), std::move(operand));
         }
         // Long form: varlist[0] is the decl just parsed; gather any more.
         std::vector<std::unique_ptr<parse::Node>> varlist;
@@ -1975,6 +2039,8 @@ struct Parser {
             decl->name = vname;
             decl->name_tok = vname_tok;
             decl->return_type = widen::internOrNone(vtype);
+            { bool any = false; for (auto& d : v_dims) if (d) any = true;
+              if (any) decl->dim_exprs = std::move(v_dims); }
             if (peek().kind == token::Kind::kEquals) {
                 advance();   // =
                 auto init = parseExpr();
@@ -1984,7 +2050,7 @@ struct Parser {
             varlist.push_back(std::move(decl));
             if (peek().kind != token::Kind::kComma) break;
             advance();   // ,
-            if (!parseForVarHead(vtype, vname, v_file, v_tok, vname_tok)) {
+            if (!parseForVarHead(vtype, vname, v_file, v_tok, vname_tok, v_dims)) {
                 return nullptr;
             }
         }
@@ -2268,10 +2334,11 @@ struct Parser {
             // enforce that a typeless param HAS a default, and required-before-
             // optional ordering).
             std::string p_type;
+            std::vector<std::unique_ptr<parse::Node>> p_type_dims;
             if (isTypeStart(peek().kind) || looksLikeQualifiedTypedDecl()
                 || (peek().kind == token::Kind::kLParen
                     && looksLikeTupleTypeDecl())) {
-                p_type = parseType(nullptr, /*reject_array_dims=*/true);
+                p_type = parseType(nullptr, /*reject_array_dims=*/true, &p_type_dims);
                 if (fatal) return false;
             }
             if (peek().kind != token::Kind::kIdentifier) {
@@ -2286,6 +2353,8 @@ struct Parser {
             std::vector<std::unique_ptr<parse::Node>> p_dims;
             bool p_any_dim = false;
             if (!parseNameDims(p_type, p_dims, p_any_dim)) return false;
+            // Name dims outer, type-position (tuple-slot) dims inner — name-then-type.
+            for (auto& d : p_type_dims) { if (d) p_any_dim = true; p_dims.push_back(std::move(d)); }
             auto p = newNodeAt(parse::Kind::kParam, p_file, p_tok);
             p->name = std::move(p_name);
             p->name_tok = p_name_tok;
@@ -2471,7 +2540,8 @@ struct Parser {
     std::unique_ptr<parse::Node> parseFunctionDef() {
         int fn_file = peek().file_id;
         int fn_tok = pos;
-        std::string ret_type = parseType();
+        std::vector<std::unique_ptr<parse::Node>> ret_dims;
+        std::string ret_type = parseType(nullptr, /*reject_array_dims=*/false, &ret_dims);
         if (fatal) return nullptr;
         if (peek().kind != token::Kind::kIdentifier) {
             error("Expected function name.");
@@ -2486,6 +2556,12 @@ struct Parser {
         node->name = std::move(name);
         node->name_tok = name_tok;
         node->return_type = widen::internOrNone(ret_type);
+        // A const-expr dim in the RETURN type (`(int[N],int) f()`): a function's
+        // entry slids_type IS its return type, so bakeNodeDims bakes node->dim_exprs
+        // against node->return_type exactly as for a var-decl.
+        bool any_ret_dim = false;
+        for (auto& d : ret_dims) if (d) any_ret_dim = true;
+        if (any_ret_dim) node->dim_exprs = std::move(ret_dims);
 
         if (!parseParamList(node.get())) return nullptr;
 

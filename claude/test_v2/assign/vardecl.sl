@@ -119,6 +119,12 @@ int32 main() {
     (da, db) = (30, 40);
     __println("da = " + da + " db = " + db);    // 30 40
 
+    /* a const-EXPRESSION dim in a VAR-DECL's type (a tuple slot): folded + baked
+       in constfold, so the slot array is sized and indexable. */
+    const int kCols = 3;
+    (int[kCols], int) vd = ((7, 8, 9), 10);
+    __println("vd = " + vd[0][2] + " " + vd[1] + " (" + ##type(vd) + ")"); // 9 10 ((int[3], int))
+
     return 0;
 }
 

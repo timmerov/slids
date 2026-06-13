@@ -126,6 +126,12 @@ int32 main() {
     __println("arrtype= "  + sizeof(int[3]));         // 12
     __println("arrtype2= " + sizeof(int[2][3]));      // 24
 
+    /* const-EXPRESSION dims in a sizeof TYPE operand: folded + baked onto the
+       sizeof node before it folds to the size. */
+    const int kSz = 3;
+    __println("arrtypeN= "  + sizeof(int[kSz]));          // 12
+    __println("arrtypeN2= " + sizeof(int[kSz][kSz + 1])); // 48
+
     /* an alias, a bare enum, and a namespace-qualified enum type all resolve to
        their underlying. */
     __println("alias= "     + sizeof(Integer));       // 8

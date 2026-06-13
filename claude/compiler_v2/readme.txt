@@ -259,14 +259,27 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     (`(int,int,int,int) t = a1` / `int a4[4] = t4`, extractvalue/insertvalue, per-
     slot widen); PARTIAL-index lvalues (sub-array assign `td[1]=(100,101)` + sub-
     array value read). See [[project_v2_array_types]].
-  * ARRAY TYPES (`int[N]`): parseType parses sized dims (LITERAL only in type
-    position), so array types compose — tuple slots `(int[3],int[4])`, alias RHS,
-    params (via alias), returns `int[3] f()`. Variable decls stay name-anchored
-    `int x[3]` (reject_array_dims rejects a top-level sized-array type at decl
-    sites). INDEXING is a per-segment walk in emitElementAddr: dispatch on the
-    CURRENT type each step (array dim -> GEP; tuple slot -> struct GEP), composing
-    alias-element nested arrays + array->tuple->array chains; the old codegen rank
-    check (a buggy duplicate of classify's per-level over-index) was deleted.
+  * ARRAY TYPES (`int[N]`): parseType parses sized dims, so array types compose —
+    tuple slots `(int[3],int[4])`, alias RHS, params, returns `int[3] f()`. Variable
+    decls stay name-anchored `int x[3]` (reject_array_dims rejects a top-level
+    sized-array type at decl sites; a tuple slot inside still takes dims). A dim may
+    be a const EXPRESSION in ANY type position, not just on a name: parseType takes
+    a `dim_sink` (passed by every composition context — tuple-slot recursion,
+    var-decl / param / return / alias-RHS / sizeof / cast / conversion target /
+    for-var) into which a non-literal dim spells a provisional `[1]` and pushes its
+    expr; with no sink (enum underlying) a non-literal dim is an error. constfold's
+    bakeDimsWalk then folds + bakes them PRE-ORDER over the whole TypeRef tree
+    (descends tuple slots + array elements, through ptr/iter/alias by handle-rebuild)
+    — name dims outer, type-position dims inner. ALIAS targets refresh: resolve
+    expands an alias use eagerly with the provisional `[1]`, so bakeNodeDims records
+    an AliasRefresh when an alias target bakes and re-points every use (node types at
+    walk-entry, entry types on bake) within the fixpoint, so a sizeof of an alias use
+    folds against the real size (resolve keeps the kAlias wrapper on sizeof(Alias) so
+    the refresh can reach it). INDEXING is a per-segment walk in emitElementAddr:
+    dispatch on the CURRENT type each step (array dim -> GEP; tuple slot -> struct
+    GEP), composing alias-element nested arrays + array->tuple->array chains; the old
+    codegen rank check (a buggy duplicate of classify's per-level over-index) was
+    deleted.
   * FOR-TUPLE `for (v : tuple)` over a HOMOGENEOUS tuple: resolve understands it
     (understandForTuple, retagging the kForEnumStmt carrier to kForTupleStmt) and
     desugar lowers it (lowerForTuple) to a kForLongStmt walking an iterator
@@ -274,7 +287,9 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     dodges addr-of-through-deref); a VARIABLE iterates in place (no copy, mutable
     by-ref writes back), a LITERAL or rvalue call spills to a `_$ftmp`. A
     non-primitive element forces by-ref; a by-ref var's pointee must match the
-    element type.
+    element type. The loop var may be EXPLICITLY tuple-typed (`for ((int,int)^ e :
+    pairs)`) — parseForVarHead accepts a `(`-led tuple type via looksLikeTupleTypeDecl
+    (same as a param), which is how a const-dim rides a for-var type (a tuple slot).
   * #x desugars (grammar parseUnary) to the 5-tuple `(##file, ##line, ##type(x),
     ##name(x), ^x)`; x must be an lvalue. Passing an rvalue tuple to a reference
     param (`dump(#x)`) materializes it in a temp — emitCall brackets such a call

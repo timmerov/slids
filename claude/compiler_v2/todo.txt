@@ -8,15 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * CONST-EXPRESSION ARRAY DIM IN A TYPE (Phase 2) — array TYPE spellings (`int[N]`
-    in type position — tuple slots, alias RHS, params via alias, returns) LANDED but
-    take only LITERAL dims; a const-EXPRESSION dim inside a type (`(int[N], int[4])`,
-    `alias V = int[N]`) is rejected ("An array type dimension must be an integer
-    literal"). The dim_exprs / bakeNodeDims fold is var-decl-NODE-anchored, so a dim
-    in a nested type position has no node to hang on. Needs the const-dim fold moved
-    to type level. Top-level `int name[N]` const dims still work via the name path.
-    prerequisite: none (array-TYPE grammar + the per-segment index walk both LANDED).
-
   * CONVERSION OF AN OUT-OF-INT64-RANGE FLOAT LITERAL — tryFoldConvert does NOT
     fold a float-literal operand whose truncation falls outside int64 (|v| >=
     2^63); `(int = 1e30)` is lowered at runtime where `fptosi` of an out-of-range
@@ -52,12 +43,14 @@ BUGS (found, deferred)
     convert to '...'; the target must be a value type" / "Cannot convert
     '(int, int)' to 'int'"). typeconv.sl's top spec describes element-wise
     conversion — `(int, int) t = ((int,int)=tpl)` -> (65, 66), `int a[3] =
-    (int[3]=ch_arr)` -> [97, 98, 99] — but it is unbuilt (also gated by the
-    grammar leading a conversion only with a primitive type keyword, so a tuple /
-    array target does not even parse). Needs: grammar to parse a tuple/array
-    conversion target, and kConvertExpr + convertExplicit to recurse per slot /
-    element (each leaf scalar reuses the existing grid). prerequisite: group with
-    the user-named conversion-target work.
+    (int[3]=ch_arr)` -> [97, 98, 99] — but it is unbuilt. A primitive-led ARRAY
+    target (`(int[N]=e)`, const dims and all) now PARSES and reaches the classify
+    gate (the const-dim plumbing is wired — typeconv.sl's neg_conv_const_dim); a
+    TUPLE target (`((int,int)=e)`) still doesn't parse (a conversion is led only by a
+    primitive type keyword, not a `(`). Needs: grammar to parse a tuple conversion
+    target, and kConvertExpr + convertExplicit to recurse per slot / element (each
+    leaf scalar reuses the existing grid). prerequisite: group with the user-named
+    conversion-target work.
 
   * ASSIGNMENT RELATION — PER-ELEMENT ARRAY/TUPLE COMPAT. The unify-the-check work
     LANDED: one checkValueAssign(tree, dest, rhs, diag) runs the implicit-conversion

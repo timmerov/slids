@@ -185,16 +185,24 @@ int32 main() {
     t4[0][0][1] = 99;
     __println("t4store= " + t4[0][0][1]);   // 99
 
+    /* const-EXPRESSION dims in a tuple slot type (a named const + an arithmetic
+       expr): folded in constfold and baked into each slot's array type — ##type
+       reports the baked dims, and the slot indexing sees the real sizes. */
+    const int kN = 3;
+    (int[kN], int[kN + 1]) t5 = ((1,2,3), (4,5,6,7));
+    __println(##type(t5) + " t5= " + t5[0][2] + " " + t5[1][1]);  // (int[3], int[4]) t5= 3 5
+
     return 0;
 }
 
 /* compile errors — each uncommented in isolation by the negative runner. */
 
-/* a non-literal dimension in an array TYPE (here a tuple slot) is rejected; only
-   literal dims are allowed in type position (a const-expr dim needs Phase 2). */
-//-EXPECT-ERROR: An array type dimension must be an integer literal
-//int neg_array_type_nonliteral() {
+/* a const-EXPRESSION dim in an array TYPE (a tuple slot) is accepted (folded +
+   baked in constfold); a RUNTIME (non-const) dim is still rejected — it can't fold
+   to a constant size. */
+//-EXPECT-ERROR: Array size must be an integer constant
+//int neg_array_type_runtime_dim() {
 //    int n = 3;
-//    (int[n], int[4]) t;
-//    return 0;
+//    (int[n], int) t = ((1,2,3), 4);
+//    return t[1];
 //}

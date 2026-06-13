@@ -97,6 +97,17 @@ int arrSum(int a[3]) {        // name-anchored, literal dim
 int arrSumN(int a[A3LEN]) {   // name-anchored, const-expression dim
     return a[0] + a[1] + a[2];
 }
+// a const-EXPRESSION dim in the RETURN type's TYPE position (`int[A3LEN] f()`, the
+// size on the type not the name) — baked into the function's return type.
+int[A3LEN] makeArrN() {
+    int r[A3LEN] = (6, 7, 8);
+    return r;
+}
+// a const-EXPRESSION dim in a tuple-slot PARAM type (type position, distinct from
+// the name-anchored `int a[A3LEN]` form above).
+int sumTupN((int[A3LEN], int) t) {
+    return t[0][0] + t[0][1] + t[0][2] + t[1];
+}
 
 /*
 orphan function declared but not defined.
@@ -146,6 +157,12 @@ int32 main() {
     __println("sumA3= " + sumA3(m));             // 12
     __println("arrSum= " + arrSum(m));           // 12
     __println("arrSumN= " + arrSumN(m));         // 12
+
+    // const-expr dim in a TYPE-position return type and a tuple-slot param type
+    int mN[A3LEN] = makeArrN();
+    __println("makeArrN= " + mN[0] + " " + mN[2]);   // 6 8
+    (int[A3LEN], int) tpN = ((1, 2, 3), 10);
+    __println("sumTupN= " + sumTupN(tpN));            // 16
 
     //-EXPECT-ERROR: expects 2 arguments, got 1
     //add(1);

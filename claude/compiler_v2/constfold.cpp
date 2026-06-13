@@ -1190,8 +1190,17 @@ std::unique_ptr<parse::Node> tryFoldConvert(parse::Node& n) {
     return lit;
 }
 
+// An alias whose TARGET carried a const-expr dim: resolve expanded every use
+// eagerly into a kAlias(name, old_u) handle capturing the PROVISIONAL underlying;
+// once the dim bakes we map old_u -> new_u and refresh every use (node types +
+// entries). Keyed on (name, old_u) since char/uint8-style same-structure aliases
+// must not cross-match. (Defined below; forward-declared for walk + bakeNodeDims.)
+struct AliasRefresh { std::string name; widen::TypeRef old_u; widen::TypeRef new_u; };
+widen::TypeRef refreshAliasType(widen::TypeRef t, std::vector<AliasRefresh> const& rs);
+void refreshEntries(parse::Tree& tree, std::vector<AliasRefresh> const& rs);
 void bakeNodeDims(parse::Node& n, parse::Tree& tree, bool final,
-                  bool& changed, diagnostic::Sink& diag);
+                  bool& changed, diagnostic::Sink& diag,
+                  std::vector<AliasRefresh>& refreshes);
 
 // `no_substitute` (set inside a ##type operand): fold pure-literal subtrees but
 // do NOT substitute a kConst ident to its value. ##type reports the type of its
@@ -1201,11 +1210,18 @@ void bakeNodeDims(parse::Node& n, parse::Tree& tree, bool final,
 // const left unsubstituted stays a kIdentExpr, so any binary containing it isn't
 // all-literal and won't fold.
 void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
-          bool& changed, diagnostic::Sink& diag, bool no_substitute = false) {
+          bool& changed, diagnostic::Sink& diag,
+          std::vector<AliasRefresh>& refreshes, bool no_substitute = false) {
     if (!slot) return;
+    // Re-point this node's type at any baked alias underlying BEFORE folding it —
+    // so a sizeof of an alias-use (type operand in return_type) measures the real
+    // size. The alias decl is always walked before its uses, so a refresh recorded
+    // when it baked is in hand by the time the use is reached. No-op when empty.
+    if (!refreshes.empty())
+        slot->return_type = refreshAliasType(slot->return_type, refreshes);
     if (slot->kind == parse::Kind::kStringifyType) {
         for (auto& c : slot->children) {
-            walk(c, tree, changed, diag, /*no_substitute=*/true);
+            walk(c, tree, changed, diag, refreshes, /*no_substitute=*/true);
         }
         return;
     }
@@ -1220,17 +1236,17 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
         return;
     }
     for (auto& c : slot->children) {
-        walk(c, tree, changed, diag, no_substitute);
+        walk(c, tree, changed, diag, refreshes, no_substitute);
     }
     // Fold inside parameter defaults too (params live in a separate vector, not
     // children) so a constant-expression default reaches a literal.
     for (auto& p : slot->params) {
-        walk(p, tree, changed, diag, no_substitute);
+        walk(p, tree, changed, diag, refreshes, no_substitute);
     }
     // Fold const-expression array dims (a separate vector) so they reach a
     // literal; bakeArrayDims (after the fixpoint) splices the size into the type.
     for (auto& d : slot->dim_exprs) {
-        walk(d, tree, changed, diag, no_substitute);
+        walk(d, tree, changed, diag, refreshes, no_substitute);
     }
     if (slot->kind == parse::Kind::kUnaryExpr) {
         if (auto folded = tryFoldUnary(*slot, diag)) {
@@ -1256,15 +1272,13 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
         if (tryCaptureConst(*slot, tree, diag)) {
             changed = true;
         }
-        // Bake const-expression array dims as soon as they've folded (so the array
-        // type is correct before a later sizeof of it folds). final=false: a dim
-        // not yet folded is left for a later round.
-        bakeNodeDims(*slot, tree, /*final=*/false, changed, diag);
     }
-    // A const-EXPRESSION array dim on a PARAMETER (`int f(int a[N])`) bakes into the
-    // param's return_type + entry, same as a var decl.
-    if (slot->kind == parse::Kind::kParam) {
-        bakeNodeDims(*slot, tree, /*final=*/false, changed, diag);
+    // Bake a node's const-expression array dims as soon as they've folded (so the
+    // array type is correct before a later sizeof of it folds). final=false: a dim
+    // not yet folded is left for a later round. Any owner kind carries dims —
+    // var-decl / param / function-return / alias-target / sizeof-cast-convert operand.
+    if (!slot->dim_exprs.empty()) {
+        bakeNodeDims(*slot, tree, /*final=*/false, changed, diag, refreshes);
     }
     // After a function's params are walked (post-order), re-sync the signature's
     // param_types from the params' (now-baked) return types — resolve built
@@ -1284,66 +1298,120 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
     assignNominal(*slot);
 }
 
-// The kArray within a (possibly pointer/iterator/alias-wrapped) type, or kNoType
-// if there is none. The array decl's dims live on this node; the spine wrappers
-// (a trailing `^`/`[]`, or an alias OF an array) sit around it.
-widen::TypeRef findArrayRef(widen::TypeRef t) {
+// Re-mint a type tree, swapping any kAlias(name, old_u) recorded in `rs` for
+// kAlias(name, new_u). Recurses composites so a nested / chained alias use is
+// caught; rebuilds from child handles (never a spelling, preserving aliases).
+widen::TypeRef refreshAliasType(widen::TypeRef t, std::vector<AliasRefresh> const& rs) {
     using F = widen::Type::Form;
     switch (widen::form(t)) {
-        case F::kArray:    return t;
-        case F::kPointer:  return findArrayRef(widen::get(t).pointee);
-        case F::kIterator: return findArrayRef(widen::get(t).pointee);
-        case F::kAlias:    return findArrayRef(widen::get(t).underlying);
-        case F::kPrimitive: case F::kVoid: case F::kAnyptr:
-        case F::kSlid: case F::kTuple: case F::kNone:
-            return widen::kNoType;
-    }
-    return widen::kNoType;
-}
-
-// Rebuild `t` with the spine's kArray re-dimensioned to `new_dims`, STRUCTURALLY —
-// the array's element type (alias and all) and every wrapper are preserved by
-// re-interning from child HANDLES, never a spelling. (A spelling round-trip is what
-// clobbered an alias element: `spell(kAlias)` is the bare name, so re-interning it
-// yields a kSlid, losing the alias->underlying link.) Child handles are captured
-// before recursing (a recursive intern may realloc the arena).
-widen::TypeRef rebuildArrayDims(widen::TypeRef t, std::vector<int> const& new_dims) {
-    using F = widen::Type::Form;
-    switch (widen::form(t)) {
-        case F::kArray: {
-            widen::TypeRef e = widen::get(t).elem;
-            return widen::internArray(e, new_dims);
-        }
-        case F::kPointer: {
-            widen::TypeRef p = widen::get(t).pointee;
-            return widen::internPointer(rebuildArrayDims(p, new_dims));
-        }
-        case F::kIterator: {
-            widen::TypeRef p = widen::get(t).pointee;
-            return widen::internIterator(rebuildArrayDims(p, new_dims));
-        }
         case F::kAlias: {
             std::string name = widen::get(t).name;
-            widen::TypeRef u = widen::get(t).underlying;
-            return widen::internAlias(name, rebuildArrayDims(u, new_dims));
+            widen::TypeRef orig_u = widen::get(t).underlying;
+            widen::TypeRef u = refreshAliasType(orig_u, rs);
+            for (auto const& r : rs)
+                if (r.name == name && r.old_u == orig_u) u = r.new_u;
+            return widen::internAlias(name, u);
+        }
+        case F::kPointer:
+            return widen::internPointer(refreshAliasType(widen::get(t).pointee, rs));
+        case F::kIterator:
+            return widen::internIterator(refreshAliasType(widen::get(t).pointee, rs));
+        case F::kArray: {
+            std::vector<int> dims = widen::get(t).dims;
+            return widen::internArray(refreshAliasType(widen::get(t).elem, rs), dims);
+        }
+        case F::kTuple: {
+            std::vector<widen::TypeRef> slots = widen::get(t).slots;
+            for (auto& s : slots) s = refreshAliasType(s, rs);
+            return widen::internTuple(slots);
         }
         case F::kPrimitive: case F::kVoid: case F::kAnyptr:
-        case F::kSlid: case F::kTuple: case F::kNone:
-            break;   // unreachable: bakeNodeDims only runs on a node carrying dims
+        case F::kSlid: case F::kNone:
+            return t;
     }
-    assert(false && "rebuildArrayDims: no array in a dim-bearing type");
     return t;
 }
 
-// Splice a var-decl's folded const-expression dims into its type (and entry).
-// dim_exprs is aligned to the array's dims, left to right (a null slot is a literal
-// dim, already baked). Each must have folded to a POSITIVE INTEGER literal. `final`
+// Apply the accumulated alias refreshes to every symbol-table entry's type(s) —
+// so a sizeof(var) / classify / codegen reading entry.slids_type sees the baked
+// underlying. (Node return_types are refreshed at each node's walk entry.)
+void refreshEntries(parse::Tree& tree, std::vector<AliasRefresh> const& rs) {
+    if (rs.empty()) return;
+    for (auto& e : tree.entries) {
+        e.slids_type = refreshAliasType(e.slids_type, rs);
+        for (auto& pt : e.param_types) pt = refreshAliasType(pt, rs);
+    }
+}
+
+// Bake a type tree's const-expr array dims in PRE-ORDER, consuming one dim_exprs
+// entry per array dim (a null entry keeps the literal dim; a node overrides with
+// its folded value). Descends tuple slots + array elements + sees through
+// ptr/iter/alias by handle-rebuild — so a dim in ANY type position (a tuple slot,
+// a nested array element) bakes, not just a single linear array spine. `idx`
+// advances through `des`.
+widen::TypeRef bakeDimsWalk(widen::TypeRef t,
+                            std::vector<std::unique_ptr<parse::Node>> const& des,
+                            std::size_t& idx, bool& failed, diagnostic::Sink& diag) {
+    using F = widen::Type::Form;
+    switch (widen::form(t)) {
+        case F::kArray: {
+            std::vector<int> dims = widen::get(t).dims;
+            for (std::size_t k = 0; k < dims.size(); k++, idx++) {
+                if (idx >= des.size() || !des[idx]) continue;   // literal — keep
+                parse::Node const& d = *des[idx];
+                bool int_lit = d.kind == parse::Kind::kIntLiteral
+                            || d.kind == parse::Kind::kUintLiteral
+                            || d.kind == parse::Kind::kCharLiteral;
+                int64_t v = 0;
+                if (!int_lit || !parseI64(d.text, v)) {
+                    diagnostic::report(diag, {d.file_id, d.tok,
+                        "Array size must be an integer constant.", {}});
+                    failed = true;
+                } else if (v <= 0) {
+                    diagnostic::report(diag, {d.file_id, d.tok,
+                        "Array size must be a positive integer constant.", {}});
+                    failed = true;
+                } else {
+                    dims[k] = static_cast<int>(v);
+                }
+            }
+            widen::TypeRef e = bakeDimsWalk(widen::get(t).elem, des, idx, failed, diag);
+            return widen::internArray(e, dims);
+        }
+        case F::kPointer:
+            return widen::internPointer(
+                bakeDimsWalk(widen::get(t).pointee, des, idx, failed, diag));
+        case F::kIterator:
+            return widen::internIterator(
+                bakeDimsWalk(widen::get(t).pointee, des, idx, failed, diag));
+        case F::kAlias: {
+            std::string name = widen::get(t).name;
+            return widen::internAlias(name,
+                bakeDimsWalk(widen::get(t).underlying, des, idx, failed, diag));
+        }
+        case F::kTuple: {
+            std::vector<widen::TypeRef> slots = widen::get(t).slots;
+            for (auto& s : slots) s = bakeDimsWalk(s, des, idx, failed, diag);
+            return widen::internTuple(slots);
+        }
+        case F::kPrimitive: case F::kVoid: case F::kAnyptr:
+        case F::kSlid: case F::kNone:
+            return t;   // no dims here
+    }
+    return t;
+}
+
+// Splice a node's folded const-expression dims into its type (and entry). dim_exprs
+// is the type tree's array dims in PRE-ORDER (name dims outer, type-position dims
+// inner); each non-null must have folded to a POSITIVE INTEGER literal. `final`
 // (the post-fixpoint pass): a dim that STILL isn't a literal is a non-constant array
 // size -> error. During the fold fixpoint (final=false) an unfolded dim is just left
 // for a later round — important so a dim like `sizeof(int)` bakes the array BEFORE a
-// `sizeof(thatArray)` elsewhere folds.
+// `sizeof(thatArray)` elsewhere folds. A baked kAliasDecl records an AliasRefresh so
+// its eager uses can be re-pointed at the baked underlying.
 void bakeNodeDims(parse::Node& n, parse::Tree& tree, bool final,
-                  bool& changed, diagnostic::Sink& diag) {
+                  bool& changed, diagnostic::Sink& diag,
+                  std::vector<AliasRefresh>& refreshes) {
     if (n.dim_exprs.empty()) return;
     for (auto& d : n.dim_exprs) {
         if (d && !isLiteral(*d)) {
@@ -1354,51 +1422,42 @@ void bakeNodeDims(parse::Node& n, parse::Tree& tree, bool final,
             return;
         }
     }
-    // Splice the folded dims onto resolve's STRUCTURED type — read the array's
-    // provisional dims, override each expression-dim's slot, rebuild via handles.
-    widen::TypeRef arr = findArrayRef(n.return_type);
-    assert(arr != widen::kNoType
-        && "bakeNodeDims: dim_exprs on a type with no array");
-    std::vector<int> dims = widen::get(arr).dims;
+    std::size_t idx = 0;
     bool failed = false;
-    for (std::size_t i = 0; i < n.dim_exprs.size() && i < dims.size(); i++) {
-        if (!n.dim_exprs[i]) continue;      // literal dim — already baked at grammar
-        parse::Node const& d = *n.dim_exprs[i];
-        bool int_lit = d.kind == parse::Kind::kIntLiteral
-                    || d.kind == parse::Kind::kUintLiteral
-                    || d.kind == parse::Kind::kCharLiteral;
-        int64_t v = 0;
-        if (!int_lit || !parseI64(d.text, v)) {
-            diagnostic::report(diag, {d.file_id, d.tok,
-                "Array size must be an integer constant.", {}});
-            failed = true;
-        } else if (v <= 0) {
-            diagnostic::report(diag, {d.file_id, d.tok,
-                "Array size must be a positive integer constant.", {}});
-            failed = true;
-        } else {
-            dims[i] = static_cast<int>(v);
-        }
-    }
-    if (!failed) {
-        // Update BOTH the node type and the symbol-table entry — downstream
-        // (classify bounds checks, codegen, sizeof) reads the array type from the
-        // entry's slids_type, which resolve stamped with the provisional `[1]`.
-        widen::TypeRef rebuilt = rebuildArrayDims(n.return_type, dims);
+    widen::TypeRef old_type = n.return_type;
+    widen::TypeRef rebuilt = bakeDimsWalk(n.return_type, n.dim_exprs, idx, failed, diag);
+    if (!failed && rebuilt != old_type) {
+        // A function's entry slids_type IS its return type, an alias's IS its target,
+        // a var/param's IS its declared type — so the same entry update is correct
+        // for all; expression operands (sizeof/cast/convert) have no entry.
         if (n.resolved_entry_id >= 0)
             tree.entries[n.resolved_entry_id].slids_type = rebuilt;
         n.return_type = rebuilt;
+        if (n.kind == parse::Kind::kAliasDecl) {
+            refreshes.push_back({n.name, old_type, rebuilt});
+            refreshEntries(tree, refreshes);   // re-point eager uses' entry types now
+        }
         changed = true;
     }
     n.dim_exprs.clear();
 }
 
 // Post-fixpoint sweep: bake any remaining dims (final — an unfolded dim errors).
-void finalizeArrayDims(parse::Node& n, parse::Tree& tree, diagnostic::Sink& diag) {
-    for (auto& c : n.children) if (c) finalizeArrayDims(*c, tree, diag);
-    for (auto& p : n.params)   if (p) finalizeArrayDims(*p, tree, diag);
+void finalizeArrayDims(parse::Node& n, parse::Tree& tree, diagnostic::Sink& diag,
+                       std::vector<AliasRefresh>& refreshes) {
+    for (auto& c : n.children) if (c) finalizeArrayDims(*c, tree, diag, refreshes);
+    for (auto& p : n.params)   if (p) finalizeArrayDims(*p, tree, diag, refreshes);
     bool dummy = false;
-    bakeNodeDims(n, tree, /*final=*/true, dummy, diag);
+    bakeNodeDims(n, tree, /*final=*/true, dummy, diag, refreshes);
+}
+
+// Refresh every node's return_type from the accumulated alias refreshes (the
+// post-fixpoint companion to refreshEntries — catches type-operand nodes the
+// walk-entry refresh already handles, plus any not on the fold path).
+void refreshNodeTypes(parse::Node& n, std::vector<AliasRefresh> const& rs) {
+    n.return_type = refreshAliasType(n.return_type, rs);
+    for (auto& c : n.children) if (c) refreshNodeTypes(*c, rs);
+    for (auto& p : n.params)   if (p) refreshNodeTypes(*p, rs);
 }
 
 }  // namespace
@@ -1409,11 +1468,16 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // can then collapse) and capture const-decl values from now-folded
     // rhs expressions. Convergence is guaranteed because each round only
     // adds substitutions / captures; never removes them.
+    // Alias-target const-dim refreshes accumulate across the run (resolve expanded
+    // every alias use eagerly, so a baked alias target must be re-pointed at its
+    // uses). bakeNodeDims records them + refreshes entries; walk refreshes each
+    // node's type at entry.
+    std::vector<AliasRefresh> refreshes;
     bool changed = true;
     while (changed) {
         changed = false;
         for (auto& n : tree.nodes) {
-            walk(n, tree, changed, diag);
+            walk(n, tree, changed, diag, refreshes);
         }
         // Stop at the first reported error. A capture that failed its range
         // check (tryCaptureConst) leaves literal_text empty, so a later round —
@@ -1424,7 +1488,13 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // Bake const-expression array dims now the fold has reached its fixpoint (the
     // dim exprs have folded as far as they will). Skip if folding already errored.
     if (!diagnostic::hasErrors(diag)) {
-        for (auto& n : tree.nodes) finalizeArrayDims(*n, tree, diag);
+        for (auto& n : tree.nodes) finalizeArrayDims(*n, tree, diag, refreshes);
+        // Final alias-refresh sweep: re-point every node type + entry at the baked
+        // alias underlyings (covers anything not already refreshed in the fixpoint).
+        if (!refreshes.empty()) {
+            for (auto& n : tree.nodes) refreshNodeTypes(*n, refreshes);
+            refreshEntries(tree, refreshes);
+        }
     }
     // Fixpoint check: any kConst whose rhs never folded is unresolvable
     // (cyclic or refers to a non-constant). Emit ONE diagnostic at the

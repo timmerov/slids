@@ -227,10 +227,20 @@ Phase 4 — types beyond primitives
     "Subscript indexes past the last dimension of '<arr>'"; a LITERAL zero/negative
     dim is rejected in the grammar [a const-EXPRESSION dim in constfold]. A dim may
     be a const EXPRESSION, not just a literal [`T a[N]`, `T a[sizeof(int)]`,
-    `T a[N+1]`]: grammar parses it as an expression + bakes a provisional `[1]`;
-    constfold folds it and bakes the real size into the type spelling AND the entry
-    [bakeNodeDims, within the fixpoint so a later sizeof-of-the-array sees the real
-    size; final pass errors a non-constant / non-positive / non-integer dim].
+    `T a[N+1]`], in ANY type position [LANDED everywhere, not just the name]:
+    parseType takes a dim_sink passed by every composition context — tuple slot,
+    var-decl / param / return / alias-RHS / sizeof / cast / conversion target /
+    for-var [a tuple slot is how a const dim rides a pointer/for-var/return type;
+    `int[N]^` array-then-`^` isn't a type]. A non-literal dim spells a provisional
+    `[1]` + pushes its expr; constfold's bakeDimsWalk folds + bakes PRE-ORDER over
+    the whole TypeRef tree [tuple slots + array elements, through ptr/iter/alias],
+    within the fixpoint so a later sizeof sees the real size; the final pass errors a
+    non-constant / non-positive / non-integer dim. An ALIAS target's uses, expanded
+    eagerly by resolve with the provisional `[1]`, are re-pointed by an AliasRefresh
+    bakeNodeDims records [node types at walk-entry, entry types on bake]. The for-var
+    head accepts a tuple type [looksLikeTupleTypeDecl] so a for-var carries one.
+    [The conversion-target case parses + bakes but is gated at classify — an array /
+    tuple `(Type=expr)` target is unbuilt; see todo.]
     SET FROM A HOMOGENEOUS TUPLE [init or whole-array assign]: a multi-dim array
     takes a NESTED tuple whose SHAPE matches the declared dims [row × col] —
     classifyArrayFromTuple checks the leaf count AND the nesting [a transposed or

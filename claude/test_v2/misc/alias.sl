@@ -22,6 +22,9 @@ alias Float = float;
 alias Whole = Integer;        // chained to another alias
 alias IntPtr = int^;          // alias whose target is a pointer type
 
+const int kVecN = 3;
+alias Vec = int[kVecN];       // alias TARGET has a const-EXPRESSION array dim
+
 enum Dir ( kNorth, kSouth, kEast, kWest );
 
 Space {
@@ -53,6 +56,15 @@ int32 main() {
 
     Dir d = Dir:kNorth;
     __println(##type(d) + " " + ##name(d) + " = " + d);
+
+    /* an alias whose TARGET has a const-EXPRESSION dim (`alias Vec = int[kVecN]`):
+       resolve expanded each use eagerly with the provisional dim; constfold bakes
+       the alias target and REFRESHES the uses, so indexing, sizeof of the variable
+       (entry type) and sizeof of the alias TYPE (node type) all see the real size. */
+    Vec vrow = (4, 5, 6);
+    vrow[1] = 50;
+    __println(##type(vrow) + " vrow= " + vrow[0] + " " + vrow[1] + " " + vrow[2]);  // Vec vrow= 4 50 6
+    __println("sizeof(vrow)= " + sizeof(vrow) + " sizeof(Vec)= " + sizeof(Vec));    // 12 12
 
     /* propagation: alias + same alias -> alias; + int -> drops to underlying;
        + literal -> alias (flexes in); a comparison -> bool. */

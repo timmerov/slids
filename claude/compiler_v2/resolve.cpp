@@ -1120,6 +1120,11 @@ std::unique_ptr<parse::Node> buildSelfField(std::string const& field,
 
 void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                  bool unevaluated) {
+    // Const-expression array dims in a TYPE operand (`sizeof(int[N])`, `<int[N]^>`,
+    // `(int[N]=e)`): resolve each so its const refs / sizeof resolve; constfold
+    // folds + bakes the size (provisional `[1]` until then).
+    for (auto& d : e.dim_exprs)
+        if (d) resolveExpr(tree, *d, diag, /*unevaluated=*/false);
     switch (e.kind) {
         case parse::Kind::kIdentExpr: {
             int id;
@@ -1386,6 +1391,15 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                 bool is_type = (k == parse::EntryKind::kAlias)
                     || (k == parse::EntryKind::kNamespace
                         && tree.entries[id].slids_type != widen::kNoType);   // enum facet
+                if (k == parse::EntryKind::kAlias) {
+                    // Measure the alias as a type, PRESERVING the alias wrapper
+                    // (don't flatten to the target spelling): sizeof sees through it
+                    // for the size, and keeping the kAlias lets constfold refresh a
+                    // const-expression dim in the alias target (`alias V = int[N]`).
+                    e.return_type =
+                        widen::internAlias(tree.entries[id].name, tree.entries[id].slids_type);
+                    return;
+                }
                 if (is_type) {
                     std::string spelling = operand.global_qualified ? "::" : "";
                     for (auto const& seg : operand.qualifier) spelling += seg + ":";
@@ -1729,6 +1743,10 @@ Completion understandForArray(parse::Tree& tree, parse::Node& s, int arr_id,
         var_decl.return_type = resolveTypeRef(tree, var_decl.return_type, visiting,
                                               reported, vfile, vtok, diag);
     }
+    // A const-expression dim in the loop var's TYPE (a tuple slot) — resolve in the
+    // enclosing scope (before the loop frame) so constfold folds + bakes it.
+    for (auto& d : var_decl.dim_exprs)
+        if (d) resolveExpr(tree, *d, diag);
     bool by_ref = isReferenceType(var_decl.return_type);
     if (by_ref) {
         // A by-ref loop var `T^` references the element type T (pointee == elem).
@@ -1919,6 +1937,10 @@ Completion understandForTuple(parse::Tree& tree, parse::Node& s,
         var_decl.return_type = resolveTypeRef(tree, var_decl.return_type, visiting,
                                               reported, vfile, vtok, diag);
     }
+    // A const-expression dim in the loop var's TYPE (a tuple slot) — resolve in the
+    // enclosing scope (before the loop frame) so constfold folds + bakes it.
+    for (auto& d : var_decl.dim_exprs)
+        if (d) resolveExpr(tree, *d, diag);
     // Resolve the iterable: an lvalue (var / `ref^` / index) is read + init-checked
     // + use-marked; a literal's / call's sub-expressions resolve.
     resolveExpr(tree, it_ref, diag);
@@ -2335,6 +2357,11 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // Function-scope value alias: register in the body frame, then
             // validate the target (forward refs within a body aren't pre-scanned).
             registerAlias(tree, s, diag);
+            // A const-expression dim in the alias TARGET (`alias V = int[N]`) —
+            // resolve in the body frame so constfold folds + bakes + refreshes it.
+            for (auto& d : s.dim_exprs) {
+                if (d) resolveExpr(tree, *d, diag);
+            }
             resolveDeclType(tree, s.return_type, s.file_id, s.tok, diag);
             return Completion::Normal;
         }
@@ -3099,6 +3126,13 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
                 if (d) resolveExpr(tree, *d, diag);
             }
         }
+    }
+    // A const-expression array dim in the RETURN type (`int[N] f()` / a tuple-slot
+    // return) lives on the function node — a constant expression in the enclosing
+    // scope, like a param dim. constfold bakes it into the return type (== entry
+    // slids_type for a function).
+    for (auto& d : fn.dim_exprs) {
+        if (d) resolveExpr(tree, *d, diag);
     }
     int saved_floor = tree.capture_floor;
     parse::Node* saved_capture_node = tree.capture_node;
@@ -4002,6 +4036,17 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         if (isQualified(*ch)) continue;   // inline member init resolved above
         for (auto& init : ch->children) {
             if (init) resolveExpr(tree, *init, diag);
+        }
+    }
+
+    // Pass 1b-alias-dims — resolve a const-expression array dim in a file-scope
+    // alias TARGET (`alias V = int[N]`) now every program-scope const exists.
+    // constfold folds + bakes it and refreshes the alias's eager uses.
+    for (auto& ch : program->children) {
+        if (ch && ch->kind == parse::Kind::kAliasDecl) {
+            for (auto& d : ch->dim_exprs) {
+                if (d) resolveExpr(tree, *d, diag);
+            }
         }
     }
 

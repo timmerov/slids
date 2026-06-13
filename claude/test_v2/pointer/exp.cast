@@ -5,6 +5,7 @@ intptr round-trip= 99
 same address= true
 demote= 7
 promote= 7
+castN= true
 buffer round-trip= 1234
 chain= 99
 ref array= 99
