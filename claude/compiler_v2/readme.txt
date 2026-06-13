@@ -1014,7 +1014,10 @@ STAGE FILES (.h / .cpp pairs)
             checkStrongConstAssign (so a move COPIES under assignment rules; a
             narrowing move rejects). kSwapStmt requires the two operands' deepStrip
             types be IDENTICAL (no widening — a symmetric exchange can't convert
-            both ways), else "Swap operands must be the same type". resolve owns
+            both ways), else "Swap operands must be the same type". classify also
+            rejects a SELF-swap / SELF-move — both operands the same bare variable
+            (isSameLvalue) — with "Cannot swap a value with itself" / "Cannot move a
+            value onto itself" (indexed / deref self is a later pass). resolve owns
             the lvalue rule: resolveMoveSwapLvalue rejects a non-lvalue (a swap rhs
             is a general expression, so `x <--> 7` would otherwise crash codegen)
             — BOTH swap operands and a move's LHS must be lvalues ("A swap operand"
@@ -1043,19 +1046,25 @@ STAGE FILES (.h / .cpp pairs)
             ++/-- per phrase, replacing each with a read; also drops parse-
             only nodes (alias, namespace) and hoists namespace member
             functions to program scope with entry-id-derived symbols (no
-            cached canonical-name strings). Statement-level
-            bumps splice as sibling kExprStmt bump-statements around the
-            statement (post AFTER the store -- the statement is the phrase);
-            a bump inside a sub-phrase (call args, && / || rhs) stays in a
-            synthesized kSeqExpr {pre... value post...} so a short-circuited
-            bump never fires. The statement-bump splice (lowerStatementList)
-            recurses into a kBlockStmt, a kIfStmt (lowerIfStmt: the condition is a
-            self-contained phrase whose bumps fire before the branch, and the arms
-            recurse), a kWhileStmt / kDoWhileStmt (lowerWhileStmt: the condition is
-            a phrase re-tested each iteration, the body recurses), and a
-            kForLongStmt (lowerForLong: varlist initializers + condition are
-            phrases, the update + body are statement lists) so a bump inside them
-            splices within that scope, not at function scope. The OTHER for-shapes
+            cached canonical-name strings). lowerStatementPPID is an EXHAUSTIVE
+            switch over the statement kinds (var-decl / assign / store / move / swap
+            / destructure / return / call / expr lower their operands; break /
+            continue / delete / dtor / fn-def are explicit no-ops; an assert
+            backstops a future kind -- no silent default). Statement-level bumps
+            splice as sibling kExprStmt bump-statements around the statement (post
+            AFTER the store -- the statement is the phrase: `arr[k++] = v` ->
+            `arr[k]=v; k++`, and a swap `x++ <--> y++` -> `x <--> y; x++; y++`); a
+            bump inside a sub-phrase (call args, && / || rhs, each tuple-literal /
+            destructure slot) stays in a synthesized kSeqExpr {pre... value post...}
+            so a short-circuited or per-slot bump never fires. The statement-bump
+            splice (lowerStatementList) recurses into a kBlockStmt, a kIfStmt
+            (lowerIfStmt: the condition is a self-contained phrase whose bumps fire
+            before the branch, and the arms recurse), a kWhileStmt / kDoWhileStmt
+            (lowerWhileStmt: the condition is a phrase re-tested each iteration, the
+            body recurses), a kForLongStmt (lowerForLong: varlist initializers +
+            condition are phrases, the update + body are statement lists), and a
+            kSwitchStmt (lowerSwitchStmt: the scrutinee is a phrase) so a bump
+            inside them splices within that scope, not at function scope. The OTHER for-shapes
             now lower HERE too (no longer in grammar/resolve): lowerForRanged /
             lowerForArray / lowerForTuple build a kForLongStmt subtree, minting
             helper locals (`_$idx`/`_$end`/`_$step`/`_$iter`/`_$ftmp`) with fresh

@@ -92,6 +92,13 @@ DEFERRED TESTS
     shared helper then — at the helper, not the if-condition call site.
     prerequisite: pointers/iterators (Phase 4).
 
+  * IMPORT-NEGATIVE RUNNER GAP — run_negatives.sh can't reproduce a "missing a
+    SPECIFIC import" error: it compiles each case in a temp dir with `-I .` (the
+    temp dir), which lacks the suite's `.slh` files, so an import test fails on the
+    FIRST missing import (`Cannot find 'importee1.slh'`) instead of the intended one
+    (`file_does_not_exist.slh`). Pre-existing; surfaced auditing the lex negatives.
+    Needs the runner to put the source dir on the import path (e.g. `-I <srcdir>`).
+
 
 DEFERRED FEATURES (later; may not be on the plan)
 
@@ -302,6 +309,14 @@ DEFERRED FEATURES (later; may not be on the plan)
     `ident ++` and demands `;`, so the lvalue form never parses. Needs the
     statement/lvalue parse to accept a postfix-inc lvalue + desugar to lift the bump
     after the store.
+
+  * SELF-SWAP / SELF-MOVE FOR COMPLEX LVALUES — classify rejects a self-swap /
+    self-move when both operands are the same BARE variable (isSameLvalue: two
+    kIdentExpr with the same resolved_entry_id) -> "Cannot swap a value with itself"
+    / "Cannot move a value onto itself". An indexed / deref self (`arr[i] <--> arr[i]`,
+    `p^ <-- p^`) is NOT detected — that needs structural lvalue-equality (same base +
+    same index/deref chain), and a runtime index can't be compared statically anyway.
+    Low priority. Widen isSameLvalue when complex-lvalue equality is wanted.
 
 
 REACH GOALS

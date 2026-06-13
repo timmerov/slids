@@ -65,7 +65,11 @@ Phase 1 — expression core (LANDED)
     in body frame; arity + per-arg type check; decl/def signature match LANDED
   * PPID — pre/post-inc/dec via phrases (kPreIncExpr/kPostIncExpr → desugar
     extracts bumps per phrase; statement bumps hoist to sibling bump-stmts,
-    sub-phrases keep them in a kSeqExpr; bare `e++;` lowers to a kBumpExpr) LANDED
+    sub-phrases keep them in a kSeqExpr; bare `e++;` lowers to a kBumpExpr). Every
+    phrase-site covered: statements (var-decl/assign/store/move/swap/destructure/
+    return/call), if/while/do-while conditions, switch scrutinee, for start/end/step,
+    call args, &&/|| rhs, and tuple-literal/destructure slots — lowerStatementPPID is
+    an exhaustive switch (assert backstop). Canon: expression/ppid.sl.       LANDED
   * call-as-expression — kCallExpr via parsePostfix on a bare ident; shared
     resolveUserCall + emitCall with kCallStmt; void-return + print-intrinsic-
     as-expr rejected                                                   LANDED
@@ -76,13 +80,15 @@ Phase 2 — declarations + flow (LANDED)
     kAssignStmt arm, on a truly-undeclared name (!isQualified && resolveName < 0),
     creates a kLocalVar with empty slids_type, rewrites the node to a kVarDeclStmt,
     resolves the rhs (so `x = x` reads x uninitialized), marks it initialized;
-    classify's kVarDeclStmt arm then infers the rhs, NORMALIZES a literal-inferred
-    type to its preferred spelling (preferredSpelling: int32->int, uint32->uint,
-    float32->float; a typed rhs keeps its spelling), inherits rhs.alias_label, and
-    WRITES BACK entry.slids_type (the one deliberate classify symbol-table
-    mutation, assert-guarded). Aug-assign on an inferred var fixed: classify's
-    kAugAssignStmt arm RE-READS entryType into s.return_type (resolve cached it
-    empty before the inferred decl was stamped). Canon: expression/inferred.sl.
+    classify's kVarDeclStmt arm then infers the rhs type: a STRONG literal (a typed
+    const substituted in, e.g. `const int8 K`) keeps its declared width via
+    rhs.strong_type; otherwise rhs.inferred_type is used DIRECTLY (already the
+    preferred no-width handle — defaultLiteralType returns int/uint/float, never
+    int32 — so no spell->intern round-trip), inheriting rhs.alias_label, and WRITES
+    BACK entry.slids_type (the one deliberate classify symbol-table mutation,
+    assert-guarded). Aug-assign on an inferred var fixed: classify's kAugAssignStmt
+    arm RE-READS entryType into s.return_type (resolve cached it empty before the
+    inferred decl was stamped). Canon: assign/infer.sl.
     The for-loop typeless/reuse loop var (Session-4 remainder + the v1 chess-sample
     reuse fix) is now WIRED IN on this mechanism (see the flow item below).
     Definite assignment LANDED: a local read before

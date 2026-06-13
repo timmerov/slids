@@ -4,7 +4,8 @@ CXX       = g++
 LLCFLAGS  = --filetype=obj --relocation-model=pic
 
 BIN_DIR   = ../../bin
-BUILD_DIR = ../../build/test_v2/lex
+DIR       := $(notdir $(CURDIR))
+BUILD_DIR = ../../build/test_v2/$(DIR)
 
 SAMPLES = \
 	brackets \
@@ -21,7 +22,7 @@ negatives:
 	@../run_negatives.sh $(addsuffix .sl,$(SAMPLES))
 
 positives: all
-	@../run_positives.sh lex $(SAMPLES)
+	@../run_positives.sh $(DIR) $(SAMPLES)
 
 define SAMPLE_RULES
 $(1): $(BIN_DIR)/$(1)

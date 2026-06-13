@@ -1964,13 +1964,16 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     assert((diagnostic::hasErrors(diag)
                             || rhs.inferred_type != widen::kNoType)
                         && "inferred-init: a typeable rhs must yield a type");
-                    // A literal-inferred type normalizes to its preferred spelling
-                    // (int32->int, ...); a typed rhs keeps its EXACT handle (so an
-                    // alias/structured type survives — no spell->intern downgrade).
-                    widen::TypeRef inferred = isLiteralKind(rhs.kind)
-                        ? widen::internOrNone(
-                              preferredSpelling(widen::spellOrEmpty(rhs.inferred_type)))
-                        : rhs.inferred_type;
+                    // rhs.inferred_type is ALREADY the right handle: a weak literal's
+                    // is the preferred no-width default (defaultLiteralType returns
+                    // int/uint/float, never int32), and a typed rhs keeps its exact
+                    // handle (alias/structured types survive). A STRONG literal
+                    // (substituted from a typed const, e.g. `const int8 K`) keeps its
+                    // declared width — its strong_type IS its type. No spell->intern.
+                    widen::TypeRef inferred =
+                        (isLiteralKind(rhs.kind) && rhs.strong_type != widen::kNoType)
+                            ? rhs.strong_type
+                            : rhs.inferred_type;
                     s.return_type = inferred;
                     tree.entries[s.resolved_entry_id].slids_type = inferred;
                     tree.entries[s.resolved_entry_id].alias_label = rhs.alias_label;

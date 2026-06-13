@@ -1,5 +1,6 @@
 
 SUBDIRS = \
+	assign \
 	class \
 	constfold \
 	expression \

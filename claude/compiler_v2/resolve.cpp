@@ -1168,13 +1168,17 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                 return;
             }
             if (tree.entries[id].kind == parse::EntryKind::kNamespace) {
+                parse::Entry const& ns = tree.entries[id];
                 diagnostic::report(diag, {e.file_id, e.tok,
-                    "'" + e.name + "' is a namespace, not a value.", {}});
+                    "'" + e.name + "' is a namespace, not a value.",
+                    {{ns.file_id, ns.tok, "namespace declared here"}}});
                 return;
             }
             if (tree.entries[id].kind == parse::EntryKind::kClass) {
+                parse::Entry const& c = tree.entries[id];
                 diagnostic::report(diag, {e.file_id, e.tok,
-                    "'" + e.name + "' is a type, not a value.", {}});
+                    "'" + e.name + "' is a type, not a value.",
+                    {{c.file_id, c.tok, "class declared here"}}});
                 return;
             }
             // Definite-assignment: reading a local before it is written is a

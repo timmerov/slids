@@ -8,10 +8,12 @@ DIR       := $(notdir $(CURDIR))
 BUILD_DIR = ../../build/test_v2/$(DIR)
 
 SAMPLES = \
-	cast \
-	iterator \
-	new \
-	reference
+	augment \
+	infer \
+	lvalue \
+	moveswap \
+	typeconv \
+	vardecl
 
 .PHONY: all clean negatives positives $(SAMPLES)
 
@@ -38,9 +40,6 @@ $(BUILD_DIR)/$(1).ll: $(1).sl $(SLIDSC)
 endef
 
 $(foreach s,$(SAMPLES),$(eval $(call SAMPLE_RULES,$(s))))
-
-# Header dependencies — re-lex importer when its .slh change
-$(BUILD_DIR)/importer.ll: importee1.slh importee2.slh
 
 clean:
 	rm -rf $(BUILD_DIR)
