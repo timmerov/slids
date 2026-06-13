@@ -1222,7 +1222,9 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
             // resolving to a LocalVar (no field / index lvalues yet).
             parse::Node& operand = *e.children[0];
             if (operand.kind != parse::Kind::kIdentExpr) {
-                diagnostic::report(diag, {e.file_id, e.tok,
+                // Caret the offending operand (consistent with the function / const
+                // cases below), not the '++' operator.
+                diagnostic::report(diag, {operand.file_id, operand.tok,
                     "The operand of '" + e.text + "' must be a variable.", {}});
                 return;
             }

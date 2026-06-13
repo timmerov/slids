@@ -887,33 +887,100 @@ std::unique_ptr<ast::Node> makeBumpStmt(std::unique_ptr<ast::Node> bump) {
 void lowerStatementPPID(ast::Node& stmt,
                         std::vector<std::unique_ptr<ast::Node>>& pre,
                         std::vector<std::unique_ptr<ast::Node>>& post) {
-    if (stmt.kind == ast::Kind::kVarDeclStmt
-        || stmt.kind == ast::Kind::kAssignStmt) {
-        if (!stmt.children.empty() && stmt.children[0]) {
-            lowerInPhrase(stmt.children[0], pre, post);
+    switch (stmt.kind) {
+        // The statement IS the phrase: its direct expression operands carry
+        // statement-level bumps (pre before, post after the statement).
+        case ast::Kind::kVarDeclStmt:
+        case ast::Kind::kAssignStmt:
+            // children[0] = the rhs (the lvalue is a bare name, no ppid).
+            if (!stmt.children.empty() && stmt.children[0]) {
+                lowerInPhrase(stmt.children[0], pre, post);
+            }
+            return;
+        case ast::Kind::kStoreStmt:
+        case ast::Kind::kMoveStmt:
+        case ast::Kind::kSwapStmt:
+            // store: [0]=lvalue, [1]=rhs; move: [0]=lhs, [1]=rhs; swap: [0],[1] both
+            // lvalues. Each is a direct operand of the statement phrase, so a bump
+            // lifts off it and the post fires AFTER the store/move/swap — e.g.
+            // `x++ <--> y++` -> `x <--> y; x++; y++`, `arr[k++] = v` -> `arr[k]=v; k++`.
+            for (auto& ch : stmt.children) {
+                if (ch) lowerInPhrase(ch, pre, post);
+            }
+            return;
+        case ast::Kind::kDestructureStmt:
+            // children[0] = the rhs tuple (its slots are sub-phrases via the
+            // kTupleExpr arm); [1..] = plain target lvalues (a complex target with
+            // ppid is the deferred complex-lhs case).
+            if (!stmt.children.empty() && stmt.children[0]) {
+                lowerInPhrase(stmt.children[0], pre, post);
+            }
+            return;
+        case ast::Kind::kReturnStmt:
+            if (!stmt.children.empty() && stmt.children[0]) {
+                lowerPhraseSlot(stmt.children[0]);
+            }
+            return;
+        case ast::Kind::kCallStmt:
+            for (auto& arg : stmt.children) lowerPhraseSlot(arg);
+            return;
+        case ast::Kind::kExprStmt: {
+            // The value is discarded. A bare inc/dec needs only its bump — no read.
+            auto& child = stmt.children[0];
+            if (child->kind == ast::Kind::kPreIncExpr
+                || child->kind == ast::Kind::kPostIncExpr) {
+                child = makeBump(*child->children[0], child->text);
+            } else {
+                lowerPhraseSlot(child);
+            }
+            return;
         }
-    } else if (stmt.kind == ast::Kind::kDestructureStmt) {
-        // children[0] = the rhs tuple (its slots are sub-phrases via the kTupleExpr
-        // arm); children[1..] = plain target lvalues (a complex target with ppid is
-        // the deferred complex-lhs case).
-        if (!stmt.children.empty() && stmt.children[0]) {
-            lowerInPhrase(stmt.children[0], pre, post);
-        }
-    } else if (stmt.kind == ast::Kind::kReturnStmt) {
-        if (!stmt.children.empty() && stmt.children[0]) {
-            lowerPhraseSlot(stmt.children[0]);
-        }
-    } else if (stmt.kind == ast::Kind::kCallStmt) {
-        for (auto& arg : stmt.children) lowerPhraseSlot(arg);
-    } else if (stmt.kind == ast::Kind::kExprStmt) {
-        // The value is discarded. A bare inc/dec needs only its bump — no read.
-        auto& child = stmt.children[0];
-        if (child->kind == ast::Kind::kPreIncExpr
-            || child->kind == ast::Kind::kPostIncExpr) {
-            child = makeBump(*child->children[0], child->text);
-        } else {
-            lowerPhraseSlot(child);
-        }
+        // Leaf statements with no liftable ppid operand.
+        case ast::Kind::kDeleteStmt:
+        case ast::Kind::kDtorCallStmt:
+        case ast::Kind::kBreakStmt:
+        case ast::Kind::kContinueStmt:
+        case ast::Kind::kFunctionDef:
+        case ast::Kind::kFunctionDecl:
+            return;
+        // Not reachable here: compound statements are dispatched by
+        // lowerStatementList; kAugAssignStmt is lowered to kAssignStmt before this
+        // pass; expression kinds are never a statement. Asserted for exhaustiveness
+        // so a future statement kind cannot silently skip PPID lowering.
+        case ast::Kind::kProgram:
+        case ast::Kind::kAugAssignStmt:
+        case ast::Kind::kBlockStmt:
+        case ast::Kind::kIfStmt:
+        case ast::Kind::kWhileStmt:
+        case ast::Kind::kDoWhileStmt:
+        case ast::Kind::kForLongStmt:
+        case ast::Kind::kSwitchStmt:
+        case ast::Kind::kCaseClause:
+        case ast::Kind::kCallExpr:
+        case ast::Kind::kStringLiteral:
+        case ast::Kind::kIntLiteral:
+        case ast::Kind::kUintLiteral:
+        case ast::Kind::kCharLiteral:
+        case ast::Kind::kBoolLiteral:
+        case ast::Kind::kFloatLiteral:
+        case ast::Kind::kNullptrLiteral:
+        case ast::Kind::kIdentExpr:
+        case ast::Kind::kUnaryExpr:
+        case ast::Kind::kBinaryExpr:
+        case ast::Kind::kPreIncExpr:
+        case ast::Kind::kPostIncExpr:
+        case ast::Kind::kAddrOfExpr:
+        case ast::Kind::kDerefExpr:
+        case ast::Kind::kIndexExpr:
+        case ast::Kind::kTupleExpr:
+        case ast::Kind::kNewExpr:
+        case ast::Kind::kCastExpr:
+        case ast::Kind::kConvertExpr:
+        case ast::Kind::kSeqExpr:
+        case ast::Kind::kBumpExpr:
+        case ast::Kind::kParam:
+            assert(false && "lowerStatementPPID: not a lowerable statement kind");
+            return;
     }
 }
 

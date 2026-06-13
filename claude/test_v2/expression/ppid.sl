@@ -78,6 +78,11 @@ covered here:
     -> sw=2). Method-call args reduce to the call-arg case — a kMethodCallStmt is
     lowered to a kCallStmt before the PPID pass — so they need no separate test.
   - prefix ppid in a short-circuited && rhs is skipped too (pf && ++pi -> pi=0).
+  - store / move statements are phrases: a store rhs (stp^ = stx++) and an index
+    bump (ar[kk++] = 99 -> store ar[1], then kk++) and a move rhs (mvb <-- mva++)
+    all lift the bump after the statement. (Swap-OPERAND ppid x++ <--> y++ is a
+    PARSER block — parseIncDecStmt commits to a bare x++; — so the kSwapStmt arm is
+    defensive / unreachable today; see the deferred x++-as-lvalue item.)
   - alias transparency: an inc on an alias-typed var (Counter=int32) stays a binary
     OPERAND whose own type drives the common-type rule (no spelling round-trip that
     would clobber 'Counter' to an unknown slid).
@@ -87,8 +92,12 @@ a function name (main++), and a ppid on a complex (deref) lvalue (cp++^ = 7 ->
 "Expected ';'" — parseIncDecStmt commits to the bare `cp++;`).
 
 fixed while writing these tests: tuple-literal slots not being separate phrases
-(kTupleExpr arm in lowerInPhrase), and destructure rhs ppid (kDestructureStmt arm
-in lowerStatementPPID, reusing the tuple-slot path). The for-range bound was NOT a
+(kTupleExpr arm in lowerInPhrase); destructure rhs ppid (kDestructureStmt arm); and
+store / move / swap ppid (kStoreStmt/kMoveStmt/kSwapStmt arms) — an audit found the
+PPID dispatch silently no-op'd those, so a ppid in them crashed (e.g. p^ = x++).
+lowerStatementPPID is now an EXHAUSTIVE switch (assert backstop) so a future stmt
+kind can't silently skip lowering. Also: the "operand of '++' must be a variable"
+diagnostic now carets the operand, not the operator. The for-range bound was NOT a
 separate bug — an earlier crash there was the destructure crash misattributed (the
 assert fires at the first surviving inc/dec); lowerForLong already lowers it.
 
@@ -282,10 +291,30 @@ int32 main() {
     }
     __println("sw= " + sw);                       // 2
 
-    int32 sx = 5;
-    int^ sp = ^sx;
-    sp^ = sx++;
-    __println("AUDIT-PROBE sx= " + sx);
+    /* store / move / swap statements are phrases too: a ppid operand lifts off and
+       the post fires after the statement. */
+    int32 stx = 5;
+    int32 sty = 0;
+    int32^ stp = ^sty;
+    stp^ = stx++;                                 // store old stx into sty, then stx bumps
+    __println("sty= " + sty + " stx= " + stx);    // 5 6
+
+    int32 ar[3];
+    ar[0] = 0;
+    ar[1] = 0;
+    ar[2] = 0;
+    int32 kk = 1;
+    ar[kk++] = 99;                                // index bump lifts: store ar[1], then kk++
+    __println("ar1= " + ar[1] + " kk= " + kk);    // 99 2
+
+    int32 mva = 5;
+    int32 mvb = 0;
+    mvb <-- mva++;                                // move old mva into mvb, then mva bumps
+    __println("mvb= " + mvb + " mva= " + mva);    // 5 6
+
+    /* swap-OPERAND ppid (`x++ <--> y++`) is blocked at the PARSER — parseIncDecStmt
+       commits to a bare `x++;` (the deferred x++-as-lvalue gap) — so the kSwapStmt
+       PPID arm is defensive / unreachable today, not exercised here. */
 
     //-EXPECT-ERROR: Constant 'K' cannot be incremented
     //const int32 K = 5;
