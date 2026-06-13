@@ -282,6 +282,11 @@ int32 main() {
     }
     __println("sw= " + sw);                       // 2
 
+    int32 sx = 5;
+    int^ sp = ^sx;
+    sp^ = sx++;
+    __println("AUDIT-PROBE sx= " + sx);
+
     //-EXPECT-ERROR: Constant 'K' cannot be incremented
     //const int32 K = 5;
     //K++;
