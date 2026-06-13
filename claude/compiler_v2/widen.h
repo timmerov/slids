@@ -215,9 +215,7 @@ std::string convertExplicit(std::string const& src_val,
 
 // "Smallest type large enough to hold either operand" per the widen.sl binary
 // rule. Returns false if no built-in type fits both. The TypeRef overload is the
-// primary (operands stripped; result is the preferred handle); the string overload
-// wraps it for the remaining name-based callers.
+// operands stripped; result is the preferred handle.
 bool commonType(TypeRef t1, TypeRef t2, TypeRef& out);
-bool commonType(std::string const& t1, std::string const& t2, std::string& out);
 
 }  // namespace widen

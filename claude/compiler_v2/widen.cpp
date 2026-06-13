@@ -609,14 +609,6 @@ bool commonType(TypeRef t1, TypeRef t2, TypeRef& out) {
     return true;
 }
 
-// String wrapper for the remaining name-based callers (e.g. argConvertCost).
-bool commonType(std::string const& t1, std::string const& t2, std::string& out) {
-    TypeRef o;
-    if (!commonType(internOrNone(t1), internOrNone(t2), o)) return false;
-    out = spell(o);
-    return true;
-}
-
 // Structured: a type is "known" if its leaf is a built-in primitive or void.
 // A reference/iterator/array is known iff its pointee/element is; a named slid
 // type and the internal anyptr are not (matches the pre-migration predicate).

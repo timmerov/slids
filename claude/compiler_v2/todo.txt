@@ -8,13 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * RETIRE THE std::string commonType WRAPPER — the commonType TypeRef port LANDED
-    (every type-combining caller is on the TypeRef form). The only holdout is
-    argConvertCost (classify.cpp:411), whose `param` arrives as a spelling because
-    overload ranking is name-based, so it still calls the std::string commonType
-    overload (widen.cpp:613). De-string that path to drop the wrapper entirely.
-    (Same flavour as REMAINING STRING-TYPE DECISIONS.)
-
   * REMAINING STRING-TYPE DECISIONS — convert to structured TypeRef checks (same v1
     string-pattern the commonType port retired; all correct today, just debt). Two
     flavours. (Human-edge spelling — preferredSpelling, alias labels, diagnostic text
@@ -25,9 +18,11 @@ BUGS (found, deferred)
         && k.cat==kFloat`; this fixed a live bug (a float-ALIAS enum underlying was
         mis-detected as non-float).
       - classify.cpp ~941 — `ot=="bool"` gating an operator error -> kBool.
-      - string `classify(a,ka)` in constResultStrong (constfold.cpp ~467) and sameClass
-        (classify.cpp ~388) — classify the SPELLING; constResultStrong already holds
-        aRef/bRef (from the commonType port), so classify those refs directly.
+      - string `classify(a,ka)` in constResultStrong (constfold.cpp ~467) — classify
+        the SPELLING; it already holds aRef/bRef (from the commonType port), so
+        classify those refs directly. (sameClass was de-stringed with argConvertCost
+        — it now classifies the TypeRefs and the std::string commonType wrapper is
+        retired.)
     NAME-BASED IDENTITY (char vs uint8, intptr vs int64 are structurally identical, so
     the decision is genuinely name-keyed — but should compare the interned HANDLE,
     `ref == widen::intern("char"/"intptr")`, not spell() a string and `==` it):

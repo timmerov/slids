@@ -6,6 +6,14 @@ what test coverage gaps remain ?
 update readme.txt, todo.txt, plan*.txt, and memories.
 update readme.txt, todo.txt, plan.txt, plan-flow.txt, and memories.
 
+claude really likes to look at types as a string.
+trying to eradicate this practice.
+but man...
+widen::internOrNone
+preferredSpelling
+spellOrEmpty
+widen::strip
+
 inferred reference type.
 int x = 100;
 ref^ = x;

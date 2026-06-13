@@ -382,8 +382,8 @@ void flexBinaryOperands(parse::Node& lhs, parse::Node& rhs) {
 
 // Two types occupy the same width-class (so `int` and `int32` are "the same" for
 // overload-exactness, sidestepping the int/int32 spelling). Non-numeric types
-// (char[], slids) fall back to string equality.
-bool sameClass(std::string const& a, std::string const& b) {
+// (char[], slids) fall back to TypeRef equality (the arena dedups structurally).
+bool sameClass(widen::TypeRef a, widen::TypeRef b) {
     widen::TypeKind ka, kb;
     if (!widen::classify(a, ka) || !widen::classify(b, kb)) return a == b;
     return ka.cat == kb.cat && ka.bits == kb.bits;
@@ -408,22 +408,21 @@ widen::TypeRef autoRefPointee(widen::TypeRef param, parse::Node const& arg) {
 // Conversion cost of argument `a` to parameter type `param` for overload ranking:
 // 0 = exact (same class), 1 = a widening (literal flex, or within-family widen),
 // -1 = not convertible (narrowing / cross-family / un-typeable).
-int argConvertCost(parse::Node const& a, std::string const& param) {
-    std::string at = widen::spellOrEmpty(widen::strip(a.inferred_type));   // see through alias
+int argConvertCost(parse::Node const& a, widen::TypeRef param) {
+    widen::TypeRef at = widen::strip(a.inferred_type);   // see through one alias layer
     // A non-primitive value auto-promotes to a reference param: viable when the
     // arg type matches the param's pointee (exact, mirroring the value checks).
-    widen::TypeRef pr = widen::internOrNone(param);
-    if (pr != widen::kNoType) {
-        widen::TypeRef pointee = autoRefPointee(pr, a);
+    if (param != widen::kNoType) {
+        widen::TypeRef pointee = autoRefPointee(param, a);
         if (pointee != widen::kNoType)
-            return sameClass(at, widen::spellOrEmpty(widen::strip(pointee))) ? 0 : -1;
+            return sameClass(at, widen::strip(pointee)) ? 0 : -1;
     }
-    if (at.empty()) return -1;
+    if (at == widen::kNoType) return -1;
     if (sameClass(at, param)) return 0;
     if (isLiteralKind(a.kind)) {
-        return literalFitsContext(a, widen::internOrNone(param)) ? 1 : -1;
+        return literalFitsContext(a, param) ? 1 : -1;
     }
-    std::string out;
+    widen::TypeRef out;
     if (widen::commonType(at, param, out) && sameClass(out, param)) return 1;
     return -1;
 }
@@ -1295,7 +1294,7 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
         bool ok = true;
         for (std::size_t i = 0; i < s.children.size() && ok; i++) {
             int c = s.children[i]
-                ? argConvertCost(*s.children[i], widen::spellOrEmpty(widen::strip(e.param_types[i])))
+                ? argConvertCost(*s.children[i], widen::strip(e.param_types[i]))
                 : -1;
             if (c < 0) ok = false; else cost += c;
         }
