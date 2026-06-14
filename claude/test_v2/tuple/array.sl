@@ -66,11 +66,6 @@ a 2d array is an array of arrays.
 
     twodim is now: ((5,6), (3,4), (1,2));
 
-arrays of tuples.
-
-    (int, int) arr[3] = ((1,2), (3,4), (5,6));
-    six = arr[2][1];
-    six = arr[1,2];
 */
 
 /*
@@ -266,29 +261,11 @@ int32 main() {
     }
     __println(" )");
 
-    /* array of tuples. */
-    (int,int) a7[3] = ((11,12), (13,14), (15,16));
-    __print("a7 = (");
-    for (y : 0..3) {
-        __print("(" + a7[y][0] + ","+ a7[1,y] + ")");
-    }
-    __println(")");
-
-    /* a MULTI-DIM array of tuples: 2 rows of 3, each element a (int,int). */
-    (int,int) m7[2][3] = ( ((1,2),(3,4),(5,6)), ((7,8),(9,10),(11,12)) );
-    __println("m7= " + m7[0][0][0] + " " + m7[1][2][1] + " " + m7[0][2][0]); // 1 12 5
-
     /* an alias-of-array as the ELEMENT type: `Vec2 va[3]` is a nested array; the
        index walk descends into the element, no flattening (alias preserved). */
     alias Vec2 = int[2];
     Vec2 va[3] = ((1,2), (3,4), (5,6));
     __println("va= " + va[0][0] + " " + va[2][1] + " " + va[1][0]);          // 1 6 3
-
-    /* the same array initialized from element VALUES (not literals) — each whole
-       element is loaded and stored. */
-    Vec2 av = (7, 8);
-    Vec2 vv[2] = (av, av);
-    __println("vv= " + vv[0][0] + " " + vv[1][1]);                           // 7 8
 
     /* reading a nested-array ELEMENT as a whole sub-array value. */
     int row[2] = va[0];
@@ -458,24 +435,6 @@ int32 main() {
 //int neg_array_type_const() {
 //    const int[3] c = (1,2,3);
 //    return c[0];
-//}
-
-/* an array-VALUE element whose type doesn't match the array's element type. */
-//-EXPECT-ERROR: does not match the declared element type
-//int neg_array_value_elem() {
-//    alias Vec2 = int[2];
-//    Vec2 a = (1,2);
-//    int wrong[5] = (5,6,7,8,9);
-//    Vec2 va[2] = (a, wrong);
-//    return va[0][0];
-//}
-
-/* a tuple-VALUE element whose arity doesn't match the array's tuple element. */
-//-EXPECT-ERROR: does not match the declared element type
-//int neg_tuple_value_elem() {
-//    (int,int,int) bad = (1,2,3);
-//    (int,int) at[2] = (bad, bad);
-//    return at[0][0];
 //}
 
 /* a nested array-element initializer whose SHAPE doesn't match the element. */

@@ -1,0 +1,13 @@
+reuse: a= 10 b= 20
+declare: c= 30 d= 40
+typed: x= 50 y= 60
+mixed: a= 70 e= 80 f= 90
+discard-tail: g= 100
+discard-mid: h= 1 k= 3
+from-var: m= 7 n= 8
+hetero: hx= 1 hy= true hz= 2.5
+func: fa= 11 fb= 22
+swap: sa= 2 sb= 1
+inner: oa= 10 ob= 20
+outer: oa= 10 ob= 2
+array: aa= 10 ab= 20

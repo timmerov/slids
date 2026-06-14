@@ -2198,17 +2198,44 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                                   "A swap operand", diag);
             return Completion::Normal;
         case parse::Kind::kDestructureStmt:
-            // (a, b, ) = tuple. children[0] = rhs (read), [1..] = target lvalues
-            // (a null child is a skipped slot). Each target is a WRITE (like an
-            // assign lhs) — resolve + mark it initialized. rhs read FIRST.
+            // (a, int b, ) = tuple. children[0] = rhs (read), [1..] = DECLARATOR
+            // slots (kVarDeclStmt) or null (discard). A TYPED slot declares a fresh
+            // local; a TYPELESS slot reuses an enclosing local (flipped to
+            // kAssignStmt — a store) or declares a fresh inferred one — the same
+            // lexical declare-vs-reuse the bare assign / for-var use. rhs read FIRST.
             if (s.children[0]) resolveExpr(tree, *s.children[0], diag);
             for (std::size_t i = 1; i < s.children.size(); i++) {
-                if (!s.children[i]) continue;
-                if (resolveAssignTarget(tree, *s.children[i], diag)
-                    && tree.entries[s.children[i]->resolved_entry_id].kind
-                           == parse::EntryKind::kLocalVar) {
-                    tree.initialized_locals.insert(s.children[i]->resolved_entry_id);
+                parse::Node* slot = s.children[i].get();
+                if (!slot) continue;   // discard
+                if (slot->return_type != widen::kNoType) {
+                    resolveDeclType(tree, slot->return_type, slot->file_id,
+                                    slot->name_tok, diag);
+                    parse::Entry e;
+                    e.kind = parse::EntryKind::kLocalVar;
+                    e.name = slot->name;
+                    e.slids_type = slot->return_type;
+                    e.file_id = slot->file_id;
+                    e.tok = slot->name_tok;
+                    slot->resolved_entry_id = parse::addEntry(tree, std::move(e));
+                    tree.body_locals.push_back(slot->resolved_entry_id);
+                } else {
+                    int existing = resolveName(tree, slot->name);
+                    if (existing >= 0 && tree.entries[existing].kind
+                                             == parse::EntryKind::kLocalVar) {
+                        slot->resolved_entry_id = existing;
+                        slot->kind = parse::Kind::kAssignStmt;   // reuse -> a store
+                    } else {
+                        parse::Entry e;
+                        e.kind = parse::EntryKind::kLocalVar;
+                        e.name = slot->name;
+                        e.slids_type = widen::kNoType;   // classify stamps it from the slot
+                        e.file_id = slot->file_id;
+                        e.tok = slot->name_tok;
+                        slot->resolved_entry_id = parse::addEntry(tree, std::move(e));
+                        tree.body_locals.push_back(slot->resolved_entry_id);
+                    }
                 }
+                tree.initialized_locals.insert(slot->resolved_entry_id);
             }
             return Completion::Normal;
         case parse::Kind::kDeleteStmt: {

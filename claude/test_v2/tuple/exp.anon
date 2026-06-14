@@ -4,9 +4,6 @@ Dir
 bool
 false
 w0= 2
-da= 2
-ga= false
-db= 2
 s3= 5 7 9
 c3= 8 9 10
 d3= 99 98 97
@@ -17,4 +14,3 @@ t1=(1,2,3,4)
 t3= 1 6 10
 t4= 2 14 4
 t4store= 99
-(int[3], int[4]) t5= 3 5

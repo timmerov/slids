@@ -1,0 +1,290 @@
+compiler_v2 — UNIFIED DECLARATOR (design)
+
+A single declarator parser for every site that consumes a type. Replaces the
+current split between parseType (the type spelling, gated by reject_array_dims)
+and parseNameDims (dims that follow a name), and folds destructure in too. This
+is a design doc — nothing here is built yet.
+
+
+MOTIVATION
+
+Today a "type position" is parsed by two cooperating routines: parseType for the
+type expression, parseNameDims for the array dims that hang off a declared name.
+The reject_array_dims bool is really a proxy for "is there a name here" — at a
+named decl the sized dims go on the name (int x[3]); at a nameless site they go
+inline (return type (int,int)[3]). That split is why a nameless tuple SLOT can't
+spell a composed type (int^[2]) — there is no name to hang the array on, and the
+inline suffix parser only accepts ONE modifier category.
+
+There are 10 type-parse sites (grammar.cpp) plus destructure. Unify them.
+
+
+THE DECLARATOR
+
+One production, parameterized by a per-site name policy:
+
+    declarator(name_policy) := [qualifier] [core-type] [name] [name-dims]
+
+  qualifier  : a prefix `const` / `mutable` (Phase 6; see QUALIFIERS).
+  core-type  : OPTIONAL — a base + a left-to-right chain of postfix wrappers.
+               Omitted = a TYPELESS declarator: the type is INFERRED from the
+               binding. Four binding contexts: a var-decl `= init` (`x = 5`), a
+               param `= default` (`f(x = 5)`), a for-var `: iterable`, and a
+               destructure slot that DECLARES. A nameless TYPE site (return type,
+               alias RHS, ...) requires the core-type. (A typeless binding to an
+               already-resolved name — a plain `x = 5` or a destructure slot that
+               REUSES an existing variable — is an assignment, not a declarator;
+               the declare-vs-reuse split is by lexical resolution.)
+  name       : an identifier; presence governed by name_policy.
+  name-dims  : the OUTERMOST sized-array dimensions, written on the name.
+
+At least one of {core-type, name} is present. BOTH omitted is the EMPTY
+declarator — a destructure DISCARD slot (only valid in a ListSlot). The
+`ident ident` vs `ident =`/`ident;` lookahead splits "core-type + name" from a
+typeless "name" (a lone trailing identifier is the name, not the type).
+
+
+CORE-TYPE — THE WRAPPER CHAIN
+
+    core-type := base { ^ | [] | [N] }*
+    base      := primitive | ident(alias/class/enum, possibly qualified)
+               | ( declarator-list )            # a tuple type
+
+Each postfix wrapper applies to the type ACCUMULATED SO FAR, left to right:
+
+  ^      reference   (no arithmetic)
+  []     iterator    (arithmetic allowed)
+  [N]    sized array dimension
+
+So the order of suffixes is the order of nesting, and every composition is
+spellable without parens:
+
+  int^[3]   ==  (int^)[3]   == array of 3 references
+  int[3]^   ==  (int[3])^   == reference to an array of 3
+  int[2][3] ==  (int[2])[3] == row-major: 2 of (3 of int)
+
+The current single-modifier suffix (the if/else-if/else-if) becomes a LOOP over
+wrappers. `[]` (empty brackets) is the iterator wrapper; `[N]` (with a size) is a
+dimension — the parser already distinguishes them by emptiness.
+
+No parens are EVER required to disambiguate the postfix chain (postfix,
+left-associative, no precedence to resolve). Parens are only needed to scope a
+prefix qualifier (see QUALIFIERS).
+
+
+THE NAME, AND name-dims — "TOP-LEVEL SIZED DIM ON THE NAME"
+
+The name is optional FOR THE PARSE; whether it is required/forbidden is the
+per-site name_policy. Where a name is present, the rule for sized dims is:
+
+  At a named declarator, the OUTERMOST sized-array dimension is written as
+  name-dims, not inline. Sized dims NESTED inside a pointer wrapper (or hidden
+  behind an alias) stay in the core-type.
+
+Worked across the cases (declaring v):
+
+  int v[3]      core int          name-dims [3]   OK    v : int[3]
+  int[3] v      core int[3]  (top-level dim)       ERR   -> int v[3]
+  int[3]^ v     core (int[3])^ (dim inside ^)      OK    v : ref-to-int[3]
+  int^[3] v     core (int^)[3] (top-level dim)     ERR   -> int^ v[3]
+  Vec3 v        core Vec3 (dim hidden in alias)    OK    v : int[3]
+  Vec3^ v       core Vec3^ (outer is ^)            OK    v : ref-to-int[3]
+
+The "size belongs on the name" discipline survives in this sharper form: only a
+TOP-LEVEL inline sized dim is rejected. An alias is one identifier token carrying
+no textual top-level dim, so `Vec3 x` parses and resolve composes int[3]; the
+naive substitution `int[3] x` being illegal is irrelevant (substitution is on the
+resolved type, never on tokens). name-dims compose on top of an alias's dims:
+`Vec3 x[2]` -> int[2][3] (2 of int[3]).
+
+
+name_policy PER SITE  (replaces reject_array_dims)
+
+  Required   var-decl declared type, parameter, for-loop variable
+  Forbidden  return type, alias RHS, enum underlying, cast target,
+             conversion target, sizeof operand
+  ListSlot   destructure / tuple-type slots — name PARSED as optional; the
+             surrounding shape decides. A tuple TYPE forces its slots ANONYMOUS
+             and a destructure NAMES them, but that is the semantic
+             slots-xor-outer-name rule, NOT a Forbidden parse policy (see TUPLES
+             AND DESTRUCTURE).
+
+A parameter name is REQUIRED — there are no anonymous parameters.
+
+
+TUPLES AND DESTRUCTURE — ONE PARENTHESIZED SHAPE
+
+`( declarator , ... )` is the single shared shape for BOTH a tuple TYPE and a
+destructure. Each element parses as a declarator with the name OPTIONAL; the
+surrounding shape interprets. The rule is PER-LIST — a parenthesized list has
+NAMED SLOTS xor AN OUTER NAME, never both (an identifier may follow `)` only when
+the slots are anonymous):
+
+  slots anonymous   + outer name           -> tuple-typed var-decl   (int,int) z
+  slots named       + `= expr`, no outer   -> destructure            (int x, y) = e
+  slots named       + outer name           -> parse OK, REJECT: "too many names"
+  slots anonymous   + `= expr`, no outer   -> REJECT: nothing to bind
+
+So `(int x, int y) z[3]` parses (it is `(declarator-list) name dims`) and the
+slots-xor-outer-name check rejects it (named slots AND the outer name z).
+
+NESTING IS FREE — the check is independent at each list, NOT a tree-global "one
+level" constraint. A slot may itself be a `( sub-list )`, so a nested destructure
+is legal even though names then appear at two nesting LEVELS:
+
+  ((a, b), c) = ((1, 2), 3)      # (a,b)<-(1,2), c<-3  =>  a=1 b=2 c=3
+
+This passes because no list here is named-slots-AND-outer-named: the inner (a,b)
+is a bare slot (nothing after its `)`), and the outer is `= expr`-bound. The
+discriminator is literally "an identifier immediately after `)`".
+
+
+DESTRUCTURE SLOTS
+
+A destructure binds a `( slot, ... ) = expr`. Each slot, dispatched on
+type-presence, obeys the ordinary scope rules — a slot is exactly a var-decl OR
+an assignment:
+
+  typed   (int x)   declare in the CURRENT scope; same-scope collision is a
+                    dup-decl ERROR; an enclosing same-name is shadowed (legal).
+  untyped (x)       lexical-resolve the name: found anywhere up the chain ->
+                    ASSIGN (reuse); found nowhere -> declare-inferred in the
+                    current scope.
+  nested  ((a,b))   a `( sub-list )` slot -> recurse, matched against the
+                    corresponding nested tuple value (per-slot rules apply at the
+                    deeper level; names may appear at any depth).
+  empty             discard that tuple position.
+
+Arity must match the tuple width INCLUDING discards; the trailing comma is
+SIGNIFICANT (it adds a discard slot). Worked example:
+
+    int a; int b;
+    { int c;
+      (a, int b, int c, d, ) = foo();   // foo returns a 5-tuple
+    }
+  a      untyped, resolves (outer)         -> reuse  (assign into outer a)
+  int b  typed, b only in outer scope      -> new var in the block (shadows)
+  int c  typed, c in THIS scope            -> ERROR  (same-scope dup)
+  d      untyped, unresolved               -> declare-inferred
+  (last) empty                             -> discard
+
+Targets are bare names (declarator-shaped), NOT arbitrary lvalues — `(arr[i], b)
+= e` is out (that was the "tuple list of lvalues" we rejected).
+
+
+QUALIFIERS  (const / mutable — Phase 6)
+
+A prefix qualifier binds LOOSEST: it wraps the ENTIRE suffix chain to its right.
+Parens scope it to an inner sub-type — the one place parens ARE required.
+
+  const int^      ==  const (int^)   == const reference to int
+  (const int)^    ==  reference to const int
+
+  precedence:  postfix suffixes bind tight (left-to-right);
+               a prefix qualifier binds loose (wraps everything after it).
+
+Enforcement defers with the const-correctness work; the parse rule above is
+fixed now. The grouping parens ride the size-1-tuple collapse ((T) -> T), not a
+separate grouping construct — so the only first-class use of `(...)` in a type
+stays the tuple constructor (with commas). Canonical spellings are paren-free
+where the chain suffices (int[3]^, not (int[3])^).
+
+
+OPERAND-SIDE ALGEBRA  (validates the type design; not new code)
+
+The dereference / subscript operators are the inverse of the wrappers:
+
+  ^      (postfix deref) peels a POINTER wrapper (^ / []); requires pointer-like.
+  [i]    (subscript)     peels an array dimension.
+  ^      (prefix addr)   adds a wrapper: addr-of a bare lvalue -> reference (T^);
+                         addr-of an indexed element -> iterator (T[]).
+
+  int[3]^ v;   v       : int[3]^   the reference (base address of the array)
+               v^      : int[3]    peels ^  -> the array, located at that address
+               v^[0]   : int       peels a dim -> element 0
+               ^v^[0]  : int[]     addr-of an indexed element -> iterator
+               v, v^, ^v^[0] share one numeric address (&array == &array[0]).
+
+  int x[3];    x^      ILLEGAL — x is an array, not a pointer; deref needs a
+                       pointer wrapper. The first element is x[0].
+
+No implicit array -> iterator decay. `^` <-> pointer wrappers, `[i]` <-> array
+dims, kept distinct.
+
+
+PASSING — ONLY PRIMITIVES BY VALUE
+
+ONLY PRIMITIVES are passed by value (copied). Arrays, tuples, and classes are
+ALWAYS passed BY POINTER — never copied. There is NO by-value/copy form for a
+non-primitive.
+
+The author has a variety of param SPELLINGS for a non-primitive; they differ in
+the param's TYPE and the in-body ACCESS syntax (and form distinct overloads), but
+all pass a pointer at the ABI (Vec3 = int[3]):
+
+  array spelling   void f(int v[3])   ==  void f(Vec3 v)    body: v[i]  (v IS the array)
+  ref spelling     void f(int[3]^ v)  ==  void f(Vec3^ v)   body: v^[i]
+  iterator         void f(int[] v)                          body: v[i]  (length-less)
+
+  rejected         void f(int[3] v)   (top-level dim -> name; write int v[3])
+
+So `Vec3 v` is NOT a copy — it still passes a pointer; it just lets the body touch
+the elements directly instead of through a deref. The value-vs-ref spelling is
+author ergonomics over one pass-by-pointer ABI, not a copy-vs-share distinction.
+
+References to arrays are ACCEPTED — forced by consistency: we accept references
+to tuples ((int,int)^), an array IS a homogeneous tuple, so references to arrays
+follow; and Vec3^ legal + Vec3==int[3] means int[3]^ (the same type) must be
+legal too.
+
+Call side (the arg spelling selects the overload):
+  Vec3 vec;
+  f(vec)    -> the array              -> selects int v[3] / Vec3 v
+  f(^vec)   -> ^vec is Vec3^ (ref)    -> selects int[3]^ v / Vec3^ v
+  int[] v has no implicit feed from an array (no decay); pass ^vec[0].
+
+
+THE 10 SITES
+
+All funnel through parseDeclarator(name_policy). Today's parseType call sites
+(grammar.cpp): var-decl declared type, parameter, return type, for-var, alias
+RHS, enum underlying (x2: primitive-led / ident-led), cast target, conversion
+target, sizeof operand — plus the internal tuple-slot recursion. Destructure
+(parseDestructureStmt) joins as a ListSlot site (each slot a declarator), no
+longer a list of parseExpr lvalues.
+
+
+IMPLEMENTATION NOTES
+
+- Merge parseType + parseNameDims into one parseDeclarator. The suffix chain is a
+  loop over { ^ | [] | [N] }; name-dims are the outermost sized dims, moved to the
+  name at a named site per the top-level rule.
+- reject_array_dims -> name_policy (Required / Forbidden / ListSlot) + the
+  top-level-dim rule.
+- The `( declarator-list )` parser is shared by tuple types and destructure; the
+  name-level rule and the (anonymous|named, outer-name?, `=`?) shape select the
+  interpretation.
+- Destructure becomes per-slot declarators with the typed/untyped/empty dispatch
+  above; the existing null-child = skip becomes null-child = discard.
+
+CLOSES (todo.txt): TUPLE-OF-ARRAY TYPE falls out for free — the wrapper chain
+makes a composed slot type (int^[2], int[3]^) spellable in a nameless slot, so
+the single-modifier-suffix limitation that produced "Expected ')'" disappears.
+
+
+SETTLED
+
+- parameter name: REQUIRED (no anonymous parameters).
+- non-primitive params (array / tuple / class): ALWAYS by pointer, never copied;
+  only primitives pass by value. The author's spelling (value vs ref vs iterator)
+  is access-syntax + overload identity, not copy-vs-share.
+- untyped destructure slot resolving in an enclosing scope: assign into the outer
+  variable (reuse).
+- BOTH pointer kinds are RESEATABLE and NULLABLE (long-standing spec): `r = ^y`
+  repoints, `r = nullptr` clears. `^` and `[]` differ ONLY in arithmetic (`^` has
+  none, `[]` has it) — both reseat, both null. The const-reference semantics
+  (`const int^` locks the reseat) build on this.
+
+OPEN DECISIONS
+
+- the const / mutable enforcement model (Phase 6).

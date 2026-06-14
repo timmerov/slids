@@ -599,6 +599,15 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // slot type as context (so a literal flexes into it). The result type
             // is the kTuple of the slots' inferred types.
             widen::TypeRef ctx_s = widen::strip(context);
+            // A tuple LITERAL whose context is an ARRAY is array-from-tuple, not a
+            // nested tuple: type it as the array and leave the single per-element
+            // validation to checkValueAssign -> classifyArrayFromTuple. Inferring it
+            // as a tuple here would mis-type the node `(int,int,int)` and force a
+            // second, contradictory classification (the double-classification).
+            if (widen::form(ctx_s) == widen::Type::Form::kArray) {
+                e.inferred_type = context;
+                return;
+            }
             std::vector<widen::TypeRef> ctx_slots;
             if (widen::form(ctx_s) == widen::Type::Form::kTuple
                 && widen::get(ctx_s).slots.size() == e.children.size()) {
@@ -2203,21 +2212,31 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             return;
         }
         case parse::Kind::kDestructureStmt: {
-            // (a, b, ) = tuple. children[0] = rhs tuple, [1..] = target lvalues
-            // (null = skipped slot). The rhs must be a tuple, the arity must
-            // match, and each target's type must match its slot (a slot is
-            // assigned to the target; MVP requires the same underlying type).
+            // (a, int b, ) = tuple. children[0] = rhs, [1..] = declarator slots
+            // (null = discard). The rhs is a TUPLE or an ARRAY (a homogeneous tuple);
+            // the arity must match, and each slot binds its element: a typeless
+            // DECLARED slot takes the element's type; a typed declared slot or a
+            // REUSED variable must already match it (MVP: same underlying type).
             parse::Node& rhs = *s.children[0];
             inferExpr(tree, rhs, widen::kNoType, diag);
             widen::TypeRef rs = widen::strip(rhs.inferred_type);
-            if (widen::form(rs) != widen::Type::Form::kTuple) {
+            std::vector<widen::TypeRef> slots;
+            if (widen::form(rs) == widen::Type::Form::kTuple) {
+                slots = widen::get(rs).slots;
+            } else if (widen::form(rs) == widen::Type::Form::kArray) {
+                // An array is a homogeneous tuple: N copies of its (sub-)element type.
+                widen::Type const& at = widen::get(rs);
+                widen::TypeRef elem = (at.dims.size() <= 1) ? at.elem
+                    : widen::internArray(at.elem,
+                          std::vector<int>(at.dims.begin() + 1, at.dims.end()));
+                slots.assign(at.dims.front(), elem);
+            } else {
                 if (rhs.inferred_type != widen::kNoType)
                     diagnostic::report(diag, {s.file_id, s.tok,
-                        "The right side of a destructure must be a tuple; got '"
-                        + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
+                        "The right side of a destructure must be a tuple or array; "
+                        "got '" + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
                 return;
             }
-            std::vector<widen::TypeRef> slots = widen::get(rs).slots;
             std::size_t ntargets = s.children.size() - 1;
             if (ntargets != slots.size()) {
                 diagnostic::report(diag, {s.file_id, s.tok,
@@ -2228,17 +2247,29 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 return;
             }
             for (std::size_t i = 0; i < ntargets; i++) {
-                parse::Node* tgt = s.children[i + 1].get();
-                if (!tgt) continue;   // skipped slot
-                inferExpr(tree, *tgt, widen::kNoType, diag);
-                if (tgt->inferred_type != widen::kNoType
-                    && widen::deepStrip(tgt->inferred_type)
-                           != widen::deepStrip(slots[i])) {
-                    diagnostic::report(diag, {tgt->file_id, tgt->tok,
-                        "Destructure target '" + tgt->name + "' has type '"
-                        + widen::spellOrEmpty(tgt->inferred_type)
-                        + "' but slot " + std::to_string(i) + " is '"
-                        + widen::spellOrEmpty(slots[i]) + "'.", {}});
+                parse::Node* slot = s.children[i + 1].get();
+                if (!slot) continue;   // discard
+                widen::TypeRef slot_ty = slots[i];
+                if (slot->kind == parse::Kind::kVarDeclStmt
+                    && slot->return_type == widen::kNoType) {
+                    // A typeless DECLARED slot takes the tuple element's type.
+                    slot->return_type = slot_ty;
+                    if (slot->resolved_entry_id >= 0)
+                        tree.entries[slot->resolved_entry_id].slids_type = slot_ty;
+                } else {
+                    // A typed declared slot (kVarDeclStmt) or a REUSED existing
+                    // variable (kAssignStmt) must already match the tuple element.
+                    widen::TypeRef have = (slot->kind == parse::Kind::kVarDeclStmt)
+                        ? slot->return_type
+                        : parse::entryType(tree, slot->resolved_entry_id);
+                    if (have != widen::kNoType
+                        && widen::deepStrip(have) != widen::deepStrip(slot_ty)) {
+                        diagnostic::report(diag, {slot->file_id, slot->name_tok,
+                            "Destructure target '" + slot->name + "' has type '"
+                            + widen::spellOrEmpty(have)
+                            + "' but slot " + std::to_string(i) + " is '"
+                            + widen::spellOrEmpty(slot_ty) + "'.", {}});
+                    }
                 }
             }
             return;

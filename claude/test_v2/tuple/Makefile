@@ -9,7 +9,9 @@ BUILD_DIR = ../../build/test_v2/$(DIR)
 
 SAMPLES = \
 	anon \
-	array
+	array \
+	combined \
+	destructure
 
 .PHONY: all clean negatives positives $(SAMPLES)
 

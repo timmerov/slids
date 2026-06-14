@@ -117,20 +117,10 @@ int32 main() {
     __println(##type(good));           // bool
     __println(good);                   // false
 
-    /* landing 2 — slot write + destructure (incl. empty slots) */
+    /* landing 2 — slot write (destructure tests moved to destructure.sl) */
 
     pair[0] = Dir:kS;                  // write a slot by const index
     __println("w0= " + pair[0]);       // 2
-
-    Dir  da;
-    bool ga;
-    (da, ga) = pair;                   // destructure both slots
-    __println("da= " + da);            // 2
-    __println("ga= " + ga);            // false
-
-    Dir db;
-    (db, ) = pair;                     // empty trailing slot — skip slot 1
-    __println("db= " + db);            // 2
 
     /* landing 3 — slot-wise math + scalar broadcast */
 
@@ -185,24 +175,5 @@ int32 main() {
     t4[0][0][1] = 99;
     __println("t4store= " + t4[0][0][1]);   // 99
 
-    /* const-EXPRESSION dims in a tuple slot type (a named const + an arithmetic
-       expr): folded in constfold and baked into each slot's array type — ##type
-       reports the baked dims, and the slot indexing sees the real sizes. */
-    const int kN = 3;
-    (int[kN], int[kN + 1]) t5 = ((1,2,3), (4,5,6,7));
-    __println(##type(t5) + " t5= " + t5[0][2] + " " + t5[1][1]);  // (int[3], int[4]) t5= 3 5
-
     return 0;
 }
-
-/* compile errors — each uncommented in isolation by the negative runner. */
-
-/* a const-EXPRESSION dim in an array TYPE (a tuple slot) is accepted (folded +
-   baked in constfold); a RUNTIME (non-const) dim is still rejected — it can't fold
-   to a constant size. */
-//-EXPECT-ERROR: Array size must be an integer constant
-//int neg_array_type_runtime_dim() {
-//    int n = 3;
-//    (int[n], int) t = ((1,2,3), 4);
-//    return t[1];
-//}

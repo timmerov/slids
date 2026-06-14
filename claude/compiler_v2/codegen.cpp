@@ -2286,6 +2286,16 @@ void collectVarDecls(ast::Node const& s, std::vector<ast::Node const*>& out) {
         }
         return;
     }
+    if (s.kind == ast::Kind::kDestructureStmt) {
+        // [1..] = declarator slots; a DECLARED slot (kVarDeclStmt) needs an alloca,
+        // a REUSED one (kAssignStmt) stores into an already-allocated local.
+        for (std::size_t i = 1; i < s.children.size(); i++) {
+            if (s.children[i] && s.children[i]->kind == ast::Kind::kVarDeclStmt) {
+                collectVarDecls(*s.children[i], out);
+            }
+        }
+        return;
+    }
     // Any other statement kind declares no nested locals.
 }
 
