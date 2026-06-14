@@ -40,6 +40,10 @@ std::string emitArrayLiteralValue(widen::TypeRef arrType, ast::Node const& rhs,
 void emitConstructHooks(std::string const& addr, widen::TypeRef type,
                         std::ostream& out);
 bool typeNeedsHook(widen::TypeRef type, bool ctor);
+bool isAstLvalue(ast::Node const& n);
+std::string emitLvalueAddr(ast::Node const& lv, SymTab const& syms,
+                           strings::Pool& pool, std::ostream& out,
+                           diagnostic::Sink& diag);
 
 // The LLVM type for an interned slids type, read off the structured Type — no
 // spelling decomposition. A primitive maps by (cat, bits): float/double for the
@@ -566,10 +570,14 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
                      diagnostic::Sink& diag) {
     assert(call.children.size() == call.param_types.size()
         && "emitCall: arity should have been verified by classify");
-    // Passing a VALUE to a reference param (`dump(#x)` — an rvalue tuple to a
-    // `(...)^`) materializes it in a temp alloca and passes the address. Excludes
-    // a pointer-like arg (an iterator demoting to a reference passes its own
-    // pointer, not a fresh temp).
+    // Passing a non-primitive VALUE to a by-pointer param is the convenience
+    // syntax (`f(s)` == `f(^s)`, spec: plan-declarator.txt PASSING). Two arms:
+    //   LVALUE arg (named local / index / deref) — pass its address directly,
+    //     no copy. The function mutates the caller's data.
+    //   RVALUE arg (a call return, op+ result, tuple literal) — materialize the
+    //     value in a temp alloca and pass that alloca's address.
+    // Excludes a pointer-like arg (an iterator demoting to a reference passes
+    // its own pointer, not a fresh temp).
     auto isValueByRef = [&](ast::Node const& arg, widen::TypeRef dest) {
         if (widen::form(widen::strip(dest)) != widen::Type::Form::kPointer)
             return false;
@@ -582,9 +590,12 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
     // If any arg materializes a temp alloca, bracket the call in stacksave/
     // stackrestore so the slot is freed each time — a materializing call in a
     // loop reuses the stack region instead of leaking an alloca per iteration.
+    // An LVALUE arg passes its existing address with no fresh alloca, so it
+    // doesn't trigger the bracket.
     bool materializes = false;
     for (size_t i = 0; i < call.children.size(); i++)
-        if (isValueByRef(*call.children[i], call.param_types[i])) {
+        if (isValueByRef(*call.children[i], call.param_types[i])
+            && !isAstLvalue(*call.children[i])) {
             materializes = true;
             break;
         }
@@ -599,6 +610,11 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
         ast::Node const& arg = *call.children[i];
         widen::TypeRef dest = call.param_types[i];
         if (isValueByRef(arg, dest)) {
+            if (isAstLvalue(arg)) {
+                std::string addr = emitLvalueAddr(arg, syms, pool, out, diag);
+                arg_vals.push_back({"ptr", addr});
+                continue;
+            }
             widen::TypeRef pointee = widen::get(widen::strip(dest)).pointee;
             std::string pll = llvmForRef(pointee);
             std::string v = emitExpr(arg, syms, pool, out, diag, pointee);
@@ -674,6 +690,20 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
         assert(bit != syms.end() && "emitElementAddr: base not in SymTab");
         addr = bit->second.alloca_name;
         cur = bit->second.slids_type;
+        // Implicit deref for the ARRAY-BY-POINTER param shorthand: `int a[3]`
+        // as a parameter has resolved type `int[3]^` (the mungeParamType array
+        // arm rewrites it), but the body indexes it WITHOUT an explicit `^`.
+        // Load the pointer once at the base; the chain walks the array as usual.
+        widen::TypeRef cs0 = widen::strip(cur);
+        if (widen::form(cs0) == widen::Type::Form::kPointer) {
+            widen::TypeRef pointee = widen::get(cs0).pointee;
+            if (widen::form(widen::strip(pointee)) == widen::Type::Form::kArray) {
+                std::string loaded = newTmp("aptr");
+                out << "  " << loaded << " = load ptr, ptr " << addr << "\n";
+                addr = loaded;
+                cur = pointee;
+            }
+        }
     }
     // The FIRST subscript is chain.back(), the LAST is chain.front() (source order).
     for (std::size_t j = chain.size(); j-- > 0; ) {

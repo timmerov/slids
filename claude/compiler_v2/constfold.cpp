@@ -1094,6 +1094,16 @@ std::unique_ptr<parse::Node> tryFoldSizeof(parse::Node& n, parse::Tree& tree) {
         } else if (op.kind == parse::Kind::kIdentExpr
                    && op.resolved_entry_id >= 0) {
             widen::TypeRef ty = tree.entries[op.resolved_entry_id].slids_type;
+            // ARRAY-BY-POINTER param: the binding has type `T[N]^` (rewritten
+            // by mungeParamType), but the body sees it AS the array — so
+            // sizeof reads the POINTEE size, not the pointer size (8). The
+            // body's subscript chain does the matching implicit deref.
+            if (ty != widen::kNoType
+                && widen::form(widen::strip(ty)) == widen::Type::Form::kPointer) {
+                widen::TypeRef pe = widen::get(widen::strip(ty)).pointee;
+                if (widen::form(widen::strip(pe)) == widen::Type::Form::kArray)
+                    ty = pe;
+            }
             if (ty != widen::kNoType) size = widen::typeByteSize(ty);
         }
     }

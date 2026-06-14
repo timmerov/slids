@@ -232,9 +232,13 @@ by-pointer-ness is invisible to the author.
 
 DECLARATION vs CALL — value-spelling is a CALL-SITE convenience, NOT a param form.
 The declaration is always the pointer (`void f(String^ s)`). The CALL is either:
-  f(^s)   explicit address-of
-  f(s)    the convenience — auto-take the address, INCLUDING of a TEMPORARY:
-          f(String + "x = " + x), where the rhs is a temp built by op+
+  f(^s)   explicit address-of.
+  f(s)    the convenience — semantically identical to `f(^s)`. Two lowerings:
+          LVALUE s (a named local / field / index / deref) — pass &s directly,
+            no copy. The function mutates the caller's data.
+          RVALUE s (a call return, op+ result, tuple literal) — materialize the
+            value in a stacksaved alloca and pass that alloca's address (so
+            f(String + "x = " + x) still has a stable address to take).
 There is no value SPELLING of a non-primitive parameter; the "value" look lives
 only at the call site (and in the array shorthand, which still passes a pointer).
 
@@ -251,9 +255,11 @@ const lands (const is an entry kind, not yet a type qualifier — Phase 6).
 Installing it in the right place keeps the future const default from being a
 retrofit. The OTHER arms (primitive / array / reject) are live now.
 
-Call side: the auto-ref (autoRefPointee) supplies the address when the arg is a
-non-primitive value and the param is by-pointer; it must materialize a TEMPORARY's
-address for f(temp), not only &existing.
+Call side: emitCall splits the by-pointer arg into the lvalue arm (pass &arg
+directly via emitLvalueAddr) and the rvalue arm (materialize via stacksave/
+alloca/store, pass the temp's address). autoRefPointee (classify) supplies the
+TYPE side of the same convenience: a non-primitive value arg checks against the
+param's pointee.
 
 
 THE 10 SITES

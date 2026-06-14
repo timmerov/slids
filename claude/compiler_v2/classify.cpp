@@ -518,6 +518,17 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             parse::Node& index = *e.children[1];
             inferExpr(tree, base, widen::kNoType, diag);
             inferExpr(tree, index, widen::kNoType, diag);
+            // Implicit deref for the ARRAY-BY-POINTER param shorthand: a param
+            // typed `int[3]^` (rewritten by mungeParamType) indexes WITHOUT an
+            // explicit `^`. Treat the base as the pointee array for the rest of
+            // the index logic.
+            {
+                widen::TypeRef cs = widen::strip(base.inferred_type);
+                if (widen::form(cs) == widen::Type::Form::kPointer) {
+                    widen::TypeRef pointee = widen::get(cs).pointee;
+                    if (isArrayType(pointee)) base.inferred_type = pointee;
+                }
+            }
             std::string bt = widen::spellOrEmpty(base.inferred_type);
             // A tuple slot read. Slots are heterogeneous, so the result type
             // depends on a STATIC index — the index must be a compile-time

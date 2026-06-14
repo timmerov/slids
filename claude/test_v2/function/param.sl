@@ -15,13 +15,13 @@ required parameters first, followed by optional parameters.
         __println(a + b + c);
     }
 
-non-primitive parameters are passed by reference.
-for convenience, pass by value syntax is accepted.
-under the hood, it's pass by reference.
+non-primitive parameters are passed by pointer.
+for convenience, call by value syntax is accepted.
+under the hood, it's pass by pointer.
 
 note:
 
-technically, non-primitive parameters are passed by reference to const.
+technically, non-primitive parameters are passed by pointer to const.
 unless explicitly marked as mutable.
 but const correctness hasn't landed yet.
 

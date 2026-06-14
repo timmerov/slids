@@ -3723,14 +3723,21 @@ bool fieldContributesNeed(parse::Tree const& tree, widen::TypeRef ft, bool ctor)
 // mungeParamTypes — the param-type rewrite hook (see plan-declarator.txt PASSING).
 // The spec: primitives pass by value; everything else by pointer. So a parameter's
 // resolved type must be primitive, a pointer (reference `^` / iterator `[]`), or an
-// array (the `int a[3]` shorthand — a pointer); a TUPLE or CLASS value parameter is
-// a COMPILE ERROR. Today only this REJECT arm is live: the array-by-pointer ABI is
-// still TODO (currently by value — todo BUGS), and pointer-to-const waits for const
-// (Phase 6). Runs after param types are resolved (alias-substituted).
+// array (the `int a[3]` shorthand, rewritten here to a pointer to the array — the
+// body indexes WITHOUT an explicit `^`); a TUPLE or CLASS value parameter is a
+// COMPILE ERROR. Pointer-to-const waits for const (Phase 6). Runs after param
+// types are resolved (alias-substituted).
 void mungeParamType(parse::Tree& /*tree*/, parse::Node& p, diagnostic::Sink& diag) {
     if (p.return_type == widen::kNoType) return;   // typeless: inferred from a default
     using F = widen::Type::Form;
     F f = widen::form(widen::strip(p.return_type));
+    if (f == F::kArray) {
+        // Array-by-pointer arm: rewrite `int[3]` to `int[3]^` (a pointer to the
+        // array). Codegen's call site passes the array's address (lvalue arm
+        // of emitCall); the body's subscript implicit-derefs at the base.
+        p.return_type = widen::internPointer(p.return_type);
+        return;
+    }
     if (f == F::kTuple || f == F::kSlid) {
         diagnostic::report(diag, {p.file_id, p.tok,   // caret the TYPE, not the name
             "A non-primitive parameter must be a pointer (reference / iterator) or "
@@ -3740,12 +3747,32 @@ void mungeParamType(parse::Tree& /*tree*/, parse::Node& p, diagnostic::Sink& dia
 
 // Walk every function (file-scope / nested / method / namespace member) and munge
 // its parameter types. Recurses through children (nested fns, class methods, ns
-// members all live there).
+// members all live there). After rewriting the param's parse-node type, re-syncs
+// the function entry's param_types AND the body-frame param entry's slids_type,
+// which were both captured pre-rewrite during body resolution.
 void mungeParamTypes(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag) {
     if (node.kind == parse::Kind::kFunctionDef
         || node.kind == parse::Kind::kFunctionDecl) {
         for (auto& p : node.params) {
             if (p) mungeParamType(tree, *p, diag);
+        }
+        // Re-sync the function entry's param_types so call-site stamping at
+        // classify sees the rewritten (pointer) types.
+        if (node.resolved_entry_id >= 0
+            && node.resolved_entry_id < static_cast<int>(tree.entries.size())) {
+            parse::Entry& e = tree.entries[node.resolved_entry_id];
+            for (std::size_t i = 0;
+                 i < node.params.size() && i < e.param_types.size(); i++) {
+                if (node.params[i]) e.param_types[i] = node.params[i]->return_type;
+            }
+        }
+        // Re-sync each body-frame param entry's slids_type so SymTab seeding at
+        // codegen and identifier resolution at classify see the rewrite.
+        for (auto& p : node.params) {
+            if (p && p->resolved_entry_id >= 0
+                && p->resolved_entry_id < static_cast<int>(tree.entries.size())) {
+                tree.entries[p->resolved_entry_id].slids_type = p->return_type;
+            }
         }
     }
     for (auto& c : node.children) {
