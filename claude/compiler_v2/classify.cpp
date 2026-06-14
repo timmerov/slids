@@ -1957,6 +1957,71 @@ bool isSameLvalue(parse::Node const& a, parse::Node const& b) {
         && a.resolved_entry_id == b.resolved_entry_id;
 }
 
+// The element types a tuple or array destructures into: a tuple's slots, or N copies
+// of an array's (sub-)element type. Empty if `t` is neither (not destructurable).
+std::vector<widen::TypeRef> destructureSlots(widen::TypeRef t) {
+    widen::TypeRef s = widen::strip(t);
+    if (widen::form(s) == widen::Type::Form::kTuple) return widen::get(s).slots;
+    if (widen::form(s) == widen::Type::Form::kArray) {
+        widen::Type const& at = widen::get(s);
+        widen::TypeRef elem = (at.dims.size() <= 1) ? at.elem
+            : widen::internArray(at.elem,
+                  std::vector<int>(at.dims.begin() + 1, at.dims.end()));
+        return std::vector<widen::TypeRef>(at.dims.front(), elem);
+    }
+    return {};
+}
+
+// Type-check a destructure's slots (node.children[1..]) against `slots` (the element
+// types of the source `src`). A typeless DECLARED slot takes its element's type; a
+// typed slot or a REUSED variable must match it; a NESTED slot recurses (its element
+// must itself be a tuple/array); null is a discard.
+void classifyDestructureSlots(parse::Tree& tree, parse::Node& node,
+                              std::vector<widen::TypeRef> const& slots,
+                              widen::TypeRef src, diagnostic::Sink& diag) {
+    std::size_t ntargets = node.children.size() - 1;
+    if (ntargets != slots.size()) {
+        diagnostic::report(diag, {node.file_id, node.tok,
+            "Destructure has " + std::to_string(ntargets)
+            + " target(s) but the tuple '" + widen::spellOrEmpty(src) + "' has "
+            + std::to_string(slots.size()) + " slot(s).", {}});
+        return;
+    }
+    for (std::size_t i = 0; i < ntargets; i++) {
+        parse::Node* slot = node.children[i + 1].get();
+        if (!slot) continue;   // discard
+        widen::TypeRef slot_ty = slots[i];
+        if (slot->kind == parse::Kind::kDestructureStmt) {
+            std::vector<widen::TypeRef> sub = destructureSlots(slot_ty);
+            if (sub.empty()) {
+                diagnostic::report(diag, {slot->file_id, slot->tok,
+                    "A nested destructure target needs a tuple or array element; got '"
+                    + widen::spellOrEmpty(slot_ty) + "'.", {}});
+                continue;
+            }
+            classifyDestructureSlots(tree, *slot, sub, slot_ty, diag);
+            continue;
+        }
+        if (slot->kind == parse::Kind::kVarDeclStmt
+            && slot->return_type == widen::kNoType) {
+            slot->return_type = slot_ty;
+            if (slot->resolved_entry_id >= 0)
+                tree.entries[slot->resolved_entry_id].slids_type = slot_ty;
+        } else {
+            widen::TypeRef have = (slot->kind == parse::Kind::kVarDeclStmt)
+                ? slot->return_type
+                : parse::entryType(tree, slot->resolved_entry_id);
+            if (have != widen::kNoType
+                && widen::deepStrip(have) != widen::deepStrip(slot_ty)) {
+                diagnostic::report(diag, {slot->file_id, slot->name_tok,
+                    "Destructure target '" + slot->name + "' has type '"
+                    + widen::spellOrEmpty(have) + "' but slot " + std::to_string(i)
+                    + " is '" + widen::spellOrEmpty(slot_ty) + "'.", {}});
+            }
+        }
+    }
+}
+
 void classifyStmt(parse::Tree& tree, parse::Node& s,
                   widen::TypeRef fn_return_type,
                   diagnostic::Sink& diag) {
@@ -2212,66 +2277,19 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             return;
         }
         case parse::Kind::kDestructureStmt: {
-            // (a, int b, ) = tuple. children[0] = rhs, [1..] = declarator slots
-            // (null = discard). The rhs is a TUPLE or an ARRAY (a homogeneous tuple);
-            // the arity must match, and each slot binds its element: a typeless
-            // DECLARED slot takes the element's type; a typed declared slot or a
-            // REUSED variable must already match it (MVP: same underlying type).
+            // children[0] = rhs (a TUPLE or ARRAY — a homogeneous tuple), [1..] =
+            // declarator / nested slots. Shape + per-slot checks recurse for nested.
             parse::Node& rhs = *s.children[0];
             inferExpr(tree, rhs, widen::kNoType, diag);
-            widen::TypeRef rs = widen::strip(rhs.inferred_type);
-            std::vector<widen::TypeRef> slots;
-            if (widen::form(rs) == widen::Type::Form::kTuple) {
-                slots = widen::get(rs).slots;
-            } else if (widen::form(rs) == widen::Type::Form::kArray) {
-                // An array is a homogeneous tuple: N copies of its (sub-)element type.
-                widen::Type const& at = widen::get(rs);
-                widen::TypeRef elem = (at.dims.size() <= 1) ? at.elem
-                    : widen::internArray(at.elem,
-                          std::vector<int>(at.dims.begin() + 1, at.dims.end()));
-                slots.assign(at.dims.front(), elem);
-            } else {
+            std::vector<widen::TypeRef> slots = destructureSlots(rhs.inferred_type);
+            if (slots.empty()) {
                 if (rhs.inferred_type != widen::kNoType)
                     diagnostic::report(diag, {s.file_id, s.tok,
                         "The right side of a destructure must be a tuple or array; "
                         "got '" + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
                 return;
             }
-            std::size_t ntargets = s.children.size() - 1;
-            if (ntargets != slots.size()) {
-                diagnostic::report(diag, {s.file_id, s.tok,
-                    "Destructure has " + std::to_string(ntargets)
-                    + " target(s) but the tuple '"
-                    + widen::spellOrEmpty(rhs.inferred_type) + "' has "
-                    + std::to_string(slots.size()) + " slot(s).", {}});
-                return;
-            }
-            for (std::size_t i = 0; i < ntargets; i++) {
-                parse::Node* slot = s.children[i + 1].get();
-                if (!slot) continue;   // discard
-                widen::TypeRef slot_ty = slots[i];
-                if (slot->kind == parse::Kind::kVarDeclStmt
-                    && slot->return_type == widen::kNoType) {
-                    // A typeless DECLARED slot takes the tuple element's type.
-                    slot->return_type = slot_ty;
-                    if (slot->resolved_entry_id >= 0)
-                        tree.entries[slot->resolved_entry_id].slids_type = slot_ty;
-                } else {
-                    // A typed declared slot (kVarDeclStmt) or a REUSED existing
-                    // variable (kAssignStmt) must already match the tuple element.
-                    widen::TypeRef have = (slot->kind == parse::Kind::kVarDeclStmt)
-                        ? slot->return_type
-                        : parse::entryType(tree, slot->resolved_entry_id);
-                    if (have != widen::kNoType
-                        && widen::deepStrip(have) != widen::deepStrip(slot_ty)) {
-                        diagnostic::report(diag, {slot->file_id, slot->name_tok,
-                            "Destructure target '" + slot->name + "' has type '"
-                            + widen::spellOrEmpty(have)
-                            + "' but slot " + std::to_string(i) + " is '"
-                            + widen::spellOrEmpty(slot_ty) + "'.", {}});
-                    }
-                }
-            }
+            classifyDestructureSlots(tree, s, slots, rhs.inferred_type, diag);
             return;
         }
         case parse::Kind::kDeleteStmt: {

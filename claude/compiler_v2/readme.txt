@@ -244,9 +244,11 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
   * Landed: construct + whole-copy + const-index read `t[k]` (extractvalue; a
     RUNTIME index on a tuple is rejected — heterogeneous slots); slot write
     `t[k]=v` (struct-GEP) + destructure `(a,b,)=t` (kDestructureStmt, null child =
-    skipped slot); slot-wise arith + scalar broadcast (`(1,2,3)+7`); params /
-    returns / references (`{i32,i32}` by value, `(T,T)^` = ptr). Codegen builds
-    the aggregate via insertvalue; classify slot-types via internTuple.
+    skipped slot); slot-wise arith + scalar broadcast (`(1,2,3)+7`); returns /
+    references (a tuple RETURN is `{i32,i32}` by value, `(T,T)^` = ptr). Codegen
+    builds the aggregate via insertvalue; classify slot-types via internTuple.
+    DEFECT: a tuple PARAM is currently `{i32,i32}` BY VALUE — the spec is by-pointer
+    (or reject the value form); see todo BUGS + plan-declarator.txt mungeParamTypes.
   * ARRAY from a tuple: `int a[3]=(1,2,3)`, `a=(4,5,6)`, multi-dim
     `int td[3][2]=((1,2),(3,4),(5,6))` (a NESTED tuple whose SHAPE — row × col —
     matches the standard-order dims). ELEMENT-AWARE: collectArrayElementNodes

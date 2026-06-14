@@ -104,39 +104,34 @@ name_policy PER SITE  (replaces reject_array_dims)
   Forbidden  return type, alias RHS, enum underlying, cast target,
              conversion target, sizeof operand
   ListSlot   destructure / tuple-type slots — name PARSED as optional; the
-             surrounding shape decides. A tuple TYPE forces its slots ANONYMOUS
-             and a destructure NAMES them, but that is the semantic
-             slots-xor-outer-name rule, NOT a Forbidden parse policy (see TUPLES
-             AND DESTRUCTURE).
+             POSITION decides. A tuple TYPE forces its slots ANONYMOUS (a named slot
+             is "too many names") and a destructure NAMES them — the by-position
+             rule, NOT a Forbidden parse policy (see TUPLES AND DESTRUCTURE).
 
 A parameter name is REQUIRED — there are no anonymous parameters.
 
 
-TUPLES AND DESTRUCTURE — ONE PARENTHESIZED SHAPE
+TUPLES AND DESTRUCTURE — A PARENTHESIZED `( ... )`, READ BY POSITION
 
-`( declarator , ... )` is the single shared shape for BOTH a tuple TYPE and a
-destructure. Each element parses as a declarator with the name OPTIONAL; the
-surrounding shape interprets. The rule is PER-LIST — a parenthesized list has
-NAMED SLOTS xor AN OUTER NAME, never both (an identifier may follow `)` only when
-the slots are anonymous):
+`( ... )` is the shared shape for a tuple TYPE and a destructure, but the rule is
+decided by POSITION — not by one unified name-counting scheme:
 
-  slots anonymous   + outer name           -> tuple-typed var-decl   (int,int) z
-  slots named       + `= expr`, no outer   -> destructure            (int x, y) = e
-  slots named       + outer name           -> parse OK, REJECT: "too many names"
-  slots anonymous   + `= expr`, no outer   -> REJECT: nothing to bind
+  TYPE position (var-decl / param / return): the slots are TYPES and must be
+  ANONYMOUS. A NAMED slot is "TOO MANY NAMES" — the name belongs on the variable,
+  not inside the type:
+       (int, int) z          OK     z : (int, int)
+       (int x, int y) z       ERROR  "too many names" (x,y named in the TYPE, plus z)
 
-So `(int x, int y) z[3]` parses (it is `(declarator-list) name dims`) and the
-slots-xor-outer-name check rejects it (named slots AND the outer name z).
+  DESTRUCTURE (`( ... ) = expr`, dispatched by the trailing `=`): the slots are
+  BINDINGS and carry as many names as needed, at ANY nesting depth — "too many
+  names" never applies:
+       (int x, int y) = e            OK
+       ((int a, b), int c) = e        OK   (nested; names at every level are fine)
 
-NESTING IS FREE — the check is independent at each list, NOT a tree-global "one
-level" constraint. A slot may itself be a `( sub-list )`, so a nested destructure
-is legal even though names then appear at two nesting LEVELS:
+So "too many names" is purely a TYPE-position rule (names where only types belong);
+a destructure is the `=`-bound form, and it nests freely:
 
   ((a, b), c) = ((1, 2), 3)      # (a,b)<-(1,2), c<-3  =>  a=1 b=2 c=3
-
-This passes because no list here is named-slots-AND-outer-named: the inner (a,b)
-is a bare slot (nothing after its `)`), and the outer is `= expr`-bound. The
-discriminator is literally "an identifier immediately after `)`".
 
 
 DESTRUCTURE SLOTS
@@ -153,7 +148,9 @@ an assignment:
   nested  ((a,b))   a `( sub-list )` slot -> recurse, matched against the
                     corresponding nested tuple value (per-slot rules apply at the
                     deeper level; names may appear at any depth).
-  empty             discard that tuple position.
+  discard           an empty slot (a bare `,`) OR a TYPED slot with NO name (`int`)
+                    -> drop that tuple position. The slot name is OPTIONAL; a
+                    typed-no-name slot is a documented drop, same as empty.
 
 Arity must match the tuple width INCLUDING discards; the trailing comma is
 SIGNIFICANT (it adds a discard slot). Worked example:
@@ -212,36 +209,51 @@ No implicit array -> iterator decay. `^` <-> pointer wrappers, `[i]` <-> array
 dims, kept distinct.
 
 
-PASSING — ONLY PRIMITIVES BY VALUE
+PASSING — PRIMITIVES BY VALUE, EVERYTHING ELSE BY POINTER  (invariant since day 0)
 
-ONLY PRIMITIVES are passed by value (copied). Arrays, tuples, and classes are
-ALWAYS passed BY POINTER — never copied. There is NO by-value/copy form for a
-non-primitive.
+A PRIMITIVE parameter passes by value (copied). EVERYTHING else passes BY POINTER —
+the pointers (reference `^`, iterator `[]`) AND arrays/tuples/classes. There is no
+by-value/copy form for a non-primitive, and a non-primitive VALUE parameter is a
+COMPILE ERROR:
 
-The author has a variety of param SPELLINGS for a non-primitive; they differ in
-the param's TYPE and the in-body ACCESS syntax (and form distinct overloads), but
-all pass a pointer at the ABI (Vec3 = int[3]):
+  void f(int a)         primitive             -> by value
+  void f(int[] p)       iterator (a pointer)  -> by pointer
+  void f((int,int)^ t)  reference (a pointer) -> by pointer
+  void f(int a[3])      ARRAY shorthand       -> by pointer  (see below)
+  void f((int,int) t)   tuple BY VALUE        -> COMPILE ERROR
+  void f(Vec3 v)        array BY VALUE        -> COMPILE ERROR  (Vec3 = int[3])
 
-  array spelling   void f(int v[3])   ==  void f(Vec3 v)    body: v[i]  (v IS the array)
-  ref spelling     void f(int[3]^ v)  ==  void f(Vec3^ v)   body: v^[i]
-  iterator         void f(int[] v)                          body: v[i]  (length-less)
+THE ARRAY SHORTHAND. `int a[3]` and `int[] p` as PARAMETERS are both pointers —
+`int a[3]` a pointer to a KNOWN-size array, `int[] p` one of unknown size. (As a
+VARIABLE, `int a[3]` is three ints — array-as-data; as a PARAMETER it is the
+address — array-as-pointer. Same tokens; position disambiguates.) `int a[3]` is
+sugar for `int[3]^ a` but indexes WITHOUT a deref (`a[0]`, not `a^[0]`); the
+by-pointer-ness is invisible to the author.
 
-  rejected         void f(int[3] v)   (top-level dim -> name; write int v[3])
+DECLARATION vs CALL — value-spelling is a CALL-SITE convenience, NOT a param form.
+The declaration is always the pointer (`void f(String^ s)`). The CALL is either:
+  f(^s)   explicit address-of
+  f(s)    the convenience — auto-take the address, INCLUDING of a TEMPORARY:
+          f(String + "x = " + x), where the rhs is a temp built by op+
+There is no value SPELLING of a non-primitive parameter; the "value" look lives
+only at the call site (and in the array shorthand, which still passes a pointer).
 
-So `Vec3 v` is NOT a copy — it still passes a pointer; it just lets the body touch
-the elements directly instead of through a deref. The value-vs-ref spelling is
-author ergonomics over one pass-by-pointer ABI, not a copy-vs-share distinction.
+mungeParamTypes — the PARAM-TYPE REWRITE HOOK (resolve), over each resolved param:
+  primitive          -> pass through (by value)
+  array  (kArray)    -> by pointer, semantically deref'd at use, INVISIBLE to the
+                        author (codegen receives a `ptr` and binds the param's
+                        alloca to it — no copy, no `^` in the body)
+  pointer (^ / [])   -> pointer-to-CONST: `int^ p` is sugar for `(const int)^ p`
+  everything else    -> COMPILE ERROR (a non-primitive parameter must be a pointer
+                        or an array)
+The hook belongs HERE now even though the pointer-to-const rewrite is INERT until
+const lands (const is an entry kind, not yet a type qualifier — Phase 6).
+Installing it in the right place keeps the future const default from being a
+retrofit. The OTHER arms (primitive / array / reject) are live now.
 
-References to arrays are ACCEPTED — forced by consistency: we accept references
-to tuples ((int,int)^), an array IS a homogeneous tuple, so references to arrays
-follow; and Vec3^ legal + Vec3==int[3] means int[3]^ (the same type) must be
-legal too.
-
-Call side (the arg spelling selects the overload):
-  Vec3 vec;
-  f(vec)    -> the array              -> selects int v[3] / Vec3 v
-  f(^vec)   -> ^vec is Vec3^ (ref)    -> selects int[3]^ v / Vec3^ v
-  int[] v has no implicit feed from an array (no decay); pass ^vec[0].
+Call side: the auto-ref (autoRefPointee) supplies the address when the arg is a
+non-primitive value and the param is by-pointer; it must materialize a TEMPORARY's
+address for f(temp), not only &existing.
 
 
 THE 10 SITES
@@ -275,9 +287,11 @@ the single-modifier-suffix limitation that produced "Expected ')'" disappears.
 SETTLED
 
 - parameter name: REQUIRED (no anonymous parameters).
-- non-primitive params (array / tuple / class): ALWAYS by pointer, never copied;
-  only primitives pass by value. The author's spelling (value vs ref vs iterator)
-  is access-syntax + overload identity, not copy-vs-share.
+- params: PRIMITIVE by value; everything else BY POINTER. A non-primitive VALUE
+  param is a COMPILE ERROR — the declaration is always the pointer (`String^ s`),
+  and value-spelling (`f(s)`) is a CALL-SITE convenience. Sole exception: the array
+  shorthand `int a[3]` (a pointer, indexed without a deref). Done via the
+  mungeParamTypes hook (resolve); its pointer-to-const arm defers to Phase 6.
 - untyped destructure slot resolving in an enclosing scope: assign into the outer
   variable (reuse).
 - BOTH pointer kinds are RESEATABLE and NULLABLE (long-standing spec): `r = ^y`

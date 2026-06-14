@@ -94,8 +94,8 @@ enum Dir ( kN, kE, kS, kW );
 
 /* landing 4 — tuple params / returns + tuple references */
 
-(int, int) addpair( (int, int) p ) {       // by-value tuple param + tuple return
-    return (p[0] + 1, p[1] + 1);
+(int, int) addpair( (int, int)^ p ) {       // by-value tuple param + tuple return
+    return (p^[0] + 1, p^[1] + 1);
 }
 
 int firstRef( (int, int)^ pr ) {           // by-reference tuple param

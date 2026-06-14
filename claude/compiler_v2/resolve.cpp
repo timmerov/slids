@@ -2016,6 +2016,61 @@ bool condIsConstTrue(parse::Node const& c) {
     return false;
 }
 
+// Resolve a destructure's slots (node.children[1..]; [0] is the rhs, handled by the
+// caller). A TYPED slot declares a fresh local (dup-checked); a TYPELESS slot reuses
+// an enclosing local (flipped to kAssignStmt) or declares a fresh inferred one; a
+// NESTED `(...)` slot (a kDestructureStmt with no rhs) recurses; null is a discard.
+void resolveDestructureSlots(parse::Tree& tree, parse::Node& node,
+                             diagnostic::Sink& diag) {
+    for (std::size_t i = 1; i < node.children.size(); i++) {
+        parse::Node* slot = node.children[i].get();
+        if (!slot) continue;   // discard
+        if (slot->kind == parse::Kind::kDestructureStmt) {
+            resolveDestructureSlots(tree, *slot, diag);   // nested sub-pattern
+            continue;
+        }
+        if (slot->return_type != widen::kNoType) {
+            resolveDeclType(tree, slot->return_type, slot->file_id,
+                            slot->name_tok, diag);
+            int dup = parse::findInFrame(tree, parse::currentFrameId(tree),
+                                         slot->name);
+            if (dup >= 0) {
+                parse::Entry const& prev = tree.entries[dup];
+                diagnostic::report(diag, {slot->file_id, slot->name_tok,
+                    "Duplicate declaration of '" + slot->name + "'.",
+                    {{prev.file_id, prev.tok, "first declared here"}}});
+            } else {
+                parse::Entry e;
+                e.kind = parse::EntryKind::kLocalVar;
+                e.name = slot->name;
+                e.slids_type = slot->return_type;
+                e.file_id = slot->file_id;
+                e.tok = slot->name_tok;
+                slot->resolved_entry_id = parse::addEntry(tree, std::move(e));
+                tree.body_locals.push_back(slot->resolved_entry_id);
+            }
+        } else {
+            int existing = resolveName(tree, slot->name);
+            if (existing >= 0 && tree.entries[existing].kind
+                                     == parse::EntryKind::kLocalVar) {
+                slot->resolved_entry_id = existing;
+                slot->kind = parse::Kind::kAssignStmt;   // reuse -> a store
+            } else {
+                parse::Entry e;
+                e.kind = parse::EntryKind::kLocalVar;
+                e.name = slot->name;
+                e.slids_type = widen::kNoType;   // classify stamps it from the slot
+                e.file_id = slot->file_id;
+                e.tok = slot->name_tok;
+                slot->resolved_entry_id = parse::addEntry(tree, std::move(e));
+                tree.body_locals.push_back(slot->resolved_entry_id);
+            }
+        }
+        if (slot->resolved_entry_id >= 0)
+            tree.initialized_locals.insert(slot->resolved_entry_id);
+    }
+}
+
 Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     switch (s.kind) {
         case parse::Kind::kVarDeclStmt: {
@@ -2198,45 +2253,9 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                                   "A swap operand", diag);
             return Completion::Normal;
         case parse::Kind::kDestructureStmt:
-            // (a, int b, ) = tuple. children[0] = rhs (read), [1..] = DECLARATOR
-            // slots (kVarDeclStmt) or null (discard). A TYPED slot declares a fresh
-            // local; a TYPELESS slot reuses an enclosing local (flipped to
-            // kAssignStmt — a store) or declares a fresh inferred one — the same
-            // lexical declare-vs-reuse the bare assign / for-var use. rhs read FIRST.
+            // children[0] = rhs (read FIRST), [1..] = declarator / nested slots.
             if (s.children[0]) resolveExpr(tree, *s.children[0], diag);
-            for (std::size_t i = 1; i < s.children.size(); i++) {
-                parse::Node* slot = s.children[i].get();
-                if (!slot) continue;   // discard
-                if (slot->return_type != widen::kNoType) {
-                    resolveDeclType(tree, slot->return_type, slot->file_id,
-                                    slot->name_tok, diag);
-                    parse::Entry e;
-                    e.kind = parse::EntryKind::kLocalVar;
-                    e.name = slot->name;
-                    e.slids_type = slot->return_type;
-                    e.file_id = slot->file_id;
-                    e.tok = slot->name_tok;
-                    slot->resolved_entry_id = parse::addEntry(tree, std::move(e));
-                    tree.body_locals.push_back(slot->resolved_entry_id);
-                } else {
-                    int existing = resolveName(tree, slot->name);
-                    if (existing >= 0 && tree.entries[existing].kind
-                                             == parse::EntryKind::kLocalVar) {
-                        slot->resolved_entry_id = existing;
-                        slot->kind = parse::Kind::kAssignStmt;   // reuse -> a store
-                    } else {
-                        parse::Entry e;
-                        e.kind = parse::EntryKind::kLocalVar;
-                        e.name = slot->name;
-                        e.slids_type = widen::kNoType;   // classify stamps it from the slot
-                        e.file_id = slot->file_id;
-                        e.tok = slot->name_tok;
-                        slot->resolved_entry_id = parse::addEntry(tree, std::move(e));
-                        tree.body_locals.push_back(slot->resolved_entry_id);
-                    }
-                }
-                tree.initialized_locals.insert(slot->resolved_entry_id);
-            }
+            resolveDestructureSlots(tree, s, diag);
             return Completion::Normal;
         case parse::Kind::kDeleteStmt: {
             // delete p; — frees p and nulls it. Resolve the operand as a read (you
@@ -3701,6 +3720,39 @@ bool fieldContributesNeed(parse::Tree const& tree, widen::TypeRef ft, bool ctor)
     return false;
 }
 
+// mungeParamTypes — the param-type rewrite hook (see plan-declarator.txt PASSING).
+// The spec: primitives pass by value; everything else by pointer. So a parameter's
+// resolved type must be primitive, a pointer (reference `^` / iterator `[]`), or an
+// array (the `int a[3]` shorthand — a pointer); a TUPLE or CLASS value parameter is
+// a COMPILE ERROR. Today only this REJECT arm is live: the array-by-pointer ABI is
+// still TODO (currently by value — todo BUGS), and pointer-to-const waits for const
+// (Phase 6). Runs after param types are resolved (alias-substituted).
+void mungeParamType(parse::Tree& /*tree*/, parse::Node& p, diagnostic::Sink& diag) {
+    if (p.return_type == widen::kNoType) return;   // typeless: inferred from a default
+    using F = widen::Type::Form;
+    F f = widen::form(widen::strip(p.return_type));
+    if (f == F::kTuple || f == F::kSlid) {
+        diagnostic::report(diag, {p.file_id, p.tok,   // caret the TYPE, not the name
+            "A non-primitive parameter must be a pointer (reference / iterator) or "
+            "an array; got '" + widen::spellOrEmpty(p.return_type) + "'.", {}});
+    }
+}
+
+// Walk every function (file-scope / nested / method / namespace member) and munge
+// its parameter types. Recurses through children (nested fns, class methods, ns
+// members all live there).
+void mungeParamTypes(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag) {
+    if (node.kind == parse::Kind::kFunctionDef
+        || node.kind == parse::Kind::kFunctionDecl) {
+        for (auto& p : node.params) {
+            if (p) mungeParamType(tree, *p, diag);
+        }
+    }
+    for (auto& c : node.children) {
+        if (c) mungeParamTypes(tree, *c, diag);
+    }
+}
+
 }  // namespace
 
 void run(parse::Tree& tree, diagnostic::Sink& diag) {
@@ -4039,6 +4091,12 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             diagnostic::report(diag, {e.file_id, e.tok,
                 "Function '" + e.name + "' is declared but never defined.", {}});
         }
+    }
+
+    // mungeParamTypes — non-primitive params must be pointers or arrays; a tuple /
+    // class VALUE param is rejected (param types are now resolved).
+    for (auto& ch : program->children) {
+        if (ch) mungeParamTypes(tree, *ch, diag);
     }
 
     parse::popFrame(tree);

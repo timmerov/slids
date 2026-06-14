@@ -105,8 +105,8 @@ int[A3LEN] makeArrN() {
 }
 // a const-EXPRESSION dim in a tuple-slot PARAM type (type position, distinct from
 // the name-anchored `int a[A3LEN]` form above).
-int sumTupN((int[A3LEN], int) t) {
-    return t[0][0] + t[0][1] + t[0][2] + t[1];
+int sumTupN((int[A3LEN], int)^ t) {
+    return t^[0][0] + t^[0][1] + t^[0][2] + t^[1];
 }
 
 /*

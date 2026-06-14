@@ -8,6 +8,20 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
+  * NON-PRIMITIVE PARAMS PASSED BY VALUE — the day-0 invariant is: primitives by
+    value, everything else BY POINTER. But a non-primitive VALUE parameter
+    (`foo((int,int) t)`, `foo(Vec3 v)`) is neither rejected NOR passed by pointer —
+    it is silently passed by VALUE (the IR shows `@foo({i32,i32} %arg.0)`, an
+    aggregate copy). So `(int,int) t` compiles when it must be a compile error, and
+    anon.sl's value tuple params have been miscompiled (copy, not share) the whole
+    time. The auto-ref (autoRefPointee) only fires when the PARAM is a pointer
+    (`T^`); a value non-primitive param never triggers it. FIX = the mungeParamTypes
+    hook (see plan-declarator.txt PASSING): primitive -> pass through; array (incl.
+    `int a[3]` shorthand) -> by pointer, deref'd-at-use invisibly; pointer -> (Phase-6
+    pointer-to-const); everything else -> COMPILE ERROR. The reject + array arms are
+    fixable now; the const arm waits for const. anon.sl's value tuple params then
+    move to `(int,int)^`.
+
   * TUPLE-OF-ARRAY TYPE — a tuple whose slot type is an array (`(int, int^[2])`)
     does not parse: the tuple-type parser rejects the `[N]` suffix on a slot type
     ("Expected ')'"). Array-of-tuple types work (`(int, int^) a[2]`) and tuple

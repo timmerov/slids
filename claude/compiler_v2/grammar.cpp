@@ -2287,24 +2287,28 @@ struct Parser {
     // [1..] = target lvalues in slot order, a NULL child for an empty/skipped
     // slot. Targets are parsed first (syntactic order) into [1..], then the rhs
     // is filled into [0].
-    std::unique_ptr<parse::Node> parseDestructureStmt() {
-        int lp = pos;
-        auto node = newNodeAt(parse::Kind::kDestructureStmt, peek().file_id, lp);
-        node->children.push_back(nullptr);   // [0] = rhs, filled below
+    // Parse `( slot, ... )` (the leading `(` consumed here) and append the slots to
+    // `node->children` (after children[0], the rhs placeholder). A slot is empty (a
+    // bare `,` -> discard), a DECLARATOR (`[type] name` -> a kVarDeclStmt; `int x`
+    // declares, a bare `x` reuses-or-declares per resolve), or a NESTED `( ... )`
+    // destructure (recurse — a kDestructureStmt slot with no rhs of its own).
+    bool parseDestructureSlots(parse::Node* node) {
         advance();   // (
         while (true) {
             if (peek().kind == token::Kind::kComma
                 || peek().kind == token::Kind::kRParen) {
-                node->children.push_back(nullptr);   // empty / discard slot
+                node->children.push_back(nullptr);   // discard slot
+            } else if (peek().kind == token::Kind::kLParen) {
+                auto sub = newNodeAt(parse::Kind::kDestructureStmt, peek().file_id, pos);
+                sub->children.push_back(nullptr);    // [0] = rhs (none for a nested slot)
+                if (!parseDestructureSlots(sub.get())) return false;
+                node->children.push_back(std::move(sub));
             } else {
-                // Each slot is a DECLARATOR: `int x` declares; a bare `x`
-                // reuses-or-declares (resolve decides by lexical lookup). Modeled as
-                // a kVarDeclStmt (no init — codegen binds the extracted tuple slot).
                 Declarator d;
                 if (!parseDeclarator(NamePolicy::Required, /*parse_name_dims=*/false,
                                      /*allow_qualified=*/false,
                                      "Expected a destructure target name.", d)) {
-                    return nullptr;
+                    return false;
                 }
                 auto slot = newNodeAt(parse::Kind::kVarDeclStmt, d.file_id, d.tok);
                 slot->name = std::move(d.name);
@@ -2315,7 +2319,14 @@ struct Parser {
             if (peek().kind != token::Kind::kComma) break;
             advance();   // ,
         }
-        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+        return expect(token::Kind::kRParen, ")");
+    }
+
+    std::unique_ptr<parse::Node> parseDestructureStmt() {
+        int lp = pos;
+        auto node = newNodeAt(parse::Kind::kDestructureStmt, peek().file_id, lp);
+        node->children.push_back(nullptr);   // [0] = rhs, filled below
+        if (!parseDestructureSlots(node.get())) return nullptr;
         if (!expect(token::Kind::kEquals, "=")) return nullptr;
         auto rhs = parseExpr();
         if (!rhs) return nullptr;

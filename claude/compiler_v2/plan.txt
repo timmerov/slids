@@ -561,7 +561,12 @@ Phase 6 — const correctness
   as an entry KIND, not a tracked type qualifier). ENFORCEMENT below is this phase.
   * `const T` qualifier; lvalue carries const, rvalue read is mutable
   * method-level const (`name(params) const { ... }`); const self
-  * pass-by-ref-to-const default for `T^`/`T[]` params; `mutable` opts out
+  * pass-by-ref-to-const default for `T^`/`T[]` params (`int^ p` == `(const int)^ p`);
+    `mutable` opts out. This is the pointer-to-const ARM of mungeParamTypes — the
+    param-type rewrite hook (resolve; see plan-declarator.txt PASSING). The hook and
+    its OTHER arms land pre-const (primitive pass-through; array-by-pointer; REJECT a
+    non-primitive value param — today's by-value-param defect, todo BUGS); this arm
+    fills in once const is a real qualifier.
   * const-overload matcher (canonical-type strips "const" for match-key)
   * const→mutable rejection at call sites
   * write-through-const rejection at every assign-family site

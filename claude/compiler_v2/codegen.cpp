@@ -1529,6 +1529,41 @@ void emitTupleFromArrayValue(std::string const& alloca_name, widen::TypeRef tupl
                         alloca_name, rhs, out, diag);
 }
 
+// The TypeRef of a tuple/array's i-th destructure element (a tuple slot, or the
+// array's (sub-)element type). agg_type is guaranteed a tuple or array by classify.
+widen::TypeRef destructureElem(widen::TypeRef agg_type, std::size_t i) {
+    widen::TypeRef s = widen::strip(agg_type);
+    if (widen::form(s) == widen::Type::Form::kTuple) return widen::get(s).slots[i];
+    widen::Type const& at = widen::get(s);   // array
+    return (at.dims.size() <= 1) ? at.elem
+        : widen::internArray(at.elem,
+              std::vector<int>(at.dims.begin() + 1, at.dims.end()));
+}
+
+// Bind a destructure's slots from the aggregate value `agg` (type agg_type): extract
+// each element and store it to the slot's alloca; a NESTED slot extracts the
+// sub-aggregate and recurses; a null slot is discarded. The rhs was evaluated once
+// by the caller.
+void emitDestructure(ast::Node const& node, std::string const& agg,
+                     widen::TypeRef agg_type, SymTab& syms, std::ostream& out) {
+    std::string llty = llvmForRef(agg_type);
+    for (std::size_t i = 1; i < node.children.size(); i++) {
+        ast::Node const* tgt = node.children[i].get();
+        if (!tgt) continue;   // discard
+        std::string slot = newTmp("dslot");
+        out << "  " << slot << " = extractvalue " << llty << " " << agg
+            << ", " << (i - 1) << "\n";
+        if (tgt->kind == ast::Kind::kDestructureStmt) {
+            emitDestructure(*tgt, slot, destructureElem(agg_type, i - 1), syms, out);
+        } else {
+            auto it = syms.find(tgt->resolved_entry_id);
+            assert(it != syms.end() && "kDestructureStmt: target not in SymTab");
+            out << "  store " << it->second.llvm_type << " " << slot
+                << ", ptr " << it->second.alloca_name << "\n";
+        }
+    }
+}
+
 void emitStmt(ast::Node const& stmt, SymTab& syms,
               strings::Pool& pool,
               widen::TypeRef fn_return_type,
@@ -1719,24 +1754,12 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             return;
         }
         case ast::Kind::kDestructureStmt: {
-            // (a, b, ) = tuple. Evaluate the rhs aggregate once, then extract
-            // each slot and store it to its target (a null child is skipped).
+            // (a, (b,c), ) = tuple. Evaluate the rhs aggregate ONCE, then bind each
+            // slot (recursing into nested slots, discarding null ones).
             ast::Node const& rhs = *stmt.children[0];
             std::string agg = emitExpr(rhs, syms, pool, out, diag,
                                        rhs.inferred_type);
-            std::string llty = llvmForRef(rhs.inferred_type);
-            for (std::size_t i = 1; i < stmt.children.size(); i++) {
-                ast::Node const* tgt = stmt.children[i].get();
-                if (!tgt) continue;   // skipped slot
-                auto it = syms.find(tgt->resolved_entry_id);
-                assert(it != syms.end()
-                    && "kDestructureStmt: target not in SymTab");
-                std::string slot = newTmp("dslot");
-                out << "  " << slot << " = extractvalue " << llty << " " << agg
-                    << ", " << (i - 1) << "\n";
-                out << "  store " << it->second.llvm_type << " " << slot
-                    << ", ptr " << it->second.alloca_name << "\n";
-            }
+            emitDestructure(stmt, agg, rhs.inferred_type, syms, out);
             return;
         }
         case ast::Kind::kDeleteStmt: {
@@ -2287,12 +2310,11 @@ void collectVarDecls(ast::Node const& s, std::vector<ast::Node const*>& out) {
         return;
     }
     if (s.kind == ast::Kind::kDestructureStmt) {
-        // [1..] = declarator slots; a DECLARED slot (kVarDeclStmt) needs an alloca,
-        // a REUSED one (kAssignStmt) stores into an already-allocated local.
+        // [1..] = slots. A DECLARED slot (kVarDeclStmt) is hoisted; a NESTED slot
+        // (kDestructureStmt) recurses to hoist ITS declared slots; a REUSED slot
+        // (kAssignStmt) and a discard (null) contribute none.
         for (std::size_t i = 1; i < s.children.size(); i++) {
-            if (s.children[i] && s.children[i]->kind == ast::Kind::kVarDeclStmt) {
-                collectVarDecls(*s.children[i], out);
-            }
+            if (s.children[i]) collectVarDecls(*s.children[i], out);
         }
         return;
     }

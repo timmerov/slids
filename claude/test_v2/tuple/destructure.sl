@@ -36,9 +36,9 @@ tuple element. dispatched by type-presence then lexical lookup:
 arity must match, INCLUDING discards. the rhs must be a tuple; a typed slot or a
 reused variable must already match its tuple element's type.
 
-deferred: NESTED destructure `((a,b),c) = ...`, the typed-slot same-scope DUP
-error (`int c` when c is in this scope), and the `(named slots) name` "too many
-names" shape rule.
+deferred: per-element WIDENING (a slot type that WIDENS its element — MVP requires
+the same underlying type), and the `(named slots) name` "too many names" shape
+rule (the parse-level disambiguation of a tuple-type decl from a destructure).
 */
 
 (int, int) makePair() {       // a function returning a tuple — a destructure rhs
@@ -110,6 +110,15 @@ int32 main() {
     (int aa, int ab) = arr;
     __println("array: aa= " + aa + " ab= " + ab);          // 10 20
 
+    /* NESTED destructure — a slot may itself be a (sub-pattern), recursively. */
+    ((int na, int nb), int nc) = ((1, 2), 3);
+    __println("nested: na= " + na + " nb= " + nb + " nc= " + nc);   // 1 2 3
+
+    /* nesting composes with reuse and discard. */
+    int ra = 0;
+    ((ra, ), rd) = ((4, 5), 6);
+    __println("nested2: ra= " + ra + " rd= " + rd);        // 4 6
+
     return 0;
 }
 
@@ -120,6 +129,22 @@ int32 main() {
 //    int8 rm = 0;
 //    (rm, ) = (100, 200);
 //    return rm;
+//}
+
+/* a TYPED slot declares like a var-decl, so it dup-errors against a same-scope
+   name (an UNTYPED slot would reuse it instead). */
+//-EXPECT-ERROR: Duplicate declaration of 'c'
+//int32 neg_dup() {
+//    int c = 0;
+//    (int c, ) = (1, 2);
+//    return c;
+//}
+
+/* a NESTED slot needs a tuple/array element to match against. */
+//-EXPECT-ERROR: A nested destructure target needs a tuple or array element
+//int32 neg_nested_scalar() {
+//    ((int a, int b), int c) = (1, 3);   // slot 0 is nested but element 0 is a scalar
+//    return a + b + c;
 //}
 
 /* compile errors — each uncommented in isolation by the negative runner. */
