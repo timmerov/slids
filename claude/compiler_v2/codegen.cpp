@@ -595,15 +595,24 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
             && af != widen::Type::Form::kIterator
             && af != widen::Type::Form::kAnyptr;
     };
+    // The LVALUE pass-direct path requires arg's type to MATCH the param's
+    // pointee exactly; an aggregate widening (`int8[N]` arg into `int[N]^`
+    // param) needs a materialized + converted temp. Same predicate used by the
+    // arg loop below.
+    auto argMaterializes = [&](ast::Node const& arg, widen::TypeRef dest) {
+        if (!isValueByRef(arg, dest)) return false;
+        if (!isAstLvalue(arg)) return true;
+        widen::TypeRef pointee = widen::get(widen::strip(dest)).pointee;
+        return widen::deepStrip(arg.inferred_type) != widen::deepStrip(pointee);
+    };
     // If any arg materializes a temp alloca, bracket the call in stacksave/
     // stackrestore so the slot is freed each time — a materializing call in a
     // loop reuses the stack region instead of leaking an alloca per iteration.
-    // An LVALUE arg passes its existing address with no fresh alloca, so it
-    // doesn't trigger the bracket.
+    // An LVALUE arg with matching types passes its existing address with no
+    // fresh alloca, so it doesn't trigger the bracket.
     bool materializes = false;
     for (size_t i = 0; i < call.children.size(); i++)
-        if (isValueByRef(*call.children[i], call.param_types[i])
-            && !isAstLvalue(*call.children[i])) {
+        if (argMaterializes(*call.children[i], call.param_types[i])) {
             materializes = true;
             break;
         }
@@ -618,14 +627,25 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
         ast::Node const& arg = *call.children[i];
         widen::TypeRef dest = call.param_types[i];
         if (isValueByRef(arg, dest)) {
-            if (isAstLvalue(arg)) {
+            widen::TypeRef pointee = widen::get(widen::strip(dest)).pointee;
+            bool types_match =
+                widen::deepStrip(arg.inferred_type) == widen::deepStrip(pointee);
+            if (isAstLvalue(arg) && types_match) {
                 std::string addr = emitLvalueAddr(arg, syms, pool, out, diag);
                 arg_vals.push_back({"ptr", addr});
                 continue;
             }
-            widen::TypeRef pointee = widen::get(widen::strip(dest)).pointee;
             std::string pll = llvmForRef(pointee);
-            std::string v = emitExpr(arg, syms, pool, out, diag, pointee);
+            std::string v;
+            if (types_match) {
+                v = emitExpr(arg, syms, pool, out, diag, pointee);
+            } else {
+                // Aggregate widen: load source as-is, walk per-leaf with
+                // widen::convert into the pointee type, materialize the result.
+                v = emitExpr(arg, syms, pool, out, diag, widen::kNoType);
+                v = emitImplicitAggregateConvert(
+                    v, arg.inferred_type, pointee, arg.file_id, arg.tok, out, diag);
+            }
             std::string slot = newTmp("argtmp");
             out << "  " << slot << " = alloca " << pll << "\n";
             out << "  store " << pll << " " << v << ", ptr " << slot << "\n";
@@ -1960,7 +1980,27 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                     return;
                 }
             }
-            std::string val = emitExpr(rhs, syms, pool, out, diag, elem);
+            // Per-element implicit widening when both sides are aggregate but
+            // elem/slot types differ (classify validated shape via
+            // checkAggregateShapeMatch). Same shape as kVarDeclStmt/kAssignStmt.
+            widen::Type::Form st_dform = widen::form(widen::strip(elem));
+            widen::Type::Form st_sform =
+                widen::form(widen::strip(rhs.inferred_type));
+            bool st_agg_widen =
+                (st_dform == widen::Type::Form::kArray
+                 || st_dform == widen::Type::Form::kTuple)
+                && (st_sform == widen::Type::Form::kArray
+                    || st_sform == widen::Type::Form::kTuple)
+                && widen::deepStrip(elem)
+                    != widen::deepStrip(rhs.inferred_type);
+            std::string val;
+            if (st_agg_widen) {
+                val = emitExpr(rhs, syms, pool, out, diag, widen::kNoType);
+                val = emitImplicitAggregateConvert(
+                    val, rhs.inferred_type, elem, rhs.file_id, rhs.tok, out, diag);
+            } else {
+                val = emitExpr(rhs, syms, pool, out, diag, elem);
+            }
             std::string llty = llvmForRef(elem);
             out << "  store " << llty << " " << val << ", ptr " << addr << "\n";
             return;
@@ -1973,7 +2013,28 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             ast::Node const& lhs = *stmt.children[0];
             ast::Node const& rhs = *stmt.children[1];
             std::string dst = emitLvalueAddr(lhs, syms, pool, out, diag);
-            std::string val = emitExpr(rhs, syms, pool, out, diag, lhs.inferred_type);
+            // Per-element implicit widening for aggregate move with elem/slot
+            // type difference (same dispatch as kStoreStmt / kAssignStmt).
+            widen::Type::Form mv_dform =
+                widen::form(widen::strip(lhs.inferred_type));
+            widen::Type::Form mv_sform =
+                widen::form(widen::strip(rhs.inferred_type));
+            bool mv_agg_widen =
+                (mv_dform == widen::Type::Form::kArray
+                 || mv_dform == widen::Type::Form::kTuple)
+                && (mv_sform == widen::Type::Form::kArray
+                    || mv_sform == widen::Type::Form::kTuple)
+                && widen::deepStrip(lhs.inferred_type)
+                    != widen::deepStrip(rhs.inferred_type);
+            std::string val;
+            if (mv_agg_widen) {
+                val = emitExpr(rhs, syms, pool, out, diag, widen::kNoType);
+                val = emitImplicitAggregateConvert(
+                    val, rhs.inferred_type, lhs.inferred_type,
+                    rhs.file_id, rhs.tok, out, diag);
+            } else {
+                val = emitExpr(rhs, syms, pool, out, diag, lhs.inferred_type);
+            }
             out << "  store " << llvmForRef(lhs.inferred_type) << " " << val
                 << ", ptr " << dst << "\n";
             if (isAstLvalue(rhs)) {
@@ -2120,8 +2181,30 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 out << "  ret void\n";
                 return;
             }
-            std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
-                                       fn_return_type);
+            ast::Node const& rv = *stmt.children[0];
+            // Per-element implicit widening for an aggregate return whose
+            // elem/slot types differ from the function's return type. Same
+            // dispatch as kVarDeclStmt / kAssignStmt / kStoreStmt / kMoveStmt.
+            widen::Type::Form rt_dform =
+                widen::form(widen::strip(fn_return_type));
+            widen::Type::Form rt_sform =
+                widen::form(widen::strip(rv.inferred_type));
+            bool rt_agg_widen =
+                (rt_dform == widen::Type::Form::kArray
+                 || rt_dform == widen::Type::Form::kTuple)
+                && (rt_sform == widen::Type::Form::kArray
+                    || rt_sform == widen::Type::Form::kTuple)
+                && widen::deepStrip(fn_return_type)
+                    != widen::deepStrip(rv.inferred_type);
+            std::string val;
+            if (rt_agg_widen) {
+                val = emitExpr(rv, syms, pool, out, diag, widen::kNoType);
+                val = emitImplicitAggregateConvert(
+                    val, rv.inferred_type, fn_return_type,
+                    rv.file_id, rv.tok, out, diag);
+            } else {
+                val = emitExpr(rv, syms, pool, out, diag, fn_return_type);
+            }
             emitUnwindDtors(scope, nullptr, out);
             std::string llty = llvmForRef(fn_return_type);
             out << "  ret " << llty << " " << val << "\n";

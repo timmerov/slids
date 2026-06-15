@@ -172,7 +172,59 @@ int32 main() {
     int64 wd[3] = ws;
     __println("wd = " + wd[0] + " " + wd[1] + " " + wd[2]);           // -1 0 1
 
+    /* SUB-ARRAY STORE through kStoreStmt: `matrix[i] = sub_aggregate`. The
+       lvalue is a partial index; the slice's elem type may differ from the
+       source. Widens per leaf via the codegen kStoreStmt arm. */
+    int matrix[3][2];
+    int8 row8[2] = (7, 8);
+    matrix[0] = row8;
+    matrix[1] = (9, 10);
+    matrix[2] = row8;
+    __println("matrix = " + matrix[0][0] + " " + matrix[0][1] + " "
+              + matrix[1][0] + " " + matrix[2][1]);                   // 7 8 9 8
+
+    /* DEREF STORE through kStoreStmt: `ref^ = aggregate`. The dst is the
+       pointee's storage; same widen dispatch. */
+    int dst_arr[3] = (0, 0, 0);
+    int[3]^ pdst = ^dst_arr;
+    int8 dsrc[3] = (4, 5, 6);
+    pdst^ = dsrc;
+    __println("pdst^ = " + dst_arr[0] + " " + dst_arr[1] + " " + dst_arr[2]); // 4 5 6
+
+    /* MOVE-INIT with aggregate widen: `dst <-- src` runs the same widen walk
+       then null-leaves the source (no pointer leaves here, so a no-op tail). */
+    int8 msrc[3] = (10, 20, 30);
+    int mdst[3];
+    mdst <-- msrc;
+    __println("mdst = " + mdst[0] + " " + mdst[1] + " " + mdst[2]);   // 10 20 30
+
+    /* RETURN value with aggregate widen: function returns int[3] but builds
+       the value via an int8 local; the kReturnStmt arm walks per leaf. */
+    int rret[3] = returns_widened();
+    __println("rret = " + rret[0] + " " + rret[1] + " " + rret[2]);   // 11 12 13
+
+    /* CALL SITE aggregate widen: pass an int8[3] arg to a function taking
+       int[3]^. classify scores it cost 1 (shape match + per-leaf widen);
+       codegen materializes a converted int[3] temp and passes its address. */
+    int8 carg[3] = (21, 22, 23);
+    int csum = sum_int3(carg);
+    __println("csum = " + csum);                                       // 66
+
     return 0;
+}
+
+/* Returns int[3] but the body works with an int8 local. The kReturnStmt arm
+   per-leaf widens to int[3] before `ret`. */
+int[3] returns_widened() {
+    int8 rs[3] = (11, 12, 13);
+    return rs;
+}
+
+/* Takes int[3]^ by pointer. A caller passing an int8[3] triggers the
+   classify-side shape-match cost-1 ranking + the codegen materialize-with-
+   convert at the call site. */
+int sum_int3(int[3]^ a) {
+    return a^[0] + a^[1] + a^[2];
 }
 
 /*
@@ -420,4 +472,47 @@ family / sign-change at the leaf, attributed to the rhs.
 //    (int8, int8) src = (-1, -2);
 //    (uint8, uint8) dst = src;
 //    return dst[0];
+//}
+
+/* narrowing through a sub-array kStoreStmt (`matrix[i] = wider_src`). */
+//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
+//int32 neg_agg_narrow_substore() {
+//    int8 mat[3][2];
+//    int wide[2] = (1, 2);
+//    mat[0] = wide;
+//    return mat[0][0];
+//}
+
+/* narrowing through a deref kStoreStmt (`ref^ = wider_src`). */
+//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
+//int32 neg_agg_narrow_deref_store() {
+//    int8 dst[3];
+//    int s[3] = (1, 2, 3);
+//    int8[3]^ p = ^dst;
+//    p^ = s;
+//    return dst[0];
+//}
+
+/* narrowing through a move (`dst <-- wider_src`). */
+//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
+//int32 neg_agg_narrow_move() {
+//    int wide[3] = (1, 2, 3);
+//    int8 narrow[3];
+//    narrow <-- wide;
+//    return narrow[0];
+//}
+
+/* narrowing through a return (function returns narrower than the value). */
+//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
+//int8[3] returns_narrowed() {
+//    int rs[3] = (1, 2, 3);
+//    return rs;
+//}
+
+/* narrowing through a call-site (caller passes wider than the param). */
+//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
+//int call_narrow_helper(int8[3]^ a) { return a^[0]; }
+//int32 neg_agg_narrow_call() {
+//    int wide[3] = (1, 2, 3);
+//    return call_narrow_helper(wide);
 //}

@@ -75,33 +75,43 @@ CODEGEN (the seams the helper exposes)
     to pure lowering + asserts (no diagnostics, no double-report).
 
 
-ORDER
+ORDER (all LANDED)
 
-  1. (LANDED) Wrote checkValueAssign + closed the two holes; routed sites 1-10;
-     kept the array-value path exact-match (suite + negatives REJECT char[]->int
-     at call/method/return plus tuple/array<->scalar and scalar->array).
-  2. (LANDED) Flipped checkArrayValueAssign (and the tuple-value arm) to a
-     recursive SHAPE match (classify::checkAggregateShapeMatch — dims/arity at
-     every composite level); the codegen aggregate-assign hot path
-     (kVarDeclStmt + kAssignStmt) detects shape-match-with-elem-diff and walks
-     per-leaf via codegen::emitImplicitAggregateConvert, calling widen::convert
-     at each leaf (rejects narrowing / cross-family / sign-change). The
-     all-identical case keeps the whole-aggregate copy. Test coverage in
-     test_v2/assign/vardecl.sl: positives for int8[N]->int[N], (int8,int8)->
-     (int,int), nested tuple-of-array, tuple-of-tuple, multi-dim array, and
-     wider tiers; negatives for narrowing, cross-family, sign-change in a slot,
-     and shape/arity mismatch.
-  3. (optional, not blocking) the numeric end-state — pull the cross-family
-     reject out of widen::convert into the classify helper so widen::convert is
-     pure lowering. Defer until / unless it pays off.
+  1. Wrote checkValueAssign + closed the two holes; routed sites 1-10; kept the
+     array-value path exact-match (suite + negatives REJECT char[]->int at call/
+     method/return plus tuple/array<->scalar and scalar->array).
+  2. Flipped checkArrayValueAssign (and the tuple-value arm) to a recursive
+     SHAPE match (classify::checkAggregateShapeMatch — dims/arity at every
+     composite level); the codegen aggregate-assign hot paths (kVarDeclStmt +
+     kAssignStmt) detect shape-match-with-elem-diff and walk per-leaf via
+     codegen::emitImplicitAggregateConvert. The all-identical case keeps the
+     whole-aggregate copy.
+  3. Extended the codegen walk dispatch to the remaining sites: kStoreStmt (sub-
+     array + deref store), kMoveStmt (null-leaves tail unchanged), kReturnStmt
+     (uses fn_return_type as dst). Call-site landed via two halves: classify-
+     side classify::shapesAndLeavesMatch ranks shape-match-with-elem-widen as
+     cost 1 in argConvertCost (exact still wins overloads); codegen's emitCall
+     unified materialization — argMaterializes lambda determines stacksave bracket;
+     lvalue-direct requires exact match, everything else materializes a converted
+     temp.
+  4. NUMERIC END-STATE refactor LANDED. classify::checkValueWiden ports
+     widen::convert's reject rules (bool->float, signed->signed narrowing,
+     unsigned->unsigned narrowing, unsigned->signed same/narrower, signed->
+     unsigned any, float->float narrowing, int<->float cross-family) and runs
+     at every site where the rejects could fire: checkValueAssign's leaf arm,
+     checkAggregateShapeMatch's leaf, kAugAssignStmt's arith path, kForRanged-
+     Stmt (bound + step), kForArrayStmt (by-value loop var vs element type).
+     widen::convert's narrow/convertErr/convertErrPlain are now ASSERTS —
+     classify is the single authority; widen is pure lowering. main.cpp halts
+     at classify errors before codegen, so the asserts catch missed gates
+     rather than emitting bad IR.
 
-  REMAINING SEAMS (smaller landings on the same machinery):
-  - kStoreStmt + kMoveStmt aggregate widen — currently the hot paths are
-    kVarDeclStmt + kAssignStmt; classify accepts shape-match at these sites too
-    but codegen still emits the single whole-aggregate store. Add the
-    emitImplicitAggregateConvert dispatch there.
-  - Call-site / return-site aggregate widen — same shape; ride the by-pointer
-    param convention (non-primitive params receive a pointer, so widening would
-    need a temporary materialization of the converted value before passing).
+  Test coverage in test_v2/assign/vardecl.sl: positives for int8[N]->int[N],
+  (int8,int8)->(int,int), nested tuple-of-array, tuple-of-tuple, multi-dim array,
+  wider tiers, sub-array kStoreStmt widen, deref kStoreStmt widen, aggregate
+  move, return-value aggregate widen, call-site aggregate widen. Negatives for
+  narrowing, cross-family, sign-change in a slot, shape/arity mismatch, and
+  narrowing through each new context (kStoreStmt sub-array + deref, kMoveStmt,
+  kReturnStmt, call-site).
 
 SPEC: readme.txt — ASSIGNMENT RELATION. Cross-cutting note: plan.txt.

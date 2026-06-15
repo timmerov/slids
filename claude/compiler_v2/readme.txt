@@ -232,14 +232,20 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     assignments, each running its own conversion (the tuple->int[4] above is four
     distinct converts) -- NOT a whole-aggregate copy. A single memcpy/aggregate
     store is only the degenerate case where every element is already identical.
-    Landed: classify::checkAggregateShapeMatch (recursive shape match -- dims at
-    every array level, arity at every tuple level) gates the aggregate row;
-    codegen::emitImplicitAggregateConvert walks the (src, dst) pair pair-wise,
-    calling widen::convert at each leaf (the implicit-widen grid -- rejects
-    narrowing / cross-family / sign-change). Wired into kVarDeclStmt + kAssign-
-    Stmt; the all-identical fast path keeps the whole-aggregate store. Other
-    sites (kStoreStmt, kMoveStmt, call/return) still emit the whole-aggregate
-    store and accept exact-match only -- smaller seams tracked in todo.txt.
+    Landed end-to-end: classify::checkAggregateShapeMatch (recursive shape match
+    -- dims at every array level, arity at every tuple level) gates the
+    aggregate row; codegen::emitImplicitAggregateConvert walks the (src, dst)
+    pair pair-wise, calling widen::convert at each leaf. Wired into every
+    assignment-family codegen seam (kVarDeclStmt, kAssignStmt, kStoreStmt's
+    sub-array + deref paths, kMoveStmt, kReturnStmt, and call-site emitCall);
+    the all-identical fast path keeps the whole-aggregate store. Call-site
+    uses classify::shapesAndLeavesMatch in argConvertCost to rank shape-match
+    -with-elem-widen as cost 1 (exact still wins overloads). NUMERIC END-STATE:
+    classify::checkValueWiden ports widen::convert's reject rules (narrowing /
+    cross-family / sign-change) and runs at the classify level (every
+    assignment-family site + kAugAssignStmt + kForRangedStmt + kForArrayStmt).
+    widen::convert is now pure lowering -- its narrow/convertErr paths ASSERT
+    if a classify gate is missing.
 
 ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
 

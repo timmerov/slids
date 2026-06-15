@@ -504,6 +504,47 @@ bool sameClass(widen::TypeRef a, widen::TypeRef b) {
     return ka.cat == kb.cat && ka.bits == kb.bits;
 }
 
+// Silent recursive shape-match predicate for the assignment relation. Walks
+// (dst, src) in lockstep; returns true iff dims/arity match at every composite
+// level AND each leaf is type-compatible at a KIND level (both numeric, both
+// pointer-like, or the same class). The per-leaf widen/narrow/cross-family
+// reject is deferred to codegen's widen::convert; this predicate is the
+// classify-side "viable for cost rank" used by overload resolution. Aliases
+// transparent via strip().
+bool shapesAndLeavesMatch(widen::TypeRef dst, widen::TypeRef src) {
+    using F = widen::Type::Form;
+    widen::TypeRef ds = widen::strip(dst);
+    widen::TypeRef ss = widen::strip(src);
+    F df = widen::form(ds);
+    F sf = widen::form(ss);
+    if (df == F::kArray || sf == F::kArray) {
+        if (df != F::kArray || sf != F::kArray) return false;
+        if (widen::get(ds).dims != widen::get(ss).dims) return false;
+        return shapesAndLeavesMatch(widen::get(ds).elem, widen::get(ss).elem);
+    }
+    if (df == F::kTuple || sf == F::kTuple) {
+        if (df != F::kTuple || sf != F::kTuple) return false;
+        std::vector<widen::TypeRef> const& dslots = widen::get(ds).slots;
+        std::vector<widen::TypeRef> const& sslots = widen::get(ss).slots;
+        if (dslots.size() != sslots.size()) return false;
+        for (std::size_t i = 0; i < dslots.size(); i++)
+            if (!shapesAndLeavesMatch(dslots[i], sslots[i])) return false;
+        return true;
+    }
+    // Leaf: same width-class (covers numeric + same-handle class/primitive), OR
+    // both pointer-like (ptr/iter/anyptr). Cross-family / pointer-vs-numeric
+    // mismatches fall through to "not viable".
+    if (sameClass(ds, ss)) return true;
+    widen::TypeKind dk, sk;
+    if (widen::classify(ds, dk) && widen::classify(ss, sk)) return true;
+    if (widen::form(ds) == F::kPointer || widen::form(ds) == F::kIterator
+        || widen::form(ds) == F::kAnyptr) {
+        if (widen::form(ss) == F::kPointer || widen::form(ss) == F::kIterator
+            || widen::form(ss) == F::kAnyptr) return true;
+    }
+    return false;
+}
+
 // A NON-PRIMITIVE value (class / tuple / array) passed as a function or method
 // ARGUMENT is auto-promoted to a reference: it is passed by reference even when
 // written by value (codegen materializes the value + passes its address — see
@@ -527,10 +568,15 @@ int argConvertCost(parse::Node const& a, widen::TypeRef param) {
     widen::TypeRef at = widen::strip(a.inferred_type);   // see through one alias layer
     // A non-primitive value auto-promotes to a reference param: viable when the
     // arg type matches the param's pointee (exact, mirroring the value checks).
+    // SHAPE-MATCH with elem widen ranks as cost 1 (per-leaf widen, like a scalar
+    // widening); exact match still wins overloads.
     if (param != widen::kNoType) {
         widen::TypeRef pointee = autoRefPointee(param, a);
-        if (pointee != widen::kNoType)
-            return sameClass(at, widen::strip(pointee)) ? 0 : -1;
+        if (pointee != widen::kNoType) {
+            if (sameClass(at, widen::strip(pointee))) return 0;
+            if (shapesAndLeavesMatch(widen::strip(pointee), at)) return 1;
+            return -1;
+        }
     }
     if (at == widen::kNoType) return -1;
     if (sameClass(at, param)) return 0;
@@ -1604,7 +1650,67 @@ void checkStrongConstAssign(widen::TypeRef dest, parse::Node const& rhs,
     } else if (st.cat == C::kSignedInt && dt.cat == C::kUnsignedInt) {
         convertErr("signed \xe2\x86\x92 unsigned");
     }
-    // bool source / int<->float cross-family: left to codegen's convert.
+    // bool source / int<->float cross-family: left to checkValueWiden.
+}
+
+// Typed-value narrowing / cross-family check — mirrors widen::convert's reject
+// rules at CLASSIFY time, so codegen's widen::convert reduces to pure lowering
+// + asserts. Type-only (no node — uses src/dest TypeRefs); the caret is the
+// caller's (rhs's tok). Covers: signed→signed narrowing, unsigned→unsigned
+// narrowing, unsigned→signed of same-or-narrower width, signed→unsigned (any
+// width), float→float narrowing, bool→float, and the int↔float cross-family.
+// Same-width-class and widening within family pass silently.
+void checkValueWiden(widen::TypeRef dest, widen::TypeRef src,
+                     int file_id, int tok, diagnostic::Sink& diag) {
+    if (dest == widen::kNoType || src == widen::kNoType) return;
+    widen::TypeKind st, dt;
+    if (!widen::classify(src, st) || !widen::classify(dest, dt)) return;
+    if (st.cat == dt.cat && st.bits == dt.bits) return;
+    std::string s = widen::spellOrEmpty(src);
+    std::string d = widen::spellOrEmpty(dest);
+    using C = widen::Category;
+    auto narrow = [&] {
+        diagnostic::report(diag, {file_id, tok,
+            "Cannot implicitly narrow '" + s + "' to '" + d
+            + "'; use an explicit type conversion.", {}});
+    };
+    auto convertErr = [&](char const* tail) {
+        diagnostic::report(diag, {file_id, tok,
+            "Cannot implicitly convert '" + s + "' to '" + d + "' (" + tail
+            + "); use an explicit type conversion.", {}});
+    };
+    auto convertErrPlain = [&] {
+        diagnostic::report(diag, {file_id, tok,
+            "Cannot implicitly convert '" + s + "' to '" + d
+            + "'; use an explicit type conversion.", {}});
+    };
+    if (st.cat == C::kBool) {
+        // bool widens to int family (zext); cross-family to float.
+        if (dt.cat == C::kFloat) convertErrPlain();
+        return;
+    }
+    if (st.cat == C::kSignedInt && dt.cat == C::kSignedInt) {
+        if (dt.bits <= st.bits) narrow();
+        return;
+    }
+    if (st.cat == C::kUnsignedInt && dt.cat == C::kUnsignedInt) {
+        if (dt.bits <= st.bits) narrow();
+        return;
+    }
+    if (st.cat == C::kUnsignedInt && dt.cat == C::kSignedInt) {
+        if (dt.bits <= st.bits) convertErr("unsigned to same-width signed");
+        return;
+    }
+    if (st.cat == C::kSignedInt && dt.cat == C::kUnsignedInt) {
+        convertErr("signed \xe2\x86\x92 unsigned");
+        return;
+    }
+    if (st.cat == C::kFloat && dt.cat == C::kFloat) {
+        if (dt.bits <= st.bits) narrow();
+        return;
+    }
+    // int↔float cross-family.
+    convertErrPlain();
 }
 
 // An array initialized / assigned from a tuple LITERAL: `int a[3] = (1,2,3)`,
@@ -1819,8 +1925,14 @@ void checkAggregateShapeMatch(widen::TypeRef dest, widen::TypeRef src,
         }
         return;
     }
-    // Leaf: codegen's widen::convert reports any narrowing / cross-family /
-    // sign-change at this leaf with rhs's caret.
+    // Leaf: typed-value widen check at the classify level (so codegen's
+    // widen::convert reduces to pure lowering + asserts). Pointer-like / class
+    // leaves are covered by checkPtrAssign / checkSlidAssign at the top level
+    // — the recursive aggregate walk here only handles numeric leaves; a
+    // pointer/class slot in an aggregate would have failed earlier checks.
+    if (!isPtrLikeType(dest) && !isPtrLikeType(src)) {
+        checkValueWiden(dest, src, rhs.file_id, rhs.tok, diag);
+    }
 }
 
 bool checkArrayValueAssign(widen::TypeRef dest, parse::Node const& rhs,
@@ -2066,9 +2178,16 @@ void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
             }
         } else {
             // Neither side is a tuple/array: scalar / pointer / class. The terminal
-            // checks — pointer implicit-cast, strong-const widen, class same-type.
+            // checks — pointer implicit-cast, strong-const widen, typed-value widen,
+            // class same-type.
             checkPtrAssign(dest, rhs, diag);
             checkStrongConstAssign(dest, rhs, diag);
+            if (!isLiteralKind(rhs.kind)
+                && !isPtrLikeType(rhs.inferred_type)
+                && !isPtrLikeType(dest)) {
+                checkValueWiden(dest, rhs.inferred_type,
+                                rhs.file_id, rhs.tok, diag);
+            }
             checkSlidAssign(dest, rhs, diag);
         }
     }
@@ -2339,6 +2458,13 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             s.inferred_type = optyRef;
             s.op_type = optyRef;
+            // The binary's result stores back into the lvalue. If the common
+            // type widened beyond the lvalue's width (`int16 += int32`), the
+            // store narrows — catch at classify so widen::convert can assert.
+            if (!isPtrLikeType(s.return_type) && !isPtrLikeType(optyRef)) {
+                checkValueWiden(s.return_type, optyRef,
+                                s.file_id, s.tok, diag);
+            }
             return;
         }
         case parse::Kind::kStoreStmt: {
@@ -2667,6 +2793,21 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             inferExpr(tree, *s.children[1], lvt, diag);
             if (s.children[2]) inferExpr(tree, *s.children[2], lvt, diag);
+            // Bound + step must coerce to the loop-var type at codegen; catch
+            // narrowing at classify so widen::convert can assert there.
+            if (lvt != widen::kNoType && !isPtrLikeType(lvt)) {
+                if (s.children[1]->inferred_type != widen::kNoType
+                    && !isPtrLikeType(s.children[1]->inferred_type)) {
+                    checkValueWiden(lvt, s.children[1]->inferred_type,
+                                    s.children[1]->file_id, s.children[1]->tok, diag);
+                }
+                if (s.children[2]
+                    && s.children[2]->inferred_type != widen::kNoType
+                    && !isPtrLikeType(s.children[2]->inferred_type)) {
+                    checkValueWiden(lvt, s.children[2]->inferred_type,
+                                    s.children[2]->file_id, s.children[2]->tok, diag);
+                }
+            }
             classifyStmt(tree, *s.children[3], fn_return_type, diag);
             // Empty-range check: both bounds constant and `start cmp end` false ->
             // the body never runs. start = the loop-var init; end = children[1].
@@ -2685,6 +2826,23 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // element / length) and the body classified with the loop var in scope.
             assert(s.children.size() == 3 && "kForArrayStmt needs var+array+body");
             inferExpr(tree, *s.children[1], widen::kNoType, diag);
+            // BY-VALUE loop var that's too narrow for the element type narrows
+            // at each iteration's binding — catch at classify so widen::convert
+            // can assert.
+            widen::TypeRef lv_t = widen::kNoType;
+            if (s.children[0]->resolved_entry_id >= 0) {
+                lv_t = parse::entryType(tree, s.children[0]->resolved_entry_id);
+            }
+            if (lv_t != widen::kNoType && !isPtrLikeType(lv_t)) {
+                widen::TypeRef arr_t = s.children[1]->inferred_type;
+                if (widen::form(widen::strip(arr_t))
+                        == widen::Type::Form::kArray) {
+                    widen::TypeRef elem_t = widen::get(widen::strip(arr_t)).elem;
+                    checkValueWiden(lv_t, elem_t,
+                                    s.children[0]->file_id,
+                                    s.children[0]->tok, diag);
+                }
+            }
             classifyStmt(tree, *s.children[2], fn_return_type, diag);
             return;
         }

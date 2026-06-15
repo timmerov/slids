@@ -379,22 +379,25 @@ std::string convert(std::string const& src_val,
             << " to " << dest_ll << "\n";
         return tmp;
     };
-    auto narrow = [&]() {
-        diagnostic::report(diag, {file_id, tok,
-            "Cannot implicitly narrow '" + src_type + "' to '" + dest_type
-            + "'; use an explicit type conversion.", {}});
+    // Narrowing / cross-family / sign-change rejects now fire at CLASSIFY via
+    // checkValueWiden (classify.cpp), so widen::convert reduces to pure
+    // lowering + asserts. If one of these branches is reached at codegen, a
+    // classify gate is missing — assert rather than emit bad IR.
+    (void)diag; (void)file_id; (void)tok;
+    auto narrow = [&]() -> std::string {
+        assert(false && "widen::convert: narrowing reached codegen "
+                        "(classify checkValueWiden should have rejected)");
         return src_val;
     };
-    auto convertErr = [&](char const* tail) {
-        diagnostic::report(diag, {file_id, tok,
-            std::string("Cannot implicitly convert '") + src_type + "' to '" + dest_type
-            + "' (" + tail + "); use an explicit type conversion.", {}});
+    auto convertErr = [&](char const* tail) -> std::string {
+        (void)tail;
+        assert(false && "widen::convert: cross-family/sign-change reached codegen "
+                        "(classify checkValueWiden should have rejected)");
         return src_val;
     };
-    auto convertErrPlain = [&]() {
-        diagnostic::report(diag, {file_id, tok,
-            std::string("Cannot implicitly convert '") + src_type + "' to '" + dest_type
-            + "'; use an explicit type conversion.", {}});
+    auto convertErrPlain = [&]() -> std::string {
+        assert(false && "widen::convert: cross-family reached codegen "
+                        "(classify checkValueWiden should have rejected)");
         return src_val;
     };
 

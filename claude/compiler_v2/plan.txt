@@ -629,17 +629,23 @@ CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)
   kAlias.
 
 CROSS-CUTTING — ASSIGNMENT RELATION (spec'd in readme.txt; LANDED end-to-end)
-  The single implicit-conversion relation — whether a source value may flow into a
-  target slot, and with what conversion — is spec'd in readme.txt (the ASSIGNMENT
-  RELATION section: the top matrix over number/pointer/tuple-array/class + the
-  integer / float / pointer / tuple-array sub-matrices). One classify helper
-  (checkValueAssign) runs the full chain at every assignment-family site (decl-
-  init, assign, store, move, call/method args, return, field-init, destructure +
-  array/tuple element pairs); swap stays exact-type, outside. The aggregate row
-  is closed via classify::checkAggregateShapeMatch (shape-match at every composite
-  level) + codegen::emitImplicitAggregateConvert (per-leaf widen::convert);
-  per-element widening (`int8[N] -> int[N]`, `(int8,int8) -> (int,int)`, nested
-  composites) works at every site. The CLASS row (op=) waits on Phase 5.
+  The single implicit-conversion relation — whether a source value may flow into
+  a target slot, and with what conversion — is spec'd in readme.txt (the
+  ASSIGNMENT RELATION section: the top matrix over number/pointer/tuple-array/
+  class + the integer / float / pointer / tuple-array sub-matrices). One classify
+  helper (checkValueAssign) runs the full chain at every assignment-family site
+  (decl-init, assign, store, move, call/method args, return, field-init,
+  destructure + array/tuple element pairs); swap stays exact-type, outside. The
+  aggregate row is closed via classify::checkAggregateShapeMatch (shape-match at
+  every composite level) + codegen::emitImplicitAggregateConvert (per-leaf
+  widen::convert); per-element widening (`int8[N] -> int[N]`, `(int8,int8) ->
+  (int,int)`, nested composites) works at every site INCLUDING kStoreStmt,
+  kMoveStmt, kReturnStmt, and call-site (classify ranks shape-match-with-elem-
+  widen as cost 1; codegen materializes a converted temp). NUMERIC END-STATE
+  refactor LANDED: classify::checkValueWiden is the single authority for
+  narrowing / cross-family / sign-change rejects; widen::convert is pure
+  lowering and ASSERTS on cases classify should have rejected (caught at the
+  inter-stage halt in main.cpp). The CLASS row (op=) waits on Phase 5.
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
