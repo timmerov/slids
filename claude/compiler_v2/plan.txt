@@ -247,7 +247,9 @@ Phase 4 — types beyond primitives
     classifyArrayFromTuple checks the leaf count AND the nesting [a transposed or
     flat literal is rejected]; lowers element-wise row-major, each slot widening
     into the element type [the per-element compatibility of the ASSIGNMENT RELATION
-    in readme.txt; array-VALUE copy is still exact-match — the open seam]. Whole-array
+    in readme.txt; the array-VALUE-copy seam is now CLOSED via
+    classify::checkAggregateShapeMatch + codegen::emitImplicitAggregateConvert —
+    shape match at classify, per-leaf widen::convert at codegen]. Whole-array
     definite-assignment is a monotonic
     may-set [a subscript write assigns the array; read-before-any-write errors];
     arrays join the unused-local sweep.)
@@ -626,18 +628,18 @@ CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)
   This unblocked anonymous tuples (now LANDED — see Phase 4) whose slots can be
   kAlias.
 
-CROSS-CUTTING — ASSIGNMENT RELATION (spec'd; code FRAGMENTED, unify pending)
+CROSS-CUTTING — ASSIGNMENT RELATION (spec'd in readme.txt; LANDED end-to-end)
   The single implicit-conversion relation — whether a source value may flow into a
-  target slot, and with what conversion — is now spec'd in readme.txt (the
-  ASSIGNMENT RELATION section: the top matrix over number/pointer/tuple-array/class
-  + the integer / float / pointer / tuple-array sub-matrices). The code implements
-  it as DIVERGENT FRAGMENTS (checkStrongConstAssign / checkSlidAssign /
-  checkPtrAssign / checkArrayValueAssign + classifyClassInit's isAgg), each site
-  running a different subset — so a char[]->int leaks at a call/return, an array
-  value copy is exact-match where the relation says per-element. PLAN: collapse into
-  one checkValueAssign helper called at every assignment-family site (decl-init,
-  assign, store, move, call/method args, return, field-init, destructure + array/
-  tuple element pairs); swap stays exact-type, outside. Open seams in todo.txt.
+  target slot, and with what conversion — is spec'd in readme.txt (the ASSIGNMENT
+  RELATION section: the top matrix over number/pointer/tuple-array/class + the
+  integer / float / pointer / tuple-array sub-matrices). One classify helper
+  (checkValueAssign) runs the full chain at every assignment-family site (decl-
+  init, assign, store, move, call/method args, return, field-init, destructure +
+  array/tuple element pairs); swap stays exact-type, outside. The aggregate row
+  is closed via classify::checkAggregateShapeMatch (shape-match at every composite
+  level) + codegen::emitImplicitAggregateConvert (per-leaf widen::convert);
+  per-element widening (`int8[N] -> int[N]`, `(int8,int8) -> (int,int)`, nested
+  composites) works at every site. The CLASS row (op=) waits on Phase 5.
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

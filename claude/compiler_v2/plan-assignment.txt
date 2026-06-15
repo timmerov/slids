@@ -77,17 +77,31 @@ CODEGEN (the seams the helper exposes)
 
 ORDER
 
-  1. Write checkValueAssign + close the two holes; route sites 1-10; keep the
-     array-value path exact-match for now (no behavior change beyond plugging the
-     leaks). The suite + negatives should now REJECT char[]->int at a call / method /
-     return, plus tuple/array->scalar and scalar->array.
-  2. Flip checkArrayValueAssign to per-element + the codegen per-element lowering.
-  3. (optional) the numeric end-state.
+  1. (LANDED) Wrote checkValueAssign + closed the two holes; routed sites 1-10;
+     kept the array-value path exact-match (suite + negatives REJECT char[]->int
+     at call/method/return plus tuple/array<->scalar and scalar->array).
+  2. (LANDED) Flipped checkArrayValueAssign (and the tuple-value arm) to a
+     recursive SHAPE match (classify::checkAggregateShapeMatch — dims/arity at
+     every composite level); the codegen aggregate-assign hot path
+     (kVarDeclStmt + kAssignStmt) detects shape-match-with-elem-diff and walks
+     per-leaf via codegen::emitImplicitAggregateConvert, calling widen::convert
+     at each leaf (rejects narrowing / cross-family / sign-change). The
+     all-identical case keeps the whole-aggregate copy. Test coverage in
+     test_v2/assign/vardecl.sl: positives for int8[N]->int[N], (int8,int8)->
+     (int,int), nested tuple-of-array, tuple-of-tuple, multi-dim array, and
+     wider tiers; negatives for narrowing, cross-family, sign-change in a slot,
+     and shape/arity mismatch.
+  3. (optional, not blocking) the numeric end-state — pull the cross-family
+     reject out of widen::convert into the classify helper so widen::convert is
+     pure lowering. Defer until / unless it pays off.
 
-  Each step is additive on the REJECT side. Regenerate exp.<name> goldens only if a
-  POSITIVE test's stdout changes (it should not). New //-EXPECT-ERROR negatives for
-  the newly-rejected leaks: char[]->int in overload.sl (line 88 is the live repro),
-  tuple/array<->scalar, plus the `int8[4] -> int[4]` POSITIVE once step 2 lands.
+  REMAINING SEAMS (smaller landings on the same machinery):
+  - kStoreStmt + kMoveStmt aggregate widen — currently the hot paths are
+    kVarDeclStmt + kAssignStmt; classify accepts shape-match at these sites too
+    but codegen still emits the single whole-aggregate store. Add the
+    emitImplicitAggregateConvert dispatch there.
+  - Call-site / return-site aggregate widen — same shape; ride the by-pointer
+    param convention (non-primitive params receive a pointer, so widening would
+    need a temporary materialization of the converted value before passing).
 
-SPEC: readme.txt — ASSIGNMENT RELATION. Tracking item: todo.txt — ASSIGNMENT
-RELATION — UNIFY THE CHECK. Cross-cutting note: plan.txt.
+SPEC: readme.txt — ASSIGNMENT RELATION. Cross-cutting note: plan.txt.

@@ -230,10 +230,16 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
   * scalar <-> aggregate is an error (the aggregate/scalar boundary).
   * per-element compatibility means an aggregate assign LOWERS to per-element
     assignments, each running its own conversion (the tuple->int[4] above is four
-    distinct converts) -- NOT a whole-aggregate copy. A single memcpy is only the
-    degenerate case where every element is already identical. The current exact-
-    deepStrip array-value rule (checkArrayValueAssign) is the known-wrong seam: it
-    rejects `int8[4] -> int[4]`, which this rule accepts.
+    distinct converts) -- NOT a whole-aggregate copy. A single memcpy/aggregate
+    store is only the degenerate case where every element is already identical.
+    Landed: classify::checkAggregateShapeMatch (recursive shape match -- dims at
+    every array level, arity at every tuple level) gates the aggregate row;
+    codegen::emitImplicitAggregateConvert walks the (src, dst) pair pair-wise,
+    calling widen::convert at each leaf (the implicit-widen grid -- rejects
+    narrowing / cross-family / sign-change). Wired into kVarDeclStmt + kAssign-
+    Stmt; the all-identical fast path keeps the whole-aggregate store. Other
+    sites (kStoreStmt, kMoveStmt, call/return) still emit the whole-aggregate
+    store and accept exact-match only -- smaller seams tracked in todo.txt.
 
 ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
 

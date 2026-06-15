@@ -8,21 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * ASSIGNMENT RELATION — PER-ELEMENT ARRAY/TUPLE COMPAT. The unify-the-check work
-    LANDED: one checkValueAssign(tree, dest, rhs, diag) runs the implicit-conversion
-    relation at every assignment-family site (decl-init, assign, store, move, single
-    + overload call args, method args, return, field-init, per-element pairs); the
-    old fragments (checkStrongConstAssign / checkSlidAssign / checkPtrAssign /
-    checkArrayValueAssign) are reached only from inside it, and a tuple/array <->
-    scalar mismatch is now rejected (the char[]->int leak at function + method calls,
-    overload.sl:88, is closed). REMAINING: an array/tuple VALUE copy is still
-    EXACT-deepStrip (checkArrayValueAssign + the tuple-value arm at classify.cpp), so
-    shape-match + per-element COMPATIBILITY does not yet work — `int8[4] -> int[4]`
-    (each element widening) is rejected instead of converted. Needs codegen to lower
-    an aggregate assign to per-element converts (a whole memcpy is only the
-    all-identical case). The CLASS row of the relation is op= — tracked under CLASS
-    COPY-INIT / op=, not here.
-
   * TUPLE TYPE WITH A CLASS SLOT — `(Cz, int) t` / `(Cz, int)` as any composite
     type position fails resolveDeclType with "Unknown type '(Cz, int)'.", even
     though resolveTypeRef walks tuple slots structurally and the class is
@@ -255,9 +240,6 @@ DEFERRED TESTS
     shared helper then — at the helper, not the if-condition call site.
     prerequisite: pointers/iterators (Phase 4).
 
-
-REACH GOALS
-
   * FOR-TUPLE OVER CLASS ELEMENTS — `for (p : classTuple)` where the element is a
     CLASS. The forced-by-ref rule for non-primitive elements has LANDED: a
     tuple/array/slid element forces the loop var to `T^` (classify), and a declared
@@ -266,6 +248,9 @@ REACH GOALS
     What remains needs classes: by-VALUE iteration over a class element (a copy
     needs a constructor — not available) + the class copy/move machinery, and
     by-ref iteration once class-typed tuples exist. prerequisite: classes (Phase 5).
+
+
+REACH GOALS
 
   * DROP THE ENUM QUALIFIER IN CONTEXT — when a variable's declared type is an
     enum, a bare member name on the rhs should resolve against that enum's
