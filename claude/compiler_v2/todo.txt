@@ -8,29 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * TUPLE-OF-ARRAY TYPE — a tuple whose slot type is an array (`(int, int^[2])`)
-    does not parse: the tuple-type parser rejects the `[N]` suffix on a slot type
-    ("Expected ')'"). Array-of-tuple types work (`(int, int^) a[2]`) and tuple
-    VALUES nest freely, but a tuple TYPE cannot name an array slot. Surfaced
-    writing whole-array move/swap coverage in moveswap.sl — the tuple-x-array
-    null-walk is exercised today only via array-of-tuple, not tuple-of-array.
-    Needs parseType to accept an array-dimension suffix on a tuple slot type.
-
-  * TUPLE / ARRAY TYPE CONVERSION — `(Type=expr)` is scalar-only: classify's
-    kConvertExpr requires a numeric/pointer source and a numeric target
-    (isNumericType), so a tuple or array on EITHER side is rejected ("Cannot
-    convert to '...'; the target must be a value type" / "Cannot convert
-    '(int, int)' to 'int'"). typeconv.sl's top spec describes element-wise
-    conversion — `(int, int) t = ((int,int)=tpl)` -> (65, 66), `int a[3] =
-    (int[3]=ch_arr)` -> [97, 98, 99] — but it is unbuilt. A primitive-led ARRAY
-    target (`(int[N]=e)`, const dims and all) now PARSES and reaches the classify
-    gate (the const-dim plumbing is wired — typeconv.sl's neg_conv_const_dim); a
-    TUPLE target (`((int,int)=e)`) still doesn't parse (a conversion is led only by a
-    primitive type keyword, not a `(`). Needs: grammar to parse a tuple conversion
-    target, and kConvertExpr + convertExplicit to recurse per slot / element (each
-    leaf scalar reuses the existing grid). prerequisite: group with the user-named
-    conversion-target work.
-
   * ASSIGNMENT RELATION — PER-ELEMENT ARRAY/TUPLE COMPAT. The unify-the-check work
     LANDED: one checkValueAssign(tree, dest, rhs, diag) runs the implicit-conversion
     relation at every assignment-family site (decl-init, assign, store, move, single
@@ -45,6 +22,16 @@ BUGS (found, deferred)
     an aggregate assign to per-element converts (a whole memcpy is only the
     all-identical case). The CLASS row of the relation is op= — tracked under CLASS
     COPY-INIT / op=, not here.
+
+  * TUPLE TYPE WITH A CLASS SLOT — `(Cz, int) t` / `(Cz, int)` as any composite
+    type position fails resolveDeclType with "Unknown type '(Cz, int)'.", even
+    though resolveTypeRef walks tuple slots structurally and the class is
+    registered. The structural walk produces the resolved slot handles fine but
+    requireKnownType (resolve.cpp:98) rejects the composed type. Surfaced
+    writing the deferred class-target conversion negative for typeconv.sl; same
+    gap blocks tuple-with-class-slot field decls more generally. Needs the
+    "known" predicate to walk the tuple slots and accept each-leaf-known instead
+    of demanding the composed handle be marked known. Low-medium priority.
 
   * SELF-SWAP / SELF-MOVE FOR COMPLEX LVALUES — classify rejects a self-swap /
     self-move when both operands are the same BARE variable (isSameLvalue: two
@@ -89,17 +76,26 @@ DEFERRED FEATURES (later; may not be on the plan)
       statement"), and a BARE `m()` now errors cleanly ("Method 'm' must be called
       on an object.") instead of crashing. Needs `self` as a usable receiver.
 
-  * CLASS / USER-TYPE CONVERSION TARGET (Phase 5) — `(Type = expr)` value
-    conversions LANDED for primitives (kConvertExpr; see [[project_v2_type_conversions]]).
-    Two slices wait on classes:
+  * CLASS / USER-TYPE CONVERSION TARGET (Phase 5) — `(Type = expr)` LANDED for
+    primitives, tuples, and arrays (lockstep recursive walk; see
+    [[project_v2_type_conversions]]). Two slices still wait:
       - a CLASS target `(String = "...")` / `(Class = Type^)` is class
         assignment-conversion (routes through the class's `op=` / char[]-assign
         path, exactly like `String s = "x"`), plus a pointer SOURCE to a class
-        that defines `op=(Type^)`.
-      - a USER-NAMED type as the target: the grammar only opens a conversion on a
-        primitive type KEYWORD after `(`, so `(Foo = v)` isn't recognized yet
-        (falls to parseExpr -> "Expected ')'"). Needs the is-this-a-type
-        lookahead Phase 5 brings.
+        that defines `op=(Type^)`. The classify defer arm exists ("conversion
+        to a class is not yet implemented") but is unreachable from any test
+        today — the user-named top-level form `(Foo=v)` doesn't parse, and a
+        tuple/array with a class slot fails earlier at resolveDeclType with
+        "Unknown type '(Cz, int)'" (a separate gap).
+      - a USER-NAMED type as the TOP-LEVEL target: the grammar opens a
+        conversion on a primitive type KEYWORD after `(` or on a balanced
+        `((...)...)` shape (the tuple/array path), so `(Foo = v)` (single
+        parens, identifier-led) isn't recognized; falls to parseExpr →
+        "Expected ')'". `((Foo)=v)` (extra parens via the balanced-paren
+        lookahead) DOES work via single-slot tuple-collapse + alias
+        transparency, but only for primitive-backed aliases — a class-backed
+        alias would hit the defer arm above. Needs the is-this-a-type lookahead
+        Phase 5 brings.
     typeconv.sl keeps the `(String=...)` example commented. prerequisite: classes.
 
   * CLASS-FIELD INIT FROM A SIZE-1 TUPLE — the "vexing parse" (Phase 5). CONTEXT,

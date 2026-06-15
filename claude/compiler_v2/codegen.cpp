@@ -44,6 +44,9 @@ bool isAstLvalue(ast::Node const& n);
 std::string emitLvalueAddr(ast::Node const& lv, SymTab const& syms,
                            strings::Pool& pool, std::ostream& out,
                            diagnostic::Sink& diag);
+std::string emitConvertWalk(std::string const& src_val,
+                            widen::TypeRef src, widen::TypeRef dst,
+                            std::ostream& out);
 
 // The LLVM type for an interned slids type, read off the structured Type — no
 // spelling decomposition. A primitive maps by (cat, bits): float/double for the
@@ -763,6 +766,90 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
     return addr;
 }
 
+// Lockstep aggregate walk for `(Type=expr)` — convert `src_val` (typed `src`)
+// into a value of type `dst`. A tuple/array target is built slot-by-slot /
+// element-by-element from `undef`; each leaf bottoms out at convertExplicit
+// (the scalar value grid). Mirrors classify's checkConvertCompat shape; classify
+// has already validated arity/dim/leaf compatibility, so no error path here.
+//
+// ARENA SAFETY: widen::get returns a reference into the arena's reallocatable
+// vector, so an intern* call anywhere downstream can dangle it. A recursive
+// emitConvertWalk inside the loop CAN intern (the kArray multi-dim path mints
+// an inner-array handle). Capture slots / dims / elem BY VALUE before the loop
+// instead of holding `auto const&`.
+std::string emitConvertWalk(std::string const& src_val,
+                            widen::TypeRef src, widen::TypeRef dst,
+                            std::ostream& out) {
+    using F = widen::Type::Form;
+    widen::TypeRef ds = widen::strip(dst);
+    widen::TypeRef ss = widen::strip(src);
+    F df = widen::form(ds);
+    if (df == F::kTuple) {
+        std::vector<widen::TypeRef> dslots = widen::get(ds).slots;
+        std::vector<widen::TypeRef> sslots = widen::get(ss).slots;
+        std::string src_ll = llvmForRef(src);
+        std::string dst_ll = llvmForRef(dst);
+        std::string result = "undef";
+        for (std::size_t i = 0; i < dslots.size(); i++) {
+            std::string slot_ll = llvmForRef(dslots[i]);
+            std::string slot_src = newTmp("extt");
+            out << "  " << slot_src << " = extractvalue " << src_ll
+                << " " << src_val << ", " << i << "\n";
+            std::string slot_conv = emitConvertWalk(slot_src, sslots[i],
+                                                    dslots[i], out);
+            std::string next = newTmp("inst");
+            out << "  " << next << " = insertvalue " << dst_ll
+                << " " << result << ", " << slot_ll
+                << " " << slot_conv << ", " << i << "\n";
+            result = next;
+        }
+        return result;
+    }
+    if (df == F::kArray) {
+        // Peel ONE outer dim at a time. With dims = [N, ...], the LLVM type is
+        // [N x <inner>]; extractvalue [i] yields the inner-array (or the leaf
+        // when there's only one dim). Recursing on the inner type handles the
+        // remaining dims AND any non-array elem (a tuple, eventually a class).
+        std::vector<int> ddims = widen::get(ds).dims;
+        std::vector<int> sdims = widen::get(ss).dims;
+        widen::TypeRef d_elem = widen::get(ds).elem;
+        widen::TypeRef s_elem = widen::get(ss).elem;
+        widen::TypeRef d_inner;
+        widen::TypeRef s_inner;
+        if (ddims.size() == 1) {
+            d_inner = d_elem;
+            s_inner = s_elem;
+        } else {
+            std::vector<int> drem(ddims.begin() + 1, ddims.end());
+            std::vector<int> srem(sdims.begin() + 1, sdims.end());
+            d_inner = widen::internArray(d_elem, drem);
+            s_inner = widen::internArray(s_elem, srem);
+        }
+        int outer_dim = ddims[0];
+        std::string src_ll = llvmForRef(src);
+        std::string dst_ll = llvmForRef(dst);
+        std::string inner_dst_ll = llvmForRef(d_inner);
+        std::string result = "undef";
+        for (int i = 0; i < outer_dim; i++) {
+            std::string elt_src = newTmp("exta");
+            out << "  " << elt_src << " = extractvalue " << src_ll
+                << " " << src_val << ", " << i << "\n";
+            std::string elt_conv = emitConvertWalk(elt_src, s_inner, d_inner, out);
+            std::string next = newTmp("insa");
+            out << "  " << next << " = insertvalue " << dst_ll
+                << " " << result << ", " << inner_dst_ll
+                << " " << elt_conv << ", " << i << "\n";
+            result = next;
+        }
+        return result;
+    }
+    // Leaf: scalar value grid. classify guarantees df is kPrimitive here (kVoid
+    // / kPointer / kIterator / kSlid are rejected upstream); a regression hits
+    // convertExplicit's "non-value destination" assert rather than emitting bad
+    // IR silently.
+    return widen::convertExplicit(src_val, src, dst, out);
+}
+
 // True if `ty` is, or (for a tuple) transitively contains, a pointer / iterator
 // leaf — i.e. a move must null something inside it.
 bool typeHasPointer(widen::TypeRef ty) {
@@ -1115,15 +1202,17 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                                   expr.file_id, expr.tok, out, diag);
         }
         case ast::Kind::kConvertExpr: {
-            // `(Type=operand)` value conversion. Emit the operand at its own type,
-            // change the bits via the explicit grid (trunc/ext/fp<->int/sign
-            // reinterpret/nonzero test), then flex the target into the
-            // surrounding dest_type (a no-op or implicit widen).
+            // `(Type=operand)` value conversion. Scalar target: emit the operand
+            // and apply the explicit grid (trunc/ext/fp<->int/sign reinterpret
+            // /nonzero test). Tuple/array target: walk the aggregate in lockstep
+            // — at each slot/element pair, extractvalue from the source, recurse
+            // (so a tuple slot may itself be a tuple/array), insertvalue into
+            // the result. Leaves bottom out at convertExplicit.
             assert(expr.children.size() == 1 && "kConvertExpr needs 1 operand");
             ast::Node const& operand = *expr.children[0];
             std::string v = emitExpr(operand, syms, pool, out, diag,
                                      operand.inferred_type);
-            v = widen::convertExplicit(v, operand.inferred_type, expr.inferred_type, out);
+            v = emitConvertWalk(v, operand.inferred_type, expr.inferred_type, out);
             return widen::convert(v, expr.inferred_type, dest_type,
                                   expr.file_id, expr.tok, out, diag);
         }

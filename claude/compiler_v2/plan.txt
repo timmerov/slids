@@ -239,8 +239,9 @@ Phase 4 — types beyond primitives
     eagerly by resolve with the provisional `[1]`, are re-pointed by an AliasRefresh
     bakeNodeDims records [node types at walk-entry, entry types on bake]. The for-var
     head accepts a tuple type [looksLikeTupleTypeDecl] so a for-var carries one.
-    [The conversion-target case parses + bakes but is gated at classify — an array /
-    tuple `(Type=expr)` target is unbuilt; see todo.]
+    [Array and tuple conversion targets land via the lockstep
+    emitConvertWalk; the const-dim plumbing rides the same dim_sink path into
+    the conversion target.]
     SET FROM A HOMOGENEOUS TUPLE [init or whole-array assign]: a multi-dim array
     takes a NESTED tuple whose SHAPE matches the declared dims [row × col] —
     classifyArrayFromTuple checks the leaf count AND the nesting [a transposed or
@@ -307,24 +308,35 @@ Phase 4 — types beyond primitives
     bits [a cast reinterprets them]; modeled as assignment-to-a-temp, so the
     result is a STRONG typed value of the target [does not flex — `int8 = (int=5)`
     is a narrowing error]. Grammar seam: a type-keyword right after `(` is
-    unambiguous [no expr/tuple starts with a type] -> parseConvertChain; chains
-    `(A = B = expr)` nest right-to-left, no inner parens. Semantics are C across
-    the whole value grid [int/uint/float families + bool + char]: float->int
-    truncates toward zero, int->int reinterprets the low N bits per target
-    signedness [same-width sign change is a free no-op], ->bool is a nonzero/
-    non-null test, ->float is sitofp/uitofp/fpext/fptrunc. classify gates: the
-    target must be a value type [pointer/iterator -> "may not be a pointer type",
-    void/tuple/class -> "must be a value type"]; a value source converts to any
-    value target; a pointer/iterator source converts ONLY to `bool` [icmp ne null]
-    or `intptr` [ptrtoint], or a class with op=(Type^) [Phase 5]. constfold
-    tryFoldConvert folds a literal operand to a strong target-typed literal so a
-    conversion can initialize a const or size an array dimension. Lowering is
-    widen::convertExplicit [the full grid — sibling to widen::convert which only
-    widens; never reports, classify pre-validated]. codegen arm mirrors the cast
-    [emit operand -> convertExplicit -> flex into dest]. test_v2/expression/
-    typeconv.sl. DEFERRED to Phase 5: a class target `(String = "...")` /
-    `(Class = Type^)` [class assignment-conversion] and a user-named type as
-    target [only primitive type keywords lead a conversion in the grammar today].
+    unambiguous -> parseConvertChain; a tuple-led target `((T0,T1,...) = ...)` is
+    recognized via a balanced-paren lookahead (looksLikeTupleConvTarget — scan
+    past balanced `(...)` and any type-suffix chain [`^`, `[]`, `[N]`], match if
+    the next token is `=`); chains `(A = B = expr)` nest right-to-left, no inner
+    parens. Semantics are C across the whole value grid [int/uint/float families
+    + bool + char] for scalar leaves: float->int truncates toward zero, int->int
+    reinterprets the low N bits per target signedness [same-width sign change is
+    a free no-op], ->bool is a nonzero/non-null test, ->float is sitofp/uitofp/
+    fpext/fptrunc. Tuple/array targets walk in LOCKSTEP per slot/element — a
+    tuple converts iff the source is a tuple of the same arity and each slot
+    pair converts; an array iff the source has the same dims and the element
+    types convert; the recursion composes freely (tuple-of-array, array-of-
+    tuple, multi-dim, nested). classify gates [classify::checkConvertCompat]:
+    pointer/iterator/anyptr -> "may not be a pointer type"; void -> "must be a
+    value type"; class -> "conversion to a class is not yet implemented"; a
+    value source converts to any value target; a pointer/iterator source
+    converts ONLY to `bool` [icmp ne null] or `intptr` [ptrtoint], or a class
+    with op=(Type^) [Phase 5]. constfold tryFoldConvert folds a SCALAR literal
+    operand to a strong target-typed literal so a conversion can initialize a
+    const or size an array dimension. Lowering: scalar leaves go through
+    widen::convertExplicit [the full grid]; tuple/array targets use codegen::
+    emitConvertWalk [build the result aggregate from `undef` via extractvalue/
+    insertvalue at each slot/element, recurse on each pair, leaf bottoms out
+    at convertExplicit]. codegen arm mirrors the cast [emit operand ->
+    emitConvertWalk -> flex into dest]. test_v2/assign/typeconv.sl. DEFERRED
+    to Phase 5: a CLASS target `(String = "...")` / `(Class = Type^)` [class
+    assignment-conversion] and a USER-NAMED TOP-LEVEL target [the tuple-led
+    `((Foo)=v)` works today via single-slot tuple-collapse + alias transparency,
+    but bare `(Foo=v)` needs the is-this-a-type lookahead Phase 5 brings].
     See [[project_v2_type_conversions]], [[feedback_cast_vs_conversion]].)
   * sizeof (`sizeof(T)` / `sizeof(expr)`)                          LANDED
     (kSizeofExpr — a primary; grammar splits a TYPE operand [paren starts with a

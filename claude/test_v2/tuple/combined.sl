@@ -4,11 +4,31 @@ test combinations of arrays and tuples.
 array of tuples.
 tuple of arrays.
 
+assignments are handled by slot/element iteratively and recursively.
+
 arrays of tuples.
 
     (int, int) arr[3] = ((1,2), (3,4), (5,6));
     six = arr[2][1];
     six = arr[1,2];
+
+mixed assignments:
+
+    int[2] arr1 = (1,2);
+    (int,int) tpl1 = arr1;
+    arr1 = tpl1;
+    tpl1 = arr1;
+    arr1 <-- tpl1;
+    tpl1 <-- arr1;
+
+complex mixed assignments:
+
+    (int[2], int[2]) tpl2 = ((1,2), (3,4));
+    (int,int) arr2[2] = tpl2;
+    tpl2 = arr2;
+    arr2 = tpl2;
+    tpl2 <-- arr2;
+    arr2 <-- tpl2;
 */
 
 /*

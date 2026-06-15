@@ -218,16 +218,26 @@ struct Parser {
         // A LITERAL dim bakes its size into the spelling; a const-EXPRESSION dim (only
         // when a dim_sink is provided) spells a provisional `[1]` and pushes the expr
         // to the sink for constfold to fold + bake.
-        bool local_pointer = false;     // a `^` / `[]` emitted in this chain
-        bool local_const_dim = false;   // a const-EXPRESSION (sink) dim in this chain
+        //
+        // SINK PUSH ORDER: bakeDimsWalk (constfold) consumes dim_exprs in PRE-ORDER —
+        // outermost kArray's dims first, then descend through `^`/`[]` to inner ones.
+        // SOURCE order matches that only for a PURE-array chain (one kArray with many
+        // dims). When a `^`/`[]` splits the chain into multiple array RUNS, the LAST
+        // run in source order corresponds to the OUTERMOST kArray in the tree. So we
+        // buffer dim_exprs per run, then push runs into dim_sink in REVERSE order at
+        // chain end. Within a run, source order is preserved (the comma transpose has
+        // already reversed within a single bracket group).
         bool outermost_sized = false;   // the LAST wrapper emitted is a sized dim
+        std::vector<std::vector<std::unique_ptr<parse::Node>>> runs;
+        bool in_run = false;
+        auto closeRun = [&]() { in_run = false; };
         while (true) {
             if (peek().kind == token::Kind::kLBracket
                 && peekKind(1) == token::Kind::kRBracket) {
                 advance(); advance();   // `[` `]`
                 type += "[]";           // iterator
-                local_pointer = true;
                 outermost_sized = false;
+                closeRun();
             } else if (peek().kind == token::Kind::kLBracket) {
                 advance();   // [
                 std::vector<std::string> bracket_spell;
@@ -246,7 +256,6 @@ struct Parser {
                         if (!dim) return "";
                         bracket_spell.push_back("1");   // provisional; constfold bakes
                         bracket_expr.push_back(std::move(dim));
-                        local_const_dim = true;
                     } else {
                         error("An array type dimension must be an integer literal.");
                         return "";
@@ -255,16 +264,20 @@ struct Parser {
                     advance();   // ,
                 }
                 if (!expect(token::Kind::kRBracket, "]")) return "";
+                if (dim_sink && !in_run) {
+                    runs.emplace_back();
+                    in_run = true;
+                }
                 for (std::size_t k = bracket_spell.size(); k-- > 0; ) {  // comma transpose
                     type += "[" + bracket_spell[k] + "]";
-                    if (dim_sink) dim_sink->push_back(std::move(bracket_expr[k]));
+                    if (dim_sink) runs.back().push_back(std::move(bracket_expr[k]));
                 }
                 outermost_sized = true;
             } else if (peek().kind == token::Kind::kBitXor) {
                 advance();
                 type += "^";
-                local_pointer = true;
                 outermost_sized = false;
+                closeRun();
             } else {
                 break;
             }
@@ -278,16 +291,12 @@ struct Parser {
                   "write 'T name[N]', not 'T[N] name'.");
             return "";
         }
-        // A const-EXPRESSION dim's sink order matches the interned type tree only for
-        // a pure array chain; splitting two array groups with a pointer/iterator
-        // wrapper (`int[A]^[B]`) makes the bake's pre-order walk disagree with the
-        // source-order push. Reject that combination (it was unspellable before this
-        // chain anyway) — name the inner array with an alias.
-        if (local_const_dim && local_pointer) {
-            error("A const-expression array dimension cannot combine with a "
-                  "pointer or iterator suffix in one type; name the array with an "
-                  "alias.");
-            return "";
+        // Emit runs in REVERSE order so the sink's push order matches bakeDimsWalk's
+        // pre-order traversal of the interned type tree.
+        if (dim_sink) {
+            for (auto it = runs.rbegin(); it != runs.rend(); ++it) {
+                for (auto& d : *it) dim_sink->push_back(std::move(d));
+            }
         }
         return type;
     }
@@ -481,6 +490,50 @@ struct Parser {
         return peekKind(o) == token::Kind::kEquals;
     }
 
+    // Pure lookahead at parsePrimary's LParen branch — the outer `(` is already
+    // consumed, so peek(0) is the FIRST INNER token. Recognizes a tuple-led
+    // conversion target: an inner `(...)` (balanced parens), optionally followed
+    // by a chain of type suffixes (`^`, `[]`, sized `[N]` / `[N,M]`), then `=`.
+    // `((char,char)=tpl)`, `((int,int)[2]=arr)`, `((int,int)^=ptr)` match;
+    // `((1,2),(3,4))` (a tuple of tuples) does NOT (after the inner `(1,2)` the
+    // next token is `,`, not a suffix and not `=`); `((x)==y)` does NOT (`==`
+    // is a distinct token from `=`). Identifier-led inner content (a user-named
+    // type target, deferred) still passes parseType to a clean diagnostic.
+    bool looksLikeTupleConvTarget() const {
+        if (peekKind(0) != token::Kind::kLParen) return false;
+        int o = 1, depth = 1;
+        while (depth > 0) {
+            token::Kind k = peekKind(o);
+            if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput)
+                return false;
+            if (k == token::Kind::kLParen) depth++;
+            else if (k == token::Kind::kRParen) depth--;
+            o++;
+        }
+        // Skip a chain of type-suffix wrappers between the balanced `(...)` and
+        // the `=` — `^`, `[]`, `[ ... ]`. Bracket groups carry literal/const
+        // expressions; just scan past balanced `[...]` (no nesting inside).
+        for (;;) {
+            token::Kind k = peekKind(o);
+            if (k == token::Kind::kBitXor) { o++; continue; }
+            if (k == token::Kind::kLBracket) {
+                int bd = 1;
+                o++;
+                while (bd > 0) {
+                    token::Kind bk = peekKind(o);
+                    if (bk == token::Kind::kEndOfFile
+                        || bk == token::Kind::kEndOfInput) return false;
+                    if (bk == token::Kind::kLBracket) bd++;
+                    else if (bk == token::Kind::kRBracket) bd--;
+                    o++;
+                }
+                continue;
+            }
+            break;
+        }
+        return peekKind(o) == token::Kind::kEquals;
+    }
+
     // Parse a for-varlist variable head: an optional type then the variable
     // name. The decl is TYPELESS (vtype left empty -> inferred from the
     // initializer, or a reuse of an enclosing local) when the leading tokens
@@ -670,11 +723,13 @@ struct Parser {
         if (t.kind == token::Kind::kLParen) {
             int lp = pos;
             advance();
-            // `(Type=expr)` value conversion. No parenthesized expression or
-            // tuple literal can start with a type keyword, so a type-start right
-            // after `(` unambiguously marks a conversion. Chains `(A=B=expr)`
-            // nest right-to-left (one kConvertExpr per `Type=` link).
-            if (isTypeStart(peek().kind)) {
+            // `(Type=expr)` value conversion. A primitive type-start right after
+            // `(` unambiguously marks a conversion (no expr starts with a type
+            // keyword). A tuple-led target — inner `(...)` balanced parens then
+            // `=` — is recognized via lookahead and routed through the same
+            // chain. Chains `(A=B=expr)` nest right-to-left (one kConvertExpr per
+            // `Type=` link).
+            if (isTypeStart(peek().kind) || looksLikeTupleConvTarget()) {
                 auto conv = parseConvertChain(t.file_id);
                 if (!conv) return nullptr;
                 if (!expect(token::Kind::kRParen, ")")) return nullptr;

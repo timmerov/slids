@@ -244,6 +244,75 @@ int32 main() {
     float64 bfs = (float64 = bsrc);     // runtime bool source -> 1.0
     __println("bis = " + bis + " bfs = " + bfs);   // 1 1
 
+    /* tuples — per-slot conversion. */
+    (int,int) tpl1 = (65,66);
+    tpl2 = ((char,char)=tpl1);
+    __println("tpl2 = (" + tpl2[0] + "," + tpl2[1] + ")");                   // (A,B)
+
+    /* arrays — per-element conversion. char[3] -> int[3] via the leaf grid. */
+    char ch_arr[3] = ('a', 'b', 'c');
+    int int_arr[3] = (int[3] = ch_arr);
+    __println("int_arr = " + int_arr[0] + " " + int_arr[1] + " " + int_arr[2]);  // 97 98 99
+
+    /* a const-EXPRESSION dim baked into the conversion target. */
+    const int kC = 3;
+    char ch_kc[kC] = (65, 66, 67);
+    int int_kc[kC] = (int[kC] = ch_kc);
+    __println("int_kc = " + int_kc[0] + " " + int_kc[1] + " " + int_kc[2]);  // 65 66 67
+
+    /* nested: tuple-of-tuple. */
+    ((int,int),(int,int)) ntpl = ((65,66), (67,68));
+    n2 = (((char,char),(char,char))=ntpl);
+    __println("n2 = ((" + n2[0][0] + "," + n2[0][1] + "),("
+              + n2[1][0] + "," + n2[1][1] + "))");                           // ((A,B),(C,D))
+
+    /* nested: tuple-with-array slot. */
+    (int, int[2]) tpa = (90, (97, 98));
+    tpa2 = ((char, char[2]) = tpa);
+    __println("tpa2 = (" + tpa2[0] + ", [" + tpa2[1][0] + "," + tpa2[1][1] + "])"); // (Z, [a,b])
+
+    /* multi-dim array. */
+    char m2[2][3] = (('a','b','c'), ('d','e','f'));
+    int im2[2][3] = (int[2][3] = m2);
+    __println("im2 = " + im2[0][0] + " " + im2[1][2]);                       // 97 102
+
+    /* array-of-tuple — the symmetric direction to tuple-of-array. The codegen
+       array arm peels one outer dim and recurses into the tuple elem. */
+    (char,char) at_arr[2] = ((65,66), (67,68));
+    aoi = ((int,int)[2] = at_arr);
+    __println("aoi = (" + aoi[0][0] + "," + aoi[0][1] + ") ("
+              + aoi[1][0] + "," + aoi[1][1] + ")");                          // (65,66) (67,68)
+
+    /* pointer-leaf in a tuple slot (positive): each pointer source converts to
+       bool or intptr per the existing leaf rule, applied through the per-slot
+       walk. */
+    int vp = 42;
+    int^ rvp = ^vp;
+    int^ nulp = nullptr;
+    pirv = ((bool, intptr) = (rvp, nulp));
+    __println("pirv = " + pirv[0] + " " + pirv[1]);                          // true 0
+
+    /* iterator source in a tuple slot — kIterator is pointer-like, same leaf
+       rule. */
+    int harr2[3];
+    harr2[0] = 1;
+    int[] it2 = ^harr2[0];
+    bib = ((bool, bool) = (it2, it2));
+    __println("bib = " + bib[0] + " " + bib[1]);                             // true true
+
+    /* const-EXPRESSION dim baked into a tuple SLOT type (the dim_sink flows
+       through the tuple-slot recursion in parseType). */
+    (char[kC], char) src_kt = ((65,66,67), 90);
+    tup_kt = ((int[kC], int) = src_kt);
+    __println("tup_kt = (" + tup_kt[0][0] + " " + tup_kt[0][1] + " "
+              + tup_kt[0][2] + ", " + tup_kt[1] + ")");                      // (65 66 67, 90)
+
+    /* cross-category in slots — float -> int per slot, exercising the leaf
+       grid through the tuple walk. */
+    (float, float) ff = (1.5, 2.7);
+    cci = ((int, int) = ff);
+    __println("cci = (" + cci[0] + "," + cci[1] + ")");                      // (1,2)
+
     /* compile errors — each uncommented in isolation by the negative runner. */
 
     /* a pointer converts only to bool / intptr, not an arbitrary numeric. */
@@ -269,17 +338,74 @@ int32 main() {
     //int ed = (void = es);
     //__println("x= " + ed);
 
-    /* a const-EXPRESSION dim in a conversion TARGET now PARSES and bakes (`int[kC]`
-       folds to `int[3]`), but an array/tuple conversion target is still gated at
-       classify — element-wise conversion is unbuilt (see todo). The const-dim
-       plumbing reaching the gate is what this checks. */
-    //-EXPECT-ERROR: Cannot convert to 'int[3]'; the target must be a value type
-    //int neg_conv_const_dim() {
-    //    const int kC = 3;
-    //    char c[kC] = (65, 66, 67);
-    //    int a[kC] = (int[kC] = c);
+    /* a tuple/array conversion source must be the same shape — a scalar into a
+       tuple target is a "source must be a tuple" error. */
+    //-EXPECT-ERROR: the source must be a tuple
+    //int neg_tuple_target_scalar_src() {
+    //    int s = 5;
+    //    tpl_es = ((char,char) = s);
+    //    return tpl_es[0];
+    //}
+
+    /* an array conversion source must be an array of the SAME dims. */
+    //-EXPECT-ERROR: array shape differs
+    //int neg_array_dim_mismatch() {
+    //    char c[4] = ('a', 'b', 'c', 'd');
+    //    int a[3] = (int[3] = c);
     //    return a[0];
     //}
+
+    /* a tuple conversion source must be a tuple of the SAME arity. */
+    //-EXPECT-ERROR: slot count differs
+    //int neg_tuple_arity_mismatch() {
+    //    (int, int, int) t = (1, 2, 3);
+    //    pair = ((char, char) = t);
+    //    return pair[0];
+    //}
+
+    /* an array conversion source must be an array. A scalar source to an array
+       target fires the "source must be an array" rule. */
+    //-EXPECT-ERROR: the source must be an array
+    //int neg_array_target_scalar_src() {
+    //    int s = 5;
+    //    int arr_es[3] = (int[3] = s);
+    //    return arr_es[0];
+    //}
+
+    /* pointer leaf in a tuple slot whose target is neither bool nor intptr —
+       the recursive walk reaches the leaf rule and rejects per slot. */
+    //-EXPECT-ERROR: a pointer converts only to 'bool' or 'intptr'
+    //int neg_ptr_in_slot_non_bool() {
+    //    int^ pn = nullptr;
+    //    bad = ((int, int) = (pn, pn));
+    //    return bad[0];
+    //}
+
+    /* inner tuple arity mismatch — the outer arity matches but a nested slot's
+       arity differs; the recursive walk fires inside, attributed at the outer
+       conv tok (per-slot caret refinement is a later cleanup). */
+    //-EXPECT-ERROR: slot count differs
+    //int neg_inner_tuple_arity() {
+    //    inner_bad = (((char,char),(char,char)) = ((1,2),(3,4,5)));
+    //    return inner_bad[0][0];
+    //}
+
+    /* inner array shape mismatch — outer tuple arity matches but a tuple slot's
+       inner array dims differ. */
+    //-EXPECT-ERROR: array shape differs
+    //int neg_inner_array_dim() {
+    //    char a3[3] = (1,2,3);
+    //    char a4[4] = (4,5,6,7);
+    //    inner_bad2 = ((int[3], int[3]) = (a3, a4));
+    //    return inner_bad2[0][0];
+    //}
+
+    /* A class as a conversion target is deferred until op= lands. The grammar
+       has no top-level user-named conversion target, so a class would have to
+       be reached through a tuple/array slot — but a tuple type with a class
+       slot doesn't resolve today (separate gap), so the classify defer arm is
+       unreachable from any current test. Re-add a negative when either path
+       opens. */
 
     /* the result is a STRONG typed value, so assigning it to a narrower type is
        rejected just like an int variable would be — it does not flex. */

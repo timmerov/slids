@@ -597,10 +597,13 @@ STAGE FILES (.h / .cpp pairs)
             `<` is unambiguous since binary `<` only sits between operands; the
             target spelling rides on return_type, the operand is another unary so
             casts chain right-to-left), the `(Type = expr)` value conversion
-            (kConvertExpr — a type-keyword right after `(` opens it, unambiguous
-            since no parenthesized expr or tuple starts with a type; parseConvertChain
-            parses the target onto return_type and recurses for chain links
-            `(A = B = expr)`, right-to-left, no inner parens), prefix/postfix ++/--, full binary set
+            (kConvertExpr — a type-keyword right after `(` opens it, or a
+            balanced `((...)...)` shape with a trailing `=` opens a tuple-led
+            target [looksLikeTupleConvTarget — scan past balanced parens and any
+            type-suffix chain `^`/`[]`/`[N]`, match if the next token is `=`];
+            parseConvertChain parses the target onto return_type and recurses
+            for chain links `(A = B = expr)`, right-to-left, no inner parens),
+            prefix/postfix ++/--, full binary set
             arith/bitwise/shift/comparison/logical, parens, postfix-call on
             a bare ident, and the `##` stringify macros in parsePrimary's
             kHashHash arm — ##file / ##line / ##func / ##name(x) (raw lexed
@@ -1019,15 +1022,20 @@ STAGE FILES (.h / .cpp pairs)
             pointer being involved (pure-numeric assignments keep the width path).
             The kCastExpr arm validates the explicit rule and stamps the target.
             The kConvertExpr arm (`(Type = expr)`, Phase 4) infers the operand
-            with NO context (it retypes, never flexes) then gates the grid: the
-            target must be a value type (a pointer/iterator -> "may not be a
-            pointer type", anything else non-numeric -> "must be a value type");
-            a value source converts to any value target; a pointer/iterator source
-            converts ONLY to `bool` or `intptr` (else "a pointer converts only to
-            'bool' or 'intptr'"); a non-value source is rejected outright. It
-            stamps the target as inferred_type (even on the error paths). Because
-            the result is a strong typed value, an over-narrow assignment of it is
-            caught by the same checkStrongConstAssign as any typed value.
+            with NO context (it retypes, never flexes) then dispatches to
+            checkConvertCompat — a lockstep recursive walk of target vs source:
+            pointer-like target -> "may not be a pointer type"; void -> "must be
+            a value type"; class -> "conversion to a class is not yet
+            implemented" (deferred until op= lands); tuple target -> source must
+            be a tuple of the same arity, per-slot recurse; array target ->
+            source must be an array of the same dims, element recurse; leaf
+            (primitive) target -> a value source converts to any value target,
+            a pointer/iterator source converts ONLY to `bool` or `intptr` (else
+            "a pointer converts only to 'bool' or 'intptr'"), a non-value source
+            is rejected outright. It stamps the target as inferred_type (even on
+            the error paths). Because the result is a strong typed value, an
+            over-narrow assignment of it is caught by the same
+            checkStrongConstAssign as any typed value.
             Move / swap (Phase 4): kMoveStmt classifies like a store — infer the
             lhs lvalue, the rhs in that context, then checkPtrAssign +
             checkStrongConstAssign (so a move COPIES under assignment rules; a
@@ -1200,15 +1208,23 @@ STAGE FILES (.h / .cpp pairs)
             `inttoptr` — and asserts if a pointer ever reaches the SCALAR
             conversion path (an ungated ptr->non-intptr would store a `ptr` as an
             integer; classify rejects them, so this guards against a missed gate).
-            A kConvertExpr (`(Type = expr)`) mirrors the cast shape: emit the
-            operand at its own type, then widen::convertExplicit (operand->target)
-            then widen::convert (target->dest). convertExplicit is the FULL value
-            grid (sibling to convert, which only widens): trunc / sext / zext /
-            fptrunc / fpext / fptosi / fptoui / sitofp / uitofp, a same-width int
-            change is a no-op (sign reinterpret is free), `->bool` is a nonzero
-            (`icmp`/`fcmp une`) / non-null test, a pointer source is `ptrtoint`
-            (->intptr) or the non-null test (->bool). It never reports — classify
-            pre-validated — and asserts on any state classify should have caught.
+            A kConvertExpr (`(Type = expr)`) emits the operand at its own type,
+            then dispatches to emitConvertWalk (target->target lockstep): a
+            tuple/array target builds the result aggregate from `undef` via
+            extractvalue/insertvalue at each slot/element and recurses pair-wise
+            on each leaf; a primitive (leaf) target calls widen::convertExplicit.
+            The walk mirrors classify's checkConvertCompat shape. ARENA SAFETY:
+            slots/dims/elem are captured BY VALUE before the loop (widen::get
+            returns a ref into the reallocatable arena; recursion into a
+            multi-dim sub-array calls internArray and would dangle a held ref).
+            convertExplicit is the FULL value grid (sibling to convert, which
+            only widens): trunc / sext / zext / fptrunc / fpext / fptosi /
+            fptoui / sitofp / uitofp, a same-width int change is a no-op (sign
+            reinterpret is free), `->bool` is a nonzero (`icmp`/`fcmp une`) /
+            non-null test, a pointer source is `ptrtoint` (->intptr) or the
+            non-null test (->bool). It never reports — classify pre-validated
+            — and asserts on any state classify should have caught. The result
+            is then flexed into dest via widen::convert.
             kNewExpr: `new T` -> `call ptr @malloc(i64 sizeof(T))`; `new T[n]` ->
             `mul i64 n, sizeof(T)` then malloc; placement (children[1]) -> the
             address itself, no allocation (primitives construct nothing). An

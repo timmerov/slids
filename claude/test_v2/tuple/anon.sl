@@ -175,5 +175,36 @@ int32 main() {
     t4[0][0][1] = 99;
     __println("t4store= " + t4[0][0][1]);   // 99
 
+    /* const-EXPRESSION dim composed with a pointer / iterator in the SAME chain.
+       grammar buffers dim_exprs per RUN (a run is a maximal sequence of `[...]`
+       chain steps with no intervening `^`/`[]`) and pushes runs into dim_sink
+       in REVERSE order at chain end, so the sink push matches bakeDimsWalk's
+       pre-order traversal. The canonical site is a tuple slot — the only place
+       the chain can END in a sized dim (a named var/param requires the outer
+       dim on the name). */
+    const int kN = 2;
+    int xa = 100;
+    int xb = 200;
+    (int, int^[kN]) t5 = (1, (^xa, ^xb));
+    __println("t5= " + t5[0] + " " + t5[1][0]^ + " " + t5[1][1]^);    // 1 100 200
+
+    /* an inner array with a const-dim behind a reference: `int[kN]^` is "ref to
+       int[kN]". The kArray dim is INSIDE the kPointer; pre-order pops it AFTER
+       descending the ref. Legal as a named var type — `^` is the outermost
+       wrapper, not the sized dim. */
+    int ka[kN] = (11, 22);
+    int[kN]^ kp = ^ka;
+    __println("kp= " + kp^[0] + " " + kp^[1]);                        // 11 22
+
+    /* two const-dim array runs separated by a reference, in a tuple slot:
+       `int[kN]^[kN]` — array of refs to array. The OUTER kArray (the LAST
+       chain step) takes the LATER expression after the per-run reverse. */
+    int ra[kN] = (33, 44);
+    int rb[kN] = (55, 66);
+    (int[kN]^[kN], int) tdouble = ((^ra, ^rb), 7);
+    __println("tdouble= " + tdouble[0][0]^[0] + " " + tdouble[0][0]^[1]
+              + " " + tdouble[0][1]^[0] + " " + tdouble[0][1]^[1]
+              + " " + tdouble[1]);                                    // 33 44 55 66 7
+
     return 0;
 }

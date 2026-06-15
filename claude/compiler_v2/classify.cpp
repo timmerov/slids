@@ -194,6 +194,100 @@ bool isNumericType(widen::TypeRef t) {
     return widen::classify(t, k);
 }
 
+// Validate a `(Type=src)` conversion against the value-conversion grid. LEAF
+// rule is the existing scalar grid (numeric<->numeric always; pointer<->{bool,
+// intptr} only). Recurses per-slot for tuple targets and per-element for array
+// targets — a tuple converts iff the source is a tuple of the same arity and
+// each slot pair converts; an array iff the source is an array of the same
+// dims and the element types convert. A class target is deferred (no op= yet).
+// Diagnostics carry the outer conv tok; per-slot caret refinement is a later
+// pass. Returns true iff a diagnostic fired (cascade-suppression hint for the
+// caller; not currently consumed).
+bool checkConvertCompat(widen::TypeRef dst, widen::TypeRef src,
+                        int file_id, int tok, diagnostic::Sink& diag) {
+    using F = widen::Type::Form;
+    widen::TypeRef ds = widen::strip(dst);
+    widen::TypeRef ss = widen::strip(src);
+    F df = widen::form(ds);
+    F sf = widen::form(ss);
+    std::string to = widen::spellOrEmpty(dst);
+    std::string from = widen::spellOrEmpty(src);
+
+    if (isPtrLikeType(dst)) {
+        diagnostic::report(diag, {file_id, tok,
+            "A type conversion target may not be a pointer type.", {}});
+        return true;
+    }
+    if (df == F::kVoid) {
+        diagnostic::report(diag, {file_id, tok,
+            "Cannot convert to '" + to + "'; the target must be a value type.", {}});
+        return true;
+    }
+    if (df == F::kTuple) {
+        if (sf != F::kTuple) {
+            diagnostic::report(diag, {file_id, tok,
+                "Cannot convert '" + from + "' to '" + to
+                + "'; the source must be a tuple.", {}});
+            return true;
+        }
+        auto const& dslots = widen::get(ds).slots;
+        auto const& sslots = widen::get(ss).slots;
+        if (dslots.size() != sslots.size()) {
+            diagnostic::report(diag, {file_id, tok,
+                "Cannot convert '" + from + "' to '" + to + "'; slot count differs ("
+                + std::to_string(sslots.size()) + " vs "
+                + std::to_string(dslots.size()) + ").", {}});
+            return true;
+        }
+        bool any = false;
+        for (std::size_t i = 0; i < dslots.size(); i++) {
+            if (checkConvertCompat(dslots[i], sslots[i], file_id, tok, diag)) any = true;
+        }
+        return any;
+    }
+    if (df == F::kArray) {
+        if (sf != F::kArray) {
+            diagnostic::report(diag, {file_id, tok,
+                "Cannot convert '" + from + "' to '" + to
+                + "'; the source must be an array.", {}});
+            return true;
+        }
+        auto const& ddims = widen::get(ds).dims;
+        auto const& sdims = widen::get(ss).dims;
+        if (ddims != sdims) {
+            diagnostic::report(diag, {file_id, tok,
+                "Cannot convert '" + from + "' to '" + to
+                + "'; array shape differs.", {}});
+            return true;
+        }
+        return checkConvertCompat(widen::get(ds).elem, widen::get(ss).elem,
+                                  file_id, tok, diag);
+    }
+    if (df == F::kSlid) {
+        diagnostic::report(diag, {file_id, tok,
+            "Cannot convert to class type '" + to
+            + "'; conversion to a class is not yet implemented.", {}});
+        return true;
+    }
+    // df is kPrimitive (the leaf). Validate the scalar grid.
+    if (isPtrLikeType(src)) {
+        if (ds != widen::intern("bool") && ds != widen::intern("intptr")) {
+            diagnostic::report(diag, {file_id, tok,
+                "Cannot convert '" + from + "' to '" + to
+                + "'; a pointer converts only to 'bool' or 'intptr'.", {}});
+            return true;
+        }
+        return false;
+    }
+    if (!isNumericType(src)) {
+        diagnostic::report(diag, {file_id, tok,
+            "Cannot convert '" + from + "' to '" + to + "'.", {}});
+        return true;
+    }
+    // Both numeric — the value grid permits all such conversions.
+    return false;
+}
+
 // `!` and the logical operators truthy-coerce: numerics via cmp-against-zero,
 // pointer-like via cmp-against-null. Void (and any future non-value type) is
 // rejected here.
@@ -846,46 +940,21 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kConvertExpr: {
             // `(Type=operand)` value conversion. Infer the operand with NO
             // context (the conversion explicitly retypes it; it does not flex),
-            // then check the grid: the target must be a value type (not a
-            // pointer); a value source converts to any value target; a pointer
-            // source converts only to `bool` (non-null test) or `intptr`
-            // (ptrtoint). A literal operand was already folded in constfold.
+            // then dispatch the (target, source) pair to checkConvertCompat: a
+            // leaf target uses the scalar grid; tuple/array targets recurse
+            // per-slot / per-element; pointer/void/class targets are rejected.
+            // A literal operand was already folded in constfold.
             assert(e.children.size() == 1 && "kConvertExpr needs 1 operand");
             parse::Node& operand = *e.children[0];
             inferExpr(tree, operand, widen::kNoType, diag);
-            std::string to = widen::spellOrEmpty(e.return_type);
-            widen::TypeRef to_c = widen::deepStrip(e.return_type);
-            if (!isNumericType(e.return_type)) {
-                if (isPtrLikeType(e.return_type)) {
-                    diagnostic::report(diag, {e.file_id, e.tok,
-                        "A type conversion target may not be a pointer type.", {}});
-                } else {
-                    diagnostic::report(diag, {e.file_id, e.tok,
-                        "Cannot convert to '" + to
-                        + "'; the target must be a value type.", {}});
-                }
-            } else if (operand.inferred_type != widen::kNoType) {
-                std::string from = widen::spellOrEmpty(operand.inferred_type);
-                if (isPtrLikeType(operand.inferred_type)) {
-                    if (to_c != widen::intern("bool") && to_c != widen::intern("intptr")) {
-                        diagnostic::report(diag, {e.file_id, e.tok,
-                            "Cannot convert '" + from + "' to '" + to
-                            + "'; a pointer converts only to 'bool' or 'intptr'.", {}});
-                    }
-                } else if (!isNumericType(operand.inferred_type)) {
-                    diagnostic::report(diag, {e.file_id, e.tok,
-                        "Cannot convert '" + from + "' to '" + to + "'.", {}});
-                }
-                // else: a numeric source into a value target — the whole grid is
-                // legal, no diagnostic. The implicit outer else (operand type is
-                // kNoType) is the cascade-suppression case: inferExpr already
-                // reported the operand's error, so skip the source check to avoid
-                // a second misleading diagnostic. user notified, accepts state.
+            if (operand.inferred_type != widen::kNoType) {
+                checkConvertCompat(e.return_type, operand.inferred_type,
+                                   e.file_id, e.tok, diag);
             }
-            // Stamp the target type even on the error paths above (pointer / void
-            // target), so downstream stages see a typed node — the conversion's
-            // type IS the target regardless. Moot when there was an error (no
-            // codegen), but uniform with kCastExpr. user notified, accepts state.
+            // Stamp the target type even on the error paths above, so downstream
+            // stages see a typed node — the conversion's type IS the target
+            // regardless. Moot when there was an error (no codegen), but uniform
+            // with kCastExpr. user notified, accepts state.
             e.inferred_type = e.return_type;
             return;
         }

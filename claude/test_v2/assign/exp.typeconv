@@ -39,3 +39,14 @@ negfl = -3
 negfr = -3
 chi = 65
 bis = 1 bfs = 1
+tpl2 = (A,B)
+int_arr = 97 98 99
+int_kc = 65 66 67
+n2 = ((A,B),(C,D))
+tpa2 = (Z, [a,b])
+im2 = 97 102
+aoi = (65,66) (67,68)
+pirv = true 0
+bib = true true
+tup_kt = (65 66 67, 90)
+cci = (1,2)
