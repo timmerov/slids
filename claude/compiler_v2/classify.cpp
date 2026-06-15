@@ -1767,15 +1767,67 @@ void classifyTupleFromArrayValue(widen::TypeRef declType, parse::Node& rhs,
 // a mismatch reported); false if the rhs isn't an array (the caller falls through
 // to the pointer / strong-const checks). Run AFTER the array<->tuple arms so a
 // tuple source is routed there first.
+// Validate aggregate-to-aggregate assignment SHAPE (dims / arity) at every
+// composite level. Per-element TYPE COMPATIBILITY (widen / narrow / cross-
+// family) is left to codegen's per-element widen::convert, which reports any
+// leaf-level rejection at the rhs's caret. Mirrors checkConvertCompat's walk
+// shape; the leaf op differs (codegen widen::convert vs classify diagnostic).
+void checkAggregateShapeMatch(widen::TypeRef dest, widen::TypeRef src,
+                              parse::Node const& rhs, diagnostic::Sink& diag) {
+    using F = widen::Type::Form;
+    widen::TypeRef ds = widen::strip(dest);
+    widen::TypeRef ss = widen::strip(src);
+    F df = widen::form(ds);
+    F sf = widen::form(ss);
+    std::string to = widen::spellOrEmpty(dest);
+    std::string from = widen::spellOrEmpty(src);
+    if (df == F::kArray || sf == F::kArray) {
+        if (df != F::kArray || sf != F::kArray) {
+            diagnostic::report(diag, {rhs.file_id, rhs.tok,
+                "Cannot assign '" + from + "' to '" + to + "'.", {}});
+            return;
+        }
+        std::vector<int> const& ddims = widen::get(ds).dims;
+        std::vector<int> const& sdims = widen::get(ss).dims;
+        if (ddims != sdims) {
+            diagnostic::report(diag, {rhs.file_id, rhs.tok,
+                "Cannot assign '" + from + "' to '" + to
+                + "'; array shape differs.", {}});
+            return;
+        }
+        checkAggregateShapeMatch(widen::get(ds).elem, widen::get(ss).elem,
+                                 rhs, diag);
+        return;
+    }
+    if (df == F::kTuple || sf == F::kTuple) {
+        if (df != F::kTuple || sf != F::kTuple) {
+            diagnostic::report(diag, {rhs.file_id, rhs.tok,
+                "Cannot assign '" + from + "' to '" + to + "'.", {}});
+            return;
+        }
+        auto const& dslots = widen::get(ds).slots;
+        auto const& sslots = widen::get(ss).slots;
+        if (dslots.size() != sslots.size()) {
+            diagnostic::report(diag, {rhs.file_id, rhs.tok,
+                "Cannot assign '" + from + "' to '" + to + "'; slot count differs ("
+                + std::to_string(sslots.size()) + " vs "
+                + std::to_string(dslots.size()) + ").", {}});
+            return;
+        }
+        for (std::size_t i = 0; i < dslots.size(); i++) {
+            checkAggregateShapeMatch(dslots[i], sslots[i], rhs, diag);
+        }
+        return;
+    }
+    // Leaf: codegen's widen::convert reports any narrowing / cross-family /
+    // sign-change at this leaf with rhs's caret.
+}
+
 bool checkArrayValueAssign(widen::TypeRef dest, parse::Node const& rhs,
                            diagnostic::Sink& diag) {
     if (widen::form(widen::strip(rhs.inferred_type)) != widen::Type::Form::kArray)
         return false;
-    if (widen::deepStrip(dest) != widen::deepStrip(rhs.inferred_type)) {
-        diagnostic::report(diag, {rhs.file_id, rhs.tok,
-            "Cannot assign '" + widen::spellOrEmpty(rhs.inferred_type)
-            + "' to '" + widen::spellOrEmpty(dest) + "'.", {}});
-    }
+    checkAggregateShapeMatch(dest, rhs.inferred_type, rhs, diag);
     return true;
 }
 
@@ -1996,15 +2048,12 @@ void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
         bool rhsAgg = isAgg(rhs.inferred_type);
         if (destAgg && rhsAgg) {
             // Both tuple/array; the arms leave only tuple <- tuple. A tuple LITERAL
-            // already flexed its slots into `dest` via inferExpr (leave it); a tuple
-            // VALUE must match the target exactly (per-element compat is a later
-            // step — see plan-assignment.txt).
+            // already flexed its slots into `dest` via inferExpr (leave it). A
+            // tuple VALUE needs SHAPE match — codegen's per-element widen::convert
+            // handles leaf compat (widen / narrow / cross-family).
             if (rhs.kind != parse::Kind::kTupleExpr
-                && rhs.inferred_type != widen::kNoType
-                && widen::deepStrip(dest) != widen::deepStrip(rhs.inferred_type)) {
-                diagnostic::report(diag, {rhs.file_id, rhs.tok,
-                    "Cannot assign '" + widen::spellOrEmpty(rhs.inferred_type)
-                    + "' to '" + widen::spellOrEmpty(dest) + "'.", {}});
+                && rhs.inferred_type != widen::kNoType) {
+                checkAggregateShapeMatch(dest, rhs.inferred_type, rhs, diag);
             }
         } else if (destAgg != rhsAgg) {
             // A tuple/array on one side, a scalar / pointer / class on the other:

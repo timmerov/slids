@@ -125,6 +125,53 @@ int32 main() {
     (int[kCols], int) vd = ((7, 8, 9), 10);
     __println("vd = " + vd[0][2] + " " + vd[1] + " (" + ##type(vd) + ")"); // 9 10 ((int[3], int))
 
+    /* PER-ELEMENT IMPLICIT WIDENING on aggregate-value assignment. classify
+       validates SHAPE match (dims/arity) at every composite level; codegen walks
+       each leaf with widen::convert (the implicit widen — rejects narrowing /
+       cross-family / sign-change). The walk composes through nested tuples and
+       arrays. */
+
+    /* int8[N] -> int[N]: element-by-element sign-extend. */
+    int8 s8[3] = (1, 2, 3);
+    int i32a[3] = s8;
+    __println("i32a = " + i32a[0] + " " + i32a[1] + " " + i32a[2]);   // 1 2 3
+
+    /* same shape, assign-form (not just init). */
+    int i32b[3] = (0, 0, 0);
+    i32b = s8;
+    __println("i32b = " + i32b[0] + " " + i32b[1] + " " + i32b[2]);   // 1 2 3
+
+    /* (int8,int8) -> (int,int): per-slot sign-extend. */
+    (int8, int8) ts = (10, 20);
+    (int, int) ti = ts;
+    __println("ti = " + ti[0] + " " + ti[1]);                         // 10 20
+
+    /* uint8[N] -> int[N]: zero-extend. */
+    uint8 u8[3] = (200, 201, 202);
+    int wu[3] = u8;
+    __println("wu = " + wu[0] + " " + wu[1] + " " + wu[2]);           // 200 201 202
+
+    /* nested: tuple-of-array — recurse into slot 0 (array), widen each elem. */
+    (int8[3], int8) ns = ((1, 2, 3), 4);
+    (int[3], int) ni = ns;
+    __println("ni = " + ni[0][0] + " " + ni[0][2] + " " + ni[1]);     // 1 3 4
+
+    /* multi-dim array: dims match, leaf widens. */
+    int8 m8[2][3] = ((1, 2, 3), (4, 5, 6));
+    int m32[2][3] = m8;
+    __println("m32 = " + m32[0][0] + " " + m32[1][2]);                // 1 6
+
+    /* tuple-of-tuple. */
+    ((int8, int8), (int8, int8)) nts = ((1, 2), (3, 4));
+    ((int, int), (int, int)) nti = nts;
+    __println("nti = " + nti[0][0] + " " + nti[0][1]
+              + " " + nti[1][0] + " " + nti[1][1]);                   // 1 2 3 4
+
+    /* int8 -> int64: a wider widening that still rides the leaf grid. */
+    int8 ws[3] = (-1, 0, 1);
+    int64 wd[3] = ws;
+    __println("wd = " + wd[0] + " " + wd[1] + " " + wd[2]);           // -1 0 1
+
     return 0;
 }
 
@@ -319,4 +366,58 @@ assignment.
 //    a = b;
 //    __println("done");
 //    return 0;
+//}
+
+/*
+PER-ELEMENT AGGREGATE WIDENING — negative cases. classify validates shape
+(dims/arity); codegen's per-element widen::convert rejects narrowing / cross-
+family / sign-change at the leaf, attributed to the rhs.
+*/
+
+/* narrowing array — int[N] -> int8[N] rejects per element. */
+//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
+//int32 neg_agg_narrow_array() {
+//    int big[3] = (1, 2, 3);
+//    int8 small[3] = big;
+//    return small[0];
+//}
+
+/* narrowing tuple — (int, int) -> (int8, int8) rejects per slot. */
+//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
+//int32 neg_agg_narrow_tuple() {
+//    (int, int) ts = (1, 2);
+//    (int8, int8) tn = ts;
+//    return tn[0];
+//}
+
+/* cross-family — float[N] into int[N] rejects implicitly. */
+//-EXPECT-ERROR: Cannot implicitly
+//int32 neg_agg_cross_family() {
+//    float fa[3] = (1.0, 2.0, 3.0);
+//    int ia[3] = fa;
+//    return ia[0];
+//}
+
+/* shape mismatch — same family, different dim. */
+//-EXPECT-ERROR: array shape differs
+//int32 neg_agg_dim_mismatch() {
+//    int8 src[4] = (1, 2, 3, 4);
+//    int  dst[3] = src;
+//    return dst[0];
+//}
+
+/* tuple arity mismatch. */
+//-EXPECT-ERROR: slot count differs
+//int32 neg_agg_arity_mismatch() {
+//    (int8, int8, int8) src = (1, 2, 3);
+//    (int, int) dst = src;
+//    return dst[0];
+//}
+
+/* sign-change at a leaf (int8 -> uint8) rejects, even in a tuple slot. */
+//-EXPECT-ERROR: Cannot implicitly convert
+//int32 neg_agg_sign_change_slot() {
+//    (int8, int8) src = (-1, -2);
+//    (uint8, uint8) dst = src;
+//    return dst[0];
 //}

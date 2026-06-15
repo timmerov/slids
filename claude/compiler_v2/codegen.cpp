@@ -47,6 +47,11 @@ std::string emitLvalueAddr(ast::Node const& lv, SymTab const& syms,
 std::string emitConvertWalk(std::string const& src_val,
                             widen::TypeRef src, widen::TypeRef dst,
                             std::ostream& out);
+std::string emitImplicitAggregateConvert(std::string const& src_val,
+                                          widen::TypeRef src, widen::TypeRef dst,
+                                          int file_id, int tok,
+                                          std::ostream& out,
+                                          diagnostic::Sink& diag);
 
 // The LLVM type for an interned slids type, read off the structured Type — no
 // spelling decomposition. A primitive maps by (cat, bits): float/double for the
@@ -848,6 +853,85 @@ std::string emitConvertWalk(std::string const& src_val,
     // convertExplicit's "non-value destination" assert rather than emitting bad
     // IR silently.
     return widen::convertExplicit(src_val, src, dst, out);
+}
+
+// Lockstep aggregate walk for an IMPLICIT assignment with different element
+// types — `int dst[N] = int8_src;`, `(int,int) tt = (int8,int8)_var`. Same
+// shape as emitConvertWalk; leaves use widen::convert (the implicit widen,
+// which REJECTS narrowing / cross-family / sign-change) instead of
+// convertExplicit. Classify has pre-validated shape (dims/arity) at every
+// composite level; leaf-level narrowing is the only error path here.
+//
+// ARENA SAFETY: same as emitConvertWalk — capture slots / dims / elem by value
+// before the loop (the multi-dim path calls internArray; held `auto const&`
+// from widen::get would dangle through the recursion).
+std::string emitImplicitAggregateConvert(std::string const& src_val,
+                                          widen::TypeRef src, widen::TypeRef dst,
+                                          int file_id, int tok,
+                                          std::ostream& out,
+                                          diagnostic::Sink& diag) {
+    using F = widen::Type::Form;
+    widen::TypeRef ds = widen::strip(dst);
+    widen::TypeRef ss = widen::strip(src);
+    F df = widen::form(ds);
+    if (df == F::kTuple) {
+        std::vector<widen::TypeRef> dslots = widen::get(ds).slots;
+        std::vector<widen::TypeRef> sslots = widen::get(ss).slots;
+        std::string src_ll = llvmForRef(src);
+        std::string dst_ll = llvmForRef(dst);
+        std::string result = "undef";
+        for (std::size_t i = 0; i < dslots.size(); i++) {
+            std::string slot_ll = llvmForRef(dslots[i]);
+            std::string slot_src = newTmp("iaet");
+            out << "  " << slot_src << " = extractvalue " << src_ll
+                << " " << src_val << ", " << i << "\n";
+            std::string slot_conv = emitImplicitAggregateConvert(
+                slot_src, sslots[i], dslots[i], file_id, tok, out, diag);
+            std::string next = newTmp("iait");
+            out << "  " << next << " = insertvalue " << dst_ll
+                << " " << result << ", " << slot_ll
+                << " " << slot_conv << ", " << i << "\n";
+            result = next;
+        }
+        return result;
+    }
+    if (df == F::kArray) {
+        std::vector<int> ddims = widen::get(ds).dims;
+        std::vector<int> sdims = widen::get(ss).dims;
+        widen::TypeRef d_elem = widen::get(ds).elem;
+        widen::TypeRef s_elem = widen::get(ss).elem;
+        widen::TypeRef d_inner;
+        widen::TypeRef s_inner;
+        if (ddims.size() == 1) {
+            d_inner = d_elem;
+            s_inner = s_elem;
+        } else {
+            std::vector<int> drem(ddims.begin() + 1, ddims.end());
+            std::vector<int> srem(sdims.begin() + 1, sdims.end());
+            d_inner = widen::internArray(d_elem, drem);
+            s_inner = widen::internArray(s_elem, srem);
+        }
+        int outer_dim = ddims[0];
+        std::string src_ll = llvmForRef(src);
+        std::string dst_ll = llvmForRef(dst);
+        std::string inner_dst_ll = llvmForRef(d_inner);
+        std::string result = "undef";
+        for (int i = 0; i < outer_dim; i++) {
+            std::string elt_src = newTmp("iaea");
+            out << "  " << elt_src << " = extractvalue " << src_ll
+                << " " << src_val << ", " << i << "\n";
+            std::string elt_conv = emitImplicitAggregateConvert(
+                elt_src, s_inner, d_inner, file_id, tok, out, diag);
+            std::string next = newTmp("iaia");
+            out << "  " << next << " = insertvalue " << dst_ll
+                << " " << result << ", " << inner_dst_ll
+                << " " << elt_conv << ", " << i << "\n";
+            result = next;
+        }
+        return result;
+    }
+    // Leaf: widen::convert (implicit widen — reports narrowing / cross-family).
+    return widen::convert(src_val, src, dst, file_id, tok, out, diag);
 }
 
 // True if `ty` is, or (for a tuple) transitively contains, a pointer / iterator
@@ -1728,8 +1812,31 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                                             it->second.slids_type,
                                             *stmt.children[0], syms, pool, out, diag);
                 } else {
-                    std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
-                                               it->second.slids_type);
+                    // Per-element implicit widening for an aggregate VALUE rhs
+                    // whose elem/slot types differ from dst's: load the source
+                    // aggregate (no widen at expr level — convert is a no-op on
+                    // aggregates), then walk per-leaf with widen::convert. Shape
+                    // already validated by classify::checkAggregateShapeMatch.
+                    bool agg_widen =
+                        (dform == widen::Type::Form::kArray
+                         || dform == widen::Type::Form::kTuple)
+                        && (sform == widen::Type::Form::kArray
+                            || sform == widen::Type::Form::kTuple)
+                        && widen::deepStrip(it->second.slids_type)
+                            != widen::deepStrip(stmt.children[0]->inferred_type);
+                    std::string val;
+                    if (agg_widen) {
+                        val = emitExpr(*stmt.children[0], syms, pool, out, diag,
+                                       widen::kNoType);
+                        val = emitImplicitAggregateConvert(
+                            val, stmt.children[0]->inferred_type,
+                            it->second.slids_type,
+                            stmt.children[0]->file_id, stmt.children[0]->tok,
+                            out, diag);
+                    } else {
+                        val = emitExpr(*stmt.children[0], syms, pool, out, diag,
+                                       it->second.slids_type);
+                    }
                     out << "  store " << it->second.llvm_type << " " << val
                         << ", ptr " << it->second.alloca_name << "\n";
                     // A move-init (`T x <-- y`) nulls the source's pointer leaves
@@ -1787,8 +1894,30 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                                         *stmt.children[0], syms, pool, out, diag);
                 return;
             }
-            std::string val = emitExpr(*stmt.children[0], syms, pool, out, diag,
-                                       it->second.slids_type);
+            // Per-element implicit widening for an aggregate VALUE rhs whose
+            // elem/slot types differ from dst's: see kVarDeclStmt arm above.
+            widen::Type::Form a_dform =
+                widen::form(widen::strip(it->second.slids_type));
+            widen::Type::Form a_sform =
+                widen::form(widen::strip(stmt.children[0]->inferred_type));
+            bool a_agg_widen =
+                (a_dform == widen::Type::Form::kArray
+                 || a_dform == widen::Type::Form::kTuple)
+                && (a_sform == widen::Type::Form::kArray
+                    || a_sform == widen::Type::Form::kTuple)
+                && widen::deepStrip(it->second.slids_type)
+                    != widen::deepStrip(stmt.children[0]->inferred_type);
+            std::string val;
+            if (a_agg_widen) {
+                val = emitExpr(*stmt.children[0], syms, pool, out, diag,
+                               widen::kNoType);
+                val = emitImplicitAggregateConvert(
+                    val, stmt.children[0]->inferred_type, it->second.slids_type,
+                    stmt.children[0]->file_id, stmt.children[0]->tok, out, diag);
+            } else {
+                val = emitExpr(*stmt.children[0], syms, pool, out, diag,
+                               it->second.slids_type);
+            }
             out << "  store " << it->second.llvm_type << " " << val
                 << ", ptr " << it->second.alloca_name << "\n";
             return;
