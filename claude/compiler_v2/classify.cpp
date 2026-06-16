@@ -2367,17 +2367,28 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // resolve stamped resolved_entry_id and cached lvalue type as
             // s.return_type. If resolve failed, we shouldn't be here (main
             // short-circuits) — but be defensive and walk rhs anyway.
-            assert(s.children.size() == 1 && "AugAssignStmt needs 1 rhs child");
-            parse::Node& rhs = *s.children[0];
             std::string const& op = s.text;
-            // Refresh the lvalue type from the entry: an inferred-init local was
-            // still untyped when resolve cached s.return_type here, but classify
-            // stamped it when it ran the (promoted) decl above. desugar reads
-            // s.return_type, so update it in place. For an ordinary local this is
-            // the same value resolve already cached.
-            if (s.resolved_entry_id >= 0) {
-                s.return_type = parse::entryType(tree, s.resolved_entry_id);
+            parse::Node* rhs_ptr;
+            if (s.children.size() == 2) {
+                // Complex lvalue form: [0]=lvalue chain, [1]=rhs. Infer the lvalue
+                // and cache its type as return_type — the checks below + desugar
+                // read it exactly like the bare-name entry type.
+                parse::Node& lv = *s.children[0];
+                inferExpr(tree, lv, widen::kNoType, diag);
+                s.return_type = lv.inferred_type;
+                rhs_ptr = s.children[1].get();
+            } else {
+                // Bare-name form. Refresh the lvalue type from the entry: an
+                // inferred-init local was still untyped when resolve cached
+                // s.return_type here, but classify stamped it when it ran the
+                // (promoted) decl above. desugar reads s.return_type, so update it
+                // in place. For an ordinary local this is the value resolve cached.
+                if (s.resolved_entry_id >= 0) {
+                    s.return_type = parse::entryType(tree, s.resolved_entry_id);
+                }
+                rhs_ptr = s.children[0].get();
             }
+            parse::Node& rhs = *rhs_ptr;
             std::string lvalue_type = widen::spellOrEmpty(s.return_type);
 
             // A reference admits no compound arithmetic/bitwise assignment.

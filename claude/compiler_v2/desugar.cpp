@@ -115,12 +115,82 @@ ast::Kind toAstKind(parse::Kind k) {
     __builtin_unreachable();
 }
 
-// Rewrite `lhs op= rhs;` into `lhs = lhs op rhs;`. Only fires when `node` is
-// a kAugAssignStmt. Lvalue is a bare ident today — when complex lvalues land
-// (`arr[f()] += 1`), bind the lhs to a tmp here to avoid double-evaluation.
-// Classify stamped: node.return_type = lvalue type, node.inferred_type = opty.
-std::unique_ptr<ast::Node> tryDesugarAugAssign(ast::Node& node) {
+// Rewrite `lhs op= rhs;`. Only fires when `node` is a kAugAssignStmt.
+// Classify stamped: node.return_type = lvalue type, node.inferred_type = opty,
+// node.op_type = the op's compute type, node.text = the op.
+//   Bare name   (children [rhs])           -> `lhs = lhs op rhs;` (kAssignStmt).
+//   Complex lvalue (children [lvalue, rhs]) -> bind the leaf's ADDRESS once into a
+//     hidden reference (so the lvalue's index / side effects evaluate a single
+//     time), then read + store through the deref. Reuses the var-decl + deref-
+//     store + binary machinery — no new codegen.
+std::unique_ptr<ast::Node> tryDesugarAugAssign(ast::Node& node, int& next_id) {
     if (node.kind != ast::Kind::kAugAssignStmt) return nullptr;
+
+    if (node.children.size() == 2) {
+        widen::TypeRef leaf = node.return_type;            // the lvalue (leaf) type
+        int lv_id = next_id++;
+        int file = node.file_id;
+        int tok = node.tok;
+        // `_$lv` holds the leaf's ADDRESS, computed once. For an index/field
+        // target that is `^lvalue` (a reference); for a deref target `ptr^` the
+        // address IS `ptr` (don't take `^(ptr^)` — that isn't an addr-of operand).
+        ast::Node& lv = *node.children[0];
+        std::unique_ptr<ast::Node> addr;
+        widen::TypeRef refT;
+        if (lv.kind == ast::Kind::kDerefExpr) {
+            refT = lv.children[0]->inferred_type;          // the pointer's type
+            addr = std::move(lv.children[0]);
+        } else {
+            refT = widen::internPointer(leaf);             // a reference to the leaf
+            addr = std::make_unique<ast::Node>();
+            addr->kind = ast::Kind::kAddrOfExpr;
+            addr->inferred_type = refT;
+            addr->file_id = file; addr->tok = tok;
+            addr->children.push_back(std::move(node.children[0]));
+        }
+        auto derefTmp = [&]() {
+            auto id = std::make_unique<ast::Node>();
+            id->kind = ast::Kind::kIdentExpr;
+            id->name = "_$lv";
+            id->resolved_entry_id = lv_id;
+            id->inferred_type = refT;
+            id->file_id = file; id->tok = tok;
+            auto d = std::make_unique<ast::Node>();
+            d->kind = ast::Kind::kDerefExpr;
+            d->inferred_type = leaf;
+            d->file_id = file; d->tok = tok;
+            d->children.push_back(std::move(id));
+            return d;
+        };
+        auto decl = std::make_unique<ast::Node>();
+        decl->kind = ast::Kind::kVarDeclStmt;
+        decl->name = "_$lv";
+        decl->resolved_entry_id = lv_id;
+        decl->return_type = refT;
+        decl->file_id = file; decl->tok = tok; decl->name_tok = tok;
+        decl->children.push_back(std::move(addr));
+        // `_$lv^ = _$lv^ op rhs;`
+        auto binop = std::make_unique<ast::Node>();
+        binop->kind = ast::Kind::kBinaryExpr;
+        binop->text = node.text;
+        binop->inferred_type = node.inferred_type;
+        binop->op_type = node.op_type;
+        binop->file_id = file; binop->tok = tok;
+        binop->children.push_back(derefTmp());
+        binop->children.push_back(std::move(node.children[1]));
+        auto store = std::make_unique<ast::Node>();
+        store->kind = ast::Kind::kStoreStmt;
+        store->file_id = file; store->tok = tok;
+        store->children.push_back(derefTmp());
+        store->children.push_back(std::move(binop));
+        auto block = std::make_unique<ast::Node>();
+        block->kind = ast::Kind::kBlockStmt;
+        block->file_id = file; block->tok = tok;
+        block->children.push_back(std::move(decl));
+        block->children.push_back(std::move(store));
+        return block;
+    }
+
     assert(node.children.size() == 1
         && "tryDesugarAugAssign: AugAssignStmt needs 1 rhs child");
 
@@ -263,7 +333,7 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     for (auto const& pp : p.params) {
         node->params.push_back(copyNode(*pp, tree, next_id));
     }
-    if (auto rewritten = tryDesugarAugAssign(*node)) return rewritten;
+    if (auto rewritten = tryDesugarAugAssign(*node, next_id)) return rewritten;
     return node;
 }
 
@@ -1155,23 +1225,23 @@ std::unique_ptr<ast::Node> lowerMethodCall(parse::Node const& p,
     call->tok = p.tok;
     call->name_tok = p.name_tok;
 
-    // self = the receiver's ADDRESS. For `ptr^.m()` the receiver is a deref, whose
-    // object address IS the pointer operand — pass it directly (an addr-of of a
-    // deref isn't a codegen lvalue). Otherwise `^receiver` (a variable's alloca, or
-    // a field/element GEP — a field lowers to an index, which addr-of handles).
-    std::unique_ptr<ast::Node> self;
+    // `_$recv` = the receiver's ADDRESS (param-0). For `ptr^.m()` the receiver is a
+    // deref, whose object address IS the pointer operand — pass it directly (an
+    // addr-of of a deref isn't a codegen lvalue). Otherwise `^receiver` (a variable's
+    // alloca, or a field/element GEP — a field lowers to an index, addr-of handles).
+    std::unique_ptr<ast::Node> recv_arg;
     if (recv.kind == parse::Kind::kDerefExpr && !recv.children.empty()
         && recv.children[0]) {
-        self = copyNode(*recv.children[0], tree, next_id);   // the pointer itself
+        recv_arg = copyNode(*recv.children[0], tree, next_id);   // the pointer itself
     } else {
-        self = std::make_unique<ast::Node>();
-        self->kind = ast::Kind::kAddrOfExpr;
-        self->inferred_type = widen::internPointer(cls);
-        self->file_id = recv.file_id;
-        self->tok = recv.tok;
-        self->children.push_back(copyNode(recv, tree, next_id));
+        recv_arg = std::make_unique<ast::Node>();
+        recv_arg->kind = ast::Kind::kAddrOfExpr;
+        recv_arg->inferred_type = widen::internPointer(cls);
+        recv_arg->file_id = recv.file_id;
+        recv_arg->tok = recv.tok;
+        recv_arg->children.push_back(copyNode(recv, tree, next_id));
     }
-    call->children.push_back(std::move(self));
+    call->children.push_back(std::move(recv_arg));
 
     for (std::size_t i = 1; i < p.children.size(); i++)
         if (p.children[i])
@@ -1208,7 +1278,7 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
     }
     // Lift each class's ctor/dtor member bodies to top-level functions named
     // <Class>__$ctor / <Class>__$dtor (the bodies are self-bound — resolve
-    // rewrote bare field refs to `self^.field`, lowered to slot indices on copy).
+    // rewrote bare field refs to `self.field`, lowered to slot indices on copy).
     // Codegen calls these symbols at construction / scope exit. Classes defined
     // in a function body (local classes) are collected recursively, and the
     // symbol uses the class's (possibly scope-mangled) canonical type name so

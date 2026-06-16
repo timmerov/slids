@@ -1491,6 +1491,41 @@ struct Parser {
                 || peek().kind == token::Kind::kArrowBoth) {
                 return finishMoveSwap(std::move(lhs), stmt_file, stmt_tok);
             }
+            if (char const* aug = augAssignOp(peek().kind)) {
+                // `lvalue op= rhs;` — augmented assign on a complex lvalue. The
+                // target rides as children[0] (a chain expr) + the rhs as
+                // children[1]; the bare-name form (below) keeps the name on the
+                // node with children[0] = rhs instead.
+                advance();   // op=
+                auto rhs = parseExpr();
+                if (!rhs) return nullptr;
+                if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+                auto node = newNodeAt(parse::Kind::kAugAssignStmt, stmt_file,
+                                      stmt_tok);
+                node->text = aug;
+                node->children.push_back(std::move(lhs));
+                node->children.push_back(std::move(rhs));
+                return node;
+            }
+            if (peek().kind == token::Kind::kPlusPlus
+                || peek().kind == token::Kind::kMinusMinus) {
+                // `lvalue++;` / `lvalue--;` — the discarded-value statement form on
+                // a complex lvalue is `lvalue += 1` / `lvalue -= 1` (an aug-assign
+                // over the chain). The expression-embedded form (`x = arr[i]++`)
+                // stays the PPID path and is not handled here.
+                char const* aug =
+                    peek().kind == token::Kind::kPlusPlus ? "+" : "-";
+                advance();   // ++ / --
+                if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+                auto one = newNodeAt(parse::Kind::kIntLiteral, stmt_file, stmt_tok);
+                one->text = "1";
+                auto node = newNodeAt(parse::Kind::kAugAssignStmt, stmt_file,
+                                      stmt_tok);
+                node->text = aug;
+                node->children.push_back(std::move(lhs));
+                node->children.push_back(std::move(one));
+                return node;
+            }
             if (!expect(token::Kind::kEquals, "=")) return nullptr;
             auto rhs = parseExpr();
             if (!rhs) return nullptr;
@@ -2537,7 +2572,7 @@ struct Parser {
         if (!parseParamList(node.get())) return nullptr;
         if (!expect(token::Kind::kLBrace, "{")) return nullptr;
 
-        std::string self_type = name + "^";
+        std::string recv_type = name + "^";   // the implicit receiver param's type
         bool ctor_decl = false, ctor_def = false;
         bool dtor_decl = false, dtor_def = false;
         while (!fatal && peek().kind != token::Kind::kRBrace) {
@@ -2577,16 +2612,19 @@ struct Parser {
                     continue;
                 }
                 // A METHOD — a named function member (`void print() {...}`). Like
-                // ctor/dtor it is self-bound: inject the implicit `self` (Class^) as
-                // the first param. The body is a full function body (parseFunctionDef).
+                // ctor/dtor it is receiver-bound: inject the implicit receiver param
+                // `_$recv` (Class^, the object's address) as the first param. (Spec
+                // `self` is the OBJECT = `_$recv^`; the internal param is the pointer,
+                // named distinctly so it never collides with the `self` keyword.)
+                // The body is a full function body (parseFunctionDef).
                 if (looksLikeFunctionDef()) {
                     auto m = parseFunctionDef();
                     if (!m) return nullptr;
-                    auto self = newNodeAt(parse::Kind::kParam, m->file_id, m->name_tok);
-                    self->name = "self";
-                    self->name_tok = m->name_tok;
-                    self->return_type = widen::internOrNone(self_type);
-                    m->params.insert(m->params.begin(), std::move(self));
+                    auto recv = newNodeAt(parse::Kind::kParam, m->file_id, m->name_tok);
+                    recv->name = "_$recv";
+                    recv->name_tok = m->name_tok;
+                    recv->return_type = widen::internOrNone(recv_type);
+                    m->params.insert(m->params.begin(), std::move(recv));
                     node->children.push_back(std::move(m));
                     continue;
                 }
@@ -2625,11 +2663,11 @@ struct Parser {
             member->name = is_ctor ? "_$ctor" : "_$dtor";
             member->name_tok = m_tok;
             member->return_type = widen::internOrNone("void");
-            auto self = newNodeAt(parse::Kind::kParam, m_file, m_tok);
-            self->name = "self";
-            self->name_tok = m_tok;
-            self->return_type = widen::internOrNone(self_type);
-            member->params.push_back(std::move(self));
+            auto recv = newNodeAt(parse::Kind::kParam, m_file, m_tok);
+            recv->name = "_$recv";
+            recv->name_tok = m_tok;
+            recv->return_type = widen::internOrNone(recv_type);
+            member->params.push_back(std::move(recv));
 
             std::string saved_func = current_func;
             current_func = name + (is_ctor ? "._" : ".~");

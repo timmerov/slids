@@ -40,9 +40,12 @@ the enclosing frame OPEN during member-type/body resolution — names register
 first), not a frame-blind any-live-entry lookup, so a bare member type out of scope
 fails ("needs a namespace qualifier").
 METHODS LANDED (statement-call form): a named function in a class body is a
-self-bound member (ctor/dtor with a user name); bare field reads AND writes rewrite
-to self^.field; `obj.method(args)` resolves via the receiver's class frame and lifts
-to `<Class>__method(self, ...)` minted from the DEFINING class. Detail: readme
+receiver-bound member (ctor/dtor with a user name); grammar injects an implicit
+receiver param `_$recv` (Class^, the object's address) at params[0]; bare field
+reads AND writes rewrite to the spec `self.field` = `_$recv^.field`; `obj.method(args)`
+resolves via the receiver's class frame and lifts to `<Class>__method(_$recv, ...)`
+minted from the DEFINING class. (Spec `self` is the object = `_$recv^`; the internal
+param is the pointer, named distinctly from the `self` keyword.) Detail: readme
 "METHODS" + [[project_v2_methods]].
 STILL OPEN: operator overloading, for-each/for-class, move/swap operators.
 Deferred items (array/tuple-of-hook FIELD construction, class copy-init at a decl,
@@ -173,7 +176,8 @@ a class body is a parse error — the body is definitions only.
   * FIELDS — name-anchored declarations (`int x;`, `int x[3];`, `Other o;`).
   * METHODS — nested slids; reuse the Phase-3 nested-function machinery's
     parse/resolve, but a method is NOT lambda-lifted — it takes an implicit
-    `self` (the receiver) instead of a capture environment.
+    receiver param (`_$recv`, the object's address; spec `self` = `_$recv^`)
+    instead of a capture environment.
   * CTOR — `_(params) { body }`. The bare-underscore name marks the ctor.
   * DTOR — `~() { body }`. No params.
 
@@ -198,8 +202,8 @@ unblocks `(Foo = v)` conversions (todo.txt:51) — do them together.
              layout decisions here.
   RESOLVE  — register the class as a named type (a kSlid-leaf TypeRef) and as a
              scope for its members; resolve field TYPES (structural
-             resolveTypeRef -> interned TypeRef); resolve method bodies with
-             `self` bound; resolve ctor/dtor bodies; wrong-kind diagnostics.
+             resolveTypeRef -> interned TypeRef); resolve method bodies with the
+             receiver `_$recv` bound; resolve ctor/dtor bodies; wrong-kind diagnostics.
   CONSTFOLD— fold field-init const expressions (inferred field types feed off
              the folded const, mirroring named constants).
   CLASSIFY — type-check field inits + method/ctor/dtor bodies; INFER field types
@@ -288,7 +292,7 @@ a fully-typed field list.
   S1. CLASS SHELL — grammar (fields + nested-slid methods, no ctor/dtor yet);
       resolve registers the type + members; layout computes plain field layout;
       codegen emits `%struct.C` + a trivial fieldwise class (bucket 1) with
-      inline field-init at the site. Methods callable with `self`. NO ctor/dtor
+      inline field-init at the site. Methods callable with the receiver `_$recv`. NO ctor/dtor
       symbols yet — the trivial bucket is the whole story this session.
   S2. EXPLICIT CTOR — `_(...)`; has_explicit bucket; emit `C__$ctor` /
       `C__$ctor_body`; construction-site arg-shape check in classify; the

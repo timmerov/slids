@@ -336,8 +336,9 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     var-decl is definitely-initialized (DA) even with no initializer.
   * CTOR/DTOR are scope HOOKS, not the constructor — fields are initialized first,
     the ctor runs after, the dtor at scope exit. `_(){}` / `~(){}` parse as
-    kFunctionDef with an implicit `self` (`Name^`) param; a bare field name in the
-    body rewrites to `self^.field` (resolve method_fields fallback — locals shadow).
+    kFunctionDef with an implicit receiver param `_$recv` (`Name^`); a bare field
+    name in the body rewrites to the spec `self.field` = `_$recv^.field` (resolve
+    method_fields fallback — locals shadow).
     desugar lifts them to top-level `<Name>__$ctor` / `__$dtor`. Optional but must
     PAIR; FORWARD declarations (`_();`) allowed but must be defined; no author
     params. The kSlid type carries has_ctor/has_dtor (the explicit symbol exists)
@@ -399,7 +400,7 @@ CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
     (the pointer value), and an ITERATOR step loads the sequence pointer + GEPs by
     element. So `ptr^.field`, `iter[i].field`, and `arr[i].field` compose for any
     field/shape, READ or WRITE. The name-led lvalue chain also parses `.field` as a
-    store target (field WRITES, previously only ctor-body `self^.field`).
+    store target (field WRITES, previously only ctor-body `self.field`).
 
 
 CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stages)
@@ -489,26 +490,29 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     and RETURN. (Same-class is a fine copy; pointer cases are checkPtrAssign's;
     two non-classes flex per codegen's numeric rules.)
   * METHODS — a named function in a class body is a method: a ctor/dtor with a user
-    name. Grammar parses it like any function and injects an implicit `self`
-    (Class^) at params[0]; the body is a FULL function body (local consts/classes,
-    unused-local sweep, nested functions, return checks), with bare field names
-    rewritten to `self^.field` for READS and WRITES (buildSelfField — one place mints
-    `self^.field`, shared by the kIdentExpr read path and the assignment-LHS write
-    path; a bare `x_ = v` becomes a self^.field store, not a phantom local). resolve/
-    classify reach a method through the SAME ctor/dtor sites (the forEachHoistedClass
-    walker, now filtered on kFunctionDef). The method entry's param_types hold the
-    FULL list (self at [0], aligned with the node's params so the resolved-type
-    write-back stays index-correct); it lifts to `<Class>__method(self, ...)`. A call
-    `obj.method(args)` parses to kMethodCallStmt (children[0] = receiver); classify
-    resolves the method via the receiver's class frame (classEntryForType +
-    findMemberDeclared — the shared member lookup), type-checks args against
-    param_types[1..], and threads the method entry id; desugar lowers it to a normal
-    call of the lifted symbol minted from the method's OWN DEFINING class (not the
-    receiver's, so an inherited call will name the base), with the receiver's address
-    prepended as self (for `ptr^.m()` self IS the pointer — an addr-of of a deref is
-    not a codegen lvalue). A bare call resolving to a method errors ("Method 'm' must
-    be called on an object.") — sibling calls via `self` are deferred. Statement form
-    only; expression form + compound field writes (`x_ += 1`) are todo.txt.
+    name. Grammar parses it like any function and injects an implicit RECEIVER param
+    `_$recv` (Class^, the object's address) at params[0]. (The spec `self` is the
+    OBJECT — `_$recv^`; the internal param is the pointer, named distinctly so it
+    never collides with the `self` keyword.) The body is a FULL function body (local
+    consts/classes, unused-local sweep, nested functions, return checks), with bare
+    field names rewritten to the spec `self.field` for READS and WRITES (buildSelfField
+    — one place mints `_$recv^.field`, shared by the kIdentExpr read path and the
+    assignment-LHS write path; a bare `x_ = v` becomes a field store, not a phantom
+    local). resolve/classify reach a method through the SAME ctor/dtor sites (the
+    forEachHoistedClass walker, now filtered on kFunctionDef). The method entry's
+    param_types hold the FULL list (`_$recv` at [0], aligned with the node's params so
+    the resolved-type write-back stays index-correct); it lifts to
+    `<Class>__method(_$recv, ...)`. A call `obj.method(args)` parses to kMethodCallStmt
+    (children[0] = receiver); classify resolves the method via the receiver's class
+    frame (classEntryForType + findMemberDeclared — the shared member lookup),
+    type-checks args against param_types[1..], and threads the method entry id;
+    desugar lowers it to a normal call of the lifted symbol minted from the method's
+    OWN DEFINING class (not the receiver's, so an inherited call will name the base),
+    with the receiver's address prepended as `_$recv` (for `ptr^.m()` the receiver IS
+    the pointer — an addr-of of a deref is not a codegen lvalue). A bare call resolving
+    to a method errors ("Method 'm' must be called on an object.") — sibling calls via
+    the `self` keyword are deferred. Statement form only; expression form + compound
+    field writes (`x_ += 1`) are todo.txt.
   * NAME COLLISIONS + TYPE-NAME DIAGNOSTICS. A class name collides with ANY
     same-name entry (another class, an alias / enum / namespace, a const, a
     function) — reportNameCollision carets the source-LATER declaration as the
@@ -569,8 +573,10 @@ STAGE FILES (.h / .cpp pairs)
             so constfold infers the type); statements (var-decl incl. the
             `<ident> <ident>` typed-decl shape and a `<--` move-init form
             (`T x <-- y`, the move_init flag — `<-->` swap is not a decl), assign,
-            aug-assign, move (`a <-- b`) / swap (`a <--> b`) — finishMoveSwap on
-            both the bare-name and indexed/deref-lvalue paths, lhs as an expr child,
+            aug-assign, move (`a <-- b`) / swap (`a <--> b`) — the name-led lvalue
+            chain (array element / tuple slot / class field / deref / composed) takes
+            `=`, the aug-assign family, `++`/`--`, and move/swap UNIFORMLY (lhs as an
+            expr child); finishMoveSwap on both the bare-name and chain paths,
             alias,
             namespace decl, 0/1/N-arg call possibly qualified, bare inc/dec,
             return, if/else, while + post-condition do-while, the long-form for,
@@ -759,14 +765,22 @@ STAGE FILES (.h / .cpp pairs)
             then reports any body-declared local never read: "Unused local
             variable 'x'." if never written, else "Local variable 'x' set but
             never used."; gated on hasErrors so a use-before-init or dup
-            diagnostic isn't trailed by a spurious unused report. ARRAYS use a
-            separate MAY-set (assigned_arrays): a fixed-size array can't be fully
-            initialized in one statement (no initializer lists) and a fill loop's
-            element writes wouldn't survive the must-set's loop join, so an array
-            read requires only that SOME earlier subscript write exists (monotonic,
-            never rolled back) — reading before ANY write still errors; a `^arr[i]`
+            diagnostic isn't trailed by a spurious unused report. ARRAYS and TUPLES
+            (in-place aggregates — isInPlaceAggregate) use a separate MAY-set
+            (assigned_arrays): such an aggregate can't be fully initialized in one
+            statement and a fill loop's element writes wouldn't survive the must-
+            set's loop join, so a SLOT/element write assigns the WHOLE aggregate
+            (monotonic, never rolled back) and a read requires only SOME earlier
+            write — in assigned_arrays (a slot write) OR initialized_locals (a
+            whole-value `=` init; arrays route their init to the former, tuples to
+            the latter). Reading before ANY write still errors; a `^arr[i]`
             address-of marks it assigned, and an iterator-base store (`it[i]=v`)
-            READS the iterator (the pointer is dereferenced), not writes it. Consts and
+            READS the iterator (the pointer is dereferenced), not writes it. An
+            augmented assign is a read-modify-write, so resolve read-marks the
+            lvalue chain's base local (markLvalueBaseRead) — a bare `x += v`, a
+            deref `p^ += v`, and an index `a[i] += v` all count the target as used
+            for the sweep (resolveStoreTarget alone marks only the write side).
+            Consts and
             params are exempt (consts substituted away; params not in
             body_locals). Control-flow joins are modeled by a Completion
             { Normal, Abrupt } that resolveStmt RETURNS: return / break / continue
@@ -1060,8 +1074,9 @@ STAGE FILES (.h / .cpp pairs)
             the lvalue rule: resolveMoveSwapLvalue rejects a non-lvalue (a swap rhs
             is a general expression, so `x <--> 7` would otherwise crash codegen)
             — BOTH swap operands and a move's LHS must be lvalues ("A swap operand"
-            / "A move target" must be an lvalue); a move's RHS is a plain read, so
-            an rvalue source is allowed. DA: a move lhs is a pure write (need not
+            / "A move target" must be an lvalue); the accepted forms are a bare
+            ident, an array element, a tuple slot, a class field (kFieldExpr), or a
+            deref. a move's RHS is a plain read, so an rvalue source is allowed. DA: a move lhs is a pure write (need not
             be pre-init); a swap reads+writes both (both must be init).
             kNewExpr: a heap element must be sized — a primitive (compile-time
             typeByteSize) OR a CLASS (runtime __$sizeof, so it IS allocatable); void
@@ -1078,10 +1093,16 @@ STAGE FILES (.h / .cpp pairs)
             copy that propagates every annotation classify and constfold
             stamped (nominal_type, inferred_type, op_type, resolved_entry_id,
             params, param_types, file_id, tok). Two rewrites are live.
-            (1) aug-assign (`lhs op= rhs`) -> `lhs = lhs op rhs`, with the
-            synthesized IdentExpr + BinaryExpr inheriting the aug-assign's
-            classify-stamped types so codegen sees the rewrite as if it
-            were classified directly. (2) PPID: a post-copy pass extracts
+            (1) aug-assign (`lhs op= rhs`): a BARE-name lhs -> `lhs = lhs op rhs`
+            (synthesized IdentExpr + BinaryExpr inheriting the aug-assign's
+            classify-stamped types). A COMPLEX lvalue (array element / tuple slot /
+            class field / deref / composed; carried as children[0]) binds the leaf's
+            ADDRESS ONCE into a hidden `_$lv` reference — `^lvalue` for an index /
+            field target, the pointer itself for a deref target — then a kBlockStmt
+            does `_$lv^ = _$lv^ op rhs`, so a side-effecting index evaluates exactly
+            once (address-once); the grammar routes a complex `++`/`--` statement
+            through the same path as `+= 1` / `-= 1`. Both inherit the classify-
+            stamped types so codegen sees the rewrite as if classified directly. (2) PPID: a post-copy pass extracts
             ++/-- per phrase, replacing each with a read; also drops parse-
             only nodes (alias, namespace) and hoists namespace member
             functions to program scope with entry-id-derived symbols (no

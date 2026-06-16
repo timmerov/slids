@@ -26,6 +26,17 @@ bool isArrayType(widen::TypeRef t) {
     return widen::form(t) == widen::Type::Form::kArray;
 }
 
+// An in-place indexable aggregate: a fixed-size array or a tuple. Both store
+// their slots directly in the local (a subscript GEPs into them), so a slot
+// write ASSIGNS the aggregate (monotonic may-set) rather than reading through a
+// pointer — the same definite-assignment treatment for either. (A class is an
+// in-place aggregate too, but it is default-constructed at its decl, so it is
+// already initialized and never needs the may-set carve-out.)
+bool isInPlaceAggregate(widen::TypeRef t) {
+    widen::Type::Form f = widen::form(widen::strip(t));
+    return f == widen::Type::Form::kArray || f == widen::Type::Form::kTuple;
+}
+
 bool isReferenceType(widen::TypeRef t) {
     return widen::form(t) == widen::Type::Form::kPointer;
 }
@@ -1011,21 +1022,23 @@ bool isMethodField(parse::Tree const& tree, std::string const& name) {
     return false;
 }
 
-// Build `self^.field` — a kFieldExpr over a deref of the implicit `self` param.
-// The one place this shape is minted, shared by the field READ rewrite (in
-// resolveExpr) and the field WRITE rewrite (a bare assignment target).
+// Build the spec `self.field` — a kFieldExpr over `_$recv^`, the deref of the
+// implicit receiver param `_$recv` (a `Class^` holding the object's address).
+// `self` IS the object (`_$recv^`); the deref is over the POINTER, not the
+// object. The one place this shape is minted, shared by the field READ rewrite
+// (in resolveExpr) and the field WRITE rewrite (a bare assignment target).
 std::unique_ptr<parse::Node> buildSelfField(std::string const& field,
                                             int file_id, int tok) {
-    auto self_id = std::make_unique<parse::Node>();
-    self_id->kind = parse::Kind::kIdentExpr;
-    self_id->name = "self";
-    self_id->file_id = file_id;
-    self_id->tok = tok;
+    auto recv_id = std::make_unique<parse::Node>();
+    recv_id->kind = parse::Kind::kIdentExpr;
+    recv_id->name = "_$recv";
+    recv_id->file_id = file_id;
+    recv_id->tok = tok;
     auto deref = std::make_unique<parse::Node>();
     deref->kind = parse::Kind::kDerefExpr;
     deref->file_id = file_id;
     deref->tok = tok;
-    deref->children.push_back(std::move(self_id));
+    deref->children.push_back(std::move(recv_id));
     auto fe = std::make_unique<parse::Node>();
     fe->kind = parse::Kind::kFieldExpr;
     fe->name = field;
@@ -1062,9 +1075,9 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                 }
                 if (id < 0) {
                     // Inside a member body, a bare name matching a class field is
-                    // `self^.field`. Locals shadow fields (we only reach here when
+                    // `self.field`. Locals shadow fields (we only reach here when
                     // no local/const/etc. resolved), so rewrite this READ node to a
-                    // kFieldExpr over `self^` (buildSelfField) and resolve that.
+                    // kFieldExpr over `self` (buildSelfField) and resolve that.
                     if (isMethodField(tree, e.name)) {
                         auto fe = buildSelfField(e.name, e.file_id, e.tok);
                         e.kind = parse::Kind::kFieldExpr;   // e.name stays the field
@@ -1108,11 +1121,16 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
             // tracked — consts are substituted away, params are pre-seeded.
             if (tree.entries[id].kind == parse::EntryKind::kLocalVar
                 && !isCaptureLocal(tree, id)) {
-                // Arrays use the monotonic may-set (some prior write); scalars
+                // In-place aggregates (arrays, tuples) read under the monotonic
+                // may-set: a slot write marks assigned_arrays, while a whole-value
+                // init marks initialized_locals (arrays route their init to the
+                // former, tuples to the latter) — either counts as set. Scalars
                 // use the strict must-set.
-                bool array = isArrayType(tree.entries[id].slids_type);
-                bool ok = array ? tree.assigned_arrays.count(id) > 0
-                                : tree.initialized_locals.count(id) > 0;
+                bool aggregate = isInPlaceAggregate(tree.entries[id].slids_type);
+                bool ok = aggregate
+                    ? (tree.assigned_arrays.count(id) > 0
+                       || tree.initialized_locals.count(id) > 0)
+                    : tree.initialized_locals.count(id) > 0;
                 // In an unevaluated context (sizeof / ##type operand) only the
                 // TYPE is read, never the value — so definite assignment is not
                 // required. The read-mark below still fires (the var counts as
@@ -1939,8 +1957,8 @@ void resolveStoreTarget(parse::Tree& tree, parse::Node& lv,
             return;
         }
         lv.resolved_entry_id = id;
-        if (isArrayType(entry.slids_type)) {
-            // An array element store assigns the array (monotonic may-set).
+        if (isInPlaceAggregate(entry.slids_type)) {
+            // An array/tuple slot store assigns the aggregate (monotonic may-set).
             tree.assigned_arrays.insert(id);
         } else {
             // An iterator base (`it[i] = v`): the pointer value is READ to store
@@ -1960,6 +1978,26 @@ void resolveStoreTarget(parse::Tree& tree, parse::Node& lv,
     resolveExpr(tree, lv, diag);
 }
 
+// Mark the base local of an lvalue chain as READ — for an augmented assign,
+// which is a read-modify-write (`arr[i] += v` reads arr[i]). resolveStoreTarget
+// does only the write/may-set side, so the base would otherwise look store-only
+// and trip the unused-local sweep, unlike a bare `x += v` (read-marked) or a
+// deref `p^ += v` (resolveExpr marks the pointer). The walk to the innermost
+// ident is idempotent for the deref case.
+void markLvalueBaseRead(parse::Tree& tree, parse::Node& lv) {
+    parse::Node* n = &lv;
+    while (n->kind == parse::Kind::kIndexExpr
+           || n->kind == parse::Kind::kFieldExpr
+           || n->kind == parse::Kind::kDerefExpr) {
+        if (n->children.empty() || !n->children[0]) return;
+        n = n->children[0].get();
+    }
+    if (n->kind == parse::Kind::kIdentExpr && n->resolved_entry_id >= 0
+        && tree.entries[n->resolved_entry_id].kind == parse::EntryKind::kLocalVar) {
+        tree.read_locals.insert(n->resolved_entry_id);
+    }
+}
+
 // Resolve an lvalue operand of a move / swap. An index/deref target reuses
 // resolveStoreTarget (a store-through — its DA reads the base). A bare-name
 // target is checked assignable here: `read` (swap, and the moved-from leaf) means
@@ -1972,7 +2010,8 @@ void resolveStoreTarget(parse::Tree& tree, parse::Node& lv,
 // operand" / "A move target") rather than crash codegen with no address.
 void resolveMoveSwapLvalue(parse::Tree& tree, parse::Node& lv,
                            bool read, char const* what, diagnostic::Sink& diag) {
-    if (lv.kind == parse::Kind::kIndexExpr || lv.kind == parse::Kind::kDerefExpr) {
+    if (lv.kind == parse::Kind::kIndexExpr || lv.kind == parse::Kind::kDerefExpr
+        || lv.kind == parse::Kind::kFieldExpr) {
         resolveStoreTarget(tree, lv, diag);
         return;
     }
@@ -2150,10 +2189,10 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         }
         case parse::Kind::kAssignStmt: {
             // A bare assignment target matching a class FIELD (no local shadows it)
-            // is a field STORE through `self^.field` — the write-side mirror of the
+            // is a field STORE through `self.field` — the write-side mirror of the
             // read rewrite. Without this it would fall into the inferred-init path
             // below and invent a phantom local that shadows the field. Becomes a
-            // kStoreStmt [self^.field, rhs]; the rhs's own field reads rewrite too.
+            // kStoreStmt [self.field, rhs]; the rhs's own field reads rewrite too.
             if (!isQualified(s) && resolveName(tree, s.name) < 0
                 && isMethodField(tree, s.name)) {
                 auto lvalue = buildSelfField(s.name, s.file_id, s.name_tok);
@@ -2201,6 +2240,16 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             return Completion::Normal;
         }
         case parse::Kind::kAugAssignStmt: {
+            // Complex lvalue form (`arr[i] += v`): [0]=lvalue chain, [1]=rhs.
+            // resolveStoreTarget does the same read-and-write DA a store does
+            // (it reads the base, marks an aggregate assigned); the rhs reads.
+            // The bare-name form has the target name on the node + [0]=rhs.
+            if (s.children.size() == 2) {
+                resolveStoreTarget(tree, *s.children[0], diag);
+                markLvalueBaseRead(tree, *s.children[0]);   // RMW reads the target
+                if (s.children[1]) resolveExpr(tree, *s.children[1], diag);
+                return Completion::Normal;
+            }
             if (resolveAssignTarget(tree, s, diag)) {
                 // Cache lvalue type on the stmt so desugar's synthesized
                 // IdentExpr inherits it without re-walking entries.
@@ -3382,12 +3431,13 @@ void registerClassMembers(parse::Tree& tree, parse::Node& node, int frame,
         if (isDup(*m)) continue;
         resolveDeclType(tree, m->return_type, m->file_id, m->tok, diag);
         std::vector<widen::TypeRef> ptypes;
-        for (std::size_t i = 0; i < m->params.size(); ++i) {   // incl. self at [0]
+        for (std::size_t i = 0; i < m->params.size(); ++i) {   // incl. `_$recv` at [0]
             auto& p = m->params[i];
             if (!p) continue;
-            // self's `Class^` resolves in Phase 2 (resolveClassMemberBodies), and the
-            // write-back updates the entry; resolving it here would fail (the class
-            // body isn't ready). Resolve only the USER params now.
+            // the receiver `_$recv`'s `Class^` resolves in Phase 2
+            // (resolveClassMemberBodies), and the write-back updates the entry;
+            // resolving it here would fail (the class body isn't ready). Resolve
+            // only the USER params now.
             if (i >= 1 && p->return_type != widen::kNoType)
                 resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
             ptypes.push_back(p->return_type);
@@ -3547,9 +3597,10 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
 }
 
 // Resolve a class's ctor/dtor member bodies. Each is a kFunctionDef carrying an
-// implicit `self` (Class^) param; a bare field name in the body resolves to
-// `self^.field` (method_fields drives the kIdentExpr fallback rewrite). Runs
-// after file-scope entries exist so the bodies can call file-scope functions.
+// implicit receiver param `_$recv` (Class^, the object's address); a bare field
+// name in the body resolves to the spec `self.field` (= `_$recv^.field`;
+// method_fields drives the kIdentExpr fallback rewrite). Runs after file-scope
+// entries exist so the bodies can call file-scope functions.
 void resolveClassMemberBodies(parse::Tree& tree, parse::Node& node,
                               diagnostic::Sink& diag) {
     // Walk this class and its HOISTED descendants via the canonical walker. Each
@@ -3573,7 +3624,7 @@ void resolveClassMemberBodies(parse::Tree& tree, parse::Node& node,
             for (auto& m : cls.children) {
                 // Every member FUNCTION — ctor, dtor, AND methods — is self-bound:
                 // resolve its params (incl. the implicit `self`, whose bare name
-                // redirects to the scoped kSlid so a field access through self^ finds
+                // redirects to the scoped kSlid so a field access through self finds
                 // the class) and its body, with method_fields driving the field
                 // rewrite. A method is a ctor/dtor with a user name.
                 if (m && m->kind == parse::Kind::kFunctionDef) {

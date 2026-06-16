@@ -349,7 +349,7 @@ struct Tree {
 
     // Transient — while resolving a ctor/dtor body: the field names of the
     // enclosing class. An UNRESOLVED bare name matching one is rewritten to
-    // `self^.field` (locals shadow fields, so this is only a fallback). nullptr
+    // `self.field` (locals shadow fields, so this is only a fallback). nullptr
     // outside a class member body.
     std::vector<std::string> const* method_fields = nullptr;
 

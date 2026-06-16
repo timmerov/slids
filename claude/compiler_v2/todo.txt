@@ -30,11 +30,8 @@ BUGS (found, deferred)
 DEFERRED FEATURES (later; may not be on the plan)
 
   * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
-    primitive element type (a reference works for all). The ARRAY / sub-array
-    variant LANDED this session (multi-dim for-array: a sub-array element forces a
-    reference loop var; a declared by-value one errors "must use a reference loop
-    variable"). Only the CLASS-element variant remains, when class array elements
-    exist (Phase 5).
+    primitive element type (a reference works for all). Only the CLASS-element
+    variant remains, when class array elements exist (Phase 5).
 
   * CLASS COPY-INIT AT A DECL — `Class a = sameClassValue` (initialize a class
     local from another value of the SAME class — e.g. the result of a function
@@ -52,12 +49,13 @@ DEFERRED FEATURES (later; may not be on the plan)
       (`int x = obj.m()`) doesn't parse; only the statement form `obj.m(args);` is
       wired. Needs the call shape in the expression parser (parsePostfix) + a
       kMethodCallExpr (or reuse) classified/lowered like the statement form.
-    - COMPOUND FIELD WRITES in a member body: `x_ += 1`, `x_++` aren't field-
-      rewritten (only plain `x_ = ...` is — buildSelfField on the assignment LHS).
-      The aug-assign / inc-dec statement paths need the same self^.field rewrite
-      (e.g. desugar `x_ += v` to `x_ = x_ + v` so it hits the plain-assign rewrite).
+    - COMPOUND FIELD WRITES in a member body: a BARE `x_ += 1` / `x_++` isn't
+      field-rewritten (only plain `x_ = ...` is — buildSelfField on the assignment
+      LHS). Hook the field-rewrite onto the aug-assign / inc-dec LHS so a bare
+      `x_ += 1` rewrites to the self-field form (the complex-lvalue chain then
+      lowers it).
     - SIBLING METHOD CALL VIA `self` (deferred to a later session): calling one
-      method from another. Today `self^.m()` / `self.m()` parse-errors ("Expected
+      method from another. Today `self.m()` / `self.m()` parse-errors ("Expected
       statement"), and a BARE `m()` now errors cleanly ("Method 'm' must be called
       on an object.") instead of crashing. Needs `self` as a usable receiver.
 
@@ -116,8 +114,7 @@ DEFERRED FEATURES (later; may not be on the plan)
     canon block (lines ~21, 43-54, 77-86); land them with Phase 6 when const is
     a real qualifier. Until then those lines stay commented and untested.
 
-  * FOR-CLASS — the last colon-form for shape (ranged/array/tuple/enum all LANDED
-    and now lower in the DESUGAR stage). for-class needs classes + a for-each
+  * FOR-CLASS — needs classes + a for-each
     protocol (op[]/size or begin/end/next, Phase 5). Lowers to a kForLongStmt in
     desugar like the others. Not landable until classes exist.
 
@@ -240,12 +237,7 @@ DEFERRED TESTS
     shared helper then — at the helper, not the if-condition call site.
     prerequisite: pointers/iterators (Phase 4).
 
-  * FOR-TUPLE OVER CLASS ELEMENTS — `for (p : classTuple)` where the element is a
-    CLASS. The forced-by-ref rule for non-primitive elements has LANDED: a
-    tuple/array/slid element forces the loop var to `T^` (classify), and a declared
-    by-value loop var over one errors "must use a reference loop variable" — so
-    NESTED tuples (`for (sub : tupleOfTuples) { for (x : sub^) ... }`) work today.
-    What remains needs classes: by-VALUE iteration over a class element (a copy
+  * FOR-TUPLE OVER CLASS ELEMENTS — What remains needs classes: by-VALUE iteration over a class element (a copy
     needs a constructor — not available) + the class copy/move machinery, and
     by-ref iteration once class-typed tuples exist. prerequisite: classes (Phase 5).
 
@@ -285,8 +277,7 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     value-counter continuation across openings is the undecided part.)
 
   * NAMED-SWITCH BREAK (`break someswitch;`) — breaking a non-innermost switch by
-    its name. switch.sl marks it "distant future, low utility". Session 6 (labels)
-    LANDED loop labels + numbered/named break of LOOPS only; switch naming was
+    its name. switch.sl marks it "distant future, low utility". switch naming was
     deliberately left out. Needs switch blocks to carry a label (Node.label +
     parse the `:name` after a switch body, currently a parse error) and the
     numbered/named resolver to consider switch frames as named targets.
