@@ -633,7 +633,11 @@ Phase 6 — const correctness
 
   KNOWN LIMITATIONS (const, syntax phase): a leading `const` at a statement/decl
   START is the named-CONSTANT marker (needs an initializer), so a const-QUALIFIED
-  local variable is written in a type position (`(const int)^ r`), not `const T x`.
+  scalar local is written in a type position (`(const int)^ r`), not `const T x`.
+  TO REVISIT: for a tuple/array/class (`const int arr[3]=(1,2,3)`, `const (int,int)
+  t=(1,2)`, `const String s="hi"`) that path gives a MISLEADING error — those are
+  allocated + initialized const-qualified VARIABLES, not substituted constants;
+  route them off the named-const path (todo BUGS).
   A parenthesized const type with a SIZED-array suffix as a statement-level local
   (`(const int)[3] a;`) does not parse — the declarator lookahead admits only
   `^`/`[]`; fine as a tuple slot or a parameter.

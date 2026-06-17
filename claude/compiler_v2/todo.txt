@@ -129,10 +129,12 @@ DEFERRED FEATURES (later; may not be on the plan)
     type with a SIZED-array suffix as a statement-level local (`(const int)[3] a;`,
     `(const int, int)[2] a;`) does not parse: the parenthesized-type-decl lookahead
     admits only `^` / `[]`, not `[N]`. Fine as a tuple SLOT (`((const int)[2], int)`)
-    or a parameter. Pre-existing declarator gap, not const-specific. (A leading
-    `const` at a statement START is the named-CONSTANT marker by design — a const-
-    QUALIFIED local is written in a type position, `(const int)^ r`; that is not a
-    bug, just a spelling constraint.)
+    or a parameter. Pre-existing declarator gap, not const-specific. (Related: a
+    leading `const` at a statement START routes to the named-CONSTANT path — for a
+    SCALAR that's a substituted constant, but for a tuple/array/class it gives a
+    MISLEADING error; those are allocated + initialized const-qualified VARIABLES —
+    see the const-aggregate BUG above. A const-qualified scalar local is written in
+    a type position, `(const int)^ r`.)
 
   * FOR-CLASS — needs classes + a for-each
     protocol (op[]/size or begin/end/next, Phase 5). Lowers to a kForLongStmt in
