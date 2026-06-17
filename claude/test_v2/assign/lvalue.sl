@@ -170,6 +170,18 @@ int32 main() {
         __println("widths: a0=" + a[0] + " f0=" + f[0]);
     }
 
+    /* move / swap onto the SAME complex lvalue is a self-op — rejected (the
+       negatives at the bottom cover each lvalue form: deref, field, index).
+       a SIDE-EFFECTING index (a call) is NOT provably the same element, so a
+       self-LOOKING swap through it is ALLOWED. tick() bumps c on each evaluation
+       — it runs twice. */
+    {
+        int c = 0;
+        int sa[2] = (8, 9);
+        sa[tick(^c)] <--> sa[tick(^c)];
+        __println("tick c=" + c + " sa1=" + sa[1]);                // tick c=2 sa1=9
+    }
+
     /* augmented assign on a reference leaf is rejected. */
     //-EXPECT-ERROR: Arithmetic is not allowed on a reference
     //{
@@ -206,6 +218,58 @@ int32 main() {
     //    int8 a[1];
     //    a[0] = 1;
     //    a[0] += wide;
+    //    __println("" + a[0]);
+    //}
+
+    /* self-move / self-swap onto the SAME complex lvalue: a DEREF, a class FIELD,
+       and a provably-same INDEX (a literal or a bare variable) each name ONE
+       element — rejected. structural lvalue-equality: same base + same deref /
+       field / index. */
+    //-EXPECT-ERROR: Cannot move a value onto itself
+    //{
+    //    int x = 37; int^ p = ^x;
+    //    p^ <-- p^;
+    //}
+
+    //-EXPECT-ERROR: Cannot swap a value with itself
+    //{
+    //    int x = 37; int^ p = ^x;
+    //    p^ <--> p^;
+    //}
+
+    //-EXPECT-ERROR: Cannot move a value onto itself
+    //{
+    //    Simple s(1, 2);
+    //    s.x_ <-- s.x_;
+    //}
+
+    //-EXPECT-ERROR: Cannot swap a value with itself
+    //{
+    //    Simple s(1, 2);
+    //    s.x_ <--> s.x_;
+    //}
+
+    //-EXPECT-ERROR: Cannot swap a value with itself
+    //{
+    //    int a[2]; a[0] = 1; a[1] = 2;
+    //    a[0] <--> a[0];
+    //    __println("" + a[0]);
+    //}
+
+    //-EXPECT-ERROR: Cannot move a value onto itself
+    //{
+    //    int a[2]; int i = 0; a[0] = 1; a[1] = 2;
+    //    a[i] <-- a[i];
+    //    __println("" + a[i]);
+    //}
+
+    /* `a[i++] <--> a[i++]` is the SAME element under PPID (lowers to `a[i] <-->
+       a[i]; i++; i++`) and should be rejected too, but the bump isn't lifted at
+       classify so isSameLvalue doesn't see it yet — deferred (todo). */
+    //-EXPECT-ERROR-DEFERRED: a[i++] self-swap needs the PPID-lifted-bump view in isSameLvalue
+    //{
+    //    int a[2]; int i = 0; a[0] = 1; a[1] = 2;
+    //    a[i++] <--> a[i++];
     //    __println("" + a[0]);
     //}
 

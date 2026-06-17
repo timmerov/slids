@@ -135,6 +135,16 @@ int32 main() {
         __println(##type(blk) + " blk = " + blk);
     }
 
+    /* infer const array/tuple/class types. */
+    /*{
+        int arr1[3] = (1,2,3);
+        const arr2 = arr1;
+        __println(##type(arr2) + " arr2 = [" + arr2[0] + "," + arr2[1] + "," + arr2[2] + "]");
+
+        const tuple1 = (4,5,6);
+        __println(##type(tuple1) + " tuple1 = (" + tuple1[0] + "," + tuple1[1] + "," + tuple1[2] + ")");
+    }*/
+
     return 0;
 }
 

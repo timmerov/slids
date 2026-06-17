@@ -8,24 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * TUPLE TYPE WITH A CLASS SLOT — `(Cz, int) t` / `(Cz, int)` as any composite
-    type position fails resolveDeclType with "Unknown type '(Cz, int)'.", even
-    though resolveTypeRef walks tuple slots structurally and the class is
-    registered. The structural walk produces the resolved slot handles fine but
-    requireKnownType (resolve.cpp:98) rejects the composed type. Surfaced
-    writing the deferred class-target conversion negative for typeconv.sl; same
-    gap blocks tuple-with-class-slot field decls more generally. Needs the
-    "known" predicate to walk the tuple slots and accept each-leaf-known instead
-    of demanding the composed handle be marked known. Low-medium priority.
-
-  * SELF-SWAP / SELF-MOVE FOR COMPLEX LVALUES — classify rejects a self-swap /
-    self-move when both operands are the same BARE variable (isSameLvalue: two
-    kIdentExpr with the same resolved_entry_id) -> "Cannot swap a value with itself"
-    / "Cannot move a value onto itself". An indexed / deref self (`arr[i] <--> arr[i]`,
-    `p^ <-- p^`) is NOT detected — that needs structural lvalue-equality (same base +
-    same index/deref chain), and a runtime index can't be compared statically anyway.
-    Low priority. Widen isSameLvalue when complex-lvalue equality is wanted.
-
   * TYPELESS CONST AGGREGATE — `const a = (1,2,3)` (no declared type) should infer
     as a const VARIABLE, like the typed `const int a[3] = (1,2,3)` form. The type is
     unknown at resolve, so it stays on the substitution path and mis-reports "not a
@@ -33,16 +15,24 @@ BUGS (found, deferred)
     (substitute) from an aggregate / pointer (route to a not-mutable variable).
     Pinned by a //-EXPECT-ERROR-DEFERRED in test_v2/misc/mutable.sl.
 
-  * we don't have tuples of size 1 so we can't initialize arrays of size 1.
-    these should work but they're compile errors.
-    int arr[1] = 5;
-    int arr[1] = (5);
-
 DEFERRED FEATURES (later; may not be on the plan)
 
   * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
     primitive element type (a reference works for all). Only the CLASS-element
     variant remains, when class array elements exist (Phase 5).
+
+  * SELF-MOVE / SWAP THROUGH A `++` INDEX — `a[i++] <--> a[i++]` is a SELF-op:
+    under PPID the bump lifts off the lvalue, so it lowers to `a[i] <--> a[i];
+    i++; i++` — the SAME element, and should be rejected like `a[i] <--> a[i]`.
+    But classify's structural lvalue-equality (isSameLvalue) sees the index as a
+    bump expression, not a bare ident, so it doesn't match — the bump hasn't been
+    lifted yet (desugar runs after classify). To detect it, isSameLvalue's index
+    compare must see THROUGH a PPID bump to its underlying lvalue. A side-effecting
+    index that is NOT a pure bump (`a[f()] <--> a[f()]`) is genuinely a different
+    element and stays allowed. Pinned by a //-EXPECT-ERROR-DEFERRED in
+    assign/lvalue.sl. The structural isSameLvalue (deref / field / index) HAS
+    landed — only this bump-lifted-index view (isSameIndex seeing through a PPID
+    bump) remains.
 
   * CLASS COPY-INIT AT A DECL — `Class a = sameClassValue` (initialize a class
     local from another value of the SAME class — e.g. the result of a function
@@ -91,6 +81,24 @@ DEFERRED FEATURES (later; may not be on the plan)
         alias would hit the defer arm above. Needs the is-this-a-type lookahead
         Phase 5 brings.
     typeconv.sl keeps the `(String=...)` example commented. prerequisite: classes.
+
+  * TUPLE / ARRAY WITH A CLASS SLOT — `(Cz, int) t = (3,4)` (a class as a tuple
+    slot — file-scope or LOCAL class) doesn't work. Two parts:
+      - RESOLVE GATE: requireKnownType rejects the composed type, "Unknown type
+        '(Cz, int)'.", even though resolveTypeRef already resolved the slot to the
+        registered class handle. isKnownType (widen) returns false for any kSlid
+        (no class registry at the widen layer); leafIsKnownClass (resolve, which
+        HAS the registry) walks only single-child wrappers (alias / const /
+        pointer / iterator / array) — no kTuple arm. Fix: give leafIsKnownClass a
+        kTuple arm accepting a slot that is isKnownType OR a known class.
+      - CONSTRUCT + USE (the actual feature): lifting the gate is NECESSARY but
+        maybe not sufficient — `(Cz,int) t = (3,4)` must CONSTRUCT a class into
+        slot 0 (Cz from 3) and read it back. classify's tuple-init + codegen's
+        tuple construction handle class FIELDS and class ARRAY ELEMENTS today (via
+        constructClass), not class tuple SLOTS — wire constructClass into the
+        tuple-slot path and verify end-to-end (construct + t[1] + t[0].field).
+    Repro: tuple/anon.sl `(Local, int) lt = (3,4)`. Also blocks the class-target
+    conversion target + tuple-with-class-slot field decls. prerequisite: classes.
 
   * CLASS-FIELD INIT FROM A SIZE-1 TUPLE — the "vexing parse" (Phase 5). CONTEXT,
     the class structure: a class IS a named tuple. `Name(field-list){body}` interns
@@ -305,3 +313,11 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     818), so a second `++` is a parse error. Low priority / low utility. Prereq:
     `x++ AS AN LVALUE` (above) — same lift-the-bump-off-the-lvalue machinery. Needs
     parsePostfix to LOOP ++/--.
+
+  * UNIT ARRAY WITH A NON-SCALAR ELEMENT — `(int,int) arr[1] = (3,4)` (a size-1
+    array whose element is itself a tuple / array / class) can't be initialized: the
+    1-tuple==scalar collapse erases the wrapper, so `(3,4)` reads as TWO elements,
+    not one tuple element -> "shape does not match". (The SCALAR-element case
+    `int arr[1] = 2` / `int m[1][1] = 7` now works — checkValueAssign wraps the bare
+    scalar in dims-deep 1-tuples.) Needs a non-collapsing 1-tuple spelling — same
+    root as CLASS-FIELD INIT FROM A SIZE-1 TUPLE below; defer with it.

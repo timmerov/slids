@@ -271,6 +271,20 @@ int32 main() {
     int row[2] = va[0];
     __println("row= " + row[0] + " " + row[1]);                             // 1 2
 
+    {
+        // a size-1 array initialized from a bare SCALAR: size-1 tuples collapse to
+        // their element, so the lone element's initializer is spelled bare. The
+        // grouping-paren form `(2)` collapses to the same scalar.
+        int arr[1] = 2;
+        __println(arr[0]);                                                  // 2
+        int brr[1] = (2);
+        __println(brr[0]);                                                  // 2
+        // a multi-dimensional unit array (one element total) takes the bare scalar
+        // too — wrapped one 1-tuple per dim.
+        int m11[1][1] = 7;
+        __println(m11[0][0]);                                               // 7
+    }
+
     return 0;
 }
 

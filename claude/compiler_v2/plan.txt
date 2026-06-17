@@ -249,7 +249,11 @@ Phase 4 — types beyond primitives
     into the element type [the per-element compatibility of the ASSIGNMENT RELATION
     in readme.txt; the array-VALUE-copy seam is now CLOSED via
     classify::checkAggregateShapeMatch + codegen::emitImplicitAggregateConvert —
-    shape match at classify, per-leaf widen::convert at codegen]. Whole-array
+    shape match at classify, per-leaf widen::convert at codegen]. A SINGLE-ELEMENT
+    array [flattened count 1: `int[1]`, `int[1][1]`] takes a BARE SCALAR — the
+    1-tuple==scalar collapse leaves the lone element unwrapped, so checkValueAssign
+    [isScalarIntoUnitArray] wraps it in dims-deep 1-tuples and reuses this path; NOT
+    a broadcast [`int[3]=5` stays rejected]. Whole-array
     definite-assignment is a monotonic
     may-set [a subscript write assigns the array; read-before-any-write errors];
     arrays join the unused-local sweep.)
@@ -406,8 +410,12 @@ Phase 4 — types beyond primitives
     (`T x <-- y`, the move_init flag) + statement; operand forms ident, array
     element, tuple slot, CLASS FIELD (kFieldExpr — resolveMoveSwapLvalue accepts
     it, routing to resolveStoreTarget), deref. BOTH swap operands and a move's LHS
-    must be lvalues (a move's RHS may be an rvalue). Done entirely in codegen (move
-    + swap pass through desugar untouched); resolve/classify validate. The
+    must be lvalues (a move's RHS may be an rvalue). SELF-op detection is STRUCTURAL
+    (isSameLvalue, recursive): a bare var, a deref, a class field, and an index with
+    a PROVABLY-same index (a literal or the same bare var) are rejected; a
+    non-provable index (`a[f()]`) is left, and the `a[i++]` self-op is deferred
+    (todo). Done entirely in codegen (move + swap pass through desugar untouched);
+    resolve/classify validate. The
     OVERLOADABLE class `op<--`/`op<-->` + destructor-balance + class fields +
     whole-array move/swap is the Phase 5 / reach-goal piece.
     test_v2/expression/moveswap.sl.

@@ -10,3 +10,4 @@ multidim: g00=11 g11=20
 derefield: sx=10
 iter: data1=22
 widths: a0=15 f0=3.5
+tick c=2 sa1=9

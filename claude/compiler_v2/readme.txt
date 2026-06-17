@@ -291,7 +291,12 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     is how ARRAYS OF TUPLES `(int,int) a[3]` and TUPLE-OF-ARRAYS slots work; it
     replaced the old flatten-to-scalars + tupleMatchesArrayShape). A wrong nesting
     is "Array initializer shape does not match the dimensions of '<T>'"; each leaf
-    widens into the element type. Also: array↔tuple VALUE copy both directions
+    widens into the element type. A SINGLE-ELEMENT array (flattened count 1 —
+    `int[1]`, `int[1][1]`) takes a BARE SCALAR: the 1-tuple==scalar collapse leaves
+    the lone element's initializer unwrapped, so checkValueAssign
+    (isScalarIntoUnitArray) wraps it in dims-deep 1-tuples and routes it HERE. NOT a
+    broadcast (`int[3]=5` stays rejected); a NON-scalar element (`(int,int) arr[1]`)
+    is still un-spellable (todo). Also: array↔tuple VALUE copy both directions
     (`(int,int,int,int) t = a1` / `int a4[4] = t4`, extractvalue/insertvalue, per-
     slot widen); PARTIAL-index lvalues (sub-array assign `td[1]=(100,101)` + sub-
     array value read). See [[project_v2_array_types]].
@@ -1097,9 +1102,12 @@ STAGE FILES (.h / .cpp pairs)
             narrowing move rejects). kSwapStmt requires the two operands' deepStrip
             types be IDENTICAL (no widening — a symmetric exchange can't convert
             both ways), else "Swap operands must be the same type". classify also
-            rejects a SELF-swap / SELF-move — both operands the same bare variable
-            (isSameLvalue) — with "Cannot swap a value with itself" / "Cannot move a
-            value onto itself" (indexed / deref self is a later pass). resolve owns
+            rejects a SELF-swap / SELF-move with "Cannot swap a value with itself" /
+            "Cannot move a value onto itself". isSameLvalue is STRUCTURAL: a bare
+            variable (same entry), a deref (operand same), a class field (same name +
+            base same), and an index (base same + a PROVABLY-same index — a literal or
+            the same bare var). A non-provable index (`a[f()]`) is a genuinely
+            different element (left); the `a[i++]` self-op is deferred (todo). resolve owns
             the lvalue rule: resolveMoveSwapLvalue rejects a non-lvalue (a swap rhs
             is a general expression, so `x <--> 7` would otherwise crash codegen)
             — BOTH swap operands and a move's LHS must be lvalues ("A swap operand"

@@ -1748,6 +1748,22 @@ bool isArrayFromTuple(widen::TypeRef declType, parse::Node const& rhs) {
         && rhs.kind == parse::Kind::kTupleExpr;
 }
 
+// A SINGLE-ELEMENT array (`int[1]`, `int[1][1]`) initialized from a bare SCALAR.
+// Size-1 tuples collapse to their element (`(2)` -> `2`), so the lone element's
+// initializer is spelled bare — there is no 1-tuple to take the array-from-tuple
+// path. Fires ONLY when the array holds exactly one element (NOT a broadcast) and
+// the rhs is a scalar value (a tuple literal is array-from-tuple; an array value is
+// the array-value path; a non-primitive element falls to a clean per-element error).
+bool isScalarIntoUnitArray(widen::TypeRef declType, parse::Node const& rhs) {
+    widen::TypeRef d = widen::strip(declType);
+    if (widen::form(d) != widen::Type::Form::kArray) return false;
+    if (rhs.kind == parse::Kind::kTupleExpr) return false;
+    long long count = 1;
+    for (int dim : widen::get(d).dims) count *= dim;
+    return count == 1
+        && widen::form(widen::strip(rhs.inferred_type)) == widen::Type::Form::kPrimitive;
+}
+
 // Collect the array's ELEMENT initializer nodes from a (possibly nested) tuple
 // literal, descending exactly dims.size() levels of nesting — the ARRAY dims. At
 // that depth each node is ONE element, taken WHOLE: a scalar for a primitive
@@ -2166,7 +2182,27 @@ std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty
 void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
                       diagnostic::Sink& diag) {
     if (dest == widen::kNoType) return;
-    if (isArrayFromTuple(dest, rhs)) {
+    if (isScalarIntoUnitArray(dest, rhs)) {
+        // `int arr[1] = 2` / `int m[1][1] = 2` — the 1-tuple==scalar collapse means
+        // the sole element's initializer arrives bare. Wrap it in nested 1-element
+        // tuples, ONE LEVEL PER DIM (classifyArrayFromTuple wants the literal nested
+        // exactly dims-deep), and reuse the array-from-tuple path (shape check +
+        // per-element widen + codegen emit).
+        std::size_t ndims = widen::get(widen::strip(dest)).dims.size();
+        auto node = std::make_unique<parse::Node>(std::move(rhs));
+        int f = node->file_id, tk = node->tok;
+        for (std::size_t k = 0; k < ndims; k++) {
+            auto tup = std::make_unique<parse::Node>();
+            tup->kind = parse::Kind::kTupleExpr;
+            tup->file_id = f;
+            tup->tok = tk;
+            tup->children.push_back(std::move(node));
+            node = std::move(tup);
+        }
+        node->inferred_type = dest;
+        rhs = std::move(*node);
+        classifyArrayFromTuple(tree, dest, rhs, diag);
+    } else if (isArrayFromTuple(dest, rhs)) {
         classifyArrayFromTuple(tree, dest, rhs, diag);
     } else if (isArrayFromTupleValue(dest, rhs)) {
         classifyArrayFromTupleValue(dest, rhs, diag);
@@ -2220,16 +2256,51 @@ void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
     }
 }
 
-// True when two move/swap operands name the SAME variable — both are bare
-// identifier references (kIdentExpr) resolved to the same entry. A self-swap is
-// a no-op and a self-move would null the source it just copied from, so both are
-// rejected. Indexed / deref self (`arr[i] <--> arr[i]`, `p^ <-- p^`) needs
-// structural lvalue-equality and is left to a later pass.
+// A PROVABLY-same, SIDE-EFFECT-FREE array index: a literal with the same value, or
+// the same bare variable. A call (`a[f()]`) or a bump (`a[i++]`) is NOT matched —
+// `f()` is genuinely a different element, and the `a[i++]` self-op needs the
+// PPID-lifted-bump view (a separate deferred case). So self-op detection on an
+// indexed lvalue stays conservative: reject only when the index cannot differ.
+bool isSameIndex(parse::Node const& a, parse::Node const& b) {
+    if (isLiteralKind(a.kind) && a.kind == b.kind && a.text == b.text) return true;
+    return a.kind == parse::Kind::kIdentExpr && b.kind == parse::Kind::kIdentExpr
+        && a.resolved_entry_id >= 0 && a.resolved_entry_id == b.resolved_entry_id;
+}
+
+// True when two move/swap operands name the SAME element — STRUCTURAL lvalue
+// equality. A self-swap is a no-op and a self-move would null the source it just
+// copied from, so both are rejected. Recurses the lvalue chain: a bare variable
+// (kIdentExpr, same entry), a deref (`p^`, operand same), a class field (`s.f`,
+// same name + base same), and an index (`a[i]`, base same AND a provably-same
+// index — see isSameIndex). A non-provable index (`a[f()]`, `a[i++]`) is left.
 bool isSameLvalue(parse::Node const& a, parse::Node const& b) {
-    return a.kind == parse::Kind::kIdentExpr
-        && b.kind == parse::Kind::kIdentExpr
-        && a.resolved_entry_id >= 0
-        && a.resolved_entry_id == b.resolved_entry_id;
+    if (a.kind != b.kind) return false;
+    if (a.kind == parse::Kind::kIdentExpr)
+        return a.resolved_entry_id >= 0
+            && a.resolved_entry_id == b.resolved_entry_id;
+    if (a.kind == parse::Kind::kDerefExpr)
+        return !a.children.empty() && !b.children.empty()
+            && a.children[0] && b.children[0]
+            && isSameLvalue(*a.children[0], *b.children[0]);
+    if (a.kind == parse::Kind::kFieldExpr)
+        return a.name == b.name && !a.children.empty() && !b.children.empty()
+            && a.children[0] && b.children[0]
+            && isSameLvalue(*a.children[0], *b.children[0]);
+    if (a.kind == parse::Kind::kIndexExpr) {
+        // base same AND every index child provably-same-and-pure.
+        if (a.children.empty() || a.children.size() != b.children.size())
+            return false;
+        if (!a.children[0] || !b.children[0]
+            || !isSameLvalue(*a.children[0], *b.children[0]))
+            return false;
+        for (std::size_t i = 1; i < a.children.size(); i++) {
+            if (!a.children[i] || !b.children[i]
+                || !isSameIndex(*a.children[i], *b.children[i]))
+                return false;
+        }
+        return true;
+    }
+    return false;
 }
 
 // The element types a tuple or array destructures into: a tuple's slots, or N copies
