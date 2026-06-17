@@ -1342,6 +1342,8 @@ widen::TypeRef refreshAliasType(widen::TypeRef t, std::vector<AliasRefresh> cons
             for (auto& s : slots) s = refreshAliasType(s, rs);
             return widen::internTuple(slots);
         }
+        case F::kConst:
+            return widen::internConst(refreshAliasType(widen::get(t).underlying, rs));
         case F::kPrimitive: case F::kVoid: case F::kAnyptr:
         case F::kSlid: case F::kNone:
             return t;
@@ -1411,6 +1413,9 @@ widen::TypeRef bakeDimsWalk(widen::TypeRef t,
             for (auto& s : slots) s = bakeDimsWalk(s, des, idx, failed, diag);
             return widen::internTuple(slots);
         }
+        case F::kConst:
+            return widen::internConst(
+                bakeDimsWalk(widen::get(t).underlying, des, idx, failed, diag));
         case F::kPrimitive: case F::kVoid: case F::kAnyptr:
         case F::kSlid: case F::kNone:
             return t;   // no dims here

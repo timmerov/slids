@@ -76,7 +76,7 @@ bool leafIsKnownClass(parse::Tree const& tree, widen::TypeRef t) {
     using F = widen::Type::Form;
     for (;;) {
         widen::Type const& ty = widen::get(t);
-        if (ty.form == F::kAlias) { t = ty.underlying; continue; }
+        if (ty.form == F::kAlias || ty.form == F::kConst) { t = ty.underlying; continue; }
         if (ty.form == F::kPointer || ty.form == F::kIterator) { t = ty.pointee; continue; }
         if (ty.form == F::kArray) { t = ty.elem; continue; }
         if (ty.form == F::kSlid) return tree.classes.count(t) > 0;
@@ -114,7 +114,7 @@ void requireKnownType(parse::Tree const& tree, widen::TypeRef t,
         widen::TypeRef leaf = t;
         for (;;) {
             widen::Type const& ty = widen::get(leaf);
-            if (ty.form == F::kAlias) { leaf = ty.underlying; continue; }
+            if (ty.form == F::kAlias || ty.form == F::kConst) { leaf = ty.underlying; continue; }
             if (ty.form == F::kPointer || ty.form == F::kIterator) { leaf = ty.pointee; continue; }
             if (ty.form == F::kArray) { leaf = ty.elem; continue; }
             break;
@@ -212,6 +212,11 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
             for (auto& s : slots)
                 s = resolveTypeRef(tree, s, visiting, reported, file_id, tok, diag);
             return widen::internTuple(slots);
+        }
+        case F::kConst: {
+            widen::TypeRef u = widen::get(t).underlying;
+            return widen::internConst(
+                resolveTypeRef(tree, u, visiting, reported, file_id, tok, diag));
         }
         case F::kSlid: {
             std::string name = widen::get(t).name;
@@ -1269,6 +1274,9 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
             // and validate the target type spelling (alias chains, void[] reject,
             // unknown-type). classify enforces the cast legality rules.
             if (e.children[0]) resolveExpr(tree, *e.children[0], diag, unevaluated);
+            // `<const>` / `<mutable>` qualifier casts carry no target type (the
+            // result is derived from the operand in classify) — nothing to resolve.
+            if (e.text == "const" || e.text == "mutable") return;
             resolveDeclType(tree, e.return_type, e.file_id, e.tok, diag,
                             &e.return_type_seg_toks);
             return;
@@ -3668,8 +3676,8 @@ void collectByValueClasses(widen::TypeRef ft, std::vector<widen::TypeRef>& out) 
         // A pointer / iterator field breaks the size cycle; primitives carry none;
         // alias was stripped; none/void/anyptr can't be a by-value class.
         case F::kPointer: case F::kIterator: case F::kPrimitive:
-        case F::kVoid: case F::kAnyptr: case F::kAlias: case F::kNone:
-            break;
+        case F::kVoid: case F::kAnyptr: case F::kAlias: case F::kConst: case F::kNone:
+            break;   // kConst can't reach here — strip() peeled it above
     }
 }
 
@@ -3776,23 +3784,54 @@ bool fieldContributesNeed(parse::Tree const& tree, widen::TypeRef ft, bool ctor)
 // resolved type must be primitive, a pointer (reference `^` / iterator `[]`), or an
 // array (the `int a[3]` shorthand, rewritten here to a pointer to the array — the
 // body indexes WITHOUT an explicit `^`); a TUPLE or CLASS value parameter is a
-// COMPILE ERROR. Pointer-to-const waits for const (Phase 6). Runs after param
-// types are resolved (alias-substituted).
+// COMPILE ERROR. Runs after param types are resolved (alias-substituted).
+//
+// THE DEFAULT CONTRACT (const munge): calling a function is not permission to
+// modify the caller's data. So a reference / iterator parameter's POINTEE
+// becomes const — `T^` -> `(const T)^`, `T[]` -> `(const T)[]` — and an array
+// (passed by pointer) becomes a pointer to a const array — `T[N]` -> `const T[N]`
+// then `^`. The `mutable` qualifier opts a pointer/iterator/array OUT (the
+// function may write through it). A primitive passes by value (its own copy —
+// no const). The synthesized method receiver `_$recv` is skipped: const methods
+// (a const receiver) are a Phase-6 concern, so the receiver stays plain `Class^`.
 void mungeParamType(parse::Tree& /*tree*/, parse::Node& p, diagnostic::Sink& diag) {
     if (p.return_type == widen::kNoType) return;   // typeless: inferred from a default
     using F = widen::Type::Form;
-    F f = widen::form(widen::strip(p.return_type));
+    widen::TypeRef st = widen::strip(p.return_type);   // see through alias for the form
+    F f = widen::form(st);
+    bool already_const = (widen::form(p.return_type) == F::kConst);
+    bool is_recv = (p.name == "_$recv");   // synthesized method receiver — const-method = Phase 6
+
+    // `mutable` is valid only on a pointer (reference / iterator) or array parameter.
+    if (p.is_mutable && f != F::kPointer && f != F::kIterator && f != F::kArray) {
+        diagnostic::report(diag, {p.file_id, p.tok,
+            "The 'mutable' qualifier applies only to a pointer "
+            "(reference / iterator) or array parameter.", {}});
+        return;
+    }
+
     if (f == F::kArray) {
-        // Array-by-pointer arm: rewrite `int[3]` to `int[3]^` (a pointer to the
-        // array). Codegen's call site passes the array's address (lvalue arm
-        // of emitCall); the body's subscript implicit-derefs at the base.
-        p.return_type = widen::internPointer(p.return_type);
+        // Array-by-pointer arm: rewrite `int[3]` to a pointer to the array. The
+        // array VALUE is const unless `mutable` (or already written const), so
+        // the default form is `(const int[3])^`.
+        widen::TypeRef arr = p.return_type;
+        if (!p.is_mutable && !already_const) arr = widen::internConst(arr);
+        p.return_type = widen::internPointer(arr);
         return;
     }
     if (f == F::kTuple || f == F::kSlid) {
         diagnostic::report(diag, {p.file_id, p.tok,   // caret the TYPE, not the name
             "A non-primitive parameter must be a pointer (reference / iterator) or "
             "an array; got '" + widen::spellOrEmpty(p.return_type) + "'.", {}});
+        return;
+    }
+    if ((f == F::kPointer || f == F::kIterator)
+        && !p.is_mutable && !already_const && !is_recv) {
+        // Const the POINTEE (the caller's data), leaving the pointer itself
+        // writable: `T^` -> `(const T)^`, `T[]` -> `(const T)[]`.
+        widen::TypeRef cpointee = widen::internConst(widen::get(st).pointee);
+        p.return_type = (f == F::kPointer) ? widen::internPointer(cpointee)
+                                           : widen::internIterator(cpointee);
     }
 }
 

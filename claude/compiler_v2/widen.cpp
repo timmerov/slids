@@ -39,6 +39,7 @@ bool classify(std::string const& t, TypeKind& out) {
 bool classify(TypeRef ref, TypeKind& out) {
     Type const& t = get(ref);
     if (t.form == Type::Form::kAlias) return classify(t.underlying, out);  // see through
+    if (t.form == Type::Form::kConst) return classify(t.underlying, out);  // see through
     if (t.form != Type::Form::kPrimitive) return false;
     out = {t.cat, t.bits};
     return true;
@@ -626,6 +627,7 @@ bool isKnownType(TypeRef ref) {
         case Type::Form::kIterator:  return isKnownType(t.pointee);
         case Type::Form::kArray:     return isKnownType(t.elem);
         case Type::Form::kAlias:     return isKnownType(t.underlying);  // see through
+        case Type::Form::kConst:     return isKnownType(t.underlying);  // see through
         case Type::Form::kTuple: {
             for (TypeRef slot : t.slots) if (!isKnownType(slot)) return false;
             return true;
@@ -660,6 +662,8 @@ long long typeByteSize(TypeRef ref) {
             return total;
         }
         case Type::Form::kAlias:
+            return typeByteSize(t.underlying);   // see through
+        case Type::Form::kConst:
             return typeByteSize(t.underlying);   // see through
         case Type::Form::kVoid:
         case Type::Form::kSlid:
@@ -711,6 +715,7 @@ std::string structKey(Type const& t) {
         case F::kSlid:      return "S" + t.name
                                 + (t.def_id < 0 ? "" : "#" + std::to_string(t.def_id));
         case F::kAlias:     return "L" + t.name + "=" + std::to_string(t.underlying);
+        case F::kConst:     return "C" + std::to_string(t.underlying);
         case F::kPointer:   return "p" + std::to_string(t.pointee);
         case F::kIterator:  return "i" + std::to_string(t.pointee);
         case F::kArray: {
@@ -790,6 +795,18 @@ TypeRef intern(std::string const& s) {
     auto it = a.by_spelling.find(s);
     if (it != a.by_spelling.end()) return it->second;
 
+    // A leading `const ` qualifier binds LOOSEST, so it is the OUTERMOST wrapper —
+    // peel it FIRST, before any suffix stripping, so `const T^` interns to
+    // const(pointer(T)) (deep), not pointer(const(T)). The shallow form `(const T)^`
+    // keeps the const INSIDE the parens, so the `^` suffix below strips first and
+    // intern("(const T)") collapses the 1-tuple to const(T) — giving pointer(const(T)).
+    if (s.compare(0, 6, "const ") == 0) {
+        TypeRef u = intern(s.substr(6));
+        TypeRef ref = internConst(u);
+        a.by_spelling.emplace(s, ref);
+        return ref;
+    }
+
     // Decompose from the RIGHT (the outermost / last-applied suffix), mirroring
     // isKnownType's strip order: iterator `[]`, reference `^`, array `[N]...`.
     // Children intern (and structurally dedup) recursively; the built Type is then
@@ -867,6 +884,15 @@ TypeRef internAlias(std::string const& name, TypeRef underlying) {
     return internStruct(std::move(t));
 }
 
+TypeRef internConst(TypeRef underlying) {
+    if (underlying == kNoType) return kNoType;
+    if (get(underlying).form == Type::Form::kConst) return underlying;  // const const T == const T
+    Type t;
+    t.form = Type::Form::kConst;
+    t.underlying = underlying;
+    return internStruct(std::move(t));
+}
+
 // A named class/slid type, carrying its field-slot types (the named-tuple half
 // of "a class is a namespace + a named tuple"). A kSlid is interned by name
 // alone (structKey == "S" + name), so there is exactly one handle per class
@@ -910,8 +936,40 @@ std::string classSymbol(TypeRef ref) {
     return t.def_id < 0 ? t.name : t.name + "." + std::to_string(t.def_id);
 }
 
+TypeRef removeConst(TypeRef ref) {
+    Type const& t = get(ref);
+    switch (t.form) {
+        case Type::Form::kConst:    return removeConst(t.underlying);
+        case Type::Form::kPointer:  { TypeRef p = t.pointee; return internPointer(removeConst(p)); }
+        case Type::Form::kIterator: { TypeRef p = t.pointee; return internIterator(removeConst(p)); }
+        case Type::Form::kArray: {
+            TypeRef e = t.elem;
+            std::vector<int> d = t.dims;
+            return internArray(removeConst(e), d);
+        }
+        case Type::Form::kTuple: {
+            std::vector<TypeRef> s = t.slots;
+            for (TypeRef& x : s) x = removeConst(x);
+            return internTuple(s);
+        }
+        case Type::Form::kAlias: {
+            std::string n = t.name;
+            TypeRef u = t.underlying;
+            return internAlias(n, removeConst(u));
+        }
+        case Type::Form::kPrimitive:
+        case Type::Form::kVoid:
+        case Type::Form::kAnyptr:
+        case Type::Form::kSlid:
+        case Type::Form::kNone:
+            return ref;
+    }
+    return ref;
+}
+
 TypeRef strip(TypeRef ref) {
-    while (get(ref).form == Type::Form::kAlias) ref = get(ref).underlying;
+    while (get(ref).form == Type::Form::kAlias
+        || get(ref).form == Type::Form::kConst) ref = get(ref).underlying;
     return ref;
 }
 
@@ -919,6 +977,7 @@ TypeRef deepStrip(TypeRef ref) {
     Type const& t = get(ref);
     switch (t.form) {
         case Type::Form::kAlias:    return deepStrip(t.underlying);
+        case Type::Form::kConst:    return deepStrip(t.underlying);   // const erased for equality
         case Type::Form::kPointer:  { TypeRef p = t.pointee; return internPointer(deepStrip(p)); }
         case Type::Form::kIterator: { TypeRef p = t.pointee; return internIterator(deepStrip(p)); }
         case Type::Form::kArray: {
@@ -941,19 +1000,29 @@ TypeRef deepStrip(TypeRef ref) {
     return ref;
 }
 
+// A child type spelled UNDER a `^` / `[]` / `[N]` suffix: a kConst child is
+// parenthesized so the const stays bound to the pointee/element — `(const T)^`
+// (shallow), distinct from the outer-const `const T^` (deep). Any other form
+// spells bare (an inner ptr/array/tuple already self-delimits its suffix).
+static std::string spellSuffixChild(TypeRef child) {
+    std::string s = spell(child);
+    return get(child).form == Type::Form::kConst ? "(" + s + ")" : s;
+}
+
 std::string spell(TypeRef ref) {
     Type const& t = get(ref);
     switch (t.form) {
         case Type::Form::kNone:      return "";   // no type (kNoType) -> empty
         case Type::Form::kAlias:     return t.name;   // spells as the alias name
+        case Type::Form::kConst:     return "const " + spell(t.underlying);
         case Type::Form::kPrimitive: return t.name;
         case Type::Form::kVoid:      return "void";
         case Type::Form::kAnyptr:    return "anyptr";
         case Type::Form::kSlid:      return t.name;
-        case Type::Form::kPointer:   return spell(t.pointee) + "^";
-        case Type::Form::kIterator:  return spell(t.pointee) + "[]";
+        case Type::Form::kPointer:   return spellSuffixChild(t.pointee) + "^";
+        case Type::Form::kIterator:  return spellSuffixChild(t.pointee) + "[]";
         case Type::Form::kArray: {
-            std::string s = spell(t.elem);
+            std::string s = spellSuffixChild(t.elem);
             for (int d : t.dims) s += "[" + std::to_string(d) + "]";
             return s;
         }
@@ -1013,6 +1082,10 @@ bool typeSelfTest(std::ostream& out) {
         "Point", "Point^", "Point[4]", "Point[2][3]^",
         "(int, bool)", "((int, int), bool)", "(int, bool)^", "(int, bool)[3]",
         "(char[], float64, Dir)",
+        // const qualifier: leaf, deep (outer) vs shallow (parenthesized pointee),
+        // const array, const tuple, const element.
+        "const int", "const char[]", "const int^", "(const int)^",
+        "(const char)[]", "const int[3]", "const (int, bool)", "(const int)[3]",
     };
     bool ok = true;
     int n = 0;

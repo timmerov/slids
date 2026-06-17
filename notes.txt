@@ -4,7 +4,6 @@ check for silent defaults and mis/unattributed diagnostics.
 check for frame scope violations/shortcuts and stored canonical names.
 what test coverage gaps remain ?
 update readme.txt, todo.txt, plan*.txt, and memories.
-update readme.txt, todo.txt, plan.txt, plan-flow.txt, and memories.
 
 claude really likes to look at types as a string.
 trying to eradicate this practice.

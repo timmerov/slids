@@ -26,6 +26,13 @@ BUGS (found, deferred)
     same index/deref chain), and a runtime index can't be compared statically anyway.
     Low priority. Widen isSameLvalue when complex-lvalue equality is wanted.
 
+  * constant tuples, arrays, classes - the error message is misleading.
+    what exactly are there?
+    unlike most constants, they're actually allocated and initialized.
+    const int arr[3] = (1,2,3); an array of 3 const ints.
+    const (int,int) tuple = (1,2); a not-mutable tuple of 2 ints.
+    const String s = "hi"; a not-mutable string.
+
 
 DEFERRED FEATURES (later; may not be on the plan)
 
@@ -105,14 +112,27 @@ DEFERRED FEATURES (later; may not be on the plan)
     needs a non-collapsing 1-tuple syntax, which touches grouping parens globally —
     not worth it. prerequisite: a 1-tuple spelling (none planned).
 
-  * CONST-POINTER CASTS (Phase 6) — the const-correctness slice of cast.sl is
-    deferred (the A1 landing): `const Type^` (a const-qualified pointer type),
-    the `<const>` / `<mutable>` qualifier-only casts, and the mutable<->const
-    cast direction (implicit mutable->const, explicit const->mutable). v2 models
-    const as an entry KIND, not a tracked TYPE qualifier on pointers, so none of
-    these can be enforced yet. The rules are written + commented in cast.sl's
-    canon block (lines ~21, 43-54, 77-86); land them with Phase 6 when const is
-    a real qualifier. Until then those lines stay commented and untested.
+  * CONST ENFORCEMENT (Phase 6) — const representation/syntax is in (qualifier,
+    param munge, `mutable`, the casts); ENFORCEMENT is not. const is unchecked
+    today, so a const->mutable drop is silently accepted. To do:
+      - lvalue carries const / rvalue read is mutable (the value-category model);
+      - const->mutable rejected at assign + call sites without an explicit `<mutable>`;
+      - no write through a const reference (every assign-family site);
+      - const-overload matcher (match-key strips const);
+      - method-level const + a const receiver `_$recv`;
+      - `mutable` REQUIRED on a move/swap operator param (`op<--`/`op<-->`) — also
+        blocked on operator overloading existing (Phase 5+; op<-- does not parse).
+    cast.sl's const-correctness lines + the deep-const local forms in mutable.sl
+    stay syntax-only until this lands.
+
+  * CONST `(const T)[N]` STATEMENT-LOCAL DECLARATOR GAP — a parenthesized const
+    type with a SIZED-array suffix as a statement-level local (`(const int)[3] a;`,
+    `(const int, int)[2] a;`) does not parse: the parenthesized-type-decl lookahead
+    admits only `^` / `[]`, not `[N]`. Fine as a tuple SLOT (`((const int)[2], int)`)
+    or a parameter. Pre-existing declarator gap, not const-specific. (A leading
+    `const` at a statement START is the named-CONSTANT marker by design — a const-
+    QUALIFIED local is written in a type position, `(const int)^ r`; that is not a
+    bug, just a spelling constraint.)
 
   * FOR-CLASS — needs classes + a for-each
     protocol (op[]/size or begin/end/next, Phase 5). Lowers to a kForLongStmt in

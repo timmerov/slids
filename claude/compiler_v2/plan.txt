@@ -300,9 +300,15 @@ Phase 4 — types beyond primitives
     bridges pointer<->integer. `void[]`/`void[N]` rejected — void has no stride, a
     void pointer must be `void^`. Codegen: ptr<->ptr no-op, ptr<->intptr ptrtoint/
     inttoptr; convert asserts on an ungated ptr->scalar. test_v2/pointer/cast.sl.
-    DEFERRED to Phase 6: const-cast surface [`const T^`, `<const>`, `<mutable>`,
-    mutable<->const] — const is not yet a tracked pointer qualifier. Class-
-    hierarchy casts wait on Phase 5.)
+    CONST-CAST SURFACE LANDED (syntax, NO enforcement): `const T^` (deep, outer
+    const) / `(const T)^` (shallow, const pointee) targets; the `<const>` /
+    `<mutable>` qualifier-only casts [target derived from the operand in classify
+    — internConst / removeConst; pointer operand required; codegen no-op since
+    const is erased in IR]; and the full-type `<const T^>` / `<T^>` add/remove
+    forms via the existing path. const is now a tracked TypeRef qualifier (kConst).
+    DEFERRED to Phase 6: the ENFORCEMENT half [const->mutable rejection at assign/
+    call sites, write-through-const rejection]. Class-hierarchy casts wait on
+    Phase 5.)
   * value type conversions (`(Type = expr)`)                        LANDED
     (kConvertExpr — the VALUE analog of the pointer cast: an explicit width/sign/
     family change that makes the implicit-coercion rejections legal, the operation
@@ -594,23 +600,43 @@ Phase 5 — classes
 
 Phase 6 — const correctness
   Threads through phases 3-5; land after classes have the bones.
-  NOTE: `##type`-level const-qualifier REPORTING already landed (a bare const
-  ident reads `const <T>`, an expression-read strips const) as a side-effect of
-  ##type + inferred constants — but that is reporting-only (v2 still models const
-  as an entry KIND, not a tracked type qualifier). ENFORCEMENT below is this phase.
-  * `const T` qualifier; lvalue carries const, rvalue read is mutable
-  * method-level const (`name(params) const { ... }`); const self
-  * pass-by-ref-to-const default for `T^`/`T[]` params (`int^ p` == `(const int)^ p`);
-    `mutable` opts out. This is the pointer-to-const ARM of mungeParamTypes — the
-    param-type rewrite hook (resolve; see plan-declarator.txt PASSING). The hook and
-    its OTHER arms land pre-const (primitive pass-through; array-by-pointer; REJECT a
-    non-primitive value param — today's by-value-param defect, todo BUGS); this arm
-    fills in once const is a real qualifier.
+
+  QUALIFIER + MUNGE + CASTS LANDED (the SYNTAX / type-representation half; NO
+  enforcement). const is now a tracked TypeRef qualifier — Form::kConst, a facet
+  wrapping `underlying`, TRANSPARENT for matching (strip/deepStrip/classify see
+  through it) but VISIBLE in spell(). Placement encodes deep vs shallow: an OUTER
+  kConst is `const T^` (deep — the whole pointer + its data); a kConst pointee is
+  `(const T)^` (shallow). Helpers: internConst (collapses const-const), removeConst
+  (drops every const, keeps structure/aliases). intern() peels a leading `const `
+  FIRST (so the prefix binds loosest); spell() parenthesizes a const child under a
+  `^`/`[]`/`[N]` suffix so the shallow form round-trips.
+  * pass-by-ref-to-const munge (mungeParamType): a non-`mutable` reference /
+    iterator param's pointee becomes const (`T^`->`(const T)^`, `T[]`->`(const T)[]`),
+    an array param -> pointer to a const array; primitive by value untouched; the
+    synthesized `_$recv` receiver skipped (const methods below). `##type` shows it.
+  * `mutable` — a pointer/iterator PARAMETER qualifier (opts out of the munge);
+    rejected on a non-pointer param, a class field, and any non-parameter position.
+  * `<const>` / `<mutable>` qualifier casts + full-type `<const T^>` / `<T^>` —
+    add / remove const on a pointer (value-preserving; const erased in IR).
+
+  ENFORCEMENT — STILL THIS PHASE (none landed; const is transparent for now, so
+  the const->mutable direction is silently accepted):
+  * `const T` lvalue carries const, rvalue read is mutable (the value-category half)
+  * method-level const (`name(params) const { ... }`); const self (receiver munge)
   * const-overload matcher (canonical-type strips "const" for match-key)
-  * const→mutable rejection at call sites
+  * const->mutable rejection at call sites (without an explicit `<mutable>`)
   * write-through-const rejection at every assign-family site
-  * `<const>` cast — the only way to mint a const-value rvalue
-  * goal B (publish-side via transport `.slt` → `.slh`) — design-level only
+  * `<const>` cast becomes load-bearing (the only way to mint a const-value rvalue)
+  * `mutable` becomes REQUIRED on a move/swap operator param (`op<--`/`op<-->`,
+    once operator overloading + those operators exist — Phase 5+)
+  * goal B (publish-side via transport `.slt` -> `.slh`) — design-level only
+
+  KNOWN LIMITATIONS (const, syntax phase): a leading `const` at a statement/decl
+  START is the named-CONSTANT marker (needs an initializer), so a const-QUALIFIED
+  local variable is written in a type position (`(const int)^ r`), not `const T x`.
+  A parenthesized const type with a SIZED-array suffix as a statement-level local
+  (`(const int)[3] a;`) does not parse — the declarator lookahead admits only
+  `^`/`[]`; fine as a tuple slot or a parameter.
 
 Phase 7 — class advanced
   * reopens; incomplete-class semantics

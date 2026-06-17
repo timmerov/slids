@@ -488,7 +488,7 @@ int32 fwd_decl(int32 n) {
 
 /* class types are NOMINAL — Class1 and Class2 are distinct even with identical
    field layouts, so `Class2^` does not pass to a `Class1^` param. */
-//-EXPECT-ERROR: Cannot implicitly cast 'Class2^' to 'Class1^'
+//-EXPECT-ERROR: Cannot implicitly cast 'Class2^' to '(const Class1)^'
 //Class1(int x_) { }
 //Class2(int x_) { }
 //void neg_class_mismatch_fn(Class1^ p) { }

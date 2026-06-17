@@ -41,6 +41,12 @@ struct Type {
         kTuple,       // (T0, T1, ...) — slots (lands with tuples)
         kAlias,       // a transparent named type — name + underlying; sees through
                       // to underlying for all structural queries, spells as name
+        kConst,       // a const-qualified type — wraps `underlying`. Transparent for
+                      // every structural query / matching (strip/deepStrip/classify
+                      // see through it; no enforcement yet), but VISIBLE in spell()
+                      // (`const T` / `(const T)^`). Binds loosest: an OUTER kConst is
+                      // deep (`const T^` = const pointer to const data); const on a
+                      // pointee (`(const T)^`) is the shallow form.
     };
     Form form = Form::kNone;
     Category cat = Category::kSignedInt;   // kPrimitive
@@ -90,6 +96,15 @@ TypeRef internArray(TypeRef elem, std::vector<int> const& dims);
 // by resolve (which has the symbol table that knows name -> underlying).
 TypeRef internAlias(std::string const& name, TypeRef underlying);
 
+// A const-qualified type wrapping `underlying`. Transparent for matching
+// (strip/deepStrip/classify see through it), VISIBLE in spell(). Collapses
+// const(const(T)) to const(T); const(kNoType) is kNoType. Placement encodes
+// deep vs shallow: internConst(internPointer(T)) = `const T^` (deep — the
+// pointer and the data it reaches are const); internPointer(internConst(T)) =
+// `(const T)^` (shallow — a mutable pointer to const data). The param-munge
+// builds the shallow form for a non-`mutable` reference parameter.
+TypeRef internConst(TypeRef underlying);
+
 // A named class/slid type carrying its field-slot types. `def_id` is the scope
 // disambiguator (a LOCAL class's defining frame id; -1 for file-scope) — part of
 // identity, so two same-named local classes get distinct handles while the name
@@ -112,6 +127,11 @@ void setSlidNeeds(TypeRef ref, bool needs_ctor, bool needs_dtor);
 // only into emitted symbols — desugar (ctor/dtor defs) and codegen (calls / sizeof
 // / struct) both call it so definition and use agree.
 std::string classSymbol(TypeRef ref);
+
+// Remove every const qualifier (at all levels), rebuilding the wrappers — the
+// `<mutable>` cast's type transform. Unlike deepStrip it PRESERVES aliases and
+// pointer/iterator/array/tuple structure; only kConst facets are dropped.
+TypeRef removeConst(TypeRef ref);
 
 // Peel any alias layers, returning the first non-alias handle (the underlying
 // structure). Predicates that switch on form() use this to see through aliases.

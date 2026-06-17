@@ -169,7 +169,7 @@ Targets are bare names (declarator-shaped), NOT arbitrary lvalues — `(arr[i], 
 = e` is out (that was the "tuple list of lvalues" we rejected).
 
 
-QUALIFIERS  (const / mutable — Phase 6)
+QUALIFIERS  (const / mutable — parse + munge + casts LANDED; enforcement Phase 6)
 
 A prefix qualifier binds LOOSEST: it wraps the ENTIRE suffix chain to its right.
 Parens scope it to an inner sub-type — the one place parens ARE required.
@@ -180,11 +180,16 @@ Parens scope it to an inner sub-type — the one place parens ARE required.
   precedence:  postfix suffixes bind tight (left-to-right);
                a prefix qualifier binds loose (wraps everything after it).
 
-Enforcement defers with the const-correctness work; the parse rule above is
-fixed now. The grouping parens ride the size-1-tuple collapse ((T) -> T), not a
-separate grouping construct — so the only first-class use of `(...)` in a type
-stays the tuple constructor (with commas). Canonical spellings are paren-free
-where the chain suffices (int[3]^, not (int[3])^).
+const is a tracked TypeRef qualifier (Form::kConst) — the placement above IS the
+deep/shallow distinction. It is TRANSPARENT for matching (strip/deepStrip see
+through it) but VISIBLE in spell(); ENFORCEMENT defers with the const-correctness
+work. Round-trip: intern() peels a leading `const ` FIRST (loosest), and the
+grouping parens ride the size-1-tuple collapse ((T) -> T) — so `(const int)` stays
+parenthesized only when const-bearing, keeping a following suffix OUTSIDE it
+(shallow). `mutable` is a pointer/iterator PARAMETER qualifier only (rejected
+elsewhere). The only first-class use of `(...)` in a type stays the tuple
+constructor (with commas). Canonical spellings are paren-free where the chain
+suffices (int[3]^, not (int[3])^).
 
 
 OPERAND-SIDE ALGEBRA  (validates the type design; not new code)
@@ -244,16 +249,18 @@ only at the call site (and in the array shorthand, which still passes a pointer)
 
 mungeParamTypes — the PARAM-TYPE REWRITE HOOK (resolve), over each resolved param:
   primitive          -> pass through (by value)
-  array  (kArray)    -> by pointer, semantically deref'd at use, INVISIBLE to the
-                        author (codegen receives a `ptr` and binds the param's
-                        alloca to it — no copy, no `^` in the body)
-  pointer (^ / [])   -> pointer-to-CONST: `int^ p` is sugar for `(const int)^ p`
+  array  (kArray)    -> by pointer (to a CONST array unless `mutable`): semantically
+                        deref'd at use, INVISIBLE to the author (codegen receives a
+                        `ptr` and binds the param's alloca to it — no copy, no `^`)
+  pointer (^ / [])   -> pointer-to-CONST pointee unless `mutable`: `int^ p` becomes
+                        `(const int)^ p`, `int[] q` becomes `(const int)[] q`
   everything else    -> COMPILE ERROR (a non-primitive parameter must be a pointer
                         or an array)
-The hook belongs HERE now even though the pointer-to-const rewrite is INERT until
-const lands (const is an entry kind, not yet a type qualifier — Phase 6).
-Installing it in the right place keeps the future const default from being a
-retrofit. The OTHER arms (primitive / array / reject) are live now.
+All arms are LIVE: the pointer/array pointee-const rewrite runs (const is now a
+real TypeRef qualifier), `mutable` opts out, and the synthesized method receiver
+`_$recv` is SKIPPED (const methods are Phase 6). `##type` shows the munged type.
+Still INERT until Phase 6: ENFORCEMENT (nothing rejects a write through the const
+pointee yet) — see plan.txt Phase 6.
 
 Call side: emitCall splits the by-pointer arg into the lvalue arm (pass &arg
 directly via emitLvalueAddr) and the rvalue arm (materialize via stacksave/
@@ -297,7 +304,8 @@ SETTLED
   param is a COMPILE ERROR — the declaration is always the pointer (`String^ s`),
   and value-spelling (`f(s)`) is a CALL-SITE convenience. Sole exception: the array
   shorthand `int a[3]` (a pointer, indexed without a deref). Done via the
-  mungeParamTypes hook (resolve); its pointer-to-const arm defers to Phase 6.
+  mungeParamTypes hook (resolve); the pointer-to-const arm is LIVE (`mutable`
+  opts out), only its ENFORCEMENT defers to Phase 6.
 - untyped destructure slot resolving in an enclosing scope: assign into the outer
   variable (reuse).
 - BOTH pointer kinds are RESEATABLE and NULLABLE (long-standing spec): `r = ^y`

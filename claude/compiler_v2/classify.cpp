@@ -579,6 +579,12 @@ int argConvertCost(parse::Node const& a, widen::TypeRef param) {
         }
     }
     if (at == widen::kNoType) return -1;
+    // An already-a-pointer arg vs a pointer param: rank by the implicit-pointer
+    // relation, which deep-strips const/alias — so a `T^` arg matches a munged
+    // `(const T)^` param (const is transparent; no enforcement yet).
+    if (isPtrLikeType(at) && isPtrLikeType(param)) {
+        return ptrImplicitOk(at, param) ? 0 : -1;
+    }
     if (sameClass(at, param)) return 0;
     if (literalFlexes(a)) {
         return literalFitsContext(a, param) ? 1 : -1;   // weak literal flexes into param
@@ -963,6 +969,27 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // check the explicit-cast rules. The cast's type IS the target.
             assert(e.children.size() == 1 && "kCastExpr needs 1 operand");
             parse::Node& operand = *e.children[0];
+            // `<const>` / `<mutable>` — a qualifier-only cast: keep the operand's
+            // pointer type, add / remove const. Applies to a reference or iterator
+            // (canon: const is added to / removed from "pointers"). The value is
+            // unchanged (const is erased in IR), so codegen needs no special case.
+            if (e.text == "const" || e.text == "mutable") {
+                inferExpr(tree, operand, widen::kNoType, diag);
+                if (operand.inferred_type != widen::kNoType) {
+                    if (!isPtrLikeType(operand.inferred_type)) {
+                        diagnostic::report(diag, {e.file_id, e.tok,
+                            "A '<" + e.text + ">' qualifier cast applies only to a "
+                            "pointer (reference / iterator); got '"
+                            + widen::spellOrEmpty(operand.inferred_type) + "'.", {}});
+                        e.inferred_type = operand.inferred_type;   // recover
+                        return;
+                    }
+                    e.inferred_type = (e.text == "const")
+                        ? widen::internConst(operand.inferred_type)
+                        : widen::removeConst(operand.inferred_type);
+                }
+                return;
+            }
             inferExpr(tree, operand, widen::kNoType, diag);
             std::string to = widen::spellOrEmpty(e.return_type);
             // An empty operand type means inferExpr already reported an error;

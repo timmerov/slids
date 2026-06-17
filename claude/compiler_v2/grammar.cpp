@@ -156,6 +156,24 @@ struct Parser {
     std::string parseType(std::vector<int>* seg_toks = nullptr,
                           bool reject_array_dims = false,
                           std::vector<std::unique_ptr<parse::Node>>* dim_sink = nullptr) {
+        // `mutable` is a PARAMETER qualifier only — parseParamList consumes it before
+        // the type, so reaching it here means a non-parameter position (return type,
+        // var decl, tuple slot, cast target, ...).
+        if (peek().kind == token::Kind::kMutable) {
+            error("The 'mutable' qualifier may only appear on a function parameter.");
+            return "";
+        }
+        // A leading `const` qualifies the WHOLE following type (binds loosest), so
+        // `const T^` is a const pointer to const data (deep). To const-qualify only a
+        // pointee, group it: `(const T)^`. The spelling round-trips: intern() peels a
+        // leading `const ` first, and a `(const T)` group is preserved below so a
+        // suffix lands OUTSIDE the parens.
+        if (peek().kind == token::Kind::kConst) {
+            advance();   // const
+            std::string rest = parseType(seg_toks, reject_array_dims, dim_sink);
+            if (rest.empty()) return "";
+            return "const " + rest;
+        }
         std::string type;
         if (peek().kind == token::Kind::kLParen) {
             // Anonymous tuple type `(T0, T1, ...)`. A size-1 `(T)` collapses to T
@@ -179,7 +197,11 @@ struct Parser {
             }
             if (!expect(token::Kind::kRParen, ")")) return "";
             if (elems.size() == 1) {
-                type = elems[0];
+                // A 1-tuple `(T)` collapses to grouping. PRESERVE the parens when the
+                // sole element is const-qualified, so a following `^`/`[]` suffix binds
+                // OUTSIDE the const — `(const T)^` (shallow), not `const T^` (deep).
+                type = (elems[0].compare(0, 6, "const ") == 0)
+                       ? "(" + elems[0] + ")" : elems[0];
             } else {
                 type = "(";
                 for (std::size_t i = 0; i < elems.size(); i++) {
@@ -376,7 +398,12 @@ struct Parser {
         d.file_id = peek().file_id;
         d.tok = pos;
         std::vector<std::unique_ptr<parse::Node>> type_dims;
+        // A leading `const` (type qualifier) or `mutable` (a misplaced param qualifier,
+        // diagnosed by parseType) begins a type. At a statement-level var decl the
+        // `const` is the named-constant marker and is already consumed before here, so
+        // these only fire for params / class fields / inner type positions.
         bool has_type = isTypeStart(peek().kind) || looksLikeQualifiedTypedDecl()
+            || peek().kind == token::Kind::kConst || peek().kind == token::Kind::kMutable
             || (peek().kind == token::Kind::kLParen && looksLikeTupleTypeDecl());
         if (has_type) {
             d.type = parseType(&d.type_seg_toks,
@@ -1097,6 +1124,26 @@ struct Parser {
             int op_file = peek().file_id;
             int op_tok = pos;
             advance();   // <
+            // `<const>` / `<mutable>` — a qualifier-ONLY cast: the angle brackets
+            // hold just the keyword (no type), and the result keeps the operand's
+            // pointer type with const added / removed. `<const Type^>` (a const-
+            // qualified TARGET) is a normal type cast — disambiguated by a `>`
+            // immediately after `const`. classify derives the result type from the
+            // operand, so no target type is parsed here.
+            if (peek().kind == token::Kind::kMutable
+                || (peek().kind == token::Kind::kConst
+                    && peekKind(1) == token::Kind::kGt)) {
+                std::string qual =
+                    (peek().kind == token::Kind::kMutable) ? "mutable" : "const";
+                advance();   // const / mutable
+                if (!expect(token::Kind::kGt, ">")) return nullptr;
+                auto operand = parseUnary();
+                if (!operand) return nullptr;
+                auto node = newNodeAt(parse::Kind::kCastExpr, op_file, op_tok);
+                node->text = qual;   // marks a qualifier cast (target derived in classify)
+                node->children.push_back(std::move(operand));
+                return node;
+            }
             std::vector<int> target_seg_toks;
             std::vector<std::unique_ptr<parse::Node>> cast_dims;
             std::string target = parseType(&target_seg_toks,
@@ -2513,13 +2560,21 @@ struct Parser {
     // default in children[0]). Consumes the closing `)`. Shared by a function
     // def's parameters and a class def's field list (a class field is a slid
     // param). Returns false on a parse error.
-    bool parseParamList(parse::Node* node) {
+    // `allow_mutable` distinguishes a function/method parameter list (where the
+    // `mutable` pointer-qualifier is legal) from a class FIELD list (where it is not —
+    // a field is a non-parameter; parseType then diagnoses the misplaced keyword).
+    bool parseParamList(parse::Node* node, bool allow_mutable = true) {
         while (peek().kind != token::Kind::kRParen) {
-            // `[type] name [= constexpr]` — the type is optional; a typeless
+            // `[mutable] [type] name [= constexpr]` — the type is optional; a typeless
             // param infers its type from its default value (resolve/classify
             // enforce that a typeless param HAS a default, and required-before-
             // optional ordering). Name-anchored array dims (`int f(int a[3])`)
             // ride on the name, same form as a var decl.
+            bool is_mutable = false;
+            if (allow_mutable && peek().kind == token::Kind::kMutable) {
+                is_mutable = true;
+                advance();   // mutable
+            }
             Declarator pd;
             if (!parseDeclarator(NamePolicy::Required, /*parse_name_dims=*/true,
                                  /*allow_qualified=*/false,
@@ -2529,6 +2584,7 @@ struct Parser {
             auto p = newNodeAt(parse::Kind::kParam, pd.file_id, pd.tok);
             p->name = std::move(pd.name);
             p->name_tok = pd.name_tok;
+            p->is_mutable = is_mutable;
             p->return_type = widen::internOrNone(pd.type);
             if (pd.any_dim_expr) p->dim_exprs = std::move(pd.dim_exprs);
             if (peek().kind == token::Kind::kEquals) {
@@ -2569,7 +2625,7 @@ struct Parser {
         node->name = name;
         node->name_tok = name_tok;
 
-        if (!parseParamList(node.get())) return nullptr;
+        if (!parseParamList(node.get(), /*allow_mutable=*/false)) return nullptr;
         if (!expect(token::Kind::kLBrace, "{")) return nullptr;
 
         std::string recv_type = name + "^";   // the implicit receiver param's type

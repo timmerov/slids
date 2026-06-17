@@ -12,6 +12,7 @@ SAMPLES = \
 	bug \
 	hello \
 	macros \
+	mutable \
 	namespace \
 	sizeof
 

@@ -1,0 +1,26 @@
+char[]
+(const char)[]
+int
+(const (int, int))^
+const int^
+(const int)^
+(const int)^
+7
+(const int, int)
+9
+(const (const int, int))^
+(const int, const char[])
+((const int, int), int)
+((const int)[2], int)
+7
+20
+const int^
+const int^
+int^
+7
+(const Box)^
+const Box^
+(const Box)^
+CI
+7
+CI^

@@ -94,6 +94,8 @@ std::string llvmForRef(widen::TypeRef ref) {
         }
         case widen::Type::Form::kAlias:
             return llvmForRef(t.underlying);   // transparent — lower the underlying
+        case widen::Type::Form::kConst:
+            return llvmForRef(t.underlying);   // const is erased at the IR level
         case widen::Type::Form::kNone:
             break;   // not lowerable (kNone = no type reached codegen)
     }

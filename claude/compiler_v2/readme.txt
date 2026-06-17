@@ -45,9 +45,9 @@ TYPE REPRESENTATION (the carrier; not a stage)
   * Types are STRUCTURED, never strings. A type is a widen::TypeRef — a handle
     into a process-lifetime interned arena (widen::intern / widen::spell). A
     widen::Type carries a Form (kNone / kPrimitive / kVoid / kAnyptr / kPointer /
-    kIterator / kArray / kSlid / kTuple / kAlias) plus its payload (cat+bits,
-    pointee, elem+dims, slots, underlying). spell(intern(s)) == s exactly (bar
-    kAlias, which is minted not parsed), guarded by `slidsc --type-selftest`.
+    kIterator / kArray / kSlid / kTuple / kAlias / kConst) plus its payload (cat+
+    bits, pointee, elem+dims, slots, underlying). spell(intern(s)) == s exactly
+    (bar kAlias, which is minted not parsed), guarded by `slidsc --type-selftest`.
   * Dedup is STRUCTURAL (by_struct, keyed on form + child handles), NOT by
     spelling — int / int32 / intptr still stay DISTINCT (their spellings differ)
     yet share cat()/bits(), but an alias-bearing composite (`(Dir,bool)`, `Dir^`)
@@ -63,6 +63,19 @@ TYPE REPRESENTATION (the carrier; not a stage)
     sees through to `underlying` for every structural query (classify / llvm /
     size / known / the form-predicate cluster via strip). Aliases + enum type
     facets are kAlias; alias_label is now a derived display cache, not a channel.
+  * kConst is the const qualifier — a facet wrapping `underlying`, like kAlias:
+    TRANSPARENT for matching (strip / deepStrip / classify / isKnownType /
+    typeByteSize see through it; deepStrip ERASES it, so `(const T)^` == `T^` for
+    equality) but VISIBLE in spell() (`const T`, and a const child under a `^`/`[]`/
+    `[N]` suffix parenthesizes to `(const T)^`). NO enforcement yet — const is a
+    representation-only qualifier (Phase 6 enforces). Placement encodes deep vs
+    shallow: an OUTER kConst is `const T^` (the whole pointer + its data are const);
+    a kConst on the pointee is `(const T)^` (mutable pointer, const data). intern()
+    peels a leading `const ` FIRST so the prefix binds loosest (deep); the
+    parenthesized form keeps const inside, so the suffix lands outside (shallow).
+    Helpers: internConst (collapses const-const, drops on kNoType), removeConst
+    (strips every const, rebuilding wrappers; preserves aliases — the `<mutable>`
+    transform). leafIsKnownClass / requireKnownType's leaf-walk peel kConst too.
   * Every type FIELD is a TypeRef: Node.return_type / inferred_type / op_type /
     nominal_type / strong_type and Entry.slids_type / const_strong_type /
     param_types / capture_types (both parse:: and ast::), plus codegen::VarInfo.
@@ -1046,7 +1059,12 @@ STAGE FILES (.h / .cpp pairs)
             EVERY pointer-assignment site — kVarDeclStmt init, kAssignStmt, and
             kStoreStmt (a references-array element / deref slot) — gated on a
             pointer being involved (pure-numeric assignments keep the width path).
-            The kCastExpr arm validates the explicit rule and stamps the target.
+            The kCastExpr arm validates the explicit rule and stamps the target;
+            a `<const>` / `<mutable>` qualifier cast (grammar marks it via the
+            node's text — the angle brackets hold only the keyword) instead DERIVES
+            the result from the operand (internConst / removeConst), requiring a
+            pointer operand. Value-preserving: const is erased in IR, so codegen's
+            kCastExpr is unchanged (widen::convert strips const -> a no-op).
             The kConvertExpr arm (`(Type = expr)`, Phase 4) infers the operand
             with NO context (it retypes, never flexes) then dispatches to
             checkConvertCompat — a lockstep recursive walk of target vs source:
