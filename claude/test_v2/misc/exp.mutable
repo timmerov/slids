@@ -24,3 +24,33 @@ const Box^
 CI
 7
 CI^
+(const int)[3]
+4
+(const int, const int)
+5
+const (const int)^
+7
+const (const int, const int)^
+(const int, const int)
+4
+const (const int)[]
+3
+const Box
+9
+const Pt
+3
+9
+((const int, const int), const int)
+(const int)[2][3]
+6
+A3
+3
+4
+9
+3
+5
+1
+Res.ctor
+const Res
+5
+Res.dtor

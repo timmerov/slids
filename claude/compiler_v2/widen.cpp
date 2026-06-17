@@ -967,6 +967,44 @@ TypeRef removeConst(TypeRef ref) {
     return ref;
 }
 
+TypeRef deepConst(TypeRef ref) {
+    Type const& t = get(ref);
+    switch (t.form) {
+        // An array / tuple is not-mutable when each ELEMENT / SLOT is — the
+        // container is not separately assignable. No outer const.
+        case Type::Form::kArray: {
+            TypeRef e = t.elem;
+            std::vector<int> d = t.dims;
+            return internArray(deepConst(e), d);
+        }
+        case Type::Form::kTuple: {
+            std::vector<TypeRef> s = t.slots;
+            for (TypeRef& x : s) x = deepConst(x);
+            return internTuple(s);
+        }
+        // A pointer / iterator is not-mutable when it can neither reseat (const on
+        // the pointer) NOR write through (const on the pointee) — deep, both.
+        case Type::Form::kPointer:  { TypeRef p = t.pointee; return internConst(internPointer(deepConst(p))); }
+        case Type::Form::kIterator: { TypeRef p = t.pointee; return internConst(internIterator(deepConst(p))); }
+        case Type::Form::kAlias: {
+            std::string n = t.name;
+            TypeRef u = t.underlying;
+            return internAlias(n, deepConst(u));
+        }
+        case Type::Form::kConst:    return internConst(deepConst(t.underlying));
+        // A leaf (primitive / class) const-qualifies directly. void / anyptr / none
+        // carry no const.
+        case Type::Form::kPrimitive:
+        case Type::Form::kSlid:
+            return internConst(ref);
+        case Type::Form::kVoid:
+        case Type::Form::kAnyptr:
+        case Type::Form::kNone:
+            return ref;
+    }
+    return ref;
+}
+
 TypeRef strip(TypeRef ref) {
     while (get(ref).form == Type::Form::kAlias
         || get(ref).form == Type::Form::kConst) ref = get(ref).underlying;

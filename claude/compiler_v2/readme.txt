@@ -75,7 +75,16 @@ TYPE REPRESENTATION (the carrier; not a stage)
     parenthesized form keeps const inside, so the suffix lands outside (shallow).
     Helpers: internConst (collapses const-const, drops on kNoType), removeConst
     (strips every const, rebuilding wrappers; preserves aliases — the `<mutable>`
+    transform), deepConst (the MIRROR — const-qualifies every MUTABLE position:
+    array elem, tuple slot, pointer + pointee; the `const`-declared-variable
     transform). leafIsKnownClass / requireKnownType's leaf-walk peel kConst too.
+    A `const`-declared LOCAL whose type is a foldable SCALAR is a SUBSTITUTED named
+    constant; a non-scalar one (array / tuple / class / pointer / iterator) is a
+    not-mutable VARIABLE — resolve's constNeedsStorage gate routes it to a kLocalVar
+    with a deepConst type instead of the substitution path (unenforced; behaves as an
+    ordinary local). At a NON-RUNTIME scope (file / namespace / class body) a
+    non-scalar const is a global -> "requires global storage" (Phase 8). ast
+    `is_const` means "substituted constant", set from the entry kind in desugar.
   * Every type FIELD is a TypeRef: Node.return_type / inferred_type / op_type /
     nominal_type / strong_type and Entry.slids_type / const_strong_type /
     param_types / capture_types (both parse:: and ast::), plus codegen::VarInfo.
@@ -432,7 +441,9 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     leaf; a member type names itself qualified for ##type (memberQualifiedName).
   * LOCAL CLASSES — a class may be defined in ANY function body, and in any nested
     block within one (if / else / loop / switch case). resolveStmtList runs a
-    local-class pre-pass over EACH scope's statements before resolving them, so a
+    local-class pre-pass over EACH scope's statements before resolving them — and
+    before the const pre-pass, so a `const LocalClass c` decl's type resolves
+    (resolveFunctionBody and resolveStmtList both register classes first) — so a
     use may precede the definition in that scope, and the class registers in that
     block's frame (drops at scope exit). Shadowing falls out of innermost-first
     lexical lookup — a local class shadows any same-named class in an enclosing
@@ -793,9 +804,9 @@ STAGE FILES (.h / .cpp pairs)
             lvalue chain's base local (markLvalueBaseRead) — a bare `x += v`, a
             deref `p^ += v`, and an index `a[i] += v` all count the target as used
             for the sweep (resolveStoreTarget alone marks only the write side).
-            Consts and
-            params are exempt (consts substituted away; params not in
-            body_locals). Control-flow joins are modeled by a Completion
+            A SUBSTITUTED const (foldable scalar) and params are exempt (substituted
+            away / not in body_locals); a const VARIABLE (non-scalar) is a real local
+            and IS swept. Control-flow joins are modeled by a Completion
             { Normal, Abrupt } that resolveStmt RETURNS: return / break / continue
             are Abrupt, everything else Normal.
             resolveStmtList threads it over a statement list — a statement after

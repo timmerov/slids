@@ -26,13 +26,17 @@ BUGS (found, deferred)
     same index/deref chain), and a runtime index can't be compared statically anyway.
     Low priority. Widen isSameLvalue when complex-lvalue equality is wanted.
 
-  * constant tuples, arrays, classes - the error message is misleading.
-    what exactly are there?
-    unlike most constants, they're actually allocated and initialized.
-    const int arr[3] = (1,2,3); an array of 3 const ints.
-    const (int,int) tuple = (1,2); a not-mutable tuple of 2 ints.
-    const String s = "hi"; a not-mutable string.
+  * TYPELESS CONST AGGREGATE — `const a = (1,2,3)` (no declared type) should infer
+    as a const VARIABLE, like the typed `const int a[3] = (1,2,3)` form. The type is
+    unknown at resolve, so it stays on the substitution path and mis-reports "not a
+    constant expression". Make typeless-const inference distinguish a foldable scalar
+    (substitute) from an aggregate / pointer (route to a not-mutable variable).
+    Pinned by a //-EXPECT-ERROR-DEFERRED in test_v2/misc/mutable.sl.
 
+  * we don't have tuples of size 1 so we can't initialize arrays of size 1.
+    these should work but they're compile errors.
+    int arr[1] = 5;
+    int arr[1] = (5);
 
 DEFERRED FEATURES (later; may not be on the plan)
 
@@ -124,17 +128,6 @@ DEFERRED FEATURES (later; may not be on the plan)
         blocked on operator overloading existing (Phase 5+; op<-- does not parse).
     cast.sl's const-correctness lines + the deep-const local forms in mutable.sl
     stay syntax-only until this lands.
-
-  * CONST `(const T)[N]` STATEMENT-LOCAL DECLARATOR GAP — a parenthesized const
-    type with a SIZED-array suffix as a statement-level local (`(const int)[3] a;`,
-    `(const int, int)[2] a;`) does not parse: the parenthesized-type-decl lookahead
-    admits only `^` / `[]`, not `[N]`. Fine as a tuple SLOT (`((const int)[2], int)`)
-    or a parameter. Pre-existing declarator gap, not const-specific. (Related: a
-    leading `const` at a statement START routes to the named-CONSTANT path — for a
-    SCALAR that's a substituted constant, but for a tuple/array/class it gives a
-    MISLEADING error; those are allocated + initialized const-qualified VARIABLES —
-    see the const-aggregate BUG above. A const-qualified scalar local is written in
-    a type position, `(const int)^ r`.)
 
   * FOR-CLASS — needs classes + a for-each
     protocol (op[]/size or begin/end/next, Phase 5). Lowers to a kForLongStmt in

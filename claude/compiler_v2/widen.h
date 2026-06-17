@@ -133,6 +133,13 @@ std::string classSymbol(TypeRef ref);
 // pointer/iterator/array/tuple structure; only kConst facets are dropped.
 TypeRef removeConst(TypeRef ref);
 
+// Const-qualify every MUTABLE position of a type — the mirror of removeConst, used
+// to make a `const`-declared aggregate / pointer a not-mutable VARIABLE. An array
+// const-qualifies its element (`(const int)[3]`), a tuple each slot, a pointer /
+// iterator BOTH the pointer itself and its pointee (deep: `const (const int)^`), a
+// primitive / class the leaf. So not-mutability survives index / slot / deref.
+TypeRef deepConst(TypeRef ref);
+
 // Peel any alias layers, returning the first non-alias handle (the underlying
 // structure). Predicates that switch on form() use this to see through aliases.
 TypeRef strip(TypeRef ref);

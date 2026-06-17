@@ -607,9 +607,11 @@ Phase 6 — const correctness
   through it) but VISIBLE in spell(). Placement encodes deep vs shallow: an OUTER
   kConst is `const T^` (deep — the whole pointer + its data); a kConst pointee is
   `(const T)^` (shallow). Helpers: internConst (collapses const-const), removeConst
-  (drops every const, keeps structure/aliases). intern() peels a leading `const `
-  FIRST (so the prefix binds loosest); spell() parenthesizes a const child under a
-  `^`/`[]`/`[N]` suffix so the shallow form round-trips.
+  (drops every const, keeps structure/aliases), deepConst (the MIRROR — const-
+  qualifies every mutable position: array elem, tuple slot, pointer + pointee).
+  intern() peels a leading `const ` FIRST (so the prefix binds loosest); spell()
+  parenthesizes a const child under a `^`/`[]`/`[N]` suffix so the shallow form
+  round-trips.
   * pass-by-ref-to-const munge (mungeParamType): a non-`mutable` reference /
     iterator param's pointee becomes const (`T^`->`(const T)^`, `T[]`->`(const T)[]`),
     an array param -> pointer to a const array; primitive by value untouched; the
@@ -618,6 +620,14 @@ Phase 6 — const correctness
     rejected on a non-pointer param, a class field, and any non-parameter position.
   * `<const>` / `<mutable>` qualifier casts + full-type `<const T^>` / `<T^>` —
     add / remove const on a pointer (value-preserving; const erased in IR).
+  * CONST VARIABLES (non-scalar leading `const`): a leading `const` on an array /
+    tuple / class / pointer / iterator LOCAL is a not-mutable VARIABLE (allocated +
+    initialized), not a substituted constant — resolve's constNeedsStorage gate
+    routes it to a kLocalVar with a deepConst-wrapped type; a foldable SCALAR const
+    stays substituted. A non-scalar const at a NON-RUNTIME scope (file / namespace /
+    class body) is a global -> "requires global storage" (Phase 8). ast `is_const`
+    now means "substituted constant" (set from the entry kind in desugar). Canon:
+    test_v2/misc/mutable.sl.
 
   ENFORCEMENT — STILL THIS PHASE (none landed; const is transparent for now, so
   the const->mutable direction is silently accepted):
@@ -631,16 +641,14 @@ Phase 6 — const correctness
     once operator overloading + those operators exist — Phase 5+)
   * goal B (publish-side via transport `.slt` -> `.slh`) — design-level only
 
-  KNOWN LIMITATIONS (const, syntax phase): a leading `const` at a statement/decl
-  START is the named-CONSTANT marker (needs an initializer), so a const-QUALIFIED
-  scalar local is written in a type position (`(const int)^ r`), not `const T x`.
-  TO REVISIT: for a tuple/array/class (`const int arr[3]=(1,2,3)`, `const (int,int)
-  t=(1,2)`, `const String s="hi"`) that path gives a MISLEADING error — those are
-  allocated + initialized const-qualified VARIABLES, not substituted constants;
-  route them off the named-const path (todo BUGS).
-  A parenthesized const type with a SIZED-array suffix as a statement-level local
-  (`(const int)[3] a;`) does not parse — the declarator lookahead admits only
-  `^`/`[]`; fine as a tuple slot or a parameter.
+  KNOWN LIMITATIONS (const): a leading `const` needs an initializer. On a foldable
+  SCALAR it is the named-CONSTANT marker (substituted); a SCALAR const-qualified
+  VARIABLE is written in a type position (`(const int)^ r`), since a leading
+  `const int x` IS the named constant. At a NAMED declarator a top-level sized dim
+  goes on the name, never inline — `(const int)[3] a` is rejected, the same as
+  `int^[3] v`; in a NAMELESS type position the dim is inline (`alias V =
+  (const int)[3]`). A TYPELESS const aggregate (`const a = (1,2,3)`) still
+  mis-routes to the substitution path (the form is unknown at resolve — todo.txt).
 
 Phase 7 — class advanced
   * reopens; incomplete-class semantics

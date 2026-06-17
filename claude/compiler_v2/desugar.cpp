@@ -306,7 +306,12 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     node->name_tok = p.name_tok;
     node->resolved_entry_id = p.resolved_entry_id;
     node->loop_levels = p.loop_levels;
-    node->is_const = p.is_const;
+    // ast.is_const means a SUBSTITUTED constant — codegen emits no storage for it.
+    // A const VARIABLE (a non-foldable type routed to kLocalVar in resolve) is NOT
+    // substituted: it has real storage, so it lowers with is_const=false even though
+    // declared `const` — its const-ness rides on its deep-const TYPE, not this flag.
+    node->is_const = p.is_const && p.resolved_entry_id >= 0
+        && tree.entries[p.resolved_entry_id].kind == parse::EntryKind::kConst;
     node->move_init = p.move_init;
     node->non_completing = p.non_completing;
     node->param_types = p.param_types;

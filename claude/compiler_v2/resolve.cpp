@@ -41,6 +41,18 @@ bool isReferenceType(widen::TypeRef t) {
     return widen::form(t) == widen::Type::Form::kPointer;
 }
 
+// A `const`-marked decl whose declared type is a FOLDABLE SCALAR (a primitive —
+// numeric / bool / char, or an enum facet, which strip peels to its underlying
+// primitive) is a SUBSTITUTED named constant. Any other KNOWN type (pointer /
+// iterator / array / tuple / class) is a not-mutable VARIABLE: allocated +
+// initialized, its type deep-const-qualified. A typeless const (kNoType — type
+// inferred later) stays on the substitution path. True iff the const is a variable
+// (needs real storage) rather than a substituted scalar.
+bool constNeedsStorage(widen::TypeRef t) {
+    return t != widen::kNoType
+        && widen::form(widen::strip(t)) != widen::Type::Form::kPrimitive;
+}
+
 int resolveName(parse::Tree const& tree, std::string const& name);
 
 // Is `name` a namespace/class member that is a TYPE (a hoisted class, a member
@@ -670,6 +682,14 @@ void registerMemberSignature(parse::Tree& tree, parse::Node& m, int ns_frame,
     }
     if (m.kind == parse::Kind::kVarDeclStmt && m.is_const) {
         resolveDeclType(tree, m.return_type, m.file_id, m.tok, diag);
+        // A non-scalar const at namespace scope is a not-mutable GLOBAL (allocated,
+        // not substituted) — globals are not yet built (Phase 8). Report it clearly
+        // instead of letting it reach the constant-fold "not a constant" sweep.
+        if (constNeedsStorage(m.return_type)) {
+            diagnostic::report(diag, {m.file_id, m.name_tok,
+                "A const variable of a non-scalar type (array, tuple, class, or "
+                "pointer) requires global storage, which is not yet supported.", {}});
+        }
         if (findMemberDeclared(tree, ns_frame, m.name) >= 0) {
             diagnostic::report(diag, {m.file_id, m.name_tok,
                 "Duplicate declaration of '" + m.name + "'.", {}});
@@ -811,6 +831,13 @@ void resolveInlineQualifiedDecl(parse::Tree& tree, parse::Node& s,
                                          s.global_qualified, s.file_id, diag);
     if (frame < 0) return;
     resolveDeclType(tree, s.return_type, s.file_id, s.tok, diag);
+    // A non-scalar const member is a not-mutable GLOBAL — globals are not yet built
+    // (Phase 8).
+    if (constNeedsStorage(s.return_type)) {
+        diagnostic::report(diag, {s.file_id, s.name_tok,
+            "A const variable of a non-scalar type (array, tuple, class, or "
+            "pointer) requires global storage, which is not yet supported.", {}});
+    }
     if (findMemberDeclared(tree, frame, s.name) >= 0) {
         diagnostic::report(diag, {s.file_id, s.name_tok,
             "Duplicate declaration of '" + s.name + "'.", {}});
@@ -2149,20 +2176,29 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                         "Duplicate declaration of '" + s.name + "'.",
                         {{prev.file_id, prev.tok, "first declared here"}}});
                 } else {
+                    // A const whose type isn't a foldable scalar is a not-mutable
+                    // VARIABLE, not a substituted constant (see constNeedsStorage):
+                    // route it to a local with a deep-const-qualified type. const is
+                    // not yet enforced (Phase 6).
+                    bool needs_storage = constNeedsStorage(s.return_type);
+                    bool as_const = s.is_const && !needs_storage;
                     parse::Entry e;
-                    e.kind = s.is_const ? parse::EntryKind::kConst
-                                        : parse::EntryKind::kLocalVar;
+                    e.kind = as_const ? parse::EntryKind::kConst
+                                      : parse::EntryKind::kLocalVar;
                     e.name = s.name;
-                    e.slids_type = s.return_type;
                     // A named type (alias / enum / qualified) erased to a different
                     // underlying — keep the as-declared spelling as the ##type label.
+                    // Compare BEFORE the const-wrap so the wrap isn't read as erasure.
                     if (declared != widen::spellOrEmpty(s.return_type)) e.alias_label = declared;
+                    if (s.is_const && needs_storage) s.return_type = widen::deepConst(s.return_type);
+                    e.slids_type = s.return_type;
                     e.file_id = s.file_id;
                     e.tok = s.name_tok;   // caret at the ident, not at 'const'/type
                     s.resolved_entry_id = parse::addEntry(tree, std::move(e));
-                    // Track body-declared locals for the unused sweep. Consts
-                    // are substituted away and never "unused" in this sense.
-                    if (!s.is_const) {
+                    // Track body-declared locals for the unused sweep. A substituted
+                    // const is folded away and never "unused"; a const VARIABLE is a
+                    // real local and IS swept.
+                    if (!as_const) {
                         tree.body_locals.push_back(s.resolved_entry_id);
                     }
                 }
@@ -3201,6 +3237,13 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         if (isArrayType(p->return_type))
             tree.assigned_arrays.insert(p->resolved_entry_id);
     }
+    // Local-class pre-pass for the body's TOP LEVEL. BEFORE the const pre-pass
+    // (so a const decl whose type names a body-local class — `const Class c = ...`
+    // — resolves) AND before the nested-function pre-pass (so a nested function may
+    // name a body-local class in its signature, `void use(LocalClass^ p)`).
+    // resolveStmtList's own pre-pass (covering nested blocks) is idempotent — it
+    // skips a class already registered here — so these don't double-register.
+    registerLocalClasses(tree, fn.children, diag);
     // Forward-decl pre-pass for kConst: pre-create entries so const init
     // expressions can reference later-declared consts in the same body.
     // Dup detection is deferred to the main pass below (which emits a single
@@ -3216,21 +3259,22 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         if (ch->return_type != widen::kNoType) {
             resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
         }
+        // A const whose type isn't a foldable scalar (array/tuple/class/pointer) is
+        // a not-mutable VARIABLE, not a substituted constant: route it to a local
+        // (allocated + initialized) with a deep-const-qualified type. const is not
+        // yet enforced (Phase 6), so it behaves as an ordinary local for now.
+        bool needs_storage = constNeedsStorage(ch->return_type);
+        if (needs_storage) ch->return_type = widen::deepConst(ch->return_type);
         parse::Entry e;
-        e.kind = parse::EntryKind::kConst;
+        e.kind = needs_storage ? parse::EntryKind::kLocalVar
+                               : parse::EntryKind::kConst;
         e.name = ch->name;
         e.slids_type = ch->return_type;
         e.file_id = ch->file_id;
         e.tok = ch->name_tok;
         ch->resolved_entry_id = parse::addEntry(tree, std::move(e));
+        if (needs_storage) tree.body_locals.push_back(ch->resolved_entry_id);
     }
-    // Local-class pre-pass for the body's TOP LEVEL — BEFORE the nested-function
-    // pre-pass, so a nested function may name a body-local class in its signature
-    // (`void use(LocalClass^ p)`). resolveStmtList's own pre-pass (which also
-    // covers nested blocks) is idempotent — it skips a class already registered
-    // here — so these don't double-register. A nested fn sits at the body top, so
-    // its signature can only name a top-of-body local class (or a file-scope one).
-    registerLocalClasses(tree, fn.children, diag);
     // Nested-function pre-pass: register each nested function's signature in this
     // body frame so the host (and the nested function's own body, for recursion)
     // can call it regardless of textual order. Deep nesting is unsupported.
@@ -3405,6 +3449,13 @@ void registerClassMembers(parse::Tree& tree, parse::Node& node, int frame,
         if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
             if (isDup(*m)) continue;
             resolveDeclType(tree, m->return_type, m->file_id, m->tok, diag);
+            // A non-scalar const class member is a not-mutable static/GLOBAL —
+            // globals are not yet built (Phase 8).
+            if (constNeedsStorage(m->return_type)) {
+                diagnostic::report(diag, {m->file_id, m->name_tok,
+                    "A const variable of a non-scalar type (array, tuple, class, or "
+                    "pointer) requires global storage, which is not yet supported.", {}});
+            }
             parse::Entry e;
             e.kind = parse::EntryKind::kConst;
             e.name = m->name;
@@ -4086,6 +4137,13 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             // in the inline-member pass below (the namespace must exist first).
             if (isQualified(*ch)) continue;
             resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
+            // A non-scalar const at file scope is a not-mutable GLOBAL (allocated,
+            // not substituted) — globals are not yet built (Phase 8).
+            if (constNeedsStorage(ch->return_type)) {
+                diagnostic::report(diag, {ch->file_id, ch->name_tok,
+                    "A const variable of a non-scalar type (array, tuple, class, or "
+                    "pointer) requires global storage, which is not yet supported.", {}});
+            }
             int existing = parse::findInFrame(tree, parse::currentFrameId(tree), ch->name);
             if (existing >= 0) {
                 parse::Entry const& prev = tree.entries[existing];
