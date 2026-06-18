@@ -11,6 +11,7 @@ SAMPLES = \
 	construct \
 	empty \
 	field \
+	initialize \
 	hoisted \
 	incomplete \
 	inheritance \

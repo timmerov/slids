@@ -209,6 +209,8 @@ DEFERRED FEATURES (later; may not be on the plan)
     statement/lvalue parse to accept a postfix-inc lvalue + desugar to lift the bump
     after the store.
 
+  * support statements like: tuple += 1; and ++tuple;
+
 
 DEFERRED TESTS
 

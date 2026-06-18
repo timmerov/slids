@@ -1,5 +1,6 @@
 /*
-test inferring types of class fields.
+test using class fields in statements and expressions.
+test inferring field types.
 
 */
 
