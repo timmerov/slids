@@ -657,3 +657,24 @@ negatives — one //-block uncommented per run.
 //    } (t);
 //    return 0;
 //}
+
+/* a VOID-typed condition (a `void^` dereference) — pre and post forms. */
+//-EXPECT-ERROR: A while condition must be a condition expression; type 'void' is not
+//int neg_while_void() {
+//    int x = 5;
+//    void^ p = ^x;
+//    while (p^) {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+//-EXPECT-ERROR: A while condition must be a condition expression; type 'void' is not
+//int neg_do_while_void() {
+//    int x = 5;
+//    void^ p = ^x;
+//    while {
+//        __println("dead");
+//    } (p^);
+//    return 0;
+//}

@@ -509,3 +509,15 @@ negatives — one //-block uncommented per run.
 //    }
 //    return 0;
 //}
+
+/* a VOID-typed condition: a `void^` dereference yields void, which reaches the
+   check — unlike a void CALL, caught earlier as "cannot be used as an expression". */
+//-EXPECT-ERROR: An if condition must be a condition expression; type 'void' is not
+//int neg_if_void() {
+//    int x = 5;
+//    void^ p = ^x;
+//    if (p^) {
+//        __println("dead");
+//    }
+//    return 0;
+//}

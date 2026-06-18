@@ -164,3 +164,27 @@ operator. a void operand is caught earlier as "cannot be used as an expression".
 //    __println("" + r);
 //    return 0;
 //}
+
+/* a VOID operand (a `void^` dereference yields void) — rejected for every operator,
+   like a tuple/array. (a void CALL is caught earlier as "cannot be used as an
+   expression"; a void^ deref is not, so it reaches the operator check.) */
+//-EXPECT-ERROR: Operator '!' is not defined on type 'void'
+//int neg_not_void() { int x = 5; void^ p = ^x; bool r = !p^; __println("" + r); return 0; }
+
+//-EXPECT-ERROR: Operator '&&' is not defined on type 'void'
+//int neg_and_void() { int x = 5; void^ p = ^x; bool r = true && p^; __println("" + r); return 0; }
+
+//-EXPECT-ERROR: Operator '||' is not defined on type 'void'
+//int neg_or_void() { int x = 5; void^ p = ^x; bool r = true || p^; __println("" + r); return 0; }
+
+//-EXPECT-ERROR: Operator '^^' is not defined on type 'void'
+//int neg_xor_void() { int x = 5; void^ p = ^x; bool r = true ^^ p^; __println("" + r); return 0; }
+
+//-EXPECT-ERROR: Operator '&&' is not defined on type 'void'
+//int neg_aug_and_void() { int x = 5; void^ p = ^x; bool b = true; b &&= p^; __println("" + b); return 0; }
+
+//-EXPECT-ERROR: Operator '||' is not defined on type 'void'
+//int neg_aug_or_void() { int x = 5; void^ p = ^x; bool b = true; b ||= p^; __println("" + b); return 0; }
+
+//-EXPECT-ERROR: Operator '^^' is not defined on type 'void'
+//int neg_aug_xor_void() { int x = 5; void^ p = ^x; bool b = true; b ^^= p^; __println("" + b); return 0; }

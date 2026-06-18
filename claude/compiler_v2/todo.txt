@@ -248,17 +248,6 @@ DEFERRED TESTS
     can't be locked by a .sl negative. Needs a caret-aware assertion the harness
     doesn't have.
 
-  * VOID CONDITION ARM (UNREACHABLE) — the condition-type check (isCoercibleToBool,
-    shared by the if / while / for-long conditions and the logical operators
-    `! && || ^^ &&= ||= ^^=`) rejects a non-bool-coercible condition. The TUPLE /
-    ARRAY / CLASS arms are now tested (flow/ifelse.sl, while.sl [incl. do-while],
-    forlong.sl; expression/condition.sl), and the POSITIVE pointer-like coercion
-    (a `^` reference / `[]` iterator as a condition or logical operand — non-null
-    true, null false) is tested in the same files. The VOID arm stays untested + unreachable:
-    a void call is caught earlier ("Function 'f' returns no value and cannot be used
-    as an expression"), so a void-typed condition can't reach the check. Add a
-    negative only if a void value ever reaches it.
-
   * FOR-TUPLE OVER CLASS ELEMENTS — What remains needs classes: by-VALUE iteration over a class element (a copy
     needs a constructor — not available) + the class copy/move machinery, and
     by-ref iteration once class-typed tuples exist. prerequisite: classes (Phase 5).

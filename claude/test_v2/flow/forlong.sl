@@ -618,3 +618,14 @@ negatives — one //-block uncommented per run.
 //    }
 //    return 0;
 //}
+
+/* a VOID-typed for-condition (a `void^` dereference). */
+//-EXPECT-ERROR: A for condition must be a condition expression; type 'void' is not
+//int neg_for_void() {
+//    int x = 5;
+//    void^ p = ^x;
+//    for (int i = 0) (p^) { i++; } {
+//        __println("dead");
+//    }
+//    return 0;
+//}
