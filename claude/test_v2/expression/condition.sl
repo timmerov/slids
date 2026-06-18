@@ -1,0 +1,142 @@
+/*
+test condition expressions.
+
+    ! && || ^^ &&= ||= ^^=
+
+the operands must be a condition-expression.
+anything that is zero-like (0, 0.0, nullptr, false) is false.
+everything else is true.
+arrays, tuples, functions returning void are not valid condition expressions.
+
+note:
+deferred until class operator overloads land.
+classes are valid if they override op!.
+*/
+
+/*
+claude says:
+
+the operand of `!`, and both operands of `&&` / `||` / `^^`, must coerce to bool
+(isCoercibleToBool: numeric or pointer-like — int/uint/float/bool/char, and `^`/`[]`
+incl. char[]). a TUPLE or ARRAY operand is rejected: "Operator 'X' is not defined on
+type 'Y'." (the negatives below). a void operand is caught EARLIER as "cannot be used
+as an expression" (so that arm is unreachable). a CLASS operand errors the same way
+today; it becomes valid only once operator overloading lands and the class defines
+op! — deferred (the //-EXPECT-ERROR-DEFERRED below).
+
+the SAME coercion governs the if / while / for CONDITIONS (flow/ifelse.sl, while.sl,
+forlong.sl) and the logical AUGMENTED-ASSIGN `&&=` / `||=` / `^^=` (same "Operator
+'X' is not defined" message). slids has no ternary `?:`.
+*/
+
+int32 main() {
+
+    return 0;
+}
+
+/*
+negatives — one //-block uncommented per run. a logical operator's operand must
+coerce to bool (numeric / pointer-like); a TUPLE or ARRAY operand is rejected. each
+operator is tested with a GOOD operand on one side and a BAD one on the other — a
+bare `if (badtype)` would exercise the IF-CONDITION check (tested in flow/), not the
+operator. a void operand is caught earlier as "cannot be used as an expression".
+*/
+
+// unary `!` — its sole operand must coerce.
+//-EXPECT-ERROR: Operator '!' is not defined on type '(int, int)'
+//int neg_not() {
+//    (int, int) t = (1, 2);
+//    bool r = !t;
+//    __println("" + r);
+//    return 0;
+//}
+
+// `&&` — a bad operand on either side.
+//-EXPECT-ERROR: Operator '&&' is not defined on type '(int, int)'
+//int neg_and_rhs() {
+//    (int, int) t = (1, 2);
+//    bool r = true && t;
+//    __println("" + r);
+//    return 0;
+//}
+
+//-EXPECT-ERROR: Operator '&&' is not defined on type '(int, int)'
+//int neg_and_lhs() {
+//    (int, int) t = (1, 2);
+//    bool r = t && true;
+//    __println("" + r);
+//    return 0;
+//}
+
+// `||` — a bad operand on either side.
+//-EXPECT-ERROR: Operator '||' is not defined on type 'int[2]'
+//int neg_or_rhs() {
+//    int a[2] = (1, 2);
+//    bool r = true || a;
+//    __println("" + r);
+//    return 0;
+//}
+
+//-EXPECT-ERROR: Operator '||' is not defined on type 'int[2]'
+//int neg_or_lhs() {
+//    int a[2] = (1, 2);
+//    bool r = a || true;
+//    __println("" + r);
+//    return 0;
+//}
+
+// `^^` — a bad operand on either side.
+//-EXPECT-ERROR: Operator '^^' is not defined on type '(int, int)'
+//int neg_xor_rhs() {
+//    (int, int) t = (1, 2);
+//    bool r = true ^^ t;
+//    __println("" + r);
+//    return 0;
+//}
+
+//-EXPECT-ERROR: Operator '^^' is not defined on type '(int, int)'
+//int neg_xor_lhs() {
+//    (int, int) t = (1, 2);
+//    bool r = t ^^ true;
+//    __println("" + r);
+//    return 0;
+//}
+
+// logical augmented-assign — the rhs operand must coerce (lhs is the bool target).
+//-EXPECT-ERROR: Operator '&&' is not defined on type '(int, int)'
+//int neg_aug_and() {
+//    bool b = true;
+//    (int, int) t = (1, 2);
+//    b &&= t;
+//    __println("" + b);
+//    return 0;
+//}
+
+//-EXPECT-ERROR: Operator '||' is not defined on type 'int[2]'
+//int neg_aug_or() {
+//    bool b = true;
+//    int a[2] = (1, 2);
+//    b ||= a;
+//    __println("" + b);
+//    return 0;
+//}
+
+//-EXPECT-ERROR: Operator '^^' is not defined on type '(int, int)'
+//int neg_aug_xor() {
+//    bool b = true;
+//    (int, int) t = (1, 2);
+//    b ^^= t;
+//    __println("" + b);
+//    return 0;
+//}
+
+/* a CLASS operand errors today (no op!), but becomes valid once operator
+   overloading lands and the class defines op! — deferred, not a permanent reject. */
+//-EXPECT-ERROR-DEFERRED: a class condition operand needs op! (operator overloading not landed)
+//int neg_not_class() {
+//    Box(int v_) { }
+//    Box b(1);
+//    bool r = !b;
+//    __println("" + r);
+//    return 0;
+//}

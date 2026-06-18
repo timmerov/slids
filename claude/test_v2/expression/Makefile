@@ -8,6 +8,7 @@ DIR       := $(notdir $(CURDIR))
 BUILD_DIR = ../../build/test_v2/$(DIR)
 
 SAMPLES = \
+	condition \
 	int \
 	mixed \
 	nonint \

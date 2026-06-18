@@ -597,3 +597,46 @@ negatives — one //-block uncommented per run.
 //    } (true);
 //    return n;
 //}
+
+/* a while condition's type must coerce to bool (numeric / pointer-like); a TUPLE,
+   ARRAY, or CLASS value is rejected — the same rule as the if condition, distinct
+   message. (A void-typed condition is caught earlier as "cannot be used as an
+   expression".) */
+//-EXPECT-ERROR: A while condition must be a condition expression
+//int neg_while_tuple() {
+//    (int, int) t = (1, 2);
+//    while (t) {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+//-EXPECT-ERROR: A while condition must be a condition expression
+//int neg_while_array() {
+//    int a[2] = (1, 2);
+//    while (a) {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+//-EXPECT-ERROR: A while condition must be a condition expression
+//int neg_while_class() {
+//    Box(int v_) { }
+//    Box b(1);
+//    while (b) {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+/* the POST-condition (do-while) form `while {body} (cond);` checks its condition
+   the same way — a distinct site from the pre-condition while. */
+//-EXPECT-ERROR: A while condition must be a condition expression
+//int neg_do_while_tuple() {
+//    (int, int) t = (1, 2);
+//    while {
+//        __println("dead");
+//    } (t);
+//    return 0;
+//}

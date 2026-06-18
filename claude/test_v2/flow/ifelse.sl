@@ -464,3 +464,35 @@ negatives — one //-block uncommented per run.
 //    }
 //    return 0;
 //}
+
+/* an if condition's type must coerce to bool (numeric / pointer-like). A TUPLE,
+   ARRAY, or CLASS value is none of these and is rejected. (A void-typed condition
+   would also be rejected, but a void call is caught earlier as "cannot be used as
+   an expression", so that arm stays unreachable.) */
+//-EXPECT-ERROR: An if condition must be a condition expression
+//int neg_if_tuple() {
+//    (int, int) t = (1, 2);
+//    if (t) {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+//-EXPECT-ERROR: An if condition must be a condition expression
+//int neg_if_array() {
+//    int a[2] = (1, 2);
+//    if (a) {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+//-EXPECT-ERROR: An if condition must be a condition expression
+//int neg_if_class() {
+//    Box(int v_) { }
+//    Box b(1);
+//    if (b) {
+//        __println("dead");
+//    }
+//    return 0;
+//}

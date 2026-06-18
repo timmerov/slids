@@ -574,3 +574,34 @@ negatives — one //-block uncommented per run.
 //    }
 //    return i;
 //}
+
+/* the long-for condition clause is author-written, so its type must coerce to bool
+   (numeric / pointer-like); a TUPLE, ARRAY, or CLASS value is rejected — the same
+   rule as the if / while condition, distinct message. */
+//-EXPECT-ERROR: A for condition must be a condition expression
+//int neg_for_tuple() {
+//    (int, int) t = (1, 2);
+//    for (int x = 0) (t) { x++; } {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+//-EXPECT-ERROR: A for condition must be a condition expression
+//int neg_for_array() {
+//    int a[2] = (1, 2);
+//    for (int x = 0) (a) { x++; } {
+//        __println("dead");
+//    }
+//    return 0;
+//}
+
+//-EXPECT-ERROR: A for condition must be a condition expression
+//int neg_for_class() {
+//    Box(int v_) { }
+//    Box b(1);
+//    for (int x = 0) (b) { x++; } {
+//        __println("dead");
+//    }
+//    return 0;
+//}
