@@ -70,7 +70,11 @@ Phase 1 — expression core (LANDED)
     phrase-site covered: statements (var-decl/assign/store/move/swap/destructure/
     return/call), if/while/do-while conditions, switch scrutinee, for start/end/step,
     call args, &&/|| rhs, and tuple-literal/destructure slots — lowerStatementPPID is
-    an exhaustive switch (assert backstop). Canon: expression/ppid.sl.       LANDED
+    an exhaustive switch (assert backstop). COMPLEX-LVALUE operands (array element,
+    deref, class field) flow through this same path: a hidden `_$lv` binds the leaf
+    address once (address-once) and the bump is an address-child kBumpExpr; bare /
+    complex × pre/post × statement/expression are ONE path (both grammar shortcuts
+    deleted). Canon: expression/ppid.sl.                                     LANDED
   * call-as-expression — kCallExpr via parsePostfix on a bare ident; shared
     resolveUserCall + emitCall with kCallStmt; void-return + print-intrinsic-
     as-expr rejected                                                   LANDED
@@ -420,26 +424,25 @@ Phase 4 — types beyond primitives
     OVERLOADABLE class `op<--`/`op<-->` + destructor-balance + class fields +
     whole-array move/swap is the Phase 5 / reach-goal piece.
     test_v2/expression/moveswap.sl.
-  * COMPLEX-LVALUE ASSIGNMENT FAMILY (`arr[i] += v`, `o.f++`, `p^ %= 2`, …) — LANDED.
+  * COMPLEX-LVALUE ASSIGNMENT FAMILY (`arr[i] += v`, `p^ %= 2`, …) — LANDED.
     The augmented-assign family (`+= -= *= /= %= <<= >>= &= |= ^=` + logical
-    `&&= ||= ^^=`) and the `++`/`--` STATEMENT form now apply to EVERY lvalue, not
-    just bare names — array element, tuple slot, class field, deref, and composed
-    chains (multi-dim, deref-then-field, iterator element). Grammar: the name-led
-    lvalue-chain path branches on the aug-assign tokens and `++`/`--` (a complex
-    `++`/`--` becomes `+= 1` / `-= 1`), emitting a 2-child kAugAssignStmt
-    ([lvalue, rhs]); the bare-name form keeps name-on-node + [rhs]. resolve routes
-    the complex form through resolveStoreTarget (+ markLvalueBaseRead: an aug-
-    assign is a read-modify-write, so the chain's base local is read-marked for the
-    unused sweep). classify infers the lvalue type from the chain (cached as
-    return_type) and runs the existing arith/widen/shift/logical checks. desugar's
-    tryDesugarAugAssign binds the leaf ADDRESS ONCE into a hidden `_$lv` reference
-    (`^lvalue` for index/field, the pointer for a deref target) then a kBlockStmt
-    `_$lv^ = _$lv^ op rhs` — reuses var-decl + deref-store + binary nodes, NO new
-    codegen, and a side-effecting index evaluates exactly once. Tuple-slot DA also
-    fixed (a slot write/aug assigns the in-place aggregate, may-set like arrays —
-    isInPlaceAggregate). Negatives reject a reference / non-primitive (sub-array) /
-    bitwise-on-float / narrowing leaf. Expression-embedded complex `++`/`--`
-    (`x = arr[i]++`) stays the PPID path (unchanged). test_v2/assign/lvalue.sl.
+    `&&= ||= ^^=`) now applies to EVERY lvalue, not just bare names — array element,
+    tuple slot, class field, deref, and composed chains (multi-dim, deref-then-field,
+    iterator element). Grammar: the name-led lvalue-chain path branches on the
+    aug-assign tokens, emitting a 2-child kAugAssignStmt ([lvalue, rhs]); the
+    bare-name form keeps name-on-node + [rhs]. resolve routes the complex form
+    through resolveStoreTarget (+ markLvalueBaseRead: an aug-assign is a read-modify-
+    write, so the chain's base local is read-marked for the unused sweep). classify
+    infers the lvalue type from the chain (cached as return_type) and runs the
+    existing arith/widen/shift/logical checks. desugar's tryDesugarAugAssign binds
+    the leaf ADDRESS ONCE into a hidden `_$lv` reference (`^lvalue` for index/field,
+    the pointer for a deref target) then a kBlockStmt `_$lv^ = _$lv^ op rhs` — reuses
+    var-decl + deref-store + binary nodes, NO new codegen, and a side-effecting index
+    evaluates exactly once. Tuple-slot DA also fixed (a slot write/aug assigns the
+    in-place aggregate, may-set like arrays — isInPlaceAggregate). Negatives reject a
+    reference / non-primitive (sub-array) / bitwise-on-float / narrowing leaf.
+    (`++`/`--` on a complex lvalue — statement AND expression — is the PPID entry
+    above, not this aug-assign path.) test_v2/assign/lvalue.sl.
   * type aliases — LANDED (value form `alias Name = type;`, file + function
     scope, transparent; resolveTypeRef substitutes the chain; desugar drops
     kAliasDecl; an alias TARGET may be a pointer type `alias IntPtr = int^;`. An

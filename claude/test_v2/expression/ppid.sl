@@ -86,10 +86,21 @@ covered here:
   - alias transparency: an inc on an alias-typed var (Counter=int32) stays a binary
     OPERAND whose own type drives the common-type rule (no spelling round-trip that
     would clobber 'Counter' to an unknown slid).
+  - COMPLEX-LVALUE operands: ++/-- on an array element, a deref, a class field
+    (`pt.v_` lowers to the index path), statement + expression, pre + post, inc +
+    dec. A hidden `_$lv` reference binds the leaf ADDRESS once (a side-effecting
+    index runs a single time, 1D and multi-dim), and the scalar read/bump split is
+    kept so post defers to the phrase exit (oo[0]++ + oo[0] -> old+old; two DISTINCT
+    elems tw[0]++ + tw[1]++). Element TYPES: int, float (steps by 1), iterator
+    (steps by one ELEMENT via GEP). Sub-phrase forms work too: a call arg
+    (show2(sp[0]++, ++sp[1])) and a short-circuited && rhs (false && sc[0]++ skips,
+    true && sc[1]++ bumps). One PPID path — both grammar shortcuts (the postfix
+    `arr[i]++;` aug-assign rewrite and the bare-ident-only prefix) are gone.
 
 negatives: ++ on a const, on bool (operator undefined), on a non-lvalue (5++), on
-a function name (main++), and a ppid on a complex (deref) lvalue (cp++^ = 7 ->
-"Expected ';'" — parseIncDecStmt commits to the bare `cp++;`).
+a function name (main++). Distinct from the supported complex OPERAND above: a ppid
+RESULT used as an assignment TARGET (cp++^ = 7 -> "Expected ';'" — parseIncDecStmt
+commits to the bare `cp++;`) is the deferred x++-as-lvalue gap, still rejected.
 
 fixed while writing these tests: tuple-literal slots not being separate phrases
 (kTupleExpr arm in lowerInPhrase); destructure rhs ppid (kDestructureStmt arm); and
@@ -102,9 +113,10 @@ separate bug — an earlier crash there was the destructure crash misattributed 
 assert fires at the first surviving inc/dec); lowerForLong already lowers it.
 
 not covered (aspirational):
-  - the complex-lvalue desugaring examples (`p++^ += 1`, `++(arr[k++]) = 5`,
-    `row[++k] += (10,20)`) need a compound assign on a COMPLEX lvalue, a parse
-    error today (see the deferred complex-lhs op= item).
+  - a ppid RESULT used as an assignment / compound-assign TARGET (`p++^ += 1`,
+    `++(arr[k++]) = 5`) — the deferred x++-as-lvalue gap, still a parse error.
+    (A complex OPERAND — `arr[i]++`, `++p^` — is covered above; what is missing is
+    treating the ppid's own result as a writable lvalue.)
 */
 
 int32 show2(int32 a, int32 b) {
@@ -114,6 +126,9 @@ int32 show2(int32 a, int32 b) {
 
 int32 retPost(int32 v) { return v++; }   // post: returns OLD v (bump embedded, then dead)
 int32 retPre(int32 v)  { return ++v; }   // pre: bump first, returns NEW v
+
+Pt(int32 v_) {                           // a one-field class, for field-operand ppid
+}
 
 int32 main() {
     int32 a = 1;
@@ -311,6 +326,93 @@ int32 main() {
     int32 mvb = 0;
     mvb <-- mva++;                                // move old mva into mvb, then mva bumps
     __println("mvb= " + mvb + " mva= " + mva);    // 5 6
+
+    /* COMPLEX-LVALUE ppid: ++/-- on an array element or a deref, in statement AND
+       expression position, prefix AND postfix. The leaf address is bound ONCE (a
+       side-effecting index evaluates a single time) and the scalar read/bump split
+       is preserved (post defers to the phrase exit). A class FIELD reduces to this
+       same path — `b.f` lowers to an index — so it needs no separate test. */
+    int32 cl[4] = (10, 20, 30, 40);
+    cl[0]++;                                      // statement post -> 11
+    ++cl[1];                                      // statement pre  -> 21
+    cl[2]--;                                      // statement post-dec -> 29
+    __println("cl= " + cl[0] + " " + cl[1] + " " + cl[2]);          // 11 21 29
+    int32 clp = cl[3]++;                          // expr post: reads 40, then cl[3]=41
+    int32 clq = ++cl[3];                          // expr pre: cl[3]=42, reads 42
+    __println("clp= " + clp + " clq= " + clq + " cl3= " + cl[3]);   // 40 42 42
+
+    int32 dv = 5;
+    int32^ dpp = ^dv;
+    dpp^++;                                       // statement post on a deref -> dv=6
+    int32 dr = dpp^++;                            // expr post on a deref: reads 6, dv=7
+    __println("dv= " + dv + " dr= " + dr);        // 7 6
+
+    /* address-once: a side-effecting index is evaluated a single time, for a 1D
+       and a multi-dim element. */
+    int32 ao[3] = (100, 200, 300);
+    int32 aok = 0;
+    ao[aok++]++;                                  // ao[0] bumps; aok read once -> ao[0]=101, aok=1
+    __println("ao0= " + ao[0] + " aok= " + aok); // 101 1
+
+    int32 md[2][3];
+    int32 mi = 0;
+    while (mi < 6) { md[mi/3][mi%3] = 0; mi = mi + 1; }
+    int32 mk = 0;
+    md[mk++][1]++;                                // 2D elem; outer index once -> md[0][1]=1, mk=1
+    __println("md01= " + md[0][1] + " mk= " + mk);   // 1 1
+
+    /* a complex operand inside a SUB-PHRASE (a call arg): each arg is its own
+       phrase, the bump fires at that phrase's exit. */
+    int32 sp[2] = (7, 8);
+    show2(sp[0]++, ++sp[1]);                      // show 7 9 ; sp -> 8 9
+    __println("sp= " + sp[0] + " " + sp[1]);      // 8 9
+
+    /* short-circuit on a complex operand: the && rhs bumps only when reached. */
+    int32 sc[2] = (3, 4);
+    bool scz = (false && (sc[0]++ > 0));          // skipped -> sc[0] unchanged
+    bool scw = (true && (sc[1]++ > 0));           // reached -> sc[1] bumps
+    __println("sc= " + sc[0] + " " + sc[1]);      // 3 5
+    __println("scz= " + scz + " scw= " + scw);    // false true
+
+    /* post defers to phrase exit, so a re-read in the same phrase sees the OLD
+       value — old+old, then the bump (consistent with the scalar `a++ + a`). */
+    int32 oo[2] = (7, 0);
+    int32 ooq = oo[0]++ + oo[0];                  // 7 + 7 = 14, then oo[0]=8
+    __println("ooq= " + ooq + " oo0= " + oo[0]);  // 14 8
+
+    /* a non-int (float) element steps by one; post reads the old value. */
+    float64 fl[2] = (1.5, 2.5);
+    fl[0]++;                                      // float element post -> 2.5
+    float64 flr = fl[1]--;                        // post-dec: reads 2.5, fl[1]=1.5
+    __println("fl= " + fl[0] + " " + fl[1] + " flr= " + flr);   // 2.5 1.5 2.5
+
+    /* decrement through a deref. */
+    int32 dd = 9;
+    int32^ ddp = ^dd;
+    ddp^--;                                       // -> dd=8
+    __println("dd= " + dd);                       // 8
+
+    /* two DISTINCT complex elements in one phrase: both posts defer to phrase exit. */
+    int32 tw[2] = (5, 50);
+    int32 twq = tw[0]++ + tw[1]++;                // 5 + 50 = 55, then tw -> 6, 51
+    __println("twq= " + twq + " tw= " + tw[0] + " " + tw[1]);   // 55 6 51
+
+    /* an ITERATOR element steps by one ELEMENT (pointer arithmetic), not by 1. */
+    int32 idata[4] = (10, 20, 30, 40);
+    int32[] its[2];
+    its[0] = ^idata[0];
+    its[1] = ^idata[2];
+    its[0]++;                                     // step element 0: now points at idata[1]
+    int32 ia = its[0]^;                           // 20
+    int32 ib = (its[1]++)^;                       // post: reads idata[2]=30, then steps
+    int32 ic = its[1]^;                           // 40
+    __println("ia= " + ia + " ib= " + ib + " ic= " + ic);      // 20 30 40
+
+    /* a class FIELD operand — `pt.v_` lowers to an index, the same complex path. */
+    Pt pt = 10;
+    pt.v_++;                                      // field post -> 11
+    int32 ptpre = ++pt.v_;                        // field pre  -> 12
+    __println("ptv= " + pt.v_ + " ptpre= " + ptpre);   // 12 12
 
     /* swap-OPERAND ppid (`x++ <--> y++`) is blocked at the PARSER — parseIncDecStmt
        commits to a bare `x++;` (the deferred x++-as-lvalue gap) — so the kSwapStmt

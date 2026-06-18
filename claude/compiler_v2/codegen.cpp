@@ -1341,53 +1341,76 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         }
         case ast::Kind::kSeqExpr: {
             // Children emit in order. The value_index child is the result
-            // (widened into dest_type); the rest are bumps run for effect.
+            // (widened into dest_type); the rest run for effect — bumps, or a
+            // PPID address-once binding (`_$lv = ^leaf`) carried as a
+            // kVarDeclStmt so a complex post-inc captures its leaf address at the
+            // read point, inside this (possibly short-circuited) subtree.
             assert(expr.value_index >= 0
                 && expr.value_index < static_cast<int>(expr.children.size())
                 && "kSeqExpr: value_index out of range");
             std::string result;
             for (size_t i = 0; i < expr.children.size(); i++) {
+                ast::Node const& ch = *expr.children[i];
                 if (static_cast<int>(i) == expr.value_index) {
-                    result = emitExpr(*expr.children[i], syms, pool, out, diag, dest_type);
+                    result = emitExpr(ch, syms, pool, out, diag, dest_type);
+                } else if (ch.kind == ast::Kind::kVarDeclStmt) {
+                    // `_$lv` is always a plain reference: its alloca was hoisted
+                    // by collectVarDecls, so emit only the address store here.
+                    auto it = syms.find(ch.resolved_entry_id);
+                    assert(it != syms.end() && "kSeqExpr: _$lv alloca not hoisted");
+                    std::string a = emitExpr(*ch.children[0], syms, pool, out, diag,
+                                             it->second.slids_type);
+                    out << "  store " << it->second.llvm_type << " " << a
+                        << ", ptr " << it->second.alloca_name << "\n";
                 } else {
-                    emitExpr(*expr.children[i], syms, pool, out, diag, widen::kNoType);
+                    emitExpr(ch, syms, pool, out, diag, widen::kNoType);
                 }
             }
             return result;
         }
         case ast::Kind::kBumpExpr: {
-            // `x = x ± 1` on a scalar variable; the returned register (the new
-            // value) is discarded by the enclosing seq.
-            assert(expr.resolved_entry_id >= 0 && "kBumpExpr: missing entry");
-            auto it = syms.find(expr.resolved_entry_id);
-            assert(it != syms.end() && "kBumpExpr: entry not in SymTab");
+            // `lvalue = lvalue ± 1`; the returned register (the new value) is
+            // discarded by the enclosing seq. Two forms share the int/float/
+            // iterator logic below, differing only in the leaf's ADDRESS and TYPE:
+            //   scalar  — resolved_entry_id names a variable; addr = its alloca.
+            //   complex — children[0] (the `_$lv` reference) loads to the leaf
+            //             address; the leaf type rides on inferred_type.
+            std::string addr;
+            widen::TypeRef leaf;
+            if (!expr.children.empty()) {
+                addr = emitExpr(*expr.children[0], syms, pool, out, diag,
+                                widen::kNoType);
+                leaf = expr.inferred_type;
+            } else {
+                assert(expr.resolved_entry_id >= 0 && "kBumpExpr: missing entry");
+                auto it = syms.find(expr.resolved_entry_id);
+                assert(it != syms.end() && "kBumpExpr: entry not in SymTab");
+                addr = it->second.alloca_name;
+                leaf = it->second.slids_type;
+            }
             // An iterator steps by one ELEMENT: load the ptr, GEP ±1, store.
-            if (isIteratorType(it->second.slids_type)) {
+            if (isIteratorType(leaf)) {
                 std::string cur = newTmp("itld");
-                out << "  " << cur << " = load ptr, ptr "
-                    << it->second.alloca_name << "\n";
-                std::string elem_ll = llvmForRef(pointeeTypeC(it->second.slids_type));
+                out << "  " << cur << " = load ptr, ptr " << addr << "\n";
+                std::string elem_ll = llvmForRef(pointeeTypeC(leaf));
                 std::string nv = newTmp("itinc");
                 out << "  " << nv << " = getelementptr " << elem_ll << ", ptr "
                     << cur << ", i64 " << (expr.text == "++" ? "1" : "-1")
                     << "\n";
-                out << "  store ptr " << nv << ", ptr "
-                    << it->second.alloca_name << "\n";
+                out << "  store ptr " << nv << ", ptr " << addr << "\n";
                 return nv;
             }
-            std::string const& llty = it->second.llvm_type;
-            bool flt = isFloatType(it->second.slids_type);
+            std::string llty = llvmForRef(leaf);
+            bool flt = isFloatType(leaf);
             std::string cur = newTmp("ld");
-            out << "  " << cur << " = load " << llty << ", ptr "
-                << it->second.alloca_name << "\n";
+            out << "  " << cur << " = load " << llty << ", ptr " << addr << "\n";
             std::string nv = newTmp("inc");
             char const* instr = flt ? (expr.text == "++" ? "fadd" : "fsub")
                                     : (expr.text == "++" ? "add" : "sub");
             char const* one = flt ? "1.0" : "1";
             out << "  " << nv << " = " << instr << " " << llty << " "
                 << cur << ", " << one << "\n";
-            out << "  store " << llty << " " << nv << ", ptr "
-                << it->second.alloca_name << "\n";
+            out << "  store " << llty << " " << nv << ", ptr " << addr << "\n";
             return nv;
         }
         case ast::Kind::kPreIncExpr:
@@ -2608,56 +2631,16 @@ bool endsTerminatedNode(ast::Node const& s) {
 }
 
 // Collect every (non-const) local declaration reachable in this function so its
-// alloca can be hoisted to the entry block (see emitFunction). Recurses into the
-// statement-bearing children of compound statements — NOT into condition exprs,
-// which contain no declarations.
+// alloca can be hoisted to the entry block (see emitFunction). Walks the whole
+// subtree — statement bodies AND expression operands — because a PPID-lowered
+// complex inc/dec hides a `_$lv` reference decl inside a kSeqExpr that sits in an
+// expression position (a call arg, an rhs, a condition). A nested function owns
+// its own locals, so its body is NOT descended.
 void collectVarDecls(ast::Node const& s, std::vector<ast::Node const*>& out) {
-    if (s.kind == ast::Kind::kVarDeclStmt) {
-        if (!s.is_const) out.push_back(&s);
+    if (s.kind == ast::Kind::kFunctionDef || s.kind == ast::Kind::kFunctionDecl)
         return;
-    }
-    if (s.kind == ast::Kind::kBlockStmt) {
-        for (auto const& ch : s.children) if (ch) collectVarDecls(*ch, out);
-        return;
-    }
-    if (s.kind == ast::Kind::kIfStmt) {
-        if (s.children.size() > 1 && s.children[1]) collectVarDecls(*s.children[1], out);
-        if (s.children.size() > 2 && s.children[2]) collectVarDecls(*s.children[2], out);
-        return;
-    }
-    if (s.kind == ast::Kind::kWhileStmt || s.kind == ast::Kind::kDoWhileStmt) {
-        if (s.children.size() > 1 && s.children[1]) collectVarDecls(*s.children[1], out);
-        return;
-    }
-    if (s.kind == ast::Kind::kForLongStmt) {
-        // [0]=cond, [1]=update, [2]=body, [3..]=varlist decls — all hoisted.
-        if (s.children.size() > 1 && s.children[1]) collectVarDecls(*s.children[1], out);
-        if (s.children.size() > 2 && s.children[2]) collectVarDecls(*s.children[2], out);
-        for (std::size_t i = 3; i < s.children.size(); i++) {
-            if (s.children[i]) collectVarDecls(*s.children[i], out);
-        }
-        return;
-    }
-    if (s.kind == ast::Kind::kSwitchStmt) {
-        // [0]=scrutinee (no decls), [1..]=clauses; each clause's [1] is its body.
-        for (std::size_t i = 1; i < s.children.size(); i++) {
-            if (s.children[i] && s.children[i]->children.size() > 1
-                && s.children[i]->children[1]) {
-                collectVarDecls(*s.children[i]->children[1], out);
-            }
-        }
-        return;
-    }
-    if (s.kind == ast::Kind::kDestructureStmt) {
-        // [1..] = slots. A DECLARED slot (kVarDeclStmt) is hoisted; a NESTED slot
-        // (kDestructureStmt) recurses to hoist ITS declared slots; a REUSED slot
-        // (kAssignStmt) and a discard (null) contribute none.
-        for (std::size_t i = 1; i < s.children.size(); i++) {
-            if (s.children[i]) collectVarDecls(*s.children[i], out);
-        }
-        return;
-    }
-    // Any other statement kind declares no nested locals.
+    if (s.kind == ast::Kind::kVarDeclStmt && !s.is_const) out.push_back(&s);
+    for (auto const& ch : s.children) if (ch) collectVarDecls(*ch, out);
 }
 
 void emitFunction(ast::Node const& fn, strings::Pool& pool,

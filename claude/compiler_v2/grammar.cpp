@@ -1556,21 +1556,20 @@ struct Parser {
             }
             if (peek().kind == token::Kind::kPlusPlus
                 || peek().kind == token::Kind::kMinusMinus) {
-                // `lvalue++;` / `lvalue--;` — the discarded-value statement form on
-                // a complex lvalue is `lvalue += 1` / `lvalue -= 1` (an aug-assign
-                // over the chain). The expression-embedded form (`x = arr[i]++`)
-                // stays the PPID path and is not handled here.
-                char const* aug =
-                    peek().kind == token::Kind::kPlusPlus ? "+" : "-";
+                // `lvalue++;` / `lvalue--;` on a complex lvalue — the same PPID
+                // path as the expression form. Build a kPostIncExpr over the chain
+                // wrapped in a kExprStmt; desugar lowers it (the value is
+                // discarded, so only the bump survives).
+                char const* op =
+                    peek().kind == token::Kind::kPlusPlus ? "++" : "--";
+                int op_tok = pos;
                 advance();   // ++ / --
                 if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
-                auto one = newNodeAt(parse::Kind::kIntLiteral, stmt_file, stmt_tok);
-                one->text = "1";
-                auto node = newNodeAt(parse::Kind::kAugAssignStmt, stmt_file,
-                                      stmt_tok);
-                node->text = aug;
-                node->children.push_back(std::move(lhs));
-                node->children.push_back(std::move(one));
+                auto inc = newNodeAt(parse::Kind::kPostIncExpr, stmt_file, op_tok);
+                inc->text = op;
+                inc->children.push_back(std::move(lhs));
+                auto node = newNodeAt(parse::Kind::kExprStmt, stmt_file, stmt_tok);
+                node->children.push_back(std::move(inc));
                 return node;
             }
             if (!expect(token::Kind::kEquals, "=")) return nullptr;
@@ -1730,39 +1729,29 @@ struct Parser {
         int stmt_tok = pos;
         bool prefix = peek().kind == token::Kind::kPlusPlus
                    || peek().kind == token::Kind::kMinusMinus;
-        token::Kind opk;
-        int op_tok;
-        std::string name;
-        int name_tok;
+        std::unique_ptr<parse::Node> inc;
         if (prefix) {
-            opk = peek().kind;
-            op_tok = pos;
-            advance();   // ++ / --
-            if (peek().kind != token::Kind::kIdentifier) {
-                error("Expected a variable after '"
-                      + std::string(opk == token::Kind::kPlusPlus ? "++" : "--")
-                      + "'.");
-                return nullptr;
-            }
-            name = peek().text;
-            name_tok = pos;
-            advance();
+            // `++<lvalue>;` — parse the full operand chain via parseUnary, which
+            // consumes the leading `++` and builds a kPreIncExpr over a bare ident
+            // OR a complex lvalue (`++arr[i];`, `++b.f;`, `++p^;`), identical to
+            // the expression form. resolve / classify check the operand.
+            inc = parseUnary();
+            if (!inc) return nullptr;
         } else {
-            name = peek().text;
-            name_tok = pos;
+            // `<ident>++;` — dispatched only for a bare ident followed by ++/--.
+            int name_tok = pos;
+            std::string name = peek().text;
             advance();   // ident
-            opk = peek().kind;
-            op_tok = pos;
+            token::Kind opk = peek().kind;
+            int op_tok = pos;
             advance();   // ++ / --
+            auto operand = newNodeAt(parse::Kind::kIdentExpr, stmt_file, name_tok);
+            operand->name = std::move(name);
+            inc = newNodeAt(parse::Kind::kPostIncExpr, stmt_file, op_tok);
+            inc->text = opk == token::Kind::kPlusPlus ? "++" : "--";
+            inc->children.push_back(std::move(operand));
         }
         if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
-        auto operand = newNodeAt(parse::Kind::kIdentExpr, stmt_file, name_tok);
-        operand->name = std::move(name);
-        auto inc = newNodeAt(prefix ? parse::Kind::kPreIncExpr
-                                    : parse::Kind::kPostIncExpr,
-                             stmt_file, op_tok);
-        inc->text = opk == token::Kind::kPlusPlus ? "++" : "--";
-        inc->children.push_back(std::move(operand));
         auto stmt = newNodeAt(parse::Kind::kExprStmt, stmt_file, stmt_tok);
         stmt->children.push_back(std::move(inc));
         return stmt;

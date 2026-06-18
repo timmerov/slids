@@ -1147,9 +1147,10 @@ STAGE FILES (.h / .cpp pairs)
             ADDRESS ONCE into a hidden `_$lv` reference — `^lvalue` for an index /
             field target, the pointer itself for a deref target — then a kBlockStmt
             does `_$lv^ = _$lv^ op rhs`, so a side-effecting index evaluates exactly
-            once (address-once); the grammar routes a complex `++`/`--` statement
-            through the same path as `+= 1` / `-= 1`. Both inherit the classify-
-            stamped types so codegen sees the rewrite as if classified directly. (2) PPID: a post-copy pass extracts
+            once (address-once). Both the bare-name and complex aug-assign forms
+            inherit the classify-stamped types so codegen sees the rewrite as if
+            classified directly. (`++`/`--` on a complex lvalue is NOT routed here --
+            it flows through PPID below, like every other inc/dec.) (2) PPID: a post-copy pass extracts
             ++/-- per phrase, replacing each with a read; also drops parse-
             only nodes (alias, namespace) and hoists namespace member
             functions to program scope with entry-id-derived symbols (no
@@ -1163,7 +1164,19 @@ STAGE FILES (.h / .cpp pairs)
             `arr[k]=v; k++`, and a swap `x++ <--> y++` -> `x <--> y; x++; y++`); a
             bump inside a sub-phrase (call args, && / || rhs, each tuple-literal /
             destructure slot) stays in a synthesized kSeqExpr {pre... value post...}
-            so a short-circuited or per-slot bump never fires. The statement-bump
+            so a short-circuited or per-slot bump never fires. A COMPLEX-LVALUE
+            operand (`arr[i]++`, `++p^`, a class field) flows through THIS pass too:
+            it binds the leaf address once into a hidden `_$lv` reference (the aug-
+            assign pattern), the read becomes `_$lv^`, and the bump is an ADDRESS-
+            based kBumpExpr (children[0] = `_$lv`, codegen loads through it, reusing
+            the scalar int/float/iterator step). A post-inc captures at the read
+            point (a nested kSeqExpr {decl, _$lv^}); a pre-inc captures with the bump
+            in the pre-list. collectVarDecls (codegen) walks expression subtrees so a
+            seq-buried `_$lv` decl is still hoisted to the entry block, and the
+            kSeqExpr arm emits its address store. So bare/complex x pre/post x
+            statement/expression all flow through this ONE PPID path -- both grammar
+            shortcuts (the postfix `arr[i]++;` -> aug-assign rewrite, the bare-ident-
+            only prefix) are gone. The statement-bump
             splice (lowerStatementList) recurses into a kBlockStmt, a kIfStmt
             (lowerIfStmt: the condition is a self-contained phrase whose bumps fire
             before the branch, and the arms recurse), a kWhileStmt / kDoWhileStmt

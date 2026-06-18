@@ -884,52 +884,171 @@ std::unique_ptr<ast::Node> makeBump(ast::Node const& operand,
     return b;
 }
 
-void lowerPhraseSlot(std::unique_ptr<ast::Node>& slot);
+// An inc/dec operand that is not a bare ident: an index or deref chain. (After
+// copyNode a field is already a kIndexExpr — there is no ast::kFieldExpr.) A
+// complex operand needs an address-once binding, unlike a bare ident whose
+// alloca already gives a stable address.
+bool isComplexLvalue(ast::Node const& n) {
+    return n.kind == ast::Kind::kIndexExpr
+        || n.kind == ast::Kind::kDerefExpr;
+}
+
+// `_$lv` reference ident — its loaded VALUE is the captured leaf address.
+std::unique_ptr<ast::Node> makeLvIdent(int lv_id, widen::TypeRef refT,
+                                       int file, int tok) {
+    auto id = std::make_unique<ast::Node>();
+    id->kind = ast::Kind::kIdentExpr;
+    id->name = "_$lv";
+    id->resolved_entry_id = lv_id;
+    id->inferred_type = refT;
+    id->file_id = file; id->tok = tok;
+    return id;
+}
+
+// `_$lv^` — the leaf read/write site, a deref of the captured address.
+std::unique_ptr<ast::Node> makeLvDeref(int lv_id, widen::TypeRef refT,
+                                       widen::TypeRef leaf, int file, int tok) {
+    auto d = std::make_unique<ast::Node>();
+    d->kind = ast::Kind::kDerefExpr;
+    d->inferred_type = leaf;
+    d->file_id = file; d->tok = tok;
+    d->children.push_back(makeLvIdent(lv_id, refT, file, tok));
+    return d;
+}
+
+// A complex-lvalue bump: a kBumpExpr whose children[0] yields the leaf ADDRESS
+// (the `_$lv` reference loaded). codegen loads the leaf through that address,
+// ±1, stores back — reusing the scalar bump's int/float/iterator logic keyed on
+// inferred_type (the leaf). resolved_entry_id stays -1 (address-, not id-based).
+std::unique_ptr<ast::Node> makeComplexBump(int lv_id, widen::TypeRef refT,
+                                           widen::TypeRef leaf,
+                                           std::string const& op,
+                                           int file, int tok) {
+    auto b = std::make_unique<ast::Node>();
+    b->kind = ast::Kind::kBumpExpr;
+    b->text = op;
+    b->resolved_entry_id = -1;
+    b->inferred_type = leaf;
+    b->file_id = file; b->tok = tok;
+    b->children.push_back(makeLvIdent(lv_id, refT, file, tok));
+    return b;
+}
+
+// The address-once binding `_$lv = ^leaf` (a reference var-decl). For a deref
+// target the address IS the pointer operand (don't take `^(ptr^)`); for an
+// index/field target it is `^operand` (a reference to the leaf). Mirrors
+// tryDesugarAugAssign. `operand` is consumed. Out-params return refT and the
+// `_$lv` entry id.
+std::unique_ptr<ast::Node> makeLvDecl(std::unique_ptr<ast::Node> operand,
+                                      int& next_id, widen::TypeRef& refT,
+                                      int& lv_id) {
+    lv_id = next_id++;
+    widen::TypeRef leaf = operand->inferred_type;
+    int file = operand->file_id, tok = operand->tok;
+    std::unique_ptr<ast::Node> addr;
+    if (operand->kind == ast::Kind::kDerefExpr) {
+        refT = operand->children[0]->inferred_type;   // the pointer's type
+        addr = std::move(operand->children[0]);
+    } else {
+        refT = widen::internPointer(leaf);            // a reference to the leaf
+        addr = std::make_unique<ast::Node>();
+        addr->kind = ast::Kind::kAddrOfExpr;
+        addr->inferred_type = refT;
+        addr->file_id = file; addr->tok = tok;
+        addr->children.push_back(std::move(operand));
+    }
+    auto decl = std::make_unique<ast::Node>();
+    decl->kind = ast::Kind::kVarDeclStmt;
+    decl->name = "_$lv";
+    decl->resolved_entry_id = lv_id;
+    decl->return_type = refT;
+    decl->file_id = file; decl->tok = tok; decl->name_tok = tok;
+    decl->children.push_back(std::move(addr));
+    return decl;
+}
+
+void lowerPhraseSlot(std::unique_ptr<ast::Node>& slot, int& next_id);
 
 // Walk an expression that belongs to the CURRENT phrase: collect its bumps into
 // pre/post, replace each inc/dec with a read of the operand. Sub-phrase
 // children — call args and the rhs of && / || — recurse via lowerPhraseSlot.
 void lowerInPhrase(std::unique_ptr<ast::Node>& slot,
                    std::vector<std::unique_ptr<ast::Node>>& pre,
-                   std::vector<std::unique_ptr<ast::Node>>& post) {
+                   std::vector<std::unique_ptr<ast::Node>>& post,
+                   int& next_id) {
     if (!slot) return;
     ast::Node& n = *slot;
     if (n.kind == ast::Kind::kPreIncExpr || n.kind == ast::Kind::kPostIncExpr) {
+        bool is_pre = n.kind == ast::Kind::kPreIncExpr;
+        if (isComplexLvalue(*n.children[0])) {
+            // Lower any nested inc/dec in the operand's index chain into THIS
+            // phrase first (e.g. `arr[i++]++`), then bind the leaf address once.
+            lowerInPhrase(n.children[0], pre, post, next_id);
+            int file = n.file_id, tok = n.tok;
+            std::string op = n.text;
+            widen::TypeRef leaf = n.inferred_type;
+            widen::TypeRef refT;
+            int lv_id;
+            auto decl = makeLvDecl(std::move(n.children[0]), next_id, refT, lv_id);
+            auto bump = makeComplexBump(lv_id, refT, leaf, op, file, tok);
+            if (is_pre) {
+                // bump fires at phrase entry: capture then mutate, both in pre;
+                // the read yields the post-increment value.
+                pre.push_back(std::move(decl));
+                pre.push_back(std::move(bump));
+                slot = makeLvDeref(lv_id, refT, leaf, file, tok);
+            } else {
+                // bump fires at phrase exit: capture + read at THIS point (a seq
+                // so the address is taken once, at the read), bump in post.
+                auto read_seq = std::make_unique<ast::Node>();
+                read_seq->kind = ast::Kind::kSeqExpr;
+                read_seq->inferred_type = leaf;
+                read_seq->file_id = file; read_seq->tok = tok;
+                read_seq->value_index = 1;   // [decl, read] -> value is the read
+                read_seq->children.push_back(std::move(decl));
+                read_seq->children.push_back(
+                    makeLvDeref(lv_id, refT, leaf, file, tok));
+                slot = std::move(read_seq);
+                post.push_back(std::move(bump));
+            }
+            return;
+        }
         auto operand = std::move(n.children[0]);   // ident lvalue (resolve checked)
         auto bump = makeBump(*operand, n.text);
-        if (n.kind == ast::Kind::kPreIncExpr) pre.push_back(std::move(bump));
-        else                                  post.push_back(std::move(bump));
+        if (is_pre) pre.push_back(std::move(bump));
+        else        post.push_back(std::move(bump));
         slot = std::move(operand);                 // the read replaces the inc/dec
         return;
     }
     if (n.kind == ast::Kind::kCallExpr) {
-        for (auto& arg : n.children) lowerPhraseSlot(arg);
+        for (auto& arg : n.children) lowerPhraseSlot(arg, next_id);
         return;
     }
     if (n.kind == ast::Kind::kTupleExpr) {
         // Each comma slot of a tuple literal is its OWN phrase (like a call arg),
         // evaluated left to right — so its bumps stay inside that slot's seq.
-        for (auto& el : n.children) lowerPhraseSlot(el);
+        for (auto& el : n.children) lowerPhraseSlot(el, next_id);
         return;
     }
     if (n.kind == ast::Kind::kBinaryExpr && (n.text == "&&" || n.text == "||")) {
-        lowerInPhrase(n.children[0], pre, post);   // lhs: same phrase
-        lowerPhraseSlot(n.children[1]);            // rhs: own conditional phrase
+        lowerInPhrase(n.children[0], pre, post, next_id);  // lhs: same phrase
+        lowerPhraseSlot(n.children[1], next_id);           // rhs: own cond. phrase
         return;
     }
     // Every other interior node (arith/bitwise/^^/unary) is part of this
     // phrase; leaves have no children, so the loop is a no-op for them.
-    // seq/bump are synthesized by this pass and must never be re-walked.
+    // seq/bump are synthesized by this pass — produced above and never re-walked
+    // (each phrase is lowered once), so reaching one here is a bug.
     assert(n.kind != ast::Kind::kSeqExpr && n.kind != ast::Kind::kBumpExpr
         && "lowerInPhrase: re-walked a synthesized PPID node");
-    for (auto& c : n.children) lowerInPhrase(c, pre, post);
+    for (auto& c : n.children) lowerInPhrase(c, pre, post, next_id);
 }
 
 // Lower the phrase rooted at `slot`; wrap it in a seq iff it carried bumps.
-void lowerPhraseSlot(std::unique_ptr<ast::Node>& slot) {
+void lowerPhraseSlot(std::unique_ptr<ast::Node>& slot, int& next_id) {
     if (!slot) return;
     std::vector<std::unique_ptr<ast::Node>> pre, post;
-    lowerInPhrase(slot, pre, post);
+    lowerInPhrase(slot, pre, post, next_id);
     if (pre.empty() && post.empty()) return;
     auto seq = std::make_unique<ast::Node>();
     seq->kind = ast::Kind::kSeqExpr;
@@ -961,7 +1080,8 @@ std::unique_ptr<ast::Node> makeBumpStmt(std::unique_ptr<ast::Node> bump) {
 // no slot after a terminator, and its value is read before the bump anyway.
 void lowerStatementPPID(ast::Node& stmt,
                         std::vector<std::unique_ptr<ast::Node>>& pre,
-                        std::vector<std::unique_ptr<ast::Node>>& post) {
+                        std::vector<std::unique_ptr<ast::Node>>& post,
+                        int& next_id) {
     switch (stmt.kind) {
         // The statement IS the phrase: its direct expression operands carry
         // statement-level bumps (pre before, post after the statement).
@@ -969,7 +1089,7 @@ void lowerStatementPPID(ast::Node& stmt,
         case ast::Kind::kAssignStmt:
             // children[0] = the rhs (the lvalue is a bare name, no ppid).
             if (!stmt.children.empty() && stmt.children[0]) {
-                lowerInPhrase(stmt.children[0], pre, post);
+                lowerInPhrase(stmt.children[0], pre, post, next_id);
             }
             return;
         case ast::Kind::kStoreStmt:
@@ -980,7 +1100,7 @@ void lowerStatementPPID(ast::Node& stmt,
             // lifts off it and the post fires AFTER the store/move/swap — e.g.
             // `x++ <--> y++` -> `x <--> y; x++; y++`, `arr[k++] = v` -> `arr[k]=v; k++`.
             for (auto& ch : stmt.children) {
-                if (ch) lowerInPhrase(ch, pre, post);
+                if (ch) lowerInPhrase(ch, pre, post, next_id);
             }
             return;
         case ast::Kind::kDestructureStmt:
@@ -988,25 +1108,40 @@ void lowerStatementPPID(ast::Node& stmt,
             // kTupleExpr arm); [1..] = plain target lvalues (a complex target with
             // ppid is the deferred complex-lhs case).
             if (!stmt.children.empty() && stmt.children[0]) {
-                lowerInPhrase(stmt.children[0], pre, post);
+                lowerInPhrase(stmt.children[0], pre, post, next_id);
             }
             return;
         case ast::Kind::kReturnStmt:
             if (!stmt.children.empty() && stmt.children[0]) {
-                lowerPhraseSlot(stmt.children[0]);
+                lowerPhraseSlot(stmt.children[0], next_id);
             }
             return;
         case ast::Kind::kCallStmt:
-            for (auto& arg : stmt.children) lowerPhraseSlot(arg);
+            for (auto& arg : stmt.children) lowerPhraseSlot(arg, next_id);
             return;
         case ast::Kind::kExprStmt: {
             // The value is discarded. A bare inc/dec needs only its bump — no read.
             auto& child = stmt.children[0];
             if (child->kind == ast::Kind::kPreIncExpr
                 || child->kind == ast::Kind::kPostIncExpr) {
-                child = makeBump(*child->children[0], child->text);
+                if (isComplexLvalue(*child->children[0])) {
+                    // Complex lvalue, value discarded: bind the address once (pre)
+                    // then bump through it. Pre vs post is moot with no read.
+                    lowerInPhrase(child->children[0], pre, post, next_id);
+                    int file = child->file_id, tok = child->tok;
+                    std::string op = child->text;
+                    widen::TypeRef leaf = child->inferred_type;
+                    widen::TypeRef refT;
+                    int lv_id;
+                    auto decl = makeLvDecl(std::move(child->children[0]),
+                                           next_id, refT, lv_id);
+                    pre.push_back(std::move(decl));
+                    child = makeComplexBump(lv_id, refT, leaf, op, file, tok);
+                } else {
+                    child = makeBump(*child->children[0], child->text);
+                }
             } else {
-                lowerPhraseSlot(child);
+                lowerPhraseSlot(child, next_id);
             }
             return;
         }
@@ -1059,21 +1194,30 @@ void lowerStatementPPID(ast::Node& stmt,
     }
 }
 
-void lowerStatementList(std::vector<std::unique_ptr<ast::Node>>& stmts);
+void lowerStatementList(std::vector<std::unique_ptr<ast::Node>>& stmts,
+                        int& next_id);
+
+// Splice a pre/post entry as a sibling statement. A scalar bump is a kBumpExpr
+// (an expression) wrapped in a kExprStmt; a complex lvalue's address-once
+// binding is already a kVarDeclStmt and rides through unchanged.
+std::unique_ptr<ast::Node> spliceStmt(std::unique_ptr<ast::Node> b) {
+    if (b->kind == ast::Kind::kVarDeclStmt) return b;
+    return makeBumpStmt(std::move(b));
+}
 
 // Lower an if-statement's PPID. The condition is a self-contained phrase: its
 // bumps stay inside a seq and fire as the condition is evaluated, before the
 // branch (like a call argument). The then/else branches are statement lists;
 // an `else if` chain is a nested kIfStmt, recursed structurally.
-void lowerIfStmt(ast::Node& s) {
-    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0]);
+void lowerIfStmt(ast::Node& s, int& next_id) {
+    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0], next_id);
     if (s.children.size() > 1 && s.children[1]) {
-        lowerStatementList(s.children[1]->children);   // then-block
+        lowerStatementList(s.children[1]->children, next_id);   // then-block
     }
     if (s.children.size() > 2 && s.children[2]) {
         ast::Node& else_branch = *s.children[2];
-        if (else_branch.kind == ast::Kind::kIfStmt) lowerIfStmt(else_branch);
-        else lowerStatementList(else_branch.children);  // else-block
+        if (else_branch.kind == ast::Kind::kIfStmt) lowerIfStmt(else_branch, next_id);
+        else lowerStatementList(else_branch.children, next_id);  // else-block
     }
 }
 
@@ -1081,10 +1225,10 @@ void lowerIfStmt(ast::Node& s) {
 // whose bumps fire each time it is tested (re-evaluated per iteration); the body
 // is a statement list. Both kinds share the child layout ([cond, body]), so this
 // serves kWhileStmt and kDoWhileStmt alike.
-void lowerWhileStmt(ast::Node& s) {
-    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0]);
+void lowerWhileStmt(ast::Node& s, int& next_id) {
+    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0], next_id);
     if (s.children.size() > 1 && s.children[1]) {
-        lowerStatementList(s.children[1]->children);   // body block
+        lowerStatementList(s.children[1]->children, next_id);   // body block
     }
 }
 
@@ -1092,32 +1236,32 @@ void lowerWhileStmt(ast::Node& s) {
 // The varlist initializers run once (lower each as a self-contained phrase); the
 // condition is a phrase re-tested each iteration; update + body are statement
 // lists.
-void lowerForLong(ast::Node& s) {
+void lowerForLong(ast::Node& s, int& next_id) {
     for (std::size_t i = 3; i < s.children.size(); i++) {
         if (s.children[i] && !s.children[i]->children.empty()
             && s.children[i]->children[0]) {
-            lowerPhraseSlot(s.children[i]->children[0]);   // varlist init
+            lowerPhraseSlot(s.children[i]->children[0], next_id);   // varlist init
         }
     }
-    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0]);   // cond
+    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0], next_id);  // cond
     if (s.children.size() > 1 && s.children[1]) {
-        lowerStatementList(s.children[1]->children);   // update block
+        lowerStatementList(s.children[1]->children, next_id);   // update block
     }
     if (s.children.size() > 2 && s.children[2]) {
-        lowerStatementList(s.children[2]->children);   // body block
+        lowerStatementList(s.children[2]->children, next_id);   // body block
     }
 }
 
 // Lower a switch's PPID. children[0] = scrutinee (a self-contained phrase whose
 // bumps fire once as it is evaluated); [1..] = kCaseClause, each [0] = label
 // (a folded constant — no bumps) and [1] = body statement list.
-void lowerSwitchStmt(ast::Node& s) {
-    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0]);
+void lowerSwitchStmt(ast::Node& s, int& next_id) {
+    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0], next_id);
     for (std::size_t i = 1; i < s.children.size(); i++) {
         if (!s.children[i]) continue;
         ast::Node& clause = *s.children[i];
         if (clause.children.size() > 1 && clause.children[1]) {
-            lowerStatementList(clause.children[1]->children);   // body block
+            lowerStatementList(clause.children[1]->children, next_id);   // body block
         }
     }
 }
@@ -1126,41 +1270,42 @@ void lowerSwitchStmt(ast::Node& s) {
 // pre-bumps before / post-bumps after each statement. Recurses into a nested
 // kBlockStmt / kIfStmt so bumps inside them splice within that scope, not at the
 // enclosing one.
-void lowerStatementList(std::vector<std::unique_ptr<ast::Node>>& stmts) {
+void lowerStatementList(std::vector<std::unique_ptr<ast::Node>>& stmts,
+                        int& next_id) {
     std::vector<std::unique_ptr<ast::Node>> lowered;
     for (auto& stmt : stmts) {
         if (!stmt) continue;
         if (stmt->kind == ast::Kind::kBlockStmt) {
-            lowerStatementList(stmt->children);
+            lowerStatementList(stmt->children, next_id);
             lowered.push_back(std::move(stmt));
             continue;
         }
         if (stmt->kind == ast::Kind::kIfStmt) {
-            lowerIfStmt(*stmt);
+            lowerIfStmt(*stmt, next_id);
             lowered.push_back(std::move(stmt));
             continue;
         }
         if (stmt->kind == ast::Kind::kWhileStmt
             || stmt->kind == ast::Kind::kDoWhileStmt) {
-            lowerWhileStmt(*stmt);
+            lowerWhileStmt(*stmt, next_id);
             lowered.push_back(std::move(stmt));
             continue;
         }
         if (stmt->kind == ast::Kind::kForLongStmt) {
-            lowerForLong(*stmt);
+            lowerForLong(*stmt, next_id);
             lowered.push_back(std::move(stmt));
             continue;
         }
         if (stmt->kind == ast::Kind::kSwitchStmt) {
-            lowerSwitchStmt(*stmt);
+            lowerSwitchStmt(*stmt, next_id);
             lowered.push_back(std::move(stmt));
             continue;
         }
         std::vector<std::unique_ptr<ast::Node>> pre, post;
-        lowerStatementPPID(*stmt, pre, post);
-        for (auto& b : pre) lowered.push_back(makeBumpStmt(std::move(b)));
+        lowerStatementPPID(*stmt, pre, post, next_id);
+        for (auto& b : pre) lowered.push_back(spliceStmt(std::move(b)));
         lowered.push_back(std::move(stmt));
-        for (auto& b : post) lowered.push_back(makeBumpStmt(std::move(b)));
+        for (auto& b : post) lowered.push_back(spliceStmt(std::move(b)));
     }
     stmts = std::move(lowered);
 }
@@ -1316,7 +1461,7 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
         if (!n || n->kind != ast::Kind::kProgram) continue;
         for (auto& fn : n->children) {
             if (!fn || fn->kind != ast::Kind::kFunctionDef) continue;
-            lowerStatementList(fn->children);
+            lowerStatementList(fn->children, next_id);
         }
     }
     // Carry the class kSlid types so codegen can emit each `<Name>__$sizeof()`

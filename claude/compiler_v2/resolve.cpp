@@ -321,6 +321,9 @@ void registerAlias(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
 void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                  bool unevaluated = false);
 void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
+void resolveStoreTarget(parse::Tree& tree, parse::Node& lv,
+                        diagnostic::Sink& diag);
+void markLvalueBaseRead(parse::Tree& tree, parse::Node& lv);
 
 // ---- Namespace lookup --------------------------------------------------------
 // The global root is namespace frame 0 (the program frame). Its members are the
@@ -1194,9 +1197,17 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
         }
         case parse::Kind::kPreIncExpr:
         case parse::Kind::kPostIncExpr: {
-            // Operand must be an assignable variable. Phase 1: a bare ident
-            // resolving to a LocalVar (no field / index lvalues yet).
+            // Operand must be an assignable lvalue. A complex lvalue (field /
+            // index / deref) is a read-modify-write: resolve it as a store target
+            // (the same DA an aug-assign does) and mark its base read.
             parse::Node& operand = *e.children[0];
+            if (operand.kind == parse::Kind::kIndexExpr
+                || operand.kind == parse::Kind::kFieldExpr
+                || operand.kind == parse::Kind::kDerefExpr) {
+                resolveStoreTarget(tree, operand, diag);
+                markLvalueBaseRead(tree, operand);   // RMW reads the target
+                return;
+            }
             if (operand.kind != parse::Kind::kIdentExpr) {
                 // Caret the offending operand (consistent with the function / const
                 // cases below), not the '++' operator.

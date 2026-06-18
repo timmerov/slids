@@ -43,3 +43,18 @@ sw= 2
 sty= 5 stx= 6
 ar1= 99 kk= 2
 mvb= 5 mva= 6
+cl= 11 21 29
+clp= 40 clq= 42 cl3= 42
+dv= 7 dr= 6
+ao0= 101 aok= 1
+md01= 1 mk= 1
+show 7 9
+sp= 8 9
+sc= 3 5
+scz= false scw= true
+ooq= 14 oo0= 8
+fl= 2.5 1.5 flr= 2.5
+dd= 8
+twq= 55 tw= 6 51
+ia= 20 ib= 30 ic= 40
+ptv= 12 ptpre= 12

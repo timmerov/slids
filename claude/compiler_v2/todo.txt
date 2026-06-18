@@ -8,6 +8,15 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
+  * COMPLEX AUG-ASSIGN OF A TUPLE INTO AN ARRAY-TYPED ELEMENT — `row[1] += (10, 20)`
+    where `row[1]` is an element of array type (`int32[2]`) SEGFAULTS slidsc at
+    compile time. The aug-assign leaf is itself an aggregate, so tryDesugarAugAssign's
+    `_$lv^ = _$lv^ + (10,20)` builds a per-element broadcast over an array leaf that
+    the complex-lvalue aug-assign path mishandles. Independent of PPID (crashes with
+    no inc/dec present). Repro: a 2D-array element `+=` a tuple — expression/ppid.sl's
+    `row[++k] += (10,20)` aspirational line hits it. Fix: handle an aggregate leaf in
+    the complex aug-assign broadcast (or reject it cleanly instead of crashing).
+
 DEFERRED FEATURES (later; may not be on the plan)
 
   * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
