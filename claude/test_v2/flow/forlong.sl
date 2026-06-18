@@ -420,6 +420,19 @@ int32 main() {
     __println("for_typeless_shadow(3) = " + for_typeless_shadow(3));        // 126
     __println("for_typeless_ppid(8) = " + for_typeless_ppid(8));            // 306
     __println("for_typeless_nested(3, 4) = " + for_typeless_nested(3, 4));  // 12
+
+    /* a reference / iterator as the long-for condition. non-null enters; the update
+       nulls it, so the body runs once. */
+    {
+        int fx = 5;
+        for (int^ fp = ^fx) (fp) { fp = nullptr; } {
+            __println("for-ref body");
+        }
+        int fa[2] = (1, 2);
+        for (int[] fit = ^fa[0]) (fit) { fit = nullptr; } {
+            __println("for-iter body");
+        }
+    }
     return 0;
 }
 

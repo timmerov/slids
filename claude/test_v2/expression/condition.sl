@@ -31,6 +31,30 @@ forlong.sl) and the logical AUGMENTED-ASSIGN `&&=` / `||=` / `^^=` (same "Operat
 
 int32 main() {
 
+    int x = 5;
+    int^ p = ^x;          // non-null reference
+    int^ pn = nullptr;    // null reference
+    int a[2] = (1, 2);
+    int[] it = ^a[0];     // non-null iterator
+
+    // unary `!` on a reference / iterator: null -> true, non-null -> false.
+    __println("!p = " + (!p));          // false
+    __println("!pn = " + (!pn));        // true
+    __println("!it = " + (!it));        // false
+
+    // && / || / ^^ with a pointer-like operand (coerces: non-null true, null false).
+    __println("p && true = " + (p && true));      // true
+    __println("pn && true = " + (pn && true));    // false
+    __println("p || false = " + (p || false));    // true
+    __println("pn || false = " + (pn || false));  // false
+    __println("p ^^ true = " + (p ^^ true));      // false
+    __println("it ^^ false = " + (it ^^ false));  // true
+
+    // logical augmented-assign with a pointer-like rhs.
+    bool b1 = false; b1 ||= p;  __println("b1 = " + b1);   // true
+    bool b2 = true;  b2 &&= pn; __println("b2 = " + b2);   // false
+    bool b3 = false; b3 ^^= it; __println("b3 = " + b3);   // true
+
     return 0;
 }
 

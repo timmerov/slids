@@ -25,7 +25,8 @@ PIPELINE — current shape
 
   classify is type inference + (Phase 3) overload resolution. Stamps
   inferred_type / op_type, rejects no-common-type binaries, non-coercible
-  operands for `! && || ^^`, an if condition not coercible to bool, non-numeric
+  operands for `! && || ^^` (and the `&&= ||= ^^=` aug-assigns), an if / while /
+  for condition not coercible to bool, non-numeric
   shift sides, bitwise on float, and return correctness (non-void must end in a
   return — recursing into a trailing block and a both-arms-return if/else; void
   can't return a value). Reads entries via resolved_entry_id but never mutates

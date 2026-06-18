@@ -248,19 +248,16 @@ DEFERRED TESTS
     can't be locked by a .sl negative. Needs a caret-aware assertion the harness
     doesn't have.
 
-  * IF-CONDITION TYPE DIAGNOSTIC — classify rejects an if condition whose type
-    isn't coercible to bool ("An if condition must be a condition expression;
-    type 'X' is not."), but no constructible expression has such a type yet:
-    numerics + char[] coerce, and a void-typed condition needs a void function,
-    which is unbuildable until bare `return;` lands. The check is defensive and
-    UNTESTED; add a negative once a non-coercible value exists. prerequisite:
-    void functions (bare return) or slid/class values.
-
-  * `^`-REFERENCE CONDITION — isCoercibleToBool (shared with `!`/`&&`/`||`)
-    matches only the `[]` iterator suffix, not `^` references, so `if (ref)`
-    will wrongly error when `^` reference values land (Phase 4). Widen the
-    shared helper then — at the helper, not the if-condition call site.
-    prerequisite: pointers/iterators (Phase 4).
+  * VOID CONDITION ARM (UNREACHABLE) — the condition-type check (isCoercibleToBool,
+    shared by the if / while / for-long conditions and the logical operators
+    `! && || ^^ &&= ||= ^^=`) rejects a non-bool-coercible condition. The TUPLE /
+    ARRAY / CLASS arms are now tested (flow/ifelse.sl, while.sl [incl. do-while],
+    forlong.sl; expression/condition.sl), and the POSITIVE pointer-like coercion
+    (a `^` reference / `[]` iterator as a condition or logical operand — non-null
+    true, null false) is tested in the same files. The VOID arm stays untested + unreachable:
+    a void call is caught earlier ("Function 'f' returns no value and cannot be used
+    as an expression"), so a void-typed condition can't reach the check. Add a
+    negative only if a void value ever reaches it.
 
   * FOR-TUPLE OVER CLASS ELEMENTS — What remains needs classes: by-VALUE iteration over a class element (a copy
     needs a constructor — not available) + the class copy/move machinery, and

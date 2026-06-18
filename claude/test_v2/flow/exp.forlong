@@ -25,3 +25,5 @@ for_two_typeless(10) = 5
 for_typeless_shadow(3) = 126
 for_typeless_ppid(8) = 306
 for_typeless_nested(3, 4) = 12
+for-ref body
+for-iter body

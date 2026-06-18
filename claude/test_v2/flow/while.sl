@@ -459,6 +459,23 @@ int32 main() {
     __println("do_body_local(5) = " + do_body_local(5));    // 10
     __println("do_empty_cond(0) = " + do_empty_cond(0));    // 0
     __println("do_empty_cond(4) = " + do_empty_cond(4));    // 4
+
+    /* a reference / iterator as a while condition — pre-condition and post-condition
+       (do-while). non-null enters; null skips / exits. */
+    {
+        int wx = 5;
+        int^ wref = ^wx;
+        int wc = 0;
+        while (wref) { wc = wc + 1; wref = nullptr; }
+        __println("while-ref ran " + wc);                   // 1
+        int[] wnone = nullptr;
+        while (wnone) { __println("dead"); }
+        __println("while-null skipped");
+        int[] pn = nullptr;
+        int pc = 0;
+        while { pc = pc + 1; } (pn);
+        __println("do-while-null ran " + pc);               // 1
+    }
     return 0;
 }
 

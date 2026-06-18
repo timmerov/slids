@@ -277,6 +277,19 @@ int32 main() {
     __println("ppid_cond(0) = " + ppid_cond(0));    // 1
     __println("always_then() = " + always_then());  // 1
     __println("empty_else() = " + empty_else());    // 1
+
+    /* a reference / iterator coerces to bool as an if condition (non-null true,
+       null false). */
+    {
+        int rx = 5;
+        int^ rref = ^rx;
+        if (rref) { __println("if-ref true"); }                              // true
+        int^ rnull = nullptr;
+        if (rnull) { __println("dead"); } else { __println("if-null false"); }   // false
+        int ra[2] = (1, 2);
+        int[] rit = ^ra[0];
+        if (rit) { __println("if-iter true"); }                             // true
+    }
     return 0;
 }
 

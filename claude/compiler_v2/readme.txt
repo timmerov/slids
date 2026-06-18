@@ -1035,8 +1035,9 @@ STAGE FILES (.h / .cpp pairs)
             (alias+same-alias or alias+const-literal keeps the label, any mismatch
             drops it); a comparison clears it — inferred_type/op_type/slids_type stay
             the erased underlying so widen/codegen are untouched. Sharp rejections at
-            the source: non-coercible operands for ! && || ^^, an if / while / for
-            condition not coercible to bool, non-numeric shift sides, bitwise on
+            the source: non-coercible operands for ! && || ^^ (and the &&= ||= ^^=
+            aug-assigns), an if / while / for condition not coercible to bool,
+            non-numeric shift sides, bitwise on
             float, no-common-type binaries. Return-correctness (endsInReturn) recurses
             into a trailing block and a trailing if/else whose arms both return.
             Constant-condition unreachable detection (runs HERE, post-constfold, so
@@ -1216,8 +1217,10 @@ STAGE FILES (.h / .cpp pairs)
             leak a slot per iteration (same class); the short-circuit + rhs edges
             route through dedicated known-label blocks so the phi predecessors are
             always valid. A kBlockStmt is transparent (emit children in order). A
-            kIfStmt emits emitToBool on the condition + a conditional br to
-            then/else/merge labels (no phi — definite-assignment rides the hoisted
+            kIfStmt emits emitToBool on the condition (a numeric is `!= 0`, a
+            pointer-like — `^`/`[]`/anyptr — is `!= null`, a float is `une 0.0`; the
+            unary `!` MIRRORS it, comparing a pointer-like to `null` not `0`) + a
+            conditional br to then/else/merge labels (no phi — definite-assignment rides the hoisted
             allocas); an arm ending in a control transfer (return / break /
             continue) emits no br-to-merge, and when every arm transfers the merge
             block is omitted entirely (resolve's 2A guarantees nothing live

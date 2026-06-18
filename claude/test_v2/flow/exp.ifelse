@@ -31,3 +31,6 @@ ppid_cond(5) = 1006
 ppid_cond(0) = 1
 always_then() = 1
 empty_else() = 1
+if-ref true
+if-null false
+if-iter true

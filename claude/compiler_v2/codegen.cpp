@@ -320,9 +320,15 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
         std::string v = emitExpr(operand, syms, pool, out, diag, operand_type);
         std::string llty = llvmForRef(operand_type);
         std::string tmp = newTmp("lnot");
+        widen::Type::Form of = widen::form(widen::strip(operand_type));
         if (isFloatType(operand_type)) {
             out << "  " << tmp << " = fcmp oeq " << llty << " "
                 << v << ", 0.0\n";
+        } else if (of == widen::Type::Form::kPointer
+                || of == widen::Type::Form::kIterator
+                || of == widen::Type::Form::kAnyptr) {
+            // a pointer-like is false iff null; `icmp eq ptr v, 0` is invalid LLVM.
+            out << "  " << tmp << " = icmp eq ptr " << v << ", null\n";
         } else {
             out << "  " << tmp << " = icmp eq " << llty << " "
                 << v << ", 0\n";

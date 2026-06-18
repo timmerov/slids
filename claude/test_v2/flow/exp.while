@@ -35,3 +35,6 @@ do_cond_reads_body(3) = 4
 do_body_local(5) = 10
 do_empty_cond(0) = 0
 do_empty_cond(4) = 4
+while-ref ran 1
+while-null skipped
+do-while-null ran 1
