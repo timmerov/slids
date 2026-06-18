@@ -461,7 +461,11 @@ Phase 4 — types beyond primitives
     diagnostics for assign-to-const, range overflow, missing init, dup, cyclic).
     Inferred-type constants LANDED (typeless `const name = expr`, grammar infers
     when `const` is followed by `name =`): the strong/weak distinction via
-    strong_type on nodes / const_strong_type on entries. The CONST + CONST fold
+    strong_type on nodes / const_strong_type on entries. A typeless const whose rhs
+    is a foldable SCALAR substitutes; a non-scalar (aggregate / pointer) rhs is
+    DEFERRED by constfold and routed by classify to a const VARIABLE (kLocalVar +
+    deepConst), inferring the type bottom-up (so `const t2 = t1` chains resolve); a
+    leftover typeless scalar is the genuine "not a constant expression". The CONST + CONST fold
     rules (spec in constant.sl's claude block) determine a folded result's KIND and
     strength: baseConstKind (matrix — char preferred, bool yields, sign mix ->
     signed) + promoteConstKind (value-fit: bool!0/1->int, char!0..255->int,
@@ -634,8 +638,12 @@ Phase 6 — const correctness
     routes it to a kLocalVar with a deepConst-wrapped type; a foldable SCALAR const
     stays substituted. A non-scalar const at a NON-RUNTIME scope (file / namespace /
     class body) is a global -> "requires global storage" (Phase 8). ast `is_const`
-    now means "substituted constant" (set from the entry kind in desugar). Canon:
-    test_v2/misc/mutable.sl.
+    now means "substituted constant" (set from the entry kind in desugar). A TYPELESS
+    const (`const x = rhs`) is the same split decided in CLASSIFY: constfold defers
+    the unfoldable case, classify infers the rhs type and routes a non-scalar one to
+    the same kLocalVar + deepConst path (a leftover typeless scalar errors; the
+    runtime-scalar const variable is a todo). Canon: test_v2/misc/mutable.sl,
+    assign/infer.sl.
 
   ENFORCEMENT — STILL THIS PHASE (none landed; const is transparent for now, so
   the const->mutable direction is silently accepted):
@@ -655,8 +663,9 @@ Phase 6 — const correctness
   `const int x` IS the named constant. At a NAMED declarator a top-level sized dim
   goes on the name, never inline — `(const int)[3] a` is rejected, the same as
   `int^[3] v`; in a NAMELESS type position the dim is inline (`alias V =
-  (const int)[3]`). A TYPELESS const aggregate (`const a = (1,2,3)`) still
-  mis-routes to the substitution path (the form is unknown at resolve — todo.txt).
+  (const int)[3]`). A TYPELESS const aggregate (`const a = (1,2,3)`) routes to a
+  const VARIABLE via classify (LANDED — see the inferred-type-constants note above);
+  only a runtime-SCALAR typeless const (`const x = y`) still errors (todo.txt).
 
 Phase 7 — class advanced
   * reopens; incomplete-class semantics

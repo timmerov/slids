@@ -85,6 +85,12 @@ TYPE REPRESENTATION (the carrier; not a stage)
     ordinary local). At a NON-RUNTIME scope (file / namespace / class body) a
     non-scalar const is a global -> "requires global storage" (Phase 8). ast
     `is_const` means "substituted constant", set from the entry kind in desugar.
+    A TYPELESS const (`const x = rhs`, no declared type) is the SAME split but
+    decided in CLASSIFY (the type is unknown at resolve): constfold DEFERS a typeless
+    const it can't fold (slids_type still kNoType), then classify infers the rhs type
+    and flips a non-scalar one to a kLocalVar + deepConst; a leftover typeless SCALAR
+    is the genuine "not a constant expression" (a runtime-scalar const variable is a
+    todo).
   * Every type FIELD is a TypeRef: Node.return_type / inferred_type / op_type /
     nominal_type / strong_type and Entry.slids_type / const_strong_type /
     param_types / capture_types (both parse:: and ast::), plus codegen::VarInfo.
@@ -789,7 +795,9 @@ STAGE FILES (.h / .cpp pairs)
             uninitialized), and marks it initialized — the type is left for classify
             to infer + write back. A TYPELESS const (`const name = expr`, empty
             declared type) skips resolveDeclType in both the function-body const
-            pre-pass and the main kVarDeclStmt arm (constfold infers the type).
+            pre-pass and the main kVarDeclStmt arm (constfold infers a foldable
+            SCALAR's type; a non-scalar rhs is deferred to classify, which routes it
+            to a kLocalVar + deepConst const variable).
             An end-of-body sweep
             then reports any body-declared local never read: "Unused local
             variable 'x'." if never written, else "Local variable 'x' set but
@@ -957,9 +965,10 @@ STAGE FILES (.h / .cpp pairs)
             stamps strong_type onto a substituted literal from entry.const_strong_type
             AND carries entry.alias_label onto it (so a const's type label survives
             substitution — needed for the inferred-var case);
-            tryCaptureConst infers a typeless const's type (a strong rhs takes its
-            type, a bare-literal rhs is WEAK -> weakDefaultType preferred spelling
-            with the narrowest nominal kept under the hood) and marks explicit-typed
+            tryCaptureConst infers a FOLDABLE-SCALAR typeless const's type (a strong
+            rhs takes its type, a bare-literal rhs is WEAK -> weakDefaultType preferred
+            spelling with the narrowest nominal kept under the hood; a non-scalar /
+            unfoldable rhs is left for classify) and marks explicit-typed
             consts strong, and stamps the captured value's literal_kind from the
             DECLARED type via literalKindForType (char -> kCharLiteral, bool ->
             kBoolLiteral, float* -> kFloatLiteral, uint* -> kUintLiteral, else

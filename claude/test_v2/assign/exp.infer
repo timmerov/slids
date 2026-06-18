@@ -22,3 +22,6 @@ int64 negbig = -3000000000
 Color ec = 1
 int outer = 2
 int blk = 7
+(const int)[3] arr2 = [1,2,3]
+(const int, const int, const int) tuple1 = (4,5,6)
+(const int, const int, const int) tuple2 = (4,5,6)

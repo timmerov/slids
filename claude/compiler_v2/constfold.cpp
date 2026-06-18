@@ -1534,6 +1534,12 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     for (parse::Entry const& entry : tree.entries) {
         if (entry.kind != parse::EntryKind::kConst) continue;
         if (!entry.literal_text.empty()) continue;
+        // A TYPELESS const that didn't fold (slids_type still unset) is DEFERRED to
+        // classify: its rhs may be an AGGREGATE / pointer, which is a not-mutable
+        // VARIABLE (inferred + routed there), not a foldable scalar. classify
+        // reports the genuine "not a constant expression" for a leftover typeless
+        // SCALAR. A TYPED scalar const that didn't fold is a real error here.
+        if (entry.slids_type == widen::kNoType) continue;
         diagnostic::report(diag, {entry.file_id, entry.tok,
             "Initializer for '" + entry.name + "' is not a constant expression.",
             {}});

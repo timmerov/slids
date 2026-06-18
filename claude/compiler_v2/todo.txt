@@ -8,18 +8,20 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * TYPELESS CONST AGGREGATE — `const a = (1,2,3)` (no declared type) should infer
-    as a const VARIABLE, like the typed `const int a[3] = (1,2,3)` form. The type is
-    unknown at resolve, so it stays on the substitution path and mis-reports "not a
-    constant expression". Make typeless-const inference distinguish a foldable scalar
-    (substitute) from an aggregate / pointer (route to a not-mutable variable).
-    Pinned by a //-EXPECT-ERROR-DEFERRED in test_v2/misc/mutable.sl.
-
 DEFERRED FEATURES (later; may not be on the plan)
 
   * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
     primitive element type (a reference works for all). Only the CLASS-element
     variant remains, when class array elements exist (Phase 5).
+
+  * TYPELESS CONST FROM A RUNTIME SCALAR — `int y = 42; const x = y;` errors
+    "Initializer for 'x' is not a constant expression." x can't be a substituted
+    literal constant (y is a runtime value), but it SHOULD be a const-qualified
+    scalar VARIABLE (allocated + initialized, not-mutable) — like the typeless
+    AGGREGATE consts that now route to variables (classify infers the rhs type and
+    flips a non-primitive typeless const to a kLocalVar + deepConst). Extend that to
+    a PRIMITIVE rhs that didn't fold: route to a const SCALAR variable instead of
+    erroring. Keep a FOLDABLE scalar (`const x = 5`) on the substitution path.
 
   * SELF-MOVE / SWAP THROUGH A `++` INDEX — `a[i++] <--> a[i++]` is a SELF-op:
     under PPID the bump lifts off the lvalue, so it lowers to `a[i] <--> a[i];

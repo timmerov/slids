@@ -2418,6 +2418,34 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     tree.entries[s.resolved_entry_id].slids_type = inferred;
                     tree.entries[s.resolved_entry_id].alias_label = rhs.alias_label;
                 }
+                // A TYPELESS CONST that constfold could NOT fold (its entry
+                // slids_type is still unset) is resolved HERE: infer the rhs type;
+                // an AGGREGATE / pointer is a not-mutable VARIABLE (flip the entry
+                // to kLocalVar + deepConst, like a typed const variable — desugar's
+                // is_const-from-entry-kind then makes codegen allocate it); a
+                // leftover SCALAR is the genuine "not a constant expression".
+                if (s.is_const && s.return_type == widen::kNoType
+                    && s.resolved_entry_id >= 0
+                    && tree.entries[s.resolved_entry_id].slids_type == widen::kNoType) {
+                    parse::Node& rhs = *s.children[0];
+                    widen::TypeRef inferred =
+                        (isLiteralKind(rhs.kind) && rhs.strong_type != widen::kNoType)
+                            ? rhs.strong_type : rhs.inferred_type;
+                    if (inferred != widen::kNoType
+                        && widen::form(widen::strip(inferred))
+                               != widen::Type::Form::kPrimitive) {
+                        widen::TypeRef ct = widen::deepConst(inferred);
+                        s.return_type = ct;
+                        parse::Entry& e = tree.entries[s.resolved_entry_id];
+                        e.kind = parse::EntryKind::kLocalVar;
+                        e.slids_type = ct;
+                        e.alias_label = rhs.alias_label;
+                    } else if (inferred != widen::kNoType) {
+                        diagnostic::report(diag, {s.file_id, s.name_tok,
+                            "Initializer for '" + s.name
+                            + "' is not a constant expression.", {}});
+                    }
+                }
                 // A for-tuple LITERAL spill temp must be homogeneous — the loop
                 // iterates by an iterator strided by slot 0's type, so a mixed
                 // tuple would misread the other slots. (A tuple VARIABLE is checked
