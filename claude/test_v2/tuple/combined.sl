@@ -42,6 +42,11 @@ covered here:
   - array of tuples / multi-dim array of tuples / tuple of arrays, read + store
     through the composed index chain; alias-typed array elements; const-expr dims
     in a tuple slot type (folded + baked, ##type reports the baked dims).
+  - CROSS-FORM copy + move: array <-> tuple, assigned or moved (<--) in both
+    directions, simple (int[2] <-> (int,int)) and nested ((int[2],int[2]) <->
+    (int,int)[2]). The copy lowers BY SLOT — an array index and a tuple slot are
+    the same i-th sub-component — recursing to scalar leaves; the two forms are
+    one homogeneous aggregate. (Swap <--> stays exact-type, so it is not cross-form.)
   - MIXED arithmetic: array op tuple and tuple op array. Both run element-wise
     (matching shape required) and yield a TUPLE — the more general heterogeneous-
     capable shape — so ##type(array + tuple) is a tuple. op= mixes the same way:
@@ -58,6 +63,17 @@ in array.sl / anon.sl).
 negatives: a const-expr tuple-slot dim is fine, a runtime dim isn't; an array /
 tuple VALUE element whose type / arity doesn't match the declared element.
 */
+
+/* CROSS-FORM RETURN — the function's return type and the returned VALUE differ in
+   form; the return seam converts by slot, form-agnostically (both directions). */
+(int[2], int[2]) retTOA() {              // returns tuple-of-arrays
+    (int, int) a[2] = ((1,2), (3,4));    // body builds an array-of-tuples value
+    return a;
+}
+(int, int)[2] retAOT() {                 // returns array-of-tuples
+    (int[2], int[2]) t = ((5,6), (7,8)); // body builds a tuple-of-arrays value
+    return t;
+}
 
 int32 main() {
 
@@ -117,6 +133,87 @@ int32 main() {
     __println("np= " + np[0][0] + " " + np[0][1] + " "
               + np[1][0] + " " + np[1][1]);        // 11 22 33 44
 
+    /* SIMPLE cross-form copy — int[2] <-> (int,int). The copy is lowered BY SLOT
+       (array index and tuple slot are the same i-th sub-component), in both
+       directions and for both assign and move. */
+    {
+        int arr1[2] = (1, 2);
+        (int, int) tpl1 = arr1;                  // tuple <- array value
+        __println("tpl1= " + tpl1[0] + " " + tpl1[1]);              // 1 2
+        tpl1 = (3, 4);
+        arr1 = tpl1;                             // array <- tuple value
+        __println("arr1= " + arr1[0] + " " + arr1[1]);              // 3 4
+
+        (int, int) tm = (5, 6);
+        int am[2] = (0, 0);
+        am <-- tm;                              // array <-- tuple (move)
+        __println("am<--tm= " + am[0] + " " + am[1]);               // 5 6
+        int as[2] = (7, 8);
+        (int, int) ts = (0, 0);
+        ts <-- as;                              // tuple <-- array (move)
+        __println("ts<--as= " + ts[0] + " " + ts[1]);               // 7 8
+    }
+
+    /* COMPLEX (nested) cross-form copy — (int[2],int[2]) <-> (int,int)[2]. The
+       per-slot lowering RECURSES: each outer slot is itself a cross-form copy
+       (tuple-slot int[2] <-> array-element (int,int)) down to scalar leaves. */
+    {
+        (int[2], int[2]) tpl2 = ((1,2), (3,4));
+        (int, int) arr2[2] = tpl2;               // array-of-tuples <- tuple-of-arrays
+        __println("arr2= " + arr2[0][0] + " " + arr2[0][1] + " "
+                  + arr2[1][0] + " " + arr2[1][1]);                 // 1 2 3 4
+
+        (int, int) src2[2] = ((10,20), (30,40));
+        tpl2 = src2;                             // tuple-of-arrays <- array-of-tuples
+        __println("tpl2= " + tpl2[0][0] + " " + tpl2[0][1] + " "
+                  + tpl2[1][0] + " " + tpl2[1][1]);                 // 10 20 30 40
+
+        (int[2], int[2]) mt2 = ((5,6), (7,8));
+        (int, int) ma2[2] = ((0,0), (0,0));
+        ma2 <-- mt2;                             // array-of-tuples <-- tuple-of-arrays
+        __println("ma2= " + ma2[0][0] + " " + ma2[0][1] + " "
+                  + ma2[1][0] + " " + ma2[1][1]);                   // 5 6 7 8
+        (int, int) ms2[2] = ((9,10), (11,12));
+        (int[2], int[2]) ts2 = ((0,0), (0,0));
+        ts2 <-- ms2;                             // tuple-of-arrays <-- array-of-tuples
+        __println("ts2= " + ts2[0][0] + " " + ts2[0][1] + " "
+                  + ts2[1][0] + " " + ts2[1][1]);                   // 9 10 11 12
+    }
+
+    /* NESTED cross-form ARITHMETIC — array-of-tuples op tuple-of-arrays. The
+       slot-wise op recurses across the differing forms; a mixed result is a
+       TUPLE at every level. */
+    {
+        (int, int) xat[2] = ((1,2), (3,4));
+        (int[2], int[2]) xta = ((10,20), (30,40));
+        ((int,int), (int,int)) xsum = xat + xta;
+        __println("xsum= " + xsum[0][0] + " " + xsum[0][1] + " "
+                  + xsum[1][0] + " " + xsum[1][1]);                 // 11 22 33 44
+    }
+
+    /* CROSS-FORM move with POINTER leaves — array-of-pointers <-- tuple-of-pointers.
+       The copy threads each pointer by slot; the move then nulls the SOURCE's
+       pointer leaves (emitNullLeaves recurses the aggregate). */
+    {
+        int x = 3;
+        int y = 4;
+        int^ ap[2] = (^x, ^x);
+        (int^, int^) tp = (^x, ^y);
+        ap <-- tp;                              // array-of-ptrs <-- tuple-of-ptrs
+        __println("ap= " + ap[0]^ + " " + ap[1]^);                 // 3 4
+        __println("tpNull= " + !tp[0] + " " + !tp[1]);             // true true
+    }
+
+    /* CROSS-FORM RETURN — receive each function's cross-form result (the return
+       seam converted the returned value into the declared return type by slot). */
+    {
+        (int[2], int[2]) c1 = retTOA();      // tuple-of-arrays <- array-of-tuples
+        __println("c1= " + c1[0][0] + " " + c1[0][1] + " "
+                  + c1[1][0] + " " + c1[1][1]);                    // 1 2 3 4
+        (int, int) c2[2] = retAOT();         // array-of-tuples <- tuple-of-arrays
+        __println("c2= " + c2[0][0] + " " + c2[0][1] + " "
+                  + c2[1][0] + " " + c2[1][1]);                    // 5 6 7 8
+    }
     return 0;
 }
 
@@ -148,4 +245,23 @@ int32 main() {
 //    (int,int,int) bad = (1,2,3);
 //    (int,int) at[2] = (bad, bad);
 //    return at[0][0];
+//}
+
+/* a CROSS-FORM copy whose leaves would NARROW is rejected at the leaf (the shape
+   check is form-agnostic and runs the per-leaf widen rule, so a narrowing leaf is
+   caught at classify, not at codegen). */
+//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
+//int neg_crossform_narrow() {
+//    (int[2], int[2]) s = ((1,2), (3,4));
+//    (int8, int8) d[2] = s;
+//    return d[0][0];
+//}
+
+/* a CROSS-FORM copy whose top-level slot COUNT differs (array-of-tuples has 2
+   elements, the tuple has 3 slots) — rejected form-agnostically. */
+//-EXPECT-ERROR: slot count differs
+//int neg_crossform_count() {
+//    (int, int) a[2] = ((1,2), (3,4));
+//    (int, int, int) b = a;
+//    return b[0];
 //}

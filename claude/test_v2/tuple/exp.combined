@@ -8,3 +8,16 @@ mt+=ma= 11 22
 ma+=t= 101 202
 vr= 6 7
 np= 11 22 33 44
+tpl1= 1 2
+arr1= 3 4
+am<--tm= 5 6
+ts<--as= 7 8
+arr2= 1 2 3 4
+tpl2= 10 20 30 40
+ma2= 5 6 7 8
+ts2= 9 10 11 12
+xsum= 11 22 33 44
+ap= 3 4
+tpNull= true true
+c1= 1 2 3 4
+c2= 5 6 7 8

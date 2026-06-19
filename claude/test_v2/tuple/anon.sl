@@ -222,6 +222,46 @@ int32 main() {
               + " " + tdouble[0][1]^[0] + " " + tdouble[0][1]^[1]
               + " " + tdouble[1]);                                    // 33 44 55 66 7
 
+    /* by-slot COPY within tuple form. A same-type whole-tuple copy is a single
+       store; a LEAF-WIDEN copy ((int8,int8) -> (int,int)) is lowered BY SLOT into
+       per-slot widening stores — at a declaration and at an assignment. */
+    (int8, int8) p8 = (1, 2);
+    (int, int) wp = p8;                    // tuple <- tuple value, per-slot widen
+    __println("wp= " + wp[0] + " " + wp[1]);                         // 1 2
+    (int8, int8) p8b = (3, 4);
+    wp = p8b;                              // assign form
+    __println("wpa= " + wp[0] + " " + wp[1]);                        // 3 4
+
+    /* nested: a tuple-of-tuples leaf-widen copy recurses to each scalar leaf. */
+    ((int8,int8), (int8,int8)) n8 = ((1,2), (3,4));
+    ((int,int), (int,int)) wn = n8;
+    __println("wn= " + wn[0][0] + " " + wn[0][1] + " "
+              + wn[1][0] + " " + wn[1][1]);                          // 1 2 3 4
+
+    /* MOVE and SWAP on tuples — same-type whole-aggregate ops. Move copies the
+       source (nulling any pointer leaves); swap exchanges two same-type tuples. */
+    (int, int) mvs = (7, 8);
+    (int, int) mvd = (0, 0);
+    mvd <-- mvs;                           // move
+    __println("mvd<--= " + mvd[0] + " " + mvd[1]);                   // 7 8
+    (int, int) swa = (1, 2);
+    (int, int) swb = (3, 4);
+    swa <--> swb;                          // swap
+    __println("swap= " + swa[0] + " " + swa[1] + " "
+              + swb[0] + " " + swb[1]);                              // 3 4 1 2
+
+    /* a NESTED tuple with POINTER leaves — move copies the pointers and nulls each
+       SOURCE leaf, recursing through the nested slots (emitNullLeaves). */
+    int nx = 1;
+    int ny = 2;
+    int nz = 3;
+    int nw = 4;
+    ((int^,int^), (int^,int^)) npa = ((^nx,^ny), (^nz,^nw));
+    ((int^,int^), (int^,int^)) npb = ((^nx,^nx), (^nx,^nx));
+    npb <-- npa;
+    __println("npmove= " + npb[0][0]^ + " " + npb[1][1]^);           // 1 4
+    __println("npaNull= " + !npa[0][0] + " " + !npa[1][1]);          // true true
+
     return 0;
 }
 

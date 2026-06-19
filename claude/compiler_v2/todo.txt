@@ -8,18 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * NESTED CROSS-FORM AGGREGATE ASSIGNMENT — a tuple-of-tuples VALUE into a
-    tuple-of-arrays (or any nested array<->tuple form mismatch) is rejected:
-    `(int[2],int[2]) b = ((1,2),(3,4))`, and `(int[2],int[2]) a + ((10,20),(30,40))`
-    (mixed nested arithmetic), both hit checkAggregateShapeMatch's cross-form reject
-    ("Cannot assign '(int,int)' to 'int[2]'") at a NESTED slot. The TOP-LEVEL
-    array<->tuple value copy is allowed, but checkAggregateShapeMatch's recursion
-    demands the SAME form at every inner level. (A nested tuple LITERAL also can't
-    spell a tuple-of-arrays — literal shape ambiguity.) Fix: let
-    checkAggregateShapeMatch + the codegen aggregate-convert seam treat array and
-    tuple as the same shape at every level, the way aggregateArithType /
-    checkAggregateStoreWiden already do.
-
   * AGGREGATE SHIFT NOT SLOT-WISE — `<<` / `>>` (and `<<=` / `>>=`) reject an array
     or tuple operand ("Shift left-hand side must be numeric"), even though every
     other binary op (+ - * / % & | ^) now applies element-wise over aggregates. The
@@ -32,7 +20,36 @@ BUGS (found, deferred)
     shift; the shift has its own instr/typing (count needn't match the slot type),
     so the shared path needs a shift-aware leaf op rather than emitArithInstr.
 
+  * SUB-ARRAY-ROW SWAP / MOVE REJECTED — a PARTIAL array index as a swap or move
+    operand (`grid[i] <--> grid[j]`, `grid[i] <-- t`) is rejected with "An array
+    subscript must index every dimension." A partial index addresses a sub-array
+    SLICE (already a valid store target — `grid[i] = ...` uses allow_partial), but
+    the swap/move lvalue path (emitLvalueAddr -> emitElementAddr, allow_partial
+    defaulting false) demands a fully-indexed scalar or whole-variable operand. The
+    array.sl header documents `twodim[0] <--> twodim[2]` (swap two rows) as
+    intended. Fix: let the swap/move operand take a partial array index (the same
+    slice addressing a sub-array store allows), exchanging / moving the whole row.
+
 DEFERRED FEATURES (later; may not be on the plan)
+
+  * AGGREGATE MOVE / RETURN NOT LOWERED BY SLOT IN DESUGAR — a cross-form / leaf-
+    widen aggregate COPY at a decl / assign / store now lowers BY SLOT in desugar
+    (lowerAggregateList -> per-leaf stores). A cross-form MOVE (`a <-- b`) and a
+    cross-form RETURN value instead ride codegen's form-agnostic
+    emitImplicitAggregateConvert (move adds emitNullLeaves for the source-null).
+    Both are CORRECT, just not literally desugared by slot — a consistency gap with
+    the "every aggregate operation desugars by slot" model. To unify: extend
+    lowerAggregateList to kMoveStmt (per-slot copy + a per-leaf null of the source)
+    and kReturnStmt (materialize a return temp, copy by slot). Low priority — the
+    codegen convert seam already produces correct IR.
+
+  * AGGREGATE SCALAR DISTRIBUTION ON ARRAYS — `array + 1` / `array += 1` / `++array`
+    (a scalar broadcast over an ARRAY) is rejected; only a TUPLE broadcasts a scalar
+    today (`tuple + 7`, anon.sl). Since an array IS a homogeneous tuple, the binary
+    arm's "array op scalar falls through to the scalar reject" (classify) should
+    route an array-op-scalar through the slot-wise aggregate path too, broadcasting
+    the scalar per element. Also covers `tuple += 1` (a scalar aug-assign) and the
+    `++tuple` / `++array` inc-dec forms (which inc/dec every slot).
 
   * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
     primitive element type (a reference works for all). Only the CLASS-element
@@ -233,8 +250,6 @@ DEFERRED FEATURES (later; may not be on the plan)
     statement/lvalue parse to accept a postfix-inc lvalue + desugar to lift the bump
     after the store.
 
-  * support statements like: tuple += 1; and ++tuple;
-
 
 DEFERRED TESTS
 
@@ -335,7 +350,3 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     `int arr[1] = 2` / `int m[1][1] = 7` now works — checkValueAssign wraps the bare
     scalar in dims-deep 1-tuples.) Needs a non-collapsing 1-tuple spelling — same
     root as CLASS-FIELD INIT FROM A SIZE-1 TUPLE below; defer with it.
-
-  * arrays are homogeneous tuples. anonymous tuples can do scalar distribution.
-    therefore, arrays should too.
-    array = array + 1; array += 1; ++array;

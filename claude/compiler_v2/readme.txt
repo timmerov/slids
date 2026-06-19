@@ -260,15 +260,26 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     assignments, each running its own conversion (the tuple->int[4] above is four
     distinct converts) -- NOT a whole-aggregate copy. A single memcpy/aggregate
     store is only the degenerate case where every element is already identical.
-    Landed end-to-end: classify::checkAggregateShapeMatch (recursive shape match
-    -- dims at every array level, arity at every tuple level) gates the
-    aggregate row; codegen::emitImplicitAggregateConvert walks the (src, dst)
-    pair pair-wise, calling widen::convert at each leaf. Wired into every
-    assignment-family codegen seam (kVarDeclStmt, kAssignStmt, kStoreStmt's
-    sub-array + deref paths, kMoveStmt, kReturnStmt, and call-site emitCall);
-    the all-identical fast path keeps the whole-aggregate store. Call-site
-    uses classify::shapesAndLeavesMatch in argConvertCost to rank shape-match
-    -with-elem-widen as cost 1 (exact still wins overloads). NUMERIC END-STATE:
+    Landed end-to-end, FORM-AGNOSTIC (an array IS a homogeneous tuple):
+    classify::checkAggregateShapeMatch matches array and tuple as the SAME shape at
+    every level -- slot COUNT (aggregateSlotCount) per level + a per-leaf widen
+    (checkValueWiden), so cross-form (`(int[2],int[2]) <-> (int,int)[2]`, any
+    nesting) is accepted and a leaf NARROW is rejected at classify (was a codegen
+    assert). Every cross-form value copy routes through it; the old count-only
+    classifyArray/TupleFrom*Value arms + tupleFlatSlotCount are DELETED. The COPY
+    itself is lowered BY SLOT in desugar (lowerAggregateList: a cross-form / leaf-
+    widen copy at a decl/assign/store becomes per-leaf kStoreStmts over a form-
+    agnostic kIndexExpr chain `dst[i] = src[i]`, recursing; a non-lvalue source
+    spills to `_$agg`), so codegen sees only scalar leaves there. The residual
+    seams desugar does not visit (return, call-arg, const-decl) use the now FORM-
+    AGNOSTIC codegen::emitImplicitAggregateConvert (extractvalue index i is identical
+    for an LLVM array and a struct, so one walk converts both forms); the four old
+    flatten HACKS (emitArrayFromTupleValue / emitTupleFromArrayValue /
+    emitTupleLeafStores / emitArrayElemStores) are DELETED. Move + cross-form return
+    work via that convert (not yet desugared by slot -- todo). The all-identical
+    fast path keeps the whole-aggregate store. Call-site uses classify::
+    shapesAndLeavesMatch in argConvertCost to rank shape-match-with-elem-widen as
+    cost 1 (exact still wins overloads). NUMERIC END-STATE:
     classify::checkValueWiden ports widen::convert's reject rules (narrowing /
     cross-family / sign-change) and runs at the classify level (every
     assignment-family site + kAugAssignStmt + kForRangedStmt + kForArrayStmt).
@@ -303,9 +314,10 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     (isScalarIntoUnitArray) wraps it in dims-deep 1-tuples and routes it HERE. NOT a
     broadcast (`int[3]=5` stays rejected); a NON-scalar element (`(int,int) arr[1]`)
     is still un-spellable (todo). Also: array↔tuple VALUE copy both directions
-    (`(int,int,int,int) t = a1` / `int a4[4] = t4`, extractvalue/insertvalue, per-
-    slot widen); PARTIAL-index lvalues (sub-array assign `td[1]=(100,101)` + sub-
-    array value read). See [[project_v2_array_types]].
+    (`(int,int,int,int) t = a1` / `int a4[4] = t4`), incl. NESTED cross-form
+    (`(int,int)[2] <-> (int[2],int[2])`) — lowered BY SLOT in desugar to per-leaf
+    stores (see ASSIGNMENT RELATION); PARTIAL-index lvalues (sub-array assign
+    `td[1]=(100,101)` + sub-array value read). See [[project_v2_array_types]].
   * AGGREGATE ARITHMETIC — arrays and tuples are one homogeneous-aggregate shape and
     share ONE slot-wise arith/bitwise path: `tuple op tuple`, `array op array`, and
     mixed `array op tuple` / `tuple op array` (a mixed result is always a TUPLE — the
@@ -317,10 +329,11 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     `lhs op rhs`; the op= store-back is gated by checkAggregateStoreWiden (cross-form
     per-leaf widen, allowing array<-tuple). codegen::emitAggregateArith builds the
     result via extractvalue/insertvalue (an array `[N x T]` aggregates like a struct),
-    recursing for a nested slot. Comparison on an aggregate is rejected; SHIFT is the
-    one binary op not yet slot-wise (rejected on an aggregate — todo BUGS). NESTED
-    cross-form assignment (a tuple-of-tuples value into a tuple-of-arrays) is still a
-    gap (todo BUGS).
+    recursing for a nested slot. NESTED cross-form arithmetic (array-of-tuples op
+    tuple-of-arrays) works — aggregateArithType is form-agnostic. Comparison on an
+    aggregate is rejected; SHIFT is the one binary op not yet slot-wise (rejected on
+    an aggregate — todo BUG), and an array-op-SCALAR broadcast is still rejected
+    (only a tuple broadcasts a scalar today — todo).
   * ARRAY TYPES (`int[N]`): parseType parses sized dims, so array types compose —
     tuple slots `(int[3],int[4])`, alias RHS, params, returns `int[3] f()`. Variable
     decls stay name-anchored `int x[3]` (reject_array_dims rejects a top-level
@@ -1154,7 +1167,7 @@ STAGE FILES (.h / .cpp pairs)
   desugar   parse tree -> ast (separate node-type set). Today: identity
             copy that propagates every annotation classify and constfold
             stamped (nominal_type, inferred_type, op_type, resolved_entry_id,
-            params, param_types, file_id, tok). Two rewrites are live.
+            params, param_types, file_id, tok). Three rewrites are live.
             (1) aug-assign (`lhs op= rhs`): a BARE-name lhs -> `lhs = lhs op rhs`
             (synthesized IdentExpr + BinaryExpr inheriting the aug-assign's
             classify-stamped types). A COMPLEX lvalue (array element / tuple slot /
@@ -1207,8 +1220,20 @@ STAGE FILES (.h / .cpp pairs)
             — resolve/classify UNDERSTAND the short form, desugar lowers it (no
             parse-tree mutation; codegen is node-driven). The for-tuple iterator is
             `<T[]><void^>base` (the void^ bridge), so a `ref^` deref dodges
-            addr-of-through-deref. Future rewrites (receiver shapes, more operator
-            dispatch) slot in as their phases land.
+            addr-of-through-deref.
+            (3) aggregate copy by slot (lowerAggregateList, runs after the aug-assign
+            / class-lift phases, before PPID): a CROSS-FORM or leaf-WIDEN aggregate
+            copy (an array IS a homogeneous tuple) at a kVarDeclStmt / kAssignStmt /
+            kStoreStmt is rewritten into per-leaf kStoreStmts over a form-agnostic
+            kIndexExpr chain — `dst[i] = src[i]`, recursing while the dst slot stays
+            an aggregate that differs from the src slot, bottoming out at scalar (or
+            same-type sub-aggregate) leaves. Indexing is form-agnostic (codegen's
+            emitElementAddr dispatches array-dim vs tuple-slot), so `dst[i]`/`src[i]`
+            walk arrays and tuples alike; a non-lvalue source spills once to `_$agg`.
+            A same-type whole copy stays a single store (the trivial base case).
+            Move + cross-form return don't lower here yet (codegen's form-agnostic
+            convert handles them — todo to unify). Future rewrites (receiver shapes,
+            more operator dispatch) slot in as their phases land.
   optimize  ast -> ast in place. Slids-aware perf rewrites LLVM can't do
             (compound-fuse, NRVO, identity-temp adoption, build-into-target).
             (TODO stub.)

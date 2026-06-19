@@ -290,8 +290,25 @@ Phase 4 — types beyond primitives
     gates the op= store-back [cross-form, allows array<-tuple]; codegen::emit-
     AggregateArith builds the result via extract/insertvalue. Fixed the element-+=-
     tuple crash + array+array invalid IR + the array+tuple confusing error. SHIFT
-    not yet slot-wise + nested cross-form assignment = todo BUGS. Coverage:
+    not yet slot-wise = todo BUG; array-op-SCALAR broadcast = todo. Coverage:
     tuple/anon.sl, tuple/array.sl, tuple/combined.sl.)
+  * aggregate COPY / MOVE by slot (cross-form + leaf-widen)         LANDED
+    (an array IS a homogeneous tuple, so a copy is performed BY SLOT, iteratively
+    and recursively, down to scalar leaves. classify::checkAggregateShapeMatch is
+    now FORM-AGNOSTIC [array==tuple at every level: slot count + per-leaf widen;
+    aggregateSlotCount/Type]; every cross-form value copy routes through it [the old
+    count-only classifyArray/TupleFrom*Value arms + tupleFlatSlotCount DELETED, so a
+    leaf NARROW is now rejected at classify, not a codegen assert]. desugar's
+    lowerAggregateList rewrites a cross-form / leaf-widen copy at a decl / assign /
+    store into per-leaf kStoreStmts over a form-agnostic kIndexExpr chain [`dst[i] =
+    src[i]`, recursing; a non-lvalue source spills to `_$agg`]; codegen sees only
+    scalar leaves there. codegen::emitImplicitAggregateConvert [the residual
+    return / call-arg / const-decl seam] was rewritten form-agnostic too; the four
+    flatten HACKS [emitArrayFromTupleValue / emitTupleFromArrayValue /
+    emitTupleLeafStores / emitArrayElemStores] DELETED. Move + cross-form return
+    work via the form-agnostic convert [not yet desugared by slot — todo]. Coverage:
+    tuple/anon.sl, tuple/array.sl, tuple/combined.sl [cross-form copy/move/return,
+    pointer-leaf move null, cross-form narrow + count negatives].)
   * for-array (`for (var : arr)`)                                  LANDED
     (DESUGAR-stage lowering to kForLongStmt: resolve UNDERSTANDS it
     [understandForArray, retags kForArrayStmt], desugar's lowerForArray builds a
@@ -733,12 +750,16 @@ CROSS-CUTTING — ASSIGNMENT RELATION (spec'd in readme.txt; LANDED end-to-end)
   helper (checkValueAssign) runs the full chain at every assignment-family site
   (decl-init, assign, store, move, call/method args, return, field-init,
   destructure + array/tuple element pairs); swap stays exact-type, outside. The
-  aggregate row is closed via classify::checkAggregateShapeMatch (shape-match at
-  every composite level) + codegen::emitImplicitAggregateConvert (per-leaf
-  widen::convert); per-element widening (`int8[N] -> int[N]`, `(int8,int8) ->
-  (int,int)`, nested composites) works at every site INCLUDING kStoreStmt,
-  kMoveStmt, kReturnStmt, and call-site (classify ranks shape-match-with-elem-
-  widen as cost 1; codegen materializes a converted temp). NUMERIC END-STATE
+  aggregate row is closed via classify::checkAggregateShapeMatch (now FORM-AGNOSTIC
+  — array IS a homogeneous tuple, so it shape-matches array<->tuple as the SAME
+  shape at every level: slot count + per-leaf widen) + per-slot lowering. A cross-
+  form / leaf-widen copy at a decl/assign/store is lowered BY SLOT in desugar
+  (lowerAggregateList -> per-leaf kStoreStmts); the residual return / call-arg /
+  const-decl seam uses the form-agnostic codegen::emitImplicitAggregateConvert.
+  Per-element widening (`int8[N] -> int[N]`, `(int8,int8) -> (int,int)`) AND cross-
+  form (`(int[2],int[2]) <-> (int,int)[2]`, any nesting) work at every site; a leaf
+  NARROW is rejected at classify (was a codegen assert). swap stays exact-type,
+  outside. NUMERIC END-STATE
   refactor LANDED: classify::checkValueWiden is the single authority for
   narrowing / cross-family / sign-change rejects; widen::convert is pure
   lowering and ASSERTS on cases classify should have rejected (caught at the

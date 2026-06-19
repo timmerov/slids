@@ -314,6 +314,50 @@ int32 main() {
         __println("bw&= " + bw[0] + " " + bw[1]);                     // 8 4
     }
 
+    /* by-slot COPY within array form. A same-type whole-array copy is a single
+       store; a LEAF-WIDEN copy (int8[N] -> int[N]) is lowered BY SLOT into
+       per-element widening stores — at a declaration and at an assignment. */
+    {
+        int8 s8v[3] = (1, 2, 3);
+        int w3[3] = s8v;                      // array <- array value, per-elem widen
+        __println("w3= " + w3[0] + " " + w3[1] + " " + w3[2]);        // 1 2 3
+        int8 s8b[3] = (4, 5, 6);
+        w3 = s8b;                             // assign form
+        __println("w3a= " + w3[0] + " " + w3[1] + " " + w3[2]);       // 4 5 6
+
+        // nested: a multi-dim leaf-widen copy recurses to each scalar leaf.
+        int8 m8[2][2] = ((1,2), (3,4));
+        int wm[2][2] = m8;
+        __println("wm= " + wm[0][0] + " " + wm[0][1] + " "
+                  + wm[1][0] + " " + wm[1][1]);                       // 1 2 3 4
+    }
+
+    /* MOVE and SWAP on arrays — same-type whole-aggregate ops. Move copies the
+       source (nulling its pointer leaves, of which a value array has none); swap
+       exchanges two same-type array lvalues. */
+    {
+        int mvs[3] = (7, 8, 9);
+        int mvd[3] = (0, 0, 0);
+        mvd <-- mvs;                          // move
+        __println("mvd<--= " + mvd[0] + " " + mvd[1] + " " + mvd[2]); // 7 8 9
+
+        int swa[3] = (1, 2, 3);
+        int swb[3] = (4, 5, 6);
+        swa <--> swb;                         // swap two arrays
+        __println("swap= " + swa[0] + " " + swa[2] + " "
+                  + swb[0] + " " + swb[2]);                           // 4 6 1 3
+
+        // an array with POINTER leaves: move copies the pointers and NULLS the
+        // source's pointer leaves (emitNullLeaves walks the array per element).
+        int px = 5;
+        int py = 6;
+        int^ pa[2] = (^px, ^py);
+        int^ pb[2] = (^px, ^px);
+        pb <-- pa;
+        __println("pmove= " + pb[0]^ + " " + pb[1]^);                // 5 6
+        __println("paNull= " + !pa[0] + " " + !pa[1]);               // true true
+    }
+
     return 0;
 }
 

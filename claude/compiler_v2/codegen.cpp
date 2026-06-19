@@ -931,6 +931,28 @@ std::string emitConvertWalk(std::string const& src_val,
 // ARENA SAFETY: same as emitConvertWalk — capture slots / dims / elem by value
 // before the loop (the multi-dim path calls internArray; held `auto const&`
 // from widen::get would dangle through the recursion).
+// Form-agnostic aggregate decomposition (an array IS a homogeneous tuple): the
+// number of top-level slots, and the i-th slot type. ARENA: capture elem / dims
+// by value before internArray (a held widen::get ref would dangle on intern).
+int cgAggSlotCount(widen::TypeRef t) {
+    widen::TypeRef s = widen::strip(t);
+    if (widen::form(s) == widen::Type::Form::kTuple) {
+        return static_cast<int>(widen::get(s).slots.size());
+    }
+    std::vector<int> const& dims = widen::get(s).dims;
+    return dims.empty() ? 0 : dims[0];
+}
+widen::TypeRef cgAggSlotType(widen::TypeRef t, int i) {
+    widen::TypeRef s = widen::strip(t);
+    if (widen::form(s) == widen::Type::Form::kTuple) {
+        return widen::get(s).slots[i];
+    }
+    widen::Type const& a = widen::get(s);
+    widen::TypeRef elem = a.elem;                       // copy before any intern
+    std::vector<int> rest(a.dims.begin() + 1, a.dims.end());
+    return rest.empty() ? elem : widen::internArray(elem, rest);
+}
+
 std::string emitImplicitAggregateConvert(std::string const& src_val,
                                           widen::TypeRef src, widen::TypeRef dst,
                                           int file_id, int tok,
@@ -938,66 +960,35 @@ std::string emitImplicitAggregateConvert(std::string const& src_val,
                                           diagnostic::Sink& diag) {
     using F = widen::Type::Form;
     widen::TypeRef ds = widen::strip(dst);
-    widen::TypeRef ss = widen::strip(src);
     F df = widen::form(ds);
-    if (df == F::kTuple) {
-        std::vector<widen::TypeRef> dslots = widen::get(ds).slots;
-        std::vector<widen::TypeRef> sslots = widen::get(ss).slots;
-        std::string src_ll = llvmForRef(src);
-        std::string dst_ll = llvmForRef(dst);
-        std::string result = "undef";
-        for (std::size_t i = 0; i < dslots.size(); i++) {
-            std::string slot_ll = llvmForRef(dslots[i]);
-            std::string slot_src = newTmp("iaet");
-            out << "  " << slot_src << " = extractvalue " << src_ll
-                << " " << src_val << ", " << i << "\n";
-            std::string slot_conv = emitImplicitAggregateConvert(
-                slot_src, sslots[i], dslots[i], file_id, tok, out, diag);
-            std::string next = newTmp("iait");
-            out << "  " << next << " = insertvalue " << dst_ll
-                << " " << result << ", " << slot_ll
-                << " " << slot_conv << ", " << i << "\n";
-            result = next;
-        }
-        return result;
-    }
-    if (df == F::kArray) {
-        std::vector<int> ddims = widen::get(ds).dims;
-        std::vector<int> sdims = widen::get(ss).dims;
-        widen::TypeRef d_elem = widen::get(ds).elem;
-        widen::TypeRef s_elem = widen::get(ss).elem;
-        widen::TypeRef d_inner;
-        widen::TypeRef s_inner;
-        if (ddims.size() == 1) {
-            d_inner = d_elem;
-            s_inner = s_elem;
-        } else {
-            std::vector<int> drem(ddims.begin() + 1, ddims.end());
-            std::vector<int> srem(sdims.begin() + 1, sdims.end());
-            d_inner = widen::internArray(d_elem, drem);
-            s_inner = widen::internArray(s_elem, srem);
-        }
-        int outer_dim = ddims[0];
-        std::string src_ll = llvmForRef(src);
-        std::string dst_ll = llvmForRef(dst);
-        std::string inner_dst_ll = llvmForRef(d_inner);
-        std::string result = "undef";
-        for (int i = 0; i < outer_dim; i++) {
-            std::string elt_src = newTmp("iaea");
-            out << "  " << elt_src << " = extractvalue " << src_ll
-                << " " << src_val << ", " << i << "\n";
-            std::string elt_conv = emitImplicitAggregateConvert(
-                elt_src, s_inner, d_inner, file_id, tok, out, diag);
-            std::string next = newTmp("iaia");
-            out << "  " << next << " = insertvalue " << dst_ll
-                << " " << result << ", " << inner_dst_ll
-                << " " << elt_conv << ", " << i << "\n";
-            result = next;
-        }
-        return result;
-    }
     // Leaf: widen::convert (implicit widen — reports narrowing / cross-family).
-    return widen::convert(src_val, src, dst, file_id, tok, out, diag);
+    if (df != F::kTuple && df != F::kArray) {
+        return widen::convert(src_val, src, dst, file_id, tok, out, diag);
+    }
+    // Aggregate: walk the destination's slots, extracting the matching source
+    // slot (extractvalue's integer index is identical for an LLVM array `[N x T]`
+    // and a struct `{...}`, so the SAME walk converts array <-> tuple at any
+    // nesting). Slot TYPES decompose form-agnostically on each side.
+    int n = cgAggSlotCount(ds);
+    std::string src_ll = llvmForRef(src);
+    std::string dst_ll = llvmForRef(dst);
+    std::string result = "undef";
+    for (int i = 0; i < n; i++) {
+        widen::TypeRef dSlot = cgAggSlotType(ds, i);
+        widen::TypeRef sSlot = cgAggSlotType(widen::strip(src), i);
+        std::string slot_ll = llvmForRef(dSlot);
+        std::string slot_src = newTmp("iaet");
+        out << "  " << slot_src << " = extractvalue " << src_ll
+            << " " << src_val << ", " << i << "\n";
+        std::string slot_conv = emitImplicitAggregateConvert(
+            slot_src, sSlot, dSlot, file_id, tok, out, diag);
+        std::string next = newTmp("iait");
+        out << "  " << next << " = insertvalue " << dst_ll
+            << " " << result << ", " << slot_ll
+            << " " << slot_conv << ", " << i << "\n";
+        result = next;
+    }
+    return result;
 }
 
 // True if `ty` is, or (for a tuple) transitively contains, a pointer / iterator
@@ -1703,123 +1694,12 @@ void emitArrayFromTuple(std::string const& alloca_name, widen::TypeRef arrType,
     }
 }
 
-// Recurse a tuple VALUE's slots, extracting each scalar leaf (a nested-tuple slot
-// recurses with a longer index path) and storing it — widened to `elem` — into the
-// array's flat slot `flat`. The aggregate `agg` (LLVM type `agg_ll`) is the
-// top-level tuple, so a leaf is one `extractvalue agg, p0, p1, ...` over its path.
-void emitTupleLeafStores(std::string const& agg, std::string const& agg_ll,
-                         widen::TypeRef tupleTy, std::vector<int>& path,
-                         widen::TypeRef elem, std::string const& elem_ll,
-                         std::string const& alloca_name, std::size_t& flat,
-                         ast::Node const& rhs, std::ostream& out,
-                         diagnostic::Sink& diag) {
-    std::vector<widen::TypeRef> slots = widen::get(widen::strip(tupleTy)).slots;
-    for (std::size_t i = 0; i < slots.size(); i++) {
-        path.push_back(static_cast<int>(i));
-        if (widen::form(widen::strip(slots[i])) == widen::Type::Form::kTuple) {
-            emitTupleLeafStores(agg, agg_ll, slots[i], path, elem, elem_ll,
-                                alloca_name, flat, rhs, out, diag);
-        } else {
-            std::string raw = newTmp("tslot");
-            out << "  " << raw << " = extractvalue " << agg_ll << " " << agg << ", ";
-            for (std::size_t k = 0; k < path.size(); k++) {
-                if (k) out << ", ";
-                out << path[k];
-            }
-            out << "\n";
-            std::string v = widen::convert(raw, slots[i], elem,
-                                           rhs.file_id, rhs.tok, out, diag);
-            std::string gep = newTmp("aelt");
-            out << "  " << gep << " = getelementptr " << elem_ll << ", ptr "
-                << alloca_name << ", i64 " << flat << "\n";
-            out << "  store " << elem_ll << " " << v << ", ptr " << gep << "\n";
-            flat++;
-        }
-        path.pop_back();
-    }
-}
-
-// Assign / initialize an array from a tuple VALUE: evaluate the aggregate once,
-// then flatten its leaves into the array's flat slots (no aggregate is kept). The
-// counterpart to emitArrayFromTuple for a tuple LITERAL (classify already checked
-// the flattened slot count equals the element count).
-void emitArrayFromTupleValue(std::string const& alloca_name, widen::TypeRef arrType,
-                             ast::Node const& rhs, SymTab const& syms,
-                             strings::Pool& pool, std::ostream& out,
-                             diagnostic::Sink& diag) {
-    widen::TypeRef elem = widen::get(widen::strip(arrType)).elem;
-    std::string elem_ll = llvmForRef(elem);
-    std::string agg = emitExpr(rhs, syms, pool, out, diag, rhs.inferred_type);
-    std::string agg_ll = llvmForRef(rhs.inferred_type);
-    std::vector<int> path;
-    std::size_t flat = 0;
-    emitTupleLeafStores(agg, agg_ll, rhs.inferred_type, path, elem, elem_ll,
-                        alloca_name, flat, rhs, out, diag);
-}
-
-// Recurse a tuple DESTINATION's slots, pulling array elements in row-major flat
-// order from the loaded array value `arr` (type `arr_ll`, dims `dims`, element
-// `elem`) and storing each — widened to the slot type — into the tuple alloca via
-// a struct GEP over `path`. The mirror of emitTupleLeafStores (a nested-tuple slot
-// recurses; the source flat index decomposes into the array's dim indices).
-void emitArrayElemStores(std::string const& arr, std::string const& arr_ll,
-                         std::vector<int> const& dims, widen::TypeRef elem,
-                         widen::TypeRef tupleTy, std::string const& tuple_ll,
-                         std::vector<int>& path, std::size_t& flat,
-                         std::string const& alloca_name, ast::Node const& rhs,
-                         std::ostream& out, diagnostic::Sink& diag) {
-    std::vector<widen::TypeRef> slots = widen::get(widen::strip(tupleTy)).slots;
-    for (std::size_t i = 0; i < slots.size(); i++) {
-        path.push_back(static_cast<int>(i));
-        if (widen::form(widen::strip(slots[i])) == widen::Type::Form::kTuple) {
-            emitArrayElemStores(arr, arr_ll, dims, elem, slots[i], tuple_ll,
-                                path, flat, alloca_name, rhs, out, diag);
-        } else {
-            // Source: array element `flat`, decomposed into row-major dim indices.
-            std::vector<long> ix(dims.size());
-            long rem = static_cast<long>(flat);
-            for (int k = static_cast<int>(dims.size()) - 1; k >= 0; k--) {
-                ix[k] = rem % dims[k];
-                rem /= dims[k];
-            }
-            std::string raw = newTmp("aelt");
-            out << "  " << raw << " = extractvalue " << arr_ll << " " << arr;
-            for (long v : ix) out << ", " << v;
-            out << "\n";
-            std::string v = widen::convert(raw, elem, slots[i],
-                                           rhs.file_id, rhs.tok, out, diag);
-            std::string slot_ll = llvmForRef(slots[i]);
-            std::string gep = newTmp("tslot");
-            out << "  " << gep << " = getelementptr " << tuple_ll << ", ptr "
-                << alloca_name << ", i32 0";
-            for (int p : path) out << ", i32 " << p;
-            out << "\n";
-            out << "  store " << slot_ll << " " << v << ", ptr " << gep << "\n";
-            flat++;
-        }
-        path.pop_back();
-    }
-}
-
-// Assign / initialize a tuple from an array VALUE: evaluate the array aggregate
-// once, then flatten its elements into the tuple's slots. The counterpart to
-// emitArrayFromTupleValue (classify already checked the element count matches).
-void emitTupleFromArrayValue(std::string const& alloca_name, widen::TypeRef tupleTy,
-                             ast::Node const& rhs, SymTab const& syms,
-                             strings::Pool& pool, std::ostream& out,
-                             diagnostic::Sink& diag) {
-    widen::TypeRef arrTy = rhs.inferred_type;
-    widen::Type const& a = widen::get(widen::strip(arrTy));
-    widen::TypeRef elem = a.elem;
-    std::vector<int> dims = a.dims;
-    std::string arr_ll = llvmForRef(arrTy);
-    std::string tuple_ll = llvmForRef(tupleTy);
-    std::string arr = emitExpr(rhs, syms, pool, out, diag, arrTy);
-    std::vector<int> path;
-    std::size_t flat = 0;
-    emitArrayElemStores(arr, arr_ll, dims, elem, tupleTy, tuple_ll, path, flat,
-                        alloca_name, rhs, out, diag);
-}
+// CROSS-FORM aggregate VALUE copies (array <-> tuple, any nesting) are lowered by
+// slot in desugar (lowerAggregateList) into per-leaf stores, so no flatten helper
+// is needed here. A copy whose source/dest differ only at the LEAVES (same shape,
+// element widening) — and the seams desugar does not visit (return, call-arg,
+// const decl) — go through emitImplicitAggregateConvert, which is itself
+// form-agnostic (array == homogeneous tuple).
 
 // The TypeRef of a tuple/array's i-th destructure element (a tuple slot, or the
 // array's (sub-)element type). agg_type is guaranteed a tuple or array by classify.
@@ -1890,22 +1770,12 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                     && stmt.children[0]->kind == ast::Kind::kTupleExpr) {
                     emitArrayFromTuple(it->second.alloca_name, it->second.slids_type,
                                        *stmt.children[0], syms, pool, out, diag);
-                } else if (dform == widen::Type::Form::kArray
-                           && sform == widen::Type::Form::kTuple) {
-                    emitArrayFromTupleValue(it->second.alloca_name,
-                                            it->second.slids_type,
-                                            *stmt.children[0], syms, pool, out, diag);
-                } else if (dform == widen::Type::Form::kTuple
-                           && sform == widen::Type::Form::kArray) {
-                    emitTupleFromArrayValue(it->second.alloca_name,
-                                            it->second.slids_type,
-                                            *stmt.children[0], syms, pool, out, diag);
                 } else {
-                    // Per-element implicit widening for an aggregate VALUE rhs
-                    // whose elem/slot types differ from dst's: load the source
-                    // aggregate (no widen at expr level — convert is a no-op on
-                    // aggregates), then walk per-leaf with widen::convert. Shape
-                    // already validated by classify::checkAggregateShapeMatch.
+                    // A cross-form aggregate VALUE copy is lowered by slot in
+                    // desugar; what remains here is a same-shape leaf-widen copy
+                    // (or a const decl desugar skips) — load the source aggregate
+                    // and walk per-leaf with the form-agnostic implicit convert.
+                    // Shape already validated by classify::checkAggregateShapeMatch.
                     bool agg_widen =
                         (dform == widen::Type::Form::kArray
                          || dform == widen::Type::Form::kTuple)
@@ -1967,24 +1837,9 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                                    *stmt.children[0], syms, pool, out, diag);
                 return;
             }
-            if (widen::form(widen::strip(it->second.slids_type))
-                    == widen::Type::Form::kArray
-                && widen::form(widen::strip(stmt.children[0]->inferred_type))
-                       == widen::Type::Form::kTuple) {
-                emitArrayFromTupleValue(it->second.alloca_name, it->second.slids_type,
-                                        *stmt.children[0], syms, pool, out, diag);
-                return;
-            }
-            if (widen::form(widen::strip(it->second.slids_type))
-                    == widen::Type::Form::kTuple
-                && widen::form(widen::strip(stmt.children[0]->inferred_type))
-                       == widen::Type::Form::kArray) {
-                emitTupleFromArrayValue(it->second.alloca_name, it->second.slids_type,
-                                        *stmt.children[0], syms, pool, out, diag);
-                return;
-            }
-            // Per-element implicit widening for an aggregate VALUE rhs whose
-            // elem/slot types differ from dst's: see kVarDeclStmt arm above.
+            // A cross-form aggregate VALUE assign is lowered by slot in desugar;
+            // what reaches here is a same-shape leaf-widen copy — handled by the
+            // form-agnostic implicit convert below (see the kVarDeclStmt arm).
             widen::Type::Form a_dform =
                 widen::form(widen::strip(it->second.slids_type));
             widen::Type::Form a_sform =
@@ -2035,17 +1890,12 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             }
             ast::Node const& rhs = *stmt.children[1];
             // A SUB-ARRAY store target (a partial array index is array-typed): fill
-            // the slice from a tuple LITERAL / tuple VALUE via the array<->tuple
-            // bridge — `addr` is the slice's pointer. An array-value source falls
-            // through to the whole-value store (matched `[N x T]`).
+            // the slice from a tuple LITERAL via the array<->tuple bridge — `addr`
+            // is the slice's pointer. A tuple VALUE source is lowered by slot in
+            // desugar; an array-value source falls through to the whole-value store.
             if (widen::form(widen::strip(elem)) == widen::Type::Form::kArray) {
                 if (rhs.kind == ast::Kind::kTupleExpr) {
                     emitArrayFromTuple(addr, elem, rhs, syms, pool, out, diag);
-                    return;
-                }
-                if (widen::form(widen::strip(rhs.inferred_type))
-                        == widen::Type::Form::kTuple) {
-                    emitArrayFromTupleValue(addr, elem, rhs, syms, pool, out, diag);
                     return;
                 }
             }

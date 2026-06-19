@@ -189,6 +189,24 @@ widen::TypeRef arrayElementType(widen::TypeRef t) {
         a.elem, std::vector<int>(a.dims.begin() + 1, a.dims.end()));
 }
 
+// Form-agnostic aggregate decomposition (an array is a homogeneous tuple): the
+// number of top-level slots, and the i-th slot's type — a tuple's slot, or an
+// array's element with the outermost dimension stripped.
+int aggregateSlotCount(widen::TypeRef t) {
+    widen::TypeRef s = widen::strip(t);
+    if (widen::form(s) == widen::Type::Form::kTuple) {
+        return static_cast<int>(widen::get(s).slots.size());
+    }
+    return arrayFirstDim(s);
+}
+widen::TypeRef aggregateSlotType(widen::TypeRef t, int i) {
+    widen::TypeRef s = widen::strip(t);
+    if (widen::form(s) == widen::Type::Form::kTuple) {
+        return widen::get(s).slots[i];
+    }
+    return arrayElementType(s);
+}
+
 bool isIntegerClass(widen::TypeRef t) {
     widen::TypeKind k;
     if (!widen::classify(t, k)) return false;
@@ -1947,15 +1965,6 @@ void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
     }
 }
 
-// A tuple's flattened scalar-slot count (nested tuples expand recursively).
-long tupleFlatSlotCount(widen::TypeRef t) {
-    widen::Type const& ty = widen::get(widen::strip(t));
-    if (ty.form != widen::Type::Form::kTuple) return 1;
-    long n = 0;
-    for (widen::TypeRef s : ty.slots) n += tupleFlatSlotCount(s);
-    return n;
-}
-
 // An array initialized / assigned from a tuple VALUE — a tuple-typed expression
 // that is NOT a literal (`int a[4] = t4;`). The literal case is isArrayFromTuple
 // (its leaf NODES are re-inferred); a value has no node-level leaves, so it copies
@@ -1966,48 +1975,13 @@ bool isArrayFromTupleValue(widen::TypeRef declType, parse::Node const& rhs) {
         && widen::form(widen::strip(rhs.inferred_type)) == widen::Type::Form::kTuple;
 }
 
-// Validate an array-from-tuple-VALUE init/assign: the tuple's flattened slot count
-// must equal the array's element count. Per-slot widening into the element type is
-// checked + emitted by codegen (widen::convert), as for any typed-value assign.
-void classifyArrayFromTupleValue(widen::TypeRef declType, parse::Node& rhs,
-                                 diagnostic::Sink& diag) {
-    widen::TypeRef a = widen::strip(declType);
-    long total = 1;
-    for (int d : widen::get(a).dims) total *= d;
-    long slots = tupleFlatSlotCount(rhs.inferred_type);
-    if (slots != total) {
-        diagnostic::report(diag, {rhs.file_id, rhs.tok,
-            "Tuple has " + std::to_string(slots)
-            + " elements but array '" + widen::spellOrEmpty(declType)
-            + "' has " + std::to_string(total) + ".", {}});
-    }
-}
-
 // A tuple initialized / assigned from an array VALUE — the mirror of
 // isArrayFromTupleValue (`(int,int,int,int) t = a1;`). A tuple lhs taking an
-// array-typed rhs; copies through the aggregate (codegen extractvalue per element
-// in row-major order, storing into the tuple's slots).
+// array-typed rhs; copies through the aggregate. Validated form-agnostically by
+// checkAggregateShapeMatch (an array IS a homogeneous tuple).
 bool isTupleFromArrayValue(widen::TypeRef declType, parse::Node const& rhs) {
     return widen::form(widen::strip(declType)) == widen::Type::Form::kTuple
         && widen::form(widen::strip(rhs.inferred_type)) == widen::Type::Form::kArray;
-}
-
-// Validate a tuple-from-array-VALUE init/assign: the array's element count must
-// equal the tuple's flattened slot count. Per-slot widening of the element type
-// into the slot type is checked + emitted by codegen (widen::convert).
-void classifyTupleFromArrayValue(widen::TypeRef declType, parse::Node& rhs,
-                                 diagnostic::Sink& diag) {
-    widen::TypeRef arr = widen::strip(rhs.inferred_type);
-    long total = 1;
-    for (int d : widen::get(arr).dims) total *= d;
-    long slots = tupleFlatSlotCount(declType);
-    if (slots != total) {
-        diagnostic::report(diag, {rhs.file_id, rhs.tok,
-            "Array '" + widen::spellOrEmpty(rhs.inferred_type)
-            + "' has " + std::to_string(total) + " elements but tuple '"
-            + widen::spellOrEmpty(declType) + "' has "
-            + std::to_string(slots) + ".", {}});
-    }
 }
 
 // An array VALUE rhs — a whole array, or a partial-index SUB-ARRAY slice
@@ -2023,58 +1997,52 @@ void classifyTupleFromArrayValue(widen::TypeRef declType, parse::Node& rhs,
 // shape; the leaf op differs (codegen widen::convert vs classify diagnostic).
 void checkAggregateShapeMatch(widen::TypeRef dest, widen::TypeRef src,
                               parse::Node const& rhs, diagnostic::Sink& diag) {
-    using F = widen::Type::Form;
+    // An array IS a homogeneous tuple; both decompose to N slots. The shape match
+    // is FORM-AGNOSTIC — array and tuple are interchangeable at every level
+    // (`(int[2],int[2])` and `(int,int)[2]` have the same leaf shape) — so the
+    // only structural errors are a slot-COUNT mismatch and aggregate-vs-scalar.
+    // Per-leaf TYPE compatibility (widen / narrow / cross-family) is checkValueWiden.
     widen::TypeRef ds = widen::strip(dest);
     widen::TypeRef ss = widen::strip(src);
-    F df = widen::form(ds);
-    F sf = widen::form(ss);
-    std::string to = widen::spellOrEmpty(dest);
-    std::string from = widen::spellOrEmpty(src);
-    if (df == F::kArray || sf == F::kArray) {
-        if (df != F::kArray || sf != F::kArray) {
-            diagnostic::report(diag, {rhs.file_id, rhs.tok,
-                "Cannot assign '" + from + "' to '" + to + "'.", {}});
-            return;
-        }
-        std::vector<int> const& ddims = widen::get(ds).dims;
-        std::vector<int> const& sdims = widen::get(ss).dims;
-        if (ddims != sdims) {
-            diagnostic::report(diag, {rhs.file_id, rhs.tok,
-                "Cannot assign '" + from + "' to '" + to
-                + "'; array shape differs.", {}});
-            return;
-        }
-        checkAggregateShapeMatch(widen::get(ds).elem, widen::get(ss).elem,
-                                 rhs, diag);
+    bool dAgg = isAggregateType(ds);
+    bool sAgg = isAggregateType(ss);
+    if (dAgg != sAgg) {
+        diagnostic::report(diag, {rhs.file_id, rhs.tok,
+            "Cannot assign '" + widen::spellOrEmpty(src) + "' to '"
+            + widen::spellOrEmpty(dest) + "'.", {}});
         return;
     }
-    if (df == F::kTuple || sf == F::kTuple) {
-        if (df != F::kTuple || sf != F::kTuple) {
-            diagnostic::report(diag, {rhs.file_id, rhs.tok,
-                "Cannot assign '" + from + "' to '" + to + "'.", {}});
-            return;
-        }
-        auto const& dslots = widen::get(ds).slots;
-        auto const& sslots = widen::get(ss).slots;
-        if (dslots.size() != sslots.size()) {
-            diagnostic::report(diag, {rhs.file_id, rhs.tok,
-                "Cannot assign '" + from + "' to '" + to + "'; slot count differs ("
-                + std::to_string(sslots.size()) + " vs "
-                + std::to_string(dslots.size()) + ").", {}});
-            return;
-        }
-        for (std::size_t i = 0; i < dslots.size(); i++) {
-            checkAggregateShapeMatch(dslots[i], sslots[i], rhs, diag);
+    if (!dAgg) {
+        // Leaf: the typed-value widen check (pointer / class leaves are covered by
+        // checkPtrAssign / checkSlidAssign at the top level).
+        if (!isPtrLikeType(dest) && !isPtrLikeType(src)) {
+            checkValueWiden(dest, src, rhs.file_id, rhs.tok, diag);
         }
         return;
     }
-    // Leaf: typed-value widen check at the classify level (so codegen's
-    // widen::convert reduces to pure lowering + asserts). Pointer-like / class
-    // leaves are covered by checkPtrAssign / checkSlidAssign at the top level
-    // — the recursive aggregate walk here only handles numeric leaves; a
-    // pointer/class slot in an aggregate would have failed earlier checks.
-    if (!isPtrLikeType(dest) && !isPtrLikeType(src)) {
-        checkValueWiden(dest, src, rhs.file_id, rhs.tok, diag);
+    int dn = aggregateSlotCount(ds);
+    int sn = aggregateSlotCount(ss);
+    if (dn != sn) {
+        // Two arrays whose dimensions differ read most clearly as a shape
+        // mismatch; any other count mismatch (tuple arity, or a cross-form
+        // count) names the differing slot counts.
+        bool bothArray = widen::form(ds) == widen::Type::Form::kArray
+                      && widen::form(ss) == widen::Type::Form::kArray;
+        std::string detail = bothArray
+            ? "'; array shape differs."
+            : "'; slot count differs (" + std::to_string(sn) + " vs "
+                  + std::to_string(dn) + ").";
+        diagnostic::report(diag, {rhs.file_id, rhs.tok,
+            "Cannot assign '" + widen::spellOrEmpty(src) + "' to '"
+            + widen::spellOrEmpty(dest) + detail, {}});
+        return;
+    }
+    for (int i = 0; i < dn; i++) {
+        // Capture both slot types BEFORE recursing (a nested recursion may intern,
+        // dangling a held widen::get ref).
+        widen::TypeRef dSlot = aggregateSlotType(ds, i);
+        widen::TypeRef sSlot = aggregateSlotType(ss, i);
+        checkAggregateShapeMatch(dSlot, sSlot, rhs, diag);
     }
 }
 
@@ -2348,10 +2316,12 @@ void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
         classifyArrayFromTuple(tree, dest, rhs, diag);
     } else if (isArrayFromTuple(dest, rhs)) {
         classifyArrayFromTuple(tree, dest, rhs, diag);
-    } else if (isArrayFromTupleValue(dest, rhs)) {
-        classifyArrayFromTupleValue(dest, rhs, diag);
-    } else if (isTupleFromArrayValue(dest, rhs)) {
-        classifyTupleFromArrayValue(dest, rhs, diag);
+    } else if (isArrayFromTupleValue(dest, rhs) || isTupleFromArrayValue(dest, rhs)) {
+        // A CROSS-FORM aggregate VALUE copy (array <-> tuple). An array is a
+        // homogeneous tuple, so the same form-agnostic shape check applies: slot
+        // count at every level AND per-leaf widen (the count-only check this used
+        // to do let a leaf NARROW slip through to a codegen assert).
+        checkAggregateShapeMatch(dest, rhs.inferred_type, rhs, diag);
     } else if (checkArrayValueAssign(dest, rhs, diag)) {
         // array VALUE rhs — handled (matched, or mismatch reported).
     } else {
