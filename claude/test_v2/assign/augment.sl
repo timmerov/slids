@@ -36,12 +36,20 @@ emitExpr statement-kind guard). grammar only parses it into the node.
 Coverage added this pass: variable / complex rhs (xv/yv) — the whole rhs is one
 grouped operand of the lowered op (`xv *= yv+1` is 13*(3+1)=52, not 40).
 
-Open — COMPLEX-LHS op= (arr[i]+=1, p^+=1, obj.f+=1): a PARSE ERROR today, since
-the complex-lvalue store path (grammar.cpp:1315) accepts only `=`; the op=
-branch lives solely in the bare-name path. NOT scheduled in plan.txt or todo.txt
-(plan Phase 4 landed complex lvalues only as `=` store targets). Implementing it
-needs desugar to bind the lhs address to a temp for single-evaluation of a
-side-effecting lhs, then positive side-effect tests.
+Complex-LHS op= (arr[i] += 1, p^ += 1, obj.f += 1) LANDED — the name-led lvalue
+chain takes the aug-assign family, and desugar binds the leaf address once into a
+hidden `_$lv` reference for single-evaluation of a side-effecting lhs (positive
+cases in assign/lvalue.sl).
+
+AGGREGATE op= (the lvalue or its element is itself an aggregate) LANDED. Arrays and
+tuples are one homogeneous-aggregate shape sharing ONE slot-wise arithmetic path:
+`tuple op= tuple`, `array op= array`, and mixed `array op= tuple` / `tuple op=
+array` (incl. `row[1] += (10,20)`) all apply element-wise — matching shape required,
+a MIXED array/tuple result is a TUPLE stored back through the array<->tuple relation,
+nested aggregate slots recurse, a scalar broadcasts. classify routes the aug-assign
+through the SAME path the binary op uses (a shared aggregateArithType), so
+`lhs op= rhs` can't diverge from `lhs op rhs`; a per-leaf narrow is rejected at
+classify. Coverage in tuple/anon.sl, tuple/array.sl, tuple/combined.sl.
 */
 
 int32 main() {

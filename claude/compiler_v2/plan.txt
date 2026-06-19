@@ -279,6 +279,19 @@ Phase 4 — types beyond primitives
     DELETING the redundant codegen rank check [classify owns over-index]; composes
     alias-element nested arrays + array->tuple->array; the seam class op[] plugs into
     at Phase 5. STOP-AT-FIRST-ERROR added to codegen.)
+  * aggregate arithmetic (array/tuple, element-wise)                LANDED
+    (arrays and tuples are one homogeneous-aggregate shape sharing ONE slot-wise
+    arith/bitwise path: tuple op tuple, array op array, mixed array op tuple /
+    tuple op array [a mixed result is a TUPLE; array op array stays an array], + a
+    scalar broadcast into a tuple. Matching shape required; nested aggregate slots
+    RECURSE; a per-leaf narrow is rejected at classify. classify::aggregateArithType
+    is the single inference — the binary arm AND the aug-assign arith arm both call
+    it, so `lhs op= rhs` can't diverge from `lhs op rhs`; checkAggregateStoreWiden
+    gates the op= store-back [cross-form, allows array<-tuple]; codegen::emit-
+    AggregateArith builds the result via extract/insertvalue. Fixed the element-+=-
+    tuple crash + array+array invalid IR + the array+tuple confusing error. SHIFT
+    not yet slot-wise + nested cross-form assignment = todo BUGS. Coverage:
+    tuple/anon.sl, tuple/array.sl, tuple/combined.sl.)
   * for-array (`for (var : arr)`)                                  LANDED
     (DESUGAR-stage lowering to kForLongStmt: resolve UNDERSTANDS it
     [understandForArray, retags kForArrayStmt], desugar's lowerForArray builds a

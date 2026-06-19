@@ -285,6 +285,35 @@ int32 main() {
         __println(m11[0][0]);                                               // 7
     }
 
+    /* array arithmetic — element-wise, an array is a homogeneous tuple. An
+       array op array stays an ARRAY; op= applies the same path. */
+    {
+        int aa[3] = (1, 2, 3);
+        int bb[3] = (10, 20, 30);
+        int sum[3] = aa + bb;                 // array + array -> array: (11,22,33)
+        __println("aa+bb= " + sum[0] + " " + sum[1] + " " + sum[2]);   // 11 22 33
+        aa += bb;                             // array op= array
+        __println("aa+=bb= " + aa[0] + " " + aa[1] + " " + aa[2]);     // 11 22 33
+
+        // multi-dim: element-wise over the whole shape, and op= on a sub-array row.
+        int mm[2][2] = ((1,2),(3,4));
+        int nn[2][2] = ((10,20),(30,40));
+        mm += nn;
+        __println("mm+=nn= " + mm[0][0] + " " + mm[1][1]);            // 11 44
+        mm[0] += (100, 200);                  // op= on a sub-array (array += tuple)
+        __println("mm[0]+= " + mm[0][0] + " " + mm[0][1]);            // 111 222
+
+        // float elements (the float instr path per element).
+        float32 fa[2] = (1.5, 2.5);
+        fa += (0.25, 0.25);
+        __println("fa+= " + fa[0] + " " + fa[1]);                     // 1.75 2.75
+
+        // bitwise, element-wise.
+        int bw[2] = (12, 12);
+        bw &= (10, 6);
+        __println("bw&= " + bw[0] + " " + bw[1]);                     // 8 4
+    }
+
     return 0;
 }
 
@@ -457,4 +486,29 @@ int32 main() {
 //    alias Vec2 = int[2];
 //    Vec2 va[2] = ((1,2,3), (4,5));
 //    return va[0][0];
+//}
+
+/* comparison is not defined on an array (arith / bitwise apply element-wise). */
+//-EXPECT-ERROR: Operator '==' is not defined on an array
+//int neg_array_cmp() {
+//    int a[2] = (1,2);
+//    int b[2] = (1,2);
+//    bool z = a == b;
+//    return z;
+//}
+
+/* an aggregate op= whose result would NARROW back into the lvalue element. */
+//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
+//int neg_array_narrow() {
+//    int8 a[2] = (1,2);
+//    a += (1000, 2000);
+//    return a[0];
+//}
+
+/* a bitwise op on a float element/slot. */
+//-EXPECT-ERROR: Bitwise '&' not defined on a floating-point slot
+//int neg_array_bitwise_float() {
+//    float32 a[2] = (1.0, 2.0);
+//    a &= (1.0, 1.0);
+//    return 0;
 //}

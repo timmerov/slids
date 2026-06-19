@@ -306,6 +306,21 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     (`(int,int,int,int) t = a1` / `int a4[4] = t4`, extractvalue/insertvalue, per-
     slot widen); PARTIAL-index lvalues (sub-array assign `td[1]=(100,101)` + sub-
     array value read). See [[project_v2_array_types]].
+  * AGGREGATE ARITHMETIC — arrays and tuples are one homogeneous-aggregate shape and
+    share ONE slot-wise arith/bitwise path: `tuple op tuple`, `array op array`, and
+    mixed `array op tuple` / `tuple op array` (a mixed result is always a TUPLE — the
+    heterogeneous-capable shape; array op array stays an array), plus a scalar
+    BROADCAST into a tuple. Matching shape required; nested aggregate slots RECURSE
+    (array-of-tuples op array-of-tuples); a per-element narrow is rejected at classify.
+    classify::aggregateArithType is the SINGLE inference — the kBinaryExpr arm AND the
+    kAugAssignStmt arith arm both call it, so `lhs op= rhs` can't diverge from
+    `lhs op rhs`; the op= store-back is gated by checkAggregateStoreWiden (cross-form
+    per-leaf widen, allowing array<-tuple). codegen::emitAggregateArith builds the
+    result via extractvalue/insertvalue (an array `[N x T]` aggregates like a struct),
+    recursing for a nested slot. Comparison on an aggregate is rejected; SHIFT is the
+    one binary op not yet slot-wise (rejected on an aggregate — todo BUGS). NESTED
+    cross-form assignment (a tuple-of-tuples value into a tuple-of-arrays) is still a
+    gap (todo BUGS).
   * ARRAY TYPES (`int[N]`): parseType parses sized dims, so array types compose —
     tuple slots `(int[3],int[4])`, alias RHS, params, returns `int[3] f()`. Variable
     decls stay name-anchored `int x[3]` (reject_array_dims rejects a top-level

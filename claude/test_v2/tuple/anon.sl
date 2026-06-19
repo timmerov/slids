@@ -136,6 +136,22 @@ int32 main() {
     (int, int, int) d3 = 100 - a3;     // scalar on the LEFT: (99, 98, 97)
     __println("d3= " + d3[0] + " " + d3[1] + " " + d3[2]);   // 99 98 97
 
+    /* compound (op=) on a tuple — element-wise, the SAME path as the binary op. */
+    (int, int, int) e3 = (10, 20, 30);
+    e3 += (1, 2, 3);                   // (11, 22, 33)
+    __println("e3+= " + e3[0] + " " + e3[1] + " " + e3[2]);   // 11 22 33
+    e3 *= (2, 2, 2);                   // (22, 44, 66)
+    __println("e3*= " + e3[0] + " " + e3[1] + " " + e3[2]);   // 22 44 66
+
+    /* float-element slot-wise arithmetic (the float instr path per slot). */
+    (float32, float32) f2 = (1.5, 2.5);
+    f2 += (0.25, 0.25);                // (1.75, 2.75)
+    __println("f2= " + f2[0] + " " + f2[1]);                  // 1.75 2.75
+
+    /* bitwise, element-wise. */
+    (int, int) bw = (12, 12) & (10, 6);
+    __println("bw= " + bw[0] + " " + bw[1]);                  // 8 4
+
     /* landing 4 — tuple through functions */
 
     (int, int) q = (10, 20);
@@ -208,3 +224,21 @@ int32 main() {
 
     return 0;
 }
+
+/* compile errors — each uncommented in isolation by the negative runner. */
+
+/* comparison is not defined on a tuple (only arith / bitwise apply slot-wise). */
+//-EXPECT-ERROR: Operator '==' is not defined on a tuple
+//int neg_tuple_cmp() {
+//    (int,int) a = (1,2);
+//    bool z = a == (1,2);
+//    return z;
+//}
+
+/* tuple operands of differing shape have no element-wise result. */
+//-EXPECT-ERROR: Aggregate shapes differ
+//int neg_tuple_shape() {
+//    (int,int) a = (1,2);
+//    (int,int,int) b = a + (1,2,3);
+//    return b[0];
+//}

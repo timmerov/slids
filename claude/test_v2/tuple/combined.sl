@@ -34,7 +34,29 @@ complex mixed assignments:
 /*
 claude says:
 
-tbd
+arrays and tuples are ONE homogeneous-aggregate shape — an array is a tuple whose
+slots are identical and runtime-indexable. They interoperate by slot/element,
+iteratively and recursively, in both assignment and arithmetic.
+
+covered here:
+  - array of tuples / multi-dim array of tuples / tuple of arrays, read + store
+    through the composed index chain; alias-typed array elements; const-expr dims
+    in a tuple slot type (folded + baked, ##type reports the baked dims).
+  - MIXED arithmetic: array op tuple and tuple op array. Both run element-wise
+    (matching shape required) and yield a TUPLE — the more general heterogeneous-
+    capable shape — so ##type(array + tuple) is a tuple. op= mixes the same way:
+    the lvalue's kind is the store target (array += tuple stores the tuple result
+    back through the array<-tuple relation; tuple += array stores into the tuple),
+    and the arithmetic itself is the shared slot-wise path (the SAME one the binary
+    op uses — classify routes aug-assign through it so they can't diverge).
+
+the slot-wise arithmetic recurses for a nested aggregate slot (array-of-tuples op
+array-of-tuples) and broadcasts a scalar; a per-element narrow is rejected at
+classify. array op array stays an array; tuple op tuple stays a tuple (those live
+in array.sl / anon.sl).
+
+negatives: a const-expr tuple-slot dim is fine, a runtime dim isn't; an array /
+tuple VALUE element whose type / arity doesn't match the declared element.
 */
 
 int32 main() {
@@ -64,6 +86,36 @@ int32 main() {
     const int kN = 3;
     (int[kN], int[kN + 1]) t5 = ((1,2,3), (4,5,6,7));
     __println(##type(t5) + " t5= " + t5[0][2] + " " + t5[1][1]);  // (int[3], int[4]) t5= 3 5
+
+    /* MIXED array/tuple arithmetic — element-wise; a mixed result is a TUPLE
+       (array op tuple AND tuple op array both yield a tuple, the more general
+       heterogeneous-capable shape). */
+    int32 ma[2] = (1, 2);
+    (int32, int32) mt = (10, 20);
+    (int32, int32) mr = ma + mt;                   // array op tuple -> tuple
+    __println(##type(mr) + " mr= " + mr[0] + " " + mr[1]);   // (int32, int32) mr= 11 22
+    (int32, int32) mr2 = mt + ma;                  // tuple op array -> tuple
+    __println("mr2= " + mr2[0] + " " + mr2[1]);    // 11 22
+
+    /* op= with mixed operands: the lvalue's kind is the store target; the
+       arithmetic result is a tuple either way, stored back through the relation. */
+    mt += ma;                                      // tuple lvalue += array
+    __println("mt+=ma= " + mt[0] + " " + mt[1]);   // 11 22
+    ma += (100, 200);                              // array lvalue += tuple
+    __println("ma+=t= " + ma[0] + " " + ma[1]);    // 101 202
+
+    /* an ALIAS-typed array operand mixes the same way (strip sees the array). */
+    Vec2 va2 = (5, 6);
+    (int, int) vr = va2 + (1, 1);                  // alias-array op tuple -> tuple
+    __println("vr= " + vr[0] + " " + vr[1]);       // 6 7
+
+    /* NESTED aggregate arithmetic — an array of tuples op= an array of tuples: the
+       per-element op RECURSES into each tuple slot. */
+    (int, int) np[2] = ((1,2), (3,4));
+    (int, int) nq[2] = ((10,20), (30,40));
+    np += nq;
+    __println("np= " + np[0][0] + " " + np[0][1] + " "
+              + np[1][0] + " " + np[1][1]);        // 11 22 33 44
 
     return 0;
 }

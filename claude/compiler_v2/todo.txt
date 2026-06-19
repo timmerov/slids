@@ -8,14 +8,29 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * COMPLEX AUG-ASSIGN OF A TUPLE INTO AN ARRAY-TYPED ELEMENT — `row[1] += (10, 20)`
-    where `row[1]` is an element of array type (`int32[2]`) SEGFAULTS slidsc at
-    compile time. The aug-assign leaf is itself an aggregate, so tryDesugarAugAssign's
-    `_$lv^ = _$lv^ + (10,20)` builds a per-element broadcast over an array leaf that
-    the complex-lvalue aug-assign path mishandles. Independent of PPID (crashes with
-    no inc/dec present). Repro: a 2D-array element `+=` a tuple — expression/ppid.sl's
-    `row[++k] += (10,20)` aspirational line hits it. Fix: handle an aggregate leaf in
-    the complex aug-assign broadcast (or reject it cleanly instead of crashing).
+  * NESTED CROSS-FORM AGGREGATE ASSIGNMENT — a tuple-of-tuples VALUE into a
+    tuple-of-arrays (or any nested array<->tuple form mismatch) is rejected:
+    `(int[2],int[2]) b = ((1,2),(3,4))`, and `(int[2],int[2]) a + ((10,20),(30,40))`
+    (mixed nested arithmetic), both hit checkAggregateShapeMatch's cross-form reject
+    ("Cannot assign '(int,int)' to 'int[2]'") at a NESTED slot. The TOP-LEVEL
+    array<->tuple value copy is allowed, but checkAggregateShapeMatch's recursion
+    demands the SAME form at every inner level. (A nested tuple LITERAL also can't
+    spell a tuple-of-arrays — literal shape ambiguity.) Fix: let
+    checkAggregateShapeMatch + the codegen aggregate-convert seam treat array and
+    tuple as the same shape at every level, the way aggregateArithType /
+    checkAggregateStoreWiden already do.
+
+  * AGGREGATE SHIFT NOT SLOT-WISE — `<<` / `>>` (and `<<=` / `>>=`) reject an array
+    or tuple operand ("Shift left-hand side must be numeric"), even though every
+    other binary op (+ - * / % & | ^) now applies element-wise over aggregates. The
+    shift arm (gated on isNumericType) runs BEFORE the slot-wise aggregate path, so
+    an aggregate never reaches it. For consistency with the homogeneous-tuple model
+    a shift should be slot-wise too: `tuple << n` broadcasts the count per slot,
+    `tuple << tuple` shifts per slot (same for arrays). Fix: route the shift arm
+    through the slot-wise aggregate path (classify aggregateArithType + codegen
+    emitAggregateArith) when either operand is an aggregate, emitting a per-slot
+    shift; the shift has its own instr/typing (count needn't match the slot type),
+    so the shared path needs a shift-aware leaf op rather than emitArithInstr.
 
 DEFERRED FEATURES (later; may not be on the plan)
 
@@ -320,3 +335,7 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     `int arr[1] = 2` / `int m[1][1] = 7` now works — checkValueAssign wraps the bare
     scalar in dims-deep 1-tuples.) Needs a non-collapsing 1-tuple spelling — same
     root as CLASS-FIELD INIT FROM A SIZE-1 TUPLE below; defer with it.
+
+  * arrays are homogeneous tuples. anonymous tuples can do scalar distribution.
+    therefore, arrays should too.
+    array = array + 1; array += 1; ++array;
