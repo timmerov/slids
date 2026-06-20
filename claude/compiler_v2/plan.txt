@@ -371,11 +371,11 @@ Phase 4 — types beyond primitives
     + bool + char] for scalar leaves: float->int truncates toward zero, int->int
     reinterprets the low N bits per target signedness [same-width sign change is
     a free no-op], ->bool is a nonzero/non-null test, ->float is sitofp/uitofp/
-    fpext/fptrunc. Tuple/array targets walk in LOCKSTEP per slot/element — a
-    tuple converts iff the source is a tuple of the same arity and each slot
-    pair converts; an array iff the source has the same dims and the element
-    types convert; the recursion composes freely (tuple-of-array, array-of-
-    tuple, multi-dim, nested). classify gates [classify::checkConvertCompat]:
+    fpext/fptrunc. AGGREGATE targets convert FORM-AGNOSTIC [an array IS a
+    homogeneous tuple]: the source may be a tuple OR array, matched by slot/element
+    COUNT and recursed per slot — so CROSS-FORM `(int[2]=(1,2))` / `((int,int)=arr)`
+    works, any nesting [tuple-of-array, array-of-tuple, multi-dim]; aggregate-vs-
+    scalar rejects. classify gates [classify::checkConvertCompat]:
     pointer/iterator/anyptr -> "may not be a pointer type"; void -> "must be a
     value type"; class -> "conversion to a class is not yet implemented"; a
     value source converts to any value target; a pointer/iterator source
@@ -383,10 +383,10 @@ Phase 4 — types beyond primitives
     with op=(Type^) [Phase 5]. constfold tryFoldConvert folds a SCALAR literal
     operand to a strong target-typed literal so a conversion can initialize a
     const or size an array dimension. Lowering: scalar leaves go through
-    widen::convertExplicit [the full grid]; tuple/array targets use codegen::
-    emitConvertWalk [build the result aggregate from `undef` via extractvalue/
-    insertvalue at each slot/element, recurse on each pair, leaf bottoms out
-    at convertExplicit]. codegen arm mirrors the cast [emit operand ->
+    widen::convertExplicit [the full grid]; aggregate targets use codegen::
+    emitConvertWalk [FORM-AGNOSTIC: recurse on the DST slots, extractvalue the
+    source slot by index (identical for array/struct), insertvalue into the result,
+    leaf bottoms out at convertExplicit]. codegen arm mirrors the cast [emit operand ->
     emitConvertWalk -> flex into dest]. test_v2/assign/typeconv.sl. DEFERRED
     to Phase 5: a CLASS target `(String = "...")` / `(Class = Type^)` [class
     assignment-conversion] and a USER-NAMED TOP-LEVEL target [the tuple-led

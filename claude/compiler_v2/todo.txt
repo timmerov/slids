@@ -8,11 +8,7 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * array assigned from tuple works:
-        int arr[2] = (1,2);
-    therefore type conversion from tuple to array should also work:
-        int arr[2] = (int[2]=(1,2))
-    but it doesn't.
+  (none open)
 
 DEFERRED FEATURES (later; may not be on the plan)
 

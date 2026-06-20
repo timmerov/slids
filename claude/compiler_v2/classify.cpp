@@ -317,45 +317,34 @@ bool checkConvertCompat(widen::TypeRef dst, widen::TypeRef src,
             "Cannot convert to '" + to + "'; the target must be a value type.", {}});
         return true;
     }
-    if (df == F::kTuple) {
-        if (sf != F::kTuple) {
+    // An array IS a homogeneous tuple — convert array and tuple as the SAME shape at
+    // every level (slot count + per-leaf convert), so a CROSS-FORM conversion
+    // (`(int[2]=(1,2))`, `((int,int)=anIntArray)`) is accepted, mirroring the
+    // form-agnostic array<->tuple VALUE assignment. The leaf still uses the explicit
+    // value grid below (so narrowing is permitted, unlike an implicit assign).
+    if (df == F::kTuple || df == F::kArray || sf == F::kTuple || sf == F::kArray) {
+        bool dAgg = (df == F::kTuple || df == F::kArray);
+        bool sAgg = (sf == F::kTuple || sf == F::kArray);
+        if (dAgg != sAgg) {                          // aggregate vs scalar — no convert
             diagnostic::report(diag, {file_id, tok,
-                "Cannot convert '" + from + "' to '" + to
-                + "'; the source must be a tuple.", {}});
+                "Cannot convert '" + from + "' to '" + to + "'.", {}});
             return true;
         }
-        auto const& dslots = widen::get(ds).slots;
-        auto const& sslots = widen::get(ss).slots;
-        if (dslots.size() != sslots.size()) {
+        int dn = aggregateSlotCount(ds);
+        int sn = aggregateSlotCount(ss);
+        if (dn != sn) {
             diagnostic::report(diag, {file_id, tok,
                 "Cannot convert '" + from + "' to '" + to + "'; slot count differs ("
-                + std::to_string(sslots.size()) + " vs "
-                + std::to_string(dslots.size()) + ").", {}});
+                + std::to_string(sn) + " vs " + std::to_string(dn) + ").", {}});
             return true;
         }
         bool any = false;
-        for (std::size_t i = 0; i < dslots.size(); i++) {
-            if (checkConvertCompat(dslots[i], sslots[i], file_id, tok, diag)) any = true;
+        for (int i = 0; i < dn; i++) {
+            widen::TypeRef dSlot = aggregateSlotType(ds, i);   // capture before recurse
+            widen::TypeRef sSlot = aggregateSlotType(ss, i);
+            if (checkConvertCompat(dSlot, sSlot, file_id, tok, diag)) any = true;
         }
         return any;
-    }
-    if (df == F::kArray) {
-        if (sf != F::kArray) {
-            diagnostic::report(diag, {file_id, tok,
-                "Cannot convert '" + from + "' to '" + to
-                + "'; the source must be an array.", {}});
-            return true;
-        }
-        auto const& ddims = widen::get(ds).dims;
-        auto const& sdims = widen::get(ss).dims;
-        if (ddims != sdims) {
-            diagnostic::report(diag, {file_id, tok,
-                "Cannot convert '" + from + "' to '" + to
-                + "'; array shape differs.", {}});
-            return true;
-        }
-        return checkConvertCompat(widen::get(ds).elem, widen::get(ss).elem,
-                                  file_id, tok, diag);
     }
     if (df == F::kSlid) {
         diagnostic::report(diag, {file_id, tok,

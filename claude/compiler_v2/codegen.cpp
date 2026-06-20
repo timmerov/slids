@@ -44,6 +44,8 @@ bool isAstLvalue(ast::Node const& n);
 std::string emitLvalueAddr(ast::Node const& lv, SymTab const& syms,
                            strings::Pool& pool, std::ostream& out,
                            diagnostic::Sink& diag, bool allow_partial = false);
+int cgAggSlotCount(widen::TypeRef t);
+widen::TypeRef cgAggSlotType(widen::TypeRef t, int i);
 std::string emitConvertWalk(std::string const& src_val,
                             widen::TypeRef src, widen::TypeRef dst,
                             std::ostream& out);
@@ -874,63 +876,29 @@ std::string emitConvertWalk(std::string const& src_val,
                             std::ostream& out) {
     using F = widen::Type::Form;
     widen::TypeRef ds = widen::strip(dst);
-    widen::TypeRef ss = widen::strip(src);
     F df = widen::form(ds);
-    if (df == F::kTuple) {
-        std::vector<widen::TypeRef> dslots = widen::get(ds).slots;
-        std::vector<widen::TypeRef> sslots = widen::get(ss).slots;
+    // Aggregate: walk the destination's slots, extracting the matching source slot.
+    // extractvalue's integer index is identical for an LLVM array `[N x T]` and a
+    // struct, so the SAME walk converts array <-> tuple at any nesting (cross-form);
+    // slot TYPES decompose form-agnostically on each side. (Mirrors
+    // emitImplicitAggregateConvert; the leaf op differs — convertExplicit.)
+    if (df == F::kTuple || df == F::kArray) {
+        int n = cgAggSlotCount(ds);
         std::string src_ll = llvmForRef(src);
         std::string dst_ll = llvmForRef(dst);
         std::string result = "undef";
-        for (std::size_t i = 0; i < dslots.size(); i++) {
-            std::string slot_ll = llvmForRef(dslots[i]);
+        for (int i = 0; i < n; i++) {
+            widen::TypeRef dSlot = cgAggSlotType(ds, i);
+            widen::TypeRef sSlot = cgAggSlotType(widen::strip(src), i);
+            std::string slot_ll = llvmForRef(dSlot);
             std::string slot_src = newTmp("extt");
             out << "  " << slot_src << " = extractvalue " << src_ll
                 << " " << src_val << ", " << i << "\n";
-            std::string slot_conv = emitConvertWalk(slot_src, sslots[i],
-                                                    dslots[i], out);
+            std::string slot_conv = emitConvertWalk(slot_src, sSlot, dSlot, out);
             std::string next = newTmp("inst");
             out << "  " << next << " = insertvalue " << dst_ll
                 << " " << result << ", " << slot_ll
                 << " " << slot_conv << ", " << i << "\n";
-            result = next;
-        }
-        return result;
-    }
-    if (df == F::kArray) {
-        // Peel ONE outer dim at a time. With dims = [N, ...], the LLVM type is
-        // [N x <inner>]; extractvalue [i] yields the inner-array (or the leaf
-        // when there's only one dim). Recursing on the inner type handles the
-        // remaining dims AND any non-array elem (a tuple, eventually a class).
-        std::vector<int> ddims = widen::get(ds).dims;
-        std::vector<int> sdims = widen::get(ss).dims;
-        widen::TypeRef d_elem = widen::get(ds).elem;
-        widen::TypeRef s_elem = widen::get(ss).elem;
-        widen::TypeRef d_inner;
-        widen::TypeRef s_inner;
-        if (ddims.size() == 1) {
-            d_inner = d_elem;
-            s_inner = s_elem;
-        } else {
-            std::vector<int> drem(ddims.begin() + 1, ddims.end());
-            std::vector<int> srem(sdims.begin() + 1, sdims.end());
-            d_inner = widen::internArray(d_elem, drem);
-            s_inner = widen::internArray(s_elem, srem);
-        }
-        int outer_dim = ddims[0];
-        std::string src_ll = llvmForRef(src);
-        std::string dst_ll = llvmForRef(dst);
-        std::string inner_dst_ll = llvmForRef(d_inner);
-        std::string result = "undef";
-        for (int i = 0; i < outer_dim; i++) {
-            std::string elt_src = newTmp("exta");
-            out << "  " << elt_src << " = extractvalue " << src_ll
-                << " " << src_val << ", " << i << "\n";
-            std::string elt_conv = emitConvertWalk(elt_src, s_inner, d_inner, out);
-            std::string next = newTmp("insa");
-            out << "  " << next << " = insertvalue " << dst_ll
-                << " " << result << ", " << inner_dst_ll
-                << " " << elt_conv << ", " << i << "\n";
             result = next;
         }
         return result;

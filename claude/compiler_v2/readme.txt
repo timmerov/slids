@@ -1132,9 +1132,12 @@ STAGE FILES (.h / .cpp pairs)
             checkConvertCompat — a lockstep recursive walk of target vs source:
             pointer-like target -> "may not be a pointer type"; void -> "must be
             a value type"; class -> "conversion to a class is not yet
-            implemented" (deferred until op= lands); tuple target -> source must
-            be a tuple of the same arity, per-slot recurse; array target ->
-            source must be an array of the same dims, element recurse; leaf
+            implemented" (deferred until op= lands); AGGREGATE target (tuple or
+            array) -> FORM-AGNOSTIC (an array IS a homogeneous tuple): the source
+            may be a tuple OR array, matched by slot/element COUNT
+            (aggregateSlotCount) and recursed per slot, so a CROSS-FORM conversion
+            (`(int[2]=(1,2))`, `((int,int)=anIntArray)`, any nesting) works;
+            aggregate-vs-scalar rejects ("Cannot convert ..."); leaf
             (primitive) target -> a value source converts to any value target,
             a pointer/iterator source converts ONLY to `bool` or `intptr` (else
             "a pointer converts only to 'bool' or 'intptr'"), a non-value source
@@ -1359,14 +1362,13 @@ STAGE FILES (.h / .cpp pairs)
             conversion path (an ungated ptr->non-intptr would store a `ptr` as an
             integer; classify rejects them, so this guards against a missed gate).
             A kConvertExpr (`(Type = expr)`) emits the operand at its own type,
-            then dispatches to emitConvertWalk (target->target lockstep): a
-            tuple/array target builds the result aggregate from `undef` via
-            extractvalue/insertvalue at each slot/element and recurses pair-wise
-            on each leaf; a primitive (leaf) target calls widen::convertExplicit.
-            The walk mirrors classify's checkConvertCompat shape. ARENA SAFETY:
-            slots/dims/elem are captured BY VALUE before the loop (widen::get
-            returns a ref into the reallocatable arena; recursion into a
-            multi-dim sub-array calls internArray and would dangle a held ref).
+            then dispatches to emitConvertWalk, now FORM-AGNOSTIC: it recurses on
+            the DST's slots (cgAggSlotCount/cgAggSlotType) and extractvalues the
+            source slot by index — the index is identical for an LLVM array
+            `[N x T]` and a struct, so ONE walk converts array <-> tuple at any
+            nesting (cross-form) — building the result from `undef` via insertvalue;
+            a primitive (leaf) target calls widen::convertExplicit. Mirrors classify's
+            (also form-agnostic) checkConvertCompat + emitImplicitAggregateConvert.
             convertExplicit is the FULL value grid (sibling to convert, which
             only widens): trunc / sext / zext / fptrunc / fpext / fptosi /
             fptoui / sitofp / uitofp, a same-width int change is a no-op (sign

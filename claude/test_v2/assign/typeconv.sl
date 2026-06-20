@@ -283,6 +283,22 @@ int32 main() {
     __println("aoi = (" + aoi[0][0] + "," + aoi[0][1] + ") ("
               + aoi[1][0] + "," + aoi[1][1] + ")");                          // (65,66) (67,68)
 
+    /* CROSS-FORM conversion — an array IS a homogeneous tuple, so the source need
+       not match the target's form: a tuple converts to an array target and an array
+       to a tuple target (slot count must match; the leaf still uses the explicit
+       grid, so per-leaf narrowing is allowed). */
+    int xfca[2] = (int[2] = (1, 2));          // tuple literal -> array
+    __println("xfca = " + xfca[0] + " " + xfca[1]);                          // 1 2
+    int xfav[3] = (4, 5, 6);
+    xfct = ((int,int,int) = xfav);            // array value -> tuple
+    __println("xfct = (" + xfct[0] + "," + xfct[1] + "," + xfct[2] + ")");   // (4,5,6)
+    (int[2], int[2]) xftoa = ((1,2), (3,4));
+    xfaot = ((int,int)[2] = xftoa);           // tuple-of-arrays -> array-of-tuples
+    __println("xfaot = " + xfaot[0][0] + " " + xfaot[0][1] + " "
+              + xfaot[1][0] + " " + xfaot[1][1]);                            // 1 2 3 4
+    xfcn = (int8[2] = (300, 2));              // cross-form + explicit per-leaf narrow
+    __println("xfcn = " + xfcn[0] + " " + xfcn[1]);                          // 44 2
+
     /* pointer-leaf in a tuple slot (positive): each pointer source converts to
        bool or intptr per the existing leaf rule, applied through the per-slot
        walk. */
@@ -338,17 +354,18 @@ int32 main() {
     //int ed = (void = es);
     //__println("x= " + ed);
 
-    /* a tuple/array conversion source must be the same shape — a scalar into a
-       tuple target is a "source must be a tuple" error. */
-    //-EXPECT-ERROR: the source must be a tuple
+    /* a CROSS-FORM tuple<->array conversion is allowed (an array is a homogeneous
+       tuple), but a SCALAR into an aggregate target is not — aggregate-vs-scalar. */
+    //-EXPECT-ERROR: Cannot convert 'int' to '(char, char)'
     //int neg_tuple_target_scalar_src() {
     //    int s = 5;
     //    tpl_es = ((char,char) = s);
     //    return tpl_es[0];
     //}
 
-    /* an array conversion source must be an array of the SAME dims. */
-    //-EXPECT-ERROR: array shape differs
+    /* an aggregate conversion source must match the slot/element COUNT (cross-form
+       array<->tuple is allowed; only a count mismatch rejects). */
+    //-EXPECT-ERROR: slot count differs
     //int neg_array_dim_mismatch() {
     //    char c[4] = ('a', 'b', 'c', 'd');
     //    int a[3] = (int[3] = c);
@@ -363,9 +380,9 @@ int32 main() {
     //    return pair[0];
     //}
 
-    /* an array conversion source must be an array. A scalar source to an array
-       target fires the "source must be an array" rule. */
-    //-EXPECT-ERROR: the source must be an array
+    /* a SCALAR source into an aggregate (array) target is rejected — the cross-form
+       allowance is array<->tuple only, not scalar<->aggregate. */
+    //-EXPECT-ERROR: Cannot convert 'int' to 'int[3]'
     //int neg_array_target_scalar_src() {
     //    int s = 5;
     //    int arr_es[3] = (int[3] = s);
@@ -391,8 +408,8 @@ int32 main() {
     //}
 
     /* inner array shape mismatch — outer tuple arity matches but a tuple slot's
-       inner array dims differ. */
-    //-EXPECT-ERROR: array shape differs
+       inner array dims differ (a count mismatch at a nested level). */
+    //-EXPECT-ERROR: slot count differs
     //int neg_inner_array_dim() {
     //    char a3[3] = (1,2,3);
     //    char a4[4] = (4,5,6,7);
