@@ -119,6 +119,12 @@ int32 main() {
     ((ra, ), rd) = ((4, 5), 6);
     __println("nested2: ra= " + ra + " rd= " + rd);        // 4 6
 
+    /* a MULTI-DIMENSIONAL array destructures into ROW sub-arrays — each slot is a
+       homogeneous tuple one rank smaller (here an int[2] row, inferred). */
+    int md[2][2] = ((1, 2), (3, 4));
+    (mr0, mr1) = md;
+    __println("rows: " + mr0[0] + " " + mr0[1] + " " + mr1[0] + " " + mr1[1]);   // 1 2 3 4
+
     return 0;
 }
 
@@ -170,4 +176,30 @@ int32 main() {
 //int32 neg_type_mismatch() {
 //    (int8 p, int q) = (1, 2);
 //    return p + q;
+//}
+
+/* one name per destructure: a repeated target is rejected whether it would
+   declare a fresh local or reuse an existing variable. */
+//-EXPECT-ERROR: Duplicate destructure target 'y'
+//int32 neg_dup_target() {
+//    (y, y) = (1, 2);
+//    return y;
+//}
+
+/* the one-name rule also rejects a repeat that REUSES an existing variable. */
+//-EXPECT-ERROR: Duplicate destructure target 'a'
+//int32 neg_dup_target_reuse() {
+//    int a = 0;
+//    (a, a) = (1, 2);
+//    return a;
+//}
+
+/* a TYPELESS slot whose name collides with a same-frame NON-LOCAL entry (a const —
+   not a reusable variable) is a duplicate, not a silent shadow. */
+//-EXPECT-ERROR: Duplicate declaration of 'cc'
+//int32 neg_dup_const() {
+//    const int cc = 5;
+//    int z = 0;
+//    (cc, z) = (1, 2);
+//    return z;
 //}

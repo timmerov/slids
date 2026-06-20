@@ -112,3 +112,16 @@ int32 main() {
 //    return a + b;
 //}
 
+/* a non-primitive VALUE parameter is rejected: primitives pass by value, everything
+   else (tuple, class) must be a pointer (reference / iterator) or an array. */
+//-EXPECT-ERROR: A non-primitive parameter must be a pointer
+//int neg_tuple_val( (int, int) t ) {
+//    return t[0] + t[1];
+//}
+
+/* the same rule for a class value parameter. */
+//-EXPECT-ERROR: A non-primitive parameter must be a pointer
+//int neg_class_val( Class c ) {
+//    return c.x_;
+//}
+

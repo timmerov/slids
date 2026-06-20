@@ -431,8 +431,10 @@ Phase 4 — types beyond primitives
   * anonymous tuples (`(T1, T2, ...)`) — LANDED (Form::kTuple + slots, NOT a
     string mechanism). kTupleExpr through all stages. Landed: construct +
     whole-copy + const-index read (runtime tuple index rejected); slot write
-    `t[k]=v` + destructure `(a,b,)=t` (kDestructureStmt, null = skipped slot);
-    slot-wise arith + scalar broadcast; params/returns/references. ARRAY-from-
+    `t[k]=v` + destructure `(a,b,)=t` (kDestructureStmt, null = skipped slot; typed/
+    untyped/nested slots, one-name-per-pattern dup check, MULTI-DIM array rows now
+    destructure — was a dangling-get() crash, fixed); slot-wise arith + scalar
+    broadcast; params/returns/references. ARRAY-from-
     tuple (1-D + multi-dim init/assign, element-wise, widening). FOR-TUPLE
     `for (v:tuple)` (homogeneous; in-place for vars, spill for literals; by
     value/ref). `#x` 5-tuple (`(##file,##line,##type,##name,^x)`). Tests:

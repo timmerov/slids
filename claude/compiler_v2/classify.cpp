@@ -2503,10 +2503,13 @@ std::vector<widen::TypeRef> destructureSlots(widen::TypeRef t) {
     if (widen::form(s) == widen::Type::Form::kTuple) return widen::get(s).slots;
     if (widen::form(s) == widen::Type::Form::kArray) {
         widen::Type const& at = widen::get(s);
+        // Capture the row count BEFORE interning the element type: internArray may
+        // grow the arena's type vector, which dangles `at` (a reference into it).
+        std::size_t count = at.dims.front();
         widen::TypeRef elem = (at.dims.size() <= 1) ? at.elem
             : widen::internArray(at.elem,
                   std::vector<int>(at.dims.begin() + 1, at.dims.end()));
-        return std::vector<widen::TypeRef>(at.dims.front(), elem);
+        return std::vector<widen::TypeRef>(count, elem);
     }
     return {};
 }
@@ -3239,10 +3242,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 slots = widen::get(itup).slots;
             } else if (widen::form(itup) == widen::Type::Form::kArray) {
                 widen::Type const& at = widen::get(itup);
+                std::size_t count = at.dims.front();   // capture before internArray dangles at
                 widen::TypeRef e = (at.dims.size() <= 1) ? at.elem
                     : widen::internArray(at.elem,
                         std::vector<int>(at.dims.begin() + 1, at.dims.end()));
-                slots.assign(at.dims.front(), e);
+                slots.assign(count, e);
             }
             // Both a tuple and an array (expression iterable) route here; name the
             // iterable correctly in diagnostics.

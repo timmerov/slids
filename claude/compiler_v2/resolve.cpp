@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <set>
 #include <string>
 #include <utility>
@@ -2105,18 +2106,30 @@ bool condIsConstTrue(parse::Node const& c) {
 // caller). A TYPED slot declares a fresh local (dup-checked); a TYPELESS slot reuses
 // an enclosing local (flipped to kAssignStmt) or declares a fresh inferred one; a
 // NESTED `(...)` slot (a kDestructureStmt with no rhs) recurses; null is a discard.
+// `seen` carries the names already targeted by THIS destructure (across nested
+// sub-patterns); a name may appear at most once, whether it declares or reuses.
 void resolveDestructureSlots(parse::Tree& tree, parse::Node& node,
+                             std::map<std::string, std::pair<int, int>>& seen,
                              diagnostic::Sink& diag) {
     for (std::size_t i = 1; i < node.children.size(); i++) {
         parse::Node* slot = node.children[i].get();
         if (!slot) continue;   // discard
         if (slot->kind == parse::Kind::kDestructureStmt) {
-            resolveDestructureSlots(tree, *slot, diag);   // nested sub-pattern
+            resolveDestructureSlots(tree, *slot, seen, diag);   // nested sub-pattern
             continue;
         }
+        // One name per destructure: a repeat is a duplicate target whether it
+        // would declare (`(y, y)`) or reuse an existing variable (`(a, a)`).
+        if (auto it = seen.find(slot->name); it != seen.end()) {
+            diagnostic::report(diag, {slot->file_id, slot->name_tok,
+                "Duplicate destructure target '" + slot->name + "'.",
+                {{it->second.first, it->second.second, "first targeted here"}}});
+            continue;
+        }
+        seen.emplace(slot->name, std::make_pair(slot->file_id, slot->name_tok));
         if (slot->return_type != widen::kNoType) {
             resolveDeclType(tree, slot->return_type, slot->file_id,
-                            slot->name_tok, diag);
+                            slot->tok, diag);   // caret the TYPE, not the name
             int dup = parse::findInFrame(tree, parse::currentFrameId(tree),
                                          slot->name);
             if (dup >= 0) {
@@ -2140,6 +2153,16 @@ void resolveDestructureSlots(parse::Tree& tree, parse::Node& node,
                                      == parse::EntryKind::kLocalVar) {
                 slot->resolved_entry_id = existing;
                 slot->kind = parse::Kind::kAssignStmt;   // reuse -> a store
+            } else if (int dup = parse::findInFrame(
+                           tree, parse::currentFrameId(tree), slot->name);
+                       dup >= 0) {
+                // A same-frame entry that is NOT a reusable local (const /
+                // function / class / namespace / alias) is a duplicate, same
+                // as the typed-slot path — not a silent shadow.
+                parse::Entry const& prev = tree.entries[dup];
+                diagnostic::report(diag, {slot->file_id, slot->name_tok,
+                    "Duplicate declaration of '" + slot->name + "'.",
+                    {{prev.file_id, prev.tok, "first declared here"}}});
             } else {
                 parse::Entry e;
                 e.kind = parse::EntryKind::kLocalVar;
@@ -2359,7 +2382,10 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         case parse::Kind::kDestructureStmt:
             // children[0] = rhs (read FIRST), [1..] = declarator / nested slots.
             if (s.children[0]) resolveExpr(tree, *s.children[0], diag);
-            resolveDestructureSlots(tree, s, diag);
+            {
+                std::map<std::string, std::pair<int, int>> seen;
+                resolveDestructureSlots(tree, s, seen, diag);
+            }
             return Completion::Normal;
         case parse::Kind::kDeleteStmt: {
             // delete p; — frees p and nulls it. Resolve the operand as a read (you

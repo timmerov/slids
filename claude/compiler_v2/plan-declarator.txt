@@ -142,15 +142,21 @@ an assignment:
 
   typed   (int x)   declare in the CURRENT scope; same-scope collision is a
                     dup-decl ERROR; an enclosing same-name is shadowed (legal).
-  untyped (x)       lexical-resolve the name: found anywhere up the chain ->
-                    ASSIGN (reuse); found nowhere -> declare-inferred in the
-                    current scope.
+  untyped (x)       lexical-resolve the name: a reusable LOCAL anywhere up the
+                    chain -> ASSIGN (reuse); a same-frame NON-LOCAL (const / fn /
+                    class) -> dup-decl ERROR (not a silent shadow); found nowhere ->
+                    declare-inferred in the current scope.
   nested  ((a,b))   a `( sub-list )` slot -> recurse, matched against the
                     corresponding nested tuple value (per-slot rules apply at the
                     deeper level; names may appear at any depth).
   discard           an empty slot (a bare `,`) OR a TYPED slot with NO name (`int`)
                     -> drop that tuple position. The slot name is OPTIONAL; a
                     typed-no-name slot is a documented drop, same as empty.
+
+ONE NAME PER DESTRUCTURE: a name may target at most once across the WHOLE pattern
+(including nested sub-patterns) — a repeat is a duplicate-target ERROR whether it
+would declare (`(y, y)`) or reuse an existing variable (`(a, a)`). Tracked by a
+per-statement seen-set (resolve), separate from the same-frame dup-decl check.
 
 Arity must match the tuple width INCLUDING discards; the trailing comma is
 SIGNIFICANT (it adds a discard slot). Worked example:

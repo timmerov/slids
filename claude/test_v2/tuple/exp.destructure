@@ -13,3 +13,4 @@ outer: oa= 10 ob= 2
 array: aa= 10 ab= 20
 nested: na= 1 nb= 2 nc= 3
 nested2: ra= 4 rd= 6
+rows: 1 2 3 4

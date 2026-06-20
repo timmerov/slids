@@ -1575,9 +1575,10 @@ void emitConstructHooks(std::string const& addr, widen::TypeRef type,
     widen::Type const& ct = widen::get(cs);
     std::string llty = llvmForRef(cs);
     if (ct.form == widen::Type::Form::kArray) {
+        int n = ct.dims[0];   // capture before arrayElemOf interns (dangles ct)
         widen::TypeRef et = arrayElemOf(cs);
         if (typeNeedsHook(et, true)) {
-            for (int i = 0; i < ct.dims[0]; i++) {
+            for (int i = 0; i < n; i++) {
                 std::string gep = newTmp("ctorelt");
                 out << "  " << gep << " = getelementptr inbounds " << llty
                     << ", ptr " << addr << ", i64 0, i64 " << i << "\n";
@@ -1606,9 +1607,10 @@ void emitDestructHooks(std::string const& addr, widen::TypeRef type,
     widen::Type const& ct = widen::get(cs);
     std::string llty = llvmForRef(cs);
     if (ct.form == widen::Type::Form::kArray) {
+        int n = ct.dims[0];   // capture before arrayElemOf interns (dangles ct)
         widen::TypeRef et = arrayElemOf(cs);
         if (typeNeedsHook(et, false)) {
-            for (int i = ct.dims[0]; i-- > 0; ) {
+            for (int i = n; i-- > 0; ) {
                 std::string gep = newTmp("dtorelt");
                 out << "  " << gep << " = getelementptr inbounds " << llty
                     << ", ptr " << addr << ", i64 0, i64 " << i << "\n";

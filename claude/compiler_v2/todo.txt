@@ -8,7 +8,23 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  (none open)
+  * ARENA REALLOC DANGLES `get()` REFERENCES (structural) — `widen::get(ref)`
+    returns a `Type const&` into `arena().types`, a `std::vector<Type>`. Any intern
+    (`intern` / `internArray` / `internTuple` / `internPointer` / `internIterator`,
+    and `deepStrip`, which calls them) funnels through one `push_back` (widen.cpp:734)
+    that can REALLOCATE the vector and dangle every outstanding `get()` reference.
+    The whole codebase relies on an unwritten "capture-before-intern" discipline:
+    read the fields you need into locals BEFORE calling an intern, never touch the
+    `Type const&` after. Three sites violated it (read a dim count after interning a
+    sub-array type) and were fixed per-site (classify::destructureSlots, plus the
+    sweep fixes in emitConstructHooks / emitDestructHooks / the for-over-iterable
+    slot expansion) — but the hazard recurs every time someone holds a `get()` ref
+    across an intern, and only bites multi-dim arrays (the one case where the element
+    type is freshly interned), so it slips tests. DURABLE FIX = make handles stable:
+    back the arena with a node-stable container (`std::deque<Type>`, or a deque of
+    chunks) so a `push_back` never moves existing elements, OR have `get()` return by
+    value. Either removes the discipline requirement and the entire bug class. Until
+    then, every `Type const& x = get(...)` near an intern is a latent dangling read.
 
 DEFERRED FEATURES (later; may not be on the plan)
 

@@ -59,6 +59,10 @@ TYPE REPRESENTATION (the carrier; not a stage)
     internAlias(name, underlying) — the last minted ONLY by resolve (which has the
     symbol table). strip() peels one alias layer; deepStrip() removes all (so
     `Integer^` and `IntPtr=int^` compare equal modulo aliases).
+    HAZARD: get(ref) returns a `Type const&` INTO the arena's `std::vector<Type>`;
+    any intern* may push_back and REALLOCATE, dangling outstanding refs. Capture the
+    fields you need into locals BEFORE interning; never read the ref after. Latent
+    bug class, fixed per-site so far — durable fix (node-stable arena) is a todo BUG.
   * kAlias is a TRANSPARENT type: spells as its name (for ##type/diagnostics) but
     sees through to `underlying` for every structural query (classify / llvm /
     size / known / the form-predicate cluster via strip). Aliases + enum type
@@ -298,8 +302,11 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     skipped slot); slot-wise arith + scalar broadcast (`(1,2,3)+7`); returns /
     references (a tuple RETURN is `{i32,i32}` by value, `(T,T)^` = ptr). Codegen
     builds the aggregate via insertvalue; classify slot-types via internTuple.
-    DEFECT: a tuple PARAM is currently `{i32,i32}` BY VALUE — the spec is by-pointer
-    (or reject the value form); see todo BUGS + plan-declarator.txt mungeParamTypes.
+    A non-primitive VALUE param is now a COMPILE ERROR (mungeParamTypes, resolve) — a
+    tuple / class param must be a pointer (`(T,T)^`). The ARRAY SHORTHAND `int a[3]`
+    (and `int[] p`) is the one exception: mungeParamType rewrites it to `(const int[3])^`
+    (pointer-to-const array unless `mutable`) and classify + codegen implicit-deref it
+    at each index (`a[i]`, no `^`), so it passes BY POINTER with no copy.
   * ARRAY from a tuple: `int a[3]=(1,2,3)`, `a=(4,5,6)`, multi-dim
     `int td[3][2]=((1,2),(3,4),(5,6))` (a NESTED tuple whose SHAPE — row × col —
     matches the standard-order dims). ELEMENT-AWARE: collectArrayElementNodes
