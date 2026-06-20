@@ -292,8 +292,13 @@ Phase 4 — types beyond primitives
     tuple crash + array+array invalid IR + the array+tuple confusing error. SHIFT is
     slot-wise too [`<<`/`>>`/`<<=`/`>>=`; scalar count broadcasts, aggregate count
     per-slot; result = lhs type so it has its OWN path — classify::checkAggregateShift
-    + codegen::emitScalarShift/emitAggregateShift, not aggregateArithType]. Still todo:
-    array-op-SCALAR broadcast in ARITHMETIC (`array + 1`). Coverage:
+    + codegen::emitScalarShift/emitAggregateShift, not aggregateArithType]. SCALAR
+    BROADCAST works for ARRAYS too now [`array + 1`, `array += 1`, `tuple += 1`]: one-
+    aggregate-one-scalar routes through aggregateArithType's broadcast branch [scalar
+    repeats per slot, result keeps the aggregate's form], the literal flexes to the
+    leaf type [int8[3]+1 stays int8], binary arm gate `&&`->`||` + aug-assign gate on
+    aggregate lvalue, the old tuple-only scalar block DELETED. Still todo: `++array` /
+    `++tuple` [inc-dec on an aggregate — PPID/bump path, not arith]. Coverage:
     tuple/anon.sl, tuple/array.sl, tuple/combined.sl.)
   * aggregate COPY / MOVE by slot (cross-form + leaf-widen)         LANDED
     (an array IS a homogeneous tuple, so a copy is performed BY SLOT, iteratively

@@ -207,6 +207,17 @@ widen::TypeRef aggregateSlotType(widen::TypeRef t, int i) {
     return arrayElementType(s);
 }
 
+// The scalar leaf type of an aggregate — descend slot 0 / the element until a
+// non-aggregate remains. Used to flex a broadcast scalar literal to an aggregate's
+// element width (`int8[3] + 1` keeps int8 instead of widening to the literal int).
+widen::TypeRef aggregateLeafType(widen::TypeRef t) {
+    widen::TypeRef s = widen::strip(t);
+    while (isAggregateType(s)) {
+        s = widen::strip(aggregateSlotType(s, 0));
+    }
+    return s;
+}
+
 bool isIntegerClass(widen::TypeRef t) {
     widen::TypeKind k;
     if (!widen::classify(t, k)) return false;
@@ -730,6 +741,60 @@ bool aggregateArithType(std::string const& op, widen::TypeRef lref,
         v.assign(static_cast<std::size_t>(n < 0 ? 0 : n), slot);
         return v;
     };
+    // Rebuild the result type from the per-slot results: a tuple if this level is a
+    // tuple, else an array rebuilt from the (homogeneous) per-slot result.
+    auto rebuild = [](std::vector<widen::TypeRef> const& outs, bool tup) -> widen::TypeRef {
+        if (tup) return widen::internTuple(outs);
+        int n = static_cast<int>(outs.size());
+        widen::TypeRef e0 = outs.empty() ? widen::kNoType : outs[0];
+        if (widen::form(widen::strip(e0)) == widen::Type::Form::kArray) {
+            widen::Type const& a = widen::get(widen::strip(e0));
+            widen::TypeRef elem = a.elem;               // copy before intern
+            std::vector<int> dims;
+            dims.push_back(n);
+            for (int d : a.dims) dims.push_back(d);
+            return widen::internArray(elem, dims);
+        }
+        return widen::internArray(e0, std::vector<int>{n});
+    };
+
+    // BROADCAST: exactly one side is a scalar — repeat it per slot of the aggregate.
+    // The result keeps the AGGREGATE operand's form (array op scalar -> array,
+    // tuple op scalar -> tuple); a nested aggregate slot recurses (broadcast deeper).
+    bool lagg = isAggregateType(ls), ragg = isAggregateType(rs);
+    if (lagg != ragg) {
+        bool aggTup = lagg ? ltup : rtup;
+        widen::TypeRef scalT = lagg ? rs : ls;
+        std::vector<widen::TypeRef> aslots = slotsOf(lagg ? ls : rs, aggTup);
+        std::vector<widen::TypeRef> outs;
+        for (widen::TypeRef s : aslots) {
+            widen::TypeRef a = lagg ? s : scalT;        // preserve operand order
+            widen::TypeRef b = lagg ? scalT : s;
+            widen::TypeRef slotres;
+            if (isAggregateType(s)) {
+                if (!aggregateArithType(op, a, b, file, tok, slotres, diag))
+                    return false;
+            } else {
+                if (!widen::commonType(a, b, slotres)) {
+                    diagnostic::report(diag, {file, tok,
+                        "No common type for aggregate slot ('"
+                        + widen::spellOrEmpty(a) + "' and '"
+                        + widen::spellOrEmpty(b) + "').", {}});
+                    return false;
+                }
+                if ((op == "&" || op == "|" || op == "^") && isFloatType(slotres)) {
+                    diagnostic::report(diag, {file, tok,
+                        "Bitwise '" + op + "' not defined on a floating-point slot.",
+                        {}});
+                    return false;
+                }
+            }
+            outs.push_back(slotres);
+        }
+        out = rebuild(outs, aggTup);
+        return true;
+    }
+
     std::vector<widen::TypeRef> lslots = slotsOf(ls, ltup);
     std::vector<widen::TypeRef> rslots = slotsOf(rs, rtup);
     if (lslots.size() != rslots.size()) {
@@ -1380,7 +1445,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // matching shape. A mixed array/tuple result is a TUPLE; both-array
             // stays an array. (Tuple op SCALAR broadcast stays in the block below;
             // array op scalar falls through to the scalar reject.)
-            if (isAggregateType(lref) && isAggregateType(rref)) {
+            if (isAggregateType(lref) || isAggregateType(rref)) {
                 bool is_cmp = (op == "==" || op == "!=" || op == "<"
                             || op == "<=" || op == ">"  || op == ">=");
                 if (is_cmp) {
@@ -1392,62 +1457,23 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                         + std::string(anytup ? "a tuple." : "an array."), {}});
                     return;
                 }
+                // SCALAR BROADCAST: when exactly one side is a scalar, flex a literal
+                // scalar to the aggregate's leaf type (so `int8[3] + 1` keeps int8),
+                // then broadcast it per slot inside aggregateArithType. Both-aggregate
+                // is the matching-shape path. The result keeps the aggregate's form
+                // (array op scalar -> array, tuple op scalar -> tuple).
+                bool lagg = isAggregateType(lref), ragg = isAggregateType(rref);
+                if (lagg != ragg) {
+                    widen::TypeRef leaf = aggregateLeafType(lagg ? lref : rref);
+                    inferExpr(tree, lagg ? rhs : lhs, leaf, diag);
+                }
                 widen::TypeRef aggres;
-                if (!aggregateArithType(op, lref, rref, e.file_id, e.tok,
-                                        aggres, diag))
+                if (!aggregateArithType(op, lhs.inferred_type, rhs.inferred_type,
+                                        e.file_id, e.tok, aggres, diag))
                     return;
                 e.inferred_type = aggres;
                 e.op_type = aggres;
                 return;
-            }
-
-            // Tuple op SCALAR: broadcast the scalar to every slot (tuple op tuple
-            // and tuple op array go through the aggregate path above; only a tuple
-            // with a non-aggregate operand reaches here). Arith / bitwise only.
-            {
-                bool ltup = widen::form(widen::strip(lref)) == widen::Type::Form::kTuple;
-                bool rtup = widen::form(widen::strip(rref)) == widen::Type::Form::kTuple;
-                if (ltup || rtup) {
-                    bool is_cmp = (op == "==" || op == "!=" || op == "<"
-                                || op == "<=" || op == ">"  || op == ">=");
-                    if (is_cmp) {
-                        diagnostic::report(diag, {e.file_id, e.tok,
-                            "Operator '" + op + "' is not defined on a tuple.", {}});
-                        return;
-                    }
-                    // The tuple's slots; the other operand is the broadcast scalar.
-                    parse::Node& scal = ltup ? rhs : lhs;
-                    std::vector<widen::TypeRef> tslots =
-                        widen::get(widen::strip(ltup ? lref : rref)).slots;
-                    // Flex a literal scalar into the (homogeneous) slot type so it
-                    // doesn't default to a wider int width than the tuple's slots.
-                    if (!tslots.empty()) inferExpr(tree, scal, tslots[0], diag);
-                    widen::TypeRef sref = scal.inferred_type;
-                    std::vector<widen::TypeRef> out_slots;
-                    for (std::size_t i = 0; i < tslots.size(); i++) {
-                        widen::TypeRef ls = ltup ? tslots[i] : sref;
-                        widen::TypeRef rs = ltup ? sref : tslots[i];
-                        widen::TypeRef ctr;
-                        if (!widen::commonType(ls, rs, ctr)) {
-                            diagnostic::report(diag, {e.file_id, e.tok,
-                                "No common type for tuple slot "
-                                + std::to_string(i) + " ('" + widen::spellOrEmpty(ls)
-                                + "' and '" + widen::spellOrEmpty(rs) + "').", {}});
-                            return;
-                        }
-                        if ((op == "&" || op == "|" || op == "^")
-                            && isFloatType(ctr)) {
-                            diagnostic::report(diag, {e.file_id, e.tok,
-                                "Bitwise '" + op
-                                + "' not defined on a floating-point slot.", {}});
-                            return;
-                        }
-                        out_slots.push_back(ctr);
-                    }
-                    e.inferred_type = widen::internTuple(out_slots);
-                    e.op_type = e.inferred_type;
-                    return;
-                }
             }
 
             // Pointer operands (reference / iterator / nullptr): the six
@@ -2768,8 +2794,14 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // `lhs op rhs`. A mixed array/tuple result is a tuple; the store back
             // into the lvalue is gated by the aggregate assignment relation, so a
             // per-element narrow is caught here, not in codegen.
-            if (isAggregateType(s.return_type)
-                && isAggregateType(rhs.inferred_type)) {
+            if (isAggregateType(s.return_type)) {
+                // rhs is an aggregate (matching shape) OR a SCALAR (broadcast — e.g.
+                // `arr += 1`). For a scalar, flex a literal to the lvalue's leaf type
+                // so a narrow-element aggregate keeps its width; aggregateArithType
+                // then broadcasts it per slot.
+                if (!isAggregateType(rhs.inferred_type)) {
+                    inferExpr(tree, rhs, aggregateLeafType(s.return_type), diag);
+                }
                 widen::TypeRef aggres;
                 if (!aggregateArithType(op, s.return_type, rhs.inferred_type,
                                         s.file_id, s.tok, aggres, diag))

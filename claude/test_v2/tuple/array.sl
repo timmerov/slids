@@ -314,6 +314,26 @@ int32 main() {
         __println("bw&= " + bw[0] + " " + bw[1]);                     // 8 4
     }
 
+    /* SCALAR distribution over an array — broadcast a scalar to every element (an
+       array is a homogeneous tuple): binary, aug-assign, scalar-on-the-left,
+       narrow-element flex, and multi-dim. */
+    {
+        int sb[3] = (1, 2, 3);
+        int sr[3] = sb + 10;                  // array + scalar -> array: (11,12,13)
+        __println("arr+s= " + sr[0] + " " + sr[1] + " " + sr[2]);     // 11 12 13
+        sb += 10;                             // array += scalar
+        __println("arr+=s= " + sb[0] + " " + sb[1] + " " + sb[2]);    // 11 12 13
+        int sl[3] = (10, 20, 30);
+        int sd[3] = 100 - sl;                 // scalar on the LEFT: (90,80,70)
+        __println("s-arr= " + sd[0] + " " + sd[1] + " " + sd[2]);     // 90 80 70
+        int8 n8[3] = (1, 2, 3);
+        n8 += 1;                              // narrow element stays int8 (flex)
+        __println("arr8+=s= " + n8[0] + " " + n8[1] + " " + n8[2]);   // 2 3 4
+        int md[2][2] = ((1,2),(3,4));
+        md += 10;                             // multi-dim broadcast: ((11,12),(13,14))
+        __println("md+=s= " + md[0][0] + " " + md[1][1]);             // 11 14
+    }
+
     /* by-slot COPY within array form. A same-type whole-array copy is a single
        store; a LEAF-WIDEN copy (int8[N] -> int[N]) is lowered BY SLOT into
        per-element widening stores — at a declaration and at an assignment. */

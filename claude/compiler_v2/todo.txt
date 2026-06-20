@@ -8,7 +8,11 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  (none open)
+  * array assigned from tuple works:
+        int arr[2] = (1,2);
+    therefore type conversion from tuple to array should also work:
+        int arr[2] = (int[2]=(1,2))
+    but it doesn't.
 
 DEFERRED FEATURES (later; may not be on the plan)
 
@@ -23,15 +27,13 @@ DEFERRED FEATURES (later; may not be on the plan)
     and kReturnStmt (materialize a return temp, copy by slot). Low priority — the
     codegen convert seam already produces correct IR.
 
-  * ARITHMETIC SCALAR DISTRIBUTION ON ARRAYS — `array + 1` / `array += 1` (a scalar
-    broadcast over an ARRAY) is rejected; only a TUPLE broadcasts a scalar in
-    ARITHMETIC today (`tuple + 7`, anon.sl). SHIFT already broadcasts a scalar over
-    an array (`array << n`, landed), so arithmetic is the inconsistent holdout: the
-    binary arm's "array op scalar falls through to the scalar reject" (classify)
-    should route an array-op-scalar through the slot-wise aggregate path too,
-    broadcasting per element. Also covers `++tuple` / `++array` (inc-dec on an
-    aggregate — inc/dec every slot). (`tuple += scalar` already works via the tuple
-    broadcast.)
+  * INC / DEC ON AN AGGREGATE — `++tuple` / `++array` (and `--`) should inc/dec
+    every slot, the inc-dec analogue of the now-landed scalar broadcast (`array + 1`
+    / `array += 1` / `tuple += 1` all work — binary + aug-assign scalar distribution
+    via aggregateArithType's broadcast branch). But `++`/`--` go through the PPID /
+    kBumpExpr path, not the binary arith path, so they don't reach the slot-wise
+    broadcast. Needs the inc-dec lowering to apply per slot over an aggregate operand
+    (or desugar `++agg` to `agg += 1`, which now type-checks).
 
   * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
     primitive element type (a reference works for all). Only the CLASS-element

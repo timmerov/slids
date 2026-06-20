@@ -193,15 +193,6 @@ int32 main() {
     //    __println("" + tr[0]^);
     //}
 
-    /* augmented assign on a non-primitive (sub-array) leaf is rejected. */
-    //-EXPECT-ERROR: No common type for 'int[2]' and 'int'
-    //{
-    //    int g[2][2];
-    //    g[0][0] = 1; g[0][1] = 2; g[1][0] = 3; g[1][1] = 4;
-    //    g[0] += 1;
-    //    __println("" + g[0][0]);
-    //}
-
     /* bitwise augmented assign on a float leaf is rejected. */
     //-EXPECT-ERROR: Bitwise '&' not defined on floating-point
     //{

@@ -322,7 +322,7 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     share ONE slot-wise arith/bitwise path: `tuple op tuple`, `array op array`, and
     mixed `array op tuple` / `tuple op array` (a mixed result is always a TUPLE — the
     heterogeneous-capable shape; array op array stays an array), plus a scalar
-    BROADCAST into a tuple. Matching shape required; nested aggregate slots RECURSE
+    BROADCAST into ANY aggregate (tuple or array). Matching shape required; nested aggregate slots RECURSE
     (array-of-tuples op array-of-tuples); a per-element narrow is rejected at classify.
     classify::aggregateArithType is the SINGLE inference — the kBinaryExpr arm AND the
     kAugAssignStmt arith arm both call it, so `lhs op= rhs` can't diverge from
@@ -335,9 +335,13 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     broadcasts and a matching-shape aggregate count applies per slot — but on its OWN
     path (classify::checkAggregateShift + codegen::emitScalarShift/emitAggregateShift),
     NOT aggregateArithType, since the result is the lhs type (the count doesn't widen
-    it) and the leaf op differs. Comparison on an aggregate is rejected; an array-op-
-    SCALAR broadcast in ARITHMETIC is still rejected (a tuple broadcasts a scalar, and
-    shift broadcasts to an array, but `array + 1` doesn't yet — todo).
+    it) and the leaf op differs. Comparison on an aggregate is rejected. SCALAR
+    BROADCAST works for arrays too now (`array + 1`, `array += 1`, `tuple += 1`): the
+    binary arm AND the aug-assign arm route a one-aggregate-one-scalar op through
+    aggregateArithType's broadcast branch (the scalar repeats per slot, result keeps
+    the aggregate's form), and a literal scalar flexes to the aggregate's leaf type so
+    `int8[3] + 1` stays int8. Only `++array` / `++tuple` (inc-dec on an aggregate)
+    remains — it goes through the PPID/bump path, not the arith path — todo.
   * ARRAY TYPES (`int[N]`): parseType parses sized dims, so array types compose —
     tuple slots `(int[3],int[4])`, alias RHS, params, returns `int[3] f()`. Variable
     decls stay name-anchored `int x[3]` (reject_array_dims rejects a top-level

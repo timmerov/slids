@@ -143,6 +143,25 @@ int32 main() {
     e3 *= (2, 2, 2);                   // (22, 44, 66)
     __println("e3*= " + e3[0] + " " + e3[1] + " " + e3[2]);   // 22 44 66
 
+    /* AUG-ASSIGN with a SCALAR — broadcast a scalar in op= form (the binary scalar
+       forms are c3/d3 above). */
+    (int, int, int) g3 = (10, 20, 30);
+    g3 += 5;                           // (15, 25, 35)
+    __println("g3+= " + g3[0] + " " + g3[1] + " " + g3[2]);   // 15 25 35
+    g3 *= 2;                           // (30, 50, 70)
+    __println("g3*= " + g3[0] + " " + g3[1] + " " + g3[2]);   // 30 50 70
+
+    /* narrow-element broadcast: int8 slots stay int8 — the literal flexes to the
+       slot type, so the result stores back without narrowing. */
+    (int8, int8) i8 = (1, 2);
+    i8 += 1;                           // (2, 3)
+    __println("i8+= " + i8[0] + " " + i8[1]);                 // 2 3
+
+    /* nested: a tuple-of-tuples broadcasts the scalar into every leaf. */
+    ((int,int),(int,int)) nt = ((1,2),(3,4));
+    nt += 10;                          // ((11,12),(13,14))
+    __println("nt+= " + nt[0][0] + " " + nt[1][1]);           // 11 14
+
     /* float-element slot-wise arithmetic (the float instr path per slot). */
     (float32, float32) f2 = (1.5, 2.5);
     f2 += (0.25, 0.25);                // (1.75, 2.75)
