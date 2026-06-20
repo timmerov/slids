@@ -358,6 +358,26 @@ int32 main() {
         __println("paNull= " + !pa[0] + " " + !pa[1]);               // true true
     }
 
+    /* shift on arrays — element-wise (an array is a homogeneous tuple). A scalar
+       count broadcasts; an array count applies per element; <<= / >>= mutate in
+       place; multi-dim recurses. */
+    {
+        int sh[3] = (1, 2, 3);
+        sh = sh << 1;                          // broadcast: (2,4,6)
+        __println("sh<<= " + sh[0] + " " + sh[1] + " " + sh[2]);     // 2 4 6
+        sh >>= 1;                              // (1,2,3)
+        __println("sh>>= " + sh[0] + " " + sh[1] + " " + sh[2]);     // 1 2 3
+        int pc[3] = (1, 2, 3);
+        int ps[3] = pc << (3, 2, 1);           // per-element count: (8,8,6)
+        __println("pshift= " + ps[0] + " " + ps[1] + " " + ps[2]);   // 8 8 6
+        int aa[3] = (1, 2, 3);
+        aa <<= (3, 2, 1);                      // aug-assign with a per-element count
+        __println("aa<<= " + aa[0] + " " + aa[1] + " " + aa[2]);     // 8 8 6
+        int msh[2][2] = ((1,2),(3,4));
+        msh <<= 1;                             // multi-dim: ((2,4),(6,8))
+        __println("msh= " + msh[0][0] + " " + msh[1][1]);            // 2 8
+    }
+
     return 0;
 }
 
@@ -507,6 +527,15 @@ int32 main() {
 //    int a[F];
 //    a[0] = 1;
 //    return a[0];
+//}
+
+/* a slot-wise array shift count of the wrong length (3-element count, 2-element
+   array) is rejected — the count must match the lhs shape. */
+//-EXPECT-ERROR: A slot-wise shift needs a matching-shape count
+//int neg_array_shift_shape() {
+//    int a[2] = (1,2);
+//    int b[2] = a << (1,2,3);
+//    return b[0];
 //}
 
 /* an array size in TYPE position (not on the name) is rejected in a declaration;

@@ -28,3 +28,12 @@ mvd<--= 7 8
 swap= 3 4 1 2
 npmove= 1 4
 npaNull= true true
+12
+8 8 6
+rs= -4 8
+us= 4 4
+nsh= 2 8
+fsh= 3 4
+fd= 2 4
+mw= 4 8
+ex= 4

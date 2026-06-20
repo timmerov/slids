@@ -289,8 +289,11 @@ Phase 4 — types beyond primitives
     it, so `lhs op= rhs` can't diverge from `lhs op rhs`; checkAggregateStoreWiden
     gates the op= store-back [cross-form, allows array<-tuple]; codegen::emit-
     AggregateArith builds the result via extract/insertvalue. Fixed the element-+=-
-    tuple crash + array+array invalid IR + the array+tuple confusing error. SHIFT
-    not yet slot-wise = todo BUG; array-op-SCALAR broadcast = todo. Coverage:
+    tuple crash + array+array invalid IR + the array+tuple confusing error. SHIFT is
+    slot-wise too [`<<`/`>>`/`<<=`/`>>=`; scalar count broadcasts, aggregate count
+    per-slot; result = lhs type so it has its OWN path — classify::checkAggregateShift
+    + codegen::emitScalarShift/emitAggregateShift, not aggregateArithType]. Still todo:
+    array-op-SCALAR broadcast in ARITHMETIC (`array + 1`). Coverage:
     tuple/anon.sl, tuple/array.sl, tuple/combined.sl.)
   * aggregate COPY / MOVE by slot (cross-form + leaf-widen)         LANDED
     (an array IS a homogeneous tuple, so a copy is performed BY SLOT, iteratively

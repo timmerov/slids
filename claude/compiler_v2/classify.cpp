@@ -219,6 +219,64 @@ bool isNumericType(widen::TypeRef t) {
     return widen::classify(t, k);
 }
 
+// Validate a slot-wise SHIFT (an array IS a homogeneous tuple). Every lhs leaf
+// must be numeric (the value shifted; a float leaf shifts as multiply). With a
+// SCALAR count (`cnt == kNoType` here), only the lhs leaves are checked — the
+// caller separately requires the scalar count be integer-class. With an AGGREGATE
+// count, the walk is lockstep: the shapes must match and each count leaf must be
+// integer-class. Returns false on the first violation (the caller reports).
+bool shiftLeavesOk(widen::TypeRef lhs, widen::TypeRef cnt) {
+    widen::TypeRef ls = widen::strip(lhs);
+    bool lAgg = isAggregateType(ls);
+    if (cnt == widen::kNoType) {                       // scalar count: lhs leaves only
+        if (!lAgg) return isNumericType(ls);
+        int n = aggregateSlotCount(ls);
+        for (int i = 0; i < n; i++) {
+            widen::TypeRef sl = aggregateSlotType(ls, i);   // capture before recurse
+            if (!shiftLeavesOk(sl, widen::kNoType)) return false;
+        }
+        return true;
+    }
+    widen::TypeRef cs = widen::strip(cnt);             // aggregate count: lockstep
+    bool cAgg = isAggregateType(cs);
+    if (lAgg != cAgg) return false;
+    if (!lAgg) return isNumericType(ls) && isIntegerClass(cs);
+    int ln = aggregateSlotCount(ls), cn = aggregateSlotCount(cs);
+    if (ln != cn) return false;
+    for (int i = 0; i < ln; i++) {
+        widen::TypeRef sl = aggregateSlotType(ls, i);  // capture before recurse
+        widen::TypeRef sc = aggregateSlotType(cs, i);
+        if (!shiftLeavesOk(sl, sc)) return false;
+    }
+    return true;
+}
+
+// Type + validate an AGGREGATE shift (`lhs << cnt` / `>>`, lhs is array/tuple).
+// The result keeps the lhs aggregate type; the count broadcasts (scalar) or
+// applies per slot (matching-shape aggregate of integer leaves).
+void checkAggregateShift(widen::TypeRef lhs, parse::Node const& rhs,
+                         int file, int tok, diagnostic::Sink& diag) {
+    widen::TypeRef rt = rhs.inferred_type;
+    bool rAgg = (rt != widen::kNoType) && isAggregateType(rt);
+    if (!rAgg) {
+        if (rt != widen::kNoType && !isIntegerClass(rt)) {
+            diagnostic::report(diag, {rhs.file_id, rhs.tok,
+                "Shift count must be integer-class; got '"
+                + widen::spellOrEmpty(rt) + "'.", {}});
+        }
+        if (!shiftLeavesOk(lhs, widen::kNoType)) {
+            diagnostic::report(diag, {file, tok,
+                "Shift left-hand side must be numeric; got '"
+                + widen::spellOrEmpty(lhs) + "'.", {}});
+        }
+    } else if (!shiftLeavesOk(lhs, rt)) {
+        diagnostic::report(diag, {file, tok,
+            "A slot-wise shift needs a matching-shape count with integer-class "
+            "slots; got '" + widen::spellOrEmpty(lhs) + "' << '"
+            + widen::spellOrEmpty(rt) + "'.", {}});
+    }
+}
+
 // Validate a `(Type=src)` conversion against the value-conversion grid. LEAF
 // rule is the existing scalar grid (numeric<->numeric always; pointer<->{bool,
 // intptr} only). Recurses per-slot for tuple targets and per-element for array
@@ -1288,17 +1346,23 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 // Shift count stands alone — flexing into a float lhs would
                 // mis-type a small int literal. Codegen handles width mismatch.
                 inferExpr(tree, rhs, widen::kNoType, diag);
-                if (lhs.inferred_type != widen::kNoType
-                    && !isNumericType(lhs.inferred_type)) {
-                    diagnostic::report(diag, {lhs.file_id, lhs.tok,
-                        "Shift left-hand side must be numeric; got '"
-                        + widen::spellOrEmpty(lhs.inferred_type) + "'.", {}});
-                }
-                if (rhs.inferred_type != widen::kNoType
-                    && !isIntegerClass(rhs.inferred_type)) {
-                    diagnostic::report(diag, {rhs.file_id, rhs.tok,
-                        "Shift count must be integer-class; got '"
-                        + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
+                if (isAggregateType(lhs.inferred_type)) {
+                    // An array IS a homogeneous tuple — shift slot-wise (the result
+                    // keeps the lhs aggregate type; a scalar count broadcasts).
+                    checkAggregateShift(lhs.inferred_type, rhs, e.file_id, e.tok, diag);
+                } else {
+                    if (lhs.inferred_type != widen::kNoType
+                        && !isNumericType(lhs.inferred_type)) {
+                        diagnostic::report(diag, {lhs.file_id, lhs.tok,
+                            "Shift left-hand side must be numeric; got '"
+                            + widen::spellOrEmpty(lhs.inferred_type) + "'.", {}});
+                    }
+                    if (rhs.inferred_type != widen::kNoType
+                        && !isIntegerClass(rhs.inferred_type)) {
+                        diagnostic::report(diag, {rhs.file_id, rhs.tok,
+                            "Shift count must be integer-class; got '"
+                            + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
+                    }
                 }
                 e.inferred_type = lhs.inferred_type;
                 e.op_type = lhs.inferred_type;
@@ -2658,16 +2722,21 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
 
             if (op == "<<" || op == ">>") {
                 inferExpr(tree, rhs, widen::kNoType, diag);
-                if (!isNumericType(s.return_type)) {
-                    diagnostic::report(diag, {s.file_id, s.tok,
-                        "Shift left-hand side must be numeric; got '"
-                        + lvalue_type + "'.", {}});
-                }
-                if (rhs.inferred_type != widen::kNoType
-                    && !isIntegerClass(rhs.inferred_type)) {
-                    diagnostic::report(diag, {s.file_id, s.tok,
-                        "Shift count must be integer-class; got '"
-                        + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
+                if (isAggregateType(s.return_type)) {
+                    // Slot-wise `lhs <<= cnt` — result keeps the lhs aggregate type.
+                    checkAggregateShift(s.return_type, rhs, s.file_id, s.tok, diag);
+                } else {
+                    if (!isNumericType(s.return_type)) {
+                        diagnostic::report(diag, {s.file_id, s.tok,
+                            "Shift left-hand side must be numeric; got '"
+                            + lvalue_type + "'.", {}});
+                    }
+                    if (rhs.inferred_type != widen::kNoType
+                        && !isIntegerClass(rhs.inferred_type)) {
+                        diagnostic::report(diag, {s.file_id, s.tok,
+                            "Shift count must be integer-class; got '"
+                            + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
+                    }
                 }
                 s.inferred_type = s.return_type;
                 s.op_type = s.return_type;

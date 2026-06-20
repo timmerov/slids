@@ -454,6 +454,60 @@ std::string emitAggregateArith(std::string const& op,
     return acc;
 }
 
+// Scalar shift leaf — `lv << rv` / `lv >> rv` at the lhs type `lt`. A FLOAT lhs
+// shifts as `lv * (1<<rv)` / `lv / (1<<rv)` (per fold.sl); an integer lhs width-
+// matches the count to `lt` then shl / lshr (unsigned) / ashr (signed). Returns
+// the result at type `lt` (no dest-type convert — the caller widens if needed).
+std::string emitScalarShift(std::string const& op, std::string const& lv,
+                            widen::TypeRef lt, std::string const& rv,
+                            widen::TypeRef rt, std::ostream& out) {
+    if (isFloatType(lt)) {
+        std::string rllty = llvmForRef(rt);
+        std::string fllty = llvmForRef(lt);
+        std::string pow2 = newTmp("pow2");
+        out << "  " << pow2 << " = shl " << rllty << " 1, " << rv << "\n";
+        std::string pow2f = newTmp("pow2f");
+        out << "  " << pow2f << " = uitofp " << rllty << " " << pow2
+            << " to " << fllty << "\n";
+        std::string tmp = newTmp("bin");
+        char const* instr = (op == "<<") ? "fmul" : "fdiv";
+        out << "  " << tmp << " = " << instr << " " << fllty
+            << " " << lv << ", " << pow2f << "\n";
+        return tmp;
+    }
+    widen::TypeKind lk, rk;
+    widen::classify(lt, lk);
+    widen::classify(rt, rk);
+    std::string lllty = llvmForRef(lt);
+    std::string rllty = llvmForRef(rt);
+    std::string cnt = rv;
+    if (rk.bits != lk.bits) {
+        std::string tmp = newTmp("shft");
+        if (rk.bits > lk.bits) {
+            out << "  " << tmp << " = trunc " << rllty << " " << cnt
+                << " to " << lllty << "\n";
+        } else /* rk.bits < lk.bits — zext to wider */ {
+            out << "  " << tmp << " = zext " << rllty << " " << cnt
+                << " to " << lllty << "\n";
+        }
+        cnt = tmp;
+    }
+    bool uns = isUnsignedType(lt);
+    std::string instr = (op == "<<") ? "shl" : (uns ? "lshr" : "ashr");
+    std::string tmp = newTmp("bin");
+    out << "  " << tmp << " = " << instr << " " << lllty
+        << " " << lv << ", " << cnt << "\n";
+    return tmp;
+}
+
+// Slot-wise aggregate shift (an array IS a homogeneous tuple): shift each lhs
+// slot, recursing for a nested slot. A SCALAR count broadcasts (`rv` used at every
+// slot); an AGGREGATE count applies per slot (extractvalue rt, i). The result IS
+// the lhs aggregate type. Defined below (after cgAggSlotCount/cgAggSlotType).
+std::string emitAggregateShift(std::string const& op, std::string const& lv,
+                               widen::TypeRef lt, std::string const& rv,
+                               widen::TypeRef rt, std::ostream& out);
+
 std::string emitBinary(ast::Node const& expr, SymTab const& syms,
                        strings::Pool& pool, std::ostream& out,
                        diagnostic::Sink& diag,
@@ -474,51 +528,18 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
         widen::TypeRef rt = rhs.inferred_type;
         assert(lt != widen::kNoType && "emitBinary shift: lhs missing inferred_type");
         assert(rt != widen::kNoType && "emitBinary shift: rhs missing inferred_type");
-        // Classify already rejected non-integer rhs; nothing to recheck here.
-
+        // Classify already validated the operands; nothing to recheck here.
         std::string lv = emitExpr(lhs, syms, pool, out, diag, lt);
         std::string rv = emitExpr(rhs, syms, pool, out, diag, rt);
-
-        if (isFloatType(lt)) {
-            // Per fold.sl:128-131: `f << r` ≡ `f * (1<<r)`; `f >> r` ≡ `f / (1<<r)`.
-            std::string rllty = llvmForRef(rt);
-            std::string fllty = llvmForRef(lt);
-            std::string pow2 = newTmp("pow2");
-            out << "  " << pow2 << " = shl " << rllty << " 1, " << rv << "\n";
-            std::string pow2f = newTmp("pow2f");
-            out << "  " << pow2f << " = uitofp " << rllty << " " << pow2
-                << " to " << fllty << "\n";
-            std::string tmp = newTmp("bin");
-            char const* instr = (op == "<<") ? "fmul" : "fdiv";
-            out << "  " << tmp << " = " << instr << " " << fllty
-                << " " << lv << ", " << pow2f << "\n";
-            return widen::convert(tmp, lt, dest_type,
-                                  expr.file_id, expr.tok, out, diag);
+        // Aggregate lhs: shift each slot (a scalar count broadcasts, an aggregate
+        // count applies per slot). The result IS the lhs aggregate type, so no
+        // dest-type convert (dest_type == lt here).
+        widen::Type::Form lf = widen::form(widen::strip(lt));
+        if (lf == widen::Type::Form::kTuple || lf == widen::Type::Form::kArray) {
+            return emitAggregateShift(op, lv, lt, rv, rt, out);
         }
-
-        widen::TypeKind lk, rk;
-        widen::classify(lt, lk);
-        widen::classify(rt, rk);
-        std::string lllty = llvmForRef(lt);
-        std::string rllty = llvmForRef(rt);
-        if (rk.bits != lk.bits) {
-            std::string tmp = newTmp("shft");
-            if (rk.bits > lk.bits) {
-                out << "  " << tmp << " = trunc " << rllty << " " << rv
-                    << " to " << lllty << "\n";
-            } else /* rk.bits < lk.bits — zext to wider */ {
-                out << "  " << tmp << " = zext " << rllty << " " << rv
-                    << " to " << lllty << "\n";
-            }
-            rv = tmp;
-        }
-        bool uns = isUnsignedType(lt);
-        std::string instr = (op == "<<") ? "shl" : (uns ? "lshr" : "ashr");
-        std::string tmp = newTmp("bin");
-        out << "  " << tmp << " = " << instr << " " << lllty
-            << " " << lv << ", " << rv << "\n";
-        return widen::convert(tmp, lt, dest_type,
-                              expr.file_id, expr.tok, out, diag);
+        std::string r = emitScalarShift(op, lv, lt, rv, rt, out);
+        return widen::convert(r, lt, dest_type, expr.file_id, expr.tok, out, diag);
     }
 
     widen::TypeRef opty = expr.op_type;
@@ -951,6 +972,44 @@ widen::TypeRef cgAggSlotType(widen::TypeRef t, int i) {
     widen::TypeRef elem = a.elem;                       // copy before any intern
     std::vector<int> rest(a.dims.begin() + 1, a.dims.end());
     return rest.empty() ? elem : widen::internArray(elem, rest);
+}
+
+std::string emitAggregateShift(std::string const& op, std::string const& lv,
+                               widen::TypeRef lt, std::string const& rv,
+                               widen::TypeRef rt, std::ostream& out) {
+    using F = widen::Type::Form;
+    F rf = widen::form(widen::strip(rt));
+    bool rAgg = (rf == F::kTuple || rf == F::kArray);   // aggregate count vs broadcast
+    int n = cgAggSlotCount(lt);
+    std::string lt_ll = llvmForRef(lt);
+    std::string rt_ll = llvmForRef(rt);
+    std::string acc = "undef";
+    for (int i = 0; i < n; i++) {
+        widen::TypeRef lSlot = cgAggSlotType(lt, i);    // capture before any intern
+        std::string slot_ll = llvmForRef(lSlot);
+        std::string lslot = newTmp("lsx");
+        out << "  " << lslot << " = extractvalue " << lt_ll << " " << lv
+            << ", " << i << "\n";
+        // The count: extract slot i (aggregate count) or broadcast the scalar.
+        std::string rslot = rv;
+        widen::TypeRef rSlot = rt;
+        if (rAgg) {
+            rSlot = cgAggSlotType(rt, i);
+            std::string ex = newTmp("rsx");
+            out << "  " << ex << " = extractvalue " << rt_ll << " " << rv
+                << ", " << i << "\n";
+            rslot = ex;
+        }
+        F lsf = widen::form(widen::strip(lSlot));
+        std::string r = (lsf == F::kTuple || lsf == F::kArray)
+            ? emitAggregateShift(op, lslot, lSlot, rslot, rSlot, out)
+            : emitScalarShift(op, lslot, lSlot, rslot, rSlot, out);
+        std::string tmp = newTmp("shf");
+        out << "  " << tmp << " = insertvalue " << lt_ll << " " << acc
+            << ", " << slot_ll << " " << r << ", " << i << "\n";
+        acc = tmp;
+    }
+    return acc;
 }
 
 std::string emitImplicitAggregateConvert(std::string const& src_val,

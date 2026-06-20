@@ -214,6 +214,25 @@ int32 main() {
         __println("c2= " + c2[0][0] + " " + c2[0][1] + " "
                   + c2[1][0] + " " + c2[1][1]);                    // 5 6 7 8
     }
+
+    /* CROSS-FORM SHIFT — the value and the count differ in form; the count matches
+       by SHAPE (array==tuple) and the result keeps the LHS form. */
+    {
+        (int, int, int) tv = (1, 2, 3);
+        int tcnt[3] = (3, 2, 1);
+        (int, int, int) ts = tv << tcnt;     // tuple lhs, array count -> tuple
+        __println("xshT= " + ts[0] + " " + ts[1] + " " + ts[2]);   // 8 8 6
+        int av[3] = (1, 2, 3);
+        int as[3] = av << (3, 2, 1);         // array lhs, tuple count -> array
+        __println("xshA= " + as[0] + " " + as[1] + " " + as[2]);   // 8 8 6
+
+        /* nested cross-form: array-of-tuples shifted by a tuple-of-arrays count. */
+        (int, int) nat[2] = ((1,2), (3,4));
+        (int[2], int[2]) nct = ((1,1), (2,2));
+        (int, int) nr[2] = nat << nct;       // ((1<<1,2<<1),(3<<2,4<<2))
+        __println("xshN= " + nr[0][0] + " " + nr[0][1] + " "
+                  + nr[1][0] + " " + nr[1][1]);                    // 2 4 12 16
+    }
     return 0;
 }
 
@@ -264,4 +283,14 @@ int32 main() {
 //    (int, int) a[2] = ((1,2), (3,4));
 //    (int, int, int) b = a;
 //    return b[0];
+//}
+
+/* a CROSS-FORM shift count of mismatched shape (a 3-element array count, a 2-slot
+   tuple lhs) — the count must match the lhs shape regardless of form. */
+//-EXPECT-ERROR: A slot-wise shift needs a matching-shape count
+//int neg_crossform_shift() {
+//    (int, int) t = (1, 2);
+//    int cnt[3] = (1, 2, 3);
+//    (int, int) r = t << cnt;
+//    return r[0];
 //}

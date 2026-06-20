@@ -262,6 +262,40 @@ int32 main() {
     __println("npmove= " + npb[0][0]^ + " " + npb[1][1]^);           // 1 4
     __println("npaNull= " + !npa[0][0] + " " + !npa[1][1]);          // true true
 
+    {
+        tuple = (1,2,3);
+        tuple = tuple << 1;
+        tuple <<= 1;
+        __println(tuple[2]);
+        tuple = (1,2,3) << (3,2,1);
+        __println(tuple[0] + " " + tuple[1] + " " + tuple[2]);
+    }
+
+    /* shift: right-shift (signed ashr / unsigned lshr), nested, float (= multiply). */
+    {
+        (int, int) rs = (-8, 16);
+        rs = rs >> 1;                          // signed: (-4, 8)
+        __println("rs= " + rs[0] + " " + rs[1]);                     // -4 8
+        (uint, uint) us = (16, 16);
+        us >>= 2;                              // unsigned (lshr): (4, 4)
+        __println("us= " + us[0] + " " + us[1]);                     // 4 4
+        ((int,int),(int,int)) nsh = ((1,2),(3,4));
+        nsh = nsh << 1;                        // nested, recurses: ((2,4),(6,8))
+        __println("nsh= " + nsh[0][0] + " " + nsh[1][1]);            // 2 8
+        (float32, float32) fsh = (1.5, 2.0);
+        fsh = fsh << 1;                        // float << = multiply: (3.0, 4.0)
+        __println("fsh= " + fsh[0] + " " + fsh[1]);                  // 3 4
+        (float32, float32) fd = (4.0, 8.0);
+        fd = fd >> 1;                          // float >> = divide: (2.0, 4.0)
+        __println("fd= " + fd[0] + " " + fd[1]);                     // 2 4
+        (int, int) mw = (1, 2);
+        int8 cmw = 2;
+        mw = mw << cmw;                        // mixed-width count (int8 into int)
+        __println("mw= " + mw[0] + " " + mw[1]);                     // 4 8
+        (int, int) ex = (1, 2);
+        __println("ex= " + (ex << 2)[0]);      // shift result indexed directly: 4
+    }
+
     return 0;
 }
 
@@ -281,4 +315,37 @@ int32 main() {
 //    (int,int) a = (1,2);
 //    (int,int,int) b = a + (1,2,3);
 //    return b[0];
+//}
+
+/* a slot-wise shift count must match the lhs shape (a 2-tuple shifted by a 3-tuple). */
+//-EXPECT-ERROR: A slot-wise shift needs a matching-shape count
+//int neg_shift_shape() {
+//    (int,int) a = (1,2);
+//    (int,int) b = a << (1,2,3);
+//    return b[0];
+//}
+
+/* a scalar shift count must be integer-class, not a float. */
+//-EXPECT-ERROR: Shift count must be integer-class
+//int neg_shift_float_count() {
+//    (int,int) a = (1,2);
+//    a = a << 1.5;
+//    return a[0];
+//}
+
+/* a SCALAR value shifted by an AGGREGATE count is rejected — the count is not a
+   single integer. */
+//-EXPECT-ERROR: Shift count must be integer-class
+//int neg_scalar_lhs_agg_count() {
+//    (int,int) c = (1,2);
+//    int x = 8 << c;
+//    return x;
+//}
+
+/* a count that matches at the TOP level but mismatches a NESTED slot is rejected. */
+//-EXPECT-ERROR: A slot-wise shift needs a matching-shape count
+//int neg_shift_nested_shape() {
+//    ((int,int),(int,int)) x = ((1,1),(1,1));
+//    ((int,int),(int,int)) y = x << ((1,1),(1,1,1));
+//    return y[0][0];
 //}

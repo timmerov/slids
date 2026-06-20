@@ -330,10 +330,14 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     per-leaf widen, allowing array<-tuple). codegen::emitAggregateArith builds the
     result via extractvalue/insertvalue (an array `[N x T]` aggregates like a struct),
     recursing for a nested slot. NESTED cross-form arithmetic (array-of-tuples op
-    tuple-of-arrays) works — aggregateArithType is form-agnostic. Comparison on an
-    aggregate is rejected; SHIFT is the one binary op not yet slot-wise (rejected on
-    an aggregate — todo BUG), and an array-op-SCALAR broadcast is still rejected
-    (only a tuple broadcasts a scalar today — todo).
+    tuple-of-arrays) works — aggregateArithType is form-agnostic. SHIFT is slot-wise
+    too (`<<`/`>>`/`<<=`/`>>=`): an aggregate lhs shifts per slot, a scalar count
+    broadcasts and a matching-shape aggregate count applies per slot — but on its OWN
+    path (classify::checkAggregateShift + codegen::emitScalarShift/emitAggregateShift),
+    NOT aggregateArithType, since the result is the lhs type (the count doesn't widen
+    it) and the leaf op differs. Comparison on an aggregate is rejected; an array-op-
+    SCALAR broadcast in ARITHMETIC is still rejected (a tuple broadcasts a scalar, and
+    shift broadcasts to an array, but `array + 1` doesn't yet — todo).
   * ARRAY TYPES (`int[N]`): parseType parses sized dims, so array types compose —
     tuple slots `(int[3],int[4])`, alias RHS, params, returns `int[3] f()`. Variable
     decls stay name-anchored `int x[3]` (reject_array_dims rejects a top-level

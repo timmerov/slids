@@ -8,18 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * AGGREGATE SHIFT NOT SLOT-WISE — `<<` / `>>` (and `<<=` / `>>=`) reject an array
-    or tuple operand ("Shift left-hand side must be numeric"), even though every
-    other binary op (+ - * / % & | ^) now applies element-wise over aggregates. The
-    shift arm (gated on isNumericType) runs BEFORE the slot-wise aggregate path, so
-    an aggregate never reaches it. For consistency with the homogeneous-tuple model
-    a shift should be slot-wise too: `tuple << n` broadcasts the count per slot,
-    `tuple << tuple` shifts per slot (same for arrays). Fix: route the shift arm
-    through the slot-wise aggregate path (classify aggregateArithType + codegen
-    emitAggregateArith) when either operand is an aggregate, emitting a per-slot
-    shift; the shift has its own instr/typing (count needn't match the slot type),
-    so the shared path needs a shift-aware leaf op rather than emitArithInstr.
-
   * SUB-ARRAY-ROW SWAP / MOVE REJECTED — a PARTIAL array index as a swap or move
     operand (`grid[i] <--> grid[j]`, `grid[i] <-- t`) is rejected with "An array
     subscript must index every dimension." A partial index addresses a sub-array
@@ -43,13 +31,15 @@ DEFERRED FEATURES (later; may not be on the plan)
     and kReturnStmt (materialize a return temp, copy by slot). Low priority — the
     codegen convert seam already produces correct IR.
 
-  * AGGREGATE SCALAR DISTRIBUTION ON ARRAYS — `array + 1` / `array += 1` / `++array`
-    (a scalar broadcast over an ARRAY) is rejected; only a TUPLE broadcasts a scalar
-    today (`tuple + 7`, anon.sl). Since an array IS a homogeneous tuple, the binary
-    arm's "array op scalar falls through to the scalar reject" (classify) should
-    route an array-op-scalar through the slot-wise aggregate path too, broadcasting
-    the scalar per element. Also covers `tuple += 1` (a scalar aug-assign) and the
-    `++tuple` / `++array` inc-dec forms (which inc/dec every slot).
+  * ARITHMETIC SCALAR DISTRIBUTION ON ARRAYS — `array + 1` / `array += 1` (a scalar
+    broadcast over an ARRAY) is rejected; only a TUPLE broadcasts a scalar in
+    ARITHMETIC today (`tuple + 7`, anon.sl). SHIFT already broadcasts a scalar over
+    an array (`array << n`, landed), so arithmetic is the inconsistent holdout: the
+    binary arm's "array op scalar falls through to the scalar reject" (classify)
+    should route an array-op-scalar through the slot-wise aggregate path too,
+    broadcasting per element. Also covers `++tuple` / `++array` (inc-dec on an
+    aggregate — inc/dec every slot). (`tuple += scalar` already works via the tuple
+    broadcast.)
 
   * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
     primitive element type (a reference works for all). Only the CLASS-element
