@@ -233,6 +233,18 @@ int32 main() {
         __println("xshN= " + nr[0][0] + " " + nr[0][1] + " "
                   + nr[1][0] + " " + nr[1][1]);                    // 2 4 12 16
     }
+
+    /* SWAP / MOVE a tuple slot that is itself an ARRAY — the mixed sub-aggregate
+       case (a partial address into a tuple whose slot is an array). */
+    {
+        (int[2], int[2]) ta = ((1,2), (3,4));
+        ta[0] <--> ta[1];                    // swap the two int[2] slots
+        __println("slotAswap= " + ta[0][0] + " " + ta[0][1] + " "
+                  + ta[1][0] + " " + ta[1][1]);                    // 3 4 1 2
+        int rv[2] = (7, 8);
+        ta[0] <-- rv;                        // move an array value into an array slot
+        __println("slotAmove= " + ta[0][0] + " " + ta[0][1]);      // 7 8
+    }
     return 0;
 }
 

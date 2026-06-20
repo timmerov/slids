@@ -447,7 +447,10 @@ Phase 4 — types beyond primitives
     temp; whole-value load/store handles tuples). Forms: a move-init decl
     (`T x <-- y`, the move_init flag) + statement; operand forms ident, array
     element, tuple slot, CLASS FIELD (kFieldExpr — resolveMoveSwapLvalue accepts
-    it, routing to resolveStoreTarget), deref. BOTH swap operands and a move's LHS
+    it, routing to resolveStoreTarget), deref, AND a SUB-AGGREGATE — a partial array
+    index (sub-array row `g[i]`) or a tuple slot that is itself a tuple/array
+    (emitLvalueAddr threads allow_partial=true for swap/move, whole-value load/store
+    at the operand type; codegen-only). BOTH swap operands and a move's LHS
     must be lvalues (a move's RHS may be an rvalue). SELF-op detection is STRUCTURAL
     (isSameLvalue, recursive): a bare var, a deref, a class field, and an index with
     a PROVABLY-same index (a literal or the same bare var) are rejected; a

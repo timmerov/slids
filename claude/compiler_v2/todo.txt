@@ -8,15 +8,7 @@ quest's progress lives in plan.txt).
 
 BUGS (found, deferred)
 
-  * SUB-ARRAY-ROW SWAP / MOVE REJECTED — a PARTIAL array index as a swap or move
-    operand (`grid[i] <--> grid[j]`, `grid[i] <-- t`) is rejected with "An array
-    subscript must index every dimension." A partial index addresses a sub-array
-    SLICE (already a valid store target — `grid[i] = ...` uses allow_partial), but
-    the swap/move lvalue path (emitLvalueAddr -> emitElementAddr, allow_partial
-    defaulting false) demands a fully-indexed scalar or whole-variable operand. The
-    array.sl header documents `twodim[0] <--> twodim[2]` (swap two rows) as
-    intended. Fix: let the swap/move operand take a partial array index (the same
-    slice addressing a sub-array store allows), exchanging / moving the whole row.
+  (none open)
 
 DEFERRED FEATURES (later; may not be on the plan)
 

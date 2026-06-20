@@ -28,6 +28,8 @@ mvd<--= 7 8
 swap= 3 4 1 2
 npmove= 1 4
 npaNull= true true
+slotswap= 3 1
+slotmove= 9 9
 12
 8 8 6
 rs= -4 8

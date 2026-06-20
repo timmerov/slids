@@ -43,7 +43,7 @@ bool typeNeedsHook(widen::TypeRef type, bool ctor);
 bool isAstLvalue(ast::Node const& n);
 std::string emitLvalueAddr(ast::Node const& lv, SymTab const& syms,
                            strings::Pool& pool, std::ostream& out,
-                           diagnostic::Sink& diag);
+                           diagnostic::Sink& diag, bool allow_partial = false);
 std::string emitConvertWalk(std::string const& src_val,
                             widen::TypeRef src, widen::TypeRef dst,
                             std::ostream& out);
@@ -1070,14 +1070,17 @@ bool typeHasPointer(widen::TypeRef ty) {
 // emitElementAddr; a deref's address is the pointer value it loads.
 std::string emitLvalueAddr(ast::Node const& lv, SymTab const& syms,
                            strings::Pool& pool, std::ostream& out,
-                           diagnostic::Sink& diag) {
+                           diagnostic::Sink& diag, bool allow_partial) {
     if (lv.kind == ast::Kind::kIdentExpr) {
         auto it = syms.find(lv.resolved_entry_id);
         assert(it != syms.end() && "emitLvalueAddr: ident not in SymTab");
         return it->second.alloca_name;
     }
     if (lv.kind == ast::Kind::kIndexExpr) {
-        return emitElementAddr(lv, syms, pool, out, diag);
+        // A PARTIAL array index (a sub-array slice) is a valid swap / move operand
+        // — the whole-value load/store at the operand's type handles it. The caller
+        // opts in (allow_partial); a scalar-context lvalue keeps the full-index rule.
+        return emitElementAddr(lv, syms, pool, out, diag, allow_partial);
     }
     assert(lv.kind == ast::Kind::kDerefExpr && "emitLvalueAddr: unsupported lvalue");
     ast::Node const& ptr_expr = *lv.children[0];
@@ -1862,7 +1865,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                     // source has no storage to null.
                     if (stmt.move_init && isAstLvalue(*stmt.children[0])) {
                         std::string src = emitLvalueAddr(*stmt.children[0], syms, pool,
-                                                         out, diag);
+                                                         out, diag,
+                                                         /*allow_partial=*/true);
                         emitNullLeaves(src, stmt.children[0]->inferred_type, out);
                     }
                 }
@@ -1990,7 +1994,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             assert(stmt.children.size() == 2 && "kMoveStmt needs lhs + rhs");
             ast::Node const& lhs = *stmt.children[0];
             ast::Node const& rhs = *stmt.children[1];
-            std::string dst = emitLvalueAddr(lhs, syms, pool, out, diag);
+            std::string dst = emitLvalueAddr(lhs, syms, pool, out, diag,
+                                             /*allow_partial=*/true);
             // Per-element implicit widening for aggregate move with elem/slot
             // type difference (same dispatch as kStoreStmt / kAssignStmt).
             widen::Type::Form mv_dform =
@@ -2016,7 +2021,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             out << "  store " << llvmForRef(lhs.inferred_type) << " " << val
                 << ", ptr " << dst << "\n";
             if (isAstLvalue(rhs)) {
-                std::string src = emitLvalueAddr(rhs, syms, pool, out, diag);
+                std::string src = emitLvalueAddr(rhs, syms, pool, out, diag,
+                                                 /*allow_partial=*/true);
                 emitNullLeaves(src, rhs.inferred_type, out);
             }
             return;
@@ -2030,8 +2036,10 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             ast::Node const& a = *stmt.children[0];
             ast::Node const& b = *stmt.children[1];
             std::string ll = llvmForRef(a.inferred_type);
-            std::string addr_a = emitLvalueAddr(a, syms, pool, out, diag);
-            std::string addr_b = emitLvalueAddr(b, syms, pool, out, diag);
+            std::string addr_a = emitLvalueAddr(a, syms, pool, out, diag,
+                                                /*allow_partial=*/true);
+            std::string addr_b = emitLvalueAddr(b, syms, pool, out, diag,
+                                                /*allow_partial=*/true);
             std::string va = newTmp("swap");
             std::string vb = newTmp("swap");
             out << "  " << va << " = load " << ll << ", ptr " << addr_a << "\n";

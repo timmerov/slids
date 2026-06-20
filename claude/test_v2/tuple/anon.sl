@@ -262,6 +262,16 @@ int32 main() {
     __println("npmove= " + npb[0][0]^ + " " + npb[1][1]^);           // 1 4
     __println("npaNull= " + !npa[0][0] + " " + !npa[1][1]);          // true true
 
+    /* SUB-TUPLE swap / move — a tuple SLOT is a swap/move operand (same as a
+       sub-array row); the two slots must be the same type. */
+    ((int,int), (int,int)) ts = ((1,2), (3,4));
+    ts[0] <--> ts[1];                          // swap two same-type tuple slots
+    __println("slotswap= " + ts[0][0] + " " + ts[1][0]);             // 3 1
+    ((int,int), (int,int)) tm = ((0,0), (0,0));
+    (int, int) sv = (9, 9);
+    tm[1] <-- sv;                              // move a value into a tuple slot
+    __println("slotmove= " + tm[1][0] + " " + tm[1][1]);             // 9 9
+
     {
         tuple = (1,2,3);
         tuple = tuple << 1;
@@ -348,4 +358,12 @@ int32 main() {
 //    ((int,int),(int,int)) x = ((1,1),(1,1));
 //    ((int,int),(int,int)) y = x << ((1,1),(1,1,1));
 //    return y[0][0];
+//}
+
+/* a swap of two DIFFERENT-typed tuple slots is rejected — swap is exact-type. */
+//-EXPECT-ERROR: Swap operands must be the same type
+//int neg_swap_hetero_slot() {
+//    (int, bool) h = (1, true);
+//    h[0] <--> h[1];
+//    return h[0];
 //}

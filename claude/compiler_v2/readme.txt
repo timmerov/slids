@@ -1157,6 +1157,13 @@ STAGE FILES (.h / .cpp pairs)
             ident, an array element, a tuple slot, a class field (kFieldExpr), or a
             deref. a move's RHS is a plain read, so an rvalue source is allowed. DA: a move lhs is a pure write (need not
             be pre-init); a swap reads+writes both (both must be init).
+            A SUB-AGGREGATE operand works too: a PARTIAL array index (a sub-array
+            row `g[i]`) or a tuple SLOT (whether the slot is a tuple or an array) is
+            a valid swap/move operand — emitLvalueAddr threads allow_partial=true for
+            the swap/move sites so emitElementAddr returns the slice/slot ADDRESS,
+            and the whole-value load/store at the operand's type exchanges/moves it
+            (subject to swap's exact-type rule, so two slots of differing type
+            reject). codegen-only — classify already types the partial index.
             kNewExpr: a heap element must be sized — a primitive (compile-time
             typeByteSize) OR a CLASS (runtime __$sizeof, so it IS allocatable); void
             / unsized -> "Cannot allocate" (carets the element type, name_tok). An

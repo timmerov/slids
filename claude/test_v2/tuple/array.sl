@@ -356,6 +356,17 @@ int32 main() {
         pb <-- pa;
         __println("pmove= " + pb[0]^ + " " + pb[1]^);                // 5 6
         __println("paNull= " + !pa[0] + " " + !pa[1]);               // true true
+
+        // SUB-ARRAY rows are swap/move operands too — a partial index addresses the
+        // whole row (the swap/move uses allow_partial). swap exchanges two rows;
+        // move overwrites one row from another array value.
+        int g[3][2] = ((1,2), (3,4), (5,6));
+        g[0] <--> g[2];                       // swap rows 0 and 2
+        __println("rowswap= " + g[0][0] + " " + g[0][1] + " "
+                  + g[2][0] + " " + g[2][1]);                        // 5 6 1 2
+        int row[2] = (9, 9);
+        g[1] <-- row;                         // move a value into a sub-array row
+        __println("rowmove= " + g[1][0] + " " + g[1][1]);            // 9 9
     }
 
     /* shift on arrays — element-wise (an array is a homogeneous tuple). A scalar
