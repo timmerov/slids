@@ -28,17 +28,6 @@ BUGS (found, deferred)
 
 DEFERRED FEATURES (later; may not be on the plan)
 
-  * AGGREGATE MOVE / RETURN NOT LOWERED BY SLOT IN DESUGAR — a cross-form / leaf-
-    widen aggregate COPY at a decl / assign / store now lowers BY SLOT in desugar
-    (lowerAggregateList -> per-leaf stores). A cross-form MOVE (`a <-- b`) and a
-    cross-form RETURN value instead ride codegen's form-agnostic
-    emitImplicitAggregateConvert (move adds emitNullLeaves for the source-null).
-    Both are CORRECT, just not literally desugared by slot — a consistency gap with
-    the "every aggregate operation desugars by slot" model. To unify: extend
-    lowerAggregateList to kMoveStmt (per-slot copy + a per-leaf null of the source)
-    and kReturnStmt (materialize a return temp, copy by slot). Low priority — the
-    codegen convert seam already produces correct IR.
-
   * INC / DEC ON AN AGGREGATE — `++tuple` / `++array` (and `--`) should inc/dec
     every slot, the inc-dec analogue of the now-landed scalar broadcast (`array + 1`
     / `array += 1` / `tuple += 1` all work — binary + aug-assign scalar distribution

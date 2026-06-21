@@ -274,14 +274,17 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     itself is lowered BY SLOT in desugar (lowerAggregateList: a cross-form / leaf-
     widen copy at a decl/assign/store becomes per-leaf kStoreStmts over a form-
     agnostic kIndexExpr chain `dst[i] = src[i]`, recursing; a non-lvalue source
-    spills to `_$agg`), so codegen sees only scalar leaves there. The residual
-    seams desugar does not visit (return, call-arg, const-decl) use the now FORM-
-    AGNOSTIC codegen::emitImplicitAggregateConvert (extractvalue index i is identical
-    for an LLVM array and a struct, so one walk converts both forms); the four old
-    flatten HACKS (emitArrayFromTupleValue / emitTupleFromArrayValue /
-    emitTupleLeafStores / emitArrayElemStores) are DELETED. Move + cross-form return
-    work via that convert (not yet desugared by slot -- todo). The all-identical
-    fast path keeps the whole-aggregate store. Call-site uses classify::
+    spills to `_$agg`), so codegen sees only scalar leaves there. MOVE and RETURN
+    lower by slot in desugar too: a cross-form / leaf-widen MOVE adds a per-leaf
+    source null (emitAggNullLeaves, the desugar analogue of codegen::emitNullLeaves);
+    a cross-form / leaf-widen RETURN materializes a `_$ret` temp of the return type,
+    copies into it by slot, and returns the temp — so codegen's kMoveStmt / kReturnStmt
+    only ever see a SAME-type whole-value op. The residual seams desugar does not
+    visit (call-arg, const-decl) use the now FORM-AGNOSTIC codegen::emitImplicit-
+    AggregateConvert (extractvalue index i is identical for an LLVM array and a struct,
+    so one walk converts both forms); the four old flatten HACKS (emitArrayFromTuple-
+    Value / emitTupleFromArrayValue / emitTupleLeafStores / emitArrayElemStores) are
+    DELETED. The all-identical fast path keeps the whole-aggregate store. Call-site uses classify::
     shapesAndLeavesMatch in argConvertCost to rank shape-match-with-elem-widen as
     cost 1 (exact still wins overloads). NUMERIC END-STATE:
     classify::checkValueWiden ports widen::convert's reject rules (narrowing /
@@ -1258,9 +1261,12 @@ STAGE FILES (.h / .cpp pairs)
             emitElementAddr dispatches array-dim vs tuple-slot), so `dst[i]`/`src[i]`
             walk arrays and tuples alike; a non-lvalue source spills once to `_$agg`.
             A same-type whole copy stays a single store (the trivial base case).
-            Move + cross-form return don't lower here yet (codegen's form-agnostic
-            convert handles them — todo to unify). Future rewrites (receiver shapes,
-            more operator dispatch) slot in as their phases land.
+            kMoveStmt and kReturnStmt lower here too: a cross-form / leaf-widen MOVE
+            adds a per-leaf source null (emitAggNullLeaves), a RETURN materializes a
+            `_$ret` temp of the return type and copies into it by slot — so codegen's
+            kMoveStmt / kReturnStmt only ever see a same-type whole-value op. Future
+            rewrites (receiver shapes, more operator dispatch) slot in as their phases
+            land.
   optimize  ast -> ast in place. Slids-aware perf rewrites LLVM can't do
             (compound-fuse, NRVO, identity-temp adoption, build-into-target).
             (TODO stub.)
@@ -1348,13 +1354,15 @@ STAGE FILES (.h / .cpp pairs)
             subscript instead loads the pointer and GEPs by element type.
             kStoreStmt stores through any lvalue expr (deref / index). Move /
             swap (kMoveStmt / kSwapStmt, `a <-- b` / `a <--> b`) are lowered HERE
-            (they pass through desugar untouched). A MOVE copies the rhs into the
-            lhs via emitExpr(rhs, dest=lhs type)+store (so it reuses the widen /
-            implicit-pointer-cast / whole-tuple machinery, exactly an assignment),
-            then emitNullLeaves walks the rhs's structured type and `store ptr
-            null`s every pointer / iterator leaf — recursing by GEP into nested
-            tuple slots (the "fancy case"), so the source is left valid; an rvalue
-            source (isAstLvalue false) has no address and is a pure copy. A SWAP
+            for the SAME-type case (swap passes through desugar untouched; a cross-
+            form / leaf-widen move is desugared by slot first, so codegen sees only
+            same-type moves). A SAME-type MOVE copies the rhs into the lhs via
+            emitExpr(rhs, dest=lhs type)+store (so it reuses the widen / implicit-
+            pointer-cast / whole-tuple machinery, exactly an assignment), then
+            emitNullLeaves walks the rhs's structured type and `store ptr null`s every
+            pointer / iterator leaf — recursing by GEP into nested tuple slots (the
+            "fancy case"), so the source is left valid; an rvalue source (isAstLvalue
+            false) has no address and is a pure copy. A SWAP
             loads both lvalues into SSA temporaries and stores them crossed (no
             stack temp; a whole-value load/store handles tuples; both loads precede
             either store, so an aliased swap is safe). emitLvalueAddr gives an

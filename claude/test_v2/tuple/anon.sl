@@ -102,6 +102,11 @@ int firstRef( (int, int)^ pr ) {           // by-reference tuple param
     return pr^[0];                          // deref the ref, read slot 0
 }
 
+(int, int) widenTup() {                     // int tuple returned from an int8 tuple
+    (int8, int8) v = (9, 8);
+    return v;                               // leaf-widen return — lowered by slot
+}
+
 int32 main() {
 
     (Dir, bool) pair = (Dir:kN, false);
@@ -290,6 +295,15 @@ int32 main() {
     (int, int) sv = (9, 9);
     tm[1] <-- sv;                              // move a value into a tuple slot
     __println("slotmove= " + tm[1][0] + " " + tm[1][1]);             // 9 9
+
+    /* leaf-widen MOVE / RETURN — NOT-identical tuples (same form, differing leaf
+       types). Lowered BY SLOT (per-leaf widening), like the leaf-widen COPY above. */
+    (int8, int8) wsrc = (5, 6);
+    (int, int) wdst = (0, 0);
+    wdst <-- wsrc;                             // leaf-widen tuple move
+    __println("twmove= " + wdst[0] + " " + wdst[1]);                 // 5 6
+    (int, int) wret = widenTup();              // leaf-widen tuple return
+    __println("twret= " + wret[0] + " " + wret[1]);                  // 9 8
 
     {
         tuple = (1,2,3);

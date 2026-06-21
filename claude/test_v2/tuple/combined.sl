@@ -74,6 +74,10 @@ tuple VALUE element whose type / arity doesn't match the declared element.
     (int[2], int[2]) t = ((5,6), (7,8)); // body builds a tuple-of-arrays value
     return t;
 }
+(int, int) widenCross() {                // (int,int) returned from an int8[2] value
+    int8 v[2] = (1, 2);                  // cross-form AND leaf-widen return
+    return v;
+}
 
 int32 main() {
 
@@ -244,6 +248,17 @@ int32 main() {
         int rv[2] = (7, 8);
         ta[0] <-- rv;                        // move an array value into an array slot
         __println("slotAmove= " + ta[0][0] + " " + ta[0][1]);      // 7 8
+    }
+
+    /* CROSS-FORM + LEAF-WIDEN move/return — one array, one tuple, AND a widening
+       leaf: the per-slot lowering bridges both the form and the leaf width at once. */
+    {
+        (int8, int8) xs = (5, 6);
+        int xa[2] = (0, 0);
+        xa <-- xs;                           // array <-- tuple, int8 -> int
+        __println("xwmove= " + xa[0] + " " + xa[1]);               // 5 6
+        (int, int) xr = widenCross();        // tuple <- int8[2] return
+        __println("xwret= " + xr[0] + " " + xr[1]);                // 1 2
     }
     return 0;
 }

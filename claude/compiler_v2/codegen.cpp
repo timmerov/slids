@@ -1966,28 +1966,10 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             ast::Node const& rhs = *stmt.children[1];
             std::string dst = emitLvalueAddr(lhs, syms, pool, out, diag,
                                              /*allow_partial=*/true);
-            // Per-element implicit widening for aggregate move with elem/slot
-            // type difference (same dispatch as kStoreStmt / kAssignStmt).
-            widen::Type::Form mv_dform =
-                widen::form(widen::strip(lhs.inferred_type));
-            widen::Type::Form mv_sform =
-                widen::form(widen::strip(rhs.inferred_type));
-            bool mv_agg_widen =
-                (mv_dform == widen::Type::Form::kArray
-                 || mv_dform == widen::Type::Form::kTuple)
-                && (mv_sform == widen::Type::Form::kArray
-                    || mv_sform == widen::Type::Form::kTuple)
-                && widen::deepStrip(lhs.inferred_type)
-                    != widen::deepStrip(rhs.inferred_type);
-            std::string val;
-            if (mv_agg_widen) {
-                val = emitExpr(rhs, syms, pool, out, diag, widen::kNoType);
-                val = emitImplicitAggregateConvert(
-                    val, rhs.inferred_type, lhs.inferred_type,
-                    rhs.file_id, rhs.tok, out, diag);
-            } else {
-                val = emitExpr(rhs, syms, pool, out, diag, lhs.inferred_type);
-            }
+            // A cross-form / leaf-widen aggregate move is lowered BY SLOT in desugar
+            // (lowerAggCopyStmt, incl. the per-leaf source null); what reaches here is
+            // a same-type move — a whole-value load/store, then null the source.
+            std::string val = emitExpr(rhs, syms, pool, out, diag, lhs.inferred_type);
             out << "  store " << llvmForRef(lhs.inferred_type) << " " << val
                 << ", ptr " << dst << "\n";
             if (isAstLvalue(rhs)) {
@@ -2138,29 +2120,10 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 return;
             }
             ast::Node const& rv = *stmt.children[0];
-            // Per-element implicit widening for an aggregate return whose
-            // elem/slot types differ from the function's return type. Same
-            // dispatch as kVarDeclStmt / kAssignStmt / kStoreStmt / kMoveStmt.
-            widen::Type::Form rt_dform =
-                widen::form(widen::strip(fn_return_type));
-            widen::Type::Form rt_sform =
-                widen::form(widen::strip(rv.inferred_type));
-            bool rt_agg_widen =
-                (rt_dform == widen::Type::Form::kArray
-                 || rt_dform == widen::Type::Form::kTuple)
-                && (rt_sform == widen::Type::Form::kArray
-                    || rt_sform == widen::Type::Form::kTuple)
-                && widen::deepStrip(fn_return_type)
-                    != widen::deepStrip(rv.inferred_type);
-            std::string val;
-            if (rt_agg_widen) {
-                val = emitExpr(rv, syms, pool, out, diag, widen::kNoType);
-                val = emitImplicitAggregateConvert(
-                    val, rv.inferred_type, fn_return_type,
-                    rv.file_id, rv.tok, out, diag);
-            } else {
-                val = emitExpr(rv, syms, pool, out, diag, fn_return_type);
-            }
+            // A cross-form / leaf-widen aggregate return is lowered BY SLOT in
+            // desugar (lowerAggCopyStmt materializes a `_$ret` temp of the return
+            // type), so what reaches here matches the return type — emit it directly.
+            std::string val = emitExpr(rv, syms, pool, out, diag, fn_return_type);
             emitUnwindDtors(scope, nullptr, out);
             std::string llty = llvmForRef(fn_return_type);
             out << "  ret " << llty << " " << val << "\n";

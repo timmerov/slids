@@ -1363,14 +1363,117 @@ std::unique_ptr<ast::Node> spillSource(std::unique_ptr<ast::Node> src,
     return mintIdent("_$agg", id, srcType, file, tok);
 }
 
+// True if `t` has any pointer / iterator leaf (recursing tuple slots + array
+// elements). Mirrors codegen's typeHasPointer; used to skip the per-leaf source
+// null of a pointer-free aggregate move.
+bool typeHasPointerLeaf(widen::TypeRef t) {
+    widen::TypeRef s = widen::strip(t);
+    widen::Type::Form f = widen::form(s);
+    if (f == widen::Type::Form::kPointer || f == widen::Type::Form::kIterator)
+        return true;
+    if (f == widen::Type::Form::kTuple) {
+        std::vector<widen::TypeRef> slots = widen::get(s).slots;   // copy: no intern
+        for (widen::TypeRef slot : slots)
+            if (typeHasPointerLeaf(slot)) return true;
+        return false;
+    }
+    if (f == widen::Type::Form::kArray) {
+        widen::TypeRef elem = widen::get(s).elem;                  // copy: no intern
+        return typeHasPointerLeaf(elem);
+    }
+    return false;
+}
+
+// Emit per-leaf null stores over the source lvalue `src`: for each pointer /
+// iterator leaf, store nullptr; recurse into aggregate slots. The desugar analogue
+// of codegen's emitNullLeaves — a moved-from source is left valid (its pointers
+// nulled) by the BY-SLOT lowering rather than the codegen seam.
+void emitAggNullLeaves(ast::Node const& src,
+                       std::vector<std::unique_ptr<ast::Node>>& out,
+                       int file, int tok) {
+    widen::TypeRef t = src.inferred_type;
+    widen::Type::Form f = widen::form(widen::strip(t));
+    if (f == widen::Type::Form::kPointer || f == widen::Type::Form::kIterator) {
+        auto nullp = std::make_unique<ast::Node>();
+        nullp->kind = ast::Kind::kNullptrLiteral;
+        nullp->inferred_type = t;
+        nullp->file_id = file;
+        nullp->tok = tok;
+        auto store = std::make_unique<ast::Node>();
+        store->kind = ast::Kind::kStoreStmt;
+        store->file_id = file;
+        store->tok = tok;
+        store->children.push_back(cloneAstExpr(src));
+        store->children.push_back(std::move(nullp));
+        out.push_back(std::move(store));
+        return;
+    }
+    if (!isAggForm(t) || !typeHasPointerLeaf(t)) return;   // scalar / pointer-free
+    int n = aggSlotCount(t);
+    for (int i = 0; i < n; i++) {
+        widen::TypeRef slotT = aggSlotType(t, i);
+        auto ix = buildSlotIndex(cloneAstExpr(src), i, slotT, file, tok);
+        emitAggNullLeaves(*ix, out, file, tok);
+    }
+}
+
 // Lower one statement's aggregate cross-form / leaf-widen copy. Returns the
 // replacement statement list (empty -> not an aggregate copy, leave unchanged).
-// Handles kVarDeclStmt (init), kAssignStmt (bare name), and kStoreStmt (lvalue).
+// Handles kVarDeclStmt (init), kAssignStmt (bare name), kStoreStmt (lvalue),
+// kMoveStmt (lvalue, plus a per-leaf source null), and kReturnStmt (materialize a
+// return temp, copy by slot). `fn_return_type` is the enclosing function's return
+// type (used only by the kReturnStmt arm).
 std::vector<std::unique_ptr<ast::Node>> lowerAggCopyStmt(ast::Node& s,
                                                          parse::Tree const& tree,
+                                                         widen::TypeRef fn_return_type,
                                                          int& next_id) {
     std::vector<std::unique_ptr<ast::Node>> repl;
     int file = s.file_id, tok = s.tok;
+
+    // RETURN of a cross-form / leaf-widen aggregate: materialize a `_$ret` temp of
+    // the function's return type, copy the value into it BY SLOT, return the temp.
+    // (The forms below copy into an already-existing destination lvalue.)
+    if (s.kind == ast::Kind::kReturnStmt) {
+        if (s.children.empty() || !s.children[0]) return repl;
+        if (!isAggForm(fn_return_type)
+            || !isAggForm(s.children[0]->inferred_type)
+            || widen::deepStrip(fn_return_type)
+                == widen::deepStrip(s.children[0]->inferred_type)) {
+            return repl;
+        }
+        int id = next_id++;
+        std::unique_ptr<ast::Node> srcNode = std::move(s.children[0]);
+        widen::TypeRef srcType = srcNode->inferred_type;
+        std::vector<std::unique_ptr<ast::Node>> body;
+        auto retDecl = std::make_unique<ast::Node>();
+        retDecl->kind = ast::Kind::kVarDeclStmt;
+        retDecl->name = "_$ret";
+        retDecl->resolved_entry_id = id;
+        retDecl->return_type = fn_return_type;
+        retDecl->file_id = file;
+        retDecl->tok = tok;
+        retDecl->name_tok = tok;
+        body.push_back(std::move(retDecl));
+        std::unique_ptr<ast::Node> srcBase =
+            spillSource(std::move(srcNode), srcType, next_id, body);
+        std::unique_ptr<ast::Node> dstBase =
+            mintIdent("_$ret", id, fn_return_type, file, tok);
+        emitAggCopyLeaves(*dstBase, *srcBase, body, file, tok);
+        auto ret = std::make_unique<ast::Node>();
+        ret->kind = ast::Kind::kReturnStmt;
+        ret->file_id = file;
+        ret->tok = tok;
+        ret->children.push_back(mintIdent("_$ret", id, fn_return_type, file, tok));
+        body.push_back(std::move(ret));
+        auto block = std::make_unique<ast::Node>();
+        block->kind = ast::Kind::kBlockStmt;
+        block->file_id = file;
+        block->tok = tok;
+        for (auto& b : body) block->children.push_back(std::move(b));
+        repl.push_back(std::move(block));
+        return repl;
+    }
+    bool is_move = false;
 
     // Identify (dstType, dst-lvalue-builder, src-child-slot). A decl keeps its
     // (init-stripped) node as the leading statement so the var stays in the
@@ -1426,15 +1529,34 @@ std::vector<std::unique_ptr<ast::Node>> lowerAggCopyStmt(ast::Node& s,
             return repl;
         }
         dstBase = std::move(s.children[0]);
+    } else if (s.kind == ast::Kind::kMoveStmt) {
+        if (s.children.size() != 2) return repl;
+        dstType = s.children[0]->inferred_type;
+        if (!isAggForm(dstType)) return repl;
+        srcNode = std::move(s.children[1]);
+        if (!isAggForm(srcNode->inferred_type)
+            || widen::deepStrip(dstType)
+                == widen::deepStrip(srcNode->inferred_type)) {
+            s.children[1] = std::move(srcNode);
+            return repl;
+        }
+        dstBase = std::move(s.children[0]);
+        is_move = true;
     } else {
         return repl;
     }
 
     widen::TypeRef srcType = srcNode->inferred_type;
     std::vector<std::unique_ptr<ast::Node>> body;
+    // A move nulls the SOURCE's pointer leaves after the copy. Capture the original
+    // source lvalue before spilling — an lvalue source isn't spilled, so this is the
+    // real storage; an rvalue source (no lvalue) has nothing to null.
+    std::unique_ptr<ast::Node> moveNullSrc;
+    if (is_move && isSimpleLvalue(*srcNode)) moveNullSrc = cloneAstExpr(*srcNode);
     std::unique_ptr<ast::Node> srcBase =
         spillSource(std::move(srcNode), srcType, next_id, body);
     emitAggCopyLeaves(*dstBase, *srcBase, body, file, tok);
+    if (moveNullSrc) emitAggNullLeaves(*moveNullSrc, body, file, tok);
 
     auto block = std::make_unique<ast::Node>();
     block->kind = ast::Kind::kBlockStmt;
@@ -1455,24 +1577,26 @@ std::vector<std::unique_ptr<ast::Node>> lowerAggCopyStmt(ast::Node& s,
 // Walk a statement list, lowering aggregate copies in place and recursing into
 // nested compound statements (mirrors lowerStatementList's structural descent).
 void lowerAggregateList(std::vector<std::unique_ptr<ast::Node>>& stmts,
-                        parse::Tree const& tree, int& next_id) {
+                        parse::Tree const& tree, widen::TypeRef fn_return_type,
+                        int& next_id) {
     std::vector<std::unique_ptr<ast::Node>> out;
     for (auto& stmt : stmts) {
         if (!stmt) { out.push_back(nullptr); continue; }
         ast::Kind k = stmt->kind;
         if (k == ast::Kind::kBlockStmt) {
-            lowerAggregateList(stmt->children, tree, next_id);
+            lowerAggregateList(stmt->children, tree, fn_return_type, next_id);
         } else if (k == ast::Kind::kIfStmt || k == ast::Kind::kWhileStmt
                 || k == ast::Kind::kDoWhileStmt || k == ast::Kind::kForLongStmt) {
             for (std::size_t i = 1; i < stmt->children.size(); i++) {
                 if (!stmt->children[i]) continue;
                 if (stmt->children[i]->kind == ast::Kind::kBlockStmt) {
-                    lowerAggregateList(stmt->children[i]->children, tree, next_id);
+                    lowerAggregateList(stmt->children[i]->children, tree,
+                                       fn_return_type, next_id);
                 } else if (stmt->children[i]->kind == ast::Kind::kIfStmt) {
                     // else-if chain: recurse the nested if as a one-stmt list.
                     std::vector<std::unique_ptr<ast::Node>> one;
                     one.push_back(std::move(stmt->children[i]));
-                    lowerAggregateList(one, tree, next_id);
+                    lowerAggregateList(one, tree, fn_return_type, next_id);
                     stmt->children[i] = std::move(one[0]);
                 }
             }
@@ -1482,11 +1606,11 @@ void lowerAggregateList(std::vector<std::unique_ptr<ast::Node>>& stmts,
                     && stmt->children[i]->children.size() > 1
                     && stmt->children[i]->children[1]) {
                     lowerAggregateList(stmt->children[i]->children[1]->children,
-                                       tree, next_id);
+                                       tree, fn_return_type, next_id);
                 }
             }
         }
-        auto repl = lowerAggCopyStmt(*stmt, tree, next_id);
+        auto repl = lowerAggCopyStmt(*stmt, tree, fn_return_type, next_id);
         if (repl.empty()) {
             out.push_back(std::move(stmt));
         } else {
@@ -1761,7 +1885,7 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
         if (!n || n->kind != ast::Kind::kProgram) continue;
         for (auto& fn : n->children) {
             if (!fn || fn->kind != ast::Kind::kFunctionDef) continue;
-            lowerAggregateList(fn->children, in, next_id);
+            lowerAggregateList(fn->children, in, fn->return_type, next_id);
         }
     }
     // PPID lowering: walk each function body's statements, extract ++/--, and

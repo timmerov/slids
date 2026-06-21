@@ -88,7 +88,11 @@ ORDER (all LANDED)
      whole-aggregate copy.
   3. Extended the codegen walk dispatch to the remaining sites: kStoreStmt (sub-
      array + deref store), kMoveStmt (null-leaves tail unchanged), kReturnStmt
-     (uses fn_return_type as dst). Call-site landed via two halves: classify-
+     (uses fn_return_type as dst). [Later: the cross-form / leaf-widen MOVE and
+     RETURN walks moved into desugar's lowerAggregateList (per-slot, move adds a
+     per-leaf source null, return materializes a `_$ret` temp); the codegen
+     mv_agg_widen / rt_agg_widen branches were deleted, leaving only same-type
+     whole-value move/return in codegen.] Call-site landed via two halves: classify-
      side classify::shapesAndLeavesMatch ranks shape-match-with-elem-widen as
      cost 1 in argConvertCost (exact still wins overloads); codegen's emitCall
      unified materialization — argMaterializes lambda determines stacksave bracket;

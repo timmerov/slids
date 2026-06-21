@@ -95,6 +95,11 @@ claude says:
   `(int,int) a[3] = ((1,2),(3,4),(5,6))`.)
 */
 
+int[3] widenArr() {                          // int[3] returned from an int8[3] value
+    int8 v[3] = (1, 2, 3);
+    return v;                                 // leaf-widen return — lowered by slot
+}
+
 int32 main() {
     /* one-dimensional: fill via a ranged for, read back by subscript. */
     int arr[5];
@@ -387,6 +392,16 @@ int32 main() {
         int row[2] = (9, 9);
         g[1] <-- row;                         // move a value into a sub-array row
         __println("rowmove= " + g[1][0] + " " + g[1][1]);            // 9 9
+
+        /* leaf-widen MOVE / RETURN — NOT-identical arrays (same form, differing
+           leaf types). Lowered BY SLOT (per-element widening), like the leaf-widen
+           COPY above. */
+        int8 wsrc[3] = (5, 6, 7);
+        int wdst[3] = (0, 0, 0);
+        wdst <-- wsrc;                        // leaf-widen array move
+        __println("awmove= " + wdst[0] + " " + wdst[1] + " " + wdst[2]); // 5 6 7
+        int wret[3] = widenArr();             // leaf-widen array return
+        __println("awret= " + wret[0] + " " + wret[1] + " " + wret[2]);  // 1 2 3
     }
 
     /* shift on arrays — element-wise (an array is a homogeneous tuple). A scalar
