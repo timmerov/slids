@@ -80,7 +80,7 @@ SESSION 1 — bare blocks (foundational)   [LANDED]
     (a) parse ambiguities (type-name-as-variable; class-related, deferred); (b) a
     body-TOP local shadowing a parameter — already caught, since the param shares
     the body's top frame so a same-name top-level local is a plain Duplicate
-    declaration (canon negative lives in function/calls.sl, shadow_ban). A
+    declaration (canon negative lives in test_v2/function/calls.sl, shadow_ban). A
     NESTED-block local reusing a param name is ALLOWED (B-pure: the param is
     recoverable outside that block). So Session 1 adds NO new shadow check.
   * classify: return-correctness recursion — the "last statement is a return"

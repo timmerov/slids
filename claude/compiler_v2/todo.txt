@@ -28,6 +28,19 @@ BUGS (found, deferred)
 
 DEFERRED FEATURES (later; may not be on the plan)
 
+  * SELF-MOVE / SWAP THROUGH A `++` INDEX — `a[i++] <--> a[i++]` is a SELF-op:
+    under PPID the bump lifts off the lvalue, so it lowers to `a[i] <--> a[i];
+    i++; i++` — the SAME element, and should be rejected like `a[i] <--> a[i]`.
+    But classify's structural lvalue-equality (isSameLvalue) sees the index as a
+    bump expression, not a bare ident, so it doesn't match — the bump hasn't been
+    lifted yet (desugar runs after classify). To detect it, isSameLvalue's index
+    compare must see THROUGH a PPID bump to its underlying lvalue. A side-effecting
+    index that is NOT a pure bump (`a[f()] <--> a[f()]`) is genuinely a different
+    element and stays allowed. Pinned by a //-EXPECT-ERROR-DEFERRED in
+    test_v2/assign/lvalue.sl. The structural isSameLvalue (deref / field / index) HAS
+    landed — only this bump-lifted-index view (isSameIndex seeing through a PPID
+    bump) remains.
+
   * AGGREGATE MOVE / RETURN NOT LOWERED BY SLOT IN DESUGAR — a cross-form / leaf-
     widen aggregate COPY at a decl / assign / store now lowers BY SLOT in desugar
     (lowerAggregateList -> per-leaf stores). A cross-form MOVE (`a <-- b`) and a
@@ -47,10 +60,6 @@ DEFERRED FEATURES (later; may not be on the plan)
     broadcast. Needs the inc-dec lowering to apply per slot over an aggregate operand
     (or desugar `++agg` to `agg += 1`, which now type-checks).
 
-  * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
-    primitive element type (a reference works for all). Only the CLASS-element
-    variant remains, when class array elements exist (Phase 5).
-
   * TYPELESS CONST FROM A RUNTIME SCALAR — `int y = 42; const x = y;` errors
     "Initializer for 'x' is not a constant expression." x can't be a substituted
     literal constant (y is a runtime value), but it SHOULD be a const-qualified
@@ -60,18 +69,11 @@ DEFERRED FEATURES (later; may not be on the plan)
     a PRIMITIVE rhs that didn't fold: route to a const SCALAR variable instead of
     erroring. Keep a FOLDABLE scalar (`const x = 5`) on the substitution path.
 
-  * SELF-MOVE / SWAP THROUGH A `++` INDEX — `a[i++] <--> a[i++]` is a SELF-op:
-    under PPID the bump lifts off the lvalue, so it lowers to `a[i] <--> a[i];
-    i++; i++` — the SAME element, and should be rejected like `a[i] <--> a[i]`.
-    But classify's structural lvalue-equality (isSameLvalue) sees the index as a
-    bump expression, not a bare ident, so it doesn't match — the bump hasn't been
-    lifted yet (desugar runs after classify). To detect it, isSameLvalue's index
-    compare must see THROUGH a PPID bump to its underlying lvalue. A side-effecting
-    index that is NOT a pure bump (`a[f()] <--> a[f()]`) is genuinely a different
-    element and stays allowed. Pinned by a //-EXPECT-ERROR-DEFERRED in
-    assign/lvalue.sl. The structural isSameLvalue (deref / field / index) HAS
-    landed — only this bump-lifted-index view (isSameIndex seeing through a PPID
-    bump) remains.
+  deferred features involving classes:
+
+  * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
+    primitive element type (a reference works for all). Only the CLASS-element
+    variant remains, when class array elements exist (Phase 5).
 
   * CLASS COPY-INIT AT A DECL — `Class a = sameClassValue` (initialize a class
     local from another value of the SAME class — e.g. the result of a function
@@ -136,7 +138,7 @@ DEFERRED FEATURES (later; may not be on the plan)
         tuple construction handle class FIELDS and class ARRAY ELEMENTS today (via
         constructClass), not class tuple SLOTS — wire constructClass into the
         tuple-slot path and verify end-to-end (construct + t[1] + t[0].field).
-    Repro: tuple/anon.sl `(Local, int) lt = (3,4)`. Also blocks the class-target
+    Repro: test_v2/tuple/anon.sl `(Local, int) lt = (3,4)`. Also blocks the class-target
     conversion target + tuple-with-class-slot field decls. prerequisite: classes.
 
   * CLASS-FIELD INIT FROM A SIZE-1 TUPLE — the "vexing parse" (Phase 5). CONTEXT,
@@ -163,6 +165,52 @@ DEFERRED FEATURES (later; may not be on the plan)
     needs a non-collapsing 1-tuple syntax, which touches grouping parens globally —
     not worth it. prerequisite: a 1-tuple spelling (none planned).
 
+  * FOR-CLASS — needs classes + a for-each
+    protocol (op[]/size or begin/end/next, Phase 5). Lowers to a kForLongStmt in
+    desugar like the others. Not landable until classes exist.
+
+  * CTOR/DTOR THROUGH AN ARRAY / TUPLE class FIELD — an array/tuple-of-hook-class
+    LOCAL works now (`CtorDtor arr[3] = (36,37,38)` runs ctors 36,37,38 / dtors
+    38,37,36 — classify constructs each class element via constructClass; the
+    needs-fixpoint + emitConstructHooks/emitDestructHooks descend array elem /
+    tuple slots; the var-decl arm runs the hooks after the array field-init).
+    STILL OPEN: a class FIELD of array/tuple-of-hook type (`Box(CtorDtor items_[2])`)
+    — `Box bx;` errors "Cannot default-construct a field of type 'CtorDtor[2]'."
+    classZeroValue / classifyClassInit only CONSTRUCT a direct kSlid field; an
+    array/tuple field has no default-construction path (the needs-fixpoint already
+    descends it, so the hooks WOULD fire once construction lands). Fix:
+    classZeroValue builds an N-element array (each element default-constructed) /
+    a per-slot tuple, routed through the array-from-tuple slot path. Tests go in
+    array.sl / tuple.sl.
+
+  * DESTRUCTION ON NON-BLOCK EXITS — every ctor/dtor test exits a scope by BLOCK
+    fall-through. The destructor-balance invariant's return / break / continue arms
+    (emitUnwindDtors) are implemented but UNTESTED: a hook instance at function
+    scope destroyed at `return`, one inside a loop destroyed on `break`/`continue`,
+    an early `return` out of a nested `if`. ALSO the loop-VARIABLE case (a class
+    declared in a `for` varlist) — a known limitation: the varlist alloca hoists to
+    entry, so the loop var registers in the ENCLOSING scope, not a per-iteration
+    one, and isn't destroyed at loop exit (a loop-BODY local is fine). Tests go in
+    flow/.
+
+  * CTOR/DTOR CALLED EXACTLY ONCE UNDER COPY / MOVE — canon says the ctor/dtor run
+    exactly once each; a copy / move / reassignment / by-value param-or-return of a
+    hook class must not double- or skip-run them. Needs class copy/move (not built).
+    Test in moveswap.sl.
+
+  * DUP-DEF / DUP-DECL NOTE CARET POSITION — the "first defined here" note carets
+    the first DEFINITION (Entry.def_tok) and "first declared here" the first
+    DECLARATION (Entry.tok); verified by manual probe only. The //-EXPECT-ERROR
+    runner matches a message SUBSTRING, not caret line/col, so this attribution
+    can't be locked by a .sl negative. Needs a caret-aware assertion the harness
+    doesn't have.
+
+  * FOR-TUPLE OVER CLASS ELEMENTS — What remains needs classes: by-VALUE iteration over a class element (a copy
+    needs a constructor — not available) + the class copy/move machinery, and
+    by-ref iteration once class-typed tuples exist. prerequisite: classes (Phase 5).
+
+  longer term features:
+
   * CONST ENFORCEMENT (Phase 6) — const representation/syntax is in (qualifier,
     param munge, `mutable`, the casts); ENFORCEMENT is not. const is unchecked
     today, so a const->mutable drop is silently accepted. To do:
@@ -175,10 +223,6 @@ DEFERRED FEATURES (later; may not be on the plan)
         blocked on operator overloading existing (Phase 5+; op<-- does not parse).
     cast.sl's const-correctness lines + the deep-const local forms in mutable.sl
     stay syntax-only until this lands.
-
-  * FOR-CLASS — needs classes + a for-each
-    protocol (op[]/size or begin/end/next, Phase 5). Lowers to a kForLongStmt in
-    desugar like the others. Not landable until classes exist.
 
   * NAMED-CONST-TRUE LOOP NOT FLAGGED — the constant-true-loop special case
     (3B revisited: a constant-true loop with no break is non-completing — its
@@ -248,46 +292,6 @@ DEFERRED FEATURES (later; may not be on the plan)
 
 
 DEFERRED TESTS
-
-  * CTOR/DTOR THROUGH AN ARRAY / TUPLE class FIELD — an array/tuple-of-hook-class
-    LOCAL works now (`CtorDtor arr[3] = (36,37,38)` runs ctors 36,37,38 / dtors
-    38,37,36 — classify constructs each class element via constructClass; the
-    needs-fixpoint + emitConstructHooks/emitDestructHooks descend array elem /
-    tuple slots; the var-decl arm runs the hooks after the array field-init).
-    STILL OPEN: a class FIELD of array/tuple-of-hook type (`Box(CtorDtor items_[2])`)
-    — `Box bx;` errors "Cannot default-construct a field of type 'CtorDtor[2]'."
-    classZeroValue / classifyClassInit only CONSTRUCT a direct kSlid field; an
-    array/tuple field has no default-construction path (the needs-fixpoint already
-    descends it, so the hooks WOULD fire once construction lands). Fix:
-    classZeroValue builds an N-element array (each element default-constructed) /
-    a per-slot tuple, routed through the array-from-tuple slot path. Tests go in
-    array.sl / tuple.sl.
-
-  * DESTRUCTION ON NON-BLOCK EXITS — every ctor/dtor test exits a scope by BLOCK
-    fall-through. The destructor-balance invariant's return / break / continue arms
-    (emitUnwindDtors) are implemented but UNTESTED: a hook instance at function
-    scope destroyed at `return`, one inside a loop destroyed on `break`/`continue`,
-    an early `return` out of a nested `if`. ALSO the loop-VARIABLE case (a class
-    declared in a `for` varlist) — a known limitation: the varlist alloca hoists to
-    entry, so the loop var registers in the ENCLOSING scope, not a per-iteration
-    one, and isn't destroyed at loop exit (a loop-BODY local is fine). Tests go in
-    flow/.
-
-  * CTOR/DTOR CALLED EXACTLY ONCE UNDER COPY / MOVE — canon says the ctor/dtor run
-    exactly once each; a copy / move / reassignment / by-value param-or-return of a
-    hook class must not double- or skip-run them. Needs class copy/move (not built).
-    Test in moveswap.sl.
-
-  * DUP-DEF / DUP-DECL NOTE CARET POSITION — the "first defined here" note carets
-    the first DEFINITION (Entry.def_tok) and "first declared here" the first
-    DECLARATION (Entry.tok); verified by manual probe only. The //-EXPECT-ERROR
-    runner matches a message SUBSTRING, not caret line/col, so this attribution
-    can't be locked by a .sl negative. Needs a caret-aware assertion the harness
-    doesn't have.
-
-  * FOR-TUPLE OVER CLASS ELEMENTS — What remains needs classes: by-VALUE iteration over a class element (a copy
-    needs a constructor — not available) + the class copy/move machinery, and
-    by-ref iteration once class-typed tuples exist. prerequisite: classes (Phase 5).
 
 
 REACH GOALS

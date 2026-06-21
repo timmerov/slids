@@ -74,7 +74,7 @@ Phase 1 — expression core (LANDED)
     deref, class field) flow through this same path: a hidden `_$lv` binds the leaf
     address once (address-once) and the bump is an address-child kBumpExpr; bare /
     complex × pre/post × statement/expression are ONE path (both grammar shortcuts
-    deleted). Canon: expression/ppid.sl.                                     LANDED
+    deleted). Canon: test_v2/expression/ppid.sl.                             LANDED
   * call-as-expression — kCallExpr via parsePostfix on a bare ident; shared
     resolveUserCall + emitCall with kCallStmt; void-return + print-intrinsic-
     as-expr rejected                                                   LANDED
@@ -93,7 +93,7 @@ Phase 2 — declarations + flow (LANDED)
     BACK entry.slids_type (the one deliberate classify symbol-table mutation,
     assert-guarded). Aug-assign on an inferred var fixed: classify's kAugAssignStmt
     arm RE-READS entryType into s.return_type (resolve cached it empty before the
-    inferred decl was stamped). Canon: assign/infer.sl.
+    inferred decl was stamped). Canon: test_v2/assign/infer.sl.
     The for-loop typeless/reuse loop var (Session-4 remainder + the v1 chess-sample
     reuse fix) is now WIRED IN on this mechanism (see the flow item below).
     Definite assignment LANDED: a local read before
@@ -101,7 +101,7 @@ Phase 2 — declarations + flow (LANDED)
     initialized. Unused-local sweep LANDED: a body-declared local never read
     errors ("Unused local variable" if never written, else "set but never
     used"); consts + params exempt. Straight-line only — control-flow joins
-    attach per-construct as the branches below land. Canon: expression/vardecl.sl.
+    attach per-construct as the branches below land. Canon: test_v2/expression/vardecl.sl.
   * flow constructs (blocks, if/else, while, for, switch, labeled break/
     continue) — a 6-session track in plan-flow.txt (the join model + per-construct
     landing stages; tests in test_v2/flow/). Decisions locked: switch cases
@@ -299,7 +299,7 @@ Phase 4 — types beyond primitives
     leaf type [int8[3]+1 stays int8], binary arm gate `&&`->`||` + aug-assign gate on
     aggregate lvalue, the old tuple-only scalar block DELETED. Still todo: `++array` /
     `++tuple` [inc-dec on an aggregate — PPID/bump path, not arith]. Coverage:
-    tuple/anon.sl, tuple/array.sl, tuple/combined.sl.)
+    test_v2/tuple/anon.sl, tuple/array.sl, tuple/combined.sl.)
   * aggregate COPY / MOVE by slot (cross-form + leaf-widen)         LANDED
     (an array IS a homogeneous tuple, so a copy is performed BY SLOT, iteratively
     and recursively, down to scalar leaves. classify::checkAggregateShapeMatch is
@@ -315,7 +315,7 @@ Phase 4 — types beyond primitives
     flatten HACKS [emitArrayFromTupleValue / emitTupleFromArrayValue /
     emitTupleLeafStores / emitArrayElemStores] DELETED. Move + cross-form return
     work via the form-agnostic convert [not yet desugared by slot — todo]. Coverage:
-    tuple/anon.sl, tuple/array.sl, tuple/combined.sl [cross-form copy/move/return,
+    test_v2/tuple/anon.sl, tuple/array.sl, tuple/combined.sl [cross-form copy/move/return,
     pointer-leaf move null, cross-form narrow + count negatives].)
   * for-array (`for (var : arr)`)                                  LANDED
     (DESUGAR-stage lowering to kForLongStmt: resolve UNDERSTANDS it
@@ -565,7 +565,7 @@ Phase 4 — types beyond primitives
     honored, else a no-width slot (char/int/uint/float) when a no-width operand
     contributed it, else the canonical width; two width-named operands stay width
     (so `int+int8`->int, `int+int32`->int32, `int8+uint8`->int16). Canon:
-    constfold/constant.sl (kSS, kWP1-5, kChFit/kChBig/...).
+    test_v2/constfold/constant.sl (kSS, kWP1-5, kChFit/kChBig/...).
 
 Phase 5 — classes
   * class definitions (fields, ctor, dtor) — LANDED. A class is a named tuple

@@ -57,11 +57,11 @@ Slids is a compiled, systems-level programming language. Source files (`.sl`) co
 # Build only the compiler
 make -C compiler
 
-# Build only samples
-make -C sample
+# Build only tests
+make -C test_v2
 
-# Build a single sample
-make -C sample hello1
+# Build a single test
+make -C test_v2/misc hello
 
 # Manually compile a .sl file end-to-end
 ./bin/slidsc foo.sl -o foo.ll
