@@ -26,15 +26,6 @@ BUGS
     value. Either removes the discipline requirement and the entire bug class. Until
     then, every `Type const& x = get(...)` near an intern is a latent dangling read.
 
-  * TYPELESS CONST FROM A RUNTIME SCALAR — `int y = 42; const x = y;` errors
-    "Initializer for 'x' is not a constant expression." x can't be a substituted
-    literal constant (y is a runtime value), but it SHOULD be a const-qualified
-    scalar VARIABLE (allocated + initialized, not-mutable) — like the typeless
-    AGGREGATE consts that now route to variables (classify infers the rhs type and
-    flips a non-primitive typeless const to a kLocalVar + deepConst). Extend that to
-    a PRIMITIVE rhs that didn't fold: route to a const SCALAR variable instead of
-    erroring. Keep a FOLDABLE scalar (`const x = 5`) on the substitution path.
-
 
 BLOCKED FEATURES
 
@@ -221,17 +212,6 @@ BLOCKED FEATURES
 
   * TEMPLATED ALIAS — `alias X<...> = T;`.
 
-  * NESTED FUNCTION RESTRICTIONS TO REVISIT — three deliberate limits, each a
-    compile error today (canon nested.sl says "needs to be revisited"):
-      - DEEP NESTING — a nested function may not contain a further nested
-        function ("Nested functions may not contain further nested functions.").
-      - SIBLING CALLS — one nested function may not call another ("Calling a
-        sibling nested function is not supported."). Lambda-lift threads only the
-        host's captures, not a sibling's capture environment.
-      - NESTED OVERLOADING — nested functions do NOT overload; a same-name nested
-        pair is a "Duplicate declaration". classifyCall restricts candidates to
-        file scope (parent_frame_id == 0). Revisit if nested overloads are wanted.
-
   * ORPHAN-CHECK vs IMPORT FORWARD-DECLS — resolve's Pass 3 errors on any
     function declared-but-never-defined ("Function 'X' is declared but never
     defined.") — but a `.slh` header legitimately declares-only (defined in the
@@ -259,8 +239,28 @@ BLOCKED FEATURES
     statement/lvalue parse to accept a postfix-inc lvalue + desugar to lift the bump
     after the store.
 
+  * TYPELESS CONST FROM A RUNTIME SCALAR — `int y = 42; const x = y;` errors
+    "Initializer for 'x' is not a constant expression." x can't be a substituted
+    literal constant (y is a runtime value), but it SHOULD be a const-qualified
+    scalar VARIABLE (allocated + initialized, not-mutable) — like the typeless
+    AGGREGATE consts that now route to variables (classify infers the rhs type and
+    flips a non-primitive typeless const to a kLocalVar + deepConst). Extend that to
+    a PRIMITIVE rhs that didn't fold: route to a const SCALAR variable instead of
+    erroring. Keep a FOLDABLE scalar (`const x = 5`) on the substitution path.
+
 
 REACH GOALS
+
+  * NESTED FUNCTION RESTRICTIONS TO REVISIT — three deliberate limits, each a
+    compile error today (canon nested.sl says "needs to be revisited"):
+      - DEEP NESTING — a nested function may not contain a further nested
+        function ("Nested functions may not contain further nested functions.").
+      - SIBLING CALLS — one nested function may not call another ("Calling a
+        sibling nested function is not supported."). Lambda-lift threads only the
+        host's captures, not a sibling's capture environment.
+      - NESTED OVERLOADING — nested functions do NOT overload; a same-name nested
+        pair is a "Duplicate declaration". classifyCall restricts candidates to
+        file scope (parent_frame_id == 0). Revisit if nested overloads are wanted.
 
   * DROP THE ENUM QUALIFIER IN CONTEXT — when a variable's declared type is an
     enum, a bare member name on the rhs should resolve against that enum's
