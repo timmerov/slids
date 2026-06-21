@@ -2449,12 +2449,26 @@ void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
     }
 }
 
+// Peel a PPID bump (`++`/`--`, pre or post) to its underlying operand lvalue.
+// Under PPID the bump lifts off the lvalue, so `a[i++]` accesses element `i` at
+// the op site (`a[i++] <--> a[i++]` lowers to `a[i] <--> a[i]; i++; i++` — the
+// SAME element). desugar lifts the bump AFTER classify, so isSameIndex must see
+// through it here. A call (`a[f()]`) is NOT a bump and is left as-is.
+parse::Node const& peelBump(parse::Node const& n) {
+    if ((n.kind == parse::Kind::kPreIncExpr || n.kind == parse::Kind::kPostIncExpr)
+        && !n.children.empty() && n.children[0])
+        return peelBump(*n.children[0]);
+    return n;
+}
+
 // A PROVABLY-same, SIDE-EFFECT-FREE array index: a literal with the same value, or
-// the same bare variable. A call (`a[f()]`) or a bump (`a[i++]`) is NOT matched —
-// `f()` is genuinely a different element, and the `a[i++]` self-op needs the
-// PPID-lifted-bump view (a separate deferred case). So self-op detection on an
-// indexed lvalue stays conservative: reject only when the index cannot differ.
-bool isSameIndex(parse::Node const& a, parse::Node const& b) {
+// the same bare variable. A bump (`a[i++]`) is peeled to its operand first (see
+// peelBump). A call (`a[f()]`) is NOT matched — `f()` is genuinely a different
+// element. So self-op detection on an indexed lvalue stays conservative: reject
+// only when the index cannot differ.
+bool isSameIndex(parse::Node const& a0, parse::Node const& b0) {
+    parse::Node const& a = peelBump(a0);
+    parse::Node const& b = peelBump(b0);
     if (isLiteralKind(a.kind) && a.kind == b.kind && a.text == b.text) return true;
     return a.kind == parse::Kind::kIdentExpr && b.kind == parse::Kind::kIdentExpr
         && a.resolved_entry_id >= 0 && a.resolved_entry_id == b.resolved_entry_id;

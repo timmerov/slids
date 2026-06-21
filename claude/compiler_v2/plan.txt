@@ -460,9 +460,10 @@ Phase 4 — types beyond primitives
     at the operand type; codegen-only). BOTH swap operands and a move's LHS
     must be lvalues (a move's RHS may be an rvalue). SELF-op detection is STRUCTURAL
     (isSameLvalue, recursive): a bare var, a deref, a class field, and an index with
-    a PROVABLY-same index (a literal or the same bare var) are rejected; a
-    non-provable index (`a[f()]`) is left, and the `a[i++]` self-op is deferred
-    (todo). Done entirely in codegen (move + swap pass through desugar untouched);
+    a PROVABLY-same index (a literal or the same bare var) are rejected; isSameIndex
+    peels a PPID bump to its operand, so `a[i++] <--> a[i++]` is rejected too (it
+    lowers to `a[i] <--> a[i]; i++; i++` — the same element). a non-provable index
+    (`a[f()]`) is left. Done entirely in codegen (move + swap pass through desugar untouched);
     resolve/classify validate. The
     OVERLOADABLE class `op<--`/`op<-->` + destructor-balance + class fields +
     whole-array move/swap is the Phase 5 / reach-goal piece.

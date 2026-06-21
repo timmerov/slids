@@ -255,9 +255,9 @@ int32 main() {
     //}
 
     /* `a[i++] <--> a[i++]` is the SAME element under PPID (lowers to `a[i] <-->
-       a[i]; i++; i++`) and should be rejected too, but the bump isn't lifted at
-       classify so isSameLvalue doesn't see it yet — deferred (todo). */
-    //-EXPECT-ERROR-DEFERRED: a[i++] self-swap needs the PPID-lifted-bump view in isSameLvalue
+       a[i]; i++; i++`) and is rejected too — isSameIndex peels the PPID bump to
+       its operand `i`, so the self-swap is seen at classify. */
+    //-EXPECT-ERROR: Cannot swap a value with itself
     //{
     //    int a[2]; int i = 0; a[0] = 1; a[1] = 2;
     //    a[i++] <--> a[i++];

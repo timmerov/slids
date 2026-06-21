@@ -28,19 +28,6 @@ BUGS (found, deferred)
 
 DEFERRED FEATURES (later; may not be on the plan)
 
-  * SELF-MOVE / SWAP THROUGH A `++` INDEX — `a[i++] <--> a[i++]` is a SELF-op:
-    under PPID the bump lifts off the lvalue, so it lowers to `a[i] <--> a[i];
-    i++; i++` — the SAME element, and should be rejected like `a[i] <--> a[i]`.
-    But classify's structural lvalue-equality (isSameLvalue) sees the index as a
-    bump expression, not a bare ident, so it doesn't match — the bump hasn't been
-    lifted yet (desugar runs after classify). To detect it, isSameLvalue's index
-    compare must see THROUGH a PPID bump to its underlying lvalue. A side-effecting
-    index that is NOT a pure bump (`a[f()] <--> a[f()]`) is genuinely a different
-    element and stays allowed. Pinned by a //-EXPECT-ERROR-DEFERRED in
-    test_v2/assign/lvalue.sl. The structural isSameLvalue (deref / field / index) HAS
-    landed — only this bump-lifted-index view (isSameIndex seeing through a PPID
-    bump) remains.
-
   * AGGREGATE MOVE / RETURN NOT LOWERED BY SLOT IN DESUGAR — a cross-form / leaf-
     widen aggregate COPY at a decl / assign / store now lowers BY SLOT in desugar
     (lowerAggregateList -> per-leaf stores). A cross-form MOVE (`a <-- b`) and a

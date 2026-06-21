@@ -1162,8 +1162,10 @@ STAGE FILES (.h / .cpp pairs)
             "Cannot move a value onto itself". isSameLvalue is STRUCTURAL: a bare
             variable (same entry), a deref (operand same), a class field (same name +
             base same), and an index (base same + a PROVABLY-same index — a literal or
-            the same bare var). A non-provable index (`a[f()]`) is a genuinely
-            different element (left); the `a[i++]` self-op is deferred (todo). resolve owns
+            the same bare var; isSameIndex peels a PPID bump to its operand, so
+            `a[i++] <--> a[i++]` matches as a self-op too — it lowers to
+            `a[i] <--> a[i]; i++; i++`). A non-provable index (`a[f()]`) is a genuinely
+            different element (left). resolve owns
             the lvalue rule: resolveMoveSwapLvalue rejects a non-lvalue (a swap rhs
             is a general expression, so `x <--> 7` would otherwise crash codegen)
             — BOTH swap operands and a move's LHS must be lvalues ("A swap operand"
