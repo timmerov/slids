@@ -1112,6 +1112,76 @@ void emitNullLeaves(std::string const& addr, widen::TypeRef ty,
     // state.
 }
 
+// `*addr ±= 1` for ONE scalar / iterator leaf at `addr`, typed `leaf`. An iterator
+// steps by one ELEMENT (load ptr, GEP ±1, store); a numeric leaf loads, add/sub 1
+// (float uses fadd/fsub + 1.0), and stores. Returns the new SSA value (callers that
+// discard it — every PPID bump does — ignore it). This is the per-leaf bump shared
+// by the scalar and the aggregate (leaf-walk) inc/dec.
+std::string emitLeafBump(std::string const& addr, widen::TypeRef leaf,
+                         std::string const& op, std::ostream& out) {
+    if (isIteratorType(leaf)) {
+        std::string cur = newTmp("itld");
+        out << "  " << cur << " = load ptr, ptr " << addr << "\n";
+        std::string elem_ll = llvmForRef(pointeeTypeC(leaf));
+        std::string nv = newTmp("itinc");
+        out << "  " << nv << " = getelementptr " << elem_ll << ", ptr "
+            << cur << ", i64 " << (op == "++" ? "1" : "-1") << "\n";
+        out << "  store ptr " << nv << ", ptr " << addr << "\n";
+        return nv;
+    }
+    std::string llty = llvmForRef(leaf);
+    bool flt = isFloatType(leaf);
+    std::string cur = newTmp("ld");
+    out << "  " << cur << " = load " << llty << ", ptr " << addr << "\n";
+    std::string nv = newTmp("inc");
+    char const* instr = flt ? (op == "++" ? "fadd" : "fsub")
+                            : (op == "++" ? "add" : "sub");
+    char const* one = flt ? "1.0" : "1";
+    out << "  " << nv << " = " << instr << " " << llty << " " << cur << ", "
+        << one << "\n";
+    out << "  store " << llty << " " << nv << ", ptr " << addr << "\n";
+    return nv;
+}
+
+// `*addr ±= 1` over an aggregate (tuple / array) at `addr`: step EVERY leaf. A
+// tuple GEPs each slot (`i32 0, i32 i`) and recurses per slot type; an array
+// flat-walks its contiguous row-major layout and recurses on the element; a
+// scalar / iterator leaf bumps via emitLeafBump. Mirrors emitNullLeaves' walk.
+void emitAggBump(std::string const& addr, widen::TypeRef ty,
+                 std::string const& op, std::ostream& out) {
+    widen::TypeRef s = widen::strip(ty);
+    widen::Type::Form f = widen::form(s);
+    if (f == widen::Type::Form::kTuple) {
+        std::string tll = llvmForRef(s);
+        std::vector<widen::TypeRef> slots = widen::get(s).slots;   // copy: no intern
+        for (std::size_t i = 0; i < slots.size(); i++) {
+            std::string gep = newTmp("bleaf");
+            out << "  " << gep << " = getelementptr inbounds " << tll
+                << ", ptr " << addr << ", i32 0, i32 " << i << "\n";
+            if (widen::form(widen::strip(slots[i])) == widen::Type::Form::kTuple
+                || widen::form(widen::strip(slots[i])) == widen::Type::Form::kArray)
+                emitAggBump(gep, slots[i], op, out);
+            else
+                emitLeafBump(gep, slots[i], op, out);
+        }
+        return;
+    }
+    // Array: flat-walk all dims (row-major contiguous), recurse on the element.
+    widen::TypeRef elem = widen::get(s).elem;            // copy: no intern
+    std::string elem_ll = llvmForRef(elem);
+    long total = 1;
+    for (int d : widen::get(s).dims) total *= d;
+    bool elemAgg = widen::form(widen::strip(elem)) == widen::Type::Form::kTuple
+                || widen::form(widen::strip(elem)) == widen::Type::Form::kArray;
+    for (long i = 0; i < total; i++) {
+        std::string gep = newTmp("bleaf");
+        out << "  " << gep << " = getelementptr " << elem_ll << ", ptr "
+            << addr << ", i64 " << i << "\n";
+        if (elemAgg) emitAggBump(gep, elem, op, out);
+        else         emitLeafBump(gep, elem, op, out);
+    }
+}
+
 }  // namespace
 
 std::string emitExpr(ast::Node const& expr, SymTab const& syms,
@@ -1447,30 +1517,15 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                 addr = it->second.alloca_name;
                 leaf = it->second.slids_type;
             }
-            // An iterator steps by one ELEMENT: load the ptr, GEP ±1, store.
-            if (isIteratorType(leaf)) {
-                std::string cur = newTmp("itld");
-                out << "  " << cur << " = load ptr, ptr " << addr << "\n";
-                std::string elem_ll = llvmForRef(pointeeTypeC(leaf));
-                std::string nv = newTmp("itinc");
-                out << "  " << nv << " = getelementptr " << elem_ll << ", ptr "
-                    << cur << ", i64 " << (expr.text == "++" ? "1" : "-1")
-                    << "\n";
-                out << "  store ptr " << nv << ", ptr " << addr << "\n";
-                return nv;
+            // A tuple / array steps EVERY leaf (numeric ±1, iterator one element),
+            // recursively — the per-leaf bump is the same as a scalar's. Its value
+            // is discarded (the read node carries the phrase's value), so return "".
+            widen::Type::Form lf = widen::form(widen::strip(leaf));
+            if (lf == widen::Type::Form::kTuple || lf == widen::Type::Form::kArray) {
+                emitAggBump(addr, leaf, expr.text, out);
+                return "";
             }
-            std::string llty = llvmForRef(leaf);
-            bool flt = isFloatType(leaf);
-            std::string cur = newTmp("ld");
-            out << "  " << cur << " = load " << llty << ", ptr " << addr << "\n";
-            std::string nv = newTmp("inc");
-            char const* instr = flt ? (expr.text == "++" ? "fadd" : "fsub")
-                                    : (expr.text == "++" ? "add" : "sub");
-            char const* one = flt ? "1.0" : "1";
-            out << "  " << nv << " = " << instr << " " << llty << " "
-                << cur << ", " << one << "\n";
-            out << "  store " << llty << " " << nv << ", ptr " << addr << "\n";
-            return nv;
+            return emitLeafBump(addr, leaf, expr.text, out);
         }
         case ast::Kind::kPreIncExpr:
         case ast::Kind::kPostIncExpr:

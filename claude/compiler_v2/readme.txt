@@ -350,8 +350,13 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     binary arm AND the aug-assign arm route a one-aggregate-one-scalar op through
     aggregateArithType's broadcast branch (the scalar repeats per slot, result keeps
     the aggregate's form), and a literal scalar flexes to the aggregate's leaf type so
-    `int8[3] + 1` stays int8. Only `++array` / `++tuple` (inc-dec on an aggregate)
-    remains — it goes through the PPID/bump path, not the arith path — todo.
+    `int8[3] + 1` stays int8. INC/DEC on an aggregate (`++array` / `--tuple`) also
+    works — codegen's kBumpExpr walks the leaves and applies the SAME per-leaf bump
+    (numeric ±1, iterator one element) it uses for a scalar, so it steps every leaf
+    recursively in every PPID position (statement/expression, pre/post, complex
+    lvalue, sub-phrase); classify accepts an aggregate whose leaves are each inc/dec-
+    able (isIncDecable). Not the arith path — the bump IS the existing inc-dec, just
+    leaf-walked.
   * ARRAY TYPES (`int[N]`): parseType parses sized dims, so array types compose —
     tuple slots `(int[3],int[4])`, alias RHS, params, returns `int[3] f()`. Variable
     decls stay name-anchored `int x[3]` (reject_array_dims rejects a top-level
@@ -1229,7 +1234,13 @@ STAGE FILES (.h / .cpp pairs)
             based kBumpExpr (children[0] = `_$lv`, codegen loads through it, reusing
             the scalar int/float/iterator step). A post-inc captures at the read
             point (a nested kSeqExpr {decl, _$lv^}); a pre-inc captures with the bump
-            in the pre-list. collectVarDecls (codegen) walks expression subtrees so a
+            in the pre-list. An AGGREGATE operand (`++tuple`, `--arr`, an array-of-
+            tuples element, even an array-of-iterators) needs NO new lowering — it
+            rides the same read + kBumpExpr; codegen's kBumpExpr (emitLeafBump factored
+            out) GEP-walks the tuple/array leaves (emitAggBump, the emitNullLeaves
+            shape) and applies the per-leaf scalar/iterator step to each, so it works
+            in every position above. classify gates it with isIncDecable (every leaf
+            inc/dec-able). collectVarDecls (codegen) walks expression subtrees so a
             seq-buried `_$lv` decl is still hoisted to the entry block, and the
             kSeqExpr arm emits its address store. So bare/complex x pre/post x
             statement/expression all flow through this ONE PPID path -- both grammar

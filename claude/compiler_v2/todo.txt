@@ -6,7 +6,7 @@ main plan. Everything here is OPEN; closed/landed items are removed (the main
 quest's progress lives in plan.txt).
 
 
-BUGS (found, deferred)
+BUGS
 
   * ARENA REALLOC DANGLES `get()` REFERENCES (structural) — `widen::get(ref)`
     returns a `Type const&` into `arena().types`, a `std::vector<Type>`. Any intern
@@ -26,16 +26,6 @@ BUGS (found, deferred)
     value. Either removes the discipline requirement and the entire bug class. Until
     then, every `Type const& x = get(...)` near an intern is a latent dangling read.
 
-DEFERRED FEATURES (later; may not be on the plan)
-
-  * INC / DEC ON AN AGGREGATE — `++tuple` / `++array` (and `--`) should inc/dec
-    every slot, the inc-dec analogue of the now-landed scalar broadcast (`array + 1`
-    / `array += 1` / `tuple += 1` all work — binary + aug-assign scalar distribution
-    via aggregateArithType's broadcast branch). But `++`/`--` go through the PPID /
-    kBumpExpr path, not the binary arith path, so they don't reach the slot-wise
-    broadcast. Needs the inc-dec lowering to apply per slot over an aggregate operand
-    (or desugar `++agg` to `agg += 1`, which now type-checks).
-
   * TYPELESS CONST FROM A RUNTIME SCALAR — `int y = 42; const x = y;` errors
     "Initializer for 'x' is not a constant expression." x can't be a substituted
     literal constant (y is a runtime value), but it SHOULD be a const-qualified
@@ -44,6 +34,9 @@ DEFERRED FEATURES (later; may not be on the plan)
     flips a non-primitive typeless const to a kLocalVar + deepConst). Extend that to
     a PRIMITIVE rhs that didn't fold: route to a const SCALAR variable instead of
     erroring. Keep a FOLDABLE scalar (`const x = 5`) on the substitution path.
+
+
+BLOCKED FEATURES
 
   deferred features involving classes:
 
@@ -265,9 +258,6 @@ DEFERRED FEATURES (later; may not be on the plan)
     `ident ++` and demands `;`, so the lvalue form never parses. Needs the
     statement/lvalue parse to accept a postfix-inc lvalue + desugar to lift the bump
     after the store.
-
-
-DEFERRED TESTS
 
 
 REACH GOALS

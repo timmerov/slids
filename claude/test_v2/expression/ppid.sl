@@ -414,6 +414,65 @@ int32 main() {
     int32 ptpre = ++pt.v_;                        // field pre  -> 12
     __println("ptv= " + pt.v_ + " ptpre= " + ptpre);   // 12 12
 
+    /* AGGREGATE ppid: ++/-- on a tuple or array steps EVERY leaf (numeric ±1,
+       iterator one element), recursively — in every position scalars work. Same
+       PPID machinery (read + kBumpExpr); the bump walks leaves and reuses the
+       per-leaf scalar/iterator bump. */
+    (int32, int32) at = (5, 6);
+    ++at;                                         // every slot +1 -> (6, 7)
+    __println("at++= " + at[0] + " " + at[1]);    // 6 7
+    at--;                                         // -> (5, 6)
+    __println("at--= " + at[0] + " " + at[1]);    // 5 6
+
+    int32 aa[3] = (10, 20, 30);
+    ++aa;                                         // array, every elem +1 -> (11, 21, 31)
+    __println("aa++= " + aa[0] + " " + aa[1] + " " + aa[2]);   // 11 21 31
+
+    /* pre yields the NEW aggregate, post the OLD (the read carries the value, the
+       bump fires before (pre) / after (post)). */
+    (int32, int32) pv = (1, 2);
+    (int32, int32) pre = ++pv;                    // pv -> (2,3); pre reads new
+    __println("aggpre= " + pre[0] + " " + pre[1] + " pv= " + pv[0] + " " + pv[1]);   // 2 3 2 3
+    (int32, int32) ps = (1, 2);
+    (int32, int32) post = ps++;                   // post reads old; ps -> (2,3)
+    __println("aggpost= " + post[0] + " " + post[1] + " ps= " + ps[0] + " " + ps[1]);  // 1 2 2 3
+
+    /* nested tuple + multi-dim array: the walk recurses to every scalar leaf. */
+    ((int32,int32),(int32,int32)) nt = ((1,2),(3,4));
+    ++nt;                                         // ((2,3),(4,5))
+    __println("aggnt= " + nt[0][0] + " " + nt[1][1]);          // 2 5
+    int32 md2[2][2] = ((1,2),(3,4));
+    ++md2;                                        // ((2,3),(4,5))
+    __println("aggmd= " + md2[0][0] + " " + md2[1][1]);        // 2 5
+
+    /* a complex aggregate lvalue — an array-of-tuples ELEMENT — bumps that element's
+       leaves (the leaf address is bound once via _$lv, then the aggregate walk). */
+    (int32,int32) aot[2] = ((10,20), (30,40));
+    aot[0]++;                                     // element (10,20) -> (11,21)
+    __println("aggaot= " + aot[0][0] + " " + aot[0][1]);       // 11 21
+
+    /* float leaves step by 1.0. */
+    (float32, float32) ft = (1.5, 2.5);
+    ++ft;                                         // (2.5, 3.5)
+    __println("aggft= " + ft[0] + " " + ft[1]);               // 2.5 3.5
+
+    /* an ARRAY OF ITERATORS: ++ steps each iterator by one ELEMENT, not by 1. */
+    int32 idat[4] = (100, 200, 300, 400);
+    int32[] ai[2];
+    ai[0] = ^idat[0];
+    ai[1] = ^idat[2];
+    ++ai;                                         // ai[0] -> idat[1], ai[1] -> idat[3]
+    __println("aggai= " + ai[0]^ + " " + ai[1]^);             // 200 400
+
+    /* an aggregate ++ in a SUB-PHRASE: each tuple-literal slot is its own phrase, so
+       a post bumps after that slot is read, a pre before it. */
+    (int32,int32) e1 = (1, 2);
+    (int32,int32) e2 = (3, 4);
+    ((int32,int32),(int32,int32)) tt = (e1++, ++e2);   // slot 0 reads old, slot 1 new
+    __println("aggsub= " + tt[0][0] + " " + tt[0][1] + " "
+              + tt[1][0] + " " + tt[1][1]);           // 1 2 4 5
+    __println("aggsubv= " + e1[0] + " " + e1[1] + " " + e2[0] + " " + e2[1]);   // 2 3 4 5
+
     /* swap-OPERAND ppid (`x++ <--> y++`) is blocked at the PARSER — parseIncDecStmt
        commits to a bare `x++;` (the deferred x++-as-lvalue gap) — so the kSwapStmt
        PPID arm is defensive / unreachable today, not exercised here. */
@@ -425,6 +484,10 @@ int32 main() {
     //-EXPECT-ERROR: Operator '++' is not defined on type 'bool'
     //bool bb = true;
     //bb++;
+
+    //-EXPECT-ERROR: Operator '++' is not defined on type '(bool, bool)'
+    //(bool, bool) bt = (true, false);
+    //++bt;
 
     //-EXPECT-ERROR: The operand of '++' must be a variable
     //int32 lv = 5++;

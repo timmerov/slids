@@ -230,6 +230,25 @@ bool isNumericType(widen::TypeRef t) {
     return widen::classify(t, k);
 }
 
+// True when `++`/`--` is defined on `t`: an iterator (steps one element), a
+// numeric non-bool scalar (steps ±1), or an aggregate (tuple / array) every leaf
+// of which is itself inc/dec-able (each leaf steps, recursively). A reference,
+// pointer, bool, or any leaf failing these rejects. The per-leaf rule mirrors the
+// scalar inc/dec arm so an aggregate is accepted exactly where `agg + 1` would be
+// (plus iterator leaves, which step like a scalar iterator).
+bool isIncDecable(widen::TypeRef t) {
+    if (isReference(t)) return false;
+    if (isIteratorType(t)) return true;
+    if (isAggregateType(t)) {
+        int n = aggregateSlotCount(t);
+        for (int i = 0; i < n; i++) {
+            if (!isIncDecable(aggregateSlotType(t, i))) return false;
+        }
+        return true;
+    }
+    return isNumericType(t) && widen::deepStrip(t) != widen::intern("bool");
+}
+
 // Validate a slot-wise SHIFT (an array IS a homogeneous tuple). Every lhs leaf
 // must be numeric (the value shifted; a float leaf shifts as multiply). With a
 // SCALAR count (`cnt == kNoType` here), only the lhs leaves are checked — the
@@ -1336,6 +1355,14 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     "Arithmetic is not allowed on a reference.", {}});
             } else if (isIteratorType(operand.inferred_type)) {
                 // ok — an iterator steps by one element.
+            } else if (isAggregateType(operand.inferred_type)) {
+                // A tuple / array steps every leaf (numeric ±1, iterator one
+                // element), recursively — accepted exactly where its leaves are.
+                if (!isIncDecable(operand.inferred_type)) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Operator '" + e.text + "' is not defined on type '"
+                        + ot + "'.", {}});
+                }
             } else if (!ot.empty()
                        && (!isNumericType(operand.inferred_type)
                            || widen::deepStrip(operand.inferred_type)

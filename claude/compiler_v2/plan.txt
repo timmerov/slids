@@ -74,7 +74,10 @@ Phase 1 — expression core (LANDED)
     deref, class field) flow through this same path: a hidden `_$lv` binds the leaf
     address once (address-once) and the bump is an address-child kBumpExpr; bare /
     complex × pre/post × statement/expression are ONE path (both grammar shortcuts
-    deleted). Canon: test_v2/expression/ppid.sl.                             LANDED
+    deleted). AGGREGATE operands (`++tuple`/`--arr`, nested, array-of-iterators) ride
+    this same path with no new lowering — kBumpExpr leaf-walks (emitAggBump) and reuses
+    the per-leaf scalar/iterator step (emitLeafBump); classify gates with isIncDecable.
+    Canon: test_v2/expression/ppid.sl.                                      LANDED
   * call-as-expression — kCallExpr via parsePostfix on a bare ident; shared
     resolveUserCall + emitCall with kCallStmt; void-return + print-intrinsic-
     as-expr rejected                                                   LANDED
@@ -297,8 +300,11 @@ Phase 4 — types beyond primitives
     aggregate-one-scalar routes through aggregateArithType's broadcast branch [scalar
     repeats per slot, result keeps the aggregate's form], the literal flexes to the
     leaf type [int8[3]+1 stays int8], binary arm gate `&&`->`||` + aug-assign gate on
-    aggregate lvalue, the old tuple-only scalar block DELETED. Still todo: `++array` /
-    `++tuple` [inc-dec on an aggregate — PPID/bump path, not arith]. Coverage:
+    aggregate lvalue, the old tuple-only scalar block DELETED. INC/DEC on an aggregate
+    [`++array` / `--tuple`] also LANDED — NOT the arith path: codegen's kBumpExpr
+    leaf-walks [emitAggBump] and applies the same per-leaf scalar/iterator bump
+    [emitLeafBump], classify gates with isIncDecable; no new lowering, works in every
+    PPID position [see plan PPID row + test_v2/expression/ppid.sl]. Coverage:
     test_v2/tuple/anon.sl, tuple/array.sl, tuple/combined.sl.)
   * aggregate COPY / MOVE / RETURN by slot (cross-form + leaf-widen) LANDED
     (an array IS a homogeneous tuple, so a copy is performed BY SLOT, iteratively

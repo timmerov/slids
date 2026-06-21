@@ -58,3 +58,15 @@ dd= 8
 twq= 55 tw= 6 51
 ia= 20 ib= 30 ic= 40
 ptv= 12 ptpre= 12
+at++= 6 7
+at--= 5 6
+aa++= 11 21 31
+aggpre= 2 3 pv= 2 3
+aggpost= 1 2 ps= 2 3
+aggnt= 2 5
+aggmd= 2 5
+aggaot= 11 21
+aggft= 2.5 3.5
+aggai= 200 400
+aggsub= 1 2 4 5
+aggsubv= 2 3 4 5
