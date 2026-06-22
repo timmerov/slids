@@ -48,17 +48,3 @@ letter_switch(Letter:c) = 0
 const_label(42) = 1
 const_label(0) = 0
 char_max(255) = 1
-sw_construct(0):
-Tracer:ctor 1
-  body0
-Tracer:dtor 1
-  sw_construct done
-sw_construct(1):
-  body1
-  sw_construct done
-sw_fallthrough(0):
-Tracer:ctor 2
-  fall0
-  fall1
-Tracer:dtor 2
-  sw_fallthrough done

@@ -3060,74 +3060,40 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             return Completion::Abrupt;
         }
         case parse::Kind::kSwitchStmt: {
-            // children[0] = scrutinee; an OPTIONAL kBlockStmt of unreachable leading
-            // statements (before the first label); then kCaseClause clauses (label
-            // const-expr + body block). The whole body is ONE scope (one frame), so
-            // case/default are goto targets: a var in one clause collides with / is
-            // visible in another, and class dtors run at the switch close. Cases fall
-            // through; each clause body ENTERS from S (any case can be matched
-            // directly, so the direct-entry init-set is the weakest and dominates
-            // the join).
+            // children[0] = scrutinee, [1..] = kCaseClause (label const-expr +
+            // body block). Cases fall through: a clause body that completes
+            // Normally falls into the next; a break/return/continue ends the run.
+            // Each clause body ENTERS from S (any case can be matched directly, so
+            // the direct-entry init-set is the weakest and dominates the join).
             assert(!s.children.empty() && "kSwitchStmt needs a scrutinee");
             resolveExpr(tree, *s.children[0], diag);
             std::set<int> entry = tree.initialized_locals;   // S
-            parse::pushFrame(tree);                           // ONE switch-body scope
-            std::vector<int> saved_body_locals = std::move(tree.body_locals);
-            tree.body_locals.clear();
             tree.loop_stack.push_back({});
             tree.loop_stack.back().is_switch = true;
-            // Register every clause's local classes up front in the one frame (use
-            // may precede definition; a cross-clause same-name class collides).
-            std::size_t last_clause = 0;
-            for (std::size_t i = 1; i < s.children.size(); i++) {
-                if (s.children[i] && s.children[i]->kind == parse::Kind::kCaseClause) {
-                    last_clause = i;
-                    registerLocalClasses(tree, s.children[i]->children[1]->children,
-                                         diag);
-                }
-            }
             bool has_default = false;
             bool last_normal = false;
             std::set<int> bottom_fall;
             for (std::size_t i = 1; i < s.children.size(); i++) {
-                parse::Node& item = *s.children[i];
-                if (item.kind != parse::Kind::kCaseClause) {
-                    // Leading statements before the first label are unreachable —
-                    // flag the first one (dead code declares nothing).
-                    for (auto& st : item.children) {
-                        if (st) {
-                            diagnostic::report(diag, {st->file_id, st->tok,
-                                "Unreachable statement.", {}});
-                            break;
-                        }
-                    }
-                    continue;
-                }
-                if (item.children[0]) {
-                    resolveExpr(tree, *item.children[0], diag);   // label
+                parse::Node& clause = *s.children[i];   // kCaseClause
+                if (clause.children[0]) {
+                    resolveExpr(tree, *clause.children[0], diag);   // label
                 } else {
                     has_default = true;
                 }
-                tree.initialized_locals = entry;                  // enter from S
-                // Resolve the clause body's STATEMENTS in the shared switch frame
-                // (NOT resolveStmt on the block — that would push a per-clause frame
-                // and lose the one-scope collision / visibility).
-                Completion c = resolveStmtList(tree, item.children[1]->children, diag);
-                if (i == last_clause && c == Completion::Normal) {
+                tree.initialized_locals = entry;                    // enter from S
+                Completion c = resolveStmt(tree, *clause.children[1], diag);
+                if (i + 1 == s.children.size() && c == Completion::Normal) {
                     last_normal = true;                  // falls out the bottom
                     bottom_fall = tree.initialized_locals;
                 }
             }
             parse::Tree::LoopFrame lf = std::move(tree.loop_stack.back());
             tree.loop_stack.pop_back();
-            sweepUnusedLocals(tree, diag);               // the switch frame's decls
-            tree.body_locals = std::move(saved_body_locals);
-            parse::popFrame(tree);
             // after = ∩ over the exit paths: each break point, the bottom-fall,
             // and (default-less) the no-match path = S. No exit path (every clause
             // returns/continues with a default) -> Abrupt: control never reaches
             // after the switch.
-            bool empty_body = (last_clause == 0);
+            bool empty_body = (s.children.size() == 1);
             bool normal_exit = lf.break_seen || last_normal || !has_default
                                || empty_body;
             std::set<int> after;

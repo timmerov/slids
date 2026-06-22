@@ -45,25 +45,6 @@ case must be able to handle qualified names.
         break;
     }
 
-the switch body is a single scope block.
-even though case and default are called statements, they are more like
-go-to labels within the switch block.
-variables declared in one case statement collide with same-name variables
-in different case statements.
-class objects instantiated at any case/default label are destructed at the
-close of the switch block.
-
-    switch (value) {
-    case 0:
-        Class cls;
-        break;
-    case 1;
-        /* compile error: name collision */
-        Class cls;
-        break;
-    /* cls dtor invoked here. */
-    }
-
 notes:
 consider nested switch statements.
 should switch code blocks have labels so we can break by named switch?
@@ -374,41 +355,6 @@ int char_max(char c) {
     }
 }
 
-/* a class instance declared in a case is destructed at the switch's CLOSE (the
-   switch body is one scope), guarded by a runtime "constructed" flag. */
-Tracer(int x_) {
-    _() { __println("Tracer:ctor " + x_); }
-    ~() { __println("Tracer:dtor " + x_); }
-}
-
-/* construct in a case + break: the dtor runs when control leaves the switch. A
-   value that enters a DIFFERENT case jumps over the ctor — the flag stays false so
-   no dtor runs. */
-void sw_construct(int v) {
-    switch (v) {
-        case 0:
-            Tracer t(1);
-            __println("  body0");
-            break;
-        case 1:
-            __println("  body1");
-            break;
-    }
-    __println("  sw_construct done");
-}
-
-/* fall-through keeps the instance alive THROUGH the next case to the switch close. */
-void sw_fallthrough(int v) {
-    switch (v) {
-        case 0:
-            Tracer t(2);
-            __println("  fall0");
-        case 1:
-            __println("  fall1");
-    }
-    __println("  sw_fallthrough done");
-}
-
 int32 main() {
     __println("basic(1) = " + basic(1));                    // 20
     __println("basic(5) = " + basic(5));                    // 99
@@ -461,13 +407,6 @@ int32 main() {
     __println("const_label(0) = " + const_label(0));                // 0
     char hi = 255;
     __println("char_max(255) = " + char_max(hi));                   // 1
-    // class instance in a case — dtor at the switch close, jump-over, fall-through.
-    __println("sw_construct(0):");
-    sw_construct(0);     // ctor 1, body0, dtor 1 (at break = switch exit), done
-    __println("sw_construct(1):");
-    sw_construct(1);     // body1, done — Tracer t jumped over: no ctor/dtor
-    __println("sw_fallthrough(0):");
-    sw_fallthrough(0);   // ctor 2, fall0, fall1, dtor 2 (at close), done
     return 0;
 }
 
@@ -624,28 +563,6 @@ negatives — one //-block uncommented per run.
 //int neg_label_range(char c) {
 //    switch (c) {
 //        case 300: return 1;
-//        default: return 0;
-//    }
-//}
-
-/* the switch body is ONE scope — a variable declared in one case collides with a
-   same-name variable in another (case/default are goto targets, not sub-scopes). */
-//-EXPECT-ERROR: Duplicate declaration of 'x'.
-//int neg_case_collision(int v) {
-//    switch (v) {
-//        case 0: int x = 1; break;
-//        case 1: int x = 2; break;
-//    }
-//    return 0;
-//}
-
-/* a statement before the first case/default is unreachable — the dispatch never
-   falls into it. */
-//-EXPECT-ERROR: Unreachable statement.
-//int neg_before_first_case(int v) {
-//    switch (v) {
-//        v = v + 1;
-//        case 0: return 1;
 //        default: return 0;
 //    }
 //}
