@@ -70,3 +70,11 @@ sh>>= 1 2 3
 pshift= 8 8 6
 aa<<= 8 8 6
 msh= 2 8
+pick
+sx= 4 5 6
+pick
+sd= 4 5 6
+pick
+sm= 4 5 6
+pick
+si= 4 5 6

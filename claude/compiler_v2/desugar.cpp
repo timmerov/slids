@@ -1340,14 +1340,68 @@ std::unique_ptr<ast::Node> mintIdent(std::string const& name, int id,
     return n;
 }
 
-// If `srcType` source `src` is not directly indexable (a literal / computed
-// value), spill it into a fresh same-type `_$agg` local so each slot read is a
-// simple index. Returns the indexable base (the spill ident or the original
-// lvalue) and, when spilled, pushes the spill decl into `pre`.
+// A re-evaluable index / deref operand: a literal or a bare ident (re-reading it
+// has no side effect). Anything else (a call, `++`/`--`, an arith expr) is hoisted
+// before a by-slot walk re-indexes the lvalue.
+bool isTrivialIndex(ast::Node const& n) {
+    return n.kind == ast::Kind::kIntLiteral
+        || n.kind == ast::Kind::kUintLiteral
+        || n.kind == ast::Kind::kCharLiteral
+        || n.kind == ast::Kind::kBoolLiteral
+        || n.kind == ast::Kind::kFloatLiteral
+        || n.kind == ast::Kind::kNullptrLiteral
+        || n.kind == ast::Kind::kIdentExpr;
+}
+
+// Move `lv.children[ci]` into a fresh `_$ix` temp decl (pushed to `pre`) and
+// replace it with an ident, so re-reading that position has no side effect.
+void hoistChildToTemp(ast::Node& lv, std::size_t ci, int& next_id,
+                      std::vector<std::unique_ptr<ast::Node>>& pre) {
+    ast::Node& sub = *lv.children[ci];
+    widen::TypeRef ty = sub.inferred_type;
+    int file = sub.file_id, tok = sub.tok;
+    int id = next_id++;
+    auto decl = std::make_unique<ast::Node>();
+    decl->kind = ast::Kind::kVarDeclStmt;
+    decl->name = "_$ix";
+    decl->resolved_entry_id = id;
+    decl->return_type = ty;
+    decl->file_id = file;
+    decl->tok = tok;
+    decl->name_tok = tok;
+    decl->children.push_back(std::move(lv.children[ci]));
+    pre.push_back(std::move(decl));
+    lv.children[ci] = mintIdent("_$ix", id, ty, file, tok);
+}
+
+// Hoist any side-effecting sub-expression of an lvalue — an index, a deref operand,
+// recursing the base — into a temp, so the lvalue is SIDE-EFFECT-FREE to re-index.
+// A by-slot copy / move then reads `g[_$i]` ONCE, not `g[bump()]` once per slot.
+void hoistLvalueSideEffects(ast::Node& lv, int& next_id,
+                            std::vector<std::unique_ptr<ast::Node>>& pre) {
+    if (lv.kind == ast::Kind::kIndexExpr && lv.children.size() >= 2) {
+        if (lv.children[0]) hoistLvalueSideEffects(*lv.children[0], next_id, pre);
+        if (lv.children[1] && !isTrivialIndex(*lv.children[1]))
+            hoistChildToTemp(lv, 1, next_id, pre);
+    } else if (lv.kind == ast::Kind::kDerefExpr && !lv.children.empty()
+               && lv.children[0]) {
+        if (!isTrivialIndex(*lv.children[0])) hoistChildToTemp(lv, 0, next_id, pre);
+        else hoistLvalueSideEffects(*lv.children[0], next_id, pre);
+    }
+}
+
+// If `src` is not an indexable lvalue (a literal / computed value), spill it into a
+// fresh same-type `_$agg` local so each slot read is a simple index. If it IS an
+// lvalue, hoist any side-effecting index / operand so re-indexing it per slot — and,
+// for a move, the per-leaf null — runs the side effect ONCE. Returns the indexable
+// base; pushes any spill / hoist decls into `pre`.
 std::unique_ptr<ast::Node> spillSource(std::unique_ptr<ast::Node> src,
                                        widen::TypeRef srcType, int& next_id,
                                        std::vector<std::unique_ptr<ast::Node>>& pre) {
-    if (isSimpleLvalue(*src)) return src;
+    if (isSimpleLvalue(*src)) {
+        hoistLvalueSideEffects(*src, next_id, pre);
+        return src;
+    }
     int file = src->file_id, tok = src->tok;
     int id = next_id++;
     auto decl = std::make_unique<ast::Node>();
@@ -1548,13 +1602,16 @@ std::vector<std::unique_ptr<ast::Node>> lowerAggCopyStmt(ast::Node& s,
 
     widen::TypeRef srcType = srcNode->inferred_type;
     std::vector<std::unique_ptr<ast::Node>> body;
-    // A move nulls the SOURCE's pointer leaves after the copy. Capture the original
-    // source lvalue before spilling — an lvalue source isn't spilled, so this is the
-    // real storage; an rvalue source (no lvalue) has nothing to null.
-    std::unique_ptr<ast::Node> moveNullSrc;
-    if (is_move && isSimpleLvalue(*srcNode)) moveNullSrc = cloneAstExpr(*srcNode);
     std::unique_ptr<ast::Node> srcBase =
         spillSource(std::move(srcNode), srcType, next_id, body);
+    // The DEST lvalue (a store / move target like `g[bump()]`) is re-indexed per slot
+    // too — hoist its side effects (a no-op for a bare-ident dest).
+    hoistLvalueSideEffects(*dstBase, next_id, body);
+    // A move nulls the SOURCE's pointer leaves after the copy. spillSource has made
+    // the source a side-effect-free lvalue (hoisting any side-effecting index), so the
+    // null reads the SAME storage the copy did — the source runs once.
+    std::unique_ptr<ast::Node> moveNullSrc =
+        is_move ? cloneAstExpr(*srcBase) : nullptr;
     emitAggCopyLeaves(*dstBase, *srcBase, body, file, tok);
     if (moveNullSrc) emitAggNullLeaves(*moveNullSrc, body, file, tok);
 

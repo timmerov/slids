@@ -101,6 +101,13 @@ int[3] widenArr() {                          // int[3] returned from an int8[3] 
     return v;                                 // leaf-widen return — lowered by slot
 }
 
+// prints once per call — proves a side-effecting array index in a by-slot copy /
+// move SOURCE is evaluated ONCE (hoisted to a temp), not once per slot.
+int pick() {
+    __println("pick");
+    return 1;
+}
+
 int32 main() {
     /* one-dimensional: fill via a ranged for, read back by subscript. */
     int arr[5];
@@ -423,6 +430,26 @@ int32 main() {
         int msh[2][2] = ((1,2),(3,4));
         msh <<= 1;                             // multi-dim: ((2,4),(6,8))
         __println("msh= " + msh[0][0] + " " + msh[1][1]);            // 2 8
+    }
+
+    /* a side-effecting array index in a by-slot copy / move SOURCE is evaluated
+       ONCE (hoisted to a temp), not once per slot — "pick" prints once per stmt. */
+    {
+        int8 seg[2][3] = ((1,2,3), (4,5,6));
+        int sx[3] = seg[pick()];               // leaf-widen copy from seg[pick()]
+        __println("sx= " + sx[0] + " " + sx[1] + " " + sx[2]);       // 4 5 6
+        int sd[3] = (0, 0, 0);
+        sd <-- seg[pick()];                    // leaf-widen move from seg[pick()]
+        __println("sd= " + sd[0] + " " + sd[1] + " " + sd[2]);       // 4 5 6
+
+        // codegen single-move paths: a SAME-type move and move-init from a side-
+        // effecting index also evaluate the source ONCE.
+        int seg2[2][3] = ((1,2,3), (4,5,6));
+        int sm[3] = (0, 0, 0);
+        sm <-- seg2[pick()];                   // same-type move
+        __println("sm= " + sm[0] + " " + sm[1] + " " + sm[2]);       // 4 5 6
+        int si[3] <-- seg2[pick()];            // same-type move-init
+        __println("si= " + si[0] + " " + si[1] + " " + si[2]);       // 4 5 6
     }
 
     return 0;

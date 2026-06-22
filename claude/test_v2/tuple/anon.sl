@@ -107,6 +107,13 @@ int firstRef( (int, int)^ pr ) {           // by-reference tuple param
     return v;                               // leaf-widen return — lowered by slot
 }
 
+// prints once per call — proves a side-effecting array index in a cross-form
+// (array -> tuple) copy SOURCE is evaluated ONCE, not once per slot.
+int pick() {
+    __println("pick");
+    return 1;
+}
+
 int32 main() {
 
     (Dir, bool) pair = (Dir:kN, false);
@@ -337,6 +344,14 @@ int32 main() {
         __println("mw= " + mw[0] + " " + mw[1]);                     // 4 8
         (int, int) ex = (1, 2);
         __println("ex= " + (ex << 2)[0]);      // shift result indexed directly: 4
+    }
+
+    /* a side-effecting array index in a cross-form (array -> tuple) copy SOURCE is
+       evaluated ONCE — "pick" prints once. */
+    {
+        int ag[2][2] = ((1,2), (3,4));
+        (int, int) at = ag[pick()];            // array row -> tuple, cross-form
+        __println("at= " + at[0] + " " + at[1]);   // 3 4
     }
 
     return 0;

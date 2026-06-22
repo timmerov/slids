@@ -79,6 +79,13 @@ tuple VALUE element whose type / arity doesn't match the declared element.
     return v;
 }
 
+// prints once per call — proves a side-effecting array index in a cross-form
+// copy / move SOURCE is evaluated ONCE, not once per slot.
+int pick() {
+    __println("pick");
+    return 1;
+}
+
 int32 main() {
 
     /* array of tuples. */
@@ -259,6 +266,17 @@ int32 main() {
         __println("xwmove= " + xa[0] + " " + xa[1]);               // 5 6
         (int, int) xr = widenCross();        // tuple <- int8[2] return
         __println("xwret= " + xr[0] + " " + xr[1]);                // 1 2
+    }
+
+    /* a side-effecting array index in a cross-form copy / move SOURCE is evaluated
+       ONCE — "pick" prints once per statement. */
+    {
+        int cg[2][2] = ((1,2), (3,4));
+        (int, int) ct = cg[pick()];          // cross-form copy: array row -> tuple
+        __println("ct= " + ct[0] + " " + ct[1]);                   // 3 4
+        (int, int) cm = (0, 0);
+        cm <-- cg[pick()];                   // cross-form move: array row -> tuple
+        __println("cm= " + cm[0] + " " + cm[1]);                   // 3 4
     }
     return 0;
 }

@@ -274,7 +274,10 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     itself is lowered BY SLOT in desugar (lowerAggregateList: a cross-form / leaf-
     widen copy at a decl/assign/store becomes per-leaf kStoreStmts over a form-
     agnostic kIndexExpr chain `dst[i] = src[i]`, recursing; a non-lvalue source
-    spills to `_$agg`), so codegen sees only scalar leaves there. MOVE and RETURN
+    spills to `_$agg`, and a side-effecting index/operand of an LVALUE source is
+    hoisted to a `_$ix` temp (hoistLvalueSideEffects) so the source — and a move's
+    per-leaf null — is evaluated ONCE, not per slot), so codegen sees only scalar
+    leaves there. MOVE and RETURN
     lower by slot in desugar too: a cross-form / leaf-widen MOVE adds a per-leaf
     source null (emitAggNullLeaves, the desugar analogue of codegen::emitNullLeaves);
     a cross-form / leaf-widen RETURN materializes a `_$ret` temp of the return type,
@@ -1378,13 +1381,17 @@ STAGE FILES (.h / .cpp pairs)
             swap (kMoveStmt / kSwapStmt, `a <-- b` / `a <--> b`) are lowered HERE
             for the SAME-type case (swap passes through desugar untouched; a cross-
             form / leaf-widen move is desugared by slot first, so codegen sees only
-            same-type moves). A SAME-type MOVE copies the rhs into the lhs via
-            emitExpr(rhs, dest=lhs type)+store (so it reuses the widen / implicit-
-            pointer-cast / whole-tuple machinery, exactly an assignment), then
+            same-type moves). A SAME-type MOVE from an lvalue computes the source
+            ADDRESS ONCE, LOADs the value (a widen / implicit-pointer-cast applied if a
+            scalar move's source and dest types differ), stores it into the lhs, then
             emitNullLeaves walks the rhs's structured type and `store ptr null`s every
-            pointer / iterator leaf — recursing by GEP into nested tuple slots (the
-            "fancy case"), so the source is left valid; an rvalue source (isAstLvalue
-            false) has no address and is a pure copy. A SWAP
+            pointer / iterator leaf through that SAME address — recursing by GEP into
+            nested tuple slots (the "fancy case") — so a side-effecting source index
+            (`a <-- g[bump()]`) runs ONCE and the source is left valid; an rvalue source
+            (isAstLvalue false) has no address and is a pure copy (emitExpr+store). The
+            move-INIT form (`T x <-- y`, kVarDeclStmt) is the same — desugar skips
+            move_init, so a cross-form / leaf-widen move-init reaches codegen and the
+            single load is followed by the form-agnostic aggregate convert. A SWAP
             loads both lvalues into SSA temporaries and stores them crossed (no
             stack temp; a whole-value load/store handles tuples; both loads precede
             either store, so an aliased swap is safe). emitLvalueAddr gives an

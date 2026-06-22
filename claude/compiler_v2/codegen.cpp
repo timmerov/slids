@@ -1870,29 +1870,53 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                             || sform == widen::Type::Form::kTuple)
                         && widen::deepStrip(it->second.slids_type)
                             != widen::deepStrip(stmt.children[0]->inferred_type);
-                    std::string val;
-                    if (agg_widen) {
-                        val = emitExpr(*stmt.children[0], syms, pool, out, diag,
-                                       widen::kNoType);
-                        val = emitImplicitAggregateConvert(
-                            val, stmt.children[0]->inferred_type,
-                            it->second.slids_type,
-                            stmt.children[0]->file_id, stmt.children[0]->tok,
-                            out, diag);
-                    } else {
-                        val = emitExpr(*stmt.children[0], syms, pool, out, diag,
-                                       it->second.slids_type);
-                    }
-                    out << "  store " << it->second.llvm_type << " " << val
-                        << ", ptr " << it->second.alloca_name << "\n";
-                    // A move-init (`T x <-- y`) nulls the source's pointer leaves
-                    // after the copy, leaving the source in a valid state. An rvalue
-                    // source has no storage to null.
                     if (stmt.move_init && isAstLvalue(*stmt.children[0])) {
+                        // A MOVE-INIT (`T x <-- y`) from an lvalue: compute the source
+                        // address ONCE, then load + (widen?) + store + null its pointer
+                        // leaves through it, so a side-effecting source index runs once.
+                        // (desugar skips move_init, so a cross-form / leaf-widen
+                        // move-init reaches here too — the convert keeps it correct.)
                         std::string src = emitLvalueAddr(*stmt.children[0], syms, pool,
-                                                         out, diag,
-                                                         /*allow_partial=*/true);
+                                                         out, diag, /*allow_partial=*/true);
+                        std::string raw = newTmp("mv");
+                        out << "  " << raw << " = load "
+                            << llvmForRef(stmt.children[0]->inferred_type)
+                            << ", ptr " << src << "\n";
+                        std::string val;
+                        if (agg_widen) {
+                            val = emitImplicitAggregateConvert(
+                                raw, stmt.children[0]->inferred_type,
+                                it->second.slids_type, stmt.children[0]->file_id,
+                                stmt.children[0]->tok, out, diag);
+                        } else if (widen::deepStrip(stmt.children[0]->inferred_type)
+                                   != widen::deepStrip(it->second.slids_type)) {
+                            val = widen::convert(raw, stmt.children[0]->inferred_type,
+                                                 it->second.slids_type,
+                                                 stmt.children[0]->file_id,
+                                                 stmt.children[0]->tok, out, diag);
+                        } else {
+                            val = raw;
+                        }
+                        out << "  store " << it->second.llvm_type << " " << val
+                            << ", ptr " << it->second.alloca_name << "\n";
                         emitNullLeaves(src, stmt.children[0]->inferred_type, out);
+                    } else {
+                        // A copy (or a move-init from an RVALUE — no leaves to null).
+                        std::string val;
+                        if (agg_widen) {
+                            val = emitExpr(*stmt.children[0], syms, pool, out, diag,
+                                           widen::kNoType);
+                            val = emitImplicitAggregateConvert(
+                                val, stmt.children[0]->inferred_type,
+                                it->second.slids_type,
+                                stmt.children[0]->file_id, stmt.children[0]->tok,
+                                out, diag);
+                        } else {
+                            val = emitExpr(*stmt.children[0], syms, pool, out, diag,
+                                           it->second.slids_type);
+                        }
+                        out << "  store " << it->second.llvm_type << " " << val
+                            << ", ptr " << it->second.alloca_name << "\n";
                     }
                 }
             }
@@ -2021,16 +2045,32 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             ast::Node const& rhs = *stmt.children[1];
             std::string dst = emitLvalueAddr(lhs, syms, pool, out, diag,
                                              /*allow_partial=*/true);
+            std::string llty = llvmForRef(lhs.inferred_type);
             // A cross-form / leaf-widen aggregate move is lowered BY SLOT in desugar
-            // (lowerAggCopyStmt, incl. the per-leaf source null); what reaches here is
-            // a same-type move — a whole-value load/store, then null the source.
-            std::string val = emitExpr(rhs, syms, pool, out, diag, lhs.inferred_type);
-            out << "  store " << llvmForRef(lhs.inferred_type) << " " << val
-                << ", ptr " << dst << "\n";
+            // (lowerAggCopyStmt); what reaches here is a SAME-type whole-value move.
             if (isAstLvalue(rhs)) {
+                // Compute the source address ONCE, then LOAD the value AND null its
+                // pointer leaves through it — a side-effecting source index
+                // (`a <-- g[bump()]`) runs once. Aggregate moves here are same-type
+                // (cross-form / leaf-widen are desugared), but a SCALAR move may widen,
+                // so load at the SOURCE type and convert.
                 std::string src = emitLvalueAddr(rhs, syms, pool, out, diag,
                                                  /*allow_partial=*/true);
+                std::string raw = newTmp("mv");
+                out << "  " << raw << " = load " << llvmForRef(rhs.inferred_type)
+                    << ", ptr " << src << "\n";
+                std::string val =
+                    widen::deepStrip(rhs.inferred_type)
+                        == widen::deepStrip(lhs.inferred_type)
+                    ? raw
+                    : widen::convert(raw, rhs.inferred_type, lhs.inferred_type,
+                                     rhs.file_id, rhs.tok, out, diag);
+                out << "  store " << llty << " " << val << ", ptr " << dst << "\n";
                 emitNullLeaves(src, rhs.inferred_type, out);
+            } else {
+                // An rvalue source has no storage to null — evaluate once.
+                std::string val = emitExpr(rhs, syms, pool, out, diag, lhs.inferred_type);
+                out << "  store " << llty << " " << val << ", ptr " << dst << "\n";
             }
             return;
         }
