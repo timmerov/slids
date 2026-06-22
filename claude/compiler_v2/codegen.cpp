@@ -1926,11 +1926,19 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             {
                 // Run construction hooks and register for destruction — for a
                 // class, OR an array / tuple containing one (typeNeedsHook recurses).
+                // ctor and dtor hooks are language-PAIRED (a class defines both or
+                // neither; a synthesized class runs both to drive its fields), so a
+                // SINGLE flag governs construction AND destructor registration —
+                // they can never diverge into a leak (built, not registered) or an
+                // orphan dtor (registered, never built).
                 widen::TypeRef st = widen::strip(it->second.slids_type);
-                if (typeNeedsHook(st, /*ctor=*/true)) {
+                bool needs_hooks = typeNeedsHook(st, /*ctor=*/true);
+                assert(needs_hooks == typeNeedsHook(st, /*ctor=*/false)
+                       && "ctor/dtor hook need diverged — must be language-paired");
+                if (needs_hooks) {
                     emitConstructHooks(it->second.alloca_name, st, out);
-                }
-                if (typeNeedsHook(st, /*ctor=*/false) && scope) {
+                    assert(scope && "class instance constructed without a dtor "
+                                    "scope — it would never be destroyed");
                     scope->objs.push_back({it->second.alloca_name, st});
                 }
             }

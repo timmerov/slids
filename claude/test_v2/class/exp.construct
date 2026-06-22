@@ -38,3 +38,37 @@ Later:ctor: 97
 Now:ctor: 97
 Now:dtor: 97
 Later:dtor: 97
+early_return(1): expect ctors 1,2 then dtors 2,1.
+CtorDtor:ctor: 1
+CtorDtor:ctor: 2
+CtorDtor:dtor: 2
+CtorDtor:dtor: 1
+early_return(0): expect ctors 1,3 then dtors 3,1.
+CtorDtor:ctor: 1
+CtorDtor:ctor: 3
+CtorDtor:dtor: 3
+CtorDtor:dtor: 1
+loop_break_continue(5): expect ctor/dtor 1,2,3,4 (break at 4).
+CtorDtor:ctor: 1
+CtorDtor:dtor: 1
+CtorDtor:ctor: 2
+CtorDtor:dtor: 2
+CtorDtor:ctor: 3
+CtorDtor:dtor: 3
+CtorDtor:ctor: 4
+CtorDtor:dtor: 4
+if_else(1): expect ctor/dtor 11.
+CtorDtor:ctor: 11
+CtorDtor:dtor: 11
+if_else(0): expect ctor/dtor 12.
+CtorDtor:ctor: 12
+CtorDtor:dtor: 12
+makeCtorDtor(7): expect ctor/dtor 7.
+CtorDtor:ctor: 7
+CtorDtor:dtor: 7
+new/delete: expect ctor/dtor 50.
+CtorDtor:ctor: 50
+CtorDtor:dtor: 50
+placement new + obj^.~(): expect ctor/dtor 60.
+CtorDtor:ctor: 60
+CtorDtor:dtor: 60

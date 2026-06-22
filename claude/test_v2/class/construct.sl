@@ -1,5 +1,5 @@
 /*
-test class construction.
+test class construction and destruction.
 
     Class (field-list) {body}
 
@@ -28,6 +28,24 @@ example declaration:
 example instantiation:
 
     Class cls;
+
+the primary object of this test file is to ensure that every possible
+code path handles class construction and destruction properly.
+
+things to test:
+    ctor/dtor balance
+    all code paths calls ctor/dtor
+    array/tuple of class
+    copy, move
+    new/delete
+    placement new/obj.~();
+    loops, break, continue
+    if, else
+    return
+    returned by function
+
+deferred tests:
+    temporary class objects in expressions and type conversions.
 
 notes:
 
@@ -120,6 +138,51 @@ Later(int x_) {
     ~() { __println("Later:dtor: " + x_); }
 }
 
+/*
+destruction on a NON-block exit: a mid-function return tears down the locals
+constructed so far, in reverse order, BEFORE control leaves. each path builds a
+different second local, so only the actually-constructed instances are destroyed.
+*/
+int early_return(int v) {
+    CtorDtor a(1);
+    if (v > 0) {
+        CtorDtor b(2);
+        return 10;          /* tears down 2 then 1 */
+    }
+    CtorDtor c(3);
+    return 20;              /* tears down 3 then 1 */
+}
+
+/* a hook local in a loop body is destroyed every iteration — including on the
+   continue path and the break path. */
+int loop_break_continue(int n) {
+    int i = 0;
+    while (i < n) {
+        ++i;
+        CtorDtor a(i);
+        if (i == 2) { continue; }   /* dtor before continuing */
+        if (i == 4) { break; }      /* dtor before breaking */
+    }
+    return 0;
+}
+
+/* conditional construction: only the taken branch's instance is built + torn down. */
+int if_else(int v) {
+    if (v > 0) {
+        CtorDtor a(11);
+    } else {
+        CtorDtor b(12);
+    }
+    return 0;
+}
+
+/* returned by function (by value): the object is constructed and destructed
+   exactly once (the by-value return is elided into a single instance). */
+CtorDtor makeCtorDtor(int v) {
+    CtorDtor local(v);
+    return local;
+}
+
 int32 main() {
 
     /*
@@ -181,20 +244,45 @@ int32 main() {
     __println("dtors 34,24,14 before.");
     */
 
-    /* nameless class. */
-    /* deferred.
-    {
-        __println("expect ctors 11,12,13 below.");
-        CtorDtor(11);
-        CtorDtor(12);
-        CtorDtor(13);
-        __println("expect ctors 11,12,13 above and dtors 13,12,11 below.");
-    }
-    __println("expect dtors 13,12,11 above.");
-    */
-
     {
         Now now(97);
+    }
+
+    /* destruction on a mid-function return (partial construction per path). */
+    __println("early_return(1): expect ctors 1,2 then dtors 2,1.");
+    early_return(1);
+    __println("early_return(0): expect ctors 1,3 then dtors 3,1.");
+    early_return(0);
+
+    /* a hook local in a loop, destroyed each iteration incl. continue + break. */
+    __println("loop_break_continue(5): expect ctor/dtor 1,2,3,4 (break at 4).");
+    loop_break_continue(5);
+
+    /* conditional construction — only the taken branch builds + tears down. */
+    __println("if_else(1): expect ctor/dtor 11.");
+    if_else(1);
+    __println("if_else(0): expect ctor/dtor 12.");
+    if_else(0);
+
+    /* returned by function, by value: one ctor, one dtor (result discarded). */
+    __println("makeCtorDtor(7): expect ctor/dtor 7.");
+    makeCtorDtor(7);
+
+    /* heap: the dtor runs on delete. */
+    {
+        __println("new/delete: expect ctor/dtor 50.");
+        CtorDtor^ p = new CtorDtor(50);
+        delete p;
+    }
+
+    /* placement new into a raw buffer + explicit obj^.~(); the buffer is freed
+       with no automatic dtor, so the object is destroyed exactly once. */
+    {
+        __println("placement new + obj^.~(): expect ctor/dtor 60.");
+        int8[] raw = new int8[sizeof(CtorDtor)];
+        CtorDtor^ pp = new(raw) CtorDtor(60);
+        pp^.~();
+        delete raw;
     }
 
     return 0;
@@ -291,3 +379,13 @@ one at a time and asserts the marked error substring.
 //-EXPECT-ERROR: is a namespace, not a type
 //NsHolder { }
 //FieldNs(NsHolder n_) { }
+
+/* an explicit '.~()' on an automatically-managed (non-placement) object is
+   rejected: the scope-end dtor already runs, so it would double-destruct. The
+   '.~()' form is only for placement-constructed objects reached via a pointer. */
+//-EXPECT-ERROR: only allowed on a placement-constructed object
+//int neg_explicit_dtor_auto(int v) {
+//    CtorDtor x(1);
+//    x.~();
+//    return 0;
+//}

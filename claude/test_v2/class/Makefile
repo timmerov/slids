@@ -16,6 +16,7 @@ SAMPLES = \
 	incomplete \
 	inheritance \
 	method \
+	nameless \
 	namespace_cls \
 	nested_cls \
 	operator \

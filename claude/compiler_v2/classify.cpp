@@ -3111,7 +3111,12 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         }
         case parse::Kind::kDtorCallStmt: {
             // lvalue.~(); — the receiver must be a CLASS lvalue (the object whose
-            // dtor runs). resolve resolved it; type it and require a class.
+            // dtor runs). resolve resolved it; type it and require a class. It must
+            // ALSO be reached through a pointer dereference (`ptr^.~()`): that is
+            // the placement-new cleanup pattern, where the compiler does NOT manage
+            // the object's lifetime. A directly-named / auto-managed object is
+            // destroyed at scope exit, so an explicit `.~()` on it would double-
+            // destruct — reject it.
             parse::Node& recv = *s.children[0];
             inferExpr(tree, recv, widen::kNoType, diag);
             widen::TypeRef rs = widen::strip(recv.inferred_type);
@@ -3121,6 +3126,13 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 diagnostic::report(diag, {s.file_id, s.tok,
                     "A destructor call '.~()' requires a class object; got '"
                     + widen::spellOrEmpty(recv.inferred_type) + "'.", {}});
+            } else if (recv.inferred_type != widen::kNoType
+                       && recv.kind != parse::Kind::kDerefExpr) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "A destructor call '.~()' is only allowed on a "
+                    "placement-constructed object reached through a pointer "
+                    "('ptr^.~()'); an automatically-managed object is destroyed "
+                    "at scope exit.", {}});
             }
             return;
         }
