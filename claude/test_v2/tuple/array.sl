@@ -91,8 +91,9 @@ claude says:
   transposed / flat literal is rejected, even with a matching leaf count). It
   lowers ELEMENT-WISE in row-major order (the tuple aggregate elided), each slot
   WIDENING into the element type.
-  (Reach, in todo: sub-array assign `td[1] = (100,101)`, and arrays OF tuples
-  `(int,int) a[3] = ((1,2),(3,4),(5,6))`.)
+- a SUB-ARRAY row is an lvalue: it can be assigned (`td[1] = (100,101)`), op-
+  assigned, moved, and swapped. an array OF tuples is a nested aggregate too
+  (`(int,int) a[3] = ((1,2),(3,4),(5,6))`).
 */
 
 int[3] widenArr() {                          // int[3] returned from an int8[3] value

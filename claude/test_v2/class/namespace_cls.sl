@@ -6,6 +6,11 @@ constants, globals, aliases, enums, etc may be defined inside a class body.
 classes aren't exactly namespaces.
 you can't define functions inside a class.
 you can't alias the class as a namespace - it's a type.
+
+a class conceptually desugars to a namespace and a named tuple.
+like a namespace, you may declare and define things within the class body.
+naked code in the class body is a compile error.
+the field list is a data tuple where the slots are accessed by name.
 */
 
 /*

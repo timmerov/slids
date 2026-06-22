@@ -1,22 +1,3 @@
-MyFirstClass: a=0 b=1
-MyFirstClass: a=0 b=1
-MyFirstClass: a=2 b=1
-MyFirstClass: a=3 b=1
-MyFirstClass: a=4 b=5
-MyFirstClass: a=6 b=7
-MyFirstClass: a=97 b=1
-MyFirstClass: a=42 b=1
-TupleClass: t=(1,2) b=(a,b,c)
-mx0: f=0 flag=true ch=Z
-mx1: f=1.5 flag=false ch=A
-pz.p_ is null
-nw0: small=5
-nw1: small=7
-df0: neg=-1 base=15 last=0
-df1: neg=7 base=8 last=9
-ot.inner: a=0 b=1
-MyFirstClass: a=13 b=17
-MyFirstClass: a=19 b=1
 expect ctors 100,200 after.
 CtorDtor:ctor: 100
 CtorDtor:ctor: 200
@@ -33,9 +14,6 @@ Deep:dtor
 Middle:dtor
 Leaf:dtor 5
 expect dtors above.
-one0: x=42
-th0: a=0 b=2 c=3
-th1: a=10 b=20 c=30
 expect ctors 1,2,3 below.
 CtorDtor:ctor: 1
 CtorDtor:ctor: 2

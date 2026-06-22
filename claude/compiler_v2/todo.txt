@@ -26,6 +26,50 @@ BUGS
     value. Either removes the discipline requirement and the entire bug class. Until
     then, every `Type const& x = get(...)` near an intern is a latent dangling read.
 
+  * CLASS-VALUED ELEMENTS FROM AN AGGREGATE SOURCE COPY RAW (class init) — when a
+    class is initialized from a tuple-like VALUE whose slots are themselves class
+    values (e.g. `F arr[2]; Pair p = arr;` where Pair's fields are `F`), each field
+    is filled by a plain struct copy of the source element AND then the field's ctor
+    runs (copy-then-ctor), rather than the field being placed via the class's copy
+    assignment. It compiles, the values are right, and ctors/dtors balance, but the
+    copy doesn't go through the per-field assignment dispatch (emitSlidAssign) the
+    way the tuple-LITERAL element path does (`Pair p = (f(), g())`). Harmless for a
+    class with the default copy; revisit when assignment-operator semantics for the
+    aggregate-spread path are defined. Lowering lives in classify::classifyClassInit
+    (the per-field spread) and classifyStmt (an rvalue source is spilled to a temp).
+
+  * BY-SLOT AGGREGATE COPY RE-EVALUATES A SIDE-EFFECTING LVALUE INDEX — desugar's
+    `spillSource` treats any `isSimpleLvalue` source (kIdentExpr / kIndexExpr /
+    kDerefExpr) as free to re-index, so a cross-form / leaf-widen aggregate copy
+    whose source has a side-effecting sub-expression runs it once PER SLOT. Repro:
+        int8 g[2][3] = ((1,2,3),(4,5,6));
+        int  x[3] = g[bump()];        // bump() runs 3 times, not once
+    (A same-type whole-array copy is a single store, so it's safe — only the
+    by-slot path bites.) The class-init spread had the same bug via its own copy of
+    the whitelist in classifyStmt; THAT was fixed (it now spills any source that
+    isn't a bare identifier — see classify::classifyStmt / classifyClassInit). The
+    desugar path still has it. FIX = in spillSource, only skip the spill for a
+    SIDE-EFFECT-FREE lvalue (a bare variable, or an index/deref whose index/operand
+    sub-exprs are themselves side-effect-free); otherwise spill to `_$agg` so the
+    source is evaluated once. Same flawed assumption, separate code from the (now
+    fixed) class path — they don't share the predicate.
+
+  * SWITCH CASE BODIES ARE WRONGLY SCOPED AS BLOCKS — a `switch` body is ONE scope;
+    `case` / `default` are goto LABELS inside that body, NOT scope blocks (whether
+    or not the case falls through). So a variable declared in a case lives for the
+    whole switch body, is visible in the other cases, and its destructor runs at the
+    switch's closing `}`. Today the parser wraps EACH case body in its own
+    kBlockStmt, making every case a separate scope: a local declared in one case is
+    invisible to the others ("Unresolved identifier") and its dtor runs at the case's
+    break/exit instead of at the switch end. Repro:
+        switch (0) { case 0: Class cls(7); break; case 1: blah; }
+    destructs cls AT the break (should be at the switch's `}`), and case 1 can't see
+    cls (it should). FIX = make the switch body a single scope (one DtorScope) with
+    the cases lowered as labels / jump targets within it, not nested blocks — touches
+    the parser (stop block-wrapping each case body), resolve (one switch-body scope),
+    classify (the kSwitchStmt arm classifies a single body, not per-case blocks), and
+    codegen (one dtor scope for the switch, case labels inside it).
+
 
 BLOCKED FEATURES
 

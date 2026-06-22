@@ -410,14 +410,25 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     never reaches codegen (slot access by name). `^field` address-of walks
     kFieldExpr chains (resolve) and emitElementAddr GEPs a kSlid slot.
   * CONSTRUCTION (classify classifyClassInit) normalizes every init form to a
-    per-field tuple: each field = init-tuple slot, else the author default (read
-    LIVE off the kParam node — constfold may have replaced it), else zero
-    (classZeroValue: 0 / 0.0 / false / nullptr; an unhandled field type errors). A
-    class-typed field constructs RECURSIVELY (constructClass): a scalar/tuple is the
-    sub-class's ctor input filled with ITS defaults; a same-class value copies. The
-    `=` form SPREADS its tuple slot-to-field; the call form keeps each arg whole. A
-    size-1 init tuple is inexpressible (`( x )` collapses) — punted (todo). A class
-    var-decl is definitely-initialized (DA) even with no initializer.
+    per-field tuple: each field = init slot, else the author default (read LIVE off
+    the kParam node — constfold may have replaced it), else zero (classZeroValue:
+    0 / 0.0 / false / nullptr, or RECURSIVELY a zero array / tuple; only void / an
+    unregistered class errors). A class-typed field constructs RECURSIVELY
+    (constructClass): a scalar/tuple is the sub-class's ctor input filled with ITS
+    defaults; a same-class value copies. The `=` form SPREADS its tuple slot-to-field;
+    the call form keeps each arg whole. A size-1 init tuple is inexpressible (`( x )`
+    collapses) — punted (todo). A class var-decl is definitely-initialized (DA) even
+    with no initializer.
+  * INIT FROM A TUPLE-LIKE VALUE: a class also initializes from any aggregate VALUE
+    source — an array / tuple variable or constant, a sub-array row, a function
+    return, an op result — spread across the fields BY SLOT (a class IS a named
+    tuple): a partial source fills the lead and defaults/zeros the rest, and a slot
+    feeding a class-typed field recurses. classifyClassInit spreads a side-effect-free
+    lvalue in place (`src[i]` element reads); classifyStmt first spills any source
+    that ISN'T a bare identifier (a call / op / `g[bump()]`) into a `_$cinit` temp so
+    it is evaluated ONCE — spliced via classifyStmtList's prelude, classify's only
+    statement-minting hook. [DEFERRED: whole-class copy-init `Class a = sameClass`
+    (the assignment operator) — todo.]
   * CTOR/DTOR are scope HOOKS, not the constructor — fields are initialized first,
     the ctor runs after, the dtor at scope exit. `_(){}` / `~(){}` parse as
     kFunctionDef with an implicit receiver param `_$recv` (`Name^`); a bare field

@@ -2555,10 +2555,12 @@ struct Parser {
     bool parseParamList(parse::Node* node, bool allow_mutable = true) {
         while (peek().kind != token::Kind::kRParen) {
             // `[mutable] [type] name [= constexpr]` — the type is optional; a typeless
-            // param infers its type from its default value (resolve/classify
-            // enforce that a typeless param HAS a default, and required-before-
-            // optional ordering). Name-anchored array dims (`int f(int a[3])`)
-            // ride on the name, same form as a var decl.
+            // param infers its type from its default value. For a FUNCTION param
+            // list, resolve/classify enforce that a typeless param HAS a default
+            // and that a required param cannot follow an optional one; a CLASS
+            // field list has NEITHER restriction — any field may omit its default
+            // (it then zero-fills) regardless of position. Name-anchored array
+            // dims (`int f(int a[3])`) ride on the name, same form as a var decl.
             bool is_mutable = false;
             if (allow_mutable && peek().kind == token::Kind::kMutable) {
                 is_mutable = true;

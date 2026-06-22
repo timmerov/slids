@@ -2265,7 +2265,43 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
                        parse::ClassInfo const& info, diagnostic::Sink& diag) {
     std::size_t n = info.field_names.size();
     std::vector<std::unique_ptr<parse::Node>> provided;
-    if (!s.children.empty() && s.children[0]) {
+    bool provided_built = false;
+    // A non-literal AGGREGATE VALUE source spreads across the fields BY SLOT (a class
+    // IS a named tuple). It is always a SIDE-EFFECT-FREE indexable lvalue here: a bare
+    // variable / constant, the `_$cinit` spill temp classifyStmt makes for any other
+    // source (so a side-effecting source is evaluated once), or — in recursion — an
+    // index into one of those. So it is spread into per-field element accesses
+    // (`src[i]`), and the per-field loop below handles partial fill, recursion into
+    // class-typed fields, and per-slot conversion uniformly. A tuple LITERAL (spread
+    // below), a scalar (size-1), and a same-class value (a copy) are NOT this case.
+    if (!s.children.empty() && s.children[0]
+        && s.children[0]->kind != parse::Kind::kTupleExpr) {
+        inferExpr(tree, *s.children[0], widen::kNoType, diag);
+        widen::TypeRef srcT = widen::strip(s.children[0]->inferred_type);
+        parse::Kind sk = s.children[0]->kind;
+        bool lvalue = sk == parse::Kind::kIdentExpr
+                   || sk == parse::Kind::kIndexExpr
+                   || sk == parse::Kind::kDerefExpr;
+        if (isAggregateType(srcT) && lvalue) {
+            int m = aggregateSlotCount(srcT);
+            for (int i = 0; i < m; i++) {
+                auto idx = std::make_unique<parse::Node>();
+                idx->kind = parse::Kind::kIntLiteral;
+                idx->text = std::to_string(i);
+                idx->file_id = s.children[0]->file_id;
+                idx->tok = s.children[0]->tok;
+                auto ix = std::make_unique<parse::Node>();
+                ix->kind = parse::Kind::kIndexExpr;
+                ix->file_id = s.children[0]->file_id;
+                ix->tok = s.children[0]->tok;
+                ix->children.push_back(cloneExpr(*s.children[0]));
+                ix->children.push_back(std::move(idx));
+                provided.push_back(std::move(ix));
+            }
+            provided_built = true;
+        }
+    }
+    if (!provided_built && !s.children.empty() && s.children[0]) {
         parse::Node& init = *s.children[0];
         if (init.kind == parse::Kind::kTupleExpr) {
             for (auto& ch : init.children) provided.push_back(std::move(ch));
@@ -2370,17 +2406,44 @@ std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty
             return n;
         }
         if (t.cat == widen::Category::kBool) {
+            // Post-constfold a bool literal carries INTEGER text ("0"/"1") — that is
+            // what codegen emits (`store i1 0`) and what the fit-check parses. A
+            // synthesized zero runs after constfold, so it must use the same form,
+            // not "false".
             n->kind = parse::Kind::kBoolLiteral;
-            n->text = "false";
+            n->text = "0";
             return n;
         }
         // signed / unsigned integer (incl. char) -> 0
         n->kind = parse::Kind::kIntLiteral;
         n->text = "0";
         return n;
+    } else if (t.form == F::kArray) {
+        // An array field with no initializer -> a nested zero tuple, dims-deep,
+        // each leaf the element type's zero. Snapshot the shape before recursing
+        // (interning a sub-array / leaf can reallocate the type store behind `t`).
+        // The caller's checkValueAssign routes this through classifyArrayFromTuple
+        // (shape + per-element typing), exactly like a written array initializer.
+        assert(!t.dims.empty() && "classZeroValue: kArray with no dimensions "
+               "(the parser rejects a zero-size array)");
+        int count = t.dims.front();
+        std::vector<int> rest(t.dims.begin() + 1, t.dims.end());
+        widen::TypeRef inner = rest.empty() ? t.elem
+                                            : widen::internArray(t.elem, rest);
+        n->kind = parse::Kind::kTupleExpr;
+        for (int k = 0; k < count; k++)
+            n->children.push_back(classZeroValue(tree, inner, file_id, tok, diag));
+        return n;
+    } else if (t.form == F::kTuple) {
+        // A tuple field with no initializer -> each slot's zero, recursively.
+        std::vector<widen::TypeRef> slots = t.slots;   // snapshot before recursing
+        n->kind = parse::Kind::kTupleExpr;
+        for (widen::TypeRef slotTy : slots)
+            n->children.push_back(classZeroValue(tree, slotTy, file_id, tok, diag));
+        return n;
     }
-    // Any other field type (array, tuple, void, an unregistered class) has no
-    // defined zero here — report rather than silently emit an int 0.
+    // Any other field type (void, an unregistered class) has no defined zero
+    // here — report rather than silently emit an int 0.
     diagnostic::report(diag, {file_id, tok,
         "Cannot default-construct a field of type '" + widen::spell(ty)
         + "'.", {}});
@@ -2606,8 +2669,33 @@ void classifyDestructureSlots(parse::Tree& tree, parse::Node& node,
 }
 
 void classifyStmt(parse::Tree& tree, parse::Node& s,
-                  widen::TypeRef fn_return_type,
-                  diagnostic::Sink& diag) {
+                  widen::TypeRef fn_return_type, diagnostic::Sink& diag,
+                  std::vector<std::unique_ptr<parse::Node>>* prelude);
+
+// Type-infer a statement LIST, splicing any prelude statements a member emits in
+// front of the statement that produced them. A class-from-rvalue-aggregate init
+// spills its source to a temp local here (see kVarDeclStmt) so the spread sees an
+// lvalue — handling rvalue sources exactly like lvalue ones.
+void classifyStmtList(parse::Tree& tree,
+                      std::vector<std::unique_ptr<parse::Node>>& list,
+                      widen::TypeRef fn_return_type, diagnostic::Sink& diag) {
+    for (std::size_t i = 0; i < list.size(); i++) {
+        if (!list[i]) continue;
+        std::vector<std::unique_ptr<parse::Node>> pre;
+        classifyStmt(tree, *list[i], fn_return_type, diag, &pre);
+        if (!pre.empty()) {
+            std::size_t k = pre.size();
+            list.insert(list.begin() + i,
+                        std::make_move_iterator(pre.begin()),
+                        std::make_move_iterator(pre.end()));
+            i += k;   // skip the spliced (already-typed) preludes and the stmt itself
+        }
+    }
+}
+
+void classifyStmt(parse::Tree& tree, parse::Node& s,
+                  widen::TypeRef fn_return_type, diagnostic::Sink& diag,
+                  std::vector<std::unique_ptr<parse::Node>>* prelude = nullptr) {
     switch (s.kind) {
         case parse::Kind::kVarDeclStmt: {
             // A class-typed local is constructed: normalize the init (slot /
@@ -2616,6 +2704,58 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (widen::form(widen::strip(s.return_type)) == widen::Type::Form::kSlid) {
                 auto it = tree.classes.find(widen::strip(s.return_type));
                 if (it != tree.classes.end()) {
+                    // An rvalue AGGREGATE source (a call / op result) can't be indexed
+                    // in place. Spill it into a temp local — evaluated once — so the
+                    // per-field spread in classifyClassInit sees an lvalue and handles
+                    // it EXACTLY like an array/tuple variable (partial fill, recursion
+                    // into class-typed fields, per-slot conversion). A real entry keeps
+                    // its id below desugar's minted-id range.
+                    if (prelude && !s.children.empty() && s.children[0]
+                        && s.children[0]->kind != parse::Kind::kTupleExpr) {
+                        inferExpr(tree, *s.children[0], widen::kNoType, diag);
+                        // Spill any aggregate source that ISN'T a bare identifier into
+                        // a temp (evaluated once). A bare variable is free to re-index
+                        // in place, but an index / deref / call / op source can carry a
+                        // side effect (`g[bump()]`) that the per-field spread would
+                        // otherwise re-run once per field. The spilled temp is a bare
+                        // ident, so classifyClassInit then spreads it in place.
+                        bool bare_ident =
+                            s.children[0]->kind == parse::Kind::kIdentExpr;
+                        widen::TypeRef srcT = s.children[0]->inferred_type;
+                        if (!bare_ident && isAggregateType(widen::strip(srcT))) {
+                            int f = s.children[0]->file_id, tk = s.children[0]->tok;
+                            // Append a bare entry (NOT parse::addEntry — that wants
+                            // the resolve-time frame stack, gone by classify). We only
+                            // need the id reserved so desugar's `next_id` (seeded at
+                            // entries.size()) skips it; name resolution is done.
+                            parse::Entry e;
+                            e.kind = parse::EntryKind::kLocalVar;
+                            e.name = "_$cinit";
+                            e.slids_type = srcT;
+                            e.file_id = f;
+                            e.tok = tk;
+                            int id = static_cast<int>(tree.entries.size());
+                            tree.entries.push_back(std::move(e));
+                            auto spill = std::make_unique<parse::Node>();
+                            spill->kind = parse::Kind::kVarDeclStmt;
+                            spill->name = "_$cinit";
+                            spill->resolved_entry_id = id;
+                            spill->return_type = srcT;
+                            spill->file_id = f;
+                            spill->tok = tk;
+                            spill->name_tok = tk;
+                            spill->children.push_back(std::move(s.children[0]));
+                            prelude->push_back(std::move(spill));
+                            auto ident = std::make_unique<parse::Node>();
+                            ident->kind = parse::Kind::kIdentExpr;
+                            ident->name = "_$cinit";
+                            ident->resolved_entry_id = id;
+                            ident->inferred_type = srcT;
+                            ident->file_id = f;
+                            ident->tok = tk;
+                            s.children[0] = std::move(ident);
+                        }
+                    }
                     classifyClassInit(tree, s, it->second, diag);
                     return;
                 }
@@ -3094,10 +3234,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // by constfold; the enum node carries nothing to type-infer.
             return;
         case parse::Kind::kBlockStmt:
-            // A nested scope: type-infer each contained statement.
-            for (auto& ch : s.children) {
-                if (ch) classifyStmt(tree, *ch, fn_return_type, diag);
-            }
+            // A nested scope: type-infer each contained statement (splicing any
+            // prelude a statement emits, e.g. a class-init spill temp).
+            classifyStmtList(tree, s.children, fn_return_type, diag);
             return;
         case parse::Kind::kIfStmt: {
             // children[0] = condition, [1] = then-branch, [2] = optional else.
@@ -3617,9 +3756,7 @@ void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
             classifyFunctionSignature(tree, *ch, diag);
         }
     }
-    for (auto& ch : fn.children) {
-        if (ch) classifyStmt(tree, *ch, fn.return_type, diag);
-    }
+    classifyStmtList(tree, fn.children, fn.return_type, diag);
     // A non-void function must end with a return statement, else codegen
     // would emit an unterminated block. This is the "last statement is a
     // return" heuristic, not full reachability (see todo: revisit non-void
