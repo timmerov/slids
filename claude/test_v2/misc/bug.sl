@@ -11,5 +11,22 @@ Class(int a, int b) { }
 
 int32 main() {
 
+    switch (x) {
+        default: {
+            continue;
+        } 0: {
+        } 1: {
+        }
+    }
+
+    switch (x) {
+    0: {
+        }
+    1: {
+        }
+    default: {
+        }
+    }
+
     return 0;
 }

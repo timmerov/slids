@@ -1,38 +1,47 @@
 /*
 test switch statements.
 
-includes case, default, break.
+switch keyword, value tuple, code block of case statements.
+case statement is a label-list, code block, optional continue and semicolon.
+label-list is const-expression or default keyword, colon, repeated.
 
     switch (value) {
-    case const-expr:
-    default:
-        break;
+        const-expr: { }
+        const-expr:
+        const-expr: { }
+        const-expr: { } continue;
+        default: { }
     }
 
 value clause may not be empty.
 the code body may be empty.
 case const-expressions must be unique.
-case with no break falls through.
+execution ends at the case code block unless there's a trailing continue.
+then the code falls through to the next case statement.
 default is optional.
 default is singular.
-trailing break is optional.
+trailing continue is optional.
 
 switch statememts embedded in for/while loops:
 
     while (cond) {
         switch (value) {
-        case 0:
-            /* naked break, breaks from the switch. */
-            break;
-        case 1:
-            /* numbered break, breaks from the loop. */
-            break 1;
-        case 2:
-            /* named break, breaks from the loop. */
-            break while;
-        default:
-            /* naked, numbered, named continue, continues the loop. */
+        0: {
+            /*
+            continue inside the case code block continues
+            the enclosing loop.
+            all continue forms: naked, numbered, named.
+            */
             continue;
+            }
+        1: 2: 3: {
+            /*
+            continue after the case code block falls through
+            to the next case statement.
+            always bare.
+            } continue;
+        default: {
+            }
         }
     }
 
@@ -41,16 +50,58 @@ case must be able to handle qualified names.
     enum Dir ( N, S, E, W );
     Dir d = N;
     switch (d) {
-    case Dir:N:
-        break;
+    Dir:N: {
+        }
     }
 
+formatting is up to the author.
+some suggestions:
+
+    switch (value) {
+        0: { ... }
+        1: 2: { ... }
+        default: { ... }
+    }
+
+    switch (value) {
+        0: {
+            ...
+        }
+        1:
+        2: {
+            ...
+        }
+        default: {
+            ...
+        }
+    }
+
+    switch (value) {
+        default: {
+            ...
+        } 0: {
+            ...
+        } 1: 2: {
+            ...
+        }
+    }
+
+
 notes:
-consider nested switch statements.
-should switch code blocks have labels so we can break by named switch?
-maybe.
-low utility.
-deferred to distant future.
+should we be able to define things at the top of the switch body?
+the things could be used within the case statements.
+aspirational.
+for example:
+
+    switch (value) {
+        int x = 42;
+        const float kPi = 3.14;
+        Class (int a) { }
+
+        0: {
+            Class cls(x);
+        }
+    }
 */
 
 /*
