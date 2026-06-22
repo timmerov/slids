@@ -24,7 +24,7 @@ enum class Kind {
     kBool, kVoid,
     kReturn,
     kIf, kElse, kWhile, kFor, kBreak, kContinue,
-    kEnum, kSwitch, kCase, kDefault,
+    kEnum, kSwitch, kDefault,
     kNew, kDelete, kNullptr, kSelf, kImport, kVirtual,
     kOp, kMutable, kConst, kAlias, kGlobal,
     kEllipsis,

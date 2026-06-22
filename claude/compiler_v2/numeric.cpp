@@ -193,7 +193,6 @@ void run(token::List& tokens, diagnostic::Sink& diag) {
             case token::Kind::kContinue:
             case token::Kind::kEnum:
             case token::Kind::kSwitch:
-            case token::Kind::kCase:
             case token::Kind::kDefault:
             case token::Kind::kNew:
             case token::Kind::kDelete:
