@@ -26,23 +26,6 @@ BUGS
     value. Either removes the discipline requirement and the entire bug class. Until
     then, every `Type const& x = get(...)` near an intern is a latent dangling read.
 
-  * SWITCH CASE BODIES ARE WRONGLY SCOPED AS BLOCKS — a `switch` body is ONE scope;
-    `case` / `default` are goto LABELS inside that body, NOT scope blocks (whether
-    or not the case falls through). So a variable declared in a case lives for the
-    whole switch body, is visible in the other cases, and its destructor runs at the
-    switch's closing `}`. Today the parser wraps EACH case body in its own
-    kBlockStmt, making every case a separate scope: a local declared in one case is
-    invisible to the others ("Unresolved identifier") and its dtor runs at the case's
-    break/exit instead of at the switch end. Repro:
-        switch (0) { case 0: Class cls(7); break; case 1: blah; }
-    destructs cls AT the break (should be at the switch's `}`), and case 1 can't see
-    cls (it should). FIX = make the switch body a single scope (one DtorScope) with
-    the cases lowered as labels / jump targets within it, not nested blocks — touches
-    the parser (stop block-wrapping each case body), resolve (one switch-body scope),
-    classify (the kSwitchStmt arm classifies a single body, not per-case blocks), and
-    codegen (one dtor scope for the switch, case labels inside it).
-
-
 BLOCKED FEATURES
 
   deferred features involving classes:
@@ -278,6 +261,21 @@ BLOCKED FEATURES
 
 
 REACH GOALS
+
+  * SWITCH BODY AS A LITERAL FLAT LABEL-LIST (cosmetic refactor) — the switch-scope
+    fix delivers the one-scope SEMANTICS (case/default are goto labels, cross-case
+    collision/visibility, class dtors at the switch close, leading-unreachable) but
+    keeps the kCaseClause AST internally: kSwitchStmt is [scrutinee, optional leading
+    kBlockStmt, kCaseClause(label, body-block)...], and clause bodies no longer
+    self-scope (resolve resolves their statements in the one switch frame; codegen
+    emits them into one DtorScope). The "true B" shape would be a flat
+    [scrutinee, (kCaseLabel | stmt)...] with case/default as bare label markers. This
+    was deliberately NOT done to reuse the intricate per-clause DA / fall-through /
+    return-terminator analysis intact (lowest risk). A flat-list rewrite is purely an
+    internal-representation change — behavior-invisible (all switch.sl cases stay
+    byte-for-byte) — and would need a new kCaseLabel Kind (touching every
+    -Wswitch-enum switch) plus porting the DA + dispatch to a segmented list. Only
+    worth it if the clause-with-empty-self-scope shape becomes a maintenance burden.
 
   * NESTED FUNCTION RESTRICTIONS TO REVISIT — three deliberate limits, each a
     compile error today (canon nested.sl says "needs to be revisited"):

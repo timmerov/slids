@@ -3524,6 +3524,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             parse::Node const* first_default = nullptr;      // for the dup-default note
             for (std::size_t i = 1; i < s.children.size(); i++) {
                 parse::Node& clause = *s.children[i];
+                // Skip the optional leading kBlockStmt (unreachable statements before
+                // the first label — resolve already flagged them).
+                if (clause.kind != parse::Kind::kCaseClause) continue;
                 if (clause.children[0]) {
                     parse::Node& label = *clause.children[0];
                     inferExpr(tree, label, scrut.inferred_type, diag);

@@ -1590,7 +1590,7 @@ struct LoopCtx {
 // A live destructible: the address of a class instance + the class name (its
 // dtor symbol is `<class>__$dtor`). Tracked per lexical scope, destroyed in
 // REVERSE declaration order on every exit (the destructor-balance invariant).
-struct DtorObj { std::string addr; widen::TypeRef type; };
+struct DtorObj { std::string addr; widen::TypeRef type; std::string flag; };
 struct DtorScope {
     std::vector<DtorObj> objs;
     DtorScope const* outer = nullptr;
@@ -1689,7 +1689,24 @@ void emitDestructHooks(std::string const& addr, widen::TypeRef type,
 // Emit the destructors for ONE scope, in reverse declaration order.
 void emitScopeDtors(DtorScope const& s, std::ostream& out) {
     for (auto it = s.objs.rbegin(); it != s.objs.rend(); ++it) {
+        if (it->flag.empty()) {
+            emitDestructHooks(it->addr, it->type, out);
+            continue;
+        }
+        // A switch-body class var: destruct only if it was CONSTRUCTED on this path
+        // (a label may have jumped over its ctor). Clear the flag after firing so a
+        // later unwind / the shared exit label can't destruct it twice.
+        std::string ok = newTmp("cflag");
+        std::string lbl_do = newLabel("dtor_do");
+        std::string lbl_skip = newLabel("dtor_skip");
+        out << "  " << ok << " = load i1, ptr " << it->flag << "\n";
+        out << "  br i1 " << ok << ", label %" << lbl_do << ", label %"
+            << lbl_skip << "\n";
+        out << lbl_do << ":\n";
         emitDestructHooks(it->addr, it->type, out);
+        out << "  store i1 0, ptr " << it->flag << "\n";
+        out << "  br label %" << lbl_skip << "\n";
+        out << lbl_skip << ":\n";
     }
 }
 
@@ -1930,8 +1947,15 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 if (typeNeedsHook(st, /*ctor=*/true)) {
                     emitConstructHooks(it->second.alloca_name, st, out);
                 }
+                // A switch-body class var carries a "constructed" flag (set up in the
+                // entry block): mark it true now that its ctor has run, so the
+                // switch-close dtor fires only on a path that reached here.
+                if (!it->second.flag.empty()) {
+                    out << "  store i1 1, ptr " << it->second.flag << "\n";
+                }
                 if (typeNeedsHook(st, /*ctor=*/false) && scope) {
-                    scope->objs.push_back({it->second.alloca_name, st});
+                    scope->objs.push_back({it->second.alloca_name, st,
+                                           it->second.flag});
                 }
             }
             return;
@@ -2428,18 +2452,41 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             std::string sv = emitExpr(scrut, syms, pool, out, diag,
                                       scrut.inferred_type);
             std::string llty = llvmForRef(scrut.inferred_type);
-            std::size_t n = stmt.children.size() - 1;   // clause count
+            // The case/default clauses (children[1..] may also hold an unreachable
+            // leading kBlockStmt — a resolve error halts the pipeline before codegen,
+            // but skip it defensively).
+            std::vector<ast::Node const*> clauses;
+            for (std::size_t i = 1; i < stmt.children.size(); i++) {
+                if (stmt.children[i]
+                    && stmt.children[i]->kind == ast::Kind::kCaseClause) {
+                    clauses.push_back(stmt.children[i].get());
+                }
+            }
+            std::size_t n = clauses.size();
             std::string exit_lbl = newLabel("switch_exit");
             if (n == 0) {                                // empty body: no clauses
                 out << "  br label %" << exit_lbl << "\n";
                 out << exit_lbl << ":\n";
                 return;
             }
+            // Reset each switch-body class var's "constructed" flag before the
+            // dispatch — a path that jumps over a ctor leaves it false, so the
+            // switch-close dtor skips that var.
+            for (ast::Node const* clause : clauses) {
+                for (auto const& st : clause->children[1]->children) {
+                    if (st && st->kind == ast::Kind::kVarDeclStmt) {
+                        auto sit = syms.find(st->resolved_entry_id);
+                        if (sit != syms.end() && !sit->second.flag.empty()) {
+                            out << "  store i1 0, ptr " << sit->second.flag << "\n";
+                        }
+                    }
+                }
+            }
             std::vector<std::string> blk(n);
             for (std::size_t k = 0; k < n; k++) blk[k] = newLabel("case");
             std::string default_lbl = exit_lbl;
             for (std::size_t k = 0; k < n; k++) {
-                if (!stmt.children[k + 1]->children[0]) {
+                if (!clauses[k]->children[0]) {
                     default_lbl = blk[k];
                     break;
                 }
@@ -2447,7 +2494,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             out << "  switch " << llty << " " << sv << ", label %" << default_lbl
                 << " [\n";
             for (std::size_t k = 0; k < n; k++) {
-                ast::Node const& clause = *stmt.children[k + 1];
+                ast::Node const& clause = *clauses[k];
                 if (clause.children[0]) {
                     out << "    " << llty << " " << clause.children[0]->text
                         << ", label %" << blk[k] << "\n";
@@ -2455,12 +2502,21 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             }
             out << "  ]\n";
             bool exit_reachable = (default_lbl == exit_lbl);   // no default clause
+            // ONE dtor scope for the whole switch body: a class var declared in any
+            // clause is destroyed at the switch close (guarded by its flag), not at
+            // the clause's break. Emit each clause body's statements DIRECTLY into it
+            // (the clause body block does NOT self-scope); nested blocks inside a case
+            // still scope normally.
+            DtorScope sw_scope{{}, scope};
             for (std::size_t k = 0; k < n; k++) {
-                ast::Node const& body = *stmt.children[k + 1]->children[1];
+                ast::Node const& body = *clauses[k]->children[1];
                 out << blk[k] << ":\n";
                 LoopCtx swctx{loop ? loop->header_label : std::string(), exit_lbl,
                               loop, scope};
-                emitStmt(body, syms, pool, fn_return_type, &swctx, scope, out, diag);
+                for (auto const& st : body.children) {
+                    if (st) emitStmt(*st, syms, pool, fn_return_type, &swctx,
+                                     &sw_scope, out, diag);
+                }
                 if (containsBreak(body)) exit_reachable = true;
                 if (!endsTerminated(body.children)) {
                     std::string next = (k + 1 < n) ? blk[k + 1] : exit_lbl;
@@ -2469,7 +2525,11 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 }
             }
             out << exit_lbl << ":\n";
-            if (!exit_reachable) out << "  unreachable\n";
+            // The fall-out / no-match path runs the switch-close dtors here (guarded);
+            // a break/return already unwound sw_scope (and cleared the fired flags),
+            // so this is a no-op on those paths.
+            if (exit_reachable) emitScopeDtors(sw_scope, out);
+            else out << "  unreachable\n";
             return;
         }
         case ast::Kind::kCaseClause:
@@ -2626,6 +2686,30 @@ void collectVarDecls(ast::Node const& s, std::vector<ast::Node const*>& out) {
     for (auto const& ch : s.children) if (ch) collectVarDecls(*ch, out);
 }
 
+// Collect class var-decls declared DIRECTLY in a switch clause body (recursing into
+// nested switches). They need a "constructed" i1 flag: a case label may jump over
+// the ctor, yet the dtor must run at the switch close. A var in a NESTED block
+// inside a case self-scopes normally and is NOT collected here.
+void collectSwitchDtorVars(ast::Node const& s, std::vector<ast::Node const*>& out) {
+    if (s.kind == ast::Kind::kFunctionDef || s.kind == ast::Kind::kFunctionDecl)
+        return;
+    if (s.kind == ast::Kind::kSwitchStmt) {
+        for (std::size_t i = 1; i < s.children.size(); i++) {
+            ast::Node const* clause = s.children[i].get();
+            if (!clause || clause->kind != ast::Kind::kCaseClause) continue;
+            ast::Node const* body = clause->children[1].get();
+            if (!body) continue;
+            for (auto const& st : body->children) {
+                if (st && st->kind == ast::Kind::kVarDeclStmt && !st->is_const
+                    && typeNeedsHook(widen::strip(st->return_type), /*ctor=*/false)) {
+                    out.push_back(st.get());
+                }
+            }
+        }
+    }
+    for (auto const& ch : s.children) if (ch) collectSwitchDtorVars(*ch, out);
+}
+
 void emitFunction(ast::Node const& fn, strings::Pool& pool,
                   std::ostream& out, diagnostic::Sink& diag) {
     std::string ret_llty = llvmForRef(fn.return_type);
@@ -2651,7 +2735,7 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
         std::string cap_llty = llvmForRef(fn.capture_types[i]);
         syms[fn.captures[i]] =
             {std::string("%cap.") + std::to_string(i), cap_llty,
-             fn.capture_types[i]};
+             fn.capture_types[i], ""};
     }
     // Alloca + store-in each param so the body can read/write it like a local.
     // Register under the param's resolved_entry_id (stamped by classify's
@@ -2663,7 +2747,7 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
         out << "  " << regname << " = alloca " << p_llty << "\n";
         out << "  store " << p_llty << " %arg." << i
             << ", ptr " << regname << "\n";
-        syms[p.resolved_entry_id] = {regname, p_llty, p.return_type};
+        syms[p.resolved_entry_id] = {regname, p_llty, p.return_type, ""};
     }
     // Hoist every local's alloca into the entry block. An alloca emitted at its
     // declaration site would re-allocate stack on every pass through an
@@ -2681,7 +2765,21 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
         std::string regname = std::string("%") + d->name + "."
             + std::to_string(d->resolved_entry_id);
         out << "  " << regname << " = alloca " << llty << "\n";
-        syms[d->resolved_entry_id] = {regname, llty, d->return_type};
+        syms[d->resolved_entry_id] = {regname, llty, d->return_type, ""};
+    }
+    // Hoist a "constructed" i1 flag for each class var declared directly in a switch
+    // body — a case label may jump over its ctor, so the switch-close dtor is guarded
+    // by this flag. Hoisted (like the allocas above) to avoid stack growth across an
+    // enclosing loop; the switch sets it false on entry and true after each ctor.
+    std::vector<ast::Node const*> sw_vars;
+    for (auto const& s : fn.children) if (s) collectSwitchDtorVars(*s, sw_vars);
+    for (ast::Node const* d : sw_vars) {
+        auto sit = syms.find(d->resolved_entry_id);
+        if (sit == syms.end()) continue;
+        std::string flag = std::string("%cflag.")
+            + std::to_string(d->resolved_entry_id);
+        out << "  " << flag << " = alloca i1\n";
+        sit->second.flag = flag;
     }
     // The function body is the outermost dtor scope: a class instance declared
     // at top level is destroyed at the function's exit. An explicit `return`

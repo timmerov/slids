@@ -10,6 +10,16 @@ Locked design decisions:
   1A — SUPERSEDED by canon. switch.sl + slids_reference.md specify C-style
        FALL-THROUGH (a clause with no break falls into the next); landed that
        way. The original "independent cases" plan was wrong.
+  1B — switch body is ONE scope (LANDED): case/default are goto labels, not
+       sub-scopes. A var in one case COLLIDES with a same-name var in another and is
+       visible across cases (resolve: one frame, resolveStmtList per clause); a class
+       instance declared in a case is destroyed at the switch CLOSE, guarded by a
+       runtime "constructed" i1 flag (a label may jump over the ctor / fall-through
+       may or may not run it). Statements before the first label are unreachable.
+       Detail: readme "kSwitchStmt"; switch.sl sw_construct / sw_fallthrough /
+       neg_case_collision / neg_before_first_case. The kCaseClause AST is kept
+       internally (clauses no longer self-scope) to reuse the per-clause DA intact;
+       a literal flat label-list shape is a behavior-invisible reach goal (todo.txt).
   2A — unreachable-code detection lands now (a stmt after an abrupt sibling).
   3B — REVISITED (later session). Originally: constant-true loops got no special
        case (every loop possibly-zero). NOW a constant-true loop (a literal-true /

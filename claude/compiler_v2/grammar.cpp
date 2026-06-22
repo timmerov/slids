@@ -2336,6 +2336,27 @@ struct Parser {
         if (!expect(token::Kind::kLBrace, "{")) return nullptr;
         auto node = newNodeAt(parse::Kind::kSwitchStmt, stmt_file, stmt_tok);
         node->children.push_back(std::move(scrutinee));   // [0]
+        // Statements BEFORE the first case/default are unreachable (the dispatch
+        // never falls in here). Collect them into a kBlockStmt at children[1] so
+        // resolve can flag them; absent leading statements, children stay
+        // [scrutinee, kCaseClause...] exactly as before.
+        if (peek().kind != token::Kind::kCase
+            && peek().kind != token::Kind::kDefault
+            && peek().kind != token::Kind::kRBrace
+            && peek().kind != token::Kind::kEndOfFile
+            && peek().kind != token::Kind::kEndOfInput) {
+            auto lead = newNodeAt(parse::Kind::kBlockStmt, stmt_file, stmt_tok);
+            while (peek().kind != token::Kind::kCase
+                   && peek().kind != token::Kind::kDefault
+                   && peek().kind != token::Kind::kRBrace
+                   && peek().kind != token::Kind::kEndOfFile
+                   && peek().kind != token::Kind::kEndOfInput) {
+                auto st = parseStmt();
+                if (!st) return nullptr;
+                lead->children.push_back(std::move(st));
+            }
+            node->children.push_back(std::move(lead));   // [1] = leading (unreachable)
+        }
         while (peek().kind != token::Kind::kRBrace
                && peek().kind != token::Kind::kEndOfFile
                && peek().kind != token::Kind::kEndOfInput) {

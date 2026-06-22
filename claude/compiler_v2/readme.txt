@@ -698,8 +698,13 @@ STAGE FILES (.h / .cpp pairs)
             anything else is the long form's varlist. parseSwitchStmt parses
             `switch (value) { (case const-expr | default) : stmts ... }` into a
             kSwitchStmt (children[0]=scrutinee, [1..]=kCaseClause, label null =
-            default); the value is required and each clause body is an implicit
-            block. A case label is parsed under the `case_label_` flag so a
+            default); the value is required. The switch body is ONE scope — case /
+            default are goto labels, not sub-scopes (resolve pushes a single frame and
+            resolves each clause body's statements in it, so a var in one case COLLIDES
+            with a same-name var in another and class dtors run at the switch CLOSE).
+            Statements before the first label parse into a leading kBlockStmt at
+            children[1] (resolve flags them "Unreachable statement."). A case label is
+            parsed under the `case_label_` flag so a
             qualified enum-member label (`case Dir:N:`) resolves its trailing `:`
             as the terminator, not a qualifier (parseQualifiedNameCaseLabel scans
             the maximal `:`-chain and rewinds one segment when the terminator is
@@ -1352,7 +1357,17 @@ STAGE FILES (.h / .cpp pairs)
             body then falls through via br to the next clause (or exit) unless
             terminated, so C-style fall-through is the natural block layout. A
             clause's LoopCtx inherits the enclosing loop's header (continue passes
-            through) but overrides exit = the switch exit (naked break). The exit
+            through) but overrides exit = the switch exit (naked break). The whole
+            body is ONE DtorScope (clause bodies emit their statements DIRECTLY into
+            it, not as self-scoping blocks), so a class instance declared in a case is
+            destroyed at the switch CLOSE. Because a label may jump OVER a ctor (or
+            fall-through may/may-not run it), each such var carries an i1 "constructed"
+            flag (collectSwitchDtorVars hoists it; `store false` before the dispatch,
+            `store true` after the ctor); emitScopeDtors guards the dtor on the flag
+            and clears it after firing, so a break-unwind plus the shared exit label
+            can't double-destruct. (The kCaseClause AST is kept internally — clauses no
+            longer self-scope — to reuse the per-clause DA; a literal flat label-list is
+            a behavior-invisible reach goal, see todo.txt.) The exit
             block gets an `unreachable` terminator only when nothing reaches it
             (no escaping break via containsBreak, no bottom-fall, has a default).
             endsTerminated / endsTerminatedNode (return + break + continue, and a
