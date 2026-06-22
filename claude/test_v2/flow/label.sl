@@ -12,36 +12,46 @@ followed by semi-colon if necessary.
                 /* break from the inner loop. */
                 break;
             switch (value) {
-            case 0:
-                /* break from the switch. */
+            0: {
+                /* naked break — exits the inner loop (switch is transparent). */
                 break;
-            case 1:
+            }
+            1: {
                 /* break from the inner loop. */
                 break 1;
-            case 2:
+            }
+            2: {
                 /* break from the inner loop. */
                 break inner;
-            case 3:
+            }
+            3: {
                 /* continue the inner loop. */
                 continue;
-            case 4:
+            }
+            4: {
                 /* continue the inner loop. */
                 continue 1;
-            case 5:
+            }
+            5: {
                 /* continue the inner loop. */
                 continue inner;
-            case 6:
+            }
+            6: {
                 /* break from the outer loop. */
                 break 2;
-            case 7:
+            }
+            7: {
                 /* break from the outer loop. */
                 break outer;
-            case 8:
+            }
+            8: {
                 /* continue the outer loop. */
                 continue 2;
-            case 9:
+            }
+            9: {
                 /* continue the outer loop. */
                 continue outer;
+            }
             }
         } :inner (cond);
     } :outer;
@@ -58,10 +68,11 @@ SESSION 6 — labels on loops (switch labels deferred / "distant future"):
 - a loop (while / do-while / for) carries an optional `:name` right after its
   body `}` (for do-while, that is before the trailing `(cond)`); default names
   are the keyword `for` / `while`. Innermost match wins; shadowing is allowed.
-- break/continue take an optional argument: a NUMBER (Nth ENCLOSING LOOP outward,
-  skipping switch frames) or a NAME (a loop's label, incl. the `for`/`while`
-  keyword default). Naked break = nearest loop OR switch; naked continue = nearest
-  loop (switch transparent). `break 1;` != naked `break;` inside a switch.
+- break/continue take an optional argument: a NUMBER (Nth ENCLOSING LOOP outward)
+  or a NAME (a loop's label, incl. the `for`/`while` keyword default). switch is
+  transparent to both break and continue (it is not a frame / break target), so
+  naked break = naked continue = the nearest enclosing loop. Inside a switch a
+  naked `break;` and `break 1;` are equivalent (both exit the nearest loop).
 - NO break/continue of any flavor (naked / numbered / named) is allowed directly
   in a long-for update clause. No labels on switch this round.
 */
@@ -128,8 +139,8 @@ int longfor_label(int n) {
     return hits;
 }
 
-/* `break 2;` from inside a switch skips the switch frame and exits the OUTER
-   of two enclosing loops. */
+/* `break 2;` from inside a switch exits the OUTER of two enclosing loops (switch
+   is transparent to break — it is not a frame). */
 int sw_break2(int n) {
     int hits = 0;
     int i = 0;
@@ -139,8 +150,8 @@ int sw_break2(int n) {
         while (j < n) {
             ++j;
             switch (j) {
-                case 1: break 2;
-                default: hits = hits + 1;
+                1: { break 2; }
+                default: { hits = hits + 1; }
             }
         }
     }
@@ -176,11 +187,12 @@ int nested_sw_break(int n) {
     while (i < n) {
         ++i;
         switch (i) {
-            default:
+            default: {
                 switch (i) {
-                    case 2: break w;
-                    default: hits = hits + 1;
+                    2: { break w; }
+                    default: { hits = hits + 1; }
                 }
+            }
         }
     } :w;
     return hits;
@@ -193,8 +205,8 @@ int cont_from_sw(int n) {
     while (i < n) {
         ++i;
         switch (i) {
-            case 2: continue 1;
-            default: hits = hits + 1;
+            2: { continue 1; }
+            default: { hits = hits + 1; }
         }
         hits = hits + 100;
     }
@@ -321,16 +333,16 @@ int continue_numbered(int n) {
     return hits;
 }
 
-/* a break inside a switch, numbered to exit the enclosing loop (skips the
-   switch frame) — distinct from a naked break, which would exit the switch. */
+/* a break inside a switch, numbered to exit the enclosing loop. switch is
+   transparent to break, so a naked break here does the same thing. */
 int sw_break_loop(int n) {
     int hits = 0;
     int i = 0;
     while (i < n) {
         ++i;
         switch (i) {
-            case 2: break 1;
-            default: hits = hits + 1;
+            2: { break 1; }
+            default: { hits = hits + 1; }
         }
     }
     return hits;
@@ -343,8 +355,8 @@ int sw_continue_loop(int n) {
     while (i < n) {
         ++i;
         switch (i) {
-            case 2: continue loop;
-            default: hits = hits + 1;
+            2: { continue loop; }
+            default: { hits = hits + 1; }
         }
         hits = hits + 100;
     } :loop;
@@ -459,7 +471,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Expected statement.
 //int neg_label_on_switch(int n) {
 //    switch (n) {
-//        default: break;
+//        default: { }
 //    } :sw;
 //    return 0;
 //}

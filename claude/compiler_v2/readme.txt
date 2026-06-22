@@ -696,14 +696,22 @@ STAGE FILES (.h / .cpp pairs)
             (var : Enum) {body}`) parsed as a kForEnumStmt (resolve dispatches it,
             below);
             anything else is the long form's varlist. parseSwitchStmt parses
-            `switch (value) { (case const-expr | default) : stmts ... }` into a
-            kSwitchStmt (children[0]=scrutinee, [1..]=kCaseClause, label null =
-            default); the value is required and each clause body is an implicit
-            block. A case label is parsed under the `case_label_` flag so a
-            qualified enum-member label (`case Dir:N:`) resolves its trailing `:`
-            as the terminator, not a qualifier (parseQualifiedNameCaseLabel scans
-            the maximal `:`-chain and rewinds one segment when the terminator is
-            missing). A loop carries an optional `:label` (parseOptionalLabel)
+            `switch (value) { clause... }` into a kSwitchStmt
+            (children[0]=scrutinee, [1..]=kCaseClause); the value is required.
+            There is NO `case` keyword: a clause is a LABEL-LIST + a mandatory
+            `{ }` body block + an optional trailing `continue;` —
+            `label (: label)* : { body } [continue;]`. parseCaseClause stores the
+            labels as children[0..n-2] (each a const-expr; null = a `default`
+            label, mixable into the list) and the body block as children.back();
+            a trailing `continue;` is recorded as clause.text == "continue" (a
+            fall-through into the next clause). Each label is parsed under the
+            `case_label_` flag so a qualified enum-member label (`Dir:N:`)
+            resolves its trailing `:` as the terminator, not a qualifier
+            (parseQualifiedNameCaseLabel scans the maximal `:`-chain; the body is
+            always `{`-led so a single qualified label needs no rewind). A token
+            after a label's `:` that cannot begin another label and is not `{`
+            reports "Expected '{' to open the clause body." A loop carries an
+            optional `:label` (parseOptionalLabel)
             right after its body `}` — for a do-while between the body and the
             `(cond)`, elsewhere with a required trailing `;`; labels are on loops
             only (a `:name` after a switch is a parse error). break / continue take
@@ -923,16 +931,19 @@ STAGE FILES (.h / .cpp pairs)
             argument — NAMED (`break name;` → nearest loop whose label matches; the
             label is the explicit `:name` or the keyword default for/while; switches
             carry none; innermost wins, shadowing allowed), NUMBERED (`break N;` →
-            the Nth enclosing LOOP outward, SKIPPING switch frames; N>=1), or naked
-            (break → nearest loop OR switch; continue → nearest loop, switches
-            transparent) — and folds the current init-set into THAT frame's
+            the Nth enclosing LOOP outward; N>=1), or naked (nearest enclosing
+            loop) — switch is fully TRANSPARENT to both break and continue (it
+            pushes no loop_stack frame and is not a break target), so a naked break
+            and `break 1;` are equivalent inside a switch — and folds the current
+            init-set into THAT frame's
             break/continue accumulator (∩, top-seeded via a `seen` flag; a do-while
             / for consume them, a pre-condition while ignores them). It stamps
             Node.loop_levels = hops outward to the target for codegen. NO flavor of
             break/continue is allowed directly in a for-update clause (the
             in_for_update + for_update_floor guard fires first). Errors: count <1 /
             exceeds nesting (caret on the count literal), no enclosing loop labeled
-            <name>, inside-a-loop[-or-switch]. A kForLongStmt
+            <name>, "A 'break'/'continue' statement must be inside a loop."
+            A kForLongStmt
             (long-form `for (varlist) (cond) {update} {body}`; the canonical for
             node — other for shapes desugar to it) opens ONE for-scope holding the
             varlist, with the update and body as sibling nested blocks (3 frames;
@@ -969,14 +980,16 @@ STAGE FILES (.h / .cpp pairs)
             range." check on the enum name; then resolved through the RANGED path
             (lowered in desugar, so its `_$end` is minted fresh — no clobber across
             nested typeless enum loops). A kSwitchStmt resolves
-            the scrutinee, then each clause body from the entry set S (any case can
-            be matched directly, so direct entry is the weakest join input) under a
-            loop_stack frame with is_switch=true: naked break targets the nearest
-            loop OR switch, naked continue skips switch frames to the nearest loop
-            ("A 'break' statement must be inside a loop or switch."). The after-set
-            is the ∩ over exit paths (each break point's init-set, the bottom-fall,
-            and — default-less — the no-match path = S); a switch with a default and
-            no normal exit is Abrupt. An empty
+            the scrutinee, then each clause's labels and its body from the entry
+            set S (any clause is a direct dispatch target, so direct entry is the
+            weakest join input). NO switch frame is pushed (switch is transparent
+            to break/continue). There is NO implicit fall-through: a clause that
+            completes Normally is an EXIT path unless it carries a trailing
+            continue (clause.text == "continue") into a non-last clause — a
+            continue on the LAST clause falls off the bottom and exits. The
+            after-set is the ∩ over those exit paths plus — default-less / empty —
+            the no-match path = S; a switch with a default and no exit path is
+            Abrupt. An empty
             condition (`if ()` / `while ()` / `while {} ()` / for's `()`) is the
             always-true literal grammar synthesizes via the shared
             parseParenCondition (a slids convention "empty = true"). The loop-frame
@@ -1125,16 +1138,19 @@ STAGE FILES (.h / .cpp pairs)
             and `start cmp end` is false, the body can never run -> "Invalid range."
             caret on the `..` (rangeFirstTestFalse compares the two literals; no
             infinite-loop check — deferred, todo.txt). A kSwitchStmt checks the
-            scrutinee is integer-class (float rejected); each case label must be an
-            integer constant (constfold folded it) that FITS the scrutinee type
-            (literalFitsContext — an out-of-range / sign-mismatched label is
-            rejected, never emitted as a truncated `iN`) and is unique by value
-            (full 64-bit dedup, so 'a'==97 and 1+2==3 collide, with a "first case
-            here" note); default is singular. A switch is a return-terminator
-            (endsInReturnNode) iff it has a default, no clause has an escaping break
-            (containsBreak — the same test codegen uses), and the LAST clause's
-            body ends in a return; C-style fall-through carries a stacked empty /
-            non-returning clause into that final return.
+            scrutinee is integer-class (float rejected); each label in every
+            clause's label-list must be an integer constant (constfold folded it)
+            that FITS the scrutinee type (literalFitsContext — an out-of-range /
+            sign-mismatched label is rejected, never emitted as a truncated `iN`)
+            and is unique by value (full 64-bit dedup, so 'a'==97 and 1+2==3
+            collide, with a "first case here" note); default is singular. A switch
+            is a return-terminator (endsInReturnNode) iff it has a default, no
+            clause has an escaping break (containsBreak — the same test codegen
+            uses), and EVERY clause's exit reaches a return: a clause whose body
+            returns is fine, and a non-returning clause is fine ONLY if it carries
+            a trailing continue into a LATER clause (the fall-through chain must
+            end in a return; a non-returning last clause, or one with no continue,
+            escapes without returning).
             Per-arg type inference at call sites uses the resolved
             callee's param_types (cached on the kCallStmt/kCallExpr by
             resolve) as context. A kCallExpr's inferred_type is the
@@ -1347,14 +1363,18 @@ STAGE FILES (.h / .cpp pairs)
             numbered break reaches a non-innermost loop. The body's
             back-edge is emitted only if it can fall through (endsTerminated).
             A kSwitchStmt lowers to an `llvm switch` on the scrutinee dispatching
-            to one block per clause (source order, default's block = the switch
-            instr default, or exit when there is no default); each block emits its
-            body then falls through via br to the next clause (or exit) unless
-            terminated, so C-style fall-through is the natural block layout. A
-            clause's LoopCtx inherits the enclosing loop's header (continue passes
-            through) but overrides exit = the switch exit (naked break). The exit
-            block gets an `unreachable` terminator only when nothing reaches it
-            (no escaping break via containsBreak, no bottom-fall, has a default).
+            to one block per clause (source order; one dispatch entry per label so
+            a label-list maps several values to the one block; default's block =
+            the switch instr default, or exit when there is no default). There is
+            NO implicit fall-through: a non-terminated clause body brs to the EXIT
+            unless it carries a trailing continue (clause.text == "continue"),
+            which brs to the NEXT clause's block (a continue on the last clause brs
+            to exit). break/continue inside a body bind to the ENCLOSING loop — the
+            switch passes the enclosing LoopCtx straight through (no switch ctx,
+            consistent with resolve pushing no switch frame); a trailing continue
+            after a returning body is naturally inert (endsTerminated suppresses
+            its br). The exit block gets an `unreachable` terminator only when
+            nothing reaches it (every clause returns, has a default, no exit br).
             endsTerminated / endsTerminatedNode (return + break + continue, and a
             block / both-armed-if whose paths all do) drive the if-arm and loop-
             back br decisions; a loop is never terminating (it reaches its exit).

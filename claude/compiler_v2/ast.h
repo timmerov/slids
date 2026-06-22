@@ -37,7 +37,9 @@ enum class Kind {
     kContinueStmt,  // continue;
     kSwitchStmt,    // switch (value) { clauses }; children[0]=scrutinee,
                     // [1..]=kCaseClause (source order).
-    kCaseClause,    // children[0]=label const-expr (null=default), [1]=body block.
+    kCaseClause,    // a label-list + body block: children[0..n-2]=labels (null=
+                    // default), children.back()=body block. text=="continue" =>
+                    // trailing fall-through into the next clause.
     kStringLiteral,
     kIntLiteral,
     kUintLiteral,

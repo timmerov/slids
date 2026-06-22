@@ -107,9 +107,11 @@ Phase 2 — declarations + flow (LANDED)
     attach per-construct as the branches below land. Canon: test_v2/expression/vardecl.sl.
   * flow constructs (blocks, if/else, while, for, switch, labeled break/
     continue) — a 6-session track in plan-flow.txt (the join model + per-construct
-    landing stages; tests in test_v2/flow/). Decisions locked: switch cases
-    FALL THROUGH C-style (the original "independent cases" plan was wrong — canon
-    in switch.sl/slids_reference.md), unreachable-code detection on. (3B's
+    landing stages; tests in test_v2/flow/). Decisions locked: switch clauses do
+    NOT implicitly fall through — a clause exits at its `{ }` body unless a trailing
+    `continue;` carries it into the next clause (no `case` keyword, no `break`;
+    switch transparent to break/continue — canon in switch.sl/slids_reference.md),
+    unreachable-code detection on. (3B's
     "no constant-true loop special-case" was later REVISITED — a constant-true
     loop with no escaping break is now non-completing; see below + plan-flow.txt.)
     Sessions 1 (bare blocks) + 2 (if/else) + 3 (while + do-while + break/continue)
@@ -161,17 +163,20 @@ Phase 2 — declarations + flow (LANDED)
     observable after; classify propagates the loop-var type onto a typeless ranged
     `_$end`/`_$step`; reuse requires a compatible type, else the normal assignment
     conversion rejects it). FOR-ARRAY + FOR-TUPLE landed in Phase 4 (`for (var :
-    arr)` / `for (v : tuple)` — see Phase 4); for-class pending classes. Session 5 (switch) LANDED — kSwitchStmt +
-    kCaseClause, C-style FALL-THROUGH, integer-class scrutinee, unique in-range
-    integer-constant labels (incl. qualified `case Dir:N:` via a terminator-aware
-    parse), default singular + anywhere, naked break exits the switch / naked
-    continue skips it to the enclosing loop, exhaustive switch is a
-    return-terminator (containsBreak agreed across classify+codegen), lowered to
-    an `llvm switch`. Session 6 (labels) LANDED — loop labels (`:name` after the
-    body; default keyword names for/while), numbered (`break N;` Nth loop, skipping
-    switches) + named (`break name;`) break/continue, resolved to a hop count and
-    walked over a LoopCtx linked list in codegen; no break/continue of any flavor
-    in a for-update; labels on loops only (named-switch-break distant-future).
+    arr)` / `for (v : tuple)` — see Phase 4); for-class pending classes. Session 5 (switch) LANDED, then REDESIGNED —
+    kSwitchStmt + kCaseClause (a label-list + a mandatory `{ }` body; trailing
+    `continue;` = fall-through): NO `case` keyword, NO implicit fall-through (a
+    clause exits at its body unless a trailing continue carries it into the next
+    clause), NO `break` (switch is transparent to break/continue, which bind to
+    the enclosing loop). Integer-class scrutinee, unique in-range integer-constant
+    labels (incl. qualified `Dir:N:` via a terminator-aware parse), default
+    singular + anywhere; an exhaustive switch (every clause's exit reaches a
+    return, following continue-chains) is a return-terminator (containsBreak agreed
+    across classify+codegen), lowered to an `llvm switch`. Session 6 (labels)
+    LANDED — loop labels (`:name` after the body; default keyword names for/while),
+    numbered (`break N;` Nth loop) + named (`break name;`) break/continue, resolved
+    to a hop count and walked over a LoopCtx linked list in codegen; no
+    break/continue of any flavor in a for-update; labels on loops only.
     Phase 2 FLOW COMPLETE; for-array + for-tuple landed in Phase 4, for-class pending (Phase 5).
     RELOCATION (later): all for-shapes (ranged/array/tuple/enum) were moved to lower
     in the DESUGAR stage (was grammar for ranged, resolve for array/tuple/enum) —

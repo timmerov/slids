@@ -318,7 +318,6 @@ token::Token readIdentifierOrKeyword(Stream& s) {
         {"continue", token::Kind::kContinue},
         {"enum",     token::Kind::kEnum},
         {"switch",   token::Kind::kSwitch},
-        {"case",     token::Kind::kCase},
         {"default",  token::Kind::kDefault},
         {"new",      token::Kind::kNew},
         {"delete",   token::Kind::kDelete},

@@ -7,9 +7,13 @@ constructs. Dependency-driven ordering: each session's definite-assignment
 "join" increment builds on the prior. Test files live in test_v2/flow/*.sl.
 
 Locked design decisions:
-  1A — SUPERSEDED by canon. switch.sl + slids_reference.md specify C-style
-       FALL-THROUGH (a clause with no break falls into the next); landed that
-       way. The original "independent cases" plan was wrong.
+  1A — REVISITED (switch redesign). Originally landed C-style fall-through (a
+       clause with no break falls into the next). NOW: no `case` keyword, a clause
+       is a label-list + a mandatory `{ }` body + an optional trailing `continue;`;
+       there is NO implicit fall-through (a clause exits at its body unless the
+       trailing continue carries it into the next clause) and NO `break` (switch is
+       transparent to break/continue, which bind to the enclosing loop). See the
+       SESSION 5 block below for the landed-now shape.
   2A — unreachable-code detection lands now (a stmt after an abrupt sibling).
   3B — REVISITED (later session). Originally: constant-true loops got no special
        case (every loop possibly-zero). NOW a constant-true loop (a literal-true /
@@ -307,47 +311,57 @@ SESSION 4 — for-loops   [LONG-FORM + RANGED + ENUM + TYPELESS/REUSE + FOR-ARRA
     descending). REUSE: outer local reassigned, reads the last value after.
   * exit: for-loops desugar to the canonical form and run; loop-var reuse correct.
 
-SESSION 5 — switch / case — LANDED (C-style fall-through; labels deferred to S6)
+SESSION 5 — switch / case — LANDED, then REDESIGNED (no `case` keyword, label-
+            lists, no implicit fall-through, no `break`). Labels still deferred.
 
-  * new kinds kSwitchStmt (children[0]=scrutinee, [1..]=clause) + kCaseClause
-    (children[0]=label const-expr, null=default; [1]=body block). One
+  * new kinds kSwitchStmt (children[0]=scrutinee, [1..]=clause) + kCaseClause: a
+    clause is a LABEL-LIST + a body block — children[0..n-2] = labels (each a
+    const-expr; null = a `default` label, mixable into the list), children.back()
+    = body block; clause.text == "continue" marks a trailing fall-through. One
     -Wswitch-enum pass across all 10 stages.
   * grammar: parseSwitchStmt — value REQUIRED (`switch ()` errors), body may be
-    empty, default singular + anywhere, trailing break optional. QUALIFIED
-    enum-member labels (`case Dir:N:`) parse via parseQualifiedNameCaseLabel — a
-    terminator-aware scan that rewinds one segment if the maximal `:`-chain isn't
-    followed by the terminator `:` (solves the v1 `:`-collision for keyword-,
-    brace-, AND identifier-led bodies, gated by the `case_label_` flag).
-  * resolve: LoopFrame.is_switch — break targets the nearest loop OR switch,
-    continue skips switch frames to the nearest loop ("break must be inside a
-    loop or switch"). FALL-THROUGH: each clause body resolves from S (direct
-    match is the weakest entry); after = ∩ over exit paths {break points,
-    bottom-fall, default-less ⇒ S}; an exhaustive switch (default, no escaping
-    break, and the LAST clause does not fall out the bottom — per-clause Completion
-    threading already handles a stacked empty clause) is Abrupt.
-  * classify: scrutinee must be integer-class (float rejected); each case label
-    must be an integer constant that FITS the scrutinee type (literalFitsContext
-    — an out-of-range/sign-mismatched label is rejected, never emitted as a
-    truncated `iN` constant); unique labels (value-dedup, full-64-bit, so 'a'==97
-    and 1+2==3 collide, with a "first case here" note); default singular.
-    endsInReturnNode: a switch is a return-terminator iff it has a default, no
-    clause has an escaping break (containsBreak), and the LAST clause's body ends
-    in a return — C-style fall-through carries a stacked empty / non-returning
-    clause into that final return (mirrored in codegen so the two stages agree).
-  * codegen: an `llvm switch` dispatches to per-clause blocks (source order) that
-    fall through via `br` unless terminated; naked break -> exit; default's block
-    is the switch instr default (exit when none); `unreachable` emitted in the
-    exit block only when no path reaches it (containsBreak + bottom-fall +
-    no-default reachability). copyNode preserves a null label slot.
-  * tests: test_v2/flow/switch.sl — ~30 positives (basic/fall-through/stacked/
-    default-anywhere/naked-break-vs-continue/nested/char-bool-enum-uint-int64
-    scrutinees/qualified + anon-enum + named-const + boundary labels/PPID
-    scrutinee/DA/empty-body/expr-scrutinee) + 14 negatives (empty value, dup
-    case [+xkind +folded], dup default, float scrutinee, non-const / float /
-    out-of-range label, continue-no-loop, unreachable-after, DA default-less +
-    partial, break-escape + unreachable-after-stacked) + the stacked-terminator
-    positive (a stacked empty clause that falls into a returning clause).
-  * exit: switch with fall-through + the break/continue retargeting + the join.
+    empty, default singular + anywhere. parseCaseClause parses
+    `label (: label)* : { body } [continue;]` — NO `case` keyword (de-reserved in
+    the lexer), the `{ }` body is MANDATORY (a non-label, non-`{` token after a
+    label's `:` -> "Expected '{' to open the clause body."), and a trailing
+    `continue;` sets clause.text. QUALIFIED enum-member labels (`Dir:N:`) parse via
+    parseQualifiedNameCaseLabel, gated by `case_label_`; the body is always
+    `{`-led so a single qualified label needs no rewind. (Limitation: two adjacent
+    qualified/ident labels in one list greedily merge — bare/numeric lists are
+    unambiguous; tests don't stack qualified labels.)
+  * resolve: NO switch frame — switch is transparent to break/continue (both bind
+    to the enclosing loop; naked break == `break 1;` inside a switch; "must be
+    inside a loop"). NO implicit fall-through: each clause body resolves from S
+    (direct dispatch is the weakest entry) and a Normal completion is an EXIT path
+    unless the clause carries a trailing continue into a non-last clause (the last
+    clause's continue falls off the bottom = exit). after = ∩ over the exit paths
+    {+ default-less/empty ⇒ S}; a default with no exit path is Abrupt.
+  * classify: scrutinee must be integer-class (float rejected); each label in
+    every clause's list must be an integer constant that FITS the scrutinee type
+    (literalFitsContext — out-of-range/sign-mismatched rejected, never a truncated
+    `iN`); unique labels (value-dedup, full-64-bit, so 'a'==97 and 1+2==3 collide,
+    "first case here" note); default singular. endsInReturnNode: a switch is a
+    return-terminator iff it has a default, no clause has an escaping break
+    (containsBreak), and EVERY clause's exit reaches a return — a non-returning
+    clause is OK only with a trailing continue into a LATER clause (the chain must
+    end in a return; mirrored in codegen so the two stages agree).
+  * codegen: an `llvm switch` dispatches to per-clause blocks (source order; one
+    dispatch entry per label, so a label-list maps several values to one block). A
+    non-terminated body brs to EXIT unless it has a trailing continue, which brs to
+    the NEXT clause (last-clause continue brs to exit; an inert continue after a
+    returning body is suppressed by endsTerminated). break/continue pass through to
+    the enclosing LoopCtx (no switch ctx). default's block is the switch instr
+    default (exit when none); `unreachable` in the exit block only when no path
+    reaches it. copyNode preserves a null label slot.
+  * tests: test_v2/flow/switch.sl — positives (basic/label-list/continue-fall-
+    through/default-anywhere + default-in-list/nested/char-bool-enum-uint-int64
+    scrutinees/qualified + anon-enum + named-const + boundary labels/PPID/DA/
+    empty-body/expr-scrutinee/last-clause-continue/continue-chain-terminator/
+    clause-body dtor scope) + 16 negatives (empty value, dup case [+xkind
+    +folded], dup default, float scrutinee, non-const / float / out-of-range
+    label, continue-no-loop, unreachable-after [+stacked +continue-chain], DA
+    default-less + partial, missing-brace).
+  * exit: switch with explicit-continue fall-through + transparent break/continue.
 
 SESSION 6 — labels (labeled / numbered break+continue) — LANDED. Phase 2 flow COMPLETE.
 
@@ -362,19 +376,19 @@ SESSION 6 — labels (labeled / numbered break+continue) — LANDED. Phase 2 flo
     error ("Expected statement."). break/continue parse an optional arg: an
     integer (Nth loop) or a name (identifier, OR the `for`/`while` keyword token).
   * resolve: each loop frame (LoopFrame) carries its name (explicit label or the
-    keyword default for/while; switches have none). The break/continue arm
-    resolves the target by flavor — NAMED (nearest matching loop, innermost wins /
-    shadowing allowed), NUMBERED (Nth loop outward, SKIPPING switch frames; N>=1),
-    NAKED (break -> nearest loop OR switch; continue -> nearest loop, switch
-    transparent) — folds the init-set into the TARGET frame's accumulator and
-    stamps loop_levels. The for-update floor check stays FIRST, so NO flavor of
-    break/continue is allowed directly in an update clause. Errors: count <1 /
-    exceeds nesting (caret on the count literal), no-enclosing-loop-labeled,
-    inside-loop-or-switch.
+    keyword default for/while; switch pushes no frame at all). The break/continue
+    arm resolves the target by flavor — NAMED (nearest matching loop, innermost
+    wins / shadowing allowed), NUMBERED (Nth loop outward; N>=1), NAKED (nearest
+    enclosing loop) — switch is fully TRANSPARENT (not a frame / break target), so
+    a naked break == `break 1;` inside a switch — folds the init-set into the
+    TARGET frame's accumulator and stamps loop_levels. The for-update floor check
+    stays FIRST, so NO flavor of break/continue is allowed directly in an update
+    clause. Errors: count <1 / exceeds nesting (caret on the count literal),
+    no-enclosing-loop-labeled, "must be inside a loop".
   * codegen: LoopCtx is a linked list (outer); break/continue walk loop_levels
     hops (asserted in range) to the target frame's exit (break) / header
-    (continue). A switch's swctx inherits the enclosing loop's header so a
-    continue passing through still re-tests the right loop.
+    (continue). A switch pushes no LoopCtx — it passes the enclosing loop's ctx
+    straight through, so a break/continue inside a clause targets the right loop.
     [Phase 5 reused this: the destructor-balance invariant threads a PARALLEL
     DtorScope chain through emitStmt next to LoopCtx; LoopCtx gained a `scope`
     pointer (the scope outside the loop) so a break/continue unwinds the right

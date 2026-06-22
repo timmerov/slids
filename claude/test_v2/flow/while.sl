@@ -483,8 +483,8 @@ int32 main() {
 negatives — one //-block uncommented per run.
 */
 
-/* break outside any loop or switch. */
-//-EXPECT-ERROR: A 'break' statement must be inside a loop or switch.
+/* break outside any loop. */
+//-EXPECT-ERROR: A 'break' statement must be inside a loop.
 //int neg_break_outside(int n) {
 //    if (n > 0) {
 //        break;

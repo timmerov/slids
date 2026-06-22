@@ -2283,40 +2283,58 @@ struct Parser {
         return node;
     }
 
-    // One `case const-expr:` / `default:` clause. children[0] = label const-expr
-    // (nullptr for default), [1] = body kBlockStmt (statements up to the next
-    // case/default/`}`). The body is its own lexical scope; fall-through to the
-    // next clause is a resolve/codegen concern.
+    // One switch clause: a label-list, a mandatory `{ }` body block, and an
+    // optional trailing `continue;`. children = [label0, .., labelK, body]: each
+    // label is a const-expr (nullptr => a `default` label); the LAST child is the
+    // body kBlockStmt. text == "continue" marks a trailing fall-through into the
+    // next clause. A label-list (`1: 2: 3: { }`) shares one body. There is no
+    // implicit fall-through — a clause exits the switch at its body's `}` unless
+    // the trailing `continue` carries it into the next clause.
     std::unique_ptr<parse::Node> parseCaseClause() {
         int clause_file = peek().file_id;
         int clause_tok = pos;
-        std::unique_ptr<parse::Node> label;
-        if (peek().kind == token::Kind::kCase) {
-            advance();   // case
-            case_label_ = true;
-            label = parseExpr();
-            case_label_ = false;
-            if (!label) return nullptr;
-        } else if (peek().kind == token::Kind::kDefault) {
-            advance();   // default — label stays null
-        } else {
-            error("Expected 'case' or 'default' in the switch body.");
-            return nullptr;
-        }
-        if (!expect(token::Kind::kColon, ":")) return nullptr;
-        auto body = newNodeAt(parse::Kind::kBlockStmt, clause_file, clause_tok);
-        while (peek().kind != token::Kind::kCase
-               && peek().kind != token::Kind::kDefault
-               && peek().kind != token::Kind::kRBrace
-               && peek().kind != token::Kind::kEndOfFile
-               && peek().kind != token::Kind::kEndOfInput) {
-            auto stmt = parseStmt();
-            if (!stmt) return nullptr;
-            body->children.push_back(std::move(stmt));
-        }
         auto clause = newNodeAt(parse::Kind::kCaseClause, clause_file, clause_tok);
-        clause->children.push_back(std::move(label));   // [0] (null => default)
-        clause->children.push_back(std::move(body));     // [1]
+        // Label list: one or more `(const-expr | default) :`, up to the body `{`.
+        for (;;) {
+            std::unique_ptr<parse::Node> label;
+            if (peek().kind == token::Kind::kDefault) {
+                advance();   // default — label stays null
+            } else {
+                case_label_ = true;
+                label = parseExpr();
+                case_label_ = false;
+                if (!label) return nullptr;
+            }
+            if (!expect(token::Kind::kColon, ":")) return nullptr;
+            clause->children.push_back(std::move(label));
+            if (peek().kind == token::Kind::kLBrace) break;   // body follows
+            // Otherwise another label must follow; a token that cannot begin a
+            // label means the mandatory `{ }` body is missing.
+            token::Kind nk = peek().kind;
+            bool starts_label =
+                nk == token::Kind::kDefault
+                || nk == token::Kind::kIntLiteral || nk == token::Kind::kUintLiteral
+                || nk == token::Kind::kCharLiteral || nk == token::Kind::kFloatLiteral
+                || nk == token::Kind::kBoolLiteral || nk == token::Kind::kStringLiteral
+                || nk == token::Kind::kNullptr
+                || nk == token::Kind::kIdentifier || nk == token::Kind::kColonColon
+                || nk == token::Kind::kLParen
+                || nk == token::Kind::kPlus || nk == token::Kind::kMinus
+                || nk == token::Kind::kNot  || nk == token::Kind::kBitNot;
+            if (!starts_label) {
+                error("Expected '{' to open the clause body.");
+                return nullptr;
+            }
+            // Another label in the list — loop.
+        }
+        auto body = parseBlock();
+        if (!body) return nullptr;
+        clause->children.push_back(std::move(body));   // last child = body block
+        if (peek().kind == token::Kind::kContinue) {
+            advance();   // continue — fall through to the next clause
+            if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+            clause->text = "continue";
+        }
         return clause;
     }
 

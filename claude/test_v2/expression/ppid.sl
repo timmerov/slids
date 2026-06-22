@@ -301,7 +301,7 @@ int32 main() {
     /* a switch scrutinee is a phrase: the bump fires once as it is evaluated. */
     int32 sw = 1;
     switch (sw++) {
-        case 1: { __println("sw case 1"); break; }
+        1: { __println("sw case 1"); }
         default: { __println("sw default"); }
     }
     __println("sw= " + sw);                       // 2

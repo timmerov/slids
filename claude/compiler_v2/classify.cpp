@@ -3524,8 +3524,10 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             parse::Node const* first_default = nullptr;      // for the dup-default note
             for (std::size_t i = 1; i < s.children.size(); i++) {
                 parse::Node& clause = *s.children[i];
-                if (clause.children[0]) {
-                    parse::Node& label = *clause.children[0];
+                std::size_t nlabel = clause.children.size() - 1;   // body = back()
+                for (std::size_t j = 0; j < nlabel; j++) {
+                  if (clause.children[j]) {
+                    parse::Node& label = *clause.children[j];
                     inferExpr(tree, label, scrut.inferred_type, diag);
                     if (!isLiteralKind(label.kind)) {
                         diagnostic::report(diag, {label.file_id, label.tok,
@@ -3562,7 +3564,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                                 {{first->file_id, first->tok, "first case here"}}});
                         }
                     }
-                } else {
+                  } else {
                     if (first_default) {
                         diagnostic::report(diag, {clause.file_id, clause.tok,
                             "A switch may have only one default clause.",
@@ -3571,8 +3573,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     } else {
                         first_default = &clause;
                     }
+                  }
                 }
-                classifyStmt(tree, *clause.children[1], fn_return_type, diag);
+                classifyStmt(tree, *clause.children.back(), fn_return_type, diag);
             }
             return;
         }
@@ -3674,23 +3677,33 @@ bool endsInReturnNode(parse::Node const& s) {
         return endsInReturnNode(*s.children[1])   // then-branch (a block)
             && endsInReturnNode(*s.children[2]);  // else-branch (block or if)
     }
-    // C-style fall-through: control can fall out the bottom of a switch only off
-    // the LAST clause's body (every earlier clause either returns or falls into
-    // the next). So the switch is a return-terminator iff it has a default, no
-    // clause has a break escaping past it, and the LAST clause's body ends in a
-    // return — a stacked empty (or non-returning) clause then reaches that final
-    // return via fall-through.
+    // A switch is a return-terminator iff it has a default, no clause has a break
+    // escaping it (a break leaves via the enclosing loop, not by returning), and
+    // every clause's exit reaches a return. With no implicit fall-through a clause
+    // exits the switch at its body's `}` — so a non-returning clause is acceptable
+    // only if it has a trailing `continue` into a LATER clause (the fall-through
+    // chain must end in a return); a non-returning last clause, or a non-returning
+    // clause with no continue, escapes the switch without returning.
     if (s.kind == parse::Kind::kSwitchStmt) {
         bool has_default = false;
         for (std::size_t i = 1; i < s.children.size(); i++) {
             parse::Node const& clause = *s.children[i];
-            if (!clause.children[0]) has_default = true;
-            if (containsBreak(*clause.children[1])) {
-                return false;   // an escaping break reaches past the switch
+            std::size_t nlabel = clause.children.size() - 1;
+            for (std::size_t j = 0; j < nlabel; j++)
+                if (!clause.children[j]) has_default = true;
+            if (containsBreak(*clause.children.back())) {
+                return false;   // an escaping break leaves without returning
             }
         }
         if (!has_default) return false;
-        return endsInReturnNode(*s.children.back()->children[1]);
+        for (std::size_t i = 1; i < s.children.size(); i++) {
+            parse::Node const& clause = *s.children[i];
+            if (endsInReturnNode(*clause.children.back())) continue;
+            bool has_cont = (clause.text == "continue");
+            bool is_last = (i + 1 == s.children.size());
+            if (!has_cont || is_last) return false;
+        }
+        return true;
     }
     // A non-completing loop (resolve flagged a constant-true condition with no
     // escaping break) never falls through — control leaves only via a return

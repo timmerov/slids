@@ -2417,11 +2417,15 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             return;
         }
         case ast::Kind::kSwitchStmt: {
-            // children[0]=scrutinee, [1..]=kCaseClause. Lower to an `llvm switch`
-            // dispatching to one block per clause (source order) + an exit; blocks
-            // fall through via `br` to the next unless terminated. naked break ->
-            // exit; continue passes through to the enclosing loop (swctx inherits
-            // its header). default's block is the switch instr's default label
+            // children[0]=scrutinee, [1..]=kCaseClause (a label-list +
+            // children.back()=body block; text=="continue" => trailing
+            // fall-through). Lower to an `llvm switch` dispatching to one block per
+            // clause + an exit. There is NO implicit fall-through: a clause brs to
+            // the exit at its body's end unless it has a trailing continue, which
+            // brs to the next clause (a continue on the last clause falls off the
+            // bottom -> exit). break/continue inside a body bind to the enclosing
+            // loop (switch is transparent), so the enclosing `loop` ctx is passed
+            // straight through. default's block is the switch instr's default label
             // (exit when there is no default).
             assert(!stmt.children.empty() && "kSwitchStmt needs a scrutinee");
             ast::Node const& scrut = *stmt.children[0];
@@ -2439,33 +2443,40 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             for (std::size_t k = 0; k < n; k++) blk[k] = newLabel("case");
             std::string default_lbl = exit_lbl;
             for (std::size_t k = 0; k < n; k++) {
-                if (!stmt.children[k + 1]->children[0]) {
-                    default_lbl = blk[k];
-                    break;
-                }
+                ast::Node const& clause = *stmt.children[k + 1];
+                std::size_t nlabel = clause.children.size() - 1;   // body = back()
+                bool is_default = false;
+                for (std::size_t j = 0; j < nlabel; j++)
+                    if (!clause.children[j]) { is_default = true; break; }
+                if (is_default) { default_lbl = blk[k]; break; }
             }
             out << "  switch " << llty << " " << sv << ", label %" << default_lbl
                 << " [\n";
             for (std::size_t k = 0; k < n; k++) {
                 ast::Node const& clause = *stmt.children[k + 1];
-                if (clause.children[0]) {
-                    out << "    " << llty << " " << clause.children[0]->text
-                        << ", label %" << blk[k] << "\n";
+                std::size_t nlabel = clause.children.size() - 1;
+                for (std::size_t j = 0; j < nlabel; j++) {
+                    if (clause.children[j]) {
+                        out << "    " << llty << " " << clause.children[j]->text
+                            << ", label %" << blk[k] << "\n";
+                    }
                 }
             }
             out << "  ]\n";
             bool exit_reachable = (default_lbl == exit_lbl);   // no default clause
             for (std::size_t k = 0; k < n; k++) {
-                ast::Node const& body = *stmt.children[k + 1]->children[1];
+                ast::Node const& clause = *stmt.children[k + 1];
+                ast::Node const& body = *clause.children.back();
                 out << blk[k] << ":\n";
-                LoopCtx swctx{loop ? loop->header_label : std::string(), exit_lbl,
-                              loop, scope};
-                emitStmt(body, syms, pool, fn_return_type, &swctx, scope, out, diag);
-                if (containsBreak(body)) exit_reachable = true;
+                emitStmt(body, syms, pool, fn_return_type, loop, scope, out, diag);
                 if (!endsTerminated(body.children)) {
-                    std::string next = (k + 1 < n) ? blk[k + 1] : exit_lbl;
-                    out << "  br label %" << next << "\n";
-                    if (k + 1 == n) exit_reachable = true;   // last clause falls out
+                    bool has_cont = (clause.text == "continue");
+                    if (has_cont && k + 1 < n) {
+                        out << "  br label %" << blk[k + 1] << "\n";   // fall through
+                    } else {
+                        out << "  br label %" << exit_lbl << "\n";     // exit switch
+                        exit_reachable = true;
+                    }
                 }
             }
             out << exit_lbl << ":\n";
@@ -2566,16 +2577,26 @@ bool endsInReturnNode(ast::Node const& s) {
 
 bool switchEndsInReturn(ast::Node const& s) {
     // Mirrors classify: a switch terminates iff it has a default, no clause has an
-    // escaping break, and the LAST clause's body ends in a return (C-style
-    // fall-through carries a stacked/non-returning clause into that final return).
+    // escaping break, and every clause's exit reaches a return. With no implicit
+    // fall-through a non-returning clause is acceptable only if it has a trailing
+    // continue into a LATER clause (the chain must end in a return).
     bool has_default = false;
     for (std::size_t i = 1; i < s.children.size(); i++) {
         ast::Node const& clause = *s.children[i];
-        if (!clause.children[0]) has_default = true;
-        if (containsBreak(*clause.children[1])) return false;
+        std::size_t nlabel = clause.children.size() - 1;
+        for (std::size_t j = 0; j < nlabel; j++)
+            if (!clause.children[j]) has_default = true;
+        if (containsBreak(*clause.children.back())) return false;
     }
     if (!has_default) return false;
-    return endsInReturnNode(*s.children.back()->children[1]);
+    for (std::size_t i = 1; i < s.children.size(); i++) {
+        ast::Node const& clause = *s.children[i];
+        if (endsInReturnNode(*clause.children.back())) continue;
+        bool has_cont = (clause.text == "continue");
+        bool is_last = (i + 1 == s.children.size());
+        if (!has_cont || is_last) return false;
+    }
+    return true;
 }
 
 // "This statement always transfers control away" — return / break / continue,

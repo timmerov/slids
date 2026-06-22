@@ -1661,8 +1661,8 @@ void lowerAggregateList(std::vector<std::unique_ptr<ast::Node>>& stmts,
             for (std::size_t i = 1; i < stmt->children.size(); i++) {
                 if (stmt->children[i]
                     && stmt->children[i]->children.size() > 1
-                    && stmt->children[i]->children[1]) {
-                    lowerAggregateList(stmt->children[i]->children[1]->children,
+                    && stmt->children[i]->children.back()) {
+                    lowerAggregateList(stmt->children[i]->children.back()->children,
                                        tree, fn_return_type, next_id);
                 }
             }
@@ -1733,15 +1733,15 @@ void lowerForLong(ast::Node& s, int& next_id) {
 }
 
 // Lower a switch's PPID. children[0] = scrutinee (a self-contained phrase whose
-// bumps fire once as it is evaluated); [1..] = kCaseClause, each [0] = label
-// (a folded constant — no bumps) and [1] = body statement list.
+// bumps fire once as it is evaluated); [1..] = kCaseClause, whose labels are
+// folded constants (no bumps) and whose body is children.back().
 void lowerSwitchStmt(ast::Node& s, int& next_id) {
     if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0], next_id);
     for (std::size_t i = 1; i < s.children.size(); i++) {
         if (!s.children[i]) continue;
         ast::Node& clause = *s.children[i];
-        if (clause.children.size() > 1 && clause.children[1]) {
-            lowerStatementList(clause.children[1]->children, next_id);   // body block
+        if (clause.children.size() > 1 && clause.children.back()) {
+            lowerStatementList(clause.children.back()->children, next_id);   // body
         }
     }
 }

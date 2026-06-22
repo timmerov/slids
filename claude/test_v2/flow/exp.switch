@@ -33,9 +33,6 @@ expr_scrutinee(1, 2) = 1
 expr_scrutinee(5, 5) = 0
 dir_assign(Dir:N) = 1
 dir_assign(Dir:E) = 9
-break_in_if(0, 1) = 0
-break_in_if(0, 0) = 6
-break_in_if(9, 0) = 1
 ppid_scrutinee() = 106
 neg_labels(-1) = 1
 neg_labels(-2) = 2
@@ -48,3 +45,27 @@ letter_switch(Letter:c) = 0
 const_label(42) = 1
 const_label(0) = 0
 char_max(255) = 1
+last_continue(0) = 1
+last_continue(5) = 9
+last_continue_return(0) = 1
+last_continue_return(5) = 9
+continue_terminator(0) = 11
+continue_terminator(5) = 10
+Tracer ctor 0
+clause 0 body
+Tracer dtor 0
+after switch
+default body
+after switch
+list_continue(1) = 11
+list_continue(2) = 11
+list_continue(3) = 10
+list_continue(9) = 100
+default_in_list(0) = 1
+default_in_list(1) = 2
+default_in_list(9) = 1
+into_default(0) = 51
+into_default(1) = 2
+into_default(9) = 50
+empty_continue(0) = 7
+empty_continue(9) = 7

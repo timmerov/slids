@@ -3030,14 +3030,16 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                     return Completion::Abrupt;
                 }
             } else if (is_break) {
-                // NAKED break: the nearest enclosing loop OR switch.
-                if (n == 0) {
+                // NAKED break: the nearest enclosing loop (switch is transparent —
+                // it is no longer a break target).
+                for (int t = n - 1; t >= 0; --t) {
+                    if (!tree.loop_stack[t].is_switch) { target = t; break; }
+                }
+                if (target < 0) {
                     diagnostic::report(diag, {s.file_id, s.tok,
-                        "A 'break' statement must be inside a loop or switch.",
-                        {}});
+                        "A 'break' statement must be inside a loop.", {}});
                     return Completion::Abrupt;
                 }
-                target = n - 1;
             } else {
                 // NAKED continue: the nearest enclosing LOOP (switch transparent).
                 for (int t = n - 1; t >= 0; --t) {
@@ -3060,50 +3062,47 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             return Completion::Abrupt;
         }
         case parse::Kind::kSwitchStmt: {
-            // children[0] = scrutinee, [1..] = kCaseClause (label const-expr +
-            // body block). Cases fall through: a clause body that completes
-            // Normally falls into the next; a break/return/continue ends the run.
-            // Each clause body ENTERS from S (any case can be matched directly, so
-            // the direct-entry init-set is the weakest and dominates the join).
+            // children[0] = scrutinee, [1..] = kCaseClause. A clause is a label-list
+            // (children[0..n-2], null = default) + a body block (children.back());
+            // clause.text == "continue" marks a trailing fall-through into the next
+            // clause. There is NO implicit fall-through: a clause exits the switch at
+            // its body's `}` unless it carries the trailing continue (the last
+            // clause's continue falls off the bottom). switch is transparent to
+            // break/continue — both bind to the enclosing loop — so no switch frame
+            // is pushed. Each clause body ENTERS from S (any case is a direct
+            // dispatch target, so the direct-entry init-set dominates the join).
             assert(!s.children.empty() && "kSwitchStmt needs a scrutinee");
             resolveExpr(tree, *s.children[0], diag);
             std::set<int> entry = tree.initialized_locals;   // S
-            tree.loop_stack.push_back({});
-            tree.loop_stack.back().is_switch = true;
             bool has_default = false;
-            bool last_normal = false;
-            std::set<int> bottom_fall;
-            for (std::size_t i = 1; i < s.children.size(); i++) {
-                parse::Node& clause = *s.children[i];   // kCaseClause
-                if (clause.children[0]) {
-                    resolveExpr(tree, *clause.children[0], diag);   // label
-                } else {
-                    has_default = true;
-                }
-                tree.initialized_locals = entry;                    // enter from S
-                Completion c = resolveStmt(tree, *clause.children[1], diag);
-                if (i + 1 == s.children.size() && c == Completion::Normal) {
-                    last_normal = true;                  // falls out the bottom
-                    bottom_fall = tree.initialized_locals;
-                }
-            }
-            parse::Tree::LoopFrame lf = std::move(tree.loop_stack.back());
-            tree.loop_stack.pop_back();
-            // after = ∩ over the exit paths: each break point, the bottom-fall,
-            // and (default-less) the no-match path = S. No exit path (every clause
-            // returns/continues with a default) -> Abrupt: control never reaches
-            // after the switch.
-            bool empty_body = (s.children.size() == 1);
-            bool normal_exit = lf.break_seen || last_normal || !has_default
-                               || empty_body;
             std::set<int> after;
             bool have = false;
+            bool normal_exit = false;
             auto fold = [&](std::set<int> const& set) {
                 after = have ? intersectInit(after, set) : set;
                 have = true;
+                normal_exit = true;
             };
-            if (lf.break_seen) fold(lf.break_init);
-            if (last_normal) fold(bottom_fall);
+            for (std::size_t i = 1; i < s.children.size(); i++) {
+                parse::Node& clause = *s.children[i];   // kCaseClause
+                std::size_t nlabel = clause.children.size() - 1;   // body = back()
+                for (std::size_t j = 0; j < nlabel; j++) {
+                    if (clause.children[j]) resolveExpr(tree, *clause.children[j], diag);
+                    else has_default = true;
+                }
+                tree.initialized_locals = entry;                    // enter from S
+                Completion c = resolveStmt(tree, *clause.children.back(), diag);
+                bool is_last = (i + 1 == s.children.size());
+                bool has_cont = (clause.text == "continue");
+                // A clause that completes Normally exits the switch — at its body's
+                // end (no continue) or off the bottom (last clause's continue). A
+                // continue on a non-last clause falls into the next clause instead,
+                // contributing no exit path.
+                if (c == Completion::Normal && (!has_cont || is_last)) {
+                    fold(tree.initialized_locals);
+                }
+            }
+            bool empty_body = (s.children.size() == 1);
             if (!has_default || empty_body) fold(entry);   // no-match path = S
             tree.initialized_locals = have ? std::move(after) : std::move(entry);
             return normal_exit ? Completion::Normal : Completion::Abrupt;

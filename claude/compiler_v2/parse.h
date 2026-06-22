@@ -120,11 +120,13 @@ enum class Kind {
     kBreakStmt,    // break; — exits the nearest enclosing loop OR switch.
     kContinueStmt, // continue; — jumps to the nearest enclosing loop's test
                    // (switch frames are transparent to continue).
-    kSwitchStmt,   // switch (value) { case C: ... default: ... }. children[0] =
+    kSwitchStmt,   // switch (value) { C: {..} default: {..} }. children[0] =
                    // scrutinee expr, [1..] = kCaseClause (source order).
-    kCaseClause,   // one case/default clause of a switch. children[0] = label
-                   // const-expr (nullptr => the `default` clause), [1] = body
-                   // (kBlockStmt; fall-through links it to the next clause).
+    kCaseClause,   // one clause of a switch: a label-list + a body block.
+                   // children[0..n-2] = labels (each a const-expr; nullptr => a
+                   // `default` label), children.back() = body kBlockStmt. text ==
+                   // "continue" marks a trailing fall-through into the next clause
+                   // (else the clause exits the switch at its body's `}`).
     kStringLiteral,
     kIntLiteral,
     kUintLiteral,

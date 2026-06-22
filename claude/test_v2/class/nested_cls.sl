@@ -147,7 +147,7 @@ int32 main() {
     }
 
     switch (37) {
-    case 37:
+    37: {
         Switch obj(100);
         Switch(int x_ = -1) {
             _() {
@@ -157,7 +157,7 @@ int32 main() {
                 __println("main:Switch:dtor: " + x_);
             }
         }
-        break;
+    }
     }
 
     // transitive lifecycle: a local class with a hook-class field runs the
