@@ -233,11 +233,12 @@ SESSION 4 — for-loops   [LONG-FORM + RANGED + ENUM + TYPELESS/REUSE + FOR-ARRA
     own legal break/continue target; return is banned transitively).
   * codegen: varlist init stores once (allocas hoisted); head(cond)/body/update
     /exit; continue -> update (the loop var advances on continue), break -> exit.
-  * tests: test_v2/flow/forlong.sl — 19 positives (basic, empty clauses/cond,
+  * tests: test_v2/flow/forlong.sl — 20 positives (basic, empty clauses/cond,
     multi-var, continue->update, break, nested, 3-frame shadow, typed-no-init,
     body-first DA, nested-loop break/continue targeting, break-in-nested-loop-in-
     update, PPID in cond + varlist-init, && cond, empty body, update-local,
-    stack_leak_for: body-local hoist / no per-iteration leak) + 8
+    stack_leak_for (body-local hoist / no per-iteration leak), for_ctor_var (a
+    class for-var via the (args) construction form)) + 8
     negatives (update break/continue/return, transitive return in nested update
     loop, for-var uninit in cond, continue-undercuts-update-read, possibly-zero
     escape, return-correctness).

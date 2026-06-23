@@ -2248,6 +2248,16 @@ struct Parser {
                 auto init = parseExpr();
                 if (!init) return nullptr;
                 decl->children.push_back(std::move(init));
+            } else if (peek().kind == token::Kind::kLParen) {
+                // `Type name(args)` construction form — modeled as a kTupleExpr
+                // init, exactly like parseVarDeclStmt, so it converges on the same
+                // class-construction normalization as `= (tuple)`.
+                int t_file = peek().file_id;
+                int t_tok = pos;
+                advance();   // (
+                auto tup = newNodeAt(parse::Kind::kTupleExpr, t_file, t_tok);
+                if (!parseCallArgs(*tup)) return nullptr;
+                decl->children.push_back(std::move(tup));
             }
             varlist.push_back(std::move(decl));
             if (peek().kind != token::Kind::kComma) break;

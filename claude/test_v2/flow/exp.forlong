@@ -26,5 +26,8 @@ for_typeless_shadow(3) = 126
 for_typeless_ppid(8) = 306
 for_typeless_nested(3, 4) = 12
 stack leak detected: false
+CtorVar ctor 7
+CtorVar dtor 7
+for_ctor_var() = 21
 for-ref body
 for-iter body

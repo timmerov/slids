@@ -410,6 +410,21 @@ bool stack_leak_for() {
     return (ptr[0] != ptr[1]);
 }
 
+/* a class for-var built with the CONSTRUCTION (args) form — same path as
+   `= (tuple)`: constructed once at varlist init, its field usable in the body,
+   destroyed once at loop exit. */
+CtorVar(int v_) {
+    _() { __println("CtorVar ctor " + v_); }
+    ~() { __println("CtorVar dtor " + v_); }
+}
+int for_ctor_var() {
+    int sum = 0;
+    for (CtorVar c(7), i = 0) (i < 3) { ++i; } {
+        sum = sum + c.v_;
+    }
+    return sum;
+}
+
 int32 main() {
     __println("sum_for(5) = " + sum_for(5));                // 10
     __println("empty_clauses(4) = " + empty_clauses(4));    // 6
@@ -439,6 +454,7 @@ int32 main() {
     __println("for_typeless_ppid(8) = " + for_typeless_ppid(8));            // 306
     __println("for_typeless_nested(3, 4) = " + for_typeless_nested(3, 4));  // 12
     __println("stack leak detected: " + stack_leak_for());                  // false
+    __println("for_ctor_var() = " + for_ctor_var());                        // 21 (ctor/dtor 7 once)
 
     /* a reference / iterator as the long-for condition. non-null enters; the update
        nulls it, so the body runs once. */

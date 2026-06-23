@@ -26,6 +26,12 @@ BUGS
     value. Either removes the discipline requirement and the entire bug class. Until
     then, every `Type const& x = get(...)` near an intern is a latent dangling read.
 
+  * decide if class field allows default init by tuple.
+    Class( Other field = (1,2,3) ) { }
+    Class( Other field(1,2,3) ) { }
+    lean yes to both.
+
+
 BLOCKED FEATURES
 
   deferred features involving classes:
@@ -142,13 +148,6 @@ BLOCKED FEATURES
     classZeroValue builds an N-element array (each element default-constructed) /
     a per-slot tuple, routed through the array-from-tuple slot path. Tests go in
     array.sl / tuple.sl.
-
-  * FOR-VARLIST CLASS DECL — a class declared in a `for` varlist
-    (`for (Class c(..)) ...`) doesn't parse ("Expected ')'"). The long-for opens its
-    OWN for-scope holding the varlist, so were it to parse, the var would register
-    THERE (not the enclosing scope) and be destroyed once at loop exit — the varlist
-    runs once, so construct-once / destroy-once is correct. Only the parse gap is
-    open.
 
   * CTOR/DTOR EXACTLY ONCE ON A BY-VALUE RETURN — returning a hook class BY VALUE
     must construct-once / destroy-once. Blocked on the return optimization
