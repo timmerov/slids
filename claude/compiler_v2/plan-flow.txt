@@ -182,11 +182,13 @@ SESSION 3 — while + break/continue (unlabeled) + POST-CONDITION while   [LANDE
     entry block (collectVarDecls pre-walk) — a body-local alloca would leak per
     iteration; (2) emitLogical rewritten from alloca+load to PHI nodes — an &&/|| in
     a loop condition put its alloca in the re-executed header. Both verified in IR
-    + a 1e6-iteration big_loop runs without overflow.
+    + by stack_leak_pre/post: a body local (incl. an array AND a class) keeps the
+    SAME stack address across iterations, so there is no per-iteration leak.
+    (forlong.sl carries the same check as stack_leak_for.)
   * tests: test_v2/flow/while.sl — pre (counting, zero-iter, break/continue in
-    branches, PPID-in-cond, nested loops, empty cond, && cond, big_loop) + post
+    branches, PPID-in-cond, nested loops, empty cond, && cond, stack_leak_pre) + post
     (body-runs-once, inits-escape, break, continue-to-test, PPID-in-post-cond,
-    empty post-cond, body-local hoist, cond-reads-body-var) + nested-loop
+    empty post-cond, stack_leak_post, cond-reads-body-var) + nested-loop
     break/continue targeting + ||/^^ conditions. 9 negatives: break/continue
     outside a loop, unreachable-after-break/continue, pre-loop init-doesn't-escape,
     do-while break-before-assign (after-set ∩) + continue-before-assign (cond reads
@@ -231,10 +233,11 @@ SESSION 4 — for-loops   [LONG-FORM + RANGED + ENUM + TYPELESS/REUSE + FOR-ARRA
     own legal break/continue target; return is banned transitively).
   * codegen: varlist init stores once (allocas hoisted); head(cond)/body/update
     /exit; continue -> update (the loop var advances on continue), break -> exit.
-  * tests: test_v2/flow/forlong.sl — 18 positives (basic, empty clauses/cond,
+  * tests: test_v2/flow/forlong.sl — 19 positives (basic, empty clauses/cond,
     multi-var, continue->update, break, nested, 3-frame shadow, typed-no-init,
     body-first DA, nested-loop break/continue targeting, break-in-nested-loop-in-
-    update, PPID in cond + varlist-init, && cond, empty body, update-local) + 8
+    update, PPID in cond + varlist-init, && cond, empty body, update-local,
+    stack_leak_for: body-local hoist / no per-iteration leak) + 8
     negatives (update break/continue/return, transitive return in nested update
     loop, for-var uninit in cond, continue-undercuts-update-read, possibly-zero
     escape, return-correctness).

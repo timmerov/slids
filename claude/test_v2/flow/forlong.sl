@@ -392,6 +392,24 @@ int for_typeless_nested(int rows, int cols) {
     return total;
 }
 
+/* a class to enlarge the per-iteration frame so a leak, if any, is unmistakable. */
+SpaceEater(int yum[3]) { }
+
+/* a body local in a `for` body is alloca'd ONCE (hoisted to the function entry
+   block), not per iteration: its stack address is the SAME across iterations, so
+   ptr[0] == ptr[1] and no leak is reported. */
+bool stack_leak_for() {
+    int^ ptr[2];
+    for (i = 0) (i < 2) { ++i; } {
+        int x = 42;
+        int y[4] = (1, 2, 3, 4);
+        SpaceEater ick;
+        x += y[0] + ick.yum[0];
+        ptr[i] = ^x;
+    }
+    return (ptr[0] != ptr[1]);
+}
+
 int32 main() {
     __println("sum_for(5) = " + sum_for(5));                // 10
     __println("empty_clauses(4) = " + empty_clauses(4));    // 6
@@ -420,6 +438,7 @@ int32 main() {
     __println("for_typeless_shadow(3) = " + for_typeless_shadow(3));        // 126
     __println("for_typeless_ppid(8) = " + for_typeless_ppid(8));            // 306
     __println("for_typeless_nested(3, 4) = " + for_typeless_nested(3, 4));  // 12
+    __println("stack leak detected: " + stack_leak_for());                  // false
 
     /* a reference / iterator as the long-for condition. non-null enters; the update
        nulls it, so the body runs once. */

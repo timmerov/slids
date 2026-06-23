@@ -10,7 +10,6 @@ never_runs() = 5
 drain(4) = 4
 count_to(5) = 5
 bounded_sum(5) = 10
-big_loop() = 999999
 do_once(0) = 1
 do_once(3) = 3
 last_val(3) = 1
@@ -38,3 +37,5 @@ do_empty_cond(4) = 4
 while-ref ran 1
 while-null skipped
 do-while-null ran 1
+stack leak detected: false
+stack leak detected: false

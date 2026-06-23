@@ -64,7 +64,8 @@ abrupt (a statement after one in the same block is unreachable), and both are
 errors outside any loop.
 
 a local declared in a loop body is alloca'd ONCE (hoisted to the function entry
-block), not per iteration — big_loop below would overflow the stack otherwise.
+block), not per iteration — stack_leak_pre/post below verify it: a body local has
+the SAME stack address across iterations (reused), so no per-iteration leak.
 */
 
 /* basic counting loop; sum 1..n. n <= 0 runs zero times. */
@@ -174,18 +175,34 @@ int bounded_sum(int n) {
     return s;
 }
 
-/* a body-local declared every iteration over a large loop — proves the alloca
-   is hoisted to the entry block (a per-iteration alloca would overflow the
-   stack across a million passes). */
-int big_loop() {
+/* a class used to enlarge the per-iteration frame so a leak, if any, is
+   unmistakable. */
+SpaceEater(int yum[3]) { }
+bool stack_leak_pre() {
+    int^ ptr[2];
     int i = 0;
-    int last = 0;
-    while (i < 1000000) {
-        int x = i;
-        last = x;
+    while (i < 2) {
+        int x = 42;
+        int y[4] = (1,2,3,4);
+        SpaceEater ick;
+        x += y[0] + ick.yum[0];
+        ptr[i] = ^x;
         i = i + 1;
     }
-    return last;
+    return (ptr[0] != ptr[1]);
+}
+bool stack_leak_post() {
+    int^ ptr[2];
+    int i = 0;
+    while {
+        int x = 42;
+        int y[4] = (1,2,3,4);
+        SpaceEater ick;
+        x += y[0] + ick.yum[0];
+        ptr[i] = ^x;
+        i = i + 1;
+    } (i < 2);
+    return (ptr[0] != ptr[1]);
 }
 
 /* post-condition: the body runs at least once, even when the condition is false
@@ -434,7 +451,6 @@ int32 main() {
     __println("drain(4) = " + drain(4));        // 4
     __println("count_to(5) = " + count_to(5));  // 5
     __println("bounded_sum(5) = " + bounded_sum(5));    // 10
-    __println("big_loop() = " + big_loop());    // 999999
     __println("do_once(0) = " + do_once(0));    // 1
     __println("do_once(3) = " + do_once(3));    // 3
     __println("last_val(3) = " + last_val(3));  // 1
@@ -476,6 +492,10 @@ int32 main() {
         while { pc = pc + 1; } (pn);
         __println("do-while-null ran " + pc);               // 1
     }
+
+    __println("stack leak detected: " + stack_leak_pre());
+    __println("stack leak detected: " + stack_leak_post());
+
     return 0;
 }
 
