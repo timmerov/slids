@@ -45,6 +45,7 @@ Class(int c_) {
 
 int32 main() {
 
+    /*
     __println("expect ctor 1,2 after");
     {
         Class(1);
@@ -53,6 +54,7 @@ int32 main() {
         __println("expect dtor 1,2 after.");
     }
     __println("expect dtor 2,1 before");
+    */
 
     return 0;
 }

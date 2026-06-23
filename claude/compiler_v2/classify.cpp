@@ -2278,6 +2278,15 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
         && s.children[0]->kind != parse::Kind::kTupleExpr) {
         inferExpr(tree, *s.children[0], widen::kNoType, diag);
         widen::TypeRef srcT = widen::strip(s.children[0]->inferred_type);
+        // A source already of THIS class's type is a whole-object copy/move, NOT a
+        // field spread: leave it in place. codegen does a whole-value store (and, for
+        // a `<--` move, nulls the source's pointer leaves), and the lifecycle block
+        // skips the ctor since the source is already constructed. (Requires lhs/rhs
+        // to be the same type — a different class spreads/constructs below.)
+        if (widen::deepStrip(s.children[0]->inferred_type)
+                == widen::deepStrip(info.type)) {
+            return;
+        }
         parse::Kind sk = s.children[0]->kind;
         bool lvalue = sk == parse::Kind::kIdentExpr
                    || sk == parse::Kind::kIndexExpr

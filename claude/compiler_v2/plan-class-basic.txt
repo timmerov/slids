@@ -12,8 +12,8 @@ partial + recursive; a non-bare-identifier source is spilled once into a `_$cini
 temp (classifyStmt via classifyStmtList's prelude, classify's only statement-minting
 hook) so a side-effecting index runs once. classZeroValue now zero-fills array /
 tuple / bool fields recursively. Detail in readme.txt CONSTRUCTION; standing record
-[[project_class_init_from_value]]. Still DEFERRED: whole-class copy-init at a decl
-(`Class a = sameClass`, the assignment operator) — todo.txt CLASS COPY-INIT.
+[[project_class_init_from_value]]. Whole-class copy-init at a decl
+(`Class a = sameClass`) + default move (`<--`) LANDED — see DEFAULT MOVE/COPY below.
 MODEL CORRECTION (vs the §4/§5 below, which were written pre-implementation): the
 ctor does NOT construct — field-init (the tuple fill) happens FIRST and always;
 the ctor is a trailing HOOK, the dtor a scope-exit hook. So construction stays the
@@ -55,10 +55,23 @@ resolves via the receiver's class frame and lifts to `<Class>__method(_$recv, ..
 minted from the DEFINING class. (Spec `self` is the object = `_$recv^`; the internal
 param is the pointer, named distinctly from the `self` keyword.) Detail: readme
 "METHODS" + [[project_v2_methods]].
-STILL OPEN: operator overloading, for-each/for-class, move/swap operators.
-Deferred items (array/tuple-of-hook FIELD construction, class copy-init at a decl,
-methods' expression-form call + compound field writes + sibling-call-via-self,
-non-block-exit tests) -> todo.txt.
+
+DEFAULT MOVE/COPY (classes) LANDED — a SAME-TYPE source at a var-decl init or an
+assignment is a whole-object COPY (or a MOVE for `<--`), not a field spread:
+classifyClassInit short-circuits on type equality; codegen does a whole-value store
+and, for a move, emitNullLeaves nulls every pointer / iterator leaf — recursing into
+class FIELDS and array ELEMENTS (typeHasPointer + emitNullLeaves gained kSlid / kArray
+arms, finishing the Phase-5 stubs). The ctor STILL runs on a copy/move init (field-
+init-then-ctor is uniform), so a copied/moved object is constructed exactly once and
+balances its dtor. Self-move is a static error ("Cannot move a value onto itself").
+Default only — user op<- / op= dispatch is later. Canon test_v2/class/operator.sl;
+roadmap [[project_aggregate_return_roadmap]] step 1.
+
+STILL OPEN: operator overloading, for-each/for-class, USER-overloadable move/swap
+(op<-/op<-->). Default move/copy + whole-class copy-init at a decl LANDED (above);
+non-block-exit dtor tests LANDED (construct.sl). Remaining deferred items
+(array/tuple-of-hook FIELD construction, methods' expression-form call + compound
+field writes + sibling-call-via-self) -> todo.txt.
 
 The foundational class landing: a class with fields, methods, an explicit
 constructor, and a destructor — plus the ctor/dtor CALL-IF-NEEDED model. This is

@@ -46,17 +46,6 @@ BLOCKED FEATURES
     primitive element type (a reference works for all). Only the CLASS-element
     variant remains, when class array elements exist (Phase 5).
 
-  * CLASS COPY-INIT AT A DECL — `Class a = sameClassValue` (initialize a class
-    local from another value of the SAME class — e.g. the result of a function
-    that returns a class by value) is mishandled: classify routes the decl through
-    classifyClassInit, which treats the rhs as a FIELD-init argument, so a 1-field
-    class reports "Cannot initialize field 'x_' ... from a value of type 'Class'."
-    A plain ASSIGN `a = b` works (checkSlidAssign allows same-class), and
-    `= scalar` / `= tuple` construct — only whole-class copy-INITIALIZATION at a
-    decl is wrong. Surfaces when a nested function RETURNS a local class by value.
-    Needs the class copy path (whole-value copy vs field-init). prerequisite: class
-    copy/move.
-
   * METHODS — follow-ups (the statement-call form + plain-`=` field writes LANDED).
     - EXPRESSION-FORM CALL: a value-returning method used as a value
       (`int x = obj.m()`) doesn't parse; only the statement form `obj.m(args);` is
@@ -154,20 +143,18 @@ BLOCKED FEATURES
     a per-slot tuple, routed through the array-from-tuple slot path. Tests go in
     array.sl / tuple.sl.
 
-  * DESTRUCTION ON NON-BLOCK EXITS — every ctor/dtor test exits a scope by BLOCK
-    fall-through. The destructor-balance invariant's return / break / continue arms
-    (emitUnwindDtors) are implemented but UNTESTED: a hook instance at function
-    scope destroyed at `return`, one inside a loop destroyed on `break`/`continue`,
-    an early `return` out of a nested `if`. ALSO the loop-VARIABLE case (a class
-    declared in a `for` varlist) — a known limitation: the varlist alloca hoists to
-    entry, so the loop var registers in the ENCLOSING scope, not a per-iteration
-    one, and isn't destroyed at loop exit (a loop-BODY local is fine). Tests go in
-    flow/.
+  * FOR-VARLIST CLASS DECL — a class declared in a `for` varlist
+    (`for (Class c(..)) ...`) doesn't parse ("Expected ')'"). The long-for opens its
+    OWN for-scope holding the varlist, so were it to parse, the var would register
+    THERE (not the enclosing scope) and be destroyed once at loop exit — the varlist
+    runs once, so construct-once / destroy-once is correct. Only the parse gap is
+    open.
 
-  * CTOR/DTOR CALLED EXACTLY ONCE UNDER COPY / MOVE — canon says the ctor/dtor run
-    exactly once each; a copy / move / reassignment / by-value param-or-return of a
-    hook class must not double- or skip-run them. Needs class copy/move (not built).
-    Test in moveswap.sl.
+  * CTOR/DTOR EXACTLY ONCE ON A BY-VALUE RETURN — returning a hook class BY VALUE
+    must construct-once / destroy-once. Blocked on the return optimization
+    (sret + RVO), [[project_aggregate_return_roadmap]] step 3. (Classes are passed
+    INTO a function BY ADDRESS — `^` / `[]` — never by value, so there is no
+    by-value-param case.)
 
   * DUP-DEF / DUP-DECL NOTE CARET POSITION — the "first defined here" note carets
     the first DEFINITION (Entry.def_tok) and "first declared here" the first

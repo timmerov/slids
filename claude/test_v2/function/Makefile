@@ -11,7 +11,8 @@ SAMPLES = \
 	call \
 	nested_fn \
 	overload \
-	param
+	param \
+	return
 
 .PHONY: all clean negatives positives $(SAMPLES)
 

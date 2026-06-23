@@ -1026,11 +1026,14 @@ bool typeHasPointer(widen::TypeRef ty) {
     if (f == widen::Type::Form::kPointer || f == widen::Type::Form::kIterator) {
         return true;
     }
-    if (f == widen::Type::Form::kTuple) {
+    // A class is a named tuple — recurse its fields the same way.
+    if (f == widen::Type::Form::kTuple || f == widen::Type::Form::kSlid) {
         for (widen::TypeRef slot : widen::get(s).slots) {
             if (typeHasPointer(slot)) return true;
         }
+        return false;
     }
+    if (f == widen::Type::Form::kArray) return typeHasPointer(widen::get(s).elem);
     return false;
 }
 
@@ -1077,7 +1080,8 @@ void emitNullLeaves(std::string const& addr, widen::TypeRef ty,
         out << "  store ptr null, ptr " << addr << "\n";
         return;
     }
-    if (f == widen::Type::Form::kTuple) {
+    // A class is a named tuple: null its fields' pointer leaves the same way.
+    if (f == widen::Type::Form::kTuple || f == widen::Type::Form::kSlid) {
         std::string tll = llvmForRef(s);
         std::vector<widen::TypeRef> const& slots = widen::get(s).slots;
         for (std::size_t i = 0; i < slots.size(); i++) {
@@ -1106,10 +1110,7 @@ void emitNullLeaves(std::string const& addr, widen::TypeRef ty,
         }
         return;
     }
-    // Any other form is a leaf with nothing to null: a primitive (the common
-    // case — reached, intended), or a class with pointer fields once classes land
-    // (Phase 5 — its own move operator handles its leaves). user notified, accepts
-    // state.
+    // Any other form is a leaf with nothing to null: a primitive (the common case).
 }
 
 // `*addr ±= 1` for ONE scalar / iterator leaf at `addr`, typed `leaf`. An iterator
@@ -1936,6 +1937,10 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 assert(needs_hooks == typeNeedsHook(st, /*ctor=*/false)
                        && "ctor/dtor hook need diverged — must be language-paired");
                 if (needs_hooks) {
+                    // Every init runs the ctor after field-init — a fresh
+                    // construction (from values) AND a copy/move (from a same-type
+                    // whole value). So a copied/moved object is constructed exactly
+                    // once, balancing its destructor at scope exit.
                     emitConstructHooks(it->second.alloca_name, st, out);
                     assert(scope && "class instance constructed without a dtor "
                                     "scope — it would never be destroyed");

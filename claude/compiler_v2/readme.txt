@@ -430,8 +430,12 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     lvalue in place (`src[i]` element reads); classifyStmt first spills any source
     that ISN'T a bare identifier (a call / op / `g[bump()]`) into a `_$cinit` temp so
     it is evaluated ONCE — spliced via classifyStmtList's prelude, classify's only
-    statement-minting hook. [DEFERRED: whole-class copy-init `Class a = sameClass`
-    (the assignment operator) — todo.]
+    statement-minting hook. A SAME-TYPE source is NOT spread — it is a whole-object
+    COPY, or a MOVE for `<--`: classifyClassInit short-circuits it (deepStrip equality
+    with the class type), codegen does a whole-value store (+ emitNullLeaves for the
+    move) and STILL runs the ctor, so a copied/moved object is constructed exactly
+    once and balances its dtor. Default only (no user op=/op<- yet); canon
+    test_v2/class/operator.sl.
   * CTOR/DTOR are scope HOOKS, not the constructor — fields are initialized first,
     the ctor runs after, the dtor at scope exit. `_(){}` / `~(){}` parse as
     kFunctionDef with an implicit receiver param `_$recv` (`Name^`); a bare field
@@ -1406,7 +1410,8 @@ STAGE FILES (.h / .cpp pairs)
             scalar move's source and dest types differ), stores it into the lhs, then
             emitNullLeaves walks the rhs's structured type and `store ptr null`s every
             pointer / iterator leaf through that SAME address — recursing by GEP into
-            nested tuple slots (the "fancy case") — so a side-effecting source index
+            nested tuple AND CLASS slots and array elements (a class is a named tuple;
+            typeHasPointer prunes pointer-free subtrees) — so a side-effecting source index
             (`a <-- g[bump()]`) runs ONCE and the source is left valid; an rvalue source
             (isAstLvalue false) has no address and is a pure copy (emitExpr+store). The
             move-INIT form (`T x <-- y`, kVarDeclStmt) is the same — desugar skips
