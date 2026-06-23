@@ -407,7 +407,16 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     field slot types (widen::internSlid) — so the whole tuple aggregate path
     (construct, store, slot access, llvmForRef -> literal struct) is reused and
     codegen needs NO symbol table; the layout rides on the type. requireKnownType
-    accepts a registered-class leaf.
+    accepts a registered-class leaf, INCLUDING inside a tuple (leafIsKnownClass has
+    a kTuple arm — a tuple type is known iff every slot is a built-in OR a known
+    class). A class as a TUPLE SLOT or ARRAY ELEMENT initializes BY SLOT through the
+    SAME constructClass path as a class FIELD and a single `Point pt = 0`: classify's
+    kTupleExpr arm constructs each class-typed slot from its init value (a scalar /
+    tuple is the slot-class's ctor input, field-arity validated per slot), so
+    `(Point,Point) t = (0, (3,4))` builds each Point in place. Aggregate INIT is by
+    slot, iteratively and recursively, the leaf reusing the single-element class
+    init — no separate aggregate leaf path (the rewritten slots are layout-matching
+    construction values, so desugar/codegen are unchanged).
   * `.field` is a kFieldExpr (grammar postfix `.name`); classify types it via the
     ClassInfo; desugar lowers it to a kIndexExpr over the field's slot index, so it
     never reaches codegen (slot access by name). `^field` address-of walks

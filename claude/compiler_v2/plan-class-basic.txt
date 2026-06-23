@@ -340,7 +340,8 @@ the new parse::Kind reaches every switch in one pass
     initializer, class/user-type conversion targets `(String=...)`/`(Foo=v)` —
     flip on once the ctor exists (plan.txt:315,330; todo.txt:51).
   * for-tuple / for-array over CLASS elements (by-value needs the copy ctor;
-    by-ref needs class-typed tuples/arrays) — todo.txt:21,83.
+    class-typed tuples/arrays now construct + are recognized BY SLOT — LANDED, so
+    the remaining blocker is only the for-each iteration over class elements).
   * const correctness (Phase 6); reopens/hoist/derived/virtual/contracts/unnamed
     (Phase 7); cross-TU + .slh propagation + globals (Phase 8); templates
     (Phase 9).

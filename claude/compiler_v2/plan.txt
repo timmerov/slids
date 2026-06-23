@@ -331,6 +331,18 @@ Phase 4 — types beyond primitives
     emitTupleLeafStores / emitArrayElemStores] DELETED. Coverage:
     test_v2/tuple/anon.sl, tuple/array.sl, tuple/combined.sl [cross-form + leaf-widen
     copy/move/return, pointer-leaf move null, cross-form narrow + count negatives].)
+  * tuple / array INIT with a CLASS slot / element by slot          LANDED
+    (a class as a tuple slot or array element — `(Point,Point) t = (0,(3,4))`,
+    `Point a[2] = ((1,2),(3,4))` — is RECOGNIZED [resolve::leafIsKnownClass gained a
+    kTuple arm: a tuple type is known iff every slot is isKnownType OR a known class]
+    and CONSTRUCTED by slot: classify's kTupleExpr arm wires each class-typed slot
+    through constructClass [the SAME path as a class FIELD, a class ARRAY ELEMENT, and
+    `Point pt = 0`], so a scalar/tuple slot is the slot-class's ctor input and
+    field-arity is validated per slot. No desugar/codegen change — the rewritten slots
+    are layout-matching construction values. Covers the ctor/dtor case too
+    [test_v2/misc/bug.sl: `(Class,Class) tuple('a','b')` runs ctors a,b / dtors b,a].
+    This is [[project_aggregate_return_roadmap]] step 2 [tuple of classes].
+    Coverage: test_v2/tuple/combined.sl.)
   * for-array (`for (var : arr)`)                                  LANDED
     (DESUGAR-stage lowering to kForLongStmt: resolve UNDERSTANDS it
     [understandForArray, retags kForArrayStmt], desugar's lowerForArray builds a

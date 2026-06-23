@@ -75,9 +75,9 @@ BLOCKED FEATURES
         path, exactly like `String s = "x"`), plus a pointer SOURCE to a class
         that defines `op=(Type^)`. The classify defer arm exists ("conversion
         to a class is not yet implemented") but is unreachable from any test
-        today — the user-named top-level form `(Foo=v)` doesn't parse, and a
-        tuple/array with a class slot fails earlier at resolveDeclType with
-        "Unknown type '(Cz, int)'" (a separate gap).
+        today — the user-named top-level form `(Foo=v)` doesn't parse. (A
+        tuple/array WITH a class slot now works — leafIsKnownClass's kTuple arm +
+        per-slot constructClass landed — so that is no longer a blocker here.)
       - a USER-NAMED type as the TOP-LEVEL target: the grammar opens a
         conversion on a primitive type KEYWORD after `(` or on a balanced
         `((...)...)` shape (the tuple/array path), so `(Foo = v)` (single
@@ -88,24 +88,6 @@ BLOCKED FEATURES
         alias would hit the defer arm above. Needs the is-this-a-type lookahead
         Phase 5 brings.
     typeconv.sl keeps the `(String=...)` example commented. prerequisite: classes.
-
-  * TUPLE / ARRAY WITH A CLASS SLOT — `(Cz, int) t = (3,4)` (a class as a tuple
-    slot — file-scope or LOCAL class) doesn't work. Two parts:
-      - RESOLVE GATE: requireKnownType rejects the composed type, "Unknown type
-        '(Cz, int)'.", even though resolveTypeRef already resolved the slot to the
-        registered class handle. isKnownType (widen) returns false for any kSlid
-        (no class registry at the widen layer); leafIsKnownClass (resolve, which
-        HAS the registry) walks only single-child wrappers (alias / const /
-        pointer / iterator / array) — no kTuple arm. Fix: give leafIsKnownClass a
-        kTuple arm accepting a slot that is isKnownType OR a known class.
-      - CONSTRUCT + USE (the actual feature): lifting the gate is NECESSARY but
-        maybe not sufficient — `(Cz,int) t = (3,4)` must CONSTRUCT a class into
-        slot 0 (Cz from 3) and read it back. classify's tuple-init + codegen's
-        tuple construction handle class FIELDS and class ARRAY ELEMENTS today (via
-        constructClass), not class tuple SLOTS — wire constructClass into the
-        tuple-slot path and verify end-to-end (construct + t[1] + t[0].field).
-    Repro: test_v2/tuple/anon.sl `(Local, int) lt = (3,4)`. Also blocks the class-target
-    conversion target + tuple-with-class-slot field decls. prerequisite: classes.
 
   * CLASS-FIELD INIT FROM A SIZE-1 TUPLE — the "vexing parse" (Phase 5). CONTEXT,
     the class structure: a class IS a named tuple. `Name(field-list){body}` interns

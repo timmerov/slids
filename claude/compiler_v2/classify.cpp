@@ -1012,11 +1012,30 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             for (std::size_t i = 0; i < e.children.size(); i++) {
                 widen::TypeRef slot_ctx =
                     ctx_slots.empty() ? widen::kNoType : ctx_slots[i];
+                widen::TypeRef slot_s =
+                    slot_ctx == widen::kNoType ? widen::kNoType
+                                               : widen::strip(slot_ctx);
+                // A CLASS-typed slot is CONSTRUCTED from its init value (a scalar /
+                // tuple is the slot-class's ctor input), recursively — exactly like a
+                // class-typed field or a class ARRAY element (classifyArrayFromTuple).
+                // Rewrite the slot node in place to the construction tuple, so the
+                // leaf goes through the SAME `constructClass` path as `Point pt = 0`.
+                if (slot_ctx != widen::kNoType
+                    && widen::form(slot_s) == widen::Type::Form::kSlid
+                    && tree.classes.count(slot_s) > 0) {
+                    parse::ClassInfo const& sub = tree.classes.at(slot_s);
+                    int c_file = e.children[i]->file_id, c_tok = e.children[i]->tok;
+                    auto init = std::make_unique<parse::Node>(std::move(*e.children[i]));
+                    auto built = constructClass(tree, sub, std::move(init),
+                                                c_file, c_tok, diag);
+                    *e.children[i] = std::move(*built);
+                    e.children[i]->inferred_type = slot_ctx;
+                }
                 // An ARRAY-typed slot taking a tuple LITERAL is array-from-tuple,
                 // not a nested tuple: validate it as such and type the slot as the
                 // array (so construction builds an array value, not a sub-tuple).
-                if (slot_ctx != widen::kNoType
-                    && widen::form(widen::strip(slot_ctx)) == widen::Type::Form::kArray
+                else if (slot_ctx != widen::kNoType
+                    && widen::form(slot_s) == widen::Type::Form::kArray
                     && e.children[i]->kind == parse::Kind::kTupleExpr) {
                     classifyArrayFromTuple(tree, slot_ctx, *e.children[i], diag);
                     e.children[i]->inferred_type = slot_ctx;

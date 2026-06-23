@@ -1,5 +1,5 @@
 /*
-test combinations of arrays and tuples.
+test combinations of arrays, tuples, and classes.
 
 array of tuples.
 tuple of arrays.
@@ -84,6 +84,20 @@ tuple VALUE element whose type / arity doesn't match the declared element.
 int pick() {
     __println("pick");
     return 1;
+}
+
+// A PLAIN-OLD-DATA class (fields, no ctor/dtor) used as an aggregate LEAF. Its
+// layout is { i32, i32 }, so a class slot interoperates with a (int,int) slot by
+// shape — the by-slot copy threads each WHOLE class value (default copy / move),
+// exactly as a scalar leaf would.
+Point(int x_, int y_) {
+}
+
+// CROSS-FORM RETURN with a class leaf — a tuple-of-class returned from an
+// array-of-class body, converted by slot at the return seam.
+(Point, Point) retPOA() {
+    Point a[2] = ((1,2), (3,4));
+    return a;
 }
 
 int32 main() {
@@ -278,6 +292,55 @@ int32 main() {
         cm <-- cg[pick()];                   // cross-form move: array row -> tuple
         __println("cm= " + cm[0] + " " + cm[1]);                   // 3 4
     }
+
+    /* CLASS LEAVES — a POD class as the aggregate leaf. array-of-class and
+       tuple-of-class interoperate by slot exactly like scalar leaves: each slot is
+       a WHOLE class value, threaded by the same by-slot copy / move. */
+    {
+        (Point, Point) tp = ((1,2), (3,4));      // tuple of class
+        Point pa[2] = ((5,6), (7,8));            // array of class
+        __println("tp= " + tp[0].x_ + " " + tp[1].y_);             // 1 4
+        __println("pa= " + pa[0].x_ + " " + pa[1].y_);             // 5 8
+
+        /* CROSS-FORM copy both directions — array-of-class <-> tuple-of-class. */
+        (Point, Point) ct = pa;                  // tuple-of-class <- array-of-class
+        __println("ct= " + ct[0].x_ + " " + ct[1].y_);             // 5 8
+        Point ca[2] = tp;                        // array-of-class <- tuple-of-class
+        __println("ca= " + ca[0].x_ + " " + ca[1].y_);             // 1 4
+
+        /* NESTED — a tuple whose slots are arrays-of-class; read through the
+           composed slot/element/field chain. */
+        (Point[2], Point[2]) toa = (((1,2),(3,4)), ((5,6),(7,8)));
+        __println("toa= " + toa[0][0].x_ + " " + toa[1][1].y_);    // 1 8
+
+        /* MOVE — default whole-aggregate move. POD has no pointer leaves, so the
+           move is a value copy with no source null. */
+        (Point, Point) md = ((0,0),(0,0));
+        md <-- tp;
+        __println("md= " + md[0].x_ + " " + md[1].y_);             // 1 4
+
+        /* SWAP — a whole tuple-of-class, and a single class SLOT. */
+        (Point, Point) sa = ((1,1),(2,2));
+        (Point, Point) sb = ((3,3),(4,4));
+        sa <--> sb;
+        __println("sw= " + sa[0].x_ + " " + sb[1].y_);             // 3 2
+        (Point, Point) ss = ((1,2),(3,4));
+        ss[0] <--> ss[1];                        // swap two class slots
+        __println("ssw= " + ss[0].x_ + " " + ss[1].y_);            // 3 2
+
+        /* CROSS-FORM RETURN with a class leaf. */
+        (Point, Point) cr = retPOA();            // tuple-of-class <- array-of-class
+        __println("cr= " + cr[0].x_ + " " + cr[1].y_);             // 1 4
+
+        /* CONSTRUCTION by slot — each class slot is CONSTRUCTED from its init value,
+           iteratively and recursively, through the SAME path as `Point pt = 0`. A
+           scalar is the slot-class's ctor input (x_ = scalar, y_ defaults to 0), so
+           the slot's shape need NOT match the class layout — distinct from the
+           matching-shape copies above. */
+        (Point, Point) cs = (5, 9);              // each Point built from one scalar
+        __println("cs= " + cs[0].x_ + " " + cs[0].y_ + " "
+                  + cs[1].x_ + " " + cs[1].y_);                     // 5 0 9 0
+    }
     return 0;
 }
 
@@ -338,4 +401,23 @@ int32 main() {
 //    int cnt[3] = (1, 2, 3);
 //    (int, int) r = t << cnt;
 //    return r[0];
+//}
+
+/* a CROSS-FORM copy with CLASS leaves whose top-level slot COUNT differs (a
+   tuple-of-class has 2 slots, the array has 3 elements) — rejected form-
+   agnostically, the same as the scalar-leaf case above. */
+//-EXPECT-ERROR: slot count differs
+//int neg_class_crossform_count() {
+//    (Point, Point) t = ((1,2), (3,4));
+//    Point a[3] = t;
+//    return a[0].x_;
+//}
+
+/* a class tuple SLOT whose initializer gives more values than the class has fields
+   — validated per slot via the same constructClass path as a class ARRAY element
+   and a direct class declaration. */
+//-EXPECT-ERROR: Class 'Point' has 2 field(s) but 3 initializer(s) were given
+//int neg_class_slot_arity() {
+//    (Point, Point) t = ((1,2,3), (4,5));
+//    return t[0].x_;
 //}

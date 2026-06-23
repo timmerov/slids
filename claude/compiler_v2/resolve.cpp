@@ -92,6 +92,17 @@ bool leafIsKnownClass(parse::Tree const& tree, widen::TypeRef t) {
         if (ty.form == F::kAlias || ty.form == F::kConst) { t = ty.underlying; continue; }
         if (ty.form == F::kPointer || ty.form == F::kIterator) { t = ty.pointee; continue; }
         if (ty.form == F::kArray) { t = ty.elem; continue; }
+        if (ty.form == F::kTuple) {
+            // A tuple is a known type iff every slot is — a built-in (isKnownType)
+            // or itself a class-leaf. Recurse per slot (slots are heterogeneous, so
+            // there is no single leaf to walk to). Copy the slots first: the
+            // recursive call reads the arena, but keep the loop independent of the
+            // `ty` reference for safety.
+            std::vector<widen::TypeRef> slots = ty.slots;
+            for (widen::TypeRef s : slots)
+                if (!widen::isKnownType(s) && !leafIsKnownClass(tree, s)) return false;
+            return true;
+        }
         if (ty.form == F::kSlid) return tree.classes.count(t) > 0;
         return false;
     }
