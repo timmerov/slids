@@ -5,6 +5,21 @@ phase 1: default move/copy operators.
 unblocks other features.
 move/copy by slot iteratively and recursively.
 requires lhs and rhs to be the same type.
+
+note to future self:
+
+these two var-decl follow the exact same code path:
+
+    Class cls(1,2,3);
+    Class cls = (1,2,3);
+
+when op= lands, we want to be able to support:
+
+    op=( TupleType ) { ... }
+
+in which case, the assignment form must check for an overloaded op=
+where the parameter is a tuple that matches the expression type.
+if no match, then fall back to initialization.
 */
 
 /*
