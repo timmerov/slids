@@ -190,6 +190,13 @@ int32 main() {
         __println("et[0] null= " + (et[0] == nullptr));   // true
         delete et[1];
         delete allocInt();                                // rvalue (fn return)
+        /* a DEREF lvalue: pp^ is a pointer; delete frees it + nulls pp^. (`int^ ^`
+           spells the pointer-to-pointer type — `int^^` mis-lexes as the `^^` operator;
+           see todo.) */
+        int^ rr = new int;
+        int^ ^ pp = ^rr;
+        delete pp^;
+        __println("deref delete, rr null= " + (rr == nullptr));   // true
         __println("non-variable delete ok");
     }
 

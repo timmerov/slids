@@ -39,6 +39,16 @@ BUGS
     construct.sl). Fix: reject `T^ = new T[n]` (or a single delete of a cookie'd
     allocation) at compile time — a new[]/delete[] mismatch shouldn't reach codegen.
 
+  * POINTER-TO-POINTER TYPE SPELLING `int^^` — doesn't parse in a declaration / param
+    ("Expected variable name"); v1 handled it. The lexer greedily combines `^^` into
+    the logical-xor token (kXorXor), so the declarator's pointer-suffix loop (matches
+    single `^` = kBitXor, grammar.cpp ~298) stops at `int` and the `^^` lands where the
+    name is expected. Fix: in caret-wanting contexts (the type-suffix loop) treat a
+    kXorXor as TWO `^` (the classic `>>`-in-templates split); the binary-op parser
+    keeps `^^` as logical-xor. (Double address-of `^^x` is nonsensical — out of scope.)
+    Workaround: spell it `int^ ^` (a space splits the carets) — canon pointer/new.sl
+    uses this for the deref-delete test.
+
 
 BLOCKED FEATURES
 

@@ -39,4 +39,5 @@ survived null delete
 empty array ok
 ea[0] null= true
 et[0] null= true
+deref delete, rr null= true
 non-variable delete ok
