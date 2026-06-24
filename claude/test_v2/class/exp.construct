@@ -34,6 +34,26 @@ CtorDtor:dtor: 38
 CtorDtor:dtor: 37
 CtorDtor:dtor: 36
 dtors 38,37,36 before.
+ctors 41,42,43,44 after.
+CtorDtor:ctor: 41
+CtorDtor:ctor: 42
+CtorDtor:ctor: 43
+CtorDtor:ctor: 44
+ctors 41,42,43,44 before dtors 44,43,42,41 after.
+CtorDtor:dtor: 44
+CtorDtor:dtor: 43
+CtorDtor:dtor: 42
+CtorDtor:dtor: 41
+dtors 44,43,42,41 before.
+ctors 14,24,34 after.
+CtorDtor:ctor: 14
+CtorDtor:ctor: 24
+CtorDtor:ctor: 34
+ctors 14,24,34 before dtors 34,24,14 after.
+CtorDtor:dtor: 34
+CtorDtor:dtor: 24
+CtorDtor:dtor: 14
+dtors 34,24,14 before.
 Later:ctor: 97
 Now:ctor: 97
 Now:dtor: 97
@@ -66,9 +86,38 @@ CtorDtor:dtor: 12
 makeCtorDtor(7): expect ctor/dtor 7.
 CtorDtor:ctor: 7
 CtorDtor:dtor: 7
+for_range(3): expect ctor/dtor 0,1,2.
+CtorDtor:ctor: 0
+CtorDtor:dtor: 0
+CtorDtor:ctor: 1
+CtorDtor:dtor: 1
+CtorDtor:ctor: 2
+CtorDtor:dtor: 2
+do_while(3): expect ctor/dtor 0,1,2.
+CtorDtor:ctor: 0
+CtorDtor:dtor: 0
+CtorDtor:ctor: 1
+CtorDtor:dtor: 1
+CtorDtor:ctor: 2
+CtorDtor:dtor: 2
+switch_clause(1): expect ctor/dtor 81.
+CtorDtor:ctor: 81
+CtorDtor:dtor: 81
+labeled_break(2): expect ctors 91,92 then dtors 92,91.
+CtorDtor:ctor: 91
+CtorDtor:ctor: 92
+CtorDtor:dtor: 92
+CtorDtor:dtor: 91
 new/delete: expect ctor/dtor 50.
 CtorDtor:ctor: 50
 CtorDtor:dtor: 50
+new[]/delete: expect ctors 0,0,0 then dtors 0,0,0.
+CtorDtor:ctor: 0
+CtorDtor:ctor: 0
+CtorDtor:ctor: 0
+CtorDtor:dtor: 0
+CtorDtor:dtor: 0
+CtorDtor:dtor: 0
 placement new + obj^.~(): expect ctor/dtor 60.
 CtorDtor:ctor: 60
 CtorDtor:dtor: 60

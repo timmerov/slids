@@ -36,7 +36,7 @@ things to test:
     ctor/dtor balance
     all code paths calls ctor/dtor
     array/tuple of class
-    copy, move
+    copy, move (in operator.sl)
     new/delete
     placement new/obj.~();
     loops, break, continue
@@ -183,6 +183,49 @@ CtorDtor makeCtorDtor(int v) {
     return local;
 }
 
+/* a hook local in a FOR-RANGE body is destroyed every iteration. */
+int for_range(int n) {
+    for (i : 0..n) {
+        CtorDtor a(i);
+    }
+    return 0;
+}
+
+/* a hook local in a DO-WHILE body is destroyed every iteration (incl. the first). */
+int do_while(int n) {
+    int i = 0;
+    while {
+        CtorDtor a(i);
+        ++i;
+    } (i < n);
+    return 0;
+}
+
+/* a hook local in a SWITCH clause is destroyed at the clause's block scope. */
+int switch_clause(int v) {
+    switch (v) {
+    1: { CtorDtor a(81); }
+    2: { CtorDtor b(82); }
+    }
+    return 0;
+}
+
+/* a LABELED break tears down hook locals in BOTH the inner and outer loop scopes. */
+int labeled_break(int n) {
+    int i = 0;
+    while (i < n) {
+        CtorDtor a(91);
+        ++i;
+        int j = 0;
+        while (j < n) {
+            CtorDtor b(92);
+            ++j;
+            break outer;
+        }
+    } :outer;
+    return 0;
+}
+
 int32 main() {
 
     /*
@@ -234,15 +277,24 @@ int32 main() {
     }
     __println("dtors 38,37,36 before.");
 
-    /* tuple of ctor classes. */
-    /* deferred.
+    /* MULTI-DIM array of ctor classes — every element ctor'd in row-major order,
+       dtor'd in reverse at scope exit. */
+    {
+        __println("ctors 41,42,43,44 after.");
+        CtorDtor grid[2][2] = ((41, 42), (43, 44));
+        __println("ctors 41,42,43,44 before dtors 44,43,42,41 after.");
+    }
+    __println("dtors 44,43,42,41 before.");
+
+    /* tuple of ctor classes — each slot constructed by slot in order; dtors run in
+       reverse slot order at scope exit. (The `(CtorDtor(14), ...)` temporary-in-
+       expression spelling is still a front-end gap; this names the slot types.) */
     {
         __println("ctors 14,24,34 after.");
-        tuple = (CtorDtor(14), CtorDtor(24), CtorDtor(34));
+        (CtorDtor, CtorDtor, CtorDtor) t = (14, 24, 34);
         __println("ctors 14,24,34 before dtors 34,24,14 after.");
     }
     __println("dtors 34,24,14 before.");
-    */
 
     {
         Now now(97);
@@ -268,11 +320,38 @@ int32 main() {
     __println("makeCtorDtor(7): expect ctor/dtor 7.");
     makeCtorDtor(7);
 
+    /* a hook local in a FOR-RANGE body — ctor/dtor each iteration. */
+    __println("for_range(3): expect ctor/dtor 0,1,2.");
+    for_range(3);
+
+    /* a hook local in a DO-WHILE body — ctor/dtor each iteration (incl. first). */
+    __println("do_while(3): expect ctor/dtor 0,1,2.");
+    do_while(3);
+
+    /* a hook local in a SWITCH clause — ctor/dtor at the clause block scope. */
+    __println("switch_clause(1): expect ctor/dtor 81.");
+    switch_clause(1);
+
+    /* a LABELED break — tears down hook locals in inner AND outer loop scopes. */
+    __println("labeled_break(2): expect ctors 91,92 then dtors 92,91.");
+    labeled_break(2);
+
     /* heap: the dtor runs on delete. */
     {
         __println("new/delete: expect ctor/dtor 50.");
         CtorDtor^ p = new CtorDtor(50);
         delete p;
+    }
+
+    /* heap ARRAY of ctor class — `new T[n]` default-constructs each element (the
+       count rides an 8-byte cookie), `delete` destructs each in reverse then frees.
+       Elements are default-constructed, so each c_ is 0. Note the iterator type
+       `CtorDtor[]` (NOT `CtorDtor^`): a single-ref + single-delete of an array
+       allocation mismatches the cookie. */
+    {
+        __println("new[]/delete: expect ctors 0,0,0 then dtors 0,0,0.");
+        CtorDtor[] pa = new CtorDtor[3];
+        delete pa;
     }
 
     /* placement new into a raw buffer + explicit obj^.~(); the buffer is freed

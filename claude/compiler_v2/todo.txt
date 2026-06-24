@@ -31,6 +31,22 @@ BUGS
     Class( Other field(1,2,3) ) { }
     lean yes to both.
 
+  * DELETE A CLASS FIELD (blocks RAII dtor) — `delete p_` inside a `~()` (or any
+    member) errors "The operand of 'delete' must be a pointer variable": the field ref
+    lowers to `self.p_` (a field access) and delete only accepts a bare pointer
+    VARIABLE (intended per pointer/new.sl, but blocks RAII). So a class can't free a
+    heap resource it owns in its destructor (the classic RAII pattern). Fix: accept a
+    field — and other pointer LVALUEs — as the delete operand (compute the address,
+    free, null it).
+
+  * ARRAY-NEW INTO A SINGLE REF, THEN SINGLE DELETE — `CtorDtor^ p = new CtorDtor[3];
+    delete p;` COMPILES (iterator->ref demotion is allowed) but CRASHES at runtime
+    (`munmap: invalid pointer`): the array alloc carries the 8-byte count cookie and
+    `delete` of a single ref frees the returned ptr, not ptr-8, and runs no per-elem
+    dtors. The correct `CtorDtor[] p = new CtorDtor[3]; delete p;` works (canon
+    construct.sl). Fix: reject `T^ = new T[n]` (or a single delete of a cookie'd
+    allocation) at compile time — a new[]/delete[] mismatch shouldn't reach codegen.
+
 
 BLOCKED FEATURES
 
@@ -116,8 +132,9 @@ BLOCKED FEATURES
     initializer(s)". No `=`-spelling passes a whole tuple to a lone field; the
     CALL form `Outer x( (13,17) )` is the only way (parseCallArgs preserves the
     argument boundary the collapsing parens destroy). PUNTED: use the call /
-    initializer-list form for a single-field-from-tuple init; canon construct.sl
-    keeps the `= ( (13,17) )` case commented with a "vexing parse" note. A real fix
+    initializer-list form for a single-field-from-tuple init; canon initialize.sl
+    keeps the working call form `Outer ot2( (13,17) )` and the `= ( (13,17) )` case
+    commented with a "vexing parse" note. A real fix
     needs a non-collapsing 1-tuple syntax, which touches grouping parens globally —
     not worth it. prerequisite: a 1-tuple spelling (none planned).
 
@@ -126,10 +143,11 @@ BLOCKED FEATURES
     desugar like the others. Not landable until classes exist.
 
   * CTOR/DTOR THROUGH AN ARRAY / TUPLE class FIELD — an array/tuple-of-hook-class
-    LOCAL works now (`CtorDtor arr[3] = (36,37,38)` runs ctors 36,37,38 / dtors
-    38,37,36 — classify constructs each class element via constructClass; the
+    LOCAL works now: `CtorDtor arr[3] = (36,37,38)` and `(CtorDtor,CtorDtor,CtorDtor)
+    t = (14,24,34)` both run ctors in order / dtors in reverse (canon
+    construct.sl) — classify constructs each class element/slot via constructClass; the
     needs-fixpoint + emitConstructHooks/emitDestructHooks descend array elem /
-    tuple slots; the var-decl arm runs the hooks after the array field-init).
+    tuple slots; the var-decl arm runs the hooks after the field-init.
     STILL OPEN: a class FIELD of array/tuple-of-hook type (`Box(CtorDtor items_[2])`)
     — `Box bx;` errors "Cannot default-construct a field of type 'CtorDtor[2]'."
     classZeroValue / classifyClassInit only CONSTRUCT a direct kSlid field; an
