@@ -362,7 +362,11 @@ Phase 4 — types beyond primitives
         pending a later lift. POD-aggregate returns ride the same sret ABI
         (behavior-neutral vs the old by-value return).
     Net: `Class x = mkClass()` is a single construct/destruct; ctor/dtor counts
-    balance at every position; the destroy-before-consume double-free is gone.
+    balance at every position; the destroy-before-consume double-free is gone. A call
+    result is also usable IN AN EXPRESSION (`fn() + (1,2,3)`, a call arg, a loop
+    accumuland) — the value-position temp is materialized + stacksave-bracketed; and
+    a tuple LITERAL returned as an array [`return (1,2,3)` for int[3]] builds an
+    `[N x T]` value via emitExpr->emitArrayLiteralValue [an array has no `.slots`].
     Coverage: test_v2/function/return_fn.sl. Open follow-ups in todo.txt:
     return-unnamed-temporary, disjoint-scope NRVO, POD-aggregate NRVO.)
   * for-array (`for (var : arr)`)                                  LANDED

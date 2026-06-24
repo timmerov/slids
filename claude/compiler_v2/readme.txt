@@ -345,9 +345,10 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
   * Landed: construct + whole-copy + const-index read `t[k]` (extractvalue; a
     RUNTIME index on a tuple is rejected — heterogeneous slots); slot write
     `t[k]=v` (struct-GEP) + destructure `(a,b,)=t` (kDestructureStmt, null child =
-    skipped slot); slot-wise arith + scalar broadcast (`(1,2,3)+7`); returns /
-    references (a tuple RETURN is `{i32,i32}` by value, `(T,T)^` = ptr). Codegen
-    builds the aggregate via insertvalue; classify slot-types via internTuple.
+    skipped slot); slot-wise arith + scalar broadcast (`(1,2,3)+7`); references
+    (`(T,T)^` = ptr). A non-primitive RETURN goes via sret (see NON-PRIMITIVE
+    RETURN), not by value. Codegen builds the aggregate via insertvalue; classify
+    slot-types via internTuple.
     A non-primitive VALUE param is now a COMPILE ERROR (mungeParamTypes, resolve) — a
     tuple / class param must be a pointer (`(T,T)^`). The ARRAY SHORTHAND `int a[3]`
     (and `int[] p`) is the one exception: mungeParamType rewrites it to `(const int[3])^`
@@ -370,7 +371,13 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     (`(int,int,int,int) t = a1` / `int a4[4] = t4`), incl. NESTED cross-form
     (`(int,int)[2] <-> (int[2],int[2])`) — lowered BY SLOT in desugar to per-leaf
     stores (see ASSIGNMENT RELATION); PARTIAL-index lvalues (sub-array assign
-    `td[1]=(100,101)` + sub-array value read). See [[project_v2_array_types]].
+    `td[1]=(100,101)` + sub-array value read). LOWERING by position: a STATEMENT
+    target (decl / assign / store) fills via emitArrayFromTuple (per-element store
+    into the alloca); an RVALUE position (a `return (1,2,3)` for an int[3], or an
+    operand like `fn() + (1,2,3)`) builds an `[N x T]` VALUE — emitExpr's kTupleExpr
+    arm dispatches to emitArrayLiteralValue when the literal's type is an array (an
+    array has no `.slots`, so the tuple-struct path would index empty). See
+    [[project_v2_array_types]].
   * AGGREGATE ARITHMETIC — arrays and tuples are one homogeneous-aggregate shape and
     share ONE slot-wise arith/bitwise path: `tuple op tuple`, `array op array`, and
     mixed `array op tuple` / `tuple op array` (a mixed result is always a TUPLE — the

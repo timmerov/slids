@@ -1311,6 +1311,16 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                                   expr.file_id, expr.tok, out, diag);
         }
         case ast::Kind::kTupleExpr: {
+            // A tuple LITERAL whose TYPE is an array (array-from-tuple, e.g.
+            // `return (1,2,3)` for an int[3]) builds an `[N x T]` value, not a tuple
+            // struct. The statement arms intercept this via emitArrayFromTuple, but
+            // an rvalue position (a return / operand) reaches emitExpr directly — an
+            // array has no `.slots`, so falling through would index an empty vector.
+            if (widen::form(widen::strip(expr.inferred_type))
+                    == widen::Type::Form::kArray) {
+                return emitArrayLiteralValue(expr.inferred_type, expr,
+                                             syms, pool, out, diag);
+            }
             // Build the literal struct `{ t0, t1, ... }` by inserting each slot
             // value into an undef aggregate (value semantics).
             std::string llty = llvmForRef(expr.inferred_type);

@@ -216,6 +216,11 @@ Class[3] mkArrC() { Class a[3] = (10, 20, 30); return a; }
 (int, int)[2] mkPodAoT() { (int, int) v[2] = ((1,2),(3,4)); return v; }
 (int, int) mkWiden() { (int8, int8) v = (1, 2); return v; }
 
+// returning a tuple LITERAL as an array (rvalue return — reaches emitExpr, which
+// builds an [N x T] value), and a helper that takes a call result by reference.
+int[3] retLit() { return (1, 2, 3); }
+int sumPair((int, int)^ p) { return p^[0] + p^[1]; }
+
 // NRVO variants: the SAME local returned from two paths (NRVO applies); and
 // multi-local returns — disjoint scopes (good) and overlapping (bad) — which both
 // fall back to a move (correct; the disjoint case is a deferred NRVO refinement).
@@ -350,6 +355,30 @@ int32 main() {
             Class li = mkClass();
             __println("li= " + li.id_);                         // 7, 7
         }
+    }
+    /* RETURN VALUE USED IN AN EXPRESSION — a call result as an operand of aggregate
+       arithmetic (either side), as a call argument, and accumulated in a loop. The
+       result is materialized in a temp (stacksave-bracketed) and fed to the
+       surrounding expression. retLit() also covers returning a tuple LITERAL as an
+       array (the rvalue-return path through emitExpr). */
+    __println("-- return in expr --");
+    {
+        int e1[3] = retLit() + (10, 20, 30);
+        __println("e1= " + e1[0] + " " + e1[2]);                // 11 33
+        int e2[3];
+        e2 = mkArr() + (1, 1, 1);                               // call result, assign rhs
+        __println("e2= " + e2[0] + " " + e2[2]);                // 2 4
+        (int, int) e3 = mkTup() + (100, 100);                  // call on the LEFT
+        __println("e3= " + e3[0] + " " + e3[1]);                // 104 105
+        (int, int) e4 = (100, 100) + mkTup();                  // call on the RIGHT
+        __println("e4= " + e4[0] + " " + e4[1]);                // 104 105
+        int sp = sumPair(mkTup());                             // call result as an arg
+        __println("sp= " + sp);                                 // 9
+        (int, int) acc = (0, 0);
+        for (i : 0..3) { acc = acc + mkTup(); }                // accumulate in a loop
+        __println("acc= " + acc[0] + " " + acc[1]);            // 12 15
+        /* hook call result in an expression (an arg) — lifted to a temp. */
+        __println("ho= " + idOf(mkClass()));                    // 7
     }
     __println("-- done --");
     return 0;

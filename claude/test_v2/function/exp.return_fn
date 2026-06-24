@@ -112,4 +112,14 @@ dtor 7
 ctor 7
 li= 7
 dtor 7
+-- return in expr --
+e1= 11 33
+e2= 2 4
+e3= 104 105
+e4= 104 105
+sp= 9
+acc= 12 15
+ctor 7
+ho= 7
+dtor 7
 -- done --
