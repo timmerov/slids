@@ -310,7 +310,11 @@ NON-PRIMITIVE RETURN — sret + RVO / NRVO (landed; [[project_aggregate_return_r
       L of the exact return type, desugar::analyzeNrvo marks L's decl + each return
       `nrvo`. codegen then gives L NO alloca (its storage IS %sret.in), constructs it
       in place, does NOT register it for destruction, and `return L` is a bare
-      `ret void`. One construct / one destruct (the caller's).
+      `ret void`. Applies to ANY sret return (analyzeNrvo gates on array/tuple/slid):
+      a HOOK return becomes one construct / one destruct (the caller's); a POD
+      aggregate / class elides the copy into the slot. The cross-form / leaf-widen
+      case rides along too — the `_$ret` temp desugar materializes is itself a single
+      exact-typed returned local, so it NRVOs and the by-slot copy writes %sret.in.
     - return-OF-call (`return g()`): forward — emitCall(g, sret_dst=%sret.in), so g
       builds directly into our slot; no temp, no extra ctor.
     - FALLBACK (a non-NRVO named local / rvalue): default-move-init %sret.in from the
@@ -333,8 +337,8 @@ NON-PRIMITIVE RETURN — sret + RVO / NRVO (landed; [[project_aggregate_return_r
       "Returning a class by value in an expression position is not yet supported"
       rather than miscompiled.
   POD-aggregate returns ride the same sret ABI (behavior-neutral vs the old by-value
-  return). Open follow-ups (todo.txt): returning an unnamed temporary; disjoint-scope
-  NRVO; POD-aggregate NRVO. Canon: test_v2/function/return_fn.sl.
+  return) and NRVO too (eliding the copy). Open follow-ups (todo.txt): returning an
+  unnamed temporary; disjoint-scope NRVO. Canon: test_v2/function/return_fn.sl.
 
 ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
 

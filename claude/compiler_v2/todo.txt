@@ -31,14 +31,6 @@ BUGS
     Class( Other field(1,2,3) ) { }
     lean yes to both.
 
-  * RETURN AN UNNAMED TEMPORARY — `return Class(7);` (construct a temporary in the
-    return expression) does NOT parse/classify ("variable declared here") — an
-    anonymous-temporary CONSTRUCTION isn't expressible in expression position, so
-    return_fn.sl's "case 1: return an unnamed variable" is unreachable. The sret path
-    would handle it (the rvalue branch of kReturnStmt already builds a non-lvalue rv
-    into %sret.in); the gap is the front-end (no `Type(args)` temporary expression).
-    Workaround: name the local (`Class c(7); return c;` — which then NRVOs anyway).
-
   * DISJOINT-SCOPE NRVO (good()) — when a function returns DIFFERENT locals from
     disjoint sibling scopes (`if (b) { Class p; return p; } else { Class q; return
     q; }`), each could be built directly in %sret.in (only one is ever live), but
@@ -48,16 +40,18 @@ BUGS
     lifetime overlaps it; disjoint scopes don't, the bad() same-scope case does.
     Canon: test_v2/function/return_fn.sl pickGood/pickBad (both pass via fallback).
 
-  * POD-AGGREGATE NRVO — analyzeNrvo is gated on a HOOK-bearing return
-    (returnTypeHasCtor), so a POD array/tuple return of a named local still COPIES it
-    into %sret.in (the kReturnStmt store) instead of aliasing the local to the slot.
-    Harmless (no ctor/dtor; just an avoidable aggregate copy). Widen the gate to any
-    sret return to elide the copy. Canon: return_fn.sl mkArr / mkTup / mkPodNest.
-
 
 BLOCKED FEATURES
 
   deferred features involving classes:
+
+  * RETURN AN UNNAMED TEMPORARY — `return Class(7);` (construct a temporary in the
+    return expression) does NOT parse/classify ("variable declared here") — an
+    anonymous-temporary CONSTRUCTION isn't expressible in expression position, so
+    return_fn.sl's "case 1: return an unnamed variable" is unreachable. The sret path
+    would handle it (the rvalue branch of kReturnStmt already builds a non-lvalue rv
+    into %sret.in); the gap is the front-end (no `Type(args)` temporary expression).
+    Workaround: name the local (`Class c(7); return c;` — which then NRVOs anyway).
 
   * CLASS-VALUED ELEMENTS FROM AN AGGREGATE SOURCE COPY RAW (class init) — when a
     class is initialized from a tuple-like VALUE whose slots are themselves class

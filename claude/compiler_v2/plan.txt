@@ -352,7 +352,9 @@ Phase 4 — types beyond primitives
         unwinding the OTHER scope locals; a return-OF-call forwards %sret.in to the
         callee; NRVO [analyzeNrvo, desugar] aliases a returned local's storage to
         %sret.in when EVERY return names the SAME exact-typed local — built in place,
-        not dtor'd, and `return L` becomes `ret void`.
+        not dtor'd, and `return L` becomes `ret void`. NRVO covers ANY sret return
+        [array/tuple/slid]: a hook return is one construct/destruct, a POD aggregate
+        elides the copy (and the cross-form `_$ret` temp NRVOs away too).
       - CALLER: a new decl of the exact type BUILDS IN PLACE [callee constructs the
         local directly]; an existing POD var OVERWRITES in place; an existing hook var
         / non-exact takes a temp + default-move fallback; a discarded call builds a
@@ -368,7 +370,7 @@ Phase 4 — types beyond primitives
     a tuple LITERAL returned as an array [`return (1,2,3)` for int[3]] builds an
     `[N x T]` value via emitExpr->emitArrayLiteralValue [an array has no `.slots`].
     Coverage: test_v2/function/return_fn.sl. Open follow-ups in todo.txt:
-    return-unnamed-temporary, disjoint-scope NRVO, POD-aggregate NRVO.)
+    return-unnamed-temporary, disjoint-scope NRVO.)
   * for-array (`for (var : arr)`)                                  LANDED
     (DESUGAR-stage lowering to kForLongStmt: resolve UNDERSTANDS it
     [understandForArray, retags kForArrayStmt], desugar's lowerForArray builds a

@@ -1803,15 +1803,19 @@ ast::Node* findLocalDecl(ast::Node& n, int id) {
     return nullptr;
 }
 
-// NRVO: if EVERY return of a hook-returning function is `return L` for the SAME
-// named local L of the exact return type, L IS the return value — construct it
+// NRVO: if EVERY return of an sret (non-primitive) function is `return L` for the
+// SAME named local L of the exact return type, L IS the return value — construct it
 // directly in the caller's slot (%sret.in) and never move/dtor it here. Mark L's
 // decl and each return `nrvo`; codegen aliases L's storage to %sret.in, skips its
-// destruction, and makes `return L` a bare `ret void`. Conservative: any other
-// return shape (rvalue / call / a different local — including disjoint-scope
-// multi-local `good()`) leaves the Phase B fallback in place (still correct).
+// destruction, and makes `return L` a bare `ret void`. Applies to a HOOK return
+// (one construct/destruct, the balance win) AND a POD aggregate / class (eliding the
+// avoidable copy into the slot). Conservative: any other return shape (rvalue / call
+// / a different local — including disjoint-scope multi-local `good()`) leaves the
+// Phase B fallback in place (still correct).
 void analyzeNrvo(ast::Node& fn) {
-    if (!returnTypeHasCtor(fn.return_type)) return;
+    using F = widen::Type::Form;
+    F f = widen::form(widen::strip(fn.return_type));
+    if (f != F::kArray && f != F::kTuple && f != F::kSlid) return;  // sret returns only
     std::vector<ast::Node*> returns;
     for (auto& ch : fn.children) if (ch) collectReturns(*ch, returns);
     if (returns.empty()) return;
