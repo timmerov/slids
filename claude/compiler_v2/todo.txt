@@ -31,24 +31,6 @@ BUGS
     Class( Other field(1,2,3) ) { }
     lean yes to both.
 
-  * ARRAY-NEW INTO A SINGLE REF, THEN SINGLE DELETE — `CtorDtor^ p = new CtorDtor[3];
-    delete p;` COMPILES (iterator->ref demotion is allowed) but CRASHES at runtime
-    (`munmap: invalid pointer`): the array alloc carries the 8-byte count cookie and
-    `delete` of a single ref frees the returned ptr, not ptr-8, and runs no per-elem
-    dtors. The correct `CtorDtor[] p = new CtorDtor[3]; delete p;` works (canon
-    construct.sl). Fix: reject `T^ = new T[n]` (or a single delete of a cookie'd
-    allocation) at compile time — a new[]/delete[] mismatch shouldn't reach codegen.
-
-  * POINTER-TO-POINTER TYPE SPELLING `int^^` — doesn't parse in a declaration / param
-    ("Expected variable name"); v1 handled it. The lexer greedily combines `^^` into
-    the logical-xor token (kXorXor), so the declarator's pointer-suffix loop (matches
-    single `^` = kBitXor, grammar.cpp ~298) stops at `int` and the `^^` lands where the
-    name is expected. Fix: in caret-wanting contexts (the type-suffix loop) treat a
-    kXorXor as TWO `^` (the classic `>>`-in-templates split); the binary-op parser
-    keeps `^^` as logical-xor. (Double address-of `^^x` is nonsensical — out of scope.)
-    Workaround: spell it `int^ ^` (a space splits the carets) — canon pointer/new.sl
-    uses this for the deref-delete test.
-
 
 BLOCKED FEATURES
 
@@ -291,6 +273,15 @@ REACH GOALS
 
 
 ASPIRATIONAL FEATURES (someday; low priority, may never land)
+
+  * this is a footgun. c++ has a similar issue. it's a bit easier with slids.
+    ARRAY-NEW INTO A SINGLE REF, THEN SINGLE DELETE — `CtorDtor^ p = new CtorDtor[3];
+    delete p;` COMPILES (iterator->ref demotion is allowed) but CRASHES at runtime
+    (`munmap: invalid pointer`): the array alloc carries the 8-byte count cookie and
+    `delete` of a single ref frees the returned ptr, not ptr-8, and runs no per-elem
+    dtors. The correct `CtorDtor[] p = new CtorDtor[3]; delete p;` works (canon
+    construct.sl). Fix: reject `T^ = new T[n]` (or a single delete of a cookie'd
+    allocation) at compile time — a new[]/delete[] mismatch shouldn't reach codegen.
 
   * REOPEN ENUMS — re-`enum SameName ( ... )` to add members to an existing
     enum (member names can't collide across openings). Open spec qs: does the

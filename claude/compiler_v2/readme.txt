@@ -728,7 +728,8 @@ STAGE FILES (.h / .cpp pairs)
             looksLikeQualifiedTypedDecl lookahead routes an identifier-typed decl
             to a var-decl (vs `Space:foo()` / `Space:kX = 1` / `p^ = v` /
             `arr[i] = v`, name-led statements): it scans the (qualified) name, an
-            OPTIONAL `^` (reference) or empty `[]` (iterator) suffix, then requires
+            OPTIONAL caret run (`^` = a reference level; `^^` is one logical-xor
+            token read as TWO levels) or empty `[]` (iterator) suffix, then requires
             the var name — so `Space:Dir x`, `Integer^ ref`, `Integer[] iter`,
             `Space:Dir^ d` all parse (a non-empty `[i]` is a subscript, not a
             suffix, so `arr[i] = v` stays a store; a bare `a ^ b` reads as a

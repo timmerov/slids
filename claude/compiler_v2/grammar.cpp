@@ -300,6 +300,14 @@ struct Parser {
                 type += "^";
                 outermost_sized = false;
                 closeRun();
+            } else if (peek().kind == token::Kind::kXorXor) {
+                // `^^` lexes as one logical-xor token; in a type-suffix position
+                // it is two pointer levels (`int^^`). A second closeRun() on the
+                // back-to-back level is a no-op.
+                advance();
+                type += "^^";
+                outermost_sized = false;
+                closeRun();
             } else {
                 break;
             }
@@ -470,10 +478,16 @@ struct Parser {
         // An optional reference (`^`) or iterator (`[]` — empty brackets only)
         // suffix, mirroring parseType. A non-empty `[i]` is a subscript, not a
         // type suffix, so it is left for the name-led store path.
-        if (peekKind(o) == token::Kind::kBitXor) {
+        // A run of reference carets — `^` is one level, `^^` (one logical-xor
+        // token) is two, and a 3+ run already lexed as separate `^` tokens.
+        bool any_caret = false;
+        while (peekKind(o) == token::Kind::kBitXor
+               || peekKind(o) == token::Kind::kXorXor) {
             o++;
-        } else if (peekKind(o) == token::Kind::kLBracket
-                   && peekKind(o + 1) == token::Kind::kRBracket) {
+            any_caret = true;
+        }
+        if (!any_caret && peekKind(o) == token::Kind::kLBracket
+            && peekKind(o + 1) == token::Kind::kRBracket) {
             o += 2;
         }
         return peekKind(o) == token::Kind::kIdentifier;
@@ -494,9 +508,12 @@ struct Parser {
             else if (k == token::Kind::kRParen) depth--;
             o++;
         }
-        if (peekKind(o) == token::Kind::kBitXor) o++;
-        else if (peekKind(o) == token::Kind::kLBracket
-                 && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
+        // A caret run (`^` = one level, `^^` = two) or a single `[]` iterator.
+        bool any_caret = false;
+        while (peekKind(o) == token::Kind::kBitXor
+               || peekKind(o) == token::Kind::kXorXor) { o++; any_caret = true; }
+        if (!any_caret && peekKind(o) == token::Kind::kLBracket
+            && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
         return peekKind(o) == token::Kind::kIdentifier;
     }
 
@@ -542,7 +559,7 @@ struct Parser {
         // expressions; just scan past balanced `[...]` (no nesting inside).
         for (;;) {
             token::Kind k = peekKind(o);
-            if (k == token::Kind::kBitXor) { o++; continue; }
+            if (k == token::Kind::kBitXor || k == token::Kind::kXorXor) { o++; continue; }
             if (k == token::Kind::kLBracket) {
                 int bd = 1;
                 o++;
@@ -1022,6 +1039,20 @@ struct Parser {
                 base = std::move(node);
                 continue;
             }
+            // `^^` is one logical-xor token; when it does NOT lead an operand it is
+            // a double dereference (`hdl^^`), emitted as two nested derefs.
+            if (peek().kind == token::Kind::kXorXor
+                && !startsPrimary(peekKind(1))) {
+                int op_file = peek().file_id;
+                int op_tok = pos;
+                advance();   // ^^
+                for (int i = 0; i < 2; i++) {
+                    auto node = newNodeAt(parse::Kind::kDerefExpr, op_file, op_tok);
+                    node->children.push_back(std::move(base));
+                    base = std::move(node);
+                }
+                continue;
+            }
             break;
         }
         if (base->kind == parse::Kind::kIdentExpr
@@ -1075,6 +1106,22 @@ struct Parser {
             auto node = newNodeAt(parse::Kind::kAddrOfExpr, op_file, op_tok);
             node->children.push_back(std::move(operand));
             return node;
+        }
+        // Prefix `^^` is two address-of levels. Double address-of is nonsensical
+        // (its operand is an rvalue), but parsing it as nested AddrOf lets resolve
+        // reject `^^x` with the same diagnostic as the equivalent `^^^x`.
+        if (k == token::Kind::kXorXor) {
+            int op_file = peek().file_id;
+            int op_tok = pos;
+            advance();   // ^^
+            auto operand = parseUnary();
+            if (!operand) return nullptr;
+            for (int i = 0; i < 2; i++) {
+                auto node = newNodeAt(parse::Kind::kAddrOfExpr, op_file, op_tok);
+                node->children.push_back(std::move(operand));
+                operand = std::move(node);
+            }
+            return operand;
         }
         // Prefix `#x` describes a postfix lvalue: it desugars HERE to the 5-tuple
         // `(##file, ##line, ##type(x), ##name(x), ^x)` — all of which already
@@ -1465,8 +1512,8 @@ struct Parser {
         };
 
         token::Kind next = peek().kind;
-        if (next == token::Kind::kBitXor || next == token::Kind::kLBracket
-            || next == token::Kind::kDot) {
+        if (next == token::Kind::kBitXor || next == token::Kind::kXorXor
+            || next == token::Kind::kLBracket || next == token::Kind::kDot) {
             // Lvalue-expression store: `name[i]... = rhs`, `name.field = rhs`, or
             // `name^ = rhs`. The bare name becomes a kIdentExpr, then the postfix
             // chain (subscripts, field accesses, and derefs, left to right) wraps
@@ -1480,6 +1527,7 @@ struct Parser {
             lhs->global_qualified = global;
             while (peek().kind == token::Kind::kLBracket
                    || peek().kind == token::Kind::kBitXor
+                   || peek().kind == token::Kind::kXorXor
                    || peek().kind == token::Kind::kDot) {
                 if (peek().kind == token::Kind::kLBracket) {
                     lhs = parseSubscript(std::move(lhs));   // comma-aware (transposes)
@@ -1512,12 +1560,16 @@ struct Parser {
                     advance();   // field name
                     lhs = std::move(f);
                 } else {
+                    // `^` is one deref, `^^` (one logical-xor token) is two.
+                    int levels = peek().kind == token::Kind::kXorXor ? 2 : 1;
                     int op_file = peek().file_id;
                     int op_tok = pos;
-                    advance();   // ^
-                    auto d = newNodeAt(parse::Kind::kDerefExpr, op_file, op_tok);
-                    d->children.push_back(std::move(lhs));
-                    lhs = std::move(d);
+                    advance();   // ^ or ^^
+                    for (int i = 0; i < levels; i++) {
+                        auto d = newNodeAt(parse::Kind::kDerefExpr, op_file, op_tok);
+                        d->children.push_back(std::move(lhs));
+                        lhs = std::move(d);
+                    }
                 }
             }
             // `obj.method(args);` — a method call. The chain's last step is the

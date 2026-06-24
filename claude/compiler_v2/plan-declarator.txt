@@ -65,7 +65,9 @@ spellable without parens:
 
 The current single-modifier suffix (the if/else-if/else-if) becomes a LOOP over
 wrappers. `[]` (empty brackets) is the iterator wrapper; `[N]` (with a size) is a
-dimension — the parser already distinguishes them by emptiness.
+dimension — the parser already distinguishes them by emptiness. A `^^` (lexed as
+ONE logical-xor token) counts as TWO reference levels in the loop, so `int^^`
+spells a pointer-to-pointer; a 3+ caret run already arrives as single `^` tokens.
 
 No parens are EVER required to disambiguate the postfix chain (postfix,
 left-associative, no precedence to resolve). Parens are only needed to scope a
@@ -206,6 +208,8 @@ The dereference / subscript operators are the inverse of the wrappers:
   [i]    (subscript)     peels an array dimension.
   ^      (prefix addr)   adds a wrapper: addr-of a bare lvalue -> reference (T^);
                          addr-of an indexed element -> iterator (T[]).
+  ^^     (either side)   two carets: `p^^` peels two wrappers; `^^x` adds two
+                         (nonsensical — same operand-error as `^^^x`).
 
   int[3]^ v;   v       : int[3]^   the reference (base address of the array)
                v^      : int[3]    peels ^  -> the array, located at that address

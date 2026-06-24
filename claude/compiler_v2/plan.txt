@@ -217,7 +217,12 @@ Phase 4 — types beyond primitives
     (kAddrOfExpr `^var` -> reference, kDerefExpr `v^` deref as lvalue+rvalue,
     kNullptrLiteral -> anyptr; `^` lexes as kBitXor, disambiguated structurally:
     prefix=address-of, postfix=deref [unless the next token starts a primary,
-    then it's XOR], type-suffix=reference. kStoreStmt is the general lvalue-
+    then it's XOR], type-suffix=reference. `^^` lexes as ONE kXorXor token but is
+    read as TWO carets in every caret-wanting position (type-suffix `int^^`,
+    postfix/store deref `p^^`, prefix addr-of `^^x`, the decl lookaheads); only a
+    kXorXor LEADING an operand stays logical-xor. `^^x` (double addr-of) errors
+    identically to `^^^x`; a 3+ caret run already lexes as single `^` tokens.
+    kStoreStmt is the general lvalue-
     expression store [`ref^ = v`]. Compare-only `== !=` [v1 rule]; ordering and
     all arithmetic rejected. Both lower to LLVM `ptr`.)
   * iterators (`T[]`, additive arithmetic)                          LANDED
