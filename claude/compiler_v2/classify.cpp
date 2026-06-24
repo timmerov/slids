@@ -3125,8 +3125,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             return;
         }
         case parse::Kind::kDeleteStmt: {
-            // delete p; — p must be a pointer (reference / iterator). resolve
-            // already checked it is a variable lvalue.
+            // delete <ptr>; — the operand must be a pointer (reference / iterator);
+            // any pointer expression is allowed (lvalue nulled back, rvalue freed).
             parse::Node& operand = *s.children[0];
             inferExpr(tree, operand, widen::kNoType, diag);
             if (operand.inferred_type != widen::kNoType

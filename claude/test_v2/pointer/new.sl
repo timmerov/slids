@@ -27,7 +27,7 @@ claude says:
   the element type, an optional `[n]` size. children[0] = the array-size expr (or
   null = single), [1] = the placement-address expr (or null = heap). yields T^
   (single) or T[] (array). the `new T(value)` initializer form needs tuples — not
-  landed. a kDeleteStmt holds the pointer variable in children[0].
+  landed. a kDeleteStmt holds the pointer EXPRESSION in children[0].
 - placement vs type after `new (`: today a `(` always opens a placement address
   (no type spelling starts with `(` yet); when anonymous tuples `(T1,T2)` or
   const-pointer `(const T)^` land, this needs a placement-vs-type lookahead (a
@@ -35,8 +35,9 @@ claude says:
 - classify: a heap element must be statically sized (widen::typeByteSize >= 0 —
   Phase 4 primitives; a slid -> "Cannot allocate"); an array size must be
   integer-class; a placement address must be a buffer-class pointer (void^ /
-  int8^ / uint8^, the same set as casts). delete's operand must be a pointer
-  variable (resolve: a variable lvalue; classify: a pointer type).
+  int8^ / uint8^, the same set as casts). delete's operand is ANY pointer
+  EXPRESSION (classify: a pointer type); an LVALUE (variable / field / element /
+  slot / deref) is nulled back, an RVALUE (call return / op result) is freed only.
 - codegen: `new T` -> malloc(sizeof(T)); `new T[n]` -> malloc(n * sizeof(T));
   placement -> the address itself (no allocation — for primitives nothing is
   constructed). delete -> load the pointer, free(it), store null back. malloc /
@@ -59,6 +60,10 @@ Simple(int x_ = -2) {
 // without the cookie/hook machinery, and multi-field construction.
 Plain(int a_ = 9, int b_ = 8) {
 }
+
+// returns a heap pointer — delete of the RETURN VALUE is an rvalue (freed, nothing
+// to null).
+int^ allocInt() { return new int; }
 
 int32 main() {
     /* heap single: new T -> T^. */
@@ -172,6 +177,22 @@ int32 main() {
     delete z;
     __println("empty array ok");
 
+    /* delete takes ANY pointer expression, not just a variable: a NON-variable
+       lvalue (array element / tuple slot) is freed AND nulled back; an rvalue (a
+       call return) is freed with nothing to null. */
+    {
+        int^ ea[2] = (new int, new int);
+        delete ea[0];                                     // array element lvalue
+        __println("ea[0] null= " + (ea[0] == nullptr));   // true
+        delete ea[1];
+        (int^, int^) et = (new int, new int);
+        delete et[0];                                     // tuple slot lvalue
+        __println("et[0] null= " + (et[0] == nullptr));   // true
+        delete et[1];
+        delete allocInt();                                // rvalue (fn return)
+        __println("non-variable delete ok");
+    }
+
     /* compile errors — each uncommented in isolation by the negative runner. */
 
     //-EXPECT-ERROR: Cannot allocate 'void'
@@ -189,7 +210,9 @@ int32 main() {
     //int32 nint = 0;
     //delete nint;
 
-    //-EXPECT-ERROR: The operand of 'delete' must be a pointer variable
+    /* deleting a deref whose pointee is NOT a pointer is a non-pointer delete (delete
+       now takes any pointer EXPRESSION, so the restriction is the type, not the form). */
+    //-EXPECT-ERROR: Cannot delete a non-pointer value of type 'int'
     //int^ dp = new int;
     //delete dp^;
 

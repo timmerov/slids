@@ -472,7 +472,8 @@ Phase 4 — types beyond primitives
     (kNewExpr / kDeleteStmt. `new T` -> T^ (malloc sizeof(T)); `new T[n]` -> T[]
     (malloc n*sizeof(T), n a RUNTIME expr); `new(addr) T[n]` -> placement, no
     alloc, the result is addr (addr a buffer-class pointer void^/int8^/uint8^);
-    `delete p` -> free(p) + store null (p a variable lvalue). classify: element
+    `delete p` -> free(p) + store null (p any pointer lvalue; an rvalue is freed
+    only). classify: element
     must be statically sized [widen::typeByteSize >= 0; void/slid -> "Cannot
     allocate"], array size integer-class, placement addr buffer-class, delete
     operand a pointer. malloc/free declared in the preamble. test_v2/pointer/new.sl.
@@ -481,7 +482,9 @@ Phase 4 — types beyond primitives
     [runs the ctor]; `new T[n]` field-inits each element + the new[]/delete[] COUNT
     COOKIE [8-byte header, returned ptr = malloc+8] + a ctor loop [hook class];
     `delete` runs the dtor [single null-guarded; array reverse-loops via the cookie,
-    frees ptr-8]; placement constructs at the buffer; explicit `lvalue.~()`
+    frees ptr-8] on ANY pointer expression — an lvalue [var / field / element / slot /
+    deref] is nulled back, an rvalue [call return] is freed only [so a class dtor can
+    `delete` a field it owns, RAII]; placement constructs at the buffer; explicit `lvalue.~()`
     [kDtorCallStmt] runs the dtor with no free. Grammar TODO seam: `(` after `new` =
     placement only while no type spelling starts with `(`; revisit when tuples /
     `(const T)^` land.)

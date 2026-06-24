@@ -80,6 +80,18 @@ CtorDtor(int c_) {
     }
 }
 
+/* RAII: a class that frees a heap resource it owns in its destructor — `delete` of a
+   FIELD (delete takes any pointer lvalue, not just a variable). */
+Resource(int^ data_) {
+    _() {
+        __println("Resource:ctor");
+    }
+    ~() {
+        __println("Resource:dtor");
+        delete data_;
+    }
+}
+
 ForwardCtorDtor(int d_) {
     /* ctor/dtor forward declaration. */
     _();
@@ -341,6 +353,13 @@ int32 main() {
         __println("new/delete: expect ctor/dtor 50.");
         CtorDtor^ p = new CtorDtor(50);
         delete p;
+    }
+
+    /* RAII: a class's dtor frees a heap field it owns (delete of a field). */
+    {
+        __println("RAII: expect Resource ctor then dtor.");
+        int^ d = new int;
+        Resource r(d);
     }
 
     /* heap ARRAY of ctor class — `new T[n]` default-constructs each element (the

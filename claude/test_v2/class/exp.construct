@@ -111,6 +111,9 @@ CtorDtor:dtor: 91
 new/delete: expect ctor/dtor 50.
 CtorDtor:ctor: 50
 CtorDtor:dtor: 50
+RAII: expect Resource ctor then dtor.
+Resource:ctor
+Resource:dtor
 new[]/delete: expect ctors 0,0,0 then dtors 0,0,0.
 CtorDtor:ctor: 0
 CtorDtor:ctor: 0

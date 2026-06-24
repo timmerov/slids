@@ -2244,24 +2244,32 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             return;
         }
         case ast::Kind::kDeleteStmt: {
-            // delete p; — load the pointer, free it, store null back. resolve
-            // guaranteed the operand is a variable; classify, a pointer type.
+            // delete <ptr>; — free the pointer (running the dtor / per-element dtors
+            // for a hook pointee), then null the operand back IFF it is an lvalue.
+            // The operand is any pointer EXPRESSION (classify checked the type): a
+            // variable / field / array element / tuple slot / deref is an LVALUE
+            // (nulled back); a call return / op result is an RVALUE (freed only).
             ast::Node const& operand = *stmt.children[0];
-            assert(operand.kind == ast::Kind::kIdentExpr
-                && operand.resolved_entry_id >= 0
-                && "kDeleteStmt: operand must be a resolved variable");
-            auto it = syms.find(operand.resolved_entry_id);
-            assert(it != syms.end() && "kDeleteStmt: operand not in SymTab");
-            std::string p = newTmp("del");
-            out << "  " << p << " = load ptr, ptr " << it->second.alloca_name
-                << "\n";
-            widen::TypeRef pts = widen::strip(it->second.slids_type);
+            widen::TypeRef pts = widen::strip(operand.inferred_type);
             widen::Type::Form pf = widen::form(pts);
             widen::TypeRef pointee = (pf == widen::Type::Form::kPointer
                                    || pf == widen::Type::Form::kIterator)
                 ? widen::get(pts).pointee : widen::kNoType;
             bool needs = pointee != widen::kNoType
                 && typeNeedsHook(pointee, /*ctor=*/false);
+            // The pointer value to free: from the lvalue's address (computed ONCE so
+            // a side-effecting operand like `arr[bump()]` runs once), or evaluated
+            // directly for an rvalue.
+            bool del_lvalue = isAstLvalue(operand);
+            std::string del_addr;
+            std::string p;
+            if (del_lvalue) {
+                del_addr = emitLvalueAddr(operand, syms, pool, out, diag);
+                p = newTmp("del");
+                out << "  " << p << " = load ptr, ptr " << del_addr << "\n";
+            } else {
+                p = emitExpr(operand, syms, pool, out, diag, operand.inferred_type);
+            }
             if (pf == widen::Type::Form::kIterator && needs) {
                 // Array of a hook class: the element count is in an 8-byte cookie at
                 // ptr-8 (laid down by new[]). Destroy each element in REVERSE, then
@@ -2322,7 +2330,10 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 }
                 out << "  call void @free(ptr " << p << ")\n";
             }
-            out << "  store ptr null, ptr " << it->second.alloca_name << "\n";
+            // Null the operand back — only an lvalue has storage to null (an rvalue
+            // pointer was a temporary).
+            if (del_lvalue)
+                out << "  store ptr null, ptr " << del_addr << "\n";
             return;
         }
         case ast::Kind::kDtorCallStmt: {

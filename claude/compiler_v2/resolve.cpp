@@ -2399,29 +2399,15 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             }
             return Completion::Normal;
         case parse::Kind::kDeleteStmt: {
-            // delete p; — frees p and nulls it. Resolve the operand as a read (you
-            // can't delete an uninitialized pointer; the free reads it), then
-            // require it be a plain variable lvalue (delete writes null back to
-            // it). It stays initialized (now null). classify checks it is a
-            // pointer type.
+            // delete <ptr>; — frees the pointer and, if it is an LVALUE, nulls it
+            // back. The operand is ANY pointer EXPRESSION: a variable / field / array
+            // element / tuple slot / deref (an lvalue, nulled back), or a call return
+            // / op result (an rvalue, freed only). resolveExpr resolves it as a read
+            // (you can't delete an uninitialized pointer; the free reads it); classify
+            // checks it is a pointer type. A bad operand (non-pointer, wrong-kind
+            // name) is reported by resolveExpr / classify.
             parse::Node& operand = *s.children[0];
             resolveExpr(tree, operand, diag);
-            // An unresolved bare name was already reported by resolveExpr — don't
-            // cascade a second "must be a pointer variable" onto it.
-            if (operand.kind == parse::Kind::kIdentExpr
-                && operand.resolved_entry_id < 0) {
-                return Completion::Normal;
-            }
-            // Otherwise the operand must be a plain variable lvalue (a non-ident
-            // expression, or an ident resolving to a const / function / namespace,
-            // is rejected). The id is >= 0 here, so the entry access is safe.
-            bool is_var = operand.kind == parse::Kind::kIdentExpr
-                && tree.entries[operand.resolved_entry_id].kind
-                       == parse::EntryKind::kLocalVar;
-            if (!is_var) {
-                diagnostic::report(diag, {operand.file_id, operand.tok,
-                    "The operand of 'delete' must be a pointer variable.", {}});
-            }
             return Completion::Normal;
         }
         case parse::Kind::kDtorCallStmt: {

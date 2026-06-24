@@ -31,14 +31,6 @@ BUGS
     Class( Other field(1,2,3) ) { }
     lean yes to both.
 
-  * DELETE A CLASS FIELD (blocks RAII dtor) — `delete p_` inside a `~()` (or any
-    member) errors "The operand of 'delete' must be a pointer variable": the field ref
-    lowers to `self.p_` (a field access) and delete only accepts a bare pointer
-    VARIABLE (intended per pointer/new.sl, but blocks RAII). So a class can't free a
-    heap resource it owns in its destructor (the classic RAII pattern). Fix: accept a
-    field — and other pointer LVALUEs — as the delete operand (compute the address,
-    free, null it).
-
   * ARRAY-NEW INTO A SINGLE REF, THEN SINGLE DELETE — `CtorDtor^ p = new CtorDtor[3];
     delete p;` COMPILES (iterator->ref demotion is allowed) but CRASHES at runtime
     (`munmap: invalid pointer`): the array alloc carries the 8-byte count cookie and

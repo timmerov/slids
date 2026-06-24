@@ -554,10 +554,16 @@ CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
     count COOKIE (the returned pointer is malloc+8) and runs the ctor per element.
     The cookie + ctor-hook gate on needs; the field-init does not (a trivial class
     still has field defaults). A primitive array stays a plain malloc.
-  * DELETE — single (T^): null-guarded dtor (free(null) is safe; the dtor on null
-    derefs), then free. Array (T[]) of a hook class: read the count at ptr-8, run the
-    dtor on each element in REVERSE, free ptr-8. A primitive / trivial-class pointer
-    is a plain free. Gated on typeNeedsHook(pointee).
+  * DELETE — operand is ANY pointer expression. For an LVALUE (variable / field /
+    array element / tuple slot / deref) codegen takes its address ONCE (emitLvalueAddr
+    — so `delete arr[bump()]` runs the index once), frees, and stores null BACK
+    through that address; an RVALUE (a call return / op result) is freed with no
+    null-back (a temporary has no storage). The free itself: single (T^) —
+    null-guarded dtor (free(null) is safe; the dtor on null derefs), then free; array
+    (T[]) of a hook class — read the count at ptr-8, run the dtor on each element in
+    REVERSE, free ptr-8; a primitive / trivial-class pointer is a plain free (gated on
+    typeNeedsHook(pointee)). This makes a class's dtor able to `delete` a field it owns
+    (RAII).
   * EXPLICIT DESTRUCTOR `lvalue.~()` — a kDtorCallStmt (grammar: `.` then `~` in the
     name-led lvalue chain — a destructor call, not a field). codegen runs
     emitDestructHooks on the receiver's address with NO free / no null (placement
@@ -888,10 +894,9 @@ STAGE FILES (.h / .cpp pairs)
             alias-resolves + validates the element type (resolveDeclType) and
             resolves the size / placement-address sub-expressions as value reads.
             kDeleteStmt resolves its operand as a read (you can't delete an
-            uninitialized pointer) and requires it be a variable lvalue — an
-            UNRESOLVED ident is left to resolveExpr's own "Unresolved identifier"
-            (no cascading "must be a pointer variable"); a resolved non-variable
-            (const / function / a non-ident expr) is rejected here.
+            uninitialized pointer); the operand is ANY pointer expression (classify
+            checks the pointer type). An UNRESOLVED ident / wrong-kind name is
+            reported by resolveExpr / classify.
             Owns namespaces: a kNamespace entry has a persistent frame
             identity that reopens reuse; members ride the enclosing lexical
             lifetime, tagged by owning namespace. Bare lookup walks the open-

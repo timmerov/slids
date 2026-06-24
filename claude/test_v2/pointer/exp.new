@@ -37,3 +37,6 @@ Simple:ctor: 5
 Simple:dtor: 99
 survived null delete
 empty array ok
+ea[0] null= true
+et[0] null= true
+non-variable delete ok
