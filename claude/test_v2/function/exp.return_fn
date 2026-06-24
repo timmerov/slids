@@ -70,8 +70,6 @@ w2= 1 2
 ctor 3
 cs= 3
 ctor 1
-ctor 1
-dtor 1
 g= 1
 ctor 1
 ctor 2
@@ -79,6 +77,16 @@ ctor 2
 dtor 2
 dtor 1
 bd= 2
+ctor 1
+g2= 1
+ctor 1
+ctor 2
+ctor 2
+dtor 2
+dtor 1
+bd2= 2
+dtor 2
+dtor 1
 dtor 2
 dtor 1
 dtor 3

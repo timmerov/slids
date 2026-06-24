@@ -221,12 +221,17 @@ Class[3] mkArrC() { Class a[3] = (10, 20, 30); return a; }
 int[3] retLit() { return (1, 2, 3); }
 int sumPair((int, int)^ p) { return p^[0] + p^[1]; }
 
-// NRVO variants: the SAME local returned from two paths (NRVO applies); and
-// multi-local returns — disjoint scopes (good) and overlapping (bad) — which both
-// fall back to a move (correct; the disjoint case is a deferred NRVO refinement).
+// NRVO variants: the SAME local returned from two paths (NRVO applies); a disjoint
+// multi-local return (good — different local per path, never coexisting → each NRVOs
+// into the shared slot); and an overlapping multi-local return (bad — both locals
+// alive at once → falls back to a move).
 Class condSame(bool b) { Class c(3); if (b) { return c; } return c; }
 Class pickGood(bool b) { if (b) { Class p(1); return p; } Class q(2); return q; }
 Class pickBad(bool b) { Class a(1); Class b2(2); if (b) { return a; } return b2; }
+// if/else disjoint (the canonical good()) — both locals NRVO into the shared slot.
+Class pickGood2(bool b) { if (b) { Class p(1); return p; } else { Class q(2); return q; } }
+// overlap via an OUTER local alive during the inner-else local — both fall back.
+Class pickBad2(bool b) { Class a(1); if (b) { return a; } else { Class b2(2); return b2; } }
 
 int32 main() {
 
@@ -314,8 +319,9 @@ int32 main() {
         __println("w2= " + w2[0] + " " + w2[1]);                // 1 2
     }
 
-    /* NRVO with two returns of the SAME local; multi-local disjoint (good) and
-       overlapping (bad) — both correct via the fallback. */
+    /* NRVO with two returns of the SAME local (cs); a disjoint multi-local return
+       (g — NRVO'd, one object); and an overlapping multi-local return (bd — falls
+       back to a move, two objects). */
     __println("-- nrvo variants --");
     {
         Class cs = condSame(true);
@@ -324,6 +330,10 @@ int32 main() {
         __println("g= " + g.id_);                               // 1
         Class bd = pickBad(false);
         __println("bd= " + bd.id_);                             // 2
+        Class g2 = pickGood2(true);                            // if/else disjoint -> NRVO
+        __println("g2= " + g2.id_);                             // 1
+        Class bd2 = pickBad2(false);                           // outer-alive -> fallback
+        __println("bd2= " + bd2.id_);                           // 2
     }
 
     /* NESTED inline calls — idOf(bump(^a)): the inner call is lifted, the result

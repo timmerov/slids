@@ -1803,15 +1803,87 @@ ast::Node* findLocalDecl(ast::Node& n, int id) {
     return nullptr;
 }
 
-// NRVO: if EVERY return of an sret (non-primitive) function is `return L` for the
-// SAME named local L of the exact return type, L IS the return value — construct it
-// directly in the caller's slot (%sret.in) and never move/dtor it here. Mark L's
-// decl and each return `nrvo`; codegen aliases L's storage to %sret.in, skips its
-// destruction, and makes `return L` a bare `ret void`. Applies to a HOOK return
-// (one construct/destruct, the balance win) AND a POD aggregate / class (eliding the
-// avoidable copy into the slot). Conservative: any other return shape (rvalue / call
-// / a different local — including disjoint-scope multi-local `good()`) leaves the
-// Phase B fallback in place (still correct).
+bool nrvoContains(std::vector<int> const& v, int x) {
+    for (int e : v) if (e == x) return true;
+    return false;
+}
+
+// A `return X` whose X is one of the candidate returned-locals.
+bool isNrvoLocalReturn(ast::Node const& r, std::vector<int> const& candidates,
+                       int& out_id) {
+    if (r.children.empty() || !r.children[0]) return false;
+    ast::Node const& rv = *r.children[0];
+    if (rv.kind != ast::Kind::kIdentExpr) return false;
+    if (!nrvoContains(candidates, rv.resolved_entry_id)) return false;
+    out_id = rv.resolved_entry_id;
+    return true;
+}
+
+// Scope walk computing NRVO INELIGIBILITY. `live` = candidate returned-locals
+// currently in scope (popped at each block's end). A candidate is ineligible if it
+// can't safely share the single %sret.in slot — i.e. its lifetime overlaps another
+// returned-local's (caught at a decl while the other is live), or it is live at a
+// SLOT-WRITING return (an rvalue / call / param / non-exact return that writes
+// %sret.in directly, which would clobber it). Checking DECL-point liveness (not just
+// return points) is what makes good() eligible and both bad() shapes ineligible.
+void nrvoOverlapWalk(std::vector<std::unique_ptr<ast::Node>>& stmts,
+                     std::vector<int> const& candidates,
+                     std::vector<int>& live, std::vector<int>& ineligible) {
+    auto mark = [&](int id) {
+        if (!nrvoContains(ineligible, id)) ineligible.push_back(id);
+    };
+    std::vector<int> declared_here;
+    for (auto& s : stmts) {
+        if (!s) continue;
+        ast::Kind k = s->kind;
+        if (k == ast::Kind::kVarDeclStmt
+            && nrvoContains(candidates, s->resolved_entry_id)) {
+            int L = s->resolved_entry_id;
+            for (int m : live) { mark(L); mark(m); }   // L coexists with every live M
+            live.push_back(L);
+            declared_here.push_back(L);
+        } else if (k == ast::Kind::kReturnStmt) {
+            int id;
+            if (!isNrvoLocalReturn(*s, candidates, id))     // slot-writing return
+                for (int m : live) mark(m);
+        } else if (k == ast::Kind::kBlockStmt) {
+            nrvoOverlapWalk(s->children, candidates, live, ineligible);
+        } else if (k == ast::Kind::kIfStmt || k == ast::Kind::kWhileStmt
+                || k == ast::Kind::kDoWhileStmt || k == ast::Kind::kForLongStmt) {
+            for (std::size_t i = 1; i < s->children.size(); i++) {
+                if (!s->children[i]) continue;
+                if (s->children[i]->kind == ast::Kind::kBlockStmt) {
+                    nrvoOverlapWalk(s->children[i]->children, candidates, live,
+                                    ineligible);
+                } else if (s->children[i]->kind == ast::Kind::kIfStmt) {
+                    std::vector<std::unique_ptr<ast::Node>> one;
+                    one.push_back(std::move(s->children[i]));
+                    nrvoOverlapWalk(one, candidates, live, ineligible);
+                    s->children[i] = std::move(one[0]);
+                }
+            }
+        } else if (k == ast::Kind::kSwitchStmt) {
+            for (std::size_t i = 1; i < s->children.size(); i++) {
+                if (s->children[i] && s->children[i]->children.size() > 1
+                    && s->children[i]->children.back())
+                    nrvoOverlapWalk(s->children[i]->children.back()->children,
+                                    candidates, live, ineligible);
+            }
+        }
+    }
+    for (int L : declared_here)
+        for (std::size_t i = 0; i < live.size(); i++)
+            if (live[i] == L) { live.erase(live.begin() + i); break; }
+}
+
+// NRVO: a returned local L of the EXACT return type whose lifetime is DISJOINT from
+// every other returned-local (and from any slot-writing return) IS the return value
+// — alias its storage to %sret.in, build it in place, never move/dtor it here. Mark
+// L's decl + each `return L` `nrvo` (codegen makes them a bare `ret void`). Multiple
+// disjoint locals (good(): different local per arm) all share %sret.in safely — only
+// one is live per path. Overlapping locals (bad()) fall back to the move. Applies to
+// hook returns (one construct/destruct) and POD aggregates / classes (eliding the
+// copy). Exactness keeps cross-form returns on the `_$ret` path.
 void analyzeNrvo(ast::Node& fn) {
     using F = widen::Type::Form;
     F f = widen::form(widen::strip(fn.return_type));
@@ -1819,22 +1891,37 @@ void analyzeNrvo(ast::Node& fn) {
     std::vector<ast::Node*> returns;
     for (auto& ch : fn.children) if (ch) collectReturns(*ch, returns);
     if (returns.empty()) return;
-    int local = -1;
+    // Candidate returned-locals: `return L` for a bare ident of the EXACT return type
+    // backed by a real local decl (a param has its own incoming storage — can't
+    // alias to the slot, so a `return param` is a slot-writing return).
+    std::vector<int> candidates;
     for (ast::Node* r : returns) {
-        if (r->children.empty() || !r->children[0]) return;
+        if (r->children.empty() || !r->children[0]) continue;
         ast::Node const& rv = *r->children[0];
-        if (rv.kind != ast::Kind::kIdentExpr || rv.resolved_entry_id < 0) return;
+        if (rv.kind != ast::Kind::kIdentExpr || rv.resolved_entry_id < 0) continue;
         if (widen::deepStrip(rv.inferred_type) != widen::deepStrip(fn.return_type))
-            return;
-        if (local < 0) local = rv.resolved_entry_id;
-        else if (local != rv.resolved_entry_id) return;
+            continue;
+        if (nrvoContains(candidates, rv.resolved_entry_id)) continue;
+        ast::Node* decl = nullptr;
+        for (auto& ch : fn.children)
+            if (ch) { decl = findLocalDecl(*ch, rv.resolved_entry_id); if (decl) break; }
+        if (decl) candidates.push_back(rv.resolved_entry_id);
     }
-    ast::Node* decl = nullptr;
-    for (auto& ch : fn.children)
-        if (ch) { decl = findLocalDecl(*ch, local); if (decl) break; }
-    if (!decl) return;   // a param, or no plain decl — can't alias to the slot
-    decl->nrvo = true;
-    for (ast::Node* r : returns) r->nrvo = true;
+    if (candidates.empty()) return;
+    std::vector<int> live, ineligible;
+    nrvoOverlapWalk(fn.children, candidates, live, ineligible);
+    for (int L : candidates) {
+        if (nrvoContains(ineligible, L)) continue;
+        ast::Node* decl = nullptr;
+        for (auto& ch : fn.children)
+            if (ch) { decl = findLocalDecl(*ch, L); if (decl) break; }
+        if (decl) decl->nrvo = true;
+    }
+    for (ast::Node* r : returns) {
+        int id;
+        if (isNrvoLocalReturn(*r, candidates, id) && !nrvoContains(ineligible, id))
+            r->nrvo = true;
+    }
 }
 
 // Splice a pre/post entry as a sibling statement. A scalar bump is a kBumpExpr

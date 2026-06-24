@@ -306,11 +306,17 @@ NON-PRIMITIVE RETURN — sret + RVO / NRVO (landed; [[project_aggregate_return_r
   it (the caller owns the dtor). Primitive / pointer returns are unchanged (by value).
 
   * FUNCTION side (kReturnStmt, when isSretReturn(fn_return_type)):
-    - NRVO (the common case): if EVERY return is `return L` for the SAME named local
-      L of the exact return type, desugar::analyzeNrvo marks L's decl + each return
-      `nrvo`. codegen then gives L NO alloca (its storage IS %sret.in), constructs it
+    - NRVO: a returned local L of the exact return type whose lifetime is DISJOINT
+      from every other returned local (and from any slot-writing return) is built
+      directly in %sret.in. desugar::analyzeNrvo computes ineligibility by a scope walk
+      (a candidate is out if another returned-local is live at its decl, or it is live
+      at a slot-writing return — decl-point liveness, so good()/q-after-if/if-else are
+      eligible and both bad() shapes are not), then marks each eligible L's decl + its
+      `return L` `nrvo`. codegen gives L NO alloca (its storage IS %sret.in), builds it
       in place, does NOT register it for destruction, and `return L` is a bare
-      `ret void`. Applies to ANY sret return (analyzeNrvo gates on array/tuple/slid):
+      `ret void`. MULTIPLE disjoint locals (good(): a different local per arm) all
+      alias %sret.in safely — only one is live per path; overlapping locals (bad())
+      fall back to the move. Applies to ANY sret return (analyzeNrvo gates on array/tuple/slid):
       a HOOK return becomes one construct / one destruct (the caller's); a POD
       aggregate / class elides the copy into the slot. The cross-form / leaf-widen
       case rides along too — the `_$ret` temp desugar materializes is itself a single
@@ -337,8 +343,9 @@ NON-PRIMITIVE RETURN — sret + RVO / NRVO (landed; [[project_aggregate_return_r
       "Returning a class by value in an expression position is not yet supported"
       rather than miscompiled.
   POD-aggregate returns ride the same sret ABI (behavior-neutral vs the old by-value
-  return) and NRVO too (eliding the copy). Open follow-ups (todo.txt): returning an
-  unnamed temporary; disjoint-scope NRVO. Canon: test_v2/function/return_fn.sl.
+  return) and NRVO too (eliding the copy). Open follow-up (todo.txt): returning an
+  unnamed temporary (`return Class(7)` — a front-end gap). Canon:
+  test_v2/function/return_fn.sl.
 
 ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
 

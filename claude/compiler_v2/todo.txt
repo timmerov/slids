@@ -31,15 +31,6 @@ BUGS
     Class( Other field(1,2,3) ) { }
     lean yes to both.
 
-  * DISJOINT-SCOPE NRVO (good()) — when a function returns DIFFERENT locals from
-    disjoint sibling scopes (`if (b) { Class p; return p; } else { Class q; return
-    q; }`), each could be built directly in %sret.in (only one is ever live), but
-    analyzeNrvo (desugar) only fires when EVERY return names the SAME local, so good()
-    falls back to the Phase-B move (correct, one extra object). Fix: an overlap
-    analysis — a returned local is NRVO-eligible iff no OTHER returned local's
-    lifetime overlaps it; disjoint scopes don't, the bad() same-scope case does.
-    Canon: test_v2/function/return_fn.sl pickGood/pickBad (both pass via fallback).
-
 
 BLOCKED FEATURES
 
