@@ -1394,10 +1394,10 @@ struct Parser {
         node->is_const = is_const;
         if (peek().kind == token::Kind::kEquals
             || peek().kind == token::Kind::kArrowLeft) {
-            // `<--` is a move-init: the same copy as `=`, then desugar nulls the
+            // `<--` is a default-move-init: the same copy as `=`, then desugar nulls the
             // init's pointer leaves. (`<-->` swap needs two existing values, so
             // it is not a declaration form.)
-            node->move_init = (peek().kind == token::Kind::kArrowLeft);
+            node->default_move_init = (peek().kind == token::Kind::kArrowLeft);
             advance();
             auto init = parseExpr();
             if (!init) return nullptr;

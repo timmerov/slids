@@ -343,6 +343,28 @@ Phase 4 — types beyond primitives
     [test_v2/misc/bug.sl: `(Class,Class) tuple('a','b')` runs ctors a,b / dtors b,a].
     This is [[project_aggregate_return_roadmap]] step 2 [tuple of classes].
     Coverage: test_v2/tuple/combined.sl.)
+  * non-primitive RETURN via sret (+ RVO / NRVO)                   LANDED
+    ([[project_aggregate_return_roadmap]] step 3.) A function returning a class /
+    array / tuple is emitted `void @fn(ptr %sret.in, ...)` and CONSTRUCTS its result
+    into the caller's slot, never destructing it (the caller owns the dtor). Both
+    sides land a correct FALLBACK first, then optimize:
+      - FUNCTION: each `return E` default-move-inits %sret.in (field-move + ctor),
+        unwinding the OTHER scope locals; a return-OF-call forwards %sret.in to the
+        callee; NRVO [analyzeNrvo, desugar] aliases a returned local's storage to
+        %sret.in when EVERY return names the SAME exact-typed local — built in place,
+        not dtor'd, and `return L` becomes `ret void`.
+      - CALLER: a new decl of the exact type BUILDS IN PLACE [callee constructs the
+        local directly]; an existing POD var OVERWRITES in place; an existing hook var
+        / non-exact takes a temp + default-move fallback; a discarded call builds a
+        temp and destroys it. A hook call in an INLINE (expression) position is lifted
+        to a `_$cret` temp decl in desugar [liftSretCallList]; the remaining inline
+        positions [store-rhs, loop/if condition, move/swap operand] error cleanly
+        pending a later lift. POD-aggregate returns ride the same sret ABI
+        (behavior-neutral vs the old by-value return).
+    Net: `Class x = mkClass()` is a single construct/destruct; ctor/dtor counts
+    balance at every position; the destroy-before-consume double-free is gone.
+    Coverage: test_v2/function/return_fn.sl. Open follow-ups in todo.txt:
+    return-unnamed-temporary, disjoint-scope NRVO, POD-aggregate NRVO.)
   * for-array (`for (var : arr)`)                                  LANDED
     (DESUGAR-stage lowering to kForLongStmt: resolve UNDERSTANDS it
     [understandForArray, retags kForArrayStmt], desugar's lowerForArray builds a
@@ -477,8 +499,8 @@ Phase 4 — types beyond primitives
     iterator leaf, recursing through nested tuples — the "fancy case"). An rvalue
     source has no leaves to null (move from a literal / addr-of is a pure copy).
     SWAP exchanges two EXACTLY-same-type lvalues via SSA temporaries (no stack
-    temp; whole-value load/store handles tuples). Forms: a move-init decl
-    (`T x <-- y`, the move_init flag) + statement; operand forms ident, array
+    temp; whole-value load/store handles tuples). Forms: a default-move-init decl
+    (`T x <-- y`, the default_move_init flag) + statement; operand forms ident, array
     element, tuple slot, CLASS FIELD (kFieldExpr — resolveMoveSwapLvalue accepts
     it, routing to resolveStoreTarget), deref, AND a SUB-AGGREGATE — a partial array
     index (sub-array row `g[i]`) or a tuple slot that is itself a tuple/array

@@ -312,7 +312,7 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     // declared `const` — its const-ness rides on its deep-const TYPE, not this flag.
     node->is_const = p.is_const && p.resolved_entry_id >= 0
         && tree.entries[p.resolved_entry_id].kind == parse::EntryKind::kConst;
-    node->move_init = p.move_init;
+    node->default_move_init = p.default_move_init;
     node->non_completing = p.non_completing;
     node->param_types = p.param_types;
     node->captures = p.captures;
@@ -1254,7 +1254,7 @@ std::unique_ptr<ast::Node> cloneAstExpr(ast::Node const& n) {
     c->value_index = n.value_index;
     c->loop_levels = n.loop_levels;
     c->is_const = n.is_const;
-    c->move_init = n.move_init;
+    c->default_move_init = n.default_move_init;
     c->non_completing = n.non_completing;
     c->param_types = n.param_types;
     c->captures = n.captures;
@@ -1537,7 +1537,7 @@ std::vector<std::unique_ptr<ast::Node>> lowerAggCopyStmt(ast::Node& s,
     std::unique_ptr<ast::Node> srcNode;        // moved out of s
 
     if (s.kind == ast::Kind::kVarDeclStmt) {
-        if (s.children.empty() || s.is_const || s.move_init) return repl;
+        if (s.children.empty() || s.is_const || s.default_move_init) return repl;
         // The declared type rides on the node (copyNode copies it; a desugar-minted
         // decl stamps it) — NEVER index tree.entries by a local's id (minted locals
         // have no entry; see the for-lowering INVARIANT).
@@ -1675,6 +1675,162 @@ void lowerAggregateList(std::vector<std::unique_ptr<ast::Node>>& stmts,
         }
     }
     stmts = std::move(out);
+}
+
+// A return type that constructs (a class with a ctor, or an aggregate with such a
+// leaf). Mirrors codegen::typeNeedsHook(ctor). Used to find calls whose result an
+// inline use can't destroy in place — they are lifted to a temp.
+bool returnTypeHasCtor(widen::TypeRef t) {
+    using F = widen::Type::Form;
+    widen::TypeRef s = widen::strip(t);
+    F f = widen::form(s);
+    if (f == F::kSlid) return widen::get(s).needs_ctor;
+    if (f == F::kArray) { widen::TypeRef e = widen::get(s).elem; return returnTypeHasCtor(e); }
+    if (f == F::kTuple) {
+        std::vector<widen::TypeRef> slots = widen::get(s).slots;   // copy: no intern
+        for (widen::TypeRef sl : slots) if (returnTypeHasCtor(sl)) return true;
+    }
+    return false;
+}
+
+// Lift hook-returning calls within `node` into `pre` temp decls, INSIDE-OUT (an
+// inner call lifts before its enclosing call, preserving evaluation order), each
+// replaced by an ident reading the temp. `root_intercepted` means `node` itself
+// sits at a position codegen already handles (the rhs of a decl/assign/return,
+// which constructs in place) — don't lift node itself, only its arg subtrees. The
+// minted `_$cret` decl is a class/aggregate init from a call, so codegen's
+// kVarDeclStmt sret intercept constructs it and registers it for destruction at the
+// enclosing scope; `take(mk())` becomes `Class _$cret = mk(); take(_$cret)`.
+void liftSretCallExprs(std::unique_ptr<ast::Node>& node,
+                       std::vector<std::unique_ptr<ast::Node>>& pre,
+                       int& next_id, bool root_intercepted) {
+    if (!node) return;
+    for (auto& ch : node->children)
+        liftSretCallExprs(ch, pre, next_id, false);
+    if (!root_intercepted && node->kind == ast::Kind::kCallExpr
+        && returnTypeHasCtor(node->return_type)) {
+        int file = node->file_id, tok = node->tok;
+        widen::TypeRef T = node->return_type;
+        int id = next_id++;
+        auto decl = std::make_unique<ast::Node>();
+        decl->kind = ast::Kind::kVarDeclStmt;
+        decl->name = "_$cret";
+        decl->resolved_entry_id = id;
+        decl->return_type = T;
+        decl->file_id = file;
+        decl->tok = tok;
+        decl->name_tok = tok;
+        decl->children.push_back(std::move(node));
+        pre.push_back(std::move(decl));
+        node = mintIdent("_$cret", id, T, file, tok);
+    }
+}
+
+// Walk a statement list, lifting hook-returning calls out of inline (expression)
+// positions into preceding temp decls. Mirrors lowerAggregateList's structural
+// descent into compound statements. A call at a codegen-handled root (decl/assign/
+// return rhs, or a discarded call statement) is left in place — only NESTED calls
+// (e.g. a call as another call's argument) are lifted. Loop / if conditions and
+// store/move/swap operands are NOT lifted (a hook call there still errors at
+// codegen, pending a later increment).
+void liftSretCallList(std::vector<std::unique_ptr<ast::Node>>& stmts, int& next_id) {
+    std::vector<std::unique_ptr<ast::Node>> out;
+    for (auto& stmt : stmts) {
+        if (!stmt) { out.push_back(nullptr); continue; }
+        ast::Kind k = stmt->kind;
+        if (k == ast::Kind::kBlockStmt) {
+            liftSretCallList(stmt->children, next_id);
+        } else if (k == ast::Kind::kIfStmt || k == ast::Kind::kWhileStmt
+                || k == ast::Kind::kDoWhileStmt || k == ast::Kind::kForLongStmt) {
+            for (std::size_t i = 1; i < stmt->children.size(); i++) {
+                if (!stmt->children[i]) continue;
+                if (stmt->children[i]->kind == ast::Kind::kBlockStmt) {
+                    liftSretCallList(stmt->children[i]->children, next_id);
+                } else if (stmt->children[i]->kind == ast::Kind::kIfStmt) {
+                    std::vector<std::unique_ptr<ast::Node>> one;
+                    one.push_back(std::move(stmt->children[i]));
+                    liftSretCallList(one, next_id);
+                    stmt->children[i] = std::move(one[0]);
+                }
+            }
+        } else if (k == ast::Kind::kSwitchStmt) {
+            for (std::size_t i = 1; i < stmt->children.size(); i++) {
+                if (stmt->children[i]
+                    && stmt->children[i]->children.size() > 1
+                    && stmt->children[i]->children.back()) {
+                    liftSretCallList(stmt->children[i]->children.back()->children,
+                                     next_id);
+                }
+            }
+        }
+        std::vector<std::unique_ptr<ast::Node>> pre;
+        if (k == ast::Kind::kVarDeclStmt || k == ast::Kind::kAssignStmt
+            || k == ast::Kind::kReturnStmt) {
+            // The direct rhs call is constructed in place by codegen — leave it
+            // (root_intercepted), but lift any NESTED call in its args.
+            if (!stmt->children.empty())
+                liftSretCallExprs(stmt->children[0], pre, next_id,
+                                  /*root_intercepted=*/true);
+        } else if (k == ast::Kind::kCallStmt) {
+            // The statement IS a (discarded) call codegen handles; lift its args.
+            for (auto& arg : stmt->children)
+                liftSretCallExprs(arg, pre, next_id, false);
+        } else if (k == ast::Kind::kExprStmt) {
+            if (!stmt->children.empty())
+                liftSretCallExprs(stmt->children[0], pre, next_id, false);
+        }
+        for (auto& d : pre) out.push_back(std::move(d));
+        out.push_back(std::move(stmt));
+    }
+    stmts = std::move(out);
+}
+
+// Collect kReturnStmt nodes in a body, NOT descending into nested function defs
+// (they own their own sret slot / returns).
+void collectReturns(ast::Node& n, std::vector<ast::Node*>& out) {
+    if (n.kind == ast::Kind::kFunctionDef || n.kind == ast::Kind::kFunctionDecl) return;
+    if (n.kind == ast::Kind::kReturnStmt) out.push_back(&n);
+    for (auto& ch : n.children) if (ch) collectReturns(*ch, out);
+}
+
+// Find the kVarDeclStmt declaring local `id` in a body (skip nested fns).
+ast::Node* findLocalDecl(ast::Node& n, int id) {
+    if (n.kind == ast::Kind::kFunctionDef || n.kind == ast::Kind::kFunctionDecl)
+        return nullptr;
+    if (n.kind == ast::Kind::kVarDeclStmt && n.resolved_entry_id == id) return &n;
+    for (auto& ch : n.children)
+        if (ch) { if (ast::Node* d = findLocalDecl(*ch, id)) return d; }
+    return nullptr;
+}
+
+// NRVO: if EVERY return of a hook-returning function is `return L` for the SAME
+// named local L of the exact return type, L IS the return value — construct it
+// directly in the caller's slot (%sret.in) and never move/dtor it here. Mark L's
+// decl and each return `nrvo`; codegen aliases L's storage to %sret.in, skips its
+// destruction, and makes `return L` a bare `ret void`. Conservative: any other
+// return shape (rvalue / call / a different local — including disjoint-scope
+// multi-local `good()`) leaves the Phase B fallback in place (still correct).
+void analyzeNrvo(ast::Node& fn) {
+    if (!returnTypeHasCtor(fn.return_type)) return;
+    std::vector<ast::Node*> returns;
+    for (auto& ch : fn.children) if (ch) collectReturns(*ch, returns);
+    if (returns.empty()) return;
+    int local = -1;
+    for (ast::Node* r : returns) {
+        if (r->children.empty() || !r->children[0]) return;
+        ast::Node const& rv = *r->children[0];
+        if (rv.kind != ast::Kind::kIdentExpr || rv.resolved_entry_id < 0) return;
+        if (widen::deepStrip(rv.inferred_type) != widen::deepStrip(fn.return_type))
+            return;
+        if (local < 0) local = rv.resolved_entry_id;
+        else if (local != rv.resolved_entry_id) return;
+    }
+    ast::Node* decl = nullptr;
+    for (auto& ch : fn.children)
+        if (ch) { decl = findLocalDecl(*ch, local); if (decl) break; }
+    if (!decl) return;   // a param, or no plain decl — can't alias to the slot
+    decl->nrvo = true;
+    for (ast::Node* r : returns) r->nrvo = true;
 }
 
 // Splice a pre/post entry as a sibling statement. A scalar bump is a kBumpExpr
@@ -1934,6 +2090,18 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
             }
         }
     }
+    // sret-call lift: hoist a hook-returning call out of an inline (expression)
+    // position into a preceding `_$cret` temp decl, so the call lands at a position
+    // codegen can construct + own (the temp's dtor runs at scope). Runs BEFORE the
+    // aggregate-copy + PPID passes so the lifted decls / reduced statements are
+    // lowered like any other.
+    for (auto& n : out.nodes) {
+        if (!n || n->kind != ast::Kind::kProgram) continue;
+        for (auto& fn : n->children) {
+            if (!fn || fn->kind != ast::Kind::kFunctionDef) continue;
+            liftSretCallList(fn->children, next_id);
+        }
+    }
     // Aggregate-copy lowering: rewrite every cross-form / leaf-widen aggregate
     // copy (array <-> tuple, any nesting) into per-slot stores BEFORE PPID, so a
     // copy with a `++` index lowers its bumps with the rest. Runs after the
@@ -1953,6 +2121,15 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
         for (auto& fn : n->children) {
             if (!fn || fn->kind != ast::Kind::kFunctionDef) continue;
             lowerStatementList(fn->children, next_id);
+        }
+    }
+    // NRVO analysis: after all lowering, decide which functions can build their
+    // returned local directly in the sret slot (mark decl + returns `nrvo`).
+    for (auto& n : out.nodes) {
+        if (!n || n->kind != ast::Kind::kProgram) continue;
+        for (auto& fn : n->children) {
+            if (!fn || fn->kind != ast::Kind::kFunctionDef) continue;
+            analyzeNrvo(*fn);
         }
     }
     // Carry the class kSlid types so codegen can emit each `<Name>__$sizeof()`

@@ -17,7 +17,7 @@ SAMPLES = \
 	fortuple \
 	ifelse \
 	label \
-	return \
+	return_flow \
 	switch \
 	while
 

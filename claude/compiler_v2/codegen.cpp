@@ -40,6 +40,7 @@ std::string emitArrayLiteralValue(widen::TypeRef arrType, ast::Node const& rhs,
 void emitConstructHooks(std::string const& addr, widen::TypeRef type,
                         std::ostream& out);
 bool typeNeedsHook(widen::TypeRef type, bool ctor);
+bool isSretReturn(widen::TypeRef t);
 bool isAstLvalue(ast::Node const& n);
 std::string emitLvalueAddr(ast::Node const& lv, SymTab const& syms,
                            strings::Pool& pool, std::ostream& out,
@@ -644,7 +645,7 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
 // for a void return. The caller decides whether to use, widen, or drop it.
 std::string emitCall(ast::Node const& call, SymTab const& syms,
                      strings::Pool& pool, std::ostream& out,
-                     diagnostic::Sink& diag) {
+                     diagnostic::Sink& diag, std::string const& sret_dst = "") {
     assert(call.children.size() == call.param_types.size()
         && "emitCall: arity should have been verified by classify");
     // Passing a non-primitive VALUE to a by-pointer param is the convenience
@@ -679,7 +680,9 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
     // loop reuses the stack region instead of leaking an alloca per iteration.
     // An LVALUE arg with matching types passes its existing address with no
     // fresh alloca, so it doesn't trigger the bracket.
-    bool materializes = false;
+    // A value-position sret call allocas a result temp inside the call; bracket it
+    // (like a materializing arg) so a call in a loop reuses the stack slot.
+    bool materializes = isSretReturn(call.return_type) && sret_dst.empty();
     for (size_t i = 0; i < call.children.size(); i++)
         if (argMaterializes(*call.children[i], call.param_types[i])) {
             materializes = true;
@@ -735,6 +738,37 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
     }
     std::string ret_llty = llvmForRef(call.return_type);
     std::string result;
+    if (isSretReturn(call.return_type)) {
+        // sret: the callee CONSTRUCTS its result into a caller slot, passed as the
+        // leading argument. Use the destination the caller gave (statement intercept)
+        // or — in a value position — a fresh temp we load and return by value.
+        // A HOOK-bearing return in a value position (an arg / operand, not the rhs of
+        // a decl / assign / discarded call) would construct a temp the caller can't
+        // destroy from here (no dtor scope) — it leaks / unbalances. Until the
+        // desugar lift (inline use -> a temp decl) lands, reject it cleanly rather
+        // than miscompile. Assign the call to a variable first.
+        if (sret_dst.empty() && typeNeedsHook(call.return_type, /*ctor=*/true)) {
+            diagnostic::report(diag, {call.file_id, call.tok,
+                "Returning a class by value in an expression position is not yet "
+                "supported — assign the call to a variable first.", {}});
+        }
+        std::string slot = sret_dst;
+        if (slot.empty()) {
+            slot = newTmp("srettmp");
+            out << "  " << slot << " = alloca " << ret_llty << "\n";
+        }
+        out << "  call void @" << call.name << "(ptr " << slot;
+        for (size_t i = 0; i < arg_vals.size(); i++)
+            out << ", " << arg_vals[i].first << " " << arg_vals[i].second;
+        out << ")\n";
+        if (sret_dst.empty()) {
+            result = newTmp("call");
+            out << "  " << result << " = load " << ret_llty << ", ptr " << slot << "\n";
+        }
+        if (materializes)
+            out << "  call void @llvm.stackrestore.p0(ptr " << sp << ")\n";
+        return result;
+    }
     out << "  ";
     if (widen::form(call.return_type) != widen::Type::Form::kVoid) {
         result = newTmp("call");
@@ -1612,6 +1646,18 @@ bool typeNeedsHook(widen::TypeRef t, bool ctor) {
     return false;
 }
 
+// A non-primitive return value is passed via a caller-provided slot (sret): the
+// function returns void and CONSTRUCTS the result into `%sret.in`. This is ALWAYS
+// used for an array / tuple / class return. A HOOK-bearing return additionally
+// needs the caller-side temp + default-move + dtor dance (typeNeedsHook gates that
+// at the statement intercepts); a POD aggregate just flows through the value path
+// (alloca a temp, call into it, load) — behavior-neutral vs the old by-value ABI.
+bool isSretReturn(widen::TypeRef t) {
+    using F = widen::Type::Form;
+    F f = widen::form(widen::strip(t));
+    return f == F::kArray || f == F::kTuple || f == F::kSlid;
+}
+
 // The element type of an array with the OUTERMOST dim stripped (the per-element
 // type the hook walk recurses on).
 widen::TypeRef arrayElemOf(widen::TypeRef arr) {
@@ -1847,6 +1893,28 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             auto it = syms.find(stmt.resolved_entry_id);
             assert(it != syms.end()
                 && "kVarDeclStmt: alloca not hoisted to entry block");
+            // sret CALL initializer (`Class x = fn()`). Phase B case 1 — BUILD IN
+            // PLACE: a new decl's ctor hasn't run, so when the types match exactly
+            // the callee constructs its result DIRECTLY into this local (no temp, no
+            // move). A hook local is then registered for destruction at scope exit. A
+            // non-exact (cross-form / leaf-widen) init has no exact slot to build
+            // into; it falls through to the generic convert path below (POD), and a
+            // hook leaf-widen call init doesn't arise (classify keeps a class init
+            // same-type).
+            if (!stmt.children.empty()
+                && stmt.children[0]->kind == ast::Kind::kCallExpr
+                && isSretReturn(it->second.slids_type)
+                && widen::deepStrip(it->second.slids_type)
+                       == widen::deepStrip(stmt.children[0]->return_type)) {
+                widen::TypeRef T = it->second.slids_type;
+                emitCall(*stmt.children[0], syms, pool, out, diag,
+                         it->second.alloca_name);
+                if (typeNeedsHook(T, /*ctor=*/true)) {
+                    assert(scope && "sret call init without a dtor scope");
+                    scope->objs.push_back({it->second.alloca_name, widen::strip(T)});
+                }
+                return;
+            }
             // FIELD-INIT. Note this is an if/else CHAIN (no early return) so the
             // lifecycle-hook block below ALWAYS runs after the init — an array of a
             // hook class fills via emitArrayFromTuple, then still needs its
@@ -1871,12 +1939,12 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                             || sform == widen::Type::Form::kTuple)
                         && widen::deepStrip(it->second.slids_type)
                             != widen::deepStrip(stmt.children[0]->inferred_type);
-                    if (stmt.move_init && isAstLvalue(*stmt.children[0])) {
+                    if (stmt.default_move_init && isAstLvalue(*stmt.children[0])) {
                         // A MOVE-INIT (`T x <-- y`) from an lvalue: compute the source
                         // address ONCE, then load + (widen?) + store + null its pointer
                         // leaves through it, so a side-effecting source index runs once.
-                        // (desugar skips move_init, so a cross-form / leaf-widen
-                        // move-init reaches here too — the convert keeps it correct.)
+                        // (desugar skips default_move_init, so a cross-form / leaf-widen
+                        // default-move-init reaches here too — the convert keeps it correct.)
                         std::string src = emitLvalueAddr(*stmt.children[0], syms, pool,
                                                          out, diag, /*allow_partial=*/true);
                         std::string raw = newTmp("mv");
@@ -1902,7 +1970,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                             << ", ptr " << it->second.alloca_name << "\n";
                         emitNullLeaves(src, stmt.children[0]->inferred_type, out);
                     } else {
-                        // A copy (or a move-init from an RVALUE — no leaves to null).
+                        // A copy (or a default-move-init from an RVALUE — no leaves to null).
                         std::string val;
                         if (agg_widen) {
                             val = emitExpr(*stmt.children[0], syms, pool, out, diag,
@@ -1942,9 +2010,14 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                     // whole value). So a copied/moved object is constructed exactly
                     // once, balancing its destructor at scope exit.
                     emitConstructHooks(it->second.alloca_name, st, out);
-                    assert(scope && "class instance constructed without a dtor "
-                                    "scope — it would never be destroyed");
-                    scope->objs.push_back({it->second.alloca_name, st});
+                    // NRVO: the returned local IS the caller's slot (it->second
+                    // points at %sret.in) — construct it, but the CALLER owns its
+                    // destruction, so don't register it here.
+                    if (!stmt.nrvo) {
+                        assert(scope && "class instance constructed without a dtor "
+                                        "scope — it would never be destroyed");
+                        scope->objs.push_back({it->second.alloca_name, st});
+                    }
                 }
             }
             return;
@@ -1955,6 +2028,49 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             auto it = syms.find(stmt.resolved_entry_id);
             assert(it != syms.end()
                 && "kAssignStmt: entry not in SymTab (alloca never emitted?)");
+            // sret CALL into an existing var (`obj = fn()`). Phase B case 2 — an
+            // existing POD target (no leaf ctor) of the exact type is OVERWRITTEN in
+            // place: the callee builds straight into it, no temp.
+            if (!stmt.children.empty()
+                && stmt.children[0]->kind == ast::Kind::kCallExpr
+                && isSretReturn(it->second.slids_type)
+                && !typeNeedsHook(it->second.slids_type, /*ctor=*/true)
+                && widen::deepStrip(it->second.slids_type)
+                       == widen::deepStrip(stmt.children[0]->return_type)) {
+                emitCall(*stmt.children[0], syms, pool, out, diag,
+                         it->second.alloca_name);
+                return;
+            }
+            // case 3 FALLBACK — a hook target is already constructed, so it can't be
+            // rebuilt in place: temp + default-move-ASSIGN (whole-value overwrite +
+            // null source), then destroy the temp husk.
+            if (!stmt.children.empty()
+                && stmt.children[0]->kind == ast::Kind::kCallExpr
+                && typeNeedsHook(it->second.slids_type, /*ctor=*/true)) {
+                widen::TypeRef T = it->second.slids_type;
+                // The callee writes its return type into `slot` (sized as T); a class
+                // never converts, so the two must be identical. A non-exact hook
+                // assign would silently store the wrong layout — assert, don't.
+                assert(widen::deepStrip(T)
+                           == widen::deepStrip(stmt.children[0]->return_type)
+                    && "hook sret assign must be exact-typed (no class conversion)");
+                std::string Tll = it->second.llvm_type;
+                // The result temp is reclaimed each time (stacksave/restore) so this
+                // assign in a loop doesn't grow the stack per iteration.
+                std::string sp = newTmp("sp");
+                out << "  " << sp << " = call ptr @llvm.stacksave.p0()\n";
+                std::string slot = newTmp("rettmp");
+                out << "  " << slot << " = alloca " << Tll << "\n";
+                emitCall(*stmt.children[0], syms, pool, out, diag, slot);
+                std::string raw = newTmp("mv");
+                out << "  " << raw << " = load " << Tll << ", ptr " << slot << "\n";
+                out << "  store " << Tll << " " << raw << ", ptr "
+                    << it->second.alloca_name << "\n";
+                emitNullLeaves(slot, T, out);
+                emitDestructHooks(slot, widen::strip(T), out);
+                out << "  call void @llvm.stackrestore.p0(ptr " << sp << ")\n";
+                return;
+            }
             if (widen::form(widen::strip(it->second.slids_type))
                     == widen::Type::Form::kArray
                 && stmt.children[0]->kind == ast::Kind::kTupleExpr) {
@@ -2210,6 +2326,22 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         }
         case ast::Kind::kCallStmt: {
             if (print::tryEmitCall(stmt, syms, pool, out, diag)) return;
+            // A DISCARDED sret call still constructs its result into a slot — the
+            // caller owns it, so destroy it here (otherwise the slot leaks and its
+            // ctor goes unbalanced). Materialize the slot, call into it, dtor it.
+            if (typeNeedsHook(stmt.return_type, /*ctor=*/true)) {
+                widen::TypeRef T = stmt.return_type;
+                // Reclaim the temp each time so a discarded call in a loop doesn't
+                // grow the stack per iteration.
+                std::string sp = newTmp("sp");
+                out << "  " << sp << " = call ptr @llvm.stacksave.p0()\n";
+                std::string slot = newTmp("rettmp");
+                out << "  " << slot << " = alloca " << llvmForRef(T) << "\n";
+                emitCall(stmt, syms, pool, out, diag, slot);
+                emitDestructHooks(slot, widen::strip(T), out);
+                out << "  call void @llvm.stackrestore.p0(ptr " << sp << ")\n";
+                return;
+            }
             // Statement form discards the result register.
             emitCall(stmt, syms, pool, out, diag);
             return;
@@ -2228,12 +2360,66 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 return;
             }
             ast::Node const& rv = *stmt.children[0];
+            std::string llty = llvmForRef(fn_return_type);
+            if (isSretReturn(fn_return_type)) {
+                // NRVO: the returned local WAS built directly in %sret.in (its
+                // storage is the slot) and is not in our dtor scope — nothing to
+                // move or construct; just unwind the OTHER locals and return.
+                if (stmt.nrvo) {
+                    emitUnwindDtors(scope, nullptr, out);
+                    out << "  ret void\n";
+                    return;
+                }
+                // Both paths below build `rv` into %sret.in at the return type with
+                // NO conversion. Desugar lowers a non-exact (cross-form / leaf-widen)
+                // aggregate return to an exact `_$ret` temp, and a class never
+                // converts — so what reaches here is exact-typed. Assert it: a
+                // regression would silently load/store at the wrong type.
+                {
+                    widen::TypeRef rvt = (rv.kind == ast::Kind::kCallExpr)
+                        ? rv.return_type : rv.inferred_type;
+                    assert((rvt == widen::kNoType
+                            || widen::deepStrip(rvt)
+                                   == widen::deepStrip(fn_return_type))
+                        && "sret return not exact-typed — desugar lowers non-exact");
+                    (void)rvt;
+                }
+                // RETURN-OF-CALL: forward our slot to the callee, which constructs
+                // its result DIRECTLY into %sret.in — no temp, no extra ctor.
+                if (rv.kind == ast::Kind::kCallExpr) {
+                    emitCall(rv, syms, pool, out, diag, "%sret.in");
+                    emitUnwindDtors(scope, nullptr, out);
+                    out << "  ret void\n";
+                    return;
+                }
+                // sret FALLBACK: CONSTRUCT the result into the caller's slot
+                // %sret.in by default-move-init (field-move the value in, then run
+                // the slot's ctor), so the slot is constructed exactly once and the
+                // ctor sees the returned values. The slot is NOT dtor-registered —
+                // the caller owns it. A NAMED-local source is left a moved-from husk
+                // and destroyed by the unwind below (the function-fallback's extra
+                // object; Phase C NRVO will elide it).
+                if (isAstLvalue(rv)) {
+                    std::string src = emitLvalueAddr(rv, syms, pool, out, diag,
+                                                     /*allow_partial=*/true);
+                    std::string raw = newTmp("rv");
+                    out << "  " << raw << " = load " << llty << ", ptr " << src << "\n";
+                    out << "  store " << llty << " " << raw << ", ptr %sret.in\n";
+                    emitNullLeaves(src, fn_return_type, out);
+                } else {
+                    std::string val = emitExpr(rv, syms, pool, out, diag, fn_return_type);
+                    out << "  store " << llty << " " << val << ", ptr %sret.in\n";
+                }
+                emitConstructHooks("%sret.in", widen::strip(fn_return_type), out);
+                emitUnwindDtors(scope, nullptr, out);
+                out << "  ret void\n";
+                return;
+            }
             // A cross-form / leaf-widen aggregate return is lowered BY SLOT in
             // desugar (lowerAggCopyStmt materializes a `_$ret` temp of the return
             // type), so what reaches here matches the return type — emit it directly.
             std::string val = emitExpr(rv, syms, pool, out, diag, fn_return_type);
             emitUnwindDtors(scope, nullptr, out);
-            std::string llty = llvmForRef(fn_return_type);
             out << "  ret " << llty << " " << val << "\n";
             return;
         }
@@ -2662,19 +2848,31 @@ void collectVarDecls(ast::Node const& s, std::vector<ast::Node const*>& out) {
 
 void emitFunction(ast::Node const& fn, strings::Pool& pool,
                   std::ostream& out, diagnostic::Sink& diag) {
-    std::string ret_llty = llvmForRef(fn.return_type);
+    // A non-primitive (hook-bearing) return is lowered to sret: the function
+    // returns void and takes a leading caller-provided slot `%sret.in` it
+    // CONSTRUCTS the result into (see kReturnStmt). POD / primitive returns are
+    // unchanged (returned by value).
+    bool sret = isSretReturn(fn.return_type);
+    std::string ret_llty = sret ? "void" : llvmForRef(fn.return_type);
     out << "define " << ret_llty << " @" << fn.name << "(";
+    bool need_comma = false;
+    if (sret) {
+        out << "ptr %sret.in";
+        need_comma = true;
+    }
     for (size_t i = 0; i < fn.params.size(); i++) {
         ast::Node const& p = *fn.params[i];
-        if (i > 0) out << ", ";
+        if (need_comma) out << ", ";
         std::string p_llty = llvmForRef(p.return_type);
         out << p_llty << " %arg." << i;
+        need_comma = true;
     }
     // A lifted nested function takes one extra `ptr` arg per capture (the host
     // variable's address — by reference).
     for (size_t i = 0; i < fn.captures.size(); i++) {
-        if (fn.params.size() + i > 0) out << ", ";
+        if (need_comma) out << ", ";
         out << "ptr %cap." << i;
+        need_comma = true;
     }
     out << ") {\n";
 
@@ -2712,6 +2910,12 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     }
     for (ast::Node const* d : decls) {
         std::string llty = llvmForRef(d->return_type);
+        // NRVO: the returned local's storage IS the caller's slot — no alloca; its
+        // construction (and reads/writes) go straight through %sret.in.
+        if (d->nrvo) {
+            syms[d->resolved_entry_id] = {"%sret.in", llty, d->return_type};
+            continue;
+        }
         std::string regname = std::string("%") + d->name + "."
             + std::to_string(d->resolved_entry_id);
         out << "  " << regname << " = alloca " << llty << "\n";

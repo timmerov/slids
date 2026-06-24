@@ -20,6 +20,21 @@ when op= lands, we want to be able to support:
 in which case, the assignment form must check for an overloaded op=
 where the parameter is a tuple that matches the expression type.
 if no match, then fall back to initialization.
+
+not to future self:
+
+apparently we have move-init aka var-decl-move.
+a's fields are move-copied to b.
+then b's ctor is called.
+huh.
+
+    Class a(1,2,3);
+    Class b <-- a;
+
+that only works if Class uses the default move operator.
+if Class overloads the move operator then we must construct first then move.
+otherwise the move operator would be called before the object is initialized.
+which would be bad.
 */
 
 /*

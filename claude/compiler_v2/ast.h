@@ -93,7 +93,10 @@ struct Node {
                                  // loop/switch context stack to the resolved target
                                  // (0 = innermost), stamped by resolve.
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
-    bool move_init = false;      // kVarDeclStmt: `<--` move-init (desugar nulls leaves)
+    bool default_move_init = false;      // kVarDeclStmt: `<--` default-move-init (desugar nulls leaves)
+    bool nrvo = false;           // sret NRVO: a kVarDeclStmt whose local IS the
+                                 // return slot (built in place, not dtor'd here), and
+                                 // each kReturnStmt that returns it (a no-op return).
     bool non_completing = false; // while/do-while/for-long: a constant-true loop
                                  // with no escaping break — its exit block is
                                  // unreachable (emit `unreachable`) and the loop

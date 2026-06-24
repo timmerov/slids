@@ -280,9 +280,11 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     leaves there. MOVE and RETURN
     lower by slot in desugar too: a cross-form / leaf-widen MOVE adds a per-leaf
     source null (emitAggNullLeaves, the desugar analogue of codegen::emitNullLeaves);
-    a cross-form / leaf-widen RETURN materializes a `_$ret` temp of the return type,
-    copies into it by slot, and returns the temp — so codegen's kMoveStmt / kReturnStmt
-    only ever see a SAME-type whole-value op. The residual seams desugar does not
+    a cross-form / leaf-widen RETURN materializes a `_$ret` temp of the return type
+    and copies into it by slot, so codegen's kMoveStmt / kReturnStmt see only a
+    SAME-type whole-value op. (A non-primitive return is then emitted via sret — see
+    NON-PRIMITIVE RETURN below — so kReturnStmt CONSTRUCTS that value into the
+    caller's slot rather than returning it by value.) The residual seams desugar does not
     visit (call-arg, const-decl) use the now FORM-AGNOSTIC codegen::emitImplicit-
     AggregateConvert (extractvalue index i is identical for an LLVM array and a struct,
     so one walk converts both forms); the four old flatten HACKS (emitArrayFromTuple-
@@ -295,6 +297,44 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     assignment-family site + kAugAssignStmt + kForRangedStmt + kForArrayStmt).
     widen::convert is now pure lowering -- its narrow/convertErr paths ASSERT
     if a classify gate is missing.
+
+NON-PRIMITIVE RETURN — sret + RVO / NRVO (landed; [[project_aggregate_return_roadmap]] step 3)
+
+  A function returning a class / array / tuple is lowered to sret: codegen emits
+  `void @fn(ptr %sret.in, <params>)` (isSretReturn = array/tuple/slid), and the body
+  CONSTRUCTS its result into the caller-provided slot `%sret.in` and never destructs
+  it (the caller owns the dtor). Primitive / pointer returns are unchanged (by value).
+
+  * FUNCTION side (kReturnStmt, when isSretReturn(fn_return_type)):
+    - NRVO (the common case): if EVERY return is `return L` for the SAME named local
+      L of the exact return type, desugar::analyzeNrvo marks L's decl + each return
+      `nrvo`. codegen then gives L NO alloca (its storage IS %sret.in), constructs it
+      in place, does NOT register it for destruction, and `return L` is a bare
+      `ret void`. One construct / one destruct (the caller's).
+    - return-OF-call (`return g()`): forward — emitCall(g, sret_dst=%sret.in), so g
+      builds directly into our slot; no temp, no extra ctor.
+    - FALLBACK (a non-NRVO named local / rvalue): default-move-init %sret.in from the
+      value (field-move + ctor; a named-local source is nulled and dtor'd as a husk by
+      the scope unwind). A defensive assert checks the value is exact-typed (desugar
+      lowers any cross-form / leaf-widen return to an exact `_$ret` temp first).
+  * CALLER side:
+    - new decl, exact type (`Class x = fn()`): BUILD IN PLACE — emitCall(fn,
+      sret_dst = the local's alloca); the local is constructed by the callee and
+      registered for destruction (Phase-B case 1).
+    - existing POD var, exact: OVERWRITE in place (case 2).
+    - existing hook var, or non-exact: temp + default-move(-assign) fallback (case 3),
+      the result temp reclaimed via stacksave/restore (no per-iteration stack growth).
+    - discarded call (`fn();`): build a temp, destroy it (also stacksave-bracketed).
+    - INLINE (expression) position (`g(mk())`, a nested call): desugar::liftSretCallList
+      hoists the hook-returning call to a `_$cret = call;` temp decl (codegen's
+      kVarDeclStmt sret-intercept then owns it), replacing the call with an ident.
+      Positions the lift does NOT cover yet — a store target, a loop / if condition, a
+      move/swap operand — are REJECTED at codegen (emitCall, value position) with
+      "Returning a class by value in an expression position is not yet supported"
+      rather than miscompiled.
+  POD-aggregate returns ride the same sret ABI (behavior-neutral vs the old by-value
+  return). Open follow-ups (todo.txt): returning an unnamed temporary; disjoint-scope
+  NRVO; POD-aggregate NRVO. Canon: test_v2/function/return_fn.sl.
 
 ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
 
@@ -684,8 +724,8 @@ STAGE FILES (.h / .cpp pairs)
             scope or function scope) — incl. a TYPELESS const (`const name =
             expr`, detected by `=` immediately after the name, parseType skipped
             so constfold infers the type); statements (var-decl incl. the
-            `<ident> <ident>` typed-decl shape and a `<--` move-init form
-            (`T x <-- y`, the move_init flag — `<-->` swap is not a decl), assign,
+            `<ident> <ident>` typed-decl shape and a `<--` default-move-init form
+            (`T x <-- y`, the default_move_init flag — `<-->` swap is not a decl), assign,
             aug-assign, move (`a <-- b`) / swap (`a <--> b`) — the name-led lvalue
             chain (array element / tuple slot / class field / deref / composed) takes
             `=`, the aug-assign family, `++`/`--`, and move/swap UNIFORMLY (lhs as an
@@ -1424,13 +1464,13 @@ STAGE FILES (.h / .cpp pairs)
             (`a <-- g[bump()]`) runs ONCE and the source is left valid; an rvalue source
             (isAstLvalue false) has no address and is a pure copy (emitExpr+store). The
             move-INIT form (`T x <-- y`, kVarDeclStmt) is the same — desugar skips
-            move_init, so a cross-form / leaf-widen move-init reaches codegen and the
+            default_move_init, so a cross-form / leaf-widen default-move-init reaches codegen and the
             single load is followed by the form-agnostic aggregate convert. A SWAP
             loads both lvalues into SSA temporaries and stores them crossed (no
             stack temp; a whole-value load/store handles tuples; both loads precede
             either store, so an aliased swap is safe). emitLvalueAddr gives an
             operand's address (a bare var's alloca / emitElementAddr / a deref's
-            pointer); a move-init decl (`T x <-- y`) nulls after the var-decl store.
+            pointer); a default-move-init decl (`T x <-- y`) nulls after the var-decl store.
             Iterator
             arithmetic: `iter ± int` is a signed element GEP, `iter - iter` is
             ptrtoint-diff / elemBytes, `++`/`--` GEP ±1 element. Pointer

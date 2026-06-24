@@ -222,7 +222,7 @@ struct Node {
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
     bool is_mutable = false;     // kParam: declared with leading `mutable` — opts OUT
                                  // of the default const-pointee munge (mungeParamType)
-    bool move_init = false;      // kVarDeclStmt: initialized with `<--` (a move),
+    bool default_move_init = false;      // kVarDeclStmt: initialized with `<--` (a move),
                                  // so desugar nulls the init's pointer leaves
     bool quiet_diag = false;     // kStringifyType inside a `#x` desugar: the same
                                  // operand is also resolved by the sibling `^x`, so
