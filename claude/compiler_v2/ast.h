@@ -93,6 +93,10 @@ struct Node {
                                  // loop/switch context stack to the resolved target
                                  // (0 = innermost), stamped by resolve.
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
+    bool is_construction = false; // kCallExpr: a `Class(args)` nameless class
+                                 // construction (children[0] = the construction
+                                 // tuple). desugar lifts it into a synthetic
+                                 // kVarDeclStmt temp (destroyed at statement end).
     bool default_move_init = false;      // kVarDeclStmt: `<--` default-move-init (desugar nulls leaves)
     bool nrvo = false;           // sret NRVO: a kVarDeclStmt whose local IS the
                                  // return slot (built in place, not dtor'd here), and

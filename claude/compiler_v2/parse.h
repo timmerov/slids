@@ -220,6 +220,11 @@ struct Node {
     std::string label;
     int loop_levels = -1;
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
+    bool is_construction = false; // kCallStmt/kCallExpr: a `Class(args)` nameless
+                                 // class construction (target resolved to a kClass),
+                                 // NOT a function call. resolve sets it; classify
+                                 // builds the per-field construction tuple; desugar
+                                 // lowers it to a synthetic kVarDeclStmt.
     bool is_mutable = false;     // kParam: declared with leading `mutable` — opts OUT
                                  // of the default const-pointee munge (mungeParamType)
     bool default_move_init = false;      // kVarDeclStmt: initialized with `<--` (a move),

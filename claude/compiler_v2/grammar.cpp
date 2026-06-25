@@ -1053,19 +1053,36 @@ struct Parser {
                 }
                 continue;
             }
+            // A call `(args)` on a bare name — a function call OR a `Class(args)`
+            // construction. INSIDE the loop so the chain continues after it:
+            // `Class(a).field`, `fn(x)[i]`, `Class(a).method()` (the `.method`
+            // becomes a kFieldExpr whose `(` is handled by the FieldExpr arm below).
+            if (peek().kind == token::Kind::kLParen
+                && base->kind == parse::Kind::kIdentExpr) {
+                auto node = newNodeAt(parse::Kind::kCallExpr, base->file_id, base->tok);
+                node->name = std::move(base->name);
+                node->name_tok = base->name_tok;
+                node->qualifier = std::move(base->qualifier);
+                node->qualifier_toks = std::move(base->qualifier_toks);
+                node->global_qualified = base->global_qualified;
+                advance();   // (
+                if (!parseCallArgs(*node)) return nullptr;
+                base = std::move(node);
+                continue;
+            }
+            // A call on a `recv.method` field access — a method-call EXPRESSION
+            // (e.g. `Class(a).method()`, `obj.method()` used as a value). A method
+            // call producing a value mid-expression is not yet supported (only the
+            // STATEMENT form `recv.method();`, parseNameLedStmt). Reject it with a
+            // clear, attributed message rather than letting the unconsumed `(`
+            // surface as a misleading "Expected ';'" / "Expected ')'" upstream.
+            if (peek().kind == token::Kind::kLParen
+                && base->kind == parse::Kind::kFieldExpr) {
+                error("A method call is not supported in an expression here; call it "
+                      "as a statement, or read a field instead.");
+                return nullptr;
+            }
             break;
-        }
-        if (base->kind == parse::Kind::kIdentExpr
-            && peek().kind == token::Kind::kLParen) {
-            auto node = newNodeAt(parse::Kind::kCallExpr, base->file_id, base->tok);
-            node->name = std::move(base->name);
-            node->name_tok = base->name_tok;
-            node->qualifier = std::move(base->qualifier);
-            node->qualifier_toks = std::move(base->qualifier_toks);
-            node->global_qualified = base->global_qualified;
-            advance();   // (
-            if (!parseCallArgs(*node)) return nullptr;
-            base = std::move(node);
         }
         if (peek().kind == token::Kind::kPlusPlus
             || peek().kind == token::Kind::kMinusMinus) {
@@ -1511,20 +1528,18 @@ struct Parser {
             n.global_qualified = global;
         };
 
-        token::Kind next = peek().kind;
-        if (next == token::Kind::kBitXor || next == token::Kind::kXorXor
-            || next == token::Kind::kLBracket || next == token::Kind::kDot) {
-            // Lvalue-expression store: `name[i]... = rhs`, `name.field = rhs`, or
-            // `name^ = rhs`. The bare name becomes a kIdentExpr, then the postfix
-            // chain (subscripts, field accesses, and derefs, left to right) wraps
-            // it into the store target. (A `^` here is unambiguously deref — a
-            // trailing operand would be XOR, not a statement.)
-            auto lhs = newNodeAt(parse::Kind::kIdentExpr, stmt_file, stmt_tok);
-            lhs->name = name;
-            lhs->name_tok = name_tok;
-            lhs->qualifier = segs;
-            lhs->qualifier_toks = toks;
-            lhs->global_qualified = global;
+        // Drive a postfix chain (`[i]`, `.field`, `^`, `^^`) starting from an
+        // already-parsed base lvalue/expression, then finish it as a statement: a
+        // trailing `.method(args)` -> kMethodCallStmt, `.~()` -> kDtorCallStmt,
+        // `<--`/`<-->` -> move/swap, `op=` -> aug-assign, `++`/`--` -> a discarded
+        // post-inc kExprStmt, otherwise `= rhs` -> a store (or, for a non-lvalue
+        // base such as a `Class(args)` construction temp with no trailing op, a
+        // bare kExprStmt — see the construction caller below). Shared by the
+        // bare-name lvalue-store entry and the `Class(args).chain` construction
+        // entry.
+        auto finishLvalueChain =
+            [&](std::unique_ptr<parse::Node> lhs,
+                bool allow_bare_expr) -> std::unique_ptr<parse::Node> {
             while (peek().kind == token::Kind::kLBracket
                    || peek().kind == token::Kind::kBitXor
                    || peek().kind == token::Kind::kXorXor
@@ -1624,6 +1639,15 @@ struct Parser {
                 node->children.push_back(std::move(inc));
                 return node;
             }
+            if (allow_bare_expr && peek().kind == token::Kind::kSemicolon) {
+                // `Class(args).field;` — a discarded chain value off a construction
+                // temp (no trailing store/op). The construction has no lvalue to
+                // assign to, so the whole chain is an expression statement.
+                advance();   // ;
+                auto node = newNodeAt(parse::Kind::kExprStmt, stmt_file, stmt_tok);
+                node->children.push_back(std::move(lhs));
+                return node;
+            }
             if (!expect(token::Kind::kEquals, "=")) return nullptr;
             auto rhs = parseExpr();
             if (!rhs) return nullptr;
@@ -1632,14 +1656,43 @@ struct Parser {
             node->children.push_back(std::move(lhs));
             node->children.push_back(std::move(rhs));
             return node;
+        };
+
+        token::Kind next = peek().kind;
+        if (next == token::Kind::kBitXor || next == token::Kind::kXorXor
+            || next == token::Kind::kLBracket || next == token::Kind::kDot) {
+            // Lvalue-expression store: `name[i]... = rhs`, `name.field = rhs`, or
+            // `name^ = rhs`. The bare name becomes a kIdentExpr, then the postfix
+            // chain (subscripts, field accesses, and derefs, left to right) wraps
+            // it into the store target. (A `^` here is unambiguously deref — a
+            // trailing operand would be XOR, not a statement.)
+            auto lhs = newNodeAt(parse::Kind::kIdentExpr, stmt_file, stmt_tok);
+            lhs->name = name;
+            lhs->name_tok = name_tok;
+            lhs->qualifier = segs;
+            lhs->qualifier_toks = toks;
+            lhs->global_qualified = global;
+            return finishLvalueChain(std::move(lhs), /*allow_bare_expr=*/false);
         }
         if (next == token::Kind::kLParen) {
             advance();   // (
-            auto node = newNodeAt(parse::Kind::kCallStmt, stmt_file, stmt_tok);
-            stamp(*node);
-            if (!parseCallArgs(*node)) return nullptr;
+            // Parse the call args once into a temporary kCallExpr. If a postfix
+            // continuation follows the `)` (`.method()`, `.field`, `[i]`, `^`), the
+            // name is a `Class(args)` construction used as the receiver/base of a
+            // chain (nameless temporary form) — drive the chain off it. Otherwise a
+            // bare `name(args);` stays a kCallStmt (a function call OR a statement-
+            // form construction — resolve decides which).
+            auto call = newNodeAt(parse::Kind::kCallExpr, stmt_file, stmt_tok);
+            stamp(*call);
+            if (!parseCallArgs(*call)) return nullptr;
+            token::Kind after = peek().kind;
+            if (after == token::Kind::kDot || after == token::Kind::kLBracket
+                || after == token::Kind::kBitXor || after == token::Kind::kXorXor) {
+                return finishLvalueChain(std::move(call), /*allow_bare_expr=*/true);
+            }
+            call->kind = parse::Kind::kCallStmt;
             if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
-            return node;
+            return call;
         }
         if (next == token::Kind::kArrowLeft || next == token::Kind::kArrowBoth) {
             // `name <-- rhs;` / `name <--> rhs;` — move / swap with a bare-name

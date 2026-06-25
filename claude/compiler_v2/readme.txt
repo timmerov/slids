@@ -489,6 +489,24 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     the call form keeps each arg whole. A size-1 init tuple is inexpressible (`( x )`
     collapses) — punted (todo). A class var-decl is definitely-initialized (DA) even
     with no initializer.
+  * NAMELESS CONSTRUCTION: a `Class(args)` call whose callee resolves to a kClass
+    (not a function) is a CONSTRUCTION, not a call — resolve flags `is_construction`
+    (resolveCallTarget accepts a kClass target instead of "is a variable, not a
+    function"); classify (classifyConstruction) wraps the args as the `Type name(args)`
+    init tuple and runs classifyClassInit. desugar then lowers it onto the EXISTING
+    construction machinery (no new codegen): FORM 1 (a bare `Class(args);` statement)
+    becomes a synthetic `_$nameless` kVarDeclStmt in the current scope — ctor + the
+    scope's reverse-order dtor; a hookless trivial class used this way is a no-op and
+    errors ("A nameless class statement has no effect"). FORM 2 (a construction used
+    inline — a method receiver, a field read, a call arg) is lifted to a `_$cret`
+    temp (liftSretCallExprs); for a kCallStmt/kExprStmt the temp decl is block-wrapped
+    WITH the statement so its dtor runs at the SEMICOLON. A construction as a
+    DECL/RETURN rhs (incl. the `<--` move-init) builds in place (RVO — one ctor/dtor,
+    the kAssignStmt unwrap is excluded). Any OTHER position — an if/while condition, a
+    store/move/swap operand, a re-assignment `w = Class(...)`, a method-call VALUE
+    `Class(...).method()` — is rejected cleanly (codegen's is_construction guard at
+    emitExpr/emitCall, and the parser's "method call in an expression" error), never
+    miscompiled. Detail: test_v2/class/nameless.sl.
   * INIT FROM A TUPLE-LIKE VALUE: a class also initializes from any aggregate VALUE
     source — an array / tuple variable or constant, a sub-array row, a function
     return, an op result — spread across the fields BY SLOT (a class IS a named

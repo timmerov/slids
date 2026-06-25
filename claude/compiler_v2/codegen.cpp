@@ -646,6 +646,18 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
 std::string emitCall(ast::Node const& call, SymTab const& syms,
                      strings::Pool& pool, std::ostream& out,
                      diagnostic::Sink& diag, std::string const& sret_dst = "") {
+    // A `Class(args)` construction reaching emitCall is in a position desugar's
+    // lift / build-in-place didn't cover — most notably a class RE-ASSIGNMENT
+    // (`w = Class(...)`, which would store the fields without running the ctor) or
+    // a condition / operand. It has no function param list, so reject it cleanly
+    // here (the universal call choke point) rather than tripping the arity assert
+    // below. Declare a new variable (`Class x = Class(...)`) instead.
+    if (call.is_construction) {
+        diagnostic::report(diag, {call.file_id, call.tok,
+            "Constructing a class in this position is not yet supported; "
+            "declare a new variable (e.g. 'Class x = Class(...)').", {}});
+        return "0";
+    }
     assert(call.children.size() == call.param_types.size()
         && "emitCall: arity should have been verified by classify");
     // Passing a non-primitive VALUE to a by-pointer param is the convenience
@@ -1507,6 +1519,18 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kBinaryExpr:
             return emitBinary(expr, syms, pool, out, diag, dest_type);
         case ast::Kind::kCallExpr: {
+            // A `Class(args)` construction reaching here as a VALUE was not lifted to
+            // a temp by desugar — it sits in a position the lift doesn't cover (an
+            // if/while condition, a store/move/swap operand). Reject it cleanly with
+            // an attributed message rather than falling into emitCall's arity assert
+            // (a construction has no function param list). Statement / decl-init /
+            // arg / method-receiver positions ARE lifted and never reach here.
+            if (expr.is_construction) {
+                diagnostic::report(diag, {expr.file_id, expr.tok,
+                    "Constructing a class in this position is not yet supported; "
+                    "declare a new variable (e.g. 'Class x = Class(...)').", {}});
+                return "0";
+            }
             assert(widen::form(expr.return_type) != widen::Type::Form::kVoid
                 && "emitExpr kCallExpr: classify should have rejected void call-as-value");
             std::string r = emitCall(expr, syms, pool, out, diag);

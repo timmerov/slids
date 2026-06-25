@@ -702,6 +702,7 @@ int argConvertCost(parse::Node const& a, widen::TypeRef param) {
 // candidate, stamp the chosen signature. Defined after inferExpr (mutually
 // recursive — it infers the argument expressions).
 void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
+void classifyConstruction(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
 void checkStrongConstAssign(widen::TypeRef dest, parse::Node const& rhs,
                             diagnostic::Sink& diag);
 void checkSlidAssign(widen::TypeRef lvalue_type, parse::Node const& rhs,
@@ -1349,6 +1350,12 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             return;
         }
         case parse::Kind::kCallExpr: {
+            // A `Class(args)` construction (resolve marked it): build the per-field
+            // construction tuple and type it as the class.
+            if (e.is_construction) {
+                classifyConstruction(tree, e, diag);
+                return;
+            }
             // Pick the overload (if any) + infer args; then the call yields its
             // return type (widening into `context` happens at codegen, like an
             // ident read). Reject a void return used where a value is wanted.
@@ -2403,6 +2410,38 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
     s.children.push_back(std::move(tup));
 }
 
+// A `Class(args)` nameless construction (resolve marked it is_construction). Wrap
+// the call's argument children into a kTupleExpr — EXACTLY the shape a declarator
+// `Class name(args)` feeds — then run classifyClassInit, which validates the args
+// against the class fields, fills defaults/zeros, recurses into class fields, and
+// leaves children[0] = the per-field construction tuple (typed as the class). The
+// node is typed as the class so isSretReturn / typeNeedsHook treat it as a slid.
+void classifyConstruction(parse::Tree& tree, parse::Node& s,
+                          diagnostic::Sink& diag) {
+    assert(s.is_construction && s.resolved_entry_id >= 0
+        && "classifyConstruction: not a marked construction");
+    widen::TypeRef ctype = widen::strip(tree.entries[s.resolved_entry_id].slids_type);
+    auto it = tree.classes.find(ctype);
+    if (it == tree.classes.end()) {
+        // An unregistered class — unreachable (resolve validated the target).
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "Unknown class type '" + widen::spellOrEmpty(ctype) + "'.", {}});
+        return;
+    }
+    // Wrap the args into a kTupleExpr init slot (the declarator's `Type name(args)`
+    // shape). An empty arg list -> `()` all-default.
+    auto tup = std::make_unique<parse::Node>();
+    tup->kind = parse::Kind::kTupleExpr;
+    tup->file_id = s.file_id;
+    tup->tok = s.tok;
+    for (auto& ch : s.children) if (ch) tup->children.push_back(std::move(ch));
+    s.children.clear();
+    s.children.push_back(std::move(tup));
+    classifyClassInit(tree, s, it->second, diag);   // children[0] := construction tuple
+    s.return_type = it->second.type;
+    s.inferred_type = it->second.type;
+}
+
 std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty,
                                             int file_id, int tok,
                                             diagnostic::Sink& diag) {
@@ -2732,6 +2771,25 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (widen::form(widen::strip(s.return_type)) == widen::Type::Form::kSlid) {
                 auto it = tree.classes.find(widen::strip(s.return_type));
                 if (it != tree.classes.end()) {
+                    // `Class y = Class(args)` is a BUILD, identical to `Class y(args)`
+                    // / `Class y = (args)` — NOT a same-type whole-object copy. Replace
+                    // the construction rhs with a tuple of its RAW ctor args (still
+                    // un-inferred here) so it field-inits in place through the normal
+                    // path below. Left as a construction kCallExpr, it would infer to
+                    // the class type and hit the same-type-copy early-return, leaving a
+                    // class-typed kCallExpr that codegen cannot emit (segfault).
+                    if (!s.children.empty() && s.children[0]
+                        && s.children[0]->kind == parse::Kind::kCallExpr
+                        && s.children[0]->is_construction) {
+                        auto ctor = std::move(s.children[0]);
+                        auto tup = std::make_unique<parse::Node>();
+                        tup->kind = parse::Kind::kTupleExpr;
+                        tup->file_id = ctor->file_id;
+                        tup->tok = ctor->tok;
+                        for (auto& a : ctor->children)
+                            if (a) tup->children.push_back(std::move(a));
+                        s.children[0] = std::move(tup);
+                    }
                     // An rvalue AGGREGATE source (a call / op result) can't be indexed
                     // in place. Spill it into a temp local — evaluated once — so the
                     // per-field spread in classifyClassInit sees an lvalue and handles
@@ -3168,6 +3226,29 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (isPrintIntrinsic(s.name)) {
                 for (auto& ch : s.children) {
                     if (ch) inferPrintArg(tree, *ch, diag);
+                }
+                return;
+            }
+            // Statement-form `Class(args);` — a nameless scope-lifetime object.
+            // Build its construction tuple + type it as the class; desugar lowers
+            // it to a synthetic kVarDeclStmt (dtor at end of the enclosing scope).
+            if (s.is_construction) {
+                classifyConstruction(tree, s, diag);
+                // A nameless STATEMENT-form object's only observable effect is its
+                // ctor/dtor side effects. A class with NEITHER (no explicit and no
+                // synthesized hooks — a trivial class) makes the statement a no-op,
+                // which is a compile error (spec: nameless.sl form 1). ctor/dtor are
+                // language-paired, so a single need implies both.
+                if (!diagnostic::hasErrors(diag)) {
+                    widen::TypeRef ct = widen::strip(s.inferred_type);
+                    auto ci = tree.classes.find(ct);
+                    if (ci != tree.classes.end()
+                        && !ci->second.needs_ctor && !ci->second.needs_dtor) {
+                        diagnostic::report(diag, {s.file_id, s.tok,
+                            "A nameless class statement has no effect: '"
+                            + ci->second.name
+                            + "' has no constructor or destructor.", {}});
+                    }
                 }
                 return;
             }

@@ -36,14 +36,6 @@ BLOCKED FEATURES
 
   deferred features involving classes:
 
-  * RETURN AN UNNAMED TEMPORARY — `return Class(7);` (construct a temporary in the
-    return expression) does NOT parse/classify ("variable declared here") — an
-    anonymous-temporary CONSTRUCTION isn't expressible in expression position, so
-    return_fn.sl's "case 1: return an unnamed variable" is unreachable. The sret path
-    would handle it (the rvalue branch of kReturnStmt already builds a non-lvalue rv
-    into %sret.in); the gap is the front-end (no `Type(args)` temporary expression).
-    Workaround: name the local (`Class c(7); return c;` — which then NRVOs anyway).
-
   * CLASS-VALUED ELEMENTS FROM AN AGGREGATE SOURCE COPY RAW (class init) — when a
     class is initialized from a tuple-like VALUE whose slots are themselves class
     values (e.g. `F arr[2]; Pair p = arr;` where Pair's fields are `F`), each field
@@ -62,9 +54,12 @@ BLOCKED FEATURES
 
   * METHODS — follow-ups (the statement-call form + plain-`=` field writes LANDED).
     - EXPRESSION-FORM CALL: a value-returning method used as a value
-      (`int x = obj.m()`) doesn't parse; only the statement form `obj.m(args);` is
-      wired. Needs the call shape in the expression parser (parsePostfix) + a
-      kMethodCallExpr (or reuse) classified/lowered like the statement form.
+      (`int x = obj.m()`) is not yet wired; only the statement form `obj.m(args);`
+      is. parsePostfix NOW recognizes the call-after-field shape and rejects it
+      cleanly ("A method call is not supported in an expression here") instead of
+      mis-parsing; what remains is a kMethodCallExpr (or reuse) classified/lowered
+      like the statement form. (A field READ `x = obj.field` / `x = Class(a).field`
+      DOES work.)
     - COMPOUND FIELD WRITES in a member body: a BARE `x_ += 1` / `x_++` isn't
       field-rewritten (only plain `x_ = ...` is — buildSelfField on the assignment
       LHS). Hook the field-rewrite onto the aug-assign / inc-dec LHS so a bare

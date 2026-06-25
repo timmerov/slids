@@ -293,6 +293,24 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     if (p.kind == parse::Kind::kMethodCallStmt) {
         return lowerMethodCall(p, tree, next_id);
     }
+    // Statement-form `Class(args);` (a discarded construction kCallStmt) becomes an
+    // UNNAMED scope-lifetime local: a synthetic kVarDeclStmt initialized from the
+    // construction tuple (classify left it as children[0], typed as the class). The
+    // existing kVarDeclStmt codegen field-inits it, runs the ctor, and registers it
+    // for the enclosing scope's reverse-order dtor — no new construction code.
+    if (p.kind == parse::Kind::kCallStmt && p.is_construction) {
+        auto decl = std::make_unique<ast::Node>();
+        decl->kind = ast::Kind::kVarDeclStmt;
+        decl->name = "_$nameless";
+        decl->resolved_entry_id = next_id++;
+        decl->return_type = p.inferred_type;   // the class type
+        decl->file_id = p.file_id;
+        decl->tok = p.tok;
+        decl->name_tok = p.tok;
+        assert(!p.children.empty() && "construction stmt lost its tuple");
+        decl->children.push_back(copyNode(*p.children[0], tree, next_id));
+        return decl;
+    }
     auto node = std::make_unique<ast::Node>();
     node->kind = toAstKind(p.kind);
     node->name = p.name;
@@ -314,16 +332,21 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
         && tree.entries[p.resolved_entry_id].kind == parse::EntryKind::kConst;
     node->default_move_init = p.default_move_init;
     node->non_completing = p.non_completing;
+    node->is_construction = p.is_construction;
     node->param_types = p.param_types;
     node->captures = p.captures;
     node->capture_types = p.capture_types;
     // Function definitions and calls (including qualified `Space:bar()`) resolve
     // to their entry-id-derived symbol; the qualifier is dropped (ast carries no
     // qualifier — a flat symbol replaces it).
-    if (p.kind == parse::Kind::kFunctionDef
-     || p.kind == parse::Kind::kFunctionDecl
-     || p.kind == parse::Kind::kCallExpr
-     || p.kind == parse::Kind::kCallStmt) {
+    // A construction kCallExpr (resolved to a CLASS, not a function) keeps its
+    // class name and is lifted to a temp decl later — never call functionSymbol
+    // on it (it has no function symbol).
+    if (!p.is_construction
+        && (p.kind == parse::Kind::kFunctionDef
+            || p.kind == parse::Kind::kFunctionDecl
+            || p.kind == parse::Kind::kCallExpr
+            || p.kind == parse::Kind::kCallStmt)) {
         node->name = functionSymbol(p, tree);
     }
     for (auto const& c : p.children) {
@@ -1707,8 +1730,15 @@ void liftSretCallExprs(std::unique_ptr<ast::Node>& node,
     if (!node) return;
     for (auto& ch : node->children)
         liftSretCallExprs(ch, pre, next_id, false);
-    if (!root_intercepted && node->kind == ast::Kind::kCallExpr
-        && returnTypeHasCtor(node->return_type)) {
+    // A `Class(args)` construction used inline (e.g. a method receiver) is a
+    // TEMPORARY — lift it into a synthetic decl exactly like a hook-returning call,
+    // but seed the decl from the construction TUPLE (node->children[0], typed as the
+    // class), so the kVarDeclStmt field-inits + runs the ctor. The block-wrap in
+    // liftSretCallList then makes the temp's dtor fire at STATEMENT end.
+    bool is_ctor_call = node->kind == ast::Kind::kCallExpr
+        && returnTypeHasCtor(node->return_type);
+    bool is_construction = node->is_construction;
+    if (!root_intercepted && (is_ctor_call || is_construction)) {
         int file = node->file_id, tok = node->tok;
         widen::TypeRef T = node->return_type;
         int id = next_id++;
@@ -1720,7 +1750,13 @@ void liftSretCallExprs(std::unique_ptr<ast::Node>& node,
         decl->file_id = file;
         decl->tok = tok;
         decl->name_tok = tok;
-        decl->children.push_back(std::move(node));
+        if (is_construction) {
+            // The construction's per-field tuple init (not the call node itself).
+            assert(!node->children.empty() && "construction lost its tuple");
+            decl->children.push_back(std::move(node->children[0]));
+        } else {
+            decl->children.push_back(std::move(node));
+        }
         pre.push_back(std::move(decl));
         node = mintIdent("_$cret", id, T, file, tok);
     }
@@ -1764,23 +1800,61 @@ void liftSretCallList(std::vector<std::unique_ptr<ast::Node>>& stmts, int& next_
             }
         }
         std::vector<std::unique_ptr<ast::Node>> pre;
+        // A lifted temp inside a kCallStmt / kExprStmt is a STATEMENT-scoped
+        // temporary (a `Class(args)` construction receiver, or a hook-returning
+        // method receiver) — it must be destroyed at the SEMICOLON, so its decls
+        // are wrapped with the statement in a synthetic block whose scope end IS
+        // the statement end. A VarDecl/Assign/Return rhs only lifts NESTED arg
+        // temps; those keep their established enclosing-scope lifetime (no wrap).
+        bool stmt_scoped = false;
         if (k == ast::Kind::kVarDeclStmt || k == ast::Kind::kAssignStmt
             || k == ast::Kind::kReturnStmt) {
+            // A `Class(args)` construction as the DIRECT rhs of a DECLARATION or a
+            // RETURN builds in place: unwrap it to its per-field construction tuple
+            // (children[0]) so the existing kVarDeclStmt field-init / return sret-
+            // fallback path constructs it into the slot (store + emitConstructHooks) —
+            // no temp, no extra ctor. (`Class x = Class(...)`, `return Class(x)`.)
+            // A re-ASSIGNMENT (`w = Class(...)`, w already constructed) has no fresh
+            // slot to build into: unwrapping would store the fields WITHOUT running
+            // the ctor (silently dropping it). Leave the construction in place so it
+            // reaches codegen's value-position guard and errors cleanly — class
+            // re-assignment from a construction is not supported (declare a new
+            // variable instead).
+            if (k != ast::Kind::kAssignStmt
+                && !stmt->children.empty() && stmt->children[0]
+                && stmt->children[0]->is_construction) {
+                assert(!stmt->children[0]->children.empty()
+                    && "construction rhs lost its tuple");
+                stmt->children[0] = std::move(stmt->children[0]->children[0]);
+            }
             // The direct rhs call is constructed in place by codegen — leave it
             // (root_intercepted), but lift any NESTED call in its args.
             if (!stmt->children.empty())
                 liftSretCallExprs(stmt->children[0], pre, next_id,
                                   /*root_intercepted=*/true);
         } else if (k == ast::Kind::kCallStmt) {
-            // The statement IS a (discarded) call codegen handles; lift its args.
+            // The statement IS a (discarded) call codegen handles; lift its args
+            // (incl. a lowered method call's receiver = AddrOf(temp)).
             for (auto& arg : stmt->children)
                 liftSretCallExprs(arg, pre, next_id, false);
+            stmt_scoped = true;
         } else if (k == ast::Kind::kExprStmt) {
             if (!stmt->children.empty())
                 liftSretCallExprs(stmt->children[0], pre, next_id, false);
+            stmt_scoped = true;
         }
-        for (auto& d : pre) out.push_back(std::move(d));
-        out.push_back(std::move(stmt));
+        if (stmt_scoped && !pre.empty()) {
+            auto block = std::make_unique<ast::Node>();
+            block->kind = ast::Kind::kBlockStmt;
+            block->file_id = stmt->file_id;
+            block->tok = stmt->tok;
+            for (auto& d : pre) block->children.push_back(std::move(d));
+            block->children.push_back(std::move(stmt));
+            out.push_back(std::move(block));
+        } else {
+            for (auto& d : pre) out.push_back(std::move(d));
+            out.push_back(std::move(stmt));
+        }
     }
     stmts = std::move(out);
 }

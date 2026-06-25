@@ -1,0 +1,114 @@
+== 1: form-1, two objects, reverse dtor at scope end ==
+Class:ctor: 1
+Class:ctor: 2
+-- end 1 (dtor 2,1 next) --
+Class:dtor: 2
+Class:dtor: 1
+== 2: form-1 multi-arg ==
+Pair:ctor: 3,4
+-- end 2 (dtor 3,4 next) --
+Pair:dtor: 3,4
+== 3: form-1 no args (default field 0) ==
+Class:ctor: 0
+-- end 3 (dtor 0 next) --
+Class:dtor: 0
+== 4: nameless beside a named local ==
+Class:ctor: 5
+Class:ctor: 6
+-- end 4 (dtor 6,5 next) --
+Class:dtor: 6
+Class:dtor: 5
+== 5: return-construction into a named local ==
+Class:ctor: 7
+-- end 5 (dtor 7 next) --
+Class:dtor: 7
+== 6: direct construction into a named local ==
+Class:ctor: 8
+-- end 6 (dtor 8 next) --
+Class:dtor: 8
+== 7: construction-init, no args ==
+Class:ctor: 0
+-- end 7 (dtor 0 next) --
+Class:dtor: 0
+== 8: form-2 method call on a direct temp ==
+Class:ctor: 9
+Class:print: 9
+Class:dtor: 9
+-- end 8 (dtor 9 already ran) --
+== 9: form-2 method call on a returned temp ==
+Class:ctor: 10
+Class:print: 10
+Class:dtor: 10
+-- end 9 (dtor 10 already ran) --
+== 10: form-2 field read in an initializer ==
+Class:ctor: 11
+v= 11
+-- end 10 (dtor 11 next) --
+Class:dtor: 11
+== 11: construction as a function argument ==
+Class:ctor: 12
+sink: 12
+Class:dtor: 12
+-- end 11 (dtor 12 already ran) --
+== 12: form-1 and form-2 interacting ==
+Class:ctor: 13
+Class:ctor: 14
+Class:print: 14
+Class:dtor: 14
+-- mid 12 (dtor 14 ran; dtor 13 at scope end) --
+Class:dtor: 13
+== 13: form-1 in a loop ==
+Class:ctor: 0
+Class:dtor: 0
+Class:ctor: 1
+Class:dtor: 1
+Class:ctor: 2
+Class:dtor: 2
+-- end 13 --
+== 14: multi-arg construction-init ==
+Pair:ctor: 30,40
+p.a_= 30
+Pair:dtor: 30,40
+== 15: move-init from a construction ==
+Class:ctor: 50
+y= 50
+Class:dtor: 50
+== 16: move-init from a returned temp ==
+Class:ctor: 51
+cls= 51
+Class:dtor: 51
+== 17: two temporaries in one call ==
+Class:ctor: 60
+Class:ctor: 61
+sink2: 60,61
+Class:dtor: 61
+Class:dtor: 60
+-- end 17 (dtor 61,60 already ran) --
+== 18: nested construction argument ==
+Class:ctor: 70
+Class:ctor: 70
+Class:print: 70
+Class:dtor: 70
+Class:dtor: 70
+-- end 18 --
+== 19: default-field construction ==
+Def:ctor: 5,20
+Def:ctor: 10,20
+-- end 19 (dtor 10,20 then 5,20) --
+Def:dtor: 10,20
+Def:dtor: 5,20
+== 20: class-typed field ==
+Class:ctor: 80
+Wrap:ctor
+-- end 20 --
+Wrap:dtor
+Class:dtor: 80
+== 21: qualified nested-class construction ==
+Inner:ctor: 90
+-- end 21 --
+Inner:dtor: 90
+== 22: field read in a larger expression ==
+Class:ctor: 100
+v= 101
+-- end 22 --
+Class:dtor: 100

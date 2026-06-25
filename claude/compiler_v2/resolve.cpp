@@ -1587,6 +1587,14 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         }
     }
     parse::Entry const& entry = tree.entries[id];
+    // A name resolving to a CLASS is a `Class(args)` construction, not a function
+    // call — accept it (resolveUserCall branches to construction on this). The
+    // arity is checked against the class fields in classify, not here.
+    if (entry.kind == parse::EntryKind::kClass) {
+        s.resolved_entry_id = id;
+        s.is_construction = true;
+        return true;
+    }
     if (entry.kind != parse::EntryKind::kFunction) {
         char const* what = entry.kind == parse::EntryKind::kAlias ? "type"
                          : entry.kind == parse::EntryKind::kConst ? "constant"
@@ -1606,6 +1614,17 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
 // for downstream stages. Then recurse into the argument expressions.
 void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     if (resolveCallTarget(tree, s, diag)) {
+        // `Class(args)` construction: resolveCallTarget marked it (is_construction)
+        // and stamped the class entry. There is no function arity / method / nested
+        // logic to apply — classify validates the args against the class fields and
+        // builds the per-field construction tuple. Just resolve the arg expressions
+        // so names used in the args bind.
+        if (s.is_construction) {
+            for (auto& ch : s.children) {
+                if (ch) resolveExpr(tree, *ch, diag);
+            }
+            return;
+        }
         parse::Entry const& callee = tree.entries[s.resolved_entry_id];
         // A bare call that resolved to a class METHOD (its owner frame is a class)
         // has no receiver, so it can't supply the implicit `self` — lowering it as
