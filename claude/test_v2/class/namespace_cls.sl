@@ -59,3 +59,174 @@ int32 main() {
 // a class is a type, not an importable namespace.
 //-EXPECT-ERROR: A class is a type, not an importable namespace.
 //alias Space;
+
+/* ----- bare (naked) code in a class body is a compile error ----- */
+/* a class body holds only the ctor/dtor, member definitions, and methods —
+   never a naked statement. tested across all three forms × three contexts. */
+
+/* file-scope class: naked expression-statement. */
+//-EXPECT-ERROR: A class body holds the constructor
+//BareExpr(int x_) { __println("naked"); }
+
+/* file-scope class: naked variable declaration. */
+//-EXPECT-ERROR: A class body holds the constructor
+//BareDecl(int x_) { int z = 5; }
+
+/* file-scope class: naked control-flow. */
+//-EXPECT-ERROR: A class body holds the constructor
+//BareIf(int x_) { if (x_ > 0) { } }
+
+/* hoisted class: naked expression-statement. */
+//-EXPECT-ERROR: A class body holds the constructor
+//BareHostExpr(int x_) {
+//    Mem(int y_) { __println("naked"); }
+//}
+
+/* hoisted class: naked variable declaration. */
+//-EXPECT-ERROR: A class body holds the constructor
+//BareHostDecl(int x_) {
+//    Mem(int y_) { int z = 5; }
+//}
+
+/* hoisted class: naked control-flow. */
+//-EXPECT-ERROR: A class body holds the constructor
+//BareHostIf(int x_) {
+//    Mem(int y_) { if (y_ > 0) { } }
+//}
+
+/* local class: naked expression-statement. */
+//-EXPECT-ERROR: A class body holds the constructor
+//int neg_bare_local_expr() {
+//    BareLoc(int x_) { __println("naked"); }
+//    return 0;
+//}
+
+/* local class: naked variable declaration. */
+//-EXPECT-ERROR: A class body holds the constructor
+//int neg_bare_local_decl() {
+//    BareLoc(int x_) { int z = 5; }
+//    return 0;
+//}
+
+/* local class: naked control-flow. */
+//-EXPECT-ERROR: A class body holds the constructor
+//int neg_bare_local_if() {
+//    BareLoc(int x_) { if (x_ > 0) { } }
+//    return 0;
+//}
+
+/* ----- no visibility leak: members need the class qualifier ----- */
+
+/* file-scope class (Space): a member alias is not visible bare. */
+//-EXPECT-ERROR: 'Float' needs a namespace qualifier.
+//int neg_leak_alias() { Float p = 1.0; return 0; }
+
+/* file-scope class (Space): a member const is not visible bare. */
+//-EXPECT-ERROR: 'kPi' needs a namespace qualifier.
+//int neg_leak_const() { __println("" + kPi); return 0; }
+
+/* file-scope class (Space): a member enum type is not visible bare. */
+//-EXPECT-ERROR: 'Count' needs a namespace qualifier.
+//int neg_leak_enum() { Count c = Space:Count:kZero; return 0; }
+
+/* file-scope class (Space): a member enum value is not visible bare. */
+//-EXPECT-ERROR: 'kOne' needs a namespace qualifier.
+//int neg_leak_enum_value() { __println("" + kOne); return 0; }
+
+/* file-scope class (Space): the enum keeps its name in the path — its members
+   do not flatten into the class. */
+//-EXPECT-ERROR: 'Space' has no member 'kOne'.
+//int neg_leak_flatten() { __println("" + Space:kOne); return 0; }
+
+/* file-scope class (Space): the enum's own name is not a bare namespace. */
+//-EXPECT-ERROR: 'Count' is not a namespace.
+//int neg_leak_enum_bare_qual() { __println("" + Count:kOne); return 0; }
+
+/* hoisted class (Host:Mem): a member alias is not visible bare. */
+//-EXPECT-ERROR: 'Float' needs a namespace qualifier.
+//HostFloat(int x_) {
+//    Mem(int y_) { alias Float = float; }
+//}
+//int neg_hoist_alias() { Float p = 1.0; return 0; }
+
+/* hoisted class (Host:Mem): a member const is not visible bare. */
+//-EXPECT-ERROR: 'kPi' needs a namespace qualifier.
+//HostConst(int x_) {
+//    Mem(int y_) { const int kPi = 3; }
+//}
+//int neg_hoist_const() { __println("" + kPi); return 0; }
+
+/* hoisted class (Host:Mem): a member enum type is not visible bare. */
+//-EXPECT-ERROR: 'Count' needs a namespace qualifier.
+//HostEnum(int x_) {
+//    Mem(int y_) { enum int Count (kZero, kOne, kTwo); }
+//}
+//int neg_hoist_enum() { Count c = HostEnum:Mem:Count:kZero; return 0; }
+
+/* hoisted class (Host:Mem): a member enum value is not visible bare. */
+//-EXPECT-ERROR: 'kOne' needs a namespace qualifier.
+//HostEnumVal(int x_) {
+//    Mem(int y_) { enum int Count (kZero, kOne, kTwo); }
+//}
+//int neg_hoist_enum_value() { __println("" + kOne); return 0; }
+
+/* hoisted class (Host:Mem): the enum does not flatten into the hoisted class. */
+//-EXPECT-ERROR: 'Host:Mem' has no member 'kOne'.
+//Host(int x_) {
+//    Mem(int y_) { enum int Count (kZero, kOne, kTwo); }
+//}
+//int neg_hoist_flatten() { __println("" + Host:Mem:kOne); return 0; }
+
+/* hoisted class: the hoisted name needs its host — bare `Mem` is not reachable. */
+//-EXPECT-ERROR: 'Mem' is not a namespace.
+//HostMissing(int x_) {
+//    Mem(int y_) { alias Float = float; }
+//}
+//int neg_hoist_missing_host() { Mem:Float p = 1.0; return 0; }
+
+/* hoisted class: a member of the hoisted class is not a member of the host. */
+//-EXPECT-ERROR: 'Float' is not a type in 'Host'.
+//Host(int x_) {
+//    Mem(int y_) { alias Float = float; }
+//}
+//int neg_hoist_wrong_level() { Host:Float p = 1.0; return 0; }
+
+/* local class (Loc): a member alias is not visible bare. */
+//-EXPECT-ERROR: 'Float' needs a namespace qualifier.
+//int neg_local_alias() {
+//    Loc(int x_) { alias Float = float; }
+//    Float p = 1.0;
+//    return 0;
+//}
+
+/* local class (Loc): a member const is not visible bare. */
+//-EXPECT-ERROR: 'kPi' needs a namespace qualifier.
+//int neg_local_const() {
+//    Loc(int x_) { const int kPi = 3; }
+//    __println("" + kPi);
+//    return 0;
+//}
+
+/* local class (Loc): a member enum type is not visible bare. */
+//-EXPECT-ERROR: 'Count' needs a namespace qualifier.
+//int neg_local_enum() {
+//    Loc(int x_) { enum int Count (kZero, kOne, kTwo); }
+//    Count c = Loc:Count:kZero;
+//    return 0;
+//}
+
+/* local class (Loc): a member enum value is not visible bare. */
+//-EXPECT-ERROR: 'kOne' needs a namespace qualifier.
+//int neg_local_enum_value() {
+//    Loc(int x_) { enum int Count (kZero, kOne, kTwo); }
+//    __println("" + kOne);
+//    return 0;
+//}
+
+/* local class (Loc): the enum does not flatten into the local class. */
+//-EXPECT-ERROR: 'Loc' has no member 'kOne'.
+//int neg_local_flatten() {
+//    Loc(int x_) { enum int Count (kZero, kOne, kTwo); }
+//    __println("" + Loc:kOne);
+//    return 0;
+//}
