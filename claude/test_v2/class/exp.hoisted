@@ -16,3 +16,16 @@ HOISTED:Node: 2
 Reader: 99 99
 Sub:ctor: 3
 Sub:dtor: 3
+Widget:ctor: 7
+useWidget: 7
+Widget:dtor: 7
+Inner:ctor: 5
+Inner:dtor: 5
+sizeof Ring:Ping = 8
+Pen: 1 1
+Units:Metric:Real = 2.5
+Pixel:ctor: 0
+Cell:ctor
+c.pixel = 0
+Cell:dtor
+Pixel:dtor: 0

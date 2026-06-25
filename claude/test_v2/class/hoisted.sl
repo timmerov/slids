@@ -107,6 +107,64 @@ Cfg(int x_) {
     }
 }
 
+/* a hoisted class used as a function RETURN type and a pointer PARAMETER
+   (a by-value class parameter is rejected language-wide; pass by reference). */
+Maker(int x_) {
+    Widget(int w_) {
+        _() { __println("Widget:ctor: " + w_); }
+        ~() { __println("Widget:dtor: " + w_); }
+    }
+}
+Maker:Widget makeWidget() { Maker:Widget r(7); return r; }
+void useWidget(Maker:Widget^ p) { __println("useWidget: " + p^.w_); }
+
+/* an alias to the host class sees through to a hoisted member, exactly as a
+   type-alias sees through a file-scope class's namespace (cf. Time:Count). */
+alias HostAlias = Outer;
+
+/* sibling hoisted classes that reference each other by REFERENCE — finite size
+   and allowed (the by-VALUE sibling cycle is rejected below). */
+Ring(int x_) {
+    Ping(Pong^ p_) { }
+    Pong(Ping^ p_) { }
+}
+
+/* a host member ENUM reached from a hoisted class, bare and qualified (the host
+   const/alias forms are covered by Cfg/Outer above). */
+Palette(int x_) {
+    enum int Hue ( red, green, blue );
+    Pen(int y_) {
+        _() {
+            int a = Hue:green;
+            int b = Palette:Hue:green;
+            __println("Pen: " + a + " " + b);
+        }
+        ~() { }
+    }
+}
+
+/* a member alias + const defined INSIDE a hoisted class, named from OUTSIDE via
+   the full path `Units:Metric:Real` / `Units:Metric:kScale`. */
+Units(int x_) {
+    Metric(int y_) {
+        alias Real = float;
+        const Real kScale = 2.5;
+    }
+}
+
+/* one hoisted sibling held by VALUE inside another (acyclic) — transitive hooks
+   fire (Pixel's ctor before Cell's, dtors in reverse). */
+Frame(int x_) {
+    Pixel(int v_) {
+        _() { __println("Pixel:ctor: " + v_); }
+        ~() { __println("Pixel:dtor: " + v_); }
+    }
+    Cell(Pixel p_) {
+        _() { __println("Cell:ctor"); }
+        ~() { __println("Cell:dtor"); }
+    }
+}
+
 int32 main() {
 
     { Outer outer(1); }
@@ -145,6 +203,30 @@ int32 main() {
         }
         Loc:Sub s(3);
     }
+
+    // a hoisted class as a function return type + a pointer parameter.
+    {
+        Maker:Widget w = makeWidget();
+        useWidget(w);
+    }
+
+    // an alias to the host sees through to a hoisted member.
+    { HostAlias:Inner ai(5); }
+
+    // sibling hoisted classes refer to each other by reference (finite size).
+    __println("sizeof Ring:Ping = " + sizeof(Ring:Ping));
+
+    // a host member enum reached from a hoisted class (bare + qualified).
+    { Palette:Pen p(0); }
+
+    // a member alias/const inside a hoisted class, named via the full path.
+    {
+        Units:Metric:Real s = Units:Metric:kScale;
+        __println(##type(s) + " = " + s);
+    }
+
+    // a hoisted sibling held by value in another (acyclic) — transitive hooks.
+    { Frame:Cell c; __println("c.pixel = " + c.p_.v_); }
 
     return 0;
 }
