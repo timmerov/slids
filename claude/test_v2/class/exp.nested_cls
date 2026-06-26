@@ -30,4 +30,45 @@ Holder:ctor: 7
 hh.h.v = 7
 Holder:dtor: 7
 Held:dtor: 7
+Loc:ctor: 7
+Loc:ctor: 7
+arr: 7 7
+Loc:dtor: 7
+Loc:dtor: 7
+Loc:ctor: 7
+Loc:ctor: 7
+tup: 7 7
+Loc:dtor: 7
+Loc:dtor: 7
+Loc:ctor: 7
+Loc:ctor: 7
+Loc:ctor: 7
+Loc:ctor: 7
+Loc:ctor: 7
+Loc:ctor: 7
+deep: 7 7 7 | 7 7 7
+Loc:dtor: 7
+Loc:dtor: 7
+Loc:dtor: 7
+Loc:dtor: 7
+Loc:dtor: 7
+Loc:dtor: 7
+Loc:ctor: 1
+Loc:ctor: 2
+Loc:ctor: 3
+Loc:ctor: 4
+init: 1 2 3 4
+Loc:dtor: 4
+Loc:dtor: 3
+Loc:dtor: 2
+Loc:dtor: 1
+Loc:ctor: 7
+Loc:ctor: 7
+Loc:dtor: 7
+Loc:dtor: 7
+Cell:ctor: 3
+Cell:ctor: 3
+grid: 3 3
+Cell:dtor: 3
+Cell:dtor: 3
 main:Function:dtor: 10

@@ -220,6 +220,52 @@ int32 main() {
         __println("hh.h.v = " + hh.h_.v_);
     }
 
+    // no-initializer aggregate-of-LOCAL-class default construction: the leaf class
+    // is reached through an array, a tuple, and MIXED nesting; every leaf default-
+    // constructs to its field default (7). Plus the initialized array/tuple forms
+    // and new[] of a local class.
+    {
+        Loc(int x_ = 7) {
+            _() { __println("Loc:ctor: " + x_); }
+            ~() { __println("Loc:dtor: " + x_); }
+        }
+
+        // array of local class, no initializer.
+        { Loc arr[2]; __println("arr: " + arr[0].x_ + " " + arr[1].x_); }
+
+        // tuple of local class, no initializer.
+        { (Loc, Loc) tup; __println("tup: " + tup[0].x_ + " " + tup[1].x_); }
+
+        // a class leaf buried in MIXED arrays + tuples, no initializer.
+        {
+            ( Loc[2], Loc ) deep[2];
+            __println("deep: " + deep[0][0][0].x_ + " " + deep[0][0][1].x_ + " " + deep[0][1].x_
+                      + " | " + deep[1][0][0].x_ + " " + deep[1][0][1].x_ + " " + deep[1][1].x_);
+        }
+
+        // initialized array + tuple of local class (slot values override the default).
+        {
+            Loc arr[2] = (1, 2);
+            (Loc, Loc) tup = (3, 4);
+            __println("init: " + arr[0].x_ + " " + arr[1].x_ + " " + tup[0].x_ + " " + tup[1].x_);
+        }
+
+        // new[] / delete of a local class (each element default-constructed).
+        { Loc[] heap = new Loc[2]; delete heap; }
+    }
+
+    // a LOCAL class whose FIELD is an array-of-class — default-constructing the
+    // owner default-constructs each element, firing the field's hooks.
+    {
+        Cell(int v_ = 3) {
+            _() { __println("Cell:ctor: " + v_); }
+            ~() { __println("Cell:dtor: " + v_); }
+        }
+        Grid(Cell cells_[2]) { }
+        Grid grd;
+        __println("grid: " + grd.cells_[0].v_ + " " + grd.cells_[1].v_);
+    }
+
     return 0;
 }
 

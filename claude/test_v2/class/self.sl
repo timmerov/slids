@@ -15,6 +15,17 @@ self is how a method refers to the object.
         }
     }
 
+by default, self is mutable.
+use the const keyword before the method name to make self not-mutable.
+
+    Self(int x_) {
+        void const method() {
+            __println("self is const.");
+        }
+    }
+
+note:
+const-ness is currently parsed but not enforced.
 */
 
 /*
