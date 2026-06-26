@@ -536,11 +536,9 @@ void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
 // Resolve+type a method call (kMethodCallStmt): bind the method on the receiver's
 // class, arity/type-check args, stamp param_types/return_type/inferred_type.
 // Shared by the statement form (classifyStmt) and the expression form (inferExpr).
-// as_expression: a value-producing call (`x = obj.m()`) — a CONSTRUCTION receiver
-// is rejected (no address for `_$recv`); the statement form lifts its temp in
-// desugar, so it allows one.
-void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag,
-                     bool as_expression);
+// A CONSTRUCTION receiver (`Class(a).m()`) is fine in either: desugar lifts it to a
+// `_$cret` temp (liftSretCallExprs) whose address is passed as `_$recv`.
+void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
 void classifyNamespace(parse::Tree& tree, parse::Node& node,
                        diagnostic::Sink& diag);
 
@@ -1106,7 +1104,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 if (methodId >= 0
                     && tree.entries[methodId].kind == parse::EntryKind::kFunction) {
                     e.kind = parse::Kind::kMethodCallStmt;   // name=method, child[0]=recv
-                    inferMethodCall(tree, e, diag, /*as_expression=*/true);
+                    inferMethodCall(tree, e, diag);
                     return;
                 }
                 diagnostic::report(diag, {e.file_id, e.name_tok,
@@ -1119,7 +1117,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         }
         case parse::Kind::kMethodCallStmt: {
             // A method-call EXPRESSION used as a value (`x = obj.method(args)`).
-            inferMethodCall(tree, e, diag, /*as_expression=*/true);
+            inferMethodCall(tree, e, diag);
             return;
         }
         case parse::Kind::kSizeofExpr: {
@@ -2792,8 +2790,7 @@ void classifyStmtList(parse::Tree& tree,
     }
 }
 
-void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag,
-                     bool as_expression) {
+void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     // obj.method(args) — infer the receiver, resolve the method on its class's
     // member frame, arity-check + infer the args. desugar reads the receiver's
     // class off children[0].inferred_type to mint the symbol. children =
@@ -2802,16 +2799,6 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag,
     parse::Node& recv = *s.children[0];
     inferExpr(tree, recv, widen::kNoType, diag);
     if (recv.inferred_type == widen::kNoType) return;
-    // A nameless construction (`Class(args).m()`) as a method receiver in an
-    // EXPRESSION has no address for `_$recv` and is not lifted, so reject it the
-    // same way every other unlifted construction position is (the statement form
-    // lifts its temp in desugar, so it is allowed there).
-    if (as_expression && recv.is_construction) {
-        diagnostic::report(diag, {recv.file_id, recv.tok,
-            "Constructing a class in this position is not yet supported; declare a "
-            "new variable (e.g. 'Class x = Class(...)').", {}});
-        return;
-    }
     widen::TypeRef rs = widen::strip(recv.inferred_type);
     if (!(widen::form(rs) == widen::Type::Form::kSlid
           && tree.classes.count(rs) > 0)) {
@@ -3372,7 +3359,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             return;
         }
         case parse::Kind::kMethodCallStmt: {
-            inferMethodCall(tree, s, diag, /*as_expression=*/false);
+            inferMethodCall(tree, s, diag);
             return;
         }
         case parse::Kind::kReturnStmt: {

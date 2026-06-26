@@ -717,18 +717,26 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     the pointer — an addr-of of a deref is not a codegen lvalue). A bare call resolving
     to a method errors ("Method 'm' must be called on an object.") — call it on the
     receiver or via `self`. LANDED since: the EXPRESSION form (`x = obj.m()`, lowered
-    to a value kCallExpr; a CONSTRUCTION receiver is rejected — it has no address for
-    `_$recv`; the statement form lifts its temp); SIBLING calls via `self`
-    (`self.m()`); paren-less zero-arg calls (`obj.m`, a kFieldExpr→method rewrite in
-    classify); and a method signature naming its OWN class (`Self^ m(Self^)` — the
-    placeholder ClassInfo is emplaced before member registration so the type is
-    known). The `self` KEYWORD is an address-aliased LOCAL of the class type whose
-    storage IS `_$recv`'s target: `self`, `self.field`, `self.m()`, and `^self`
-    (= `_$recv`, its own address) all flow through ordinary local machinery — resolve
-    registers it in resolveFunctionBody (like a param, not in body_locals); codegen
-    binds its SymTab address to `_$recv^` once at the prologue (self_entry_id on the
-    fn node). A bare `x_ += 1` field compound-write is still todo.txt (the explicit
-    `self.x_ += 1` works). Detail: [[project_self_and_method_calls]].
+    to a value kCallExpr); SIBLING calls via `self` (`self.m()`); paren-less zero-arg
+    calls (`obj.m`, a kFieldExpr→method rewrite in classify); and a method signature
+    naming its OWN class (`Self^ m(Self^)` — the placeholder ClassInfo is emplaced
+    before member registration so the type is known). The `self` KEYWORD is an
+    address-aliased LOCAL of the class type whose storage IS `_$recv`'s target:
+    `self`, `self.field`, `self.m()`, and `^self` (= `_$recv`, its own address) all
+    flow through ordinary local machinery — resolve registers it in
+    resolveFunctionBody (like a param, not in body_locals); codegen binds its SymTab
+    address to `_$recv^` once at the prologue (self_entry_id on the fn node). Bare
+    `x_ += 1` field compound-writes resolve to the field too (the kAugAssignStmt
+    rewrite). A CONSTRUCTION receiver in a method call (`Class(2).m()`) is lifted to
+    a `_$cret` temp: in a decl-init / arg / return / STATEMENT it lifts to the
+    enclosing scope; in a CONDITION (if/while/for/switch) it lifts into the
+    condition's PPID seq (kSeqExpr), constructed at phrase entry and DESTROYED after
+    the value — so a loop receiver is rebuilt+destroyed each iteration and an
+    if-temp dies before the body. Codegen's kSeqExpr builds/destroys the class temp;
+    desugar's lowerPhraseSlot lifts it (lift_constructions, for conditions only — a
+    return / arg builds in place). Still todo.txt: a construction under `&&`/`||`
+    (lifted unconditionally) and in a store-target / move operand (rejected). Detail:
+    [[project_self_and_method_calls]].
   * NAME COLLISIONS + TYPE-NAME DIAGNOSTICS. A class name collides with ANY
     same-name entry (another class, an alias / enum / namespace, a const, a
     function) — reportNameCollision carets the source-LATER declaration as the

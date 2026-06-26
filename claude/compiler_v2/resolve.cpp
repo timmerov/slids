@@ -2364,6 +2364,16 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             return Completion::Normal;
         }
         case parse::Kind::kAugAssignStmt: {
+            // A BARE aug-assign target matching a class FIELD is `self.field op= rhs`
+            // — rewrite to the complex-lvalue form [self.field, rhs] (mirror of the
+            // kAssignStmt field rewrite). Without this the bare name falls into
+            // resolveAssignTarget and errors "undeclared variable".
+            if (s.children.size() == 1 && !isQualified(s)
+                && resolveName(tree, s.name) < 0 && isMethodField(tree, s.name)) {
+                auto lvalue = buildSelfField(s.name, s.file_id, s.name_tok);
+                s.children.insert(s.children.begin(), std::move(lvalue));
+                s.name.clear();
+            }
             // Complex lvalue form (`arr[i] += v`): [0]=lvalue chain, [1]=rhs.
             // resolveStoreTarget does the same read-and-write DA a store does
             // (it reads the base, marks an aggregate assigned); the rhs reads.

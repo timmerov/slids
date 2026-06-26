@@ -229,6 +229,41 @@ int32 main() {
         __println("-- end 10 (dtor 11 next) --");
     }
 
+    // FORM 2 — a METHOD CALL on a construction temporary, used as a VALUE: the temp
+    // is lifted (built, the method called on it, its result read), then destroyed at
+    // scope end. (Decl-init / argument / return positions lift it; a loop/if
+    // CONDITION does not — see neg_method_in_condition.)
+    __println("== 10b: form-2 method call as a value ==");
+    {
+        int g = Class(15).get();
+        __println("g= " + g);
+        __println("-- end 10b (dtor 15 at scope end) --");
+    }
+
+    // FORM 2 — a construction-temporary method call in an IF CONDITION: the
+    // condition is evaluated once, so the temp is lifted before the if and
+    // destroyed right after it.
+    __println("== 10c: form-2 method call in an if condition ==");
+    {
+        if (Class(16).get() > 0) {
+            __println("positive");
+        }
+        __println("-- end 10c (dtor 16 ran BEFORE the body) --");
+    }
+
+    // FORM 2 — a construction-temporary method call in a WHILE condition: re-built
+    // AND destroyed EACH iteration (the condition seq re-evaluates per pass), so the
+    // ctor/dtor are balanced per iteration.
+    __println("== 10d: form-2 method call in a while condition ==");
+    {
+        int n = 0;
+        while (Class(n).get() < 2) {
+            __println("loop " + n);
+            n += 1;
+        }
+        __println("-- end 10d --");
+    }
+
     // FORM 2 — a construction passed as a function argument: built, passed by
     // reference, destroyed at the semicolon.
     __println("== 11: construction as a function argument ==");
@@ -352,31 +387,10 @@ int32 main() {
 //    Trivial(5);
 //}
 
-/* a method call on a VARIABLE mid-expression is supported (see self.sl), but the
-   receiver may not be a nameless CONSTRUCTION temporary — it has no address for
-   `_$recv`, so it is rejected like any other unlifted construction position. */
-//-EXPECT-ERROR: Constructing a class in this position is not yet supported
-//void neg_method_on_value() {
-//    int x = Class(2).method();
-//    __println("x= " + x);
-//}
-
-/* a construction in an if condition is an unsupported position — reject it
-   clearly rather than crashing in codegen. */
-//-EXPECT-ERROR: Constructing a class in this position is not yet supported
-//void neg_construction_in_if() {
-//    if (Class(3).c_ > 0) {
-//        __println("never");
-//    }
-//}
-
-/* a construction in a while condition — same unsupported position. */
-//-EXPECT-ERROR: Constructing a class in this position is not yet supported
-//void neg_construction_in_while() {
-//    while (Class(1).c_ > 99) {
-//        __println("never");
-//    }
-//}
+/* a construction temporary in a CONDITION — an if/while/for condition or a switch
+   discriminant — IS supported (positives "10b"-"10d"): the temp is lifted into the
+   condition's seq, constructed and destroyed per evaluation (so a loop rebuilds it
+   each iteration). */
 
 /* a construction through a dereference store target. */
 //-EXPECT-ERROR: Constructing a class in this position is not yet supported

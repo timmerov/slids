@@ -39,6 +39,8 @@ std::string emitArrayLiteralValue(widen::TypeRef arrType, ast::Node const& rhs,
 // and new[]/delete[] gate the count cookie on whether the element needs a dtor.
 void emitConstructHooks(std::string const& addr, widen::TypeRef type,
                         std::ostream& out);
+void emitDestructHooks(std::string const& addr, widen::TypeRef type,
+                       std::ostream& out);
 bool typeNeedsHook(widen::TypeRef type, bool ctor);
 bool isSretReturn(widen::TypeRef t);
 bool isAstLvalue(ast::Node const& n);
@@ -1287,6 +1289,17 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                 return emitElementAddr(operand, syms, pool, out, diag,
                                        /*allow_partial=*/true);
             }
+            // An unlifted CONSTRUCTION operand (`^Class(a)`, e.g. a method receiver
+            // in a CONDITION, which the statement-level lift doesn't reach) has no
+            // address. Reject it cleanly like every other unlifted construction
+            // value position, instead of asserting. (Decl-init / arg / return /
+            // statement receivers ARE lifted to a `_$cret` temp and never reach here.)
+            if (operand.is_construction) {
+                diagnostic::report(diag, {operand.file_id, operand.tok,
+                    "Constructing a class in this position is not yet supported; "
+                    "declare a new variable (e.g. 'Class x = Class(...)').", {}});
+                return "null";
+            }
             assert(operand.kind == ast::Kind::kIdentExpr
                 && operand.resolved_entry_id >= 0
                 && "kAddrOfExpr: operand must be a resolved variable");
@@ -1547,23 +1560,50 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                 && expr.value_index < static_cast<int>(expr.children.size())
                 && "kSeqExpr: value_index out of range");
             std::string result;
+            // A class temp lifted into this seq (a condition's construction/sret-call
+            // receiver) is CONSTRUCTED here and DESTROYED after the value — so it is
+            // scoped to the phrase's evaluation and rebuilt each time the seq runs
+            // (each loop iteration).
+            std::vector<std::pair<std::string, widen::TypeRef>> seq_temps;
             for (size_t i = 0; i < expr.children.size(); i++) {
                 ast::Node const& ch = *expr.children[i];
                 if (static_cast<int>(i) == expr.value_index) {
                     result = emitExpr(ch, syms, pool, out, diag, dest_type);
                 } else if (ch.kind == ast::Kind::kVarDeclStmt) {
-                    // `_$lv` is always a plain reference: its alloca was hoisted
-                    // by collectVarDecls, so emit only the address store here.
                     auto it = syms.find(ch.resolved_entry_id);
-                    assert(it != syms.end() && "kSeqExpr: _$lv alloca not hoisted");
-                    std::string a = emitExpr(*ch.children[0], syms, pool, out, diag,
-                                             it->second.slids_type);
-                    out << "  store " << it->second.llvm_type << " " << a
-                        << ", ptr " << it->second.alloca_name << "\n";
+                    assert(it != syms.end() && "kSeqExpr: temp alloca not hoisted");
+                    if (widen::form(widen::strip(ch.return_type))
+                            == widen::Type::Form::kSlid) {
+                        // A `_$cret` class temp: build it into its hoisted alloca. An
+                        // sret CALL init builds-in-place (the callee runs the ctor); a
+                        // construction TUPLE init field-inits then runs the ctor.
+                        widen::TypeRef T = ch.return_type;
+                        std::string addr = it->second.alloca_name;
+                        if (!ch.children.empty()
+                            && ch.children[0]->kind == ast::Kind::kCallExpr) {
+                            emitCall(*ch.children[0], syms, pool, out, diag, addr);
+                        } else if (!ch.children.empty()) {
+                            std::string v = emitExpr(*ch.children[0], syms, pool, out,
+                                                     diag, T);
+                            out << "  store " << it->second.llvm_type << " " << v
+                                << ", ptr " << addr << "\n";
+                            emitConstructHooks(addr, widen::strip(T), out);
+                        }
+                        seq_temps.push_back({addr, widen::strip(T)});
+                    } else {
+                        // `_$lv` plain reference: emit only the address store (its
+                        // alloca was hoisted by collectVarDecls).
+                        std::string a = emitExpr(*ch.children[0], syms, pool, out, diag,
+                                                 it->second.slids_type);
+                        out << "  store " << it->second.llvm_type << " " << a
+                            << ", ptr " << it->second.alloca_name << "\n";
+                    }
                 } else {
                     emitExpr(ch, syms, pool, out, diag, widen::kNoType);
                 }
             }
+            for (auto rit = seq_temps.rbegin(); rit != seq_temps.rend(); ++rit)
+                emitDestructHooks(rit->first, rit->second, out);
             return result;
         }
         case ast::Kind::kBumpExpr: {

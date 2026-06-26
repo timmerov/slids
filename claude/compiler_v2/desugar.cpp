@@ -269,6 +269,12 @@ std::unique_ptr<ast::Node> lowerFieldExpr(parse::Node const& p,
                                           parse::Tree const& tree, int& next_id);
 std::unique_ptr<ast::Node> lowerMethodCall(parse::Node const& p,
                                            parse::Tree const& tree, int& next_id);
+std::unique_ptr<ast::Node> mintIdent(std::string const& name, int id,
+                                     widen::TypeRef ty, int file, int tok);
+bool returnTypeHasCtor(widen::TypeRef t);
+void liftSretCallExprs(std::unique_ptr<ast::Node>& node,
+                       std::vector<std::unique_ptr<ast::Node>>& pre,
+                       int& next_id, bool root_intercepted);
 
 std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tree,
                                     int& next_id) {
@@ -991,7 +997,8 @@ std::unique_ptr<ast::Node> makeLvDecl(std::unique_ptr<ast::Node> operand,
     return decl;
 }
 
-void lowerPhraseSlot(std::unique_ptr<ast::Node>& slot, int& next_id);
+void lowerPhraseSlot(std::unique_ptr<ast::Node>& slot, int& next_id,
+                     bool lift_constructions = false);
 
 // Walk an expression that belongs to the CURRENT phrase: collect its bumps into
 // pre/post, replace each inc/dec with a read of the operand. Sub-phrase
@@ -1069,9 +1076,19 @@ void lowerInPhrase(std::unique_ptr<ast::Node>& slot,
 }
 
 // Lower the phrase rooted at `slot`; wrap it in a seq iff it carried bumps.
-void lowerPhraseSlot(std::unique_ptr<ast::Node>& slot, int& next_id) {
+void lowerPhraseSlot(std::unique_ptr<ast::Node>& slot, int& next_id,
+                     bool lift_constructions) {
     if (!slot) return;
     std::vector<std::unique_ptr<ast::Node>> pre, post;
+    // A CONSTRUCTION (or ctor-returning call) inside a CONDITION phrase is lifted to
+    // a `_$cret` temp in the seq's PRE — constructed at phrase entry and destroyed
+    // at phrase exit (codegen's kSeqExpr destroys a class temp after the value). The
+    // temp is thus scoped to the condition's EVALUATION and rebuilt each time the
+    // phrase runs (each loop iteration). The seq re-evaluates per iteration, so a
+    // loop condition's receiver is fresh each pass — the same machinery PPID uses.
+    // ONLY for conditions: a return value / call arg builds-in-place via its own path.
+    if (lift_constructions)
+        liftSretCallExprs(slot, pre, next_id, /*root_intercepted=*/false);
     lowerInPhrase(slot, pre, post, next_id);
     if (pre.empty() && post.empty()) return;
     auto seq = std::make_unique<ast::Node>();
@@ -1847,6 +1864,9 @@ void liftSretCallList(std::vector<std::unique_ptr<ast::Node>>& stmts, int& next_
                 liftSretCallExprs(stmt->children[0], pre, next_id, false);
             stmt_scoped = true;
         }
+        // A CONDITION's construction temp is NOT hoisted here — it must be scoped to
+        // the condition's EVALUATION (rebuilt per loop iteration), so it is lifted
+        // into the condition seq by lowerPhraseSlot (the PPID phrase path) instead.
         if (stmt_scoped && !pre.empty()) {
             auto block = std::make_unique<ast::Node>();
             block->kind = ast::Kind::kBlockStmt;
@@ -2015,7 +2035,7 @@ std::unique_ptr<ast::Node> spliceStmt(std::unique_ptr<ast::Node> b) {
 // branch (like a call argument). The then/else branches are statement lists;
 // an `else if` chain is a nested kIfStmt, recursed structurally.
 void lowerIfStmt(ast::Node& s, int& next_id) {
-    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0], next_id);
+    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0], next_id, /*lift_constructions=*/true);  // if condition
     if (s.children.size() > 1 && s.children[1]) {
         lowerStatementList(s.children[1]->children, next_id);   // then-block
     }
@@ -2031,7 +2051,7 @@ void lowerIfStmt(ast::Node& s, int& next_id) {
 // is a statement list. Both kinds share the child layout ([cond, body]), so this
 // serves kWhileStmt and kDoWhileStmt alike.
 void lowerWhileStmt(ast::Node& s, int& next_id) {
-    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0], next_id);
+    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0], next_id, /*lift_constructions=*/true);  // while/do-while condition
     if (s.children.size() > 1 && s.children[1]) {
         lowerStatementList(s.children[1]->children, next_id);   // body block
     }
@@ -2048,7 +2068,7 @@ void lowerForLong(ast::Node& s, int& next_id) {
             lowerPhraseSlot(s.children[i]->children[0], next_id);   // varlist init
         }
     }
-    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0], next_id);  // cond
+    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0], next_id, /*lift_constructions=*/true);  // cond
     if (s.children.size() > 1 && s.children[1]) {
         lowerStatementList(s.children[1]->children, next_id);   // update block
     }
@@ -2061,7 +2081,7 @@ void lowerForLong(ast::Node& s, int& next_id) {
 // bumps fire once as it is evaluated); [1..] = kCaseClause, whose labels are
 // folded constants (no bumps) and whose body is children.back().
 void lowerSwitchStmt(ast::Node& s, int& next_id) {
-    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0], next_id);
+    if (!s.children.empty() && s.children[0]) lowerPhraseSlot(s.children[0], next_id, /*lift_constructions=*/true);  // switch discriminant
     for (std::size_t i = 1; i < s.children.size(); i++) {
         if (!s.children[i]) continue;
         ast::Node& clause = *s.children[i];
@@ -2178,6 +2198,8 @@ std::unique_ptr<ast::Node> lowerMethodCall(parse::Node const& p,
     call->kind = ast::Kind::kCallExpr;
     call->name = widen::classSymbol(defCls) + "__" + p.name;
     call->return_type = p.return_type;   // emitCall reads return_type
+    call->inferred_type = p.return_type; // a value: its type IS the method's return
+                                         // (a switch scrutinee reads inferred_type)
     call->param_types = p.param_types;   // [self, user...] — classify cached it
     call->file_id = p.file_id;
     call->tok = p.tok;

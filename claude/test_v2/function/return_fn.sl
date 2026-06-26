@@ -407,12 +407,9 @@ int32 main() {
 //    return arr[0].id_;
 //}
 
-/* an if-condition (the lift does not descend conditions). */
-//-EXPECT-ERROR: Returning a class by value in an expression position is not yet supported
-//int neg_cond() {
-//    if (idOf(mkClass()) > 0) { return 1; }
-//    return 0;
-//}
+/* a hook-returning call in a CONDITION (if/while/for/switch) IS supported now: the
+   returned temp is lifted into the condition's seq and destroyed per evaluation
+   (a loop rebuilds it each iteration). */
 
 /* a move operand. */
 //-EXPECT-ERROR: Returning a class by value in an expression position is not yet supported

@@ -45,6 +45,26 @@ Class:ctor: 11
 v= 11
 -- end 10 (dtor 11 next) --
 Class:dtor: 11
+== 10b: form-2 method call as a value ==
+Class:ctor: 15
+g= 15
+-- end 10b (dtor 15 at scope end) --
+Class:dtor: 15
+== 10c: form-2 method call in an if condition ==
+Class:ctor: 16
+Class:dtor: 16
+positive
+-- end 10c (dtor 16 ran BEFORE the body) --
+== 10d: form-2 method call in a while condition ==
+Class:ctor: 0
+Class:dtor: 0
+loop 0
+Class:ctor: 1
+Class:dtor: 1
+loop 1
+Class:ctor: 2
+Class:dtor: 2
+-- end 10d --
 == 11: construction as a function argument ==
 Class:ctor: 12
 sink: 12
