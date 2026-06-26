@@ -132,3 +132,54 @@ Class:ctor: 100
 v= 101
 -- end 22 --
 Class:dtor: 100
+== 23: && short-circuit, rhs construction SKIPPED ==
+-- end 23 (no ctor/dtor 23) --
+== 24: && rhs evaluated, ctor/dtor balanced ==
+Class:ctor: 24
+Class:dtor: 24
+body 24
+-- end 24 (ctor/dtor 24 ran before body) --
+== 25: || short-circuit, rhs construction SKIPPED ==
+body 25
+-- end 25 (no ctor/dtor 25) --
+== 26: || rhs evaluated ==
+Class:ctor: 26
+Class:dtor: 26
+body 26
+-- end 26 (ctor/dtor 26 ran before body) --
+== 27: && in a while condition, rebuilt per pass, skipped on exit ==
+Class:ctor: 0
+Class:dtor: 0
+loop 27: 0
+Class:ctor: 1
+Class:dtor: 1
+loop 27: 1
+-- end 27 (no ctor/dtor on the exit test) --
+== 28: lhs construction always runs ==
+Class:ctor: 28
+Class:dtor: 28
+body 28
+-- end 28 (ctor/dtor 28 ran before body) --
+== 29: nested short-circuit skips the construction ==
+-- end 29 (no ctor/dtor 29) --
+== 30: && rhs construction in a decl initializer, SKIPPED (lhs false) ==
+r= false
+-- end 30 (no ctor/dtor 30) --
+== 31: && rhs construction in a decl initializer, evaluated (lhs true) ==
+Class:ctor: 31
+Class:dtor: 31
+r= true
+-- end 31 (ctor/dtor 31 ran) --
+== 32: || rhs construction in a decl initializer, evaluated (lhs false) ==
+Class:ctor: 32
+Class:dtor: 32
+r= false
+-- end 32 (ctor/dtor 32 ran) --
+== 33: && in a for-long condition, rebuilt per pass ==
+Class:ctor: 0
+Class:dtor: 0
+loop 33: 0
+Class:ctor: 1
+Class:dtor: 1
+loop 33: 1
+-- end 33 (no ctor/dtor on the exit test) --

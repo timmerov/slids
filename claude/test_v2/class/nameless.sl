@@ -56,11 +56,14 @@ then reuses the existing class-construction machinery — there is no new codege
 - a construction as the rhs of a DECLARATION (`Class x = Class(...)`, incl. the
   `<--` move-init form) or a RETURN (`return Class(x)`) builds in place (RVO) —
   one ctor, one dtor, no temp.
+- a construction used as a METHOD-CALL VALUE (`x = Class(...).method()`), a field
+  READ (`x = Class(...).field`), or in a CONDITION (if/while/for/switch — including
+  under `&&`/`||`) is lifted like form 2: built and destroyed per evaluation, so a
+  loop or short-circuit rebuilds or skips it (the short-circuit RHS lifts into its
+  OWN sub-seq, so a skipped branch runs no ctor/dtor).
 - a construction in any OTHER position is rejected cleanly (no silent miscompile):
-  an if / while condition, a store / move / swap operand, a re-assignment to an
-  existing variable (`w = Class(...)`), and a method-call VALUE
-  (`x = Class(...).method()`, which is unimplemented — only the statement form
-  `Class(...).method();` and a field READ `x = Class(...).field` work).
+  a store / move / swap operand, and a re-assignment to an existing variable
+  (`w = Class(...)`).
 
 qualified construction (`Space:Nested(args)`) and a class-typed field (the inner
 ctor runs first, torn down last) both work.
@@ -357,6 +360,116 @@ int32 main() {
         int v = Class(100).c_ + 1;
         __println("v= " + v);
         __println("-- end 22 --");
+    }
+
+    // FORM 2 — a construction under `&&` whose LHS is FALSE: the short-circuit skips
+    // the RHS, so the construction's ctor/dtor must NOT run (it is lifted into the
+    // RHS's own conditional sub-seq, not the unconditional condition pre).
+    __println("== 23: && short-circuit, rhs construction SKIPPED ==");
+    {
+        if (false && Class(23).get() > 0) {
+            __println("unreachable 23");
+        }
+        __println("-- end 23 (no ctor/dtor 23) --");
+    }
+
+    // FORM 2 — a construction under `&&` whose LHS is TRUE: the RHS is evaluated, so
+    // the temp is built and destroyed inside the condition (ctor/dtor before the body).
+    __println("== 24: && rhs evaluated, ctor/dtor balanced ==");
+    {
+        if (true && Class(24).get() > 0) {
+            __println("body 24");
+        }
+        __println("-- end 24 (ctor/dtor 24 ran before body) --");
+    }
+
+    // FORM 2 — a construction under `||` whose LHS is TRUE: the short-circuit skips
+    // the RHS, so no ctor/dtor.
+    __println("== 25: || short-circuit, rhs construction SKIPPED ==");
+    {
+        if (true || Class(25).get() > 0) {
+            __println("body 25");
+        }
+        __println("-- end 25 (no ctor/dtor 25) --");
+    }
+
+    // FORM 2 — a construction under `||` whose LHS is FALSE: the RHS is evaluated.
+    __println("== 26: || rhs evaluated ==");
+    {
+        if (false || Class(26).get() > 0) {
+            __println("body 26");
+        }
+        __println("-- end 26 (ctor/dtor 26 ran before body) --");
+    }
+
+    // FORM 2 — a construction in the RHS of `&&` in a WHILE condition: rebuilt each
+    // pass while the LHS holds, and SKIPPED on the exit test when the LHS is false
+    // (no stray ctor 2).
+    __println("== 27: && in a while condition, rebuilt per pass, skipped on exit ==");
+    {
+        int i = 0;
+        while (i < 2 && Class(i).get() >= 0) {
+            __println("loop 27: " + i);
+            i = i + 1;
+        }
+        __println("-- end 27 (no ctor/dtor on the exit test) --");
+    }
+
+    // FORM 2 — a construction in the LHS of `&&`: the LHS runs UNCONDITIONALLY, so it
+    // is lifted into the condition pre (ctor/dtor around the whole evaluation).
+    __println("== 28: lhs construction always runs ==");
+    {
+        if (Class(28).get() > 0 && true) {
+            __println("body 28");
+        }
+        __println("-- end 28 (ctor/dtor 28 ran before body) --");
+    }
+
+    // FORM 2 — a construction under a NESTED short-circuit: `(true && false)` is false,
+    // so the outer `&&` skips its RHS construction.
+    __println("== 29: nested short-circuit skips the construction ==");
+    {
+        if (true && false && Class(29).get() > 0) {
+            __println("unreachable 29");
+        }
+        __println("-- end 29 (no ctor/dtor 29) --");
+    }
+
+    // NON-CONDITION position — a construction in the RHS of `&&` in a DECL initializer
+    // whose LHS is FALSE: the RHS is still conditionally evaluated, so it is skipped.
+    __println("== 30: && rhs construction in a decl initializer, SKIPPED (lhs false) ==");
+    {
+        bool r = false && Class(30).get() > 0;
+        __println("r= " + r);
+        __println("-- end 30 (no ctor/dtor 30) --");
+    }
+
+    // NON-CONDITION position — same, LHS TRUE: the RHS construction runs and is torn
+    // down inside the initializer's `&&` sub-seq.
+    __println("== 31: && rhs construction in a decl initializer, evaluated (lhs true) ==");
+    {
+        bool r = true && Class(31).get() > 0;
+        __println("r= " + r);
+        __println("-- end 31 (ctor/dtor 31 ran) --");
+    }
+
+    // NON-CONDITION position — a construction in the RHS of `||` in a DECL initializer
+    // whose LHS is FALSE: the RHS runs.
+    __println("== 32: || rhs construction in a decl initializer, evaluated (lhs false) ==");
+    {
+        bool r = false || Class(32).get() > 100;
+        __println("r= " + r);
+        __println("-- end 32 (ctor/dtor 32 ran) --");
+    }
+
+    // FORM 2 — a construction in the RHS of `&&` in a FOR-LONG condition: rebuilt each
+    // pass while the LHS holds, skipped on the exit test.
+    __println("== 33: && in a for-long condition, rebuilt per pass ==");
+    {
+        for (int i = 0) (i < 2 && Class(i).get() >= 0) { i = i + 1; } {
+            __println("loop 33: " + i);
+        }
+        __println("-- end 33 (no ctor/dtor on the exit test) --");
     }
 
     return 0;

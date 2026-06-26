@@ -734,8 +734,10 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     the value — so a loop receiver is rebuilt+destroyed each iteration and an
     if-temp dies before the body. Codegen's kSeqExpr builds/destroys the class temp;
     desugar's lowerPhraseSlot lifts it (lift_constructions, for conditions only — a
-    return / arg builds in place). Still todo.txt: a construction under `&&`/`||`
-    (lifted unconditionally) and in a store-target / move operand (rejected). Detail:
+    return / arg builds in place). A `&&`/`||` short-circuit RHS lifts into its OWN
+    sub-seq (lowerPhraseSlot recurses per short-circuit operand), so a skipped branch
+    runs no ctor/dtor; the unconditional LHS lifts into the condition pre. Still
+    todo.txt: a construction in a store-target / move operand (rejected). Detail:
     [[project_self_and_method_calls]].
   * NAME COLLISIONS + TYPE-NAME DIAGNOSTICS. A class name collides with ANY
     same-name entry (another class, an alias / enum / namespace, a const, a

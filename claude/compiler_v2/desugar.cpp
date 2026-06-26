@@ -1063,7 +1063,10 @@ void lowerInPhrase(std::unique_ptr<ast::Node>& slot,
     }
     if (n.kind == ast::Kind::kBinaryExpr && (n.text == "&&" || n.text == "||")) {
         lowerInPhrase(n.children[0], pre, post, next_id);  // lhs: same phrase
-        lowerPhraseSlot(n.children[1], next_id);           // rhs: own cond. phrase
+        // rhs: own conditionally-evaluated phrase — lift any construction into the
+        // rhs's OWN sub-seq (constructed/destroyed only when the short-circuit
+        // doesn't skip it), not into this phrase's pre.
+        lowerPhraseSlot(n.children[1], next_id, /*lift_constructions=*/true);
         return;
     }
     // Every other interior node (arith/bitwise/^^/unary) is part of this
@@ -1747,6 +1750,18 @@ void liftSretCallExprs(std::unique_ptr<ast::Node>& node,
                        std::vector<std::unique_ptr<ast::Node>>& pre,
                        int& next_id, bool root_intercepted) {
     if (!node) return;
+    // A short-circuit `&&` / `||` evaluates its RHS conditionally. A construction in
+    // the RHS must be lifted into the RHS's OWN sub-seq (done by lowerInPhrase's
+    // && / || arm via lowerPhraseSlot), NOT hoisted into this (unconditional) phrase's
+    // pre — else its ctor/dtor would run even when the short-circuit skips it. Descend
+    // only into the LHS here (it runs unconditionally); leave the RHS for that path.
+    // The `&&` / `||` node itself is bool, never ctor-returning, so there is nothing
+    // to lift at this node.
+    if (node->kind == ast::Kind::kBinaryExpr
+        && (node->text == "&&" || node->text == "||")) {
+        liftSretCallExprs(node->children[0], pre, next_id, false);
+        return;
+    }
     for (auto& ch : node->children)
         liftSretCallExprs(ch, pre, next_id, false);
     // A `Class(args)` construction used inline (e.g. a method receiver) is a

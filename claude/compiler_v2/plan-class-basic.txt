@@ -63,7 +63,8 @@ the class type (storage = `_$recv`'s target), so `self` / `self.field` / `self.m
 position; SIBLING calls via `self`; paren-less calls; a method signature may name its
 OWN class; bare `x_ += 1` writes; and a CONSTRUCTION receiver lifts to a `_$cret` temp
 — in a CONDITION (if/while/for/switch) into the condition's PPID seq, rebuilt+destroyed
-per evaluation. Detail: readme "METHODS" + [[project_self_and_method_calls]].
+per evaluation, incl. under `&&`/`||` (the short-circuit RHS lifts into its OWN sub-seq,
+so a skipped branch runs no ctor/dtor). Detail: readme "METHODS" + [[project_self_and_method_calls]].
 
 DEFAULT MOVE/COPY (classes) LANDED — a SAME-TYPE source at a var-decl init or an
 assignment is a whole-object COPY (or a MOVE for `<--`), not a field spread:

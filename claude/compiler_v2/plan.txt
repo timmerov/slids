@@ -656,9 +656,10 @@ Phase 5 — classes
     a method signature naming its OWN class, bare `x_ += 1` field writes, a
     CONSTRUCTION receiver in an EXPRESSION (lifted to a `_$cret` temp), and
     constructions / ctor-calls in a CONDITION (if/while/for/switch — lifted into the
-    condition's PPID seq, rebuilt+destroyed per evaluation) all LANDED. OPEN
-    (todo.txt): a construction under `&&`/`||` (lifted unconditionally) and in a
-    store-target / move operand (rejected).
+    condition's PPID seq, rebuilt+destroyed per evaluation), incl. under `&&`/`||`
+    (the short-circuit RHS lifts into its OWN sub-seq, so a skipped branch runs no
+    ctor/dtor) all LANDED. OPEN (todo.txt): a construction in a store-target / move
+    operand (rejected).
   * NAMELESS class objects (`Class(args)`) — LANDED. A call whose callee resolves to
     a kClass is a CONSTRUCTION, not a function call: resolve flags is_construction;
     classify spreads the args into the per-field tuple via classifyClassInit. Form 1

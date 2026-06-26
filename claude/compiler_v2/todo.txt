@@ -26,15 +26,16 @@ BUGS
     value. Either removes the discipline requirement and the entire bug class. Until
     then, every `Type const& x = get(...)` near an intern is a latent dangling read.
 
-  * decide if class field allows default init by tuple.
-    Class( Other field = (1,2,3) ) { }
-    Class( Other field(1,2,3) ) { }
-    lean yes to both.
-
 
 BLOCKED FEATURES
 
   deferred features involving classes:
+
+  * CONSTRUCTION-IN-EXPRESSION — remaining gaps (record:
+    [[project_self_and_method_calls]]):
+    - CONSTRUCTION in a STORE TARGET / MOVE operand: `arr[i] = Class()`,
+      `r^ = Class()`, `w <-- Class()` are still rejected ("Constructing a class in
+      this position") — those positions aren't lifted (see nameless.sl negatives).
 
   * CLASS-VALUED ELEMENTS FROM AN AGGREGATE SOURCE COPY RAW (class init) — when a
     class is initialized from a tuple-like VALUE whose slots are themselves class
@@ -51,17 +52,6 @@ BLOCKED FEATURES
   * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
     primitive element type (a reference works for all). Only the CLASS-element
     variant remains, when class array elements exist (Phase 5).
-
-  * CONSTRUCTION-IN-EXPRESSION — remaining gaps (record:
-    [[project_self_and_method_calls]]):
-    - SHORT-CIRCUIT CONDITION CONSTRUCTION (bug): a construction under `&&` / `||`
-      (`if (a && Class().m())`) is lifted UNCONDITIONALLY into the condition seq, so
-      its ctor/dtor run even when the short-circuit would skip it. The flat lift
-      (liftSretCallExprs in lowerPhraseSlot) doesn't respect `&&`/`||`; it should
-      lift into the short-circuit SUB-seq (the rhs's own lowerPhraseSlot) instead.
-    - CONSTRUCTION in a STORE TARGET / MOVE operand: `arr[i] = Class()`,
-      `r^ = Class()`, `w <-- Class()` are still rejected ("Constructing a class in
-      this position") — those positions aren't lifted (see nameless.sl negatives).
 
   * CLASS / USER-TYPE CONVERSION TARGET (Phase 5) — `(Type = expr)` LANDED for
     primitives, tuples, and arrays (lockstep recursive walk; see
@@ -203,6 +193,11 @@ BLOCKED FEATURES
     flips a non-primitive typeless const to a kLocalVar + deepConst). Extend that to
     a PRIMITIVE rhs that didn't fold: route to a const SCALAR variable instead of
     erroring. Keep a FOLDABLE scalar (`const x = 5`) on the substitution path.
+
+  * decide if class field allows default init by tuple.
+    Class( Other field = (1,2,3) ) { }
+    Class( Other field(1,2,3) ) { }
+    lean yes to both.
 
 
 REACH GOALS
