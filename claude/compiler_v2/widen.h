@@ -168,6 +168,13 @@ bool classify(TypeRef ref, TypeKind& out);
 bool isKnownType(TypeRef ref);
 long long typeByteSize(TypeRef ref);
 
+// True iff the type is a class, or an array/tuple (recursively) that reaches a
+// class WITHOUT crossing a pointer/iterator — a value whose class leaves are
+// stored in place and so are default-constructed at declaration (a class can
+// never be left uninitialized). Stops at pointer/iterator (a reference leaf may
+// be null) and at primitives/void; sees through alias/const.
+bool hasInPlaceClass(TypeRef ref);
+
 // Stage-0 round-trip self-test over a fixed vocabulary; true on success.
 bool typeSelfTest(std::ostream& out);
 

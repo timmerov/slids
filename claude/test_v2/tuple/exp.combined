@@ -42,3 +42,83 @@ sw= 3 2
 ssw= 3 2
 cr= 1 4
 cs= 5 0 9 0
+expect ctors 42,42 after
+Class:ctor: 42
+Class:ctor: 42
+expect ctors 42,42 before
+42 42
+expect dtors 42,42 after
+Class:dtor: 42
+Class:dtor: 42
+expect dtors 42,42 before
+expect ctors 42,42 after
+Class:ctor: 42
+Class:ctor: 42
+expect ctors 42,42 before
+42 42
+expect dtors 42,42 after
+Class:dtor: 42
+Class:dtor: 42
+expect dtors 42,42 before
+expect ctors 42 x6 after
+Class:ctor: 42
+Class:ctor: 42
+Class:ctor: 42
+Class:ctor: 42
+Class:ctor: 42
+Class:ctor: 42
+expect ctors 42 x6 before
+deep: 42 42 42 | 42 42 42
+expect dtors 42 x6 after
+Class:dtor: 42
+Class:dtor: 42
+Class:dtor: 42
+Class:dtor: 42
+Class:dtor: 42
+Class:dtor: 42
+expect dtors 42 x6 before
+expect ctors 1..6 after
+Class:ctor: 1
+Class:ctor: 2
+Class:ctor: 3
+Class:ctor: 4
+Class:ctor: 5
+Class:ctor: 6
+expect ctors 1..6 before
+lit: 1 2 3 | 4 5 6
+expect dtors 6..1 after
+Class:dtor: 6
+Class:dtor: 5
+Class:dtor: 4
+Class:dtor: 3
+Class:dtor: 2
+Class:dtor: 1
+expect dtors 6..1 before
+expect ctors 1..6 (src) then 1..6 (copy) after
+Class:ctor: 1
+Class:ctor: 2
+Class:ctor: 3
+Class:ctor: 4
+Class:ctor: 5
+Class:ctor: 6
+Class:ctor: 1
+Class:ctor: 2
+Class:ctor: 3
+Class:ctor: 4
+Class:ctor: 5
+Class:ctor: 6
+cpy: 1 2 3 | 4 5 6
+expect dtors (copy 6..1 then src 6..1) after
+Class:dtor: 6
+Class:dtor: 5
+Class:dtor: 4
+Class:dtor: 3
+Class:dtor: 2
+Class:dtor: 1
+Class:dtor: 6
+Class:dtor: 5
+Class:dtor: 4
+Class:dtor: 3
+Class:dtor: 2
+Class:dtor: 1
+expect dtors before

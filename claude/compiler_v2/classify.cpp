@@ -2500,6 +2500,11 @@ std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty
         n->kind = parse::Kind::kTupleExpr;
         for (int k = 0; k < count; k++)
             n->children.push_back(classZeroValue(tree, inner, file_id, tok, diag));
+        // Type the aggregate node: codegen's array field-init emits each element
+        // via emitExpr, which needs the element's type. (The class-leaf branch
+        // types itself; a written initializer is typed by inferExpr — this is the
+        // no-initializer synthesis that otherwise leaves the node kNoType.)
+        n->inferred_type = st;
         return n;
     } else if (t.form == F::kTuple) {
         // A tuple field with no initializer -> each slot's zero, recursively.
@@ -2507,6 +2512,7 @@ std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty
         n->kind = parse::Kind::kTupleExpr;
         for (widen::TypeRef slotTy : slots)
             n->children.push_back(classZeroValue(tree, slotTy, file_id, tok, diag));
+        n->inferred_type = st;
         return n;
     }
     // Any other field type (void, an unregistered class) has no defined zero
@@ -2845,6 +2851,19 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     classifyClassInit(tree, s, it->second, diag);
                     return;
                 }
+            }
+            // A no-initializer array/tuple whose leaves are classes is default-
+            // constructed in place: synthesize the per-element/-slot construction
+            // value (classZeroValue recurses arrays + tuples and default-constructs
+            // each class leaf with its field defaults), so codegen field-inits it
+            // exactly like a written initializer. The scalar-class case returned
+            // above; a pointer leaf or pure-primitive aggregate is left
+            // uninitialized (hasInPlaceClass is false), as before.
+            if (s.children.empty() && widen::hasInPlaceClass(s.return_type)) {
+                auto init = classZeroValue(tree, s.return_type, s.file_id, s.tok, diag);
+                init->inferred_type = s.return_type;
+                s.children.push_back(std::move(init));
+                return;
             }
             if (!s.children.empty()) {
                 inferExpr(tree, *s.children[0], s.return_type, diag);

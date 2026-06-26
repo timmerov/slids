@@ -637,6 +637,28 @@ bool isKnownType(TypeRef ref) {
     return false;
 }
 
+bool hasInPlaceClass(TypeRef ref) {
+    Type const& t = get(ref);
+    switch (t.form) {
+        case Type::Form::kSlid:      return true;
+        case Type::Form::kArray:     return hasInPlaceClass(t.elem);
+        case Type::Form::kAlias:     return hasInPlaceClass(t.underlying);  // see through
+        case Type::Form::kConst:     return hasInPlaceClass(t.underlying);  // see through
+        case Type::Form::kTuple: {
+            for (TypeRef slot : t.slots) if (hasInPlaceClass(slot)) return true;
+            return false;
+        }
+        case Type::Form::kPrimitive:               // no class to construct
+        case Type::Form::kVoid:
+        case Type::Form::kAnyptr:
+        case Type::Form::kPointer:                 // a reference leaf may be null
+        case Type::Form::kIterator:
+        case Type::Form::kNone:
+            return false;
+    }
+    return false;
+}
+
 bool isKnownType(std::string const& t) {
     return isKnownType(intern(t));
 }

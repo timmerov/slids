@@ -341,6 +341,74 @@ int32 main() {
         __println("cs= " + cs[0].x_ + " " + cs[0].y_ + " "
                   + cs[1].x_ + " " + cs[1].y_);                     // 5 0 9 0
     }
+
+    /* test default initialization of an array/tuple of classes. */
+    {
+        Class(int x_ = 42) {
+            _() { __println("Class:ctor: " + x_); }
+            ~() { __println("Class:dtor: " + x_); }
+        }
+
+        {
+            __println("expect ctors 42,42 after");
+            Class arr[2];
+            __println("expect ctors 42,42 before");
+            __println(arr[0].x_ + " " + arr[1].x_);
+            __println("expect dtors 42,42 after");
+        }
+        __println("expect dtors 42,42 before");
+
+        {
+            __println("expect ctors 42,42 after");
+            (Class, Class) tuple;
+            __println("expect ctors 42,42 before");
+            __println(tuple[0].x_ + " " + tuple[1].x_);
+            __println("expect dtors 42,42 after");
+        }
+        __println("expect dtors 42,42 before");
+
+        /* the leaf class buried several layers deep in MIXED arrays and tuples:
+           an ARRAY of a TUPLE holding an ARRAY-of-class and a class. A no-
+           initializer decl default-constructs every leaf (x_ == 42), reachable
+           as deep[i][0][j] (array->tuple->array->class) and deep[i][1]
+           (array->tuple->class). ctors fire in declaration order, dtors mirror. */
+        {
+            __println("expect ctors 42 x6 after");
+            ( Class[2], Class ) deep[2];
+            __println("expect ctors 42 x6 before");
+            __println("deep: " + deep[0][0][0].x_ + " " + deep[0][0][1].x_ + " " + deep[0][1].x_
+                      + " | " + deep[1][0][0].x_ + " " + deep[1][0][1].x_ + " " + deep[1][1].x_);
+            __println("expect dtors 42 x6 after");
+        }
+        __println("expect dtors 42 x6 before");
+
+        /* same deep mixed shape, INITIALIZED from a tuple LITERAL — each class
+           leaf is constructed from its slot value (1..6), proving the literal
+           routes through every array/tuple layer to the buried class. */
+        {
+            __println("expect ctors 1..6 after");
+            ( Class[2], Class ) lit[2] = ( ((1, 2), 3), ((4, 5), 6) );
+            __println("expect ctors 1..6 before");
+            __println("lit: " + lit[0][0][0].x_ + " " + lit[0][0][1].x_ + " " + lit[0][1].x_
+                      + " | " + lit[1][0][0].x_ + " " + lit[1][0][1].x_ + " " + lit[1][1].x_);
+            __println("expect dtors 6..1 after");
+        }
+        __println("expect dtors 6..1 before");
+
+        /* same deep mixed shape, INITIALIZED from a tuple VARIABLE — a whole-value
+           copy of `src`, so every buried class leaf is copy-constructed (src's
+           ctors 1..6, then the copy's ctors 1..6; dtors mirror both). */
+        {
+            __println("expect ctors 1..6 (src) then 1..6 (copy) after");
+            ( Class[2], Class ) src[2] = ( ((1, 2), 3), ((4, 5), 6) );
+            ( Class[2], Class ) cpy[2] = src;
+            __println("cpy: " + cpy[0][0][0].x_ + " " + cpy[0][0][1].x_ + " " + cpy[0][1].x_
+                      + " | " + cpy[1][0][0].x_ + " " + cpy[1][0][1].x_ + " " + cpy[1][1].x_);
+            __println("expect dtors (copy 6..1 then src 6..1) after");
+        }
+        __println("expect dtors before");
+    }
+
     return 0;
 }
 

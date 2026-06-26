@@ -2279,13 +2279,13 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             if (s.resolved_entry_id >= 0
                 && tree.entries[s.resolved_entry_id].kind
                        == parse::EntryKind::kLocalVar) {
-                // A class is always constructed on declaration (its fields take
-                // default / zero values), so a class-typed decl is definitely
-                // initialized even with no explicit initializer.
-                bool is_class = widen::form(widen::strip(
-                    tree.entries[s.resolved_entry_id].slids_type))
-                        == widen::Type::Form::kSlid;
-                if (!s.children.empty() || is_class) {
+                // A class — or an array/tuple whose leaves are classes — is
+                // always constructed on declaration (its fields take default /
+                // zero values), so such a decl is definitely initialized even
+                // with no explicit initializer.
+                bool constructed = widen::hasInPlaceClass(
+                    tree.entries[s.resolved_entry_id].slids_type);
+                if (!s.children.empty() || constructed) {
                     tree.initialized_locals.insert(s.resolved_entry_id);
                     // A whole-array initializer (`int a[3] = (1,2,3)`) assigns the
                     // entire array — mark it in the array may-set too.

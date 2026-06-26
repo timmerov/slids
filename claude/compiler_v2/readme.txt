@@ -481,14 +481,24 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     kFieldExpr chains (resolve) and emitElementAddr GEPs a kSlid slot.
   * CONSTRUCTION (classify classifyClassInit) normalizes every init form to a
     per-field tuple: each field = init slot, else the author default (read LIVE off
-    the kParam node — constfold may have replaced it), else zero (classZeroValue:
-    0 / 0.0 / false / nullptr, or RECURSIVELY a zero array / tuple; only void / an
-    unregistered class errors). A class-typed field constructs RECURSIVELY
-    (constructClass): a scalar/tuple is the sub-class's ctor input filled with ITS
-    defaults; a same-class value copies. The `=` form SPREADS its tuple slot-to-field;
-    the call form keeps each arg whole. A size-1 init tuple is inexpressible (`( x )`
-    collapses) — punted (todo). A class var-decl is definitely-initialized (DA) even
-    with no initializer.
+    the kParam node — constfold may have replaced it), else default-constructed
+    (classZeroValue: 0 / 0.0 / false / nullptr for a scalar/pointer; RECURSIVELY a
+    TYPED array / tuple value whose leaves are themselves default-constructed — a
+    class leaf via constructClass with ITS field defaults; only void / an
+    unregistered class errors. The synthesized aggregate nodes carry inferred_type,
+    else codegen's array field-init asserts on an untyped element). A class-typed
+    field constructs RECURSIVELY (constructClass): a scalar/tuple is the sub-class's
+    ctor input filled with ITS defaults; a same-class value copies. The `=` form
+    SPREADS its tuple slot-to-field; the call form keeps each arg whole. A size-1
+    init tuple is inexpressible (`( x )` collapses) — punted (todo). A class — OR an
+    array/tuple whose leaves are classes (widen::hasInPlaceClass, recursing array
+    elem + tuple slots, stopping at a pointer/iterator) — is definitely-initialized
+    (DA) and default-constructed IN PLACE even with no initializer: resolve marks it
+    initialized, and classifyStmt (and the per-field loop) synthesizes the
+    construction via classZeroValue, recursing through arbitrarily MIXED arrays/
+    tuples to every buried class leaf, so a class is never uninitialized. Covers a
+    LOCAL, a class FIELD of array/tuple-of-class, and deep mixed nesting; canon
+    tuple/combined.sl (default + literal + variable forms).
   * NAMELESS CONSTRUCTION: a `Class(args)` call whose callee resolves to a kClass
     (not a function) is a CONSTRUCTION, not a call — resolve flags `is_construction`
     (resolveCallTarget accepts a kClass target instead of "is a variable, not a

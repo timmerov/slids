@@ -10,9 +10,13 @@ SINCE: a class also initializes from any TUPLE-LIKE VALUE source (array/tuple
 variable or constant, sub-array row, function return, op result) — spread by slot,
 partial + recursive; a non-bare-identifier source is spilled once into a `_$cinit`
 temp (classifyStmt via classifyStmtList's prelude, classify's only statement-minting
-hook) so a side-effecting index runs once. classZeroValue now zero-fills array /
-tuple / bool fields recursively. Detail in readme.txt CONSTRUCTION; standing record
-[[project_class_init_from_value]]. Whole-class copy-init at a decl
+hook) so a side-effecting index runs once. classZeroValue now default-constructs a
+NO-INITIALIZER array / tuple / bool field OR local recursively — each class leaf via
+constructClass (its field defaults), reached through arbitrarily MIXED arrays/tuples,
+the synthesized aggregate nodes TYPED so codegen's array field-init emits them;
+resolve marks such a class-leaf decl definitely-initialized (widen::hasInPlaceClass),
+so a class is never uninitialized (canon tuple/combined.sl). Detail in readme.txt
+CONSTRUCTION; standing record [[project_class_init_from_value]]. Whole-class copy-init at a decl
 (`Class a = sameClass`) + default move (`<--`) LANDED — see DEFAULT MOVE/COPY below.
 MODEL CORRECTION (vs the §4/§5 below, which were written pre-implementation): the
 ctor does NOT construct — field-init (the tuple fill) happens FIRST and always;

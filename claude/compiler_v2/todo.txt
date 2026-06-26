@@ -121,21 +121,6 @@ BLOCKED FEATURES
     protocol (op[]/size or begin/end/next, Phase 5). Lowers to a kForLongStmt in
     desugar like the others. Not landable until classes exist.
 
-  * CTOR/DTOR THROUGH AN ARRAY / TUPLE class FIELD — an array/tuple-of-hook-class
-    LOCAL works now: `CtorDtor arr[3] = (36,37,38)` and `(CtorDtor,CtorDtor,CtorDtor)
-    t = (14,24,34)` both run ctors in order / dtors in reverse (canon
-    construct.sl) — classify constructs each class element/slot via constructClass; the
-    needs-fixpoint + emitConstructHooks/emitDestructHooks descend array elem /
-    tuple slots; the var-decl arm runs the hooks after the field-init.
-    STILL OPEN: a class FIELD of array/tuple-of-hook type (`Box(CtorDtor items_[2])`)
-    — `Box bx;` errors "Cannot default-construct a field of type 'CtorDtor[2]'."
-    classZeroValue / classifyClassInit only CONSTRUCT a direct kSlid field; an
-    array/tuple field has no default-construction path (the needs-fixpoint already
-    descends it, so the hooks WOULD fire once construction lands). Fix:
-    classZeroValue builds an N-element array (each element default-constructed) /
-    a per-slot tuple, routed through the array-from-tuple slot path. Tests go in
-    array.sl / tuple.sl.
-
   * DUP-DEF / DUP-DECL NOTE CARET POSITION — the "first defined here" note carets
     the first DEFINITION (Entry.def_tok) and "first declared here" the first
     DECLARATION (Entry.tok); verified by manual probe only. The //-EXPECT-ERROR
@@ -301,3 +286,6 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     `int arr[1] = 2` / `int m[1][1] = 7` now works — checkValueAssign wraps the bare
     scalar in dims-deep 1-tuples.) Needs a non-collapsing 1-tuple spelling — same
     root as CLASS-FIELD INIT FROM A SIZE-1 TUPLE below; defer with it.
+
+  * allow partial initialization of an array/tuple of class elements.
+    Class arr[3] = (1,2); (Class,Class,Class) tup = (1,2);
