@@ -336,6 +336,7 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     node->param_types = p.param_types;
     node->captures = p.captures;
     node->capture_types = p.capture_types;
+    node->self_entry_id = p.self_entry_id;
     // Function definitions and calls (including qualified `Space:bar()`) resolve
     // to their entry-id-derived symbol; the qualifier is dropped (ast carries no
     // qualifier — a flat symbol replaces it).
@@ -1139,6 +1140,7 @@ void lowerStatementPPID(ast::Node& stmt,
                 lowerPhraseSlot(stmt.children[0], next_id);
             }
             return;
+        case ast::Kind::kCallExpr:   // a discarded method-call expression statement
         case ast::Kind::kCallStmt:
             for (auto& arg : stmt.children) lowerPhraseSlot(arg, next_id);
             return;
@@ -1189,7 +1191,6 @@ void lowerStatementPPID(ast::Node& stmt,
         case ast::Kind::kForLongStmt:
         case ast::Kind::kSwitchStmt:
         case ast::Kind::kCaseClause:
-        case ast::Kind::kCallExpr:
         case ast::Kind::kStringLiteral:
         case ast::Kind::kIntLiteral:
         case ast::Kind::kUintLiteral:
@@ -1282,6 +1283,7 @@ std::unique_ptr<ast::Node> cloneAstExpr(ast::Node const& n) {
     c->param_types = n.param_types;
     c->captures = n.captures;
     c->capture_types = n.capture_types;
+    c->self_entry_id = n.self_entry_id;
     for (auto const& ch : n.children) {
         c->children.push_back(ch ? cloneAstExpr(*ch) : nullptr);
     }
@@ -1832,9 +1834,11 @@ void liftSretCallList(std::vector<std::unique_ptr<ast::Node>>& stmts, int& next_
             if (!stmt->children.empty())
                 liftSretCallExprs(stmt->children[0], pre, next_id,
                                   /*root_intercepted=*/true);
-        } else if (k == ast::Kind::kCallStmt) {
+        } else if (k == ast::Kind::kCallStmt || k == ast::Kind::kCallExpr) {
             // The statement IS a (discarded) call codegen handles; lift its args
-            // (incl. a lowered method call's receiver = AddrOf(temp)).
+            // (incl. a lowered method call's receiver = AddrOf(temp)). A discarded
+            // method-call EXPRESSION statement is a kCallExpr (lowerMethodCall emits
+            // a value call); its construction/rvalue receiver lifts the same way.
             for (auto& arg : stmt->children)
                 liftSretCallExprs(arg, pre, next_id, false);
             stmt_scoped = true;
@@ -2168,7 +2172,10 @@ std::unique_ptr<ast::Node> lowerMethodCall(parse::Node const& p,
     }
 
     auto call = std::make_unique<ast::Node>();
-    call->kind = ast::Kind::kCallStmt;
+    // A value-producing call: usable as an expression (`x = obj.m()`) AND as a
+    // discarded statement (`obj.m();`) — emitStmt emits a kCallExpr statement the
+    // same way it emits a kCallStmt (value discarded, sret result destroyed).
+    call->kind = ast::Kind::kCallExpr;
     call->name = widen::classSymbol(defCls) + "__" + p.name;
     call->return_type = p.return_type;   // emitCall reads return_type
     call->param_types = p.param_types;   // [self, user...] — classify cached it

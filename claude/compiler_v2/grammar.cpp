@@ -743,6 +743,18 @@ struct Parser {
             advance();
             return node;
         }
+        if (t.kind == token::Kind::kSelf) {
+            // `self` — the receiver OBJECT. Parsed as a kIdentExpr named "self"
+            // (a reserved word, so it never collides with a user name); resolve
+            // rewrites it to `_$recv^` (the deref of the implicit receiver
+            // pointer), so `^self`, `self.field`, and `self.method()` reuse the
+            // ordinary deref / field / method-call machinery.
+            auto node = newNodeHere(parse::Kind::kIdentExpr);
+            node->name = "self";
+            node->name_tok = pos;
+            advance();
+            return node;
+        }
         if (t.kind == token::Kind::kIdentifier
             || t.kind == token::Kind::kColonColon) {
             int name_file = t.file_id;
@@ -1071,16 +1083,21 @@ struct Parser {
                 continue;
             }
             // A call on a `recv.method` field access — a method-call EXPRESSION
-            // (e.g. `Class(a).method()`, `obj.method()` used as a value). A method
-            // call producing a value mid-expression is not yet supported (only the
-            // STATEMENT form `recv.method();`, parseNameLedStmt). Reject it with a
-            // clear, attributed message rather than letting the unconsumed `(`
-            // surface as a misleading "Expected ';'" / "Expected ')'" upstream.
+            // used as a value (`x = obj.method()`, `f(obj.m())`). Build a
+            // kMethodCallStmt (receiver = the field base, name = the method);
+            // classify binds it against the receiver's class and desugar lowers it
+            // to the lifted-symbol call exactly like the statement form.
             if (peek().kind == token::Kind::kLParen
                 && base->kind == parse::Kind::kFieldExpr) {
-                error("A method call is not supported in an expression here; call it "
-                      "as a statement, or read a field instead.");
-                return nullptr;
+                auto call = newNodeAt(parse::Kind::kMethodCallStmt,
+                                      base->file_id, base->tok);
+                call->name = std::move(base->name);
+                call->name_tok = base->name_tok;
+                call->children.push_back(std::move(base->children[0]));   // receiver
+                advance();   // (
+                if (!parseCallArgs(*call)) return nullptr;                // args -> [1..]
+                base = std::move(call);
+                continue;
             }
             break;
         }
@@ -1514,11 +1531,22 @@ struct Parser {
         std::vector<std::string> segs;
         std::vector<int> toks;
         bool global = false;
-        if (!parseQualifiedName(segs, toks, global)) return nullptr;
-        std::string name = segs.back();
-        int name_tok = toks.back();
-        segs.pop_back();
-        toks.pop_back();
+        // A `self`-led statement starts from the receiver OBJECT, not a parsed
+        // name. `self` is a reserved word (a kIdentExpr named "self"); resolve
+        // rewrites it to `_$recv^`. The lvalue/method-call chain below is shared.
+        bool is_self = (peek().kind == token::Kind::kSelf);
+        std::string name;
+        int name_tok = pos;
+        if (is_self) {
+            name = "self";
+            advance();   // self
+        } else {
+            if (!parseQualifiedName(segs, toks, global)) return nullptr;
+            name = segs.back();
+            name_tok = toks.back();
+            segs.pop_back();
+            toks.pop_back();
+        }
 
         auto stamp = [&](parse::Node& n) {
             n.name = std::move(name);
@@ -1657,6 +1685,15 @@ struct Parser {
             node->children.push_back(std::move(rhs));
             return node;
         };
+
+        if (is_self) {
+            // `self.field = rhs;` / `self.method();` / `self.field op= rhs;` —
+            // drive the lvalue/method-call chain off the receiver object.
+            auto lhs = newNodeAt(parse::Kind::kIdentExpr, stmt_file, stmt_tok);
+            lhs->name = "self";
+            lhs->name_tok = name_tok;
+            return finishLvalueChain(std::move(lhs), /*allow_bare_expr=*/false);
+        }
 
         token::Kind next = peek().kind;
         if (next == token::Kind::kBitXor || next == token::Kind::kXorXor
@@ -2507,6 +2544,9 @@ struct Parser {
         if (isTypeStart(t.kind)) return parseVarDeclStmt();
         if (t.kind == token::Kind::kPlusPlus
             || t.kind == token::Kind::kMinusMinus) return parseIncDecStmt();
+        // A `self`-led statement (`self.field = rhs;`, `self.method();`) — drive
+        // the same name-led lvalue/method-call path off the receiver object.
+        if (t.kind == token::Kind::kSelf) return parseNameLedStmt();
         if (t.kind == token::Kind::kIdentifier) {
             token::Kind next = peekKind(1);
             if (next == token::Kind::kLBrace) return parseNamespaceDecl();
@@ -2631,7 +2671,12 @@ struct Parser {
         } else {
             return false;
         }
-        if (peekKind(o) == token::Kind::kLBracket
+        // A pointer/iterator return-type suffix: `T^` / `T^^` (reference) or
+        // `T[]` (iterator). Without this a method/function returning a pointer
+        // (`Self^ me()`) is not recognized as a function def.
+        if (peekKind(o) == token::Kind::kBitXor
+            || peekKind(o) == token::Kind::kXorXor) o++;
+        else if (peekKind(o) == token::Kind::kLBracket
             && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
         if (peekKind(o) != token::Kind::kIdentifier) return false;   // fn name
         o++;

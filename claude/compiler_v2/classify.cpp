@@ -533,6 +533,14 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                widen::TypeRef context, diagnostic::Sink& diag);
 void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
                           diagnostic::Sink& diag);
+// Resolve+type a method call (kMethodCallStmt): bind the method on the receiver's
+// class, arity/type-check args, stamp param_types/return_type/inferred_type.
+// Shared by the statement form (classifyStmt) and the expression form (inferExpr).
+// as_expression: a value-producing call (`x = obj.m()`) — a CONSTRUCTION receiver
+// is rejected (no address for `_$recv`); the statement form lifts its temp in
+// desugar, so it allows one.
+void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag,
+                     bool as_expression);
 void classifyNamespace(parse::Tree& tree, parse::Node& node,
                        diagnostic::Sink& diag);
 
@@ -1087,12 +1095,31 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             }
             int idx = it->second.fieldIndex(e.name);
             if (idx < 0) {
+                // Paren-less zero-arg method call: `obj.method` naming a method
+                // member (no `(args)`) IS a call. Rewrite this kFieldExpr in place
+                // to a kMethodCallStmt (receiver = children[0], no args) and type
+                // it through the shared method-call path.
+                int classId = parse::classEntryForType(tree, bt);
+                int methodId = classId < 0 ? -1
+                    : parse::findMemberDeclared(tree,
+                          tree.entries[classId].ns_frame_id, e.name);
+                if (methodId >= 0
+                    && tree.entries[methodId].kind == parse::EntryKind::kFunction) {
+                    e.kind = parse::Kind::kMethodCallStmt;   // name=method, child[0]=recv
+                    inferMethodCall(tree, e, diag, /*as_expression=*/true);
+                    return;
+                }
                 diagnostic::report(diag, {e.file_id, e.name_tok,
                     "Class '" + it->second.name + "' has no field '" + e.name
                     + "'.", {}});
                 return;
             }
             e.inferred_type = it->second.field_types[idx];
+            return;
+        }
+        case parse::Kind::kMethodCallStmt: {
+            // A method-call EXPRESSION used as a value (`x = obj.method(args)`).
+            inferMethodCall(tree, e, diag, /*as_expression=*/true);
             return;
         }
         case parse::Kind::kSizeofExpr: {
@@ -1629,7 +1656,6 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kDeleteStmt:
         case parse::Kind::kDtorCallStmt:
         case parse::Kind::kCallStmt:
-        case parse::Kind::kMethodCallStmt:
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
         case parse::Kind::kNamespaceDecl:
@@ -2766,6 +2792,75 @@ void classifyStmtList(parse::Tree& tree,
     }
 }
 
+void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag,
+                     bool as_expression) {
+    // obj.method(args) — infer the receiver, resolve the method on its class's
+    // member frame, arity-check + infer the args. desugar reads the receiver's
+    // class off children[0].inferred_type to mint the symbol. children =
+    // [receiver, args...]; the statement form discards the value, the expression
+    // form uses inferred_type.
+    parse::Node& recv = *s.children[0];
+    inferExpr(tree, recv, widen::kNoType, diag);
+    if (recv.inferred_type == widen::kNoType) return;
+    // A nameless construction (`Class(args).m()`) as a method receiver in an
+    // EXPRESSION has no address for `_$recv` and is not lifted, so reject it the
+    // same way every other unlifted construction position is (the statement form
+    // lifts its temp in desugar, so it is allowed there).
+    if (as_expression && recv.is_construction) {
+        diagnostic::report(diag, {recv.file_id, recv.tok,
+            "Constructing a class in this position is not yet supported; declare a "
+            "new variable (e.g. 'Class x = Class(...)').", {}});
+        return;
+    }
+    widen::TypeRef rs = widen::strip(recv.inferred_type);
+    if (!(widen::form(rs) == widen::Type::Form::kSlid
+          && tree.classes.count(rs) > 0)) {
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "A method call requires a class object; got '"
+            + widen::spellOrEmpty(recv.inferred_type) + "'.", {}});
+        return;
+    }
+    // Resolve the method as a member of the receiver's class frame (shared member
+    // lookup). A same-name NON-method member is not a method.
+    int classId = parse::classEntryForType(tree, rs);
+    int methodId = classId < 0 ? -1
+        : parse::findMemberDeclared(tree, tree.entries[classId].ns_frame_id, s.name);
+    if (methodId < 0
+        || tree.entries[methodId].kind != parse::EntryKind::kFunction) {
+        diagnostic::report(diag, {s.file_id, s.name_tok,
+            "Class '" + widen::spell(rs) + "' has no method '" + s.name + "'.", {}});
+        return;
+    }
+    // Thread the resolved method onto the node — desugar mints the symbol from the
+    // method's OWN defining class, not the receiver's (so a base method called on
+    // a derived receiver still names the base symbol).
+    s.resolved_entry_id = methodId;
+    parse::Entry const& m = tree.entries[methodId];
+    // param_types = [self, user...]; children = [receiver, args...]. The user-arg
+    // count is param_types.size()-1, and arg children[i] aligns with
+    // param_types[i] (i>=1) — same shape the lowered call emits.
+    std::size_t nargs = s.children.size() - 1;
+    std::size_t nuser = m.param_types.empty() ? 0 : m.param_types.size() - 1;
+    if (nargs != nuser) {
+        diagnostic::report(diag, {s.file_id, s.name_tok,
+            "Method '" + s.name + "' expects " + std::to_string(nuser)
+            + " arguments, got " + std::to_string(nargs) + ".", {}});
+        return;
+    }
+    for (std::size_t i = 1; i < s.children.size(); i++) {
+        if (!s.children[i]) continue;
+        // Type-check each arg against its param, like classifyCall — infer with the
+        // param as context, then reject a const / class / convert mismatch.
+        inferExpr(tree, *s.children[i], m.param_types[i], diag);
+        widen::TypeRef byref = autoRefPointee(m.param_types[i], *s.children[i]);
+        checkValueAssign(tree, byref != widen::kNoType ? byref : m.param_types[i],
+                         *s.children[i], diag);
+    }
+    s.param_types = m.param_types;    // [self, user...] — emitCall arity check
+    s.return_type = m.slids_type;     // emitCall reads return_type
+    s.inferred_type = m.slids_type;
+}
+
 void classifyStmt(parse::Tree& tree, parse::Node& s,
                   widen::TypeRef fn_return_type, diagnostic::Sink& diag,
                   std::vector<std::unique_ptr<parse::Node>>* prelude = nullptr) {
@@ -3277,60 +3372,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             return;
         }
         case parse::Kind::kMethodCallStmt: {
-            // obj.method(args) — infer the receiver, resolve the method on its
-            // class's member frame, arity-check + infer the args. desugar reads the
-            // receiver's class off children[0].inferred_type to mint the symbol.
-            parse::Node& recv = *s.children[0];
-            inferExpr(tree, recv, widen::kNoType, diag);
-            if (recv.inferred_type == widen::kNoType) return;
-            widen::TypeRef rs = widen::strip(recv.inferred_type);
-            if (!(widen::form(rs) == widen::Type::Form::kSlid
-                  && tree.classes.count(rs) > 0)) {
-                diagnostic::report(diag, {s.file_id, s.tok,
-                    "A method call requires a class object; got '"
-                    + widen::spellOrEmpty(recv.inferred_type) + "'.", {}});
-                return;
-            }
-            // Resolve the method as a member of the receiver's class frame (shared
-            // member lookup). A same-name NON-method member is not a method.
-            int classId = parse::classEntryForType(tree, rs);
-            int methodId = classId < 0 ? -1
-                : parse::findMemberDeclared(tree, tree.entries[classId].ns_frame_id, s.name);
-            if (methodId < 0
-                || tree.entries[methodId].kind != parse::EntryKind::kFunction) {
-                diagnostic::report(diag, {s.file_id, s.name_tok,
-                    "Class '" + widen::spell(rs) + "' has no method '" + s.name + "'.", {}});
-                return;
-            }
-            // Thread the resolved method onto the node — desugar mints the symbol
-            // from the method's OWN defining class, not the receiver's (so a base
-            // method called on a derived receiver still names the base symbol).
-            s.resolved_entry_id = methodId;
-            parse::Entry const& m = tree.entries[methodId];
-            // param_types = [self, user...]; children = [receiver, args...]. The
-            // user-arg count is param_types.size()-1, and arg children[i] aligns
-            // with param_types[i] (i>=1) — same shape the lowered call emits.
-            std::size_t nargs = s.children.size() - 1;
-            std::size_t nuser = m.param_types.empty() ? 0 : m.param_types.size() - 1;
-            if (nargs != nuser) {
-                diagnostic::report(diag, {s.file_id, s.name_tok,
-                    "Method '" + s.name + "' expects " + std::to_string(nuser)
-                    + " arguments, got " + std::to_string(nargs) + ".", {}});
-                return;
-            }
-            for (std::size_t i = 1; i < s.children.size(); i++) {
-                if (!s.children[i]) continue;
-                // Type-check each arg against its param, like classifyCall — infer
-                // with the param as context, then reject a const / class / convert
-                // mismatch (else a wrong-typed arg passed silently).
-                inferExpr(tree, *s.children[i], m.param_types[i], diag);
-                widen::TypeRef byref = autoRefPointee(m.param_types[i], *s.children[i]);
-                checkValueAssign(tree, byref != widen::kNoType ? byref : m.param_types[i],
-                                 *s.children[i], diag);
-            }
-            s.param_types = m.param_types;    // [self, user...] — emitCall arity check
-            s.return_type = m.slids_type;     // emitCall reads return_type
-            s.inferred_type = m.slids_type;
+            inferMethodCall(tree, s, diag, /*as_expression=*/false);
             return;
         }
         case parse::Kind::kReturnStmt: {

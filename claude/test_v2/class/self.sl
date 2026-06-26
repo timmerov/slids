@@ -34,30 +34,42 @@ claude says:
 tbd
 */
 
-/*
 Self(int x_) {
     Self^ this() {
         return ^self;
     }
 
-    int shadow() {
+    int shadow_x() {
         int x_ = 3;
         x_ += self.x_;
         self.x_ = x_ + 3;
         return x_;
     }
+
+    void print() {
+        __println("Self:print");
+    }
+
+    void shadow_print() {
+        void print() {
+            __println("Self:shadow_print:print");
+            self.print();
+        }
+        print();
+    }
 }
-*/
 
 int32 main() {
-/*
+
     Self s(47);
     ref = s.this;
     __println("ref = " + ref^.x_);
 
-    int shadow = s.shadow();
+    int shadow = s.shadow_x();
     __println("shadow = " + shadow);
-    __println("s = " + s.x_);
-*/
+    __println("s.x_ = " + s.x_);
+
+    s.shadow_print();
+
     return 0;
 }

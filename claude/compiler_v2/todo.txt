@@ -52,23 +52,20 @@ BLOCKED FEATURES
     primitive element type (a reference works for all). Only the CLASS-element
     variant remains, when class array elements exist (Phase 5).
 
-  * METHODS — follow-ups (the statement-call form + plain-`=` field writes LANDED).
-    - EXPRESSION-FORM CALL: a value-returning method used as a value
-      (`int x = obj.m()`) is not yet wired; only the statement form `obj.m(args);`
-      is. parsePostfix NOW recognizes the call-after-field shape and rejects it
-      cleanly ("A method call is not supported in an expression here") instead of
-      mis-parsing; what remains is a kMethodCallExpr (or reuse) classified/lowered
-      like the statement form. (A field READ `x = obj.field` / `x = Class(a).field`
-      DOES work.)
-    - COMPOUND FIELD WRITES in a member body: a BARE `x_ += 1` / `x_++` isn't
-      field-rewritten (only plain `x_ = ...` is — buildSelfField on the assignment
-      LHS). Hook the field-rewrite onto the aug-assign / inc-dec LHS so a bare
-      `x_ += 1` rewrites to the self-field form (the complex-lvalue chain then
-      lowers it).
-    - SIBLING METHOD CALL VIA `self` (deferred to a later session): calling one
-      method from another. Today `self.m()` / `self.m()` parse-errors ("Expected
-      statement"), and a BARE `m()` now errors cleanly ("Method 'm' must be called
-      on an object.") instead of crashing. Needs `self` as a usable receiver.
+  * METHODS — follow-ups. LANDED (canon class/self.sl, see
+    [[project_self_and_method_calls]]): the EXPRESSION-form call (`int x = obj.m()`),
+    the `self` KEYWORD (an address-aliased local), SIBLING calls via `self`
+    (`self.m()`), a method signature naming its OWN class (`Self^ m(Self^)`),
+    paren-less zero-arg calls (`obj.m`), and explicit `self.field` compound writes
+    (`self.x_ += 1`). STILL OPEN:
+    - BARE COMPOUND FIELD WRITE: a bare `x_ += 1` / `x_++` in a member body isn't
+      auto-rewritten to the self-field form (plain `x_ = ...` is, and the explicit
+      `self.x_ += 1` works). Hook the field-rewrite onto the aug-assign / inc-dec
+      LHS so a bare `x_ += 1` resolves to the field.
+    - CONSTRUCTION RECEIVER in an EXPRESSION: `int x = Class(2).m()` is rejected
+      ("Constructing a class in this position") — the temp has no address for
+      `_$recv`. The statement form `Class(2).m();` lifts its temp and works; the
+      expression form needs the deferred construction-in-expression lift.
 
   * CLASS / USER-TYPE CONVERSION TARGET (Phase 5) — `(Type = expr)` LANDED for
     primitives, tuples, and arrays (lockstep recursive walk; see

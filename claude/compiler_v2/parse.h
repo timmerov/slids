@@ -259,6 +259,12 @@ struct Node {
     // emitting the lifted function's by-ref params.
     std::vector<int> captures;
     std::vector<widen::TypeRef> capture_types;
+    // A method / ctor / dtor body's `self` — an address-aliased local of the
+    // class type, whose storage IS the target of the implicit `_$recv` pointer.
+    // resolve registers it (so `self` / `self.field` / `^self` resolve as an
+    // ordinary local); codegen binds its address to `_$recv^` at the prologue.
+    // -1 for a free function (no receiver).
+    int self_entry_id = -1;
 };
 
 enum class EntryKind {

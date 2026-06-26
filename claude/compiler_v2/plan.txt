@@ -649,10 +649,14 @@ Phase 5 — classes
     so it never collides with the `self` keyword.) `obj.method(args)` is a
     kMethodCallStmt resolved via the receiver's class frame (shared member lookup),
     args type-checked, lowered to the lifted `<Class>__method(_$recv, ...)` minted
-    from the method's DEFINING class. Detail: readme "METHODS" + [[project_v2_methods]].
-    OPEN (todo.txt): expression-form call (parsePostfix now rejects a value-position
-    method call cleanly; the kMethodCallExpr classify/lower still remains), compound
-    field writes, sibling call via the `self` keyword.
+    from the method's DEFINING class. Detail: readme "METHODS" +
+    [[project_self_and_method_calls]]. SINCE (canon class/self.sl): the `self` KEYWORD
+    is an address-aliased local (so `^self` = `_$recv` for free); EXPRESSION-form
+    calls (`x = obj.m()`), SIBLING calls via `self`, paren-less zero-arg calls, and a
+    method signature naming its OWN class all LANDED. OPEN (todo.txt): a BARE
+    `x_ += 1` field compound-write auto-rewrite (the explicit `self.x_ += 1` works);
+    a construction receiver in an EXPRESSION (statement form lifts; expression needs
+    the construction-in-expression lift).
   * NAMELESS class objects (`Class(args)`) — LANDED. A call whose callee resolves to
     a kClass is a CONSTRUCTION, not a function call: resolve flags is_construction;
     classify spreads the args into the per-field tuple via classifyClassInit. Form 1

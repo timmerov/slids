@@ -51,14 +51,17 @@ members but not its fields; member-TYPE lookup is now SCOPE-AWARE (resolveName w
 the enclosing frame OPEN during member-type/body resolution — names register
 first), not a frame-blind any-live-entry lookup, so a bare member type out of scope
 fails ("needs a namespace qualifier").
-METHODS LANDED (statement-call form): a named function in a class body is a
-receiver-bound member (ctor/dtor with a user name); grammar injects an implicit
-receiver param `_$recv` (Class^, the object's address) at params[0]; bare field
-reads AND writes rewrite to the spec `self.field` = `_$recv^.field`; `obj.method(args)`
-resolves via the receiver's class frame and lifts to `<Class>__method(_$recv, ...)`
-minted from the DEFINING class. (Spec `self` is the object = `_$recv^`; the internal
-param is the pointer, named distinctly from the `self` keyword.) Detail: readme
-"METHODS" + [[project_v2_methods]].
+METHODS LANDED (statement AND expression call forms): a named function in a class
+body is a receiver-bound member (ctor/dtor with a user name); grammar injects an
+implicit receiver param `_$recv` (Class^, the object's address) at params[0]; bare
+field reads AND writes rewrite to `_$recv^.field`; `obj.method(args)` resolves via
+the receiver's class frame and lifts to `<Class>__method(_$recv, ...)` minted from
+the DEFINING class. SINCE (canon class/self.sl, [[project_self_and_method_calls]]):
+the `self` KEYWORD is now an address-aliased LOCAL of the class type (storage =
+`_$recv`'s target), so `self` / `self.field` / `self.m()` / `^self` flow through
+ordinary local machinery; method calls work in EXPRESSION position (`x = obj.m()`);
+SIBLING calls via `self`; paren-less zero-arg calls; and a method signature may name
+its OWN class. Detail: readme "METHODS" + [[project_self_and_method_calls]].
 
 DEFAULT MOVE/COPY (classes) LANDED — a SAME-TYPE source at a var-decl init or an
 assignment is a whole-object COPY (or a MOVE for `<--`), not a field spread:

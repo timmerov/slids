@@ -352,11 +352,12 @@ int32 main() {
 //    Trivial(5);
 //}
 
-/* a method call on a value (a construction temporary) mid-expression is not yet
-   supported — reject it clearly, do not mis-parse. */
-//-EXPECT-ERROR: A method call is not supported in an expression here
+/* a method call on a VARIABLE mid-expression is supported (see self.sl), but the
+   receiver may not be a nameless CONSTRUCTION temporary — it has no address for
+   `_$recv`, so it is rejected like any other unlifted construction position. */
+//-EXPECT-ERROR: Constructing a class in this position is not yet supported
 //void neg_method_on_value() {
-//    int x = Class(2).get();
+//    int x = Class(2).method();
 //    __println("x= " + x);
 //}
 

@@ -373,13 +373,23 @@ int resolveNameDetail(parse::Tree const& tree, std::string const& name,
             return first;
         }
     }
-    if (first >= 0) return first;
+    // A class MEMBER (method / member const) is shadowed by a body LOCAL of the
+    // same name: a method body is lexically inside the class, so its params,
+    // locals, and nested functions take precedence (standard scoping). A bare
+    // NAMESPACE member still beats file scope, and only a true body-local (not a
+    // file-scope function) shadows a class member.
+    bool member_is_class = first >= 0
+        && tree.entries[first].owner_ns_frame >= 0
+        && parse::classEntryForFrame(tree, tree.entries[first].owner_ns_frame) >= 0;
+    if (first >= 0 && !member_is_class) return first;
     for (auto it = tree.live_entry_ids.rbegin();
          it != tree.live_entry_ids.rend(); ++it) {
         parse::Entry const& e = tree.entries[*it];
-        if (e.name == name && e.owner_ns_frame < 0) return *it;
+        if (e.name != name || e.owner_ns_frame >= 0) continue;
+        if (member_is_class && e.parent_frame_id == kGlobalFrame) continue;
+        return *it;
     }
-    return -1;
+    return first;
 }
 
 int resolveName(parse::Tree const& tree, std::string const& name) {
@@ -1319,6 +1329,13 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
             // (which knows the field set); resolve only walks the base.
             if (e.children[0]) resolveExpr(tree, *e.children[0], diag, unevaluated);
             return;
+        case parse::Kind::kMethodCallStmt:
+            // A method-call EXPRESSION (`x = obj.method(args)`). Resolve the
+            // receiver (children[0]) and args (children[1..]); classify binds the
+            // method against the receiver's class and stamps the return type.
+            for (auto& ch : e.children)
+                if (ch) resolveExpr(tree, *ch, diag, unevaluated);
+            return;
         case parse::Kind::kCastExpr: {
             // `<Type^> operand` — resolve the operand as a read, then substitute
             // and validate the target type spelling (alias chains, void[] reject,
@@ -1508,7 +1525,6 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
         case parse::Kind::kDeleteStmt:
         case parse::Kind::kDtorCallStmt:
         case parse::Kind::kCallStmt:
-        case parse::Kind::kMethodCallStmt:
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
         case parse::Kind::kNamespaceDecl:
@@ -3289,6 +3305,26 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         if (isArrayType(p->return_type))
             tree.assigned_arrays.insert(p->resolved_entry_id);
     }
+    // `self` — the receiver OBJECT in a method / ctor / dtor body. An address-
+    // aliased local of the class type whose storage IS the target of the implicit
+    // `_$recv` pointer: `self`, `self.field`, `self.m()`, and `^self` (its address
+    // = `_$recv`) all flow through the ordinary local-variable machinery; codegen
+    // binds its address to `_$recv^` at the prologue. Registered like a param (NOT
+    // in body_locals, so the unused-local sweep ignores it); `self` is a reserved
+    // word so it never collides with a user name.
+    for (auto& p : fn.params) {
+        if (!p || p->name != "_$recv") continue;
+        widen::TypeRef recv_ty = tree.entries[p->resolved_entry_id].slids_type;
+        parse::Entry se;
+        se.kind = parse::EntryKind::kLocalVar;
+        se.name = "self";
+        se.slids_type = widen::get(widen::strip(recv_ty)).pointee;
+        se.file_id = fn.file_id;
+        se.tok = fn.name_tok;
+        fn.self_entry_id = parse::addEntry(tree, std::move(se));
+        tree.initialized_locals.insert(fn.self_entry_id);
+        break;
+    }
     // Local-class pre-pass for the body's TOP LEVEL. BEFORE the const pre-pass
     // (so a const decl whose type names a body-local class — `const Class c = ...`
     // — resolves) AND before the nested-function pre-pass (so a nested function may
@@ -3648,13 +3684,17 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     e.file_id = node.file_id;
     e.tok = node.name_tok;
     node.resolved_entry_id = parse::addEntry(tree, std::move(e));
-    registerClassMembers(tree, node, cls_frame, diag);   // members don't depend on fields
+    // Emplace the placeholder ClassInfo BEFORE registering members, so a method
+    // whose signature names its OWN class (`Self^ m(Self^)`) sees a KNOWN type
+    // (requireKnownType -> leafIsKnownClass checks tree.classes). The slots are
+    // still filled in Phase 2 (registerClassBody); only type-known-ness matters here.
     parse::ClassInfo info;
     info.name = node.name;           // bare; def_id carries the scope distinction
     info.def_file_id = node.file_id;
     info.def_tok = node.name_tok;
     info.type = type;
     tree.classes.emplace(type, std::move(info));   // placeholder; fields filled in Phase 2
+    registerClassMembers(tree, node, cls_frame, diag);   // members don't depend on fields
 }
 
 // Phase 2: resolve the field types (every sibling class name is known now, so a

@@ -715,9 +715,20 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     OWN DEFINING class (not the receiver's, so an inherited call will name the base),
     with the receiver's address prepended as `_$recv` (for `ptr^.m()` the receiver IS
     the pointer — an addr-of of a deref is not a codegen lvalue). A bare call resolving
-    to a method errors ("Method 'm' must be called on an object.") — sibling calls via
-    the `self` keyword are deferred. Statement form only; expression form + compound
-    field writes (`x_ += 1`) are todo.txt.
+    to a method errors ("Method 'm' must be called on an object.") — call it on the
+    receiver or via `self`. LANDED since: the EXPRESSION form (`x = obj.m()`, lowered
+    to a value kCallExpr; a CONSTRUCTION receiver is rejected — it has no address for
+    `_$recv`; the statement form lifts its temp); SIBLING calls via `self`
+    (`self.m()`); paren-less zero-arg calls (`obj.m`, a kFieldExpr→method rewrite in
+    classify); and a method signature naming its OWN class (`Self^ m(Self^)` — the
+    placeholder ClassInfo is emplaced before member registration so the type is
+    known). The `self` KEYWORD is an address-aliased LOCAL of the class type whose
+    storage IS `_$recv`'s target: `self`, `self.field`, `self.m()`, and `^self`
+    (= `_$recv`, its own address) all flow through ordinary local machinery — resolve
+    registers it in resolveFunctionBody (like a param, not in body_locals); codegen
+    binds its SymTab address to `_$recv^` once at the prologue (self_entry_id on the
+    fn node). A bare `x_ += 1` field compound-write is still todo.txt (the explicit
+    `self.x_ += 1` works). Detail: [[project_self_and_method_calls]].
   * NAME COLLISIONS + TYPE-NAME DIAGNOSTICS. A class name collides with ANY
     same-name entry (another class, an alias / enum / namespace, a const, a
     function) — reportNameCollision carets the source-LATER declaration as the

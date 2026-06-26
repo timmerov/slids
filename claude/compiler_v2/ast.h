@@ -110,6 +110,8 @@ struct Node {
     std::vector<widen::TypeRef> param_types;     // kCallStmt/kCallExpr: resolved fn's param types
     std::vector<int> captures;                   // nested fn + its calls: captured host entry ids
     std::vector<widen::TypeRef> capture_types;   // nested fn: each capture's slids type
+    int self_entry_id = -1;                      // method/ctor/dtor: the `self` local
+                                                 // (address = `_$recv^`); -1 otherwise
 };
 
 struct Tree {

@@ -2369,6 +2369,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             emitDestructHooks(addr, recv.inferred_type, out);
             return;
         }
+        case ast::Kind::kCallExpr:   // a discarded method-call expression statement
         case ast::Kind::kCallStmt: {
             if (print::tryEmitCall(stmt, syms, pool, out, diag)) return;
             // A DISCARDED sret call still constructs its result into a slot — the
@@ -2758,7 +2759,6 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kCastExpr:
         case ast::Kind::kConvertExpr:
         case ast::Kind::kNewExpr:
-        case ast::Kind::kCallExpr:
         case ast::Kind::kSeqExpr:
         case ast::Kind::kBumpExpr:
         case ast::Kind::kPreIncExpr:
@@ -2933,6 +2933,8 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     // Alloca + store-in each param so the body can read/write it like a local.
     // Register under the param's resolved_entry_id (stamped by classify's
     // body-frame seeding).
+    std::string recv_reg;
+    widen::TypeRef recv_ptr_ty = widen::kNoType;
     for (size_t i = 0; i < fn.params.size(); i++) {
         ast::Node const& p = *fn.params[i];
         std::string p_llty = llvmForRef(p.return_type);
@@ -2941,6 +2943,17 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
         out << "  store " << p_llty << " %arg." << i
             << ", ptr " << regname << "\n";
         syms[p.resolved_entry_id] = {regname, p_llty, p.return_type};
+        if (p.name == "_$recv") { recv_reg = regname; recv_ptr_ty = p.return_type; }
+    }
+    // `self` — the receiver OBJECT, an address-aliased local. Its storage IS the
+    // target of `_$recv`, so its address is that pointer's VALUE (load it once). The
+    // SymTab entry holds that address: reads/writes/field-GEPs go through it, and
+    // `^self` returns it (= `_$recv`). No fresh alloca — like a capture.
+    if (fn.self_entry_id >= 0 && !recv_reg.empty()) {
+        widen::TypeRef self_ty = widen::get(widen::strip(recv_ptr_ty)).pointee;
+        std::string obj = newTmp("self");
+        out << "  " << obj << " = load ptr, ptr " << recv_reg << "\n";
+        syms[fn.self_entry_id] = {obj, llvmForRef(self_ty), self_ty};
     }
     // Hoist every local's alloca into the entry block. An alloca emitted at its
     // declaration site would re-allocate stack on every pass through an
