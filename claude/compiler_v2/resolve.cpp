@@ -1079,13 +1079,15 @@ bool isMethodField(parse::Tree const& tree, std::string const& name) {
     return false;
 }
 
-// Build the spec `self.field` — a kFieldExpr over `_$recv^`, the deref of the
-// implicit receiver param `_$recv` (a `Class^` holding the object's address).
-// `self` IS the object (`_$recv^`); the deref is over the POINTER, not the
-// object. The one place this shape is minted, shared by the field READ rewrite
-// (in resolveExpr) and the field WRITE rewrite (a bare assignment target).
-std::unique_ptr<parse::Node> buildSelfField(std::string const& field,
-                                            int file_id, int tok) {
+// Build `_$recv^` — the deref of the implicit receiver param `_$recv` (a
+// `Class^` holding the object's address). This IS the object the author calls
+// `self` (transmogrification: author `self` = compiler `_$recv^`; see the
+// `self`-keyword registration in resolveFunctionBody). The one place this shape
+// is minted, shared by every bare-member rewrite: a bare field READ/WRITE
+// (author `self.field` -> `_$recv^.field`) and a bare sibling-method call
+// (author `self.m()` -> `_$recv^.m()`). Routing all of them through `_$recv`
+// gives a bare method call the SAME reach as a bare field access.
+std::unique_ptr<parse::Node> buildRecvDeref(int file_id, int tok) {
     auto recv_id = std::make_unique<parse::Node>();
     recv_id->kind = parse::Kind::kIdentExpr;
     recv_id->name = "_$recv";
@@ -1096,12 +1098,20 @@ std::unique_ptr<parse::Node> buildSelfField(std::string const& field,
     deref->file_id = file_id;
     deref->tok = tok;
     deref->children.push_back(std::move(recv_id));
+    return deref;
+}
+
+// Build `_$recv^.field` (author `self.field`) — a kFieldExpr over `_$recv^`
+// (buildRecvDeref). Shared by the field READ rewrite (in resolveExpr) and the
+// field WRITE rewrite (a bare assignment target).
+std::unique_ptr<parse::Node> buildSelfField(std::string const& field,
+                                            int file_id, int tok) {
     auto fe = std::make_unique<parse::Node>();
     fe->kind = parse::Kind::kFieldExpr;
     fe->name = field;
     fe->file_id = file_id;
     fe->tok = tok;
-    fe->children.push_back(std::move(deref));
+    fe->children.push_back(buildRecvDeref(file_id, tok));
     return fe;
 }
 
@@ -1642,15 +1652,24 @@ void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
             return;
         }
         parse::Entry const& callee = tree.entries[s.resolved_entry_id];
-        // A bare call that resolved to a class METHOD (its owner frame is a class)
-        // has no receiver, so it can't supply the implicit `self` — lowering it as
-        // a self-less call crashes codegen. Reject cleanly; calling a sibling method
-        // through `self` is deferred.
+        // A bare call that resolved to a sibling class METHOD (its owner frame is
+        // a class). Author-speak: an implicit `self.method(args)`. Compiler-speak:
+        // a method call on the receiver object `_$recv^`. Rewrite it to exactly
+        // that — the receiver built from `_$recv` directly (buildRecvDeref),
+        // mirroring the bare-FIELD rewrite, so a bare method call has the SAME
+        // reach as a bare field access. classify binds the method against the
+        // receiver's class + arity-checks; lowering prepends `_$recv` as the
+        // implicit receiver. (The name resolved only because we are lexically
+        // inside the class body, where `_$recv` is in scope; a member shadowed by
+        // a local never reaches here and needs the explicit `self.method()` form.)
         if (callee.kind == parse::EntryKind::kFunction
             && callee.owner_ns_frame >= 0
             && parse::classEntryForFrame(tree, callee.owner_ns_frame) >= 0) {
-            diagnostic::report(diag, {s.file_id, s.tok,
-                "Method '" + s.name + "' must be called on an object.", {}});
+            s.children.insert(s.children.begin(), buildRecvDeref(s.file_id, s.tok));
+            s.kind = parse::Kind::kMethodCallStmt;
+            s.resolved_entry_id = -1;   // classify re-binds via class-member lookup
+            for (auto& ch : s.children)
+                if (ch) resolveExpr(tree, *ch, diag);
             return;
         }
         bool callee_nested = callee.kind == parse::EntryKind::kFunction
@@ -3315,13 +3334,23 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         if (isArrayType(p->return_type))
             tree.assigned_arrays.insert(p->resolved_entry_id);
     }
-    // `self` — the receiver OBJECT in a method / ctor / dtor body. An address-
-    // aliased local of the class type whose storage IS the target of the implicit
-    // `_$recv` pointer: `self`, `self.field`, `self.m()`, and `^self` (its address
-    // = `_$recv`) all flow through the ordinary local-variable machinery; codegen
-    // binds its address to `_$recv^` at the prologue. Registered like a param (NOT
-    // in body_locals, so the unused-local sweep ignores it); `self` is a reserved
-    // word so it never collides with a user name.
+    // `self` — the receiver OBJECT in a method / ctor / dtor body. CANONICAL
+    // author<->compiler mapping (the transmogrification):
+    //     author  self          ==  compiler  _$recv^   (the object)
+    //     author  self.field    ==  compiler  _$recv^.field
+    //     author  self.method() ==  compiler  _$recv^.method()
+    //     author  ^self         ==  compiler  _$recv     (address-of-object = the pointer)
+    // `self` is the AUTHOR's view (an object); `_$recv` is the COMPILER's view (a
+    // `Class^` reference to that object). `self` is NEVER a pointer, so `self^` is
+    // nonsense in both views — internal code names the receiver machinery `_$recv`
+    // / `_$recv^`, never "self". Here `self` is registered as an address-aliased
+    // LOCAL of the class type whose storage IS `_$recv^`, so the explicit author
+    // forms `self`, `self.field`, `self.method()`, and `^self` all flow through the
+    // ordinary local-variable machinery; codegen binds its address to `_$recv^` at
+    // the prologue. (Implicit bare `field` / `method()` don't use this local — they
+    // rewrite to `_$recv^.field` / `_$recv^.method()` directly; see buildRecvDeref.)
+    // Registered like a param (NOT in body_locals, so the unused-local sweep
+    // ignores it); `self` is a reserved word so it never collides with a user name.
     for (auto& p : fn.params) {
         if (!p || p->name != "_$recv") continue;
         widen::TypeRef recv_ty = tree.entries[p->resolved_entry_id].slids_type;

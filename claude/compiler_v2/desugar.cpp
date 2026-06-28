@@ -271,7 +271,7 @@ std::unique_ptr<ast::Node> lowerMethodCall(parse::Node const& p,
                                            parse::Tree const& tree, int& next_id);
 std::unique_ptr<ast::Node> mintIdent(std::string const& name, int id,
                                      widen::TypeRef ty, int file, int tok);
-bool returnTypeHasCtor(widen::TypeRef t);
+bool returnTypeHasClassValue(widen::TypeRef t);
 void liftSretCallExprs(std::unique_ptr<ast::Node>& node,
                        std::vector<std::unique_ptr<ast::Node>>& pre,
                        int& next_id, bool root_intercepted);
@@ -1725,15 +1725,22 @@ void lowerAggregateList(std::vector<std::unique_ptr<ast::Node>>& stmts,
 // A return type that constructs (a class with a ctor, or an aggregate with such a
 // leaf). Mirrors codegen::typeNeedsHook(ctor). Used to find calls whose result an
 // inline use can't destroy in place — they are lifted to a temp.
-bool returnTypeHasCtor(widen::TypeRef t) {
+// True when `t` is, or contains, a CLASS value returned by value (sret). Such a
+// call result used inline is a TEMPORARY that must be materialized into a named
+// `_$cret` slot — both so it is destroyed (when the class has a dtor) AND so its
+// ADDRESS can be taken (a method receiver lowers to `^_$cret`). A trivial class (no
+// ctor/dtor) is still returned by sret and still needs the slot, so the gate is "is
+// a class value", NOT "has a ctor" — a chained call `a().m()` on a by-value class
+// return would otherwise hit `^<call>` (addr-of an rvalue) and abort in codegen.
+bool returnTypeHasClassValue(widen::TypeRef t) {
     using F = widen::Type::Form;
     widen::TypeRef s = widen::strip(t);
     F f = widen::form(s);
-    if (f == F::kSlid) return widen::get(s).needs_ctor;
-    if (f == F::kArray) { widen::TypeRef e = widen::get(s).elem; return returnTypeHasCtor(e); }
+    if (f == F::kSlid) return true;
+    if (f == F::kArray) { widen::TypeRef e = widen::get(s).elem; return returnTypeHasClassValue(e); }
     if (f == F::kTuple) {
         std::vector<widen::TypeRef> slots = widen::get(s).slots;   // copy: no intern
-        for (widen::TypeRef sl : slots) if (returnTypeHasCtor(sl)) return true;
+        for (widen::TypeRef sl : slots) if (returnTypeHasClassValue(sl)) return true;
     }
     return false;
 }
@@ -1769,10 +1776,10 @@ void liftSretCallExprs(std::unique_ptr<ast::Node>& node,
     // but seed the decl from the construction TUPLE (node->children[0], typed as the
     // class), so the kVarDeclStmt field-inits + runs the ctor. The block-wrap in
     // liftSretCallList then makes the temp's dtor fire at STATEMENT end.
-    bool is_ctor_call = node->kind == ast::Kind::kCallExpr
-        && returnTypeHasCtor(node->return_type);
+    bool is_class_call = node->kind == ast::Kind::kCallExpr
+        && returnTypeHasClassValue(node->return_type);
     bool is_construction = node->is_construction;
-    if (!root_intercepted && (is_ctor_call || is_construction)) {
+    if (!root_intercepted && (is_class_call || is_construction)) {
         int file = node->file_id, tok = node->tok;
         widen::TypeRef T = node->return_type;
         int id = next_id++;

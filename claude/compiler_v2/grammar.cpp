@@ -1571,7 +1571,23 @@ struct Parser {
             while (peek().kind == token::Kind::kLBracket
                    || peek().kind == token::Kind::kBitXor
                    || peek().kind == token::Kind::kXorXor
-                   || peek().kind == token::Kind::kDot) {
+                   || peek().kind == token::Kind::kDot
+                   || (peek().kind == token::Kind::kLParen
+                       && lhs->kind == parse::Kind::kFieldExpr)) {
+                if (peek().kind == token::Kind::kLParen) {
+                    // `recv.method(args)` — a method call. INSIDE the loop so the
+                    // by-value call RESULT keeps chaining (`d.next().get();`): the
+                    // method name is the field step, its base is the receiver.
+                    advance();   // (
+                    auto call = newNodeAt(parse::Kind::kMethodCallStmt,
+                                          stmt_file, stmt_tok);
+                    call->name = lhs->name;
+                    call->name_tok = lhs->name_tok;
+                    call->children.push_back(std::move(lhs->children[0]));  // recv
+                    if (!parseCallArgs(*call)) return nullptr;     // args -> [1..]
+                    lhs = std::move(call);
+                    continue;
+                }
                 if (peek().kind == token::Kind::kLBracket) {
                     lhs = parseSubscript(std::move(lhs));   // comma-aware (transposes)
                     if (!lhs) return nullptr;
@@ -1615,19 +1631,12 @@ struct Parser {
                     }
                 }
             }
-            // `obj.method(args);` — a method call. The chain's last step is the
-            // method name; its base is the receiver. (A `(` after any other lvalue
-            // chain falls through to the `=` error below.)
-            if (peek().kind == token::Kind::kLParen
-                && lhs->kind == parse::Kind::kFieldExpr) {
-                advance();   // (
-                auto call = newNodeAt(parse::Kind::kMethodCallStmt, stmt_file, stmt_tok);
-                call->name = lhs->name;
-                call->name_tok = lhs->name_tok;
-                call->children.push_back(std::move(lhs->children[0]));   // receiver
-                if (!parseCallArgs(*call)) return nullptr;               // args -> children[1..]
+            // The chain ended in a method call (`obj.method(args);` or a chained
+            // `d.next().get();`) — a statement on its own. A call result is not an
+            // lvalue, so no trailing store/op follows; demand the `;`.
+            if (lhs->kind == parse::Kind::kMethodCallStmt) {
                 if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
-                return call;
+                return lhs;
             }
             if (peek().kind == token::Kind::kArrowLeft
                 || peek().kind == token::Kind::kArrowBoth) {

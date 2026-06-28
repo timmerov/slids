@@ -10,7 +10,7 @@ BUILD_DIR = ../../build/test_v2/$(DIR)
 SAMPLES = \
 	call \
 	nested_fn \
-	overload \
+	overload_fn \
 	param \
 	return_fn
 

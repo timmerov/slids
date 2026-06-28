@@ -1,11 +1,38 @@
 Method:ctor: 77
 Method:print: 78
+x = 79
 Pt:shift: 11,22
-Inner:show: 7
-Loc:emit: 3
+Inner:show: 7 dbl=14
+Loc:emit: 3 trip=9
 Use:scaleUp: 10
 Use:absorb: 13
 Use:viaNested: 169
 Use:scaleUp: 338
 Use:scaleUp: 4
-Method:dtor: 79
+Chain:ctor: 0
+Chain:ctor: 1
+Chain:ctor: 2
+chain = 2
+-- end chain (dtor 2,1,0 next, at scope end) --
+Chain:dtor: 2
+Chain:dtor: 1
+Chain:dtor: 0
+Chain:ctor: 5
+Chain:ctor: 6
+Chain:dtor: 6
+-- mid chain-stmt (dtor 6 ran; dtor 5 at scope end) --
+Chain:dtor: 5
+trin = 12
+trin-bare = 12
+Sibs:ctor
+Sibs:run x_=100
+Sibs:peek=105
+Sibs:report: 105
+Nest:run = 15
+Shadow:run = 10
+Flow:run: 6
+Rec:run: sum4=10 even4=1
+Fwd:run: 42
+Args:run: 14 9
+Sibs:dtor: 106
+Method:dtor: 80

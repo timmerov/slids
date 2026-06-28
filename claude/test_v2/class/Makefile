@@ -20,6 +20,7 @@ SAMPLES = \
 	namespace_cls \
 	nested_cls \
 	operator \
+	overload_cls \
 	self \
 	virtual
 
