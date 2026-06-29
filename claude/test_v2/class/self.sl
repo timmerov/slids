@@ -31,7 +31,17 @@ const-ness is currently parsed but not enforced.
 /*
 claude says:
 
-tbd
+self is the object; ^self is a reference to it. this() returns ^self,
+so `s.this` hands back a Self^ that aliases s.
+
+self.NAME forces member lookup past any shadowing name in scope:
+- shadow_x declares a local x_ that hides the field. bare x_ is the
+  local; self.x_ is the field.
+- shadow_print declares a nested function print() that hides the method.
+  bare print() calls the nested function; self.print() calls the method.
+
+so self does double duty: it names the receiver, and it reaches members
+that a local or nested-function name would otherwise shadow.
 */
 
 Self(int x_) {

@@ -49,10 +49,6 @@ BLOCKED FEATURES
     aggregate-spread path are defined. Lowering lives in classify::classifyClassInit
     (the per-field spread) and classifyStmt (an rvalue source is spilled to a temp).
 
-  * FOR-ARRAY BY-VALUE NON-PRIMITIVE ELEMENT — by-value iteration requires a
-    primitive element type (a reference works for all). Only the CLASS-element
-    variant remains, when class array elements exist (Phase 5).
-
   * CLASS / USER-TYPE CONVERSION TARGET (Phase 5) — `(Type = expr)` LANDED for
     primitives, tuples, and arrays (lockstep recursive walk; see
     [[project_v2_type_conversions]]). Two slices still wait:

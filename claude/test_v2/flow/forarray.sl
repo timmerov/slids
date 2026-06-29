@@ -1,7 +1,6 @@
 /*
 test for over a fixed size array.
 
-array must be one dimensional.
 to iterate by value, the array must be a primitive type.
 all types may be iterated by reference.
 loop variables are to be re-used if they exist in enclosing scope.
@@ -211,6 +210,16 @@ int32 main() {
         __print(" )");
     }
     __println(" )");
+
+    {
+        Class(int x_) { }
+        Class arr[3] = (1,2,3);
+        __print("arr=[");
+        for (ref : arr) {
+            __print(" " + ref^.x_);
+        }
+        __println(" ]");
+    }
 
     return 0;
 }

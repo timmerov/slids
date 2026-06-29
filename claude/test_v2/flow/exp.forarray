@@ -21,3 +21,4 @@ firstpair= 11
 wlast= 16
 osum= 42
 a3=( ( 1 2 ) ( 3 4 ) ( 5 6 ) )
+arr=[ 1 2 3 ]
