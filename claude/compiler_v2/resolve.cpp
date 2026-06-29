@@ -592,14 +592,8 @@ void registerNestedNamespaceClasses(parse::Tree& tree, parse::Node& ns,
                                     diagnostic::Sink& diag);
 void registerNamespaceTree(parse::Tree& tree, parse::Node& node,
                            int parent_ns, diagnostic::Sink& diag);
-void resolveNamespaceBodies(parse::Tree& tree, parse::Node& node,
-                            int parent_ns, diagnostic::Sink& diag);
-void resolveClassMemberInits(parse::Tree& tree, parse::Node& node,
-                             diagnostic::Sink& diag);
-void resolveClassMemberBodies(parse::Tree& tree, parse::Node& node,
-                              diagnostic::Sink& diag);
-void resolveClassFieldDefaults(parse::Tree& tree, parse::Node& node,
-                               diagnostic::Sink& diag);
+void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
+                        diagnostic::Sink& diag);
 void registerEnum(parse::Tree& tree, parse::Node& node, int parent_ns,
                   diagnostic::Sink& diag);
 void resolveEnumMemberInits(parse::Tree& tree, parse::Node& node,
@@ -806,40 +800,67 @@ void registerNamespaceTree(parse::Tree& tree, parse::Node& node,
     tree.open_ns_frames.pop_back();
 }
 
-// Resolve member bodies of an already-registered namespace: const inits,
-// function bodies (which see the open-namespace chain), and nested namespaces.
-void resolveNamespaceBodies(parse::Tree& tree, parse::Node& node,
-                            int parent_ns, diagnostic::Sink& diag) {
-    (void)parent_ns;
-    int ns = node.resolved_entry_id;   // stashed by registerNamespaceTree
-    if (ns < 0) return;   // registration already diagnosed any problem
-    tree.open_ns_frames.push_back(ns);
+// The BODY phase for ONE scope (a namespace, a class, or — recursing — either
+// nested in the other to any depth), with its frame OPEN. Resolves, in member
+// order: a class's field-default exprs and its const/enum-member inits; every
+// member FUNCTION body (method/ctor/dtor for a class — params incl. `_$recv`
+// resolved here — or a free function for a namespace); and recurses into every
+// nested namespace AND class through THIS routine. Names/types/cycle already ran
+// in the registration phases, so a member body forward-references freely. One
+// routine for all three contexts replaces resolveNamespaceBodies +
+// resolveClassMemberBodies + the bundled resolveClassMemberInits/FieldDefaults +
+// the kClassDef/kNamespaceDecl cross-arms.
+void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
+                        diagnostic::Sink& diag) {
+    int frame = isClass
+        ? (node.resolved_entry_id >= 0
+               ? tree.entries[node.resolved_entry_id].ns_frame_id : -1)
+        : node.resolved_entry_id;
+    if (frame < 0) return;   // a duplicate / unregistered scope — no members to resolve
+    tree.open_ns_frames.push_back(frame);
+    std::vector<std::string> const* saved_mf = tree.method_fields;
+    if (isClass) {
+        auto it = tree.classes.find(widen::strip(node.return_type));
+        // Bare field names in a method/ctor/dtor body rewrite to `self.field` via
+        // method_fields; a member function is self-bound only in the class scope
+        // itself — a nested namespace's free functions reset it (the else below).
+        tree.method_fields = (it != tree.classes.end()) ? &it->second.field_names
+                                                        : nullptr;
+        // Field-default exprs, with the class frame open (a default may name a
+        // sibling member bare).
+        for (auto& p : node.params) {
+            if (p && !p->children.empty() && p->children[0]) {
+                resolveExpr(tree, *p->children[0], diag);
+            }
+        }
+    } else {
+        tree.method_fields = nullptr;   // a free function does not self-bind
+    }
     for (auto& m : node.children) {
         if (!m) continue;
-        if (m->kind == parse::Kind::kNamespaceDecl) {
-            resolveNamespaceBodies(tree, *m, ns, diag);
-        } else if (m->kind == parse::Kind::kEnumDecl) {
-            // The namespace frame is open; resolveEnumMemberInits opens the
-            // enum's own frame on top, so member inits see siblings + the
-            // enclosing namespace's members.
-            resolveEnumMemberInits(tree, *m, diag);
+        if (m->kind == parse::Kind::kFunctionDef) {
+            if (isClass) {
+                // A method's params (incl. the implicit `_$recv`) resolve here —
+                // the class body is ready now (it was opaque during registration).
+                for (auto& p : m->params) {
+                    if (p && p->return_type != widen::kNoType)
+                        resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
+                }
+            }
+            resolveFunctionBody(tree, *m, diag, /*nested=*/false);
         } else if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
             for (auto& init : m->children) {
                 if (init) resolveExpr(tree, *init, diag);
             }
-        } else if (m->kind == parse::Kind::kFunctionDef) {
-            resolveFunctionBody(tree, *m, diag);
+        } else if (m->kind == parse::Kind::kEnumDecl) {
+            resolveEnumMemberInits(tree, *m, diag);
+        } else if (m->kind == parse::Kind::kNamespaceDecl) {
+            resolveScopeBodies(tree, *m, /*isClass=*/false, diag);
         } else if (m->kind == parse::Kind::kClassDef) {
-            // The class NAME / BODY / cycle-check already ran in the file-scope
-            // class passes (so cross-class forward references resolve). Here, with
-            // the namespace frame OPEN, resolve its member inits, field defaults,
-            // and method/ctor/dtor bodies — so a method may name a namespace
-            // sibling bare, exactly as a free function in this namespace can.
-            resolveClassMemberInits(tree, *m, diag);
-            resolveClassFieldDefaults(tree, *m, diag);
-            resolveClassMemberBodies(tree, *m, diag);
+            resolveScopeBodies(tree, *m, /*isClass=*/true, diag);
         }
     }
+    tree.method_fields = saved_mf;
     tree.open_ns_frames.pop_back();
 }
 
@@ -2570,7 +2591,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // class passes only walk file-scope namespaces). Member bodies then
             // resolve inside resolveNamespaceBodies.
             registerNestedNamespaceClasses(tree, s, diag);
-            resolveNamespaceBodies(tree, s, kGlobalFrame, diag);
+            resolveScopeBodies(tree, s, /*isClass=*/false, diag);
             return Completion::Normal;
         }
         case parse::Kind::kEnumDecl: {
@@ -3699,37 +3720,6 @@ void registerClassMembers(parse::Tree& tree, parse::Node& node, int frame,
     tree.open_ns_frames.pop_back();
 }
 
-// Resolve a class's member const inits and enum member inits, once file-scope
-// entries (which an init may reference) exist. The class frame is opened so a
-// member init can reference a sibling member bare.
-void resolveClassMemberInits(parse::Tree& tree, parse::Node& node,
-                             diagnostic::Sink& diag) {
-    // Each class opens its frame (so a member init may reference a sibling member
-    // bare), resolves its const/enum-member inits, then descends into its hoisted
-    // classes with the frame still open. The canonical walker owns the recursion.
-    auto classFrame = [&](parse::Node& cls) -> int {
-        return cls.resolved_entry_id >= 0
-            ? tree.entries[cls.resolved_entry_id].ns_frame_id : -1;
-    };
-    parse::forEachHoistedClass(node,
-        [&](parse::Node& cls) {
-            if (classFrame(cls) < 0) return;
-            tree.open_ns_frames.push_back(classFrame(cls));
-            for (auto& m : cls.children) {
-                if (!m) continue;
-                if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
-                    for (auto& init : m->children)
-                        if (init) resolveExpr(tree, *init, diag);
-                } else if (m->kind == parse::Kind::kEnumDecl) {
-                    resolveEnumMemberInits(tree, *m, diag);
-                }
-            }
-        },
-        [&](parse::Node& cls) {
-            if (classFrame(cls) >= 0) tree.open_ns_frames.pop_back();
-        });
-}
-
 bool fieldContributesNeed(parse::Tree const& tree, widen::TypeRef ft, bool ctor);
 
 // Class registration is TWO-PHASE so a class field may forward-reference a
@@ -3843,68 +3833,6 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     widen::setSlidLifecycle(type, has_ctor, has_dtor);
 }
 
-// Resolve a class's ctor/dtor member bodies. Each is a kFunctionDef carrying an
-// implicit receiver param `_$recv` (Class^, the object's address); a bare field
-// name in the body resolves to the spec `self.field` (= `_$recv^.field`;
-// method_fields drives the kIdentExpr fallback rewrite). Runs after file-scope
-// entries exist so the bodies can call file-scope functions.
-void resolveClassMemberBodies(parse::Tree& tree, parse::Node& node,
-                              diagnostic::Sink& diag) {
-    // Walk this class and its HOISTED descendants via the canonical walker. Each
-    // class OPENS ITS FRAME on enter (so a ctor/dtor body — and a hoisted class's
-    // body — reach the class's own members bare, and a hoisted class also sees its
-    // host's, since the host frame stays open across the descent) and pops on exit.
-    // A class with no registered frame is a duplicate — skip it (its members aren't
-    // registered either, so the descent does nothing).
-    auto classFrame = [&](parse::Node& cls) -> int {
-        return cls.resolved_entry_id >= 0
-            ? tree.entries[cls.resolved_entry_id].ns_frame_id : -1;
-    };
-    parse::forEachHoistedClass(node,
-        [&](parse::Node& cls) {
-            int frame = classFrame(cls);
-            if (frame < 0) return;
-            tree.open_ns_frames.push_back(frame);
-            auto it = tree.classes.find(widen::strip(cls.return_type));
-            std::vector<std::string> const* saved = tree.method_fields;
-            tree.method_fields = &it->second.field_names;
-            for (auto& m : cls.children) {
-                // Every member FUNCTION — ctor, dtor, AND methods — is self-bound:
-                // resolve its params (incl. the implicit `self`, whose bare name
-                // redirects to the scoped kSlid so a field access through self finds
-                // the class) and its body, with method_fields driving the field
-                // rewrite. A method is a ctor/dtor with a user name.
-                if (m && m->kind == parse::Kind::kFunctionDef) {
-                    for (auto& p : m->params) {
-                        if (p && p->return_type != widen::kNoType)
-                            resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
-                    }
-                    resolveFunctionBody(tree, *m, diag, /*nested=*/false);
-                } else if (m && m->kind == parse::Kind::kNamespaceDecl) {
-                    // A namespace nested in this class body — resolve its member
-                    // bodies with the class frame open (so they reach class members
-                    // bare, like any namespace member sees its enclosing scope).
-                    resolveNamespaceBodies(tree, *m, frame, diag);
-                }
-            }
-            tree.method_fields = saved;
-        },
-        [&](parse::Node& cls) {
-            if (classFrame(cls) >= 0) tree.open_ns_frames.pop_back();
-        });
-}
-
-// Resolve a class's field-default expressions (their ident references), after
-// file-scope consts exist. constfold folds them to literals for construction.
-void resolveClassFieldDefaults(parse::Tree& tree, parse::Node& node,
-                               diagnostic::Sink& diag) {
-    for (auto& p : node.params) {
-        if (p && !p->children.empty() && p->children[0]) {
-            resolveExpr(tree, *p->children[0], diag);
-        }
-    }
-}
-
 // The class types a field DEPENDS ON BY VALUE — a kSlid field, or an array / tuple
 // of one (recursively). A pointer / iterator field does NOT (it breaks a size
 // cycle). Mirrors fieldContributesNeed's shape.
@@ -3976,11 +3904,7 @@ void registerLocalClasses(parse::Tree& tree,
     for (parse::Node* c : fresh) registerClassBody(tree, *c, diag);   // Phase 2
     // Reject infinite-size by-value cycles BEFORE member-body / classify recursion.
     for (parse::Node* c : fresh) checkClassByValueAcyclic(tree, *c, diag);
-    for (parse::Node* c : fresh) {
-        resolveClassFieldDefaults(tree, *c, diag);
-        resolveClassMemberInits(tree, *c, diag);
-        resolveClassMemberBodies(tree, *c, diag);
-    }
+    for (parse::Node* c : fresh) resolveScopeBodies(tree, *c, /*isClass=*/true, diag);
     // Transitive needs: the file-scope fixpoint already ran (before any body), so
     // a local class isn't swept by it. Run the same fixpoint over THIS sibling set
     // — a field class is either already published or in this set (chains converge).
@@ -4467,40 +4391,25 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         }
     }
 
-    // Pass 1b-class-members — resolve class member const inits and enum member
-    // inits now that every file-scope entry exists (an init may reference one).
-    for (auto& ch : program->children) {
-        if (ch && ch->kind == parse::Kind::kClassDef) {
-            resolveClassMemberInits(tree, *ch, diag);
-        }
-    }
-
-    // Pass 1b-class — resolve class field-default expressions now that every
-    // file-scope const/entry exists (a default may reference one).
-    for (auto& ch : program->children) {
-        if (ch && ch->kind == parse::Kind::kClassDef) {
-            resolveClassFieldDefaults(tree, *ch, diag);
-        }
-    }
-
-    // Pass 2 — walk each function body.
+    // Pass 2 — walk each top-level function body.
     for (auto& ch : program->children) {
         if (!ch || ch->kind != parse::Kind::kFunctionDef) continue;
         resolveFunctionBody(tree, *ch, diag);
     }
 
-    // Pass 2-class — resolve class ctor/dtor member bodies (self-bound).
+    // Pass 2-scope — the BODY phase for every file-scope namespace and class:
+    // field-default exprs, member const/enum inits, and member function bodies
+    // (methods/ctor/dtor or free functions), recursing into nested scopes — a
+    // class in a namespace, a namespace in a class — through the ONE
+    // resolveScopeBodies routine. Every entry/type exists by now (registration +
+    // the global two-phase + the lifecycle fixpoint all ran), so this folds in the
+    // former 1b member-init / field-default passes: order within the body phase is
+    // free.
     for (auto& ch : program->children) {
-        if (ch && ch->kind == parse::Kind::kClassDef) {
-            resolveClassMemberBodies(tree, *ch, diag);
-        }
-    }
-
-    // Pass 2-ns — resolve namespace member bodies (const inits + function
-    // bodies), which see their enclosing namespace's members unqualified.
-    for (auto& ch : program->children) {
-        if (!ch || ch->kind != parse::Kind::kNamespaceDecl) continue;
-        resolveNamespaceBodies(tree, *ch, kGlobalFrame, diag);
+        if (ch && ch->kind == parse::Kind::kClassDef)
+            resolveScopeBodies(tree, *ch, /*isClass=*/true, diag);
+        else if (ch && ch->kind == parse::Kind::kNamespaceDecl)
+            resolveScopeBodies(tree, *ch, /*isClass=*/false, diag);
     }
 
     // Pass 3 — orphan declarations. A function declared but never defined

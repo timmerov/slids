@@ -645,13 +645,14 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     class's def_id can't survive one). A hoisted class is NOT bound to a host
     object: it sees the host's namespace members (`Inner`'s body reads `Outerger`
     bare, `Outer:Outerger` qualified) but NOT the host's fields (a bare host field
-    is Unresolved). classify recurses into hoisted ctor/dtor (classifyClassMemberBodies).
+    is Unresolved). classify recurses into hoisted ctor/dtor (classifyScope).
   * SCOPE-AWARE MEMBER RESOLUTION (name-then-resolve, frames open) — NOT a leniency.
     A type name resolves via resolveName (open-ns chain + lexical-with-owner<0), not
     a frame-blind any-live-entry lookup. For that to be correct, member TYPES must
     resolve with the enclosing frame OPEN: registerNamespaceTree / registerClassMembers
-    / registerClassBody / resolveClassMemberBodies each push their frame around the
-    member-type / body resolution (names were registered first — type-introducing
+    / registerClassBody (registration) and resolveScopeBodies (the unified body phase)
+    each push their frame around the member-type / body resolution (names were
+    registered first — type-introducing
     members before consts — so forward refs resolve). Result: a member type resolves
     bare only where its frame is open (inside the host); a bare member type at file
     scope FAILS — "'Inner' needs a namespace qualifier" when it IS a member-type
@@ -782,20 +783,32 @@ NAMESPACE ↔ CLASS — ONE SCOPE ABSTRACTION (landed; spans parse / desugar / c
     const inits) and recurses into nested namespaces AND classes through itself;
     run() calls it once on the program (replaced classifyNamespace +
     classifyClassMemberBodies + their cross-arms).
-  * RESOLVE — NOT yet unified (todo.txt: RESOLVE SCOPE UNIFICATION). It still runs
-    parallel namespace vs class pipelines: registration (registerNamespaceTree /
-    registerMemberSignature vs registerClassName / registerClassMembers /
-    registerClassBody) and body resolution (resolveNamespaceBodies vs
-    resolveClassMemberBodies), bridged by per-kind ARMS plus the helpers
-    collectNamespaceClasses / registerNestedNamespaceClasses so namespace-nested
-    classes (in three contexts: file, function body, class body) thread the class
-    two-phase. It works to any depth, but it is the cross-wiring the other stages
-    deleted. Unifying = a global name-phase + body-phase recursion over scopes
-    (preserving the cross-scope forward-ref guarantee the global two-phase gives),
-    unbundling resolveClassMemberInits/FieldDefaults into per-member steps, and
-    rewriting run()'s 1a/1b/2 passes. The intrinsic per-scope differences (field
-    tuple, method receiver, no-reopen for a class) stay as a small isClass config —
-    not separate pipelines.
+  * RESOLVE — BODY side UNIFIED (step 1, landed); REGISTRATION side remains (step 2;
+    todo.txt: RESOLVE SCOPE UNIFICATION).
+    - STEP 1 (done): resolveScopeBodies(node, isClass) is the one recursive body-phase
+      routine for any scope — it resolved away resolveNamespaceBodies +
+      resolveClassMemberBodies + the bundled resolveClassMemberInits/FieldDefaults +
+      both body-side ARMS (3 functions deleted). run()'s 1b-class-members / 1b-class /
+      2-class / 2-ns passes collapsed into one resolveScopeBodies sweep over file
+      classes + namespaces; registerLocalClasses + the local-namespace stmt case call
+      it too. The intrinsic per-scope bits are an isClass config (a class resolves its
+      field-default exprs + injects the `_$recv` method-param type + sets method_fields
+      for self-binding; a namespace resets method_fields so a free function nested in a
+      class body does NOT self-bind — a latent bug the merge fixed). All member
+      inits/defaults now run in the body phase (every entry exists by then, so order
+      is free).
+    - STEP 2 (remaining): the REGISTRATION pipelines are still parallel —
+      registerNamespaceTree / registerMemberSignature vs registerClassName /
+      registerClassMembers / registerClassBody — bridged by the registration ARMS +
+      collectNamespaceClasses / registerNestedNamespaceClasses. Unify = split into a
+      global NAME phase (entries + frames + slotless kSlid + placeholder ClassInfo, NO
+      type resolution) then a global TYPES phase (resolve every declared type — field
+      types, function/method/const SIGNATURE types, alias targets — now that all names
+      exist, writing back to entries), recurse uniformly, delete the namespace pipeline
+      + arms. This fixes the two forward-ref BUGS by construction (todo.txt: a
+      namespace member / method signature can't name a class because its signature
+      type resolves before all class names exist). The intrinsic per-scope differences
+      (field tuple, method receiver, no-reopen for a class) stay as the isClass config.
 
 
 STAGE FILES (.h / .cpp pairs)
@@ -1028,7 +1041,7 @@ STAGE FILES (.h / .cpp pairs)
             namespace-member enum registers in registerNamespaceTree (which
             registers type-introducing members — enums, nested namespaces —
             before consts/functions, so a member's type may name a sibling enum
-            regardless of order) and resolves inits in resolveNamespaceBodies.
+            regardless of order) and resolves inits in resolveScopeBodies.
             Definite assignment + unused locals: the body walk tracks three
             per-function entry-id sets (initialized_locals, read_locals,
             body_locals; all id-keyed, no names). A kLocalVar read before it is
