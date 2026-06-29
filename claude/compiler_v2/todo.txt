@@ -202,38 +202,6 @@ BLOCKED FEATURES
 
 REACH GOALS
 
-  * RESOLVE SCOPE UNIFICATION (step 2 — registration) — a namespace, a class body, and
-    PROGRAM scope are one construct (a brace body of member definitions); parse,
-    desugar, classify, AND resolve's BODY phase now each handle them with ONE recursive
-    routine (parseDefinitionMember / flattenScope / classifyScope / resolveScopeBodies),
-    so class-in-namespace, namespace-in-class, etc. is correct at any depth BY
-    CONSTRUCTION.
-    STEP 1 (DONE) — body merge: resolveScopeBodies replaced resolveNamespaceBodies +
-    resolveClassMemberBodies + the bundled resolveClassMemberInits/FieldDefaults + both
-    body-side arms; run()'s 1b + 2-class + 2-ns passes collapsed; registerLocalClasses +
-    the local-namespace stmt case rewired; the latent method_fields self-bind bug fixed.
-    STEP 2a (DONE) — TYPES phase: member SIGNATURE types (a namespace/class member
-    const's type, a function's/method's param + return types) are no longer resolved
-    during registration — registerMemberSignature / registerClassMembers create the entry
-    with PROVISIONAL types, and the new resolveScopeTypes (pass 1a-types in run(), + the
-    local-class / local-namespace paths) resolves them after EVERY name exists and writes
-    back to the entry, recursing through all nested scopes. This FIXED the two forward-ref
-    bugs (a namespace member / method signature can now name any class regardless of
-    order — the bugs were "signature type resolved before all class names exist").
-    STEP 2b (REMAINING) — the registration TOPOLOGY is still parallel:
-    registerNamespaceTree / registerMemberSignature vs registerClassName /
-    registerClassMembers / registerClassBody, bridged by the registration arms +
-    collectNamespaceClasses / registerNestedNamespaceClasses (thread namespace-nested
-    classes through the class two-phase in three contexts: file / function body / class
-    body). FULLY UNIFY = a single recursive NAME phase (registerScopeNames: entries +
-    frames + slotless kSlid + placeholder ClassInfo, no type resolution) feeding the
-    existing resolveScopeTypes, moving class FIELD types + member ALIAS targets into the
-    TYPES phase too, then deleting registerNamespaceTree, registerMemberSignature,
-    registerNestedNamespaceClasses, collectNamespaceClasses, and the registration arms.
-    The isClass config (field tuple / method receiver / no-reopen) is the only split that
-    stays. Pure structural cleanup now (2a already fixed the visible bugs); verify the
-    full suite at each step. Detail: readme "NAMESPACE ↔ CLASS".
-
   * NESTED FUNCTION RESTRICTIONS TO REVISIT — three deliberate limits, each a
     compile error today (canon nested.sl says "needs to be revisited"):
       - DEEP NESTING — a nested function may not contain a further nested

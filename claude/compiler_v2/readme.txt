@@ -638,9 +638,9 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     lift to module-level functions like a file-scope class's.
   * HOISTED CLASSES — a class defined in another class's BODY is a namespace-MEMBER
     of the host (like its alias/const/enum members), reached as `Outer:Inner` (and
-    `Outer:Inner:Innerger`, any depth). registerClassMembers gains a kClassDef arm
-    (registerClassName/Body with member_of = the host frame; def_id = host frame, so
-    `Outer:Inner` is a distinct identity); resolveQualifiedType accepts a kClass
+    `Outer:Inner:Innerger`, any depth). registerScopeNames recurses into the host's
+    frame (registerClassName name-only with member_of = the host frame; def_id = host
+    frame, so `Outer:Inner` is a distinct identity); resolveQualifiedType accepts a kClass
     leaf and returns the HANDLE via an out-param (NEVER a spelling round-trip — a
     class's def_id can't survive one). A hoisted class is NOT bound to a host
     object: it sees the host's namespace members (`Inner`'s body reads `Outerger`
@@ -649,9 +649,10 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
   * SCOPE-AWARE MEMBER RESOLUTION (name-then-resolve, frames open) — NOT a leniency.
     A type name resolves via resolveName (open-ns chain + lexical-with-owner<0), not
     a frame-blind any-live-entry lookup. For that to be correct, member TYPES must
-    resolve with the enclosing frame OPEN: registerNamespaceTree / registerClassMembers
-    / registerClassBody (registration) and resolveScopeBodies (the unified body phase)
-    each push their frame around the member-type / body resolution (names were
+    resolve with the enclosing frame OPEN: registerScopeNames (the NAME phase recurses
+    with frames open) and the flat field-BODY / TYPES / BODY passes (registerClassBody
+    via openOwnerChain, resolveScopeTypes / resolveScopeBodies via their recursion) each
+    open the enclosing chain around the member-type / body resolution (names were
     registered first — type-introducing
     members before consts — so forward refs resolve). Result: a member type resolves
     bare only where its frame is open (inside the host); a bare member type at file
@@ -754,7 +755,7 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     file-scope functions/consts register, so those stay "Unknown type").
 
 
-NAMESPACE ↔ CLASS — ONE SCOPE ABSTRACTION (landed; spans parse / desugar / classify)
+NAMESPACE ↔ CLASS — ONE SCOPE ABSTRACTION (landed; spans parse / desugar / classify / resolve)
 
   A namespace, a class body, and PROGRAM scope are the same construct: a brace body
   holding member definitions. A class is a namespace with a field tuple + methods; a
@@ -783,40 +784,35 @@ NAMESPACE ↔ CLASS — ONE SCOPE ABSTRACTION (landed; spans parse / desugar / c
     const inits) and recurses into nested namespaces AND classes through itself;
     run() calls it once on the program (replaced classifyNamespace +
     classifyClassMemberBodies + their cross-arms).
-  * RESOLVE — BODY phase + TYPES phase UNIFIED (steps 1 + 2a, landed); registration
-    TOPOLOGY remains (step 2b; todo.txt: RESOLVE SCOPE UNIFICATION).
-    - STEP 1 (done): resolveScopeBodies(node, isClass) is the one recursive body-phase
-      routine for any scope — it resolved away resolveNamespaceBodies +
-      resolveClassMemberBodies + the bundled resolveClassMemberInits/FieldDefaults +
-      both body-side ARMS (3 functions deleted). run()'s 1b-class-members / 1b-class /
-      2-class / 2-ns passes collapsed into one resolveScopeBodies sweep over file
-      classes + namespaces; registerLocalClasses + the local-namespace stmt case call
-      it too. The intrinsic per-scope bits are an isClass config (a class resolves its
-      field-default exprs + sets method_fields for self-binding; a namespace resets
-      method_fields so a free function nested in a class body does NOT self-bind — a
-      latent bug the merge fixed). All member inits/defaults now run in the body phase.
-    - STEP 2a (done): resolveScopeTypes(node, isClass) is the TYPES phase. Member
-      SIGNATURE types — a member const's type, a function's/method's param + return
-      types — no longer resolve during REGISTRATION: registerMemberSignature /
-      registerClassMembers create the entry with PROVISIONAL types, and resolveScopeTypes
-      (pass 1a-types in run(), + the local-class / local-namespace paths) resolves them
-      AFTER every name across every scope exists and writes back to the entry, recursing
-      all nested scopes. resolveScopeBodies no longer touches params. This FIXED the two
-      forward-ref bugs: a namespace member or a method signature can now name ANY class
-      regardless of declaration/pass order (the bug was "signature type resolved before
-      all class names exist"). Class FIELD types still resolve in registerClassBody;
-      member alias targets still resolve at registration.
-    - STEP 2b (remaining — pure structural cleanup, no behavior change): the registration
-      TOPOLOGY is still two parallel pipelines — registerNamespaceTree /
-      registerMemberSignature vs registerClassName / registerClassMembers — bridged by
-      the registration ARMS + collectNamespaceClasses / registerNestedNamespaceClasses.
-      Finish = one recursive NAME phase (registerScopeNames: entries + frames + slotless
-      kSlid + placeholder ClassInfo) feeding the existing resolveScopeTypes (moving class
-      FIELD types + member ALIAS targets into TYPES too), then deleting registerClassMembers,
-      registerNamespaceTree, registerMemberSignature, registerNestedNamespaceClasses,
-      collectNamespaceClasses, and the arms. The isClass config (field tuple, method
-      receiver, no-reopen) is the only split that stays. 2a already fixed the visible bugs,
-      so this is the last cross-wiring deletion, not a capability change.
+  * RESOLVE — FULLY UNIFIED (NAME + TYPES + BODY phases). Three recursive routines over
+    a scope, each with an isClass config; the parallel namespace/class pipelines and all
+    cross-arms are GONE. Run() does: global NAME phase -> global field-BODY phase -> cycle
+    -> needs-fixpoint -> TYPES phase -> function entries -> BODY phase.
+    - NAME phase — registerScopeNames(node, frame, classes): one recursive walk
+      registers every member NAME / entry (const/function/method/alias/enum), opens
+      nested namespace frames, and registers nested class NAMES (slotless kSlid +
+      placeholder ClassInfo via name-only registerClassName), recursing through nested
+      namespaces AND classes. Member entries carry PROVISIONAL signature types. Every
+      class NODE (file / namespace-nested / hoisted, any depth) is collected so the
+      caller runs the field-BODY phase after ALL names — the global two-phase that lets a
+      field forward-reference any class in any scope. Replaced registerClassMembers +
+      registerNamespaceTree + registerMemberSignature + collectNamespaceClasses +
+      registerNestedNamespaceClasses (all DELETED) and the registration arms.
+    - field-BODY phase — registerClassBody over the collected class list (registerClassBodies
+      bundles it + cycle + transitive-needs fixpoint for a LOCAL set). registerClassBody now
+      reopens the enclosing frame chain (openOwnerChain) because it runs in a FLAT loop,
+      not inside the name recursion — so a hoisted class's field naming a host sibling
+      (`Ring { Ping(Pong^) Pong(Ping^) }`) still resolves bare.
+    - TYPES phase — resolveScopeTypes(node, isClass): resolves member SIGNATURE types (a
+      const's type, a function's/method's param + return types) AFTER every name exists,
+      writing back to the entry, recursing with frames open. This is why a namespace
+      member or a method signature can name ANY class regardless of order (the old
+      forward-ref bugs). Member alias targets still resolve at registration.
+    - BODY phase — resolveScopeBodies(node, isClass): field-default exprs, const/enum-member
+      inits, and every member function body, recursing.
+    A side effect of the uniform vocabulary: a namespace now accepts MEMBER ALIASES
+    (`Space { alias Int = int; }`) — it was a class-only member before. The isClass config
+    (field tuple, method receiver self-binding, no-reopen) is the only split that stays.
 
 
 STAGE FILES (.h / .cpp pairs)
@@ -1046,9 +1042,9 @@ STAGE FILES (.h / .cpp pairs)
             file-scope const (`enum E ( e = kG )`) or a sibling member bare
             (`enum E ( a, b = a )`). A block-scope enum registers + resolves in
             one shot in the body pass (all enclosing entries already exist). A
-            namespace-member enum registers in registerNamespaceTree (which
-            registers type-introducing members — enums, nested namespaces —
-            before consts/functions, so a member's type may name a sibling enum
+            namespace-member enum registers in registerScopeNames (which
+            registers type-introducing members — enums, nested namespaces, class
+            names — before consts/functions, so a member's type may name a sibling enum
             regardless of order) and resolves inits in resolveScopeBodies.
             Definite assignment + unused locals: the body walk tracks three
             per-function entry-id sets (initialized_locals, read_locals,
