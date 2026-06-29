@@ -3682,7 +3682,23 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
         } else if (m->kind == parse::Kind::kFunctionDef
                 || m->kind == parse::Kind::kFunctionDecl) {
             if (m->name == "_$ctor" || m->name == "_$dtor") continue;
-            if (isDup(*m)) continue;
+            // A same-name CLASS METHOD is an OVERLOAD — register it as a separate
+            // entry (classify picks among them by signature; an identical-signature
+            // pair is caught as a dup DEFINITION there). A same-name NON-function
+            // member (a const / alias / enum / nested class — a field is a slot, not
+            // a frame member) is a true duplicate. In a NAMESPACE a same-name function
+            // stays a duplicate too: only class methods + file-scope functions resolve
+            // overloaded calls today.
+            bool is_class_frame = (node.kind == parse::Kind::kClassDef);
+            if (int prev = findMemberDeclared(tree, frame, m->name); prev >= 0
+                && !(is_class_frame
+                     && tree.entries[prev].kind == parse::EntryKind::kFunction)) {
+                parse::Entry const& pe = tree.entries[prev];
+                diagnostic::report(diag, {m->file_id, m->name_tok,
+                    "Duplicate declaration of '" + m->name + "'.",
+                    {{pe.file_id, pe.tok, "first declared here"}}});
+                continue;
+            }
             std::vector<widen::TypeRef> ptypes;
             for (auto& p : m->params) {
                 if (!p) continue;

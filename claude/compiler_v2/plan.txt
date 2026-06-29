@@ -755,6 +755,17 @@ Phase 5 — classes
     (reportNameCollision, source-order carets); requireKnownType names a non-type
     precisely ("'X' is a namespace/function/constant/variable, not a type").
   * operator overloading per slid
+  * METHOD / FUNCTION PARITY — methods get overloading + default params + infer-
+    from-default (all of which free functions already have) by routing both through
+    one shared overload-resolution ENGINE (resolveOverload + fillDefaults, a receiver
+    offset for methods); resolve allows a method overload SET in the class frame.
+    Definition/body/codegen are already unified (a method is a lifted function); the
+    divergence is only resolve lookup + the classify call path. Detail + landing
+    order: plan-method-parity.txt; canon test_v2/class/overload_cls.sl mirrors
+    overload_fn.sl. Constructors have NO overload analog — `_()` is nullary (a hook
+    over tuple-initialized fields, not a signature-bearing callable); the `Class(args)`
+    "args" are field initializers. The adjacent overloadable construct is post-
+    construction assignment (`op=`), under operator overloading — not a ctor feature.
   * move / swap — the OVERLOADABLE class operators (`op<--`/`op<-->`) + resource
     semantics + class fields inside a moved/swapped tuple (the primitive / pointer
     / tuple forms landed in Phase 4 — [[project_v2_move_swap]])

@@ -10,13 +10,20 @@ ambiguity is a compile error.
 /*
 claude says:
 
-(this round: NO default parameters — fixed-arity overloads only.)
 - a name may have several function definitions with distinct signatures. A call
   matches the candidate set: each arg must convert to the param (exact or a
   widening within family; a narrowing / cross-family rejects the candidate).
 - ranking: per arg, exact = cost 0, widening = cost 1; the lowest-total-cost
   candidate wins; a tie is "Ambiguous call". No viable candidate is "No matching
   overload". (A literal's exactness is judged against its default type.)
+- DEFAULT PARAMETERS: a trailing param may carry a default (`int32 b = 100`), so a
+  candidate's arity is a RANGE — num_required .. param-count. A call within the
+  range is viable; the omitted trailing args fill from THE CHOSEN overload's
+  defaults (fillDefaults, AFTER ranking). A default can make two overloads equally
+  viable for the same arg count -> "Ambiguous call" (the amb_one negative). The
+  param type may itself be INFERRED from the default value (`x = 5` -> int), like
+  an inferred local — a typeless param with no default has nothing to infer from
+  and is an error.
 - single-overload names keep their existing detailed errors (arity / narrow).
 */
 

@@ -1705,6 +1705,50 @@ void fillDefaults(parse::Node& s, parse::Entry const& e) {
     }
 }
 
+// Rank a candidate set against the provided user args (already inferred WITHOUT
+// context) and pick the lowest-total-cost overload. recv_offset = leading params
+// that are NOT user args (1 for a method's `_$recv` receiver, which always matches
+// the object and is held out of ranking). Reports "No matching overload" / "Ambiguous
+// call" and returns -1 on failure. Shared by classifyCall (functions, offset 0) and
+// inferMethodCall (methods, offset 1).
+int pickOverload(parse::Tree& tree, std::vector<int> const& cands,
+                 std::vector<parse::Node*> const& args, int recv_offset,
+                 std::string const& name, int file_id, int tok,
+                 diagnostic::Sink& diag) {
+    int best = -1, best_cost = INT_MAX;
+    bool tie = false;
+    for (int cid : cands) {
+        parse::Entry const& e = tree.entries[cid];
+        std::size_t umin = e.num_required > recv_offset
+            ? (std::size_t)(e.num_required - recv_offset) : 0;
+        std::size_t umax = e.param_types.size() >= (std::size_t)recv_offset
+            ? e.param_types.size() - recv_offset : 0;
+        if (args.size() < umin || args.size() > umax) continue;   // arity range
+        int cost = 0;
+        bool ok = true;
+        for (std::size_t i = 0; i < args.size() && ok; i++) {
+            int c = args[i]
+                ? argConvertCost(*args[i], widen::strip(e.param_types[i + recv_offset]))
+                : -1;
+            if (c < 0) ok = false; else cost += c;
+        }
+        if (!ok) continue;
+        if (cost < best_cost) { best_cost = cost; best = cid; tie = false; }
+        else if (cost == best_cost) { tie = true; }
+    }
+    if (best < 0) {
+        diagnostic::report(diag, {file_id, tok,
+            "No matching overload for '" + name + "'.", {}});
+        return -1;
+    }
+    if (tie) {
+        diagnostic::report(diag, {file_id, tok,
+            "Ambiguous call to '" + name + "'; multiple overloads match.", {}});
+        return -1;
+    }
+    return best;
+}
+
 void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     // Gather same-name free-function candidates (an unqualified call). A
     // qualified call was resolved to a single namespace member upstream; a single
@@ -1751,36 +1795,11 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     for (auto& ch : s.children) {
         if (ch) inferExpr(tree, *ch, widen::kNoType, diag);
     }
-    int best = -1, best_cost = INT_MAX;
-    bool tie = false;
-    for (int cid : cands) {
-        parse::Entry const& e = tree.entries[cid];
-        if (s.children.size() < (std::size_t)e.num_required
-            || s.children.size() > e.param_types.size()) {
-            continue;   // arity range
-        }
-        int cost = 0;
-        bool ok = true;
-        for (std::size_t i = 0; i < s.children.size() && ok; i++) {
-            int c = s.children[i]
-                ? argConvertCost(*s.children[i], widen::strip(e.param_types[i]))
-                : -1;
-            if (c < 0) ok = false; else cost += c;
-        }
-        if (!ok) continue;
-        if (cost < best_cost) { best_cost = cost; best = cid; tie = false; }
-        else if (cost == best_cost) { tie = true; }
-    }
-    if (best < 0) {
-        diagnostic::report(diag, {s.file_id, s.tok,
-            "No matching overload for '" + s.name + "'.", {}});
-        return;
-    }
-    if (tie) {
-        diagnostic::report(diag, {s.file_id, s.tok,
-            "Ambiguous call to '" + s.name + "'; multiple overloads match.", {}});
-        return;
-    }
+    std::vector<parse::Node*> args;
+    for (auto& ch : s.children) args.push_back(ch.get());
+    int best = pickOverload(tree, cands, args, /*recv_offset=*/0,
+                            s.name, s.file_id, s.tok, diag);
+    if (best < 0) return;
     s.resolved_entry_id = best;
     s.return_type = tree.entries[best].slids_type;
     s.param_types = tree.entries[best].param_types;
@@ -2819,45 +2838,74 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
             + widen::spellOrEmpty(recv.inferred_type) + "'.", {}});
         return;
     }
-    // Resolve the method as a member of the receiver's class frame (shared member
-    // lookup). A same-name NON-method member is not a method.
+    // Gather the same-name method OVERLOAD SET in the receiver's class frame. A
+    // same-name non-method member never enters the set (a method is a kFunction).
     int classId = parse::classEntryForType(tree, rs);
-    int methodId = classId < 0 ? -1
-        : parse::findMemberDeclared(tree, tree.entries[classId].ns_frame_id, s.name);
-    if (methodId < 0
-        || tree.entries[methodId].kind != parse::EntryKind::kFunction) {
+    int ns_frame = classId < 0 ? -1 : tree.entries[classId].ns_frame_id;
+    std::vector<int> cands;
+    if (ns_frame >= 0) {
+        for (std::size_t id = 0; id < tree.entries.size(); id++) {
+            parse::Entry const& e = tree.entries[id];
+            if (e.kind == parse::EntryKind::kFunction
+                && e.owner_ns_frame == ns_frame && e.name == s.name) {
+                cands.push_back((int)id);
+            }
+        }
+    }
+    if (cands.empty()) {
         diagnostic::report(diag, {s.file_id, s.name_tok,
             "Class '" + widen::spell(rs) + "' has no method '" + s.name + "'.", {}});
         return;
     }
-    // Thread the resolved method onto the node — desugar mints the symbol from the
-    // method's OWN defining class, not the receiver's (so a base method called on
-    // a derived receiver still names the base symbol).
+    // User args = children[1..] (the receiver children[0] is held out — params[0]
+    // is the `_$recv` receiver, always the object). recv_offset = 1.
+    std::vector<parse::Node*> uargs;
+    for (std::size_t i = 1; i < s.children.size(); i++) uargs.push_back(s.children[i].get());
+
+    int methodId;
+    if (cands.size() == 1) {
+        // Single method: keep the detailed arity error (a RANGE now — defaults make
+        // trailing user params optional). Args are type-checked below with context.
+        parse::Entry const& m = tree.entries[cands[0]];
+        std::size_t umin = m.num_required > 1 ? (std::size_t)(m.num_required - 1) : 0;
+        std::size_t umax = m.param_types.empty() ? 0 : m.param_types.size() - 1;
+        if (uargs.size() < umin || uargs.size() > umax) {
+            std::string want = (umin == umax) ? std::to_string(umin)
+                : std::to_string(umin) + " to " + std::to_string(umax);
+            diagnostic::report(diag, {s.file_id, s.name_tok,
+                "Method '" + s.name + "' expects " + want + " arguments, got "
+                + std::to_string(uargs.size()) + ".", {}});
+            return;
+        }
+        methodId = cands[0];
+    } else {
+        // 2+ overloads: infer the provided args without context, then rank by cost
+        // through the shared engine (receiver excluded via recv_offset 1).
+        for (auto* a : uargs) if (a) inferExpr(tree, *a, widen::kNoType, diag);
+        methodId = pickOverload(tree, cands, uargs, /*recv_offset=*/1,
+                                s.name, s.file_id, s.name_tok, diag);
+        if (methodId < 0) return;
+    }
+
+    // Thread the chosen method onto the node — desugar mints the symbol from the
+    // method's OWN defining class. children = [receiver, args...] and param_types =
+    // [_$recv, user...] are receiver-aligned, so fillDefaults appends omitted
+    // trailing defaults at the natural index.
     s.resolved_entry_id = methodId;
     parse::Entry const& m = tree.entries[methodId];
-    // param_types = [self, user...]; children = [receiver, args...]. The user-arg
-    // count is param_types.size()-1, and arg children[i] aligns with
-    // param_types[i] (i>=1) — same shape the lowered call emits.
-    std::size_t nargs = s.children.size() - 1;
-    std::size_t nuser = m.param_types.empty() ? 0 : m.param_types.size() - 1;
-    if (nargs != nuser) {
-        diagnostic::report(diag, {s.file_id, s.name_tok,
-            "Method '" + s.name + "' expects " + std::to_string(nuser)
-            + " arguments, got " + std::to_string(nargs) + ".", {}});
-        return;
-    }
-    for (std::size_t i = 1; i < s.children.size(); i++) {
-        if (!s.children[i]) continue;
-        // Type-check each arg against its param, like classifyCall — infer with the
-        // param as context, then reject a const / class / convert mismatch.
-        inferExpr(tree, *s.children[i], m.param_types[i], diag);
-        widen::TypeRef byref = autoRefPointee(m.param_types[i], *s.children[i]);
-        checkValueAssign(tree, byref != widen::kNoType ? byref : m.param_types[i],
-                         *s.children[i], diag);
-    }
     s.param_types = m.param_types;    // [self, user...] — emitCall arity check
     s.return_type = m.slids_type;     // emitCall reads return_type
     s.inferred_type = m.slids_type;
+    fillDefaults(s, m);
+    for (std::size_t i = 1; i < s.children.size(); i++) {
+        if (!s.children[i]) continue;
+        // Type-check each arg against its param (s.param_types is a stable copy; an
+        // inferExpr below may realloc tree.entries and dangle a live entry ref).
+        inferExpr(tree, *s.children[i], s.param_types[i], diag);
+        widen::TypeRef byref = autoRefPointee(s.param_types[i], *s.children[i]);
+        checkValueAssign(tree, byref != widen::kNoType ? byref : s.param_types[i],
+                         *s.children[i], diag);
+    }
 }
 
 void classifyStmt(parse::Tree& tree, parse::Node& s,
@@ -3903,6 +3951,30 @@ void classifyFunctionSignature(parse::Tree& tree, parse::Node& fn,
                                diagnostic::Sink& diag) {
     if (fn.resolved_entry_id < 0) return;
     parse::Entry& e = tree.entries[fn.resolved_entry_id];
+    // A METHOD carries the implicit receiver `_$recv` at params[0]. Free functions
+    // are validated in resolve (Pass 1a); a method skips that pass, so run the same
+    // two signature checks here for it — without them a typeless-no-default param
+    // reaches codegen as kNoType and aborts (bug), and a required-after-optional
+    // param is silently accepted.
+    bool is_method = !fn.params.empty() && fn.params[0]
+                  && fn.params[0]->name == "_$recv";
+    if (is_method) {
+        bool seen_default = false;
+        for (auto& p : fn.params) {
+            if (!p) continue;
+            bool has_default = !p->children.empty() && p->children[0];
+            if (p->return_type == widen::kNoType && !has_default) {
+                diagnostic::report(diag, {p->file_id, p->name_tok,
+                    "Parameter '" + p->name
+                        + "' needs an explicit type or a default value.", {}});
+            }
+            if (has_default) seen_default = true;
+            else if (seen_default) {
+                diagnostic::report(diag, {p->file_id, p->name_tok,
+                    "A required parameter cannot follow an optional parameter.", {}});
+            }
+        }
+    }
     e.param_default_text.assign(e.param_types.size(), "");
     e.param_default_kind.assign(e.param_types.size(), parse::Kind::kProgram);
     for (std::size_t i = 0;
@@ -3935,6 +4007,54 @@ void classifyFunctionSignature(parse::Tree& tree, parse::Node& fn,
         }
         e.param_default_text[i] = def.text;
         e.param_default_kind[i] = def.kind;
+    }
+    // num_required = the count of LEADING params with no default (a method's
+    // `_$recv` at [0] has none, so it counts as required). Free functions also have
+    // this set in resolve; re-setting it here is idempotent and covers METHODS,
+    // whose entries resolve never stamped it.
+    int nreq = 0;
+    for (auto& p : fn.params) {
+        if (p && !p->children.empty() && p->children[0]) break;
+        nreq++;
+    }
+    e.num_required = nreq;
+    // A METHOD with the same name + identical (now-final) param types as an EARLIER
+    // method in the same class is a duplicate DEFINITION, not an overload — functions
+    // catch this in resolve, but the method overload-set registration allows the
+    // same name, so detect it here. Reported on the later one (lower id = earlier).
+    if (is_method) {
+        for (int id = 0; id < (int)tree.entries.size(); id++) {
+            if (id >= fn.resolved_entry_id) break;
+            parse::Entry const& q = tree.entries[id];
+            if (q.kind == parse::EntryKind::kFunction
+                && q.owner_ns_frame == e.owner_ns_frame
+                && q.name == e.name && q.param_types == e.param_types) {
+                diagnostic::report(diag, {fn.file_id, fn.name_tok,
+                    "Duplicate definition of '" + fn.name + "'.",
+                    {{q.file_id, q.tok, "first defined here"}}});
+                break;
+            }
+        }
+    }
+}
+
+// Recursively complete every MEMBER function's signature (typeless-param infer +
+// default capture + num_required) across a scope tree — methods, namespace free
+// functions, and nested scopes — BEFORE any body is typed, so a forward call (even
+// across scopes) sees the full signature. Members only; a function nested in a BODY
+// is handled by classifyFunctionBody's own pre-pass. ctor/dtor hooks (no entry) are
+// no-op'd by classifyFunctionSignature's resolved_entry_id guard.
+void classifyScopeSignatures(parse::Tree& tree, parse::Node& node,
+                             diagnostic::Sink& diag) {
+    for (auto& m : node.children) {
+        if (!m) continue;
+        if (m->kind == parse::Kind::kFunctionDef
+         || m->kind == parse::Kind::kFunctionDecl) {
+            classifyFunctionSignature(tree, *m, diag);
+        } else if (m->kind == parse::Kind::kNamespaceDecl
+                || m->kind == parse::Kind::kClassDef) {
+            classifyScopeSignatures(tree, *m, diag);
+        }
     }
 }
 
@@ -3975,14 +4095,10 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     }
     if (!program) return;
 
-    // Signature pre-pass first: a call to a later-defined function must see its
-    // completed param types + captured defaults.
-    for (auto& ch : program->children) {
-        if (ch && (ch->kind == parse::Kind::kFunctionDef
-                || ch->kind == parse::Kind::kFunctionDecl)) {
-            classifyFunctionSignature(tree, *ch, diag);
-        }
-    }
+    // Signature pre-pass first: a call to a later-defined function (or method) must
+    // see its completed param types + captured defaults. Recurse ALL scopes so a
+    // method / namespace-member signature is complete before ANY body is typed.
+    classifyScopeSignatures(tree, *program, diag);
 
     // The program is itself a scope (the implicit global namespace): type its
     // member bodies — top-level function bodies, const inits, and every nested

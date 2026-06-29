@@ -1,0 +1,23 @@
+area1 = 25
+area2 = 12
+kind_i = 1
+kind_f = 2
+rank_i = 32
+rank_j = 64
+withdef1 = 105
+withdef2 = 11
+withdef_f = 999
+inf0 = 7
+inf1 = 5
+inftypes: int float char int64
+finf0 = 3.5
+finf1 = 5.5
+viaself = 36
+viabare = 12
+ptr_area1 = 25
+ptr_area2 = 12
+multi1 = 6
+multi2 = 24
+multi3 = 51
+g_int = 1
+g_ref = 2

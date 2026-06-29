@@ -253,6 +253,27 @@ std::string functionSymbol(parse::Node const& p, parse::Tree const& tree) {
     return p.name;
 }
 
+// The LLVM symbol for a method: classSymbol(defClass) + "__" + name, plus an
+// entry-id suffix when the method name is OVERLOADED in its class (2+ same-name
+// method entries in the owner frame) — so distinct overloads get distinct symbols,
+// exactly like functionSymbol. The call site and the chosen definition share the
+// entry id, so they mangle identically.
+std::string methodSymbol(parse::Tree const& tree, widen::TypeRef defCls,
+                         std::string const& name, int entry_id) {
+    std::string base = widen::classSymbol(defCls) + "__" + name;
+    if (entry_id < 0) return base;
+    int frame = tree.entries[entry_id].owner_ns_frame;
+    int count = 0;
+    for (parse::Entry const& q : tree.entries) {
+        if (q.kind == parse::EntryKind::kFunction
+            && q.owner_ns_frame == frame && q.name == name) {
+            count++;
+        }
+    }
+    if (count > 1) return base + "." + std::to_string(entry_id);
+    return base;
+}
+
 // next_id is a single program-wide counter, seeded by run() at the (frozen)
 // parse::Tree::entries size, threaded through every copy so the helper locals a
 // lowered short-for mints get globally-unique resolved_entry_ids that never
@@ -876,7 +897,8 @@ void flattenScope(parse::Node const& node, ast::Node* prog,
                 auto fn = copyNode(*f, in, next_id);
                 if      (f->name == "_$ctor") fn->name = sym + "__$ctor";
                 else if (f->name == "_$dtor") fn->name = sym + "__$dtor";
-                else                          fn->name = sym + "__" + f->name;
+                else fn->name = methodSymbol(in, widen::strip(m->return_type),
+                                             f->name, f->resolved_entry_id);
                 prog->children.push_back(std::move(fn));
             }
         }
@@ -2208,7 +2230,7 @@ std::unique_ptr<ast::Node> lowerMethodCall(parse::Node const& p,
     // discarded statement (`obj.m();`) — emitStmt emits a kCallExpr statement the
     // same way it emits a kCallStmt (value discarded, sret result destroyed).
     call->kind = ast::Kind::kCallExpr;
-    call->name = widen::classSymbol(defCls) + "__" + p.name;
+    call->name = methodSymbol(tree, defCls, p.name, p.resolved_entry_id);
     call->return_type = p.return_type;   // emitCall reads return_type
     call->inferred_type = p.return_type; // a value: its type IS the method's return
                                          // (a switch scrutinee reads inferred_type)
