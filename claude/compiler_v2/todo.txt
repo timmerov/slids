@@ -107,10 +107,6 @@ BLOCKED FEATURES
     can't be locked by a .sl negative. Needs a caret-aware assertion the harness
     doesn't have.
 
-  * FOR-TUPLE OVER CLASS ELEMENTS — What remains needs classes: by-VALUE iteration over a class element (a copy
-    needs a constructor — not available) + the class copy/move machinery, and
-    by-ref iteration once class-typed tuples exist. prerequisite: classes (Phase 5).
-
   longer term features:
 
   * CONST ENFORCEMENT (Phase 6) — const representation/syntax is in (qualifier,
@@ -235,6 +231,10 @@ REACH GOALS
     the caller can pass nullptr for the result slot. function must check.
     does not apply when the returned class has a ctor/dtor.
 
+  * don't pass ^self to methods that don't need it.
+    tricky bit is a class declared in a .slh header file.
+    safest is for every method to get ^self and maybe not use it.
+    otherwise it needs to be decorated somehow.
 
 ASPIRATIONAL FEATURES (someday; low priority, may never land)
 

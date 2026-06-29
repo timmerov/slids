@@ -1282,30 +1282,37 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             // alloca register; for `^arr[i]` it is the element GEP (an iterator).
             assert(expr.children.size() == 1 && "kAddrOfExpr needs 1 operand");
             ast::Node const& operand = *expr.children[0];
+            std::string addr;
             if (operand.kind == ast::Kind::kIndexExpr) {
                 // `^arr[i]` — the element GEP. A PARTIAL index yields a reference to
                 // a SUB-ARRAY slice (`^a3[i]` -> int[2]^), used by a multi-dim
                 // for-loop's by-ref binding; allow it.
-                return emitElementAddr(operand, syms, pool, out, diag,
+                addr = emitElementAddr(operand, syms, pool, out, diag,
                                        /*allow_partial=*/true);
+            } else {
+                // An unlifted CONSTRUCTION operand (`^Class(a)`, e.g. a method receiver
+                // in a CONDITION, which the statement-level lift doesn't reach) has no
+                // address. Reject it cleanly like every other unlifted construction
+                // value position, instead of asserting. (Decl-init / arg / return /
+                // statement receivers ARE lifted to a `_$cret` temp and never reach here.)
+                if (operand.is_construction) {
+                    diagnostic::report(diag, {operand.file_id, operand.tok,
+                        "Constructing a class in this position is not yet supported; "
+                        "declare a new variable (e.g. 'Class x = Class(...)').", {}});
+                    return "null";
+                }
+                assert(operand.kind == ast::Kind::kIdentExpr
+                    && operand.resolved_entry_id >= 0
+                    && "kAddrOfExpr: operand must be a resolved variable");
+                auto it = syms.find(operand.resolved_entry_id);
+                assert(it != syms.end() && "kAddrOfExpr: operand not in SymTab");
+                addr = it->second.alloca_name;
             }
-            // An unlifted CONSTRUCTION operand (`^Class(a)`, e.g. a method receiver
-            // in a CONDITION, which the statement-level lift doesn't reach) has no
-            // address. Reject it cleanly like every other unlifted construction
-            // value position, instead of asserting. (Decl-init / arg / return /
-            // statement receivers ARE lifted to a `_$cret` temp and never reach here.)
-            if (operand.is_construction) {
-                diagnostic::report(diag, {operand.file_id, operand.tok,
-                    "Constructing a class in this position is not yet supported; "
-                    "declare a new variable (e.g. 'Class x = Class(...)').", {}});
-                return "null";
-            }
-            assert(operand.kind == ast::Kind::kIdentExpr
-                && operand.resolved_entry_id >= 0
-                && "kAddrOfExpr: operand must be a resolved variable");
-            auto it = syms.find(operand.resolved_entry_id);
-            assert(it != syms.end() && "kAddrOfExpr: operand not in SymTab");
-            return it->second.alloca_name;
+            // `^lvalue` is a `ptr`; honor the destination type so an address taken
+            // into an `intptr` lvalue lowers through ptrtoint (ptr->ptr is a no-op,
+            // kNoType is "no conversion"). classify rejects ptr->non-intptr scalars.
+            return widen::convert(addr, expr.inferred_type, dest_type,
+                                  expr.file_id, expr.tok, out, diag);
         }
         case ast::Kind::kIndexExpr: {
             // A tuple / class-field slot read `tup[k]` (a class is a named tuple,

@@ -1,5 +1,6 @@
 /*
 test usage of self.
+test usage of methods that don't need self.
 
 self is how a method refers to the object.
 
@@ -23,6 +24,14 @@ use the const keyword before the method name to make self not-mutable.
             __println("self is const.");
         }
     }
+
+methods that don't use self - neither directly nor indirectly,
+should not invisibly pass ^self as a parameter.
+this is nigh impossible to test.
+it's an optimization and a reach goal.
+the tricky bit is classes that are declared in a .slh header file.
+either every method gets ^self.
+or the method is decorated somehow.
 
 note:
 const-ness is currently parsed but not enforced.
