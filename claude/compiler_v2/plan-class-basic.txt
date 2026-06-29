@@ -26,7 +26,18 @@ emitDestructHooks), NOT field-init inside `__$ctor_body`. ALSO LANDED since (bui
 on this base, detail in readme "CLASSES: NEW / DELETE / SIZEOF"): sizeof(Class) via
 the per-class `__$sizeof()` helper; new/delete for classes (construct + ctor, the
 new[]/delete[] count cookie, placement); explicit `lvalue.~()`; `.field` writes +
-deref/iterator field access. ALSO LANDED (detail in readme "CLASSES: AS A
+deref/iterator field access. SINCE (canon test_v2/class/empty.sl): an EMPTY class
+(no fields) has a 1-byte MINIMUM SIZE — llvmForRef lowers a zero-slot kSlid to
+`{ i8 }` not `{  }` — so distinct instances / array elements (stride 1) / tuple
+slots (offsets 0,1) get distinct addresses and sizeof is 1 (C++'s empty-class
+rule; identity is observable via `^a == ^b`); plus a ptr->intptr fix (kAddrOfExpr
+honors dest_type via widen::convert, so `^lvalue` into an `intptr` emits ptrtoint,
+not a raw `store i64 <ptr>`). SINCE (canon test_v2/class/nameless.sl): a BARE class
+name is a DEFAULT construction (`Class` == `Class()`) — resolve rewrites a class
+kIdentExpr in a value position into a zero-arg construction (evaluated only), and a
+bare `Class;` statement parses as a parenless kCallStmt that resolve turns into
+form 1 (a parenless non-class is rejected, never silently called). ALSO LANDED
+(detail in readme "CLASSES: AS A
 NAMESPACE + LOCAL", standing-record memories [[project_v2_class_as_namespace]] /
 [[project_v2_local_classes]]): CLASS-AS-NAMESPACE (a kClass entry; member
 alias/const/enum; qualified `Class:member`; alias-to-class transparency; `alias

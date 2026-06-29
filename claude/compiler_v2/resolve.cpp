@@ -1210,6 +1210,18 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                 return;
             }
             if (tree.entries[id].kind == parse::EntryKind::kClass) {
+                // A bare class name in an EVALUATED value position is a default
+                // construction (`Class` == `Class()`): rewrite the ident into a
+                // zero-arg construction kCallExpr that flows through the normal
+                // class-construction machinery. In an UNEVALUATED context
+                // (sizeof / ##type) the name is the TYPE, not a value — keep the
+                // error so a type isn't silently constructed there.
+                if (!unevaluated) {
+                    e.kind = parse::Kind::kCallExpr;
+                    e.resolved_entry_id = id;
+                    e.is_construction = true;
+                    return;
+                }
                 parse::Entry const& c = tree.entries[id];
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "'" + e.name + "' is a type, not a value.",
@@ -1653,6 +1665,15 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         s.resolved_entry_id = id;
         s.is_construction = true;
         return true;
+    }
+    // A bare `Name;` (parenless) is only valid as a class construction. A non-class
+    // bare name is not a statement — reject it rather than treat it as a `Name()`
+    // call (so a stray function/variable name is never silently invoked).
+    if (s.parenless) {
+        diagnostic::report(diag, {s.file_id, s.name_tok,
+            "'" + s.name + "' is not a statement; a bare name is a class "
+            "construction.", {}});
+        return false;
     }
     if (entry.kind != parse::EntryKind::kFunction) {
         char const* what = entry.kind == parse::EntryKind::kAlias ? "type"

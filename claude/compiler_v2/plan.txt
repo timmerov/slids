@@ -693,8 +693,12 @@ Phase 5 — classes
     DECL/RETURN rhs (incl. `<--` move-init) builds in place (RVO, one ctor/dtor); any
     OTHER position (if/while condition, store/move/swap operand, re-assignment to an
     existing var, method-call VALUE) is rejected cleanly. Qualified construction
-    (`Outer:Inner(args)`) and class-typed fields work. Detail: readme "CONSTRUCTION"
-    + test_v2/class/nameless.sl.
+    (`Outer:Inner(args)`) and class-typed fields work. SINCE: a BARE class name (no
+    parens) is a DEFAULT construction, `Class` == `Class()` — in a value position
+    resolve rewrites a class kIdentExpr into a zero-arg construction (EVALUATED only;
+    sizeof/##type keep the type), and a bare `Class;` statement parses as a parenless
+    kCallStmt that resolve turns into form 1 (a parenless non-class is rejected, not
+    called). Detail: readme "CONSTRUCTION" + test_v2/class/nameless.sl.
   * inferred field types (`Foo(name = const_expr)`) — LANDED.
   * destructor balance invariant — LANDED. Reverse-order teardown on every exit
     (block / return / break / continue) via a DtorScope chain threaded through
@@ -710,6 +714,12 @@ Phase 5 — classes
     (kDtorCallStmt) runs the dtor with no free. Also: `.field` WRITES + field access
     through deref/iterator (emitElementAddr generalized). Detail in readme "CLASSES:
     NEW / DELETE / SIZEOF" + the Phase-4 sizeof / memory-mgmt entries.
+    SINCE: an EMPTY class (no fields) gets a 1-byte minimum size — llvmForRef lowers
+    a zero-slot kSlid to `{ i8 }`, not `{  }` — so distinct instances, array elements
+    (stride 1), and tuple slots (offsets 0/1) occupy distinct storage and sizeof is 1
+    (C++'s empty-class rule). Also a ptr->intptr fix: `^lvalue` into an `intptr`
+    lvalue now emits `ptrtoint` (kAddrOfExpr honors dest_type via widen::convert),
+    not a raw `store i64 <ptr>`. Canon test_v2/class/empty.sl.
   * class as a NAMESPACE — LANDED. A kClass entry; the body holds member
     aliases/consts/enums, methods, nested classes, AND nested namespaces; qualified
     `Class:member`; alias-to-class transparency (`alias Time = Space; Time:Count`);

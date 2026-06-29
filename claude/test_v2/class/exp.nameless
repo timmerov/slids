@@ -183,3 +183,22 @@ Class:ctor: 1
 Class:dtor: 1
 loop 33: 1
 -- end 33 (no ctor/dtor on the exit test) --
+NoInitClass:ctor
+NoInitClass:ctor
+NoInitClass:ctor
+NoInitClass:ctor
+NoInitClass:ctor
+NoInitClass:ctor
+NoInitClass:ctor
+NoInitClass:ctor
+NoInitClass:ctor
+0 0
+NoInitClass:dtor
+NoInitClass:dtor
+NoInitClass:dtor
+NoInitClass:dtor
+NoInitClass:dtor
+NoInitClass:dtor
+NoInitClass:dtor
+NoInitClass:dtor
+NoInitClass:dtor

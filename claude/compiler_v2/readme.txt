@@ -145,6 +145,11 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
 
   intptr-as-source falls in the integer column, so `pointer <- intptr` is an error
   (implicit); the intptr<->pointer accept is one-directional (intptr <- pointer).
+  The ptrtoint lowering is the EXPRESSION's job, not the store's: codegen's
+  kAddrOfExpr arm routes its result through widen::convert(inferred_type, dest_type),
+  so `^lvalue` into an `intptr` lvalue emits `ptrtoint` (ptr->ptr stays a no-op,
+  kNoType is "no conversion"). Before this it returned the raw `ptr` and stored it
+  into an i64 slot — invalid IR (`store i64 <ptr>`); canon test_v2/class/empty.sl.
 
   Construction (a class ctor at a decl / `new`) is a SEPARATE operation, not this
   matrix — class <- tuple as a ctor lives outside it. Swap (`<-->`) is also outside:
@@ -517,6 +522,18 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     `Class(...).method()` — is rejected cleanly (codegen's is_construction guard at
     emitExpr/emitCall, and the parser's "method call in an expression" error), never
     miscompiled. Detail: test_v2/class/nameless.sl.
+  * BARE CLASS NAME = DEFAULT CONSTRUCTION: a class name with NO parens is `Class()`
+    (a zero-arg default construction). In a VALUE position resolve rewrites a bare
+    kIdentExpr that resolves to a kClass into a zero-arg construction kCallExpr
+    (is_construction) — but ONLY when EVALUATED; an UNEVALUATED operand (sizeof /
+    ##type, the resolveExpr `unevaluated` flag) keeps the name as the TYPE. In a
+    STATEMENT position grammar accepts a bare `Name;` as a zero-arg kCallStmt flagged
+    `parenless`; resolveCallTarget turns a parenless kClass into a construction (form
+    1) and REJECTS a parenless non-class ("'X' is not a statement; a bare name is a
+    class construction") so a stray function/variable name is never silently called.
+    No new codegen — both flow through the existing zero-arg construction machinery.
+    Canon: `NoInitClass;` / `(NoInitClass, 7)` / `NoInitClass a[2] = (NoInitClass,
+    NoInitClass)` in test_v2/class/nameless.sl.
   * INIT FROM A TUPLE-LIKE VALUE: a class also initializes from any aggregate VALUE
     source — an array / tuple variable or constant, a sub-array row, a function
     return, an op result — spread across the fields BY SLOT (a class IS a named
@@ -570,6 +587,18 @@ CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
     a CALL of that helper (a runtime intptr, NOT foldable — can't init a const).
     The class kSlid types are threaded parse->ast via a new `ast::Tree.classes`
     (desugar populates it).
+  * EMPTY CLASS MINIMUM SIZE — an instantiable class with NO fields lowers to the
+    1-byte struct `{ i8 }`, not `{  }` (0 bytes), so distinct instances occupy
+    distinct storage (C++'s empty-class rule; `^a == ^b` is observable). The single
+    fix is in llvmForRef (the zero-slot kSlid arm); it propagates everywhere layout
+    is read: `alloca { i8 }`, array element stride 1 (`[2 x { i8 }]`, so
+    `^c[0] != ^c[1]`), tuple slots at offsets 0 and 1 (`{ { i8 }, { i8 } }`), and
+    `__$sizeof` -> 1 (the GEP-null over the padded struct). The padding byte is never
+    named (the class has no fields), so field-init / `.field` are unaffected. Only a
+    class is padded — an empty tuple is not. Without it a 0-byte empty class makes
+    array/`new[]` elements and tuple slots ALIAS (stride 0 / both at offset 0); a
+    plain pair of stack locals only differed by incidental frame layout. Canon
+    test_v2/class/empty.sl.
   * NEW T / NEW T(args) — a class is sized by `call @<Name>__$sizeof()` (not the
     typeByteSize literal). `new T(args)`: grammar parses the trailing `(args)` onto
     kNewExpr children[2] (distinct from the leading `new(addr)` placement and `[n]`);

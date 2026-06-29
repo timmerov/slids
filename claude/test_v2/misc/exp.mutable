@@ -37,6 +37,8 @@ const (const int)[]
 3
 const Box
 9
+(const Box, const int)
+1 2
 const Pt
 3
 9

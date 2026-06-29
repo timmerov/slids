@@ -6,6 +6,8 @@ there are two forms.
 
 form 1: statement or local variable form:
 
+    Class;
+    Class();
     Class(1,2,3);
 
 like a named class, the unnamed variable object is initialized at site
@@ -470,6 +472,19 @@ int32 main() {
             __println("loop 33: " + i);
         }
         __println("-- end 33 (no ctor/dtor on the exit test) --");
+    }
+
+    {
+        NoInitClass(int x_) {
+            _() { __println("NoInitClass:ctor"); }
+            ~() { __println("NoInitClass:dtor"); }
+        }
+        NoInitClass;
+        NoInitClass();
+        NoInitClass(1);
+        tuple = (NoInitClass, 7);
+        NoInitClass array[2] = (NoInitClass, NoInitClass);
+        __println(tuple[0].x_ + " " + array[0].x_);
     }
 
     return 0;

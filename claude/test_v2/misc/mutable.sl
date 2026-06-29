@@ -228,6 +228,13 @@ int32 main() {
     __println(##type(cbx));               // const Box
     __println(cbx.v_);                    // 9
 
+    // a const tuple with a CLASS slot — the tuple-type-with-a-class-slot
+    // resolveDeclType gap is fixed, so the composed const type resolves and the
+    // const routing builds it (slot 0 is a default construction of Box).
+    const (Box, int) cbt = (Box(1), 2);
+    __println(##type(cbt));               // (const Box, const int)
+    __println("" + cbt[0].v_ + " " + cbt[1]);  // 1 2
+
     // a const variable of a LOCAL class (defined in this body) — the local-class
     // registration runs before the const pre-pass, so the const decl's type resolves.
     Pt(int px_, int py_) { }
@@ -318,8 +325,3 @@ one at a time and asserts the marked error substring.
 //-EXPECT-ERROR-DEFERRED: typeless const aggregate mis-routed to the substitution path
 //int main() { const a = (1, 2, 3); __println(a[0]); return 0; }
 
-// a const tuple with a CLASS slot is blocked by the TUPLE TYPE WITH A CLASS SLOT
-// bug (resolveDeclType: "Unknown type '(Box, int)'") — the const routing is fine;
-// the composed type can't be resolved. deferred until that bug is fixed.
-//-EXPECT-ERROR-DEFERRED: blocked by tuple-type-with-a-class-slot resolveDeclType gap
-//Bxx(int v_) { } int main() { const (Bxx, int) t = (Bxx(1), 2); return 0; }

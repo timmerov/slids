@@ -1773,6 +1773,22 @@ struct Parser {
             node->children.push_back(std::move(expr));
             return node;
         }
+        if (next == token::Kind::kSemicolon) {
+            // A bare `Name;` statement — a parenless default construction (`Name`
+            // == `Name()`) when Name is a class. Build a zero-arg kCallStmt flagged
+            // parenless; resolve turns a class into a construction and rejects a
+            // non-class (so a bare function/variable name is not silently called).
+            advance();   // ;
+            auto call = newNodeAt(parse::Kind::kCallStmt, stmt_file, stmt_tok);
+            call->name = name;
+            call->name_tok = name_tok;
+            call->qualifier = segs;
+            call->qualifier_toks = toks;
+            call->global_qualified = global;
+            call->parenless = true;
+            stamp(*call);
+            return call;
+        }
         error("Expected '=' or '(' after a name.");
         return nullptr;
     }

@@ -225,6 +225,10 @@ struct Node {
                                  // NOT a function call. resolve sets it; classify
                                  // builds the per-field construction tuple; desugar
                                  // lowers it to a synthetic kVarDeclStmt.
+    bool parenless = false;      // kCallStmt: a bare `Name;` statement (no `()`). Only
+                                 // valid when Name is a class — a parenless default
+                                 // construction (`Name` == `Name()`); resolveCallTarget
+                                 // rejects a parenless non-class so `f;` is not a call.
     bool is_mutable = false;     // kParam: declared with leading `mutable` — opts OUT
                                  // of the default const-pointee munge (mungeParamType)
     bool default_move_init = false;      // kVarDeclStmt: initialized with `<--` (a move),
