@@ -90,6 +90,14 @@ std::string llvmForRef(widen::TypeRef ref) {
             // types: { llvm(t0), llvm(t1) }. A class IS a named tuple, so it
             // lowers identically (the name is a compile-time concept, erased
             // here); every aggregate path is shared.
+            // An empty class (a kSlid with no fields) carries a 1-byte padding
+            // member so distinct instances occupy distinct storage — array
+            // elements / tuple slots stride by 1 (not 0) and sizeof is 1 (C++'s
+            // empty-class rule). A class is the only instantiable zero-field
+            // aggregate; an empty tuple is not padded.
+            if (t.form == widen::Type::Form::kSlid && t.slots.empty()) {
+                return "{ i8 }";
+            }
             std::string s = "{ ";
             for (std::size_t i = 0; i < t.slots.size(); i++) {
                 if (i) s += ", ";
