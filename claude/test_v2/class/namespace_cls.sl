@@ -36,6 +36,41 @@ Space(int x_) {
 
 alias Time = Space;
 
+/* a namespace nested in a class body — Box:Util. a class may HOLD a namespace,
+   the converse of a namespace holding a class. the nested namespace carries its
+   own consts, functions, and deeper namespaces; a method reaches a sibling
+   namespace member bare (Util:kScale), like any bare member access through self. */
+Box(int n_) {
+    Util {
+        const int kScale = 10;
+        int bump(int v) {
+            return v + 1;
+        }
+        Deep {
+            const int kZ = 7;
+        }
+    }
+    int scaled() {
+        return n_ * Util:kScale + Util:bump(n_);
+    }
+}
+
+/* a class holding a namespace that itself holds a CLASS — Crate:Bin:Item, the
+   deepest converse nesting (class in namespace in class). a method constructs the
+   nested class (Bin:Item) and reaches a bare sibling method (seed). */
+Crate(int lot_) {
+    Bin {
+        Item(int sku_) {
+            int sku() { return sku_; }
+        }
+    }
+    int seed() { return lot_ * 100; }
+    int first() {
+        Bin:Item it(seed());
+        return it.sku();
+    }
+}
+
 int32 main() {
 
     Space:Float press = 101.325;
@@ -50,6 +85,20 @@ int32 main() {
     // should be Time:Count
     Time:Count zero = Time:Count:kZero;
     __println(##type(zero) + " zero = " + zero);
+
+    /* a class holding a namespace (Box:Util) — qualified access, deep nesting,
+       and a method that reaches the nested namespace's members bare. */
+    Box b(3);
+    __println("scaled = " + b.scaled());
+    __println("Box:Util:kScale = " + Box:Util:kScale);
+    __println("Box:Util:Deep:kZ = " + Box:Util:Deep:kZ);
+
+    /* a class in a namespace in a class — internal use and external qualified
+       construction (Crate:Bin:Item). */
+    Crate cr(7);
+    __println("crate first = " + cr.first());
+    Crate:Bin:Item di(55);
+    __println("Crate:Bin:Item = " + di.sku());
 
     return 0;
 }
@@ -230,3 +279,30 @@ int32 main() {
 //    __println("" + Loc:kOne);
 //    return 0;
 //}
+
+/* ----- a namespace nested in a class body (Class:Ns) ----- */
+
+/* ctor/dtor are method-shaped — illegal in a namespace, even one inside a class. */
+//-EXPECT-ERROR: A constructor or destructor may only appear in a class body.
+//NegNsDtor(int n_) {
+//    Util { ~() { } }
+//}
+
+/* the nested namespace keeps its name in the path — its members do not flatten
+   into the class. */
+//-EXPECT-ERROR: 'Box' has no member 'kScale'.
+//int neg_ns_no_flatten() { __println("" + Box:kScale); return 0; }
+
+/* a nested-namespace member is not visible bare in a method — it needs the
+   namespace qualifier (Util:kScale), like a free function in that namespace. */
+//-EXPECT-ERROR: 'kScale' needs a namespace qualifier.
+//NegNsBare(int n_) {
+//    Util { const int kScale = 10; }
+//    int bad() { return kScale; }
+//}
+
+/* a namespace nested in a class is a namespace, not a type — it can't be
+   instantiated, just like a file-scope namespace. */
+//-EXPECT-ERROR: 'Util' is not a type in 'Holder'.
+//Holder(int h_) { Util { const int kX = 1; } }
+//int neg_ns_member_not_type() { Holder:Util u; return 0; }

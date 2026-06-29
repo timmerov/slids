@@ -598,14 +598,29 @@ Phase 4 — types beyond primitives
     `widen` cell). NOT covered (separate, broader call — todo.txt): strong consts flexing as
     BINARY OPERANDS (`a += sc`, `v + sc`) via flexBinaryOperands.
   * namespaces — LANDED (pulled forward from Phase 8). `Name { members }` open/
-    reopen at file or function-body scope; members are consts, functions, nested
-    namespaces; kNamespace entry with persistent frame identity; open-namespace-
-    chain bare lookup (qualifiers optional, `::` defeats a shadow); qualified
-    `A:B:C` / `::`; inline qualified member decls; bare `alias Ns;` import;
-    desugar hoists member functions with entry-id-derived symbols (no cached
-    canonical names). Members may also be enums (registerNamespaceTree registers
-    type-introducing members first, for order-independence). Cross-TU namespaces
-    + `.slh` propagation → Phase 8.
+    reopen at file or function-body scope; members are consts, functions, enums,
+    nested namespaces, AND classes (a class is a first-class namespace member,
+    reached `Ns:Class` — see NAMESPACE ↔ CLASS below); kNamespace entry with
+    persistent frame identity; open-namespace-chain bare lookup (qualifiers
+    optional, `::` defeats a shadow); qualified `A:B:C` / `::`; inline qualified
+    member decls; bare `alias Ns;` import; desugar hoists member functions with
+    entry-id-derived symbols (no cached canonical names). registerNamespaceTree
+    registers type-introducing members first, for order-independence. Cross-TU
+    namespaces + `.slh` propagation → Phase 8.
+  * NAMESPACE ↔ CLASS symmetry — LANDED. A class may be defined in a namespace
+    (`Ns:Class`), a namespace in a class body (`Class:Ns:member`), and either nests
+    in the other to ANY depth (`Class:Ns:Inner`, `Ns:Class:Ns2`...). Program scope is
+    the implicit global namespace: parseProgram parses its members through the SAME
+    dispatch as a namespace body (parseNamespaceMember → parseDefinitionMember). The
+    parse, desugar, and classify stages are UNIFIED — one recursive routine each over
+    a brace body (parseDefinitionMember / flattenScope / classifyScope), so a new
+    block kind or member feature lands once and works in every scope. RESOLVE is NOT
+    yet unified: it still runs parallel namespace/class registration + body pipelines
+    bridged by per-kind arms (collectNamespaceClasses, registerNestedNamespaceClasses,
+    the kClassDef/kNamespaceDecl arms) — a global name/body-phase redesign is the
+    remaining work (todo.txt: RESOLVE SCOPE UNIFICATION). Canon: test_v2/misc/
+    namespace.sl (class-in-namespace, forward refs, lifecycle, heap, array, local),
+    test_v2/class/namespace_cls.sl (namespace-in-class, `Class:Ns:Inner`).
   * enums — LANDED. `enum [type] [Name] ( m1 [= v], ... )`, type-first (default
     int), optional name. Lowered at RESOLVE: named → a kNamespace whose
     slids_type carries the underlying (transparent type) + kConst members;
@@ -689,9 +704,11 @@ Phase 5 — classes
     through deref/iterator (emitElementAddr generalized). Detail in readme "CLASSES:
     NEW / DELETE / SIZEOF" + the Phase-4 sizeof / memory-mgmt entries.
   * class as a NAMESPACE — LANDED. A kClass entry; the body holds member
-    aliases/consts/enums; qualified `Class:member`; alias-to-class transparency
-    (`alias Time = Space; Time:Count`); `alias Class;` rejected. Detail: readme
-    "CLASSES: AS A NAMESPACE + LOCAL" + [[project_v2_class_as_namespace]].
+    aliases/consts/enums, methods, nested classes, AND nested namespaces; qualified
+    `Class:member`; alias-to-class transparency (`alias Time = Space; Time:Count`);
+    `alias Class;` rejected. The class is itself a first-class member of an enclosing
+    namespace (NAMESPACE ↔ CLASS, above). Detail: readme "CLASSES: AS A NAMESPACE +
+    LOCAL" + [[project_namespace_class_unification]].
   * HOISTED classes (a class in another class's BODY) — LANDED. A namespace-member
     of the host, reached as `Outer:Inner` / `Outer:Inner:Innerger` (any depth);
     registerClassMembers kClassDef arm (member_of = host frame); resolveQualifiedType

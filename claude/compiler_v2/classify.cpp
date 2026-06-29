@@ -539,21 +539,33 @@ void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
 // A CONSTRUCTION receiver (`Class(a).m()`) is fine in either: desugar lifts it to a
 // `_$cret` temp (liftSretCallExprs) whose address is passed as `_$recv`.
 void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
-void classifyNamespace(parse::Tree& tree, parse::Node& node,
-                       diagnostic::Sink& diag);
+void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
+                      diagnostic::Sink& diag);
 
-// Type-check a class's member-function bodies — ctor, dtor, and methods (all
-// kFunctionDef, all self-bound) — recursing into HOISTED classes (whose bodies
-// must be typed too, else desugar lowers an un-typed field access).
-void classifyClassMemberBodies(parse::Tree& tree, parse::Node& node,
-                               diagnostic::Sink& diag) {
-    parse::forEachHoistedClass(node,
-        [&](parse::Node& cls) {
-            for (auto& m : cls.children)
-                if (m && m->kind == parse::Kind::kFunctionDef)
-                    classifyFunctionBody(tree, *m, diag);
-        },
-        [](parse::Node&) {});
+// Type-check a SCOPE's member bodies — one uniform recursion over any declaration
+// scope (program, namespace, or class). A member function (method, ctor, dtor, or
+// free function) gets its body typed; a const member's init is inferred + checked;
+// a nested scope (namespace OR class, to any depth) recurses through the SAME
+// routine — so class-in-namespace and namespace-in-class are typed identically,
+// with no per-context arm. Member bodies MUST be typed here, else desugar lowers an
+// un-typed field access.
+void classifyScope(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag) {
+    for (auto& m : node.children) {
+        if (!m) continue;
+        if (m->kind == parse::Kind::kFunctionDef) {
+            classifyFunctionBody(tree, *m, diag);
+        } else if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
+            for (auto& init : m->children) {
+                if (init) {
+                    inferExpr(tree, *init, m->return_type, diag);
+                    checkValueAssign(tree, m->return_type, *init, diag);
+                }
+            }
+        } else if (m->kind == parse::Kind::kNamespaceDecl
+                || m->kind == parse::Kind::kClassDef) {
+            classifyScope(tree, *m, diag);
+        }
+    }
 }
 
 // Walk a left-leaning '+' chain in a print-intrinsic argument. Each leaf
@@ -3396,7 +3408,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // resolve substituted the alias away; nothing to type here.
             return;
         case parse::Kind::kNamespaceDecl:
-            classifyNamespace(tree, s, diag);
+            classifyScope(tree, s, diag);
             return;
         case parse::Kind::kEnumDecl:
             // Enum members were lowered to kConst entries at resolve and folded
@@ -3769,10 +3781,10 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // A nested forward declaration carries no body to type-check.
             return;
         case parse::Kind::kClassDef:
-            // A local class: type-check its ctor/dtor member bodies (self-bound;
-            // field refs are already kFieldExpr from resolve), recursing into
-            // hoisted classes. Construction lowers at the use site.
-            classifyClassMemberBodies(tree, s, diag);
+            // A local class is a scope like any other: type its member bodies
+            // (self-bound; field refs are already kFieldExpr from resolve), nested
+            // scopes recursing through the same routine. Construction lowers at use.
+            classifyScope(tree, s, diag);
             return;
         case parse::Kind::kProgram:
         case parse::Kind::kStringLiteral:
@@ -3951,28 +3963,6 @@ void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
     }
 }
 
-// Type-infer a namespace's members: const inits in their declared-type context,
-// member function bodies, and nested namespaces. Mirrors classify::run's
-// file-scope handling, recursing through the namespace structure.
-void classifyNamespace(parse::Tree& tree, parse::Node& node,
-                       diagnostic::Sink& diag) {
-    for (auto& m : node.children) {
-        if (!m) continue;
-        if (m->kind == parse::Kind::kNamespaceDecl) {
-            classifyNamespace(tree, *m, diag);
-        } else if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
-            for (auto& init : m->children) {
-                if (init) {
-                    inferExpr(tree, *init, m->return_type, diag);
-                    checkValueAssign(tree, m->return_type, *init, diag);
-                }
-            }
-        } else if (m->kind == parse::Kind::kFunctionDef) {
-            classifyFunctionBody(tree, *m, diag);
-        }
-    }
-}
-
 }  // namespace
 
 void run(parse::Tree& tree, diagnostic::Sink& diag) {
@@ -3994,27 +3984,10 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         }
     }
 
-    for (auto& ch : program->children) {
-        if (!ch) continue;
-        if (ch->kind == parse::Kind::kFunctionDef) {
-            classifyFunctionBody(tree, *ch, diag);
-        } else if (ch->kind == parse::Kind::kNamespaceDecl) {
-            classifyNamespace(tree, *ch, diag);
-        } else if (ch->kind == parse::Kind::kVarDeclStmt && ch->is_const) {
-            // Type-infer top-level const init in its declared type's context, then
-            // run the one assignment relation — every assignment-family site does.
-            for (auto& init : ch->children) {
-                if (init) {
-                    inferExpr(tree, *init, ch->return_type, diag);
-                    checkValueAssign(tree, ch->return_type, *init, diag);
-                }
-            }
-        } else if (ch->kind == parse::Kind::kClassDef) {
-            // Type-check ctor/dtor member bodies (self-bound; field refs are
-            // already kFieldExpr from resolve), recursing into hoisted classes.
-            classifyClassMemberBodies(tree, *ch, diag);
-        }
-    }
+    // The program is itself a scope (the implicit global namespace): type its
+    // member bodies — top-level function bodies, const inits, and every nested
+    // namespace/class — through the one uniform routine.
+    classifyScope(tree, *program, diag);
 }
 
 }  // namespace classify

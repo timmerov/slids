@@ -588,10 +588,18 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
 void registerLocalClasses(parse::Tree& tree,
                           std::vector<std::unique_ptr<parse::Node>>& stmts,
                           diagnostic::Sink& diag);
+void registerNestedNamespaceClasses(parse::Tree& tree, parse::Node& ns,
+                                    diagnostic::Sink& diag);
 void registerNamespaceTree(parse::Tree& tree, parse::Node& node,
                            int parent_ns, diagnostic::Sink& diag);
 void resolveNamespaceBodies(parse::Tree& tree, parse::Node& node,
                             int parent_ns, diagnostic::Sink& diag);
+void resolveClassMemberInits(parse::Tree& tree, parse::Node& node,
+                             diagnostic::Sink& diag);
+void resolveClassMemberBodies(parse::Tree& tree, parse::Node& node,
+                              diagnostic::Sink& diag);
+void resolveClassFieldDefaults(parse::Tree& tree, parse::Node& node,
+                               diagnostic::Sink& diag);
 void registerEnum(parse::Tree& tree, parse::Node& node, int parent_ns,
                   diagnostic::Sink& diag);
 void resolveEnumMemberInits(parse::Tree& tree, parse::Node& node,
@@ -699,6 +707,13 @@ void registerMemberSignature(parse::Tree& tree, parse::Node& m, int ns_frame,
                              diagnostic::Sink& diag) {
     if (m.kind == parse::Kind::kNamespaceDecl) {
         registerNamespaceTree(tree, m, ns_frame, diag);
+        return;
+    }
+    if (m.kind == parse::Kind::kClassDef) {
+        // A class member registers through the dedicated class passes in run()
+        // (name -> body -> cycle -> member bodies), the same two-phase machinery
+        // as a file-scope or hoisted class — collected by collectNamespaceClasses
+        // once the namespace frames exist. Nothing to do in the signature pass.
         return;
     }
     if (m.kind == parse::Kind::kEnumDecl) {
@@ -814,9 +829,36 @@ void resolveNamespaceBodies(parse::Tree& tree, parse::Node& node,
             }
         } else if (m->kind == parse::Kind::kFunctionDef) {
             resolveFunctionBody(tree, *m, diag);
+        } else if (m->kind == parse::Kind::kClassDef) {
+            // The class NAME / BODY / cycle-check already ran in the file-scope
+            // class passes (so cross-class forward references resolve). Here, with
+            // the namespace frame OPEN, resolve its member inits, field defaults,
+            // and method/ctor/dtor bodies — so a method may name a namespace
+            // sibling bare, exactly as a free function in this namespace can.
+            resolveClassMemberInits(tree, *m, diag);
+            resolveClassFieldDefaults(tree, *m, diag);
+            resolveClassMemberBodies(tree, *m, diag);
         }
     }
     tree.open_ns_frames.pop_back();
+}
+
+// Collect every class defined inside a (possibly nested / reopened) file-scope
+// namespace, paired with the namespace FRAME that owns it. Namespace frames are
+// stamped by registerNamespaceTree (pass 1a-ns), so this runs after that pass.
+// Recurses through namespaces only — a class nested INSIDE a namespace-class is
+// handled by registerClassBody's own nested pass, not collected here.
+void collectNamespaceClasses(parse::Node& ns,
+        std::vector<std::pair<parse::Node*, int>>& out) {
+    int frame = ns.resolved_entry_id;
+    for (auto& m : ns.children) {
+        if (!m) continue;
+        if (m->kind == parse::Kind::kClassDef) {
+            out.push_back(std::make_pair(m.get(), frame));
+        } else if (m->kind == parse::Kind::kNamespaceDecl) {
+            collectNamespaceClasses(*m, out);
+        }
+    }
 }
 
 // `alias Ns;` / `alias A:B;` — import a namespace's members into the current
@@ -2523,6 +2565,11 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // (lifetime = this body frame) then resolve their bodies. Parent is
             // the global namespace — a function body is not itself a namespace.
             registerNamespaceTree(tree, s, kGlobalFrame, diag);
+            // Classes nested in this locally-opened namespace register through the
+            // same two-phase machinery as file-scope/local classes (the file-scope
+            // class passes only walk file-scope namespaces). Member bodies then
+            // resolve inside resolveNamespaceBodies.
+            registerNestedNamespaceClasses(tree, s, diag);
             resolveNamespaceBodies(tree, s, kGlobalFrame, diag);
             return Completion::Normal;
         }
@@ -3593,6 +3640,16 @@ void registerClassMembers(parse::Tree& tree, parse::Node& node, int frame,
             m->resolved_entry_id = parse::addEntry(tree, std::move(e));
         } else if (m->kind == parse::Kind::kEnumDecl) {
             registerEnum(tree, *m, frame, diag);
+        } else if (m->kind == parse::Kind::kNamespaceDecl) {
+            // A namespace nested in a class body — a member of the class frame,
+            // reached as `Class:Ns:member`, exactly as a namespace nested in a
+            // namespace. Its bodies resolve in resolveClassMemberBodies (class
+            // frame open) and type-check in classifyClassMemberBodies.
+            registerNamespaceTree(tree, *m, frame, diag);
+            // ...and register CLASSES nested in that namespace (a third context the
+            // file-scope class passes don't reach), two-phase with their own needs
+            // fixpoint, exactly as a function-body namespace's classes do.
+            registerNestedNamespaceClasses(tree, *m, diag);
         }
     }
     // Hoisted classes — two-phase among the sibling set (names then bodies), each
@@ -3823,6 +3880,11 @@ void resolveClassMemberBodies(parse::Tree& tree, parse::Node& node,
                             resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
                     }
                     resolveFunctionBody(tree, *m, diag, /*nested=*/false);
+                } else if (m && m->kind == parse::Kind::kNamespaceDecl) {
+                    // A namespace nested in this class body — resolve its member
+                    // bodies with the class frame open (so they reach class members
+                    // bare, like any namespace member sees its enclosing scope).
+                    resolveNamespaceBodies(tree, *m, frame, diag);
                 }
             }
             tree.method_fields = saved;
@@ -3922,6 +3984,44 @@ void registerLocalClasses(parse::Tree& tree,
     // Transitive needs: the file-scope fixpoint already ran (before any body), so
     // a local class isn't swept by it. Run the same fixpoint over THIS sibling set
     // — a field class is either already published or in this set (chains converge).
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (parse::Node* c : fresh) {
+            if (c->resolved_entry_id < 0) continue;
+            parse::ClassInfo& info = tree.classes.at(widen::strip(c->return_type));
+            for (widen::TypeRef ft : info.field_types) {
+                if (!info.needs_ctor && fieldContributesNeed(tree, ft, true))  { info.needs_ctor = true; changed = true; }
+                if (!info.needs_dtor && fieldContributesNeed(tree, ft, false)) { info.needs_dtor = true; changed = true; }
+            }
+        }
+    }
+    for (parse::Node* c : fresh) {
+        if (c->resolved_entry_id < 0) continue;
+        parse::ClassInfo const& info = tree.classes.at(widen::strip(c->return_type));
+        widen::setSlidNeeds(c->return_type, info.needs_ctor, info.needs_dtor);
+    }
+}
+
+// Register the classes nested in a namespace that is itself opened in a NON-file
+// context — a function body (`Name { ... }` local reopen) or a class body. The
+// file-scope class passes only walk file-scope namespaces, so these need the same
+// two-phase machinery here, owned by their namespace frame (member_of), with the
+// transitive-needs fixpoint (the file-scope fixpoint already ran). Member bodies
+// resolve afterwards in resolveNamespaceBodies. Idempotent: skips already-registered.
+void registerNestedNamespaceClasses(parse::Tree& tree, parse::Node& ns,
+                                    diagnostic::Sink& diag) {
+    std::vector<std::pair<parse::Node*, int>> classes;
+    collectNamespaceClasses(ns, classes);
+    std::vector<parse::Node*> fresh;
+    for (auto& nc : classes) {
+        if (nc.first->resolved_entry_id >= 0) continue;
+        registerClassName(tree, *nc.first, diag, nc.second);   // Phase 1 (all names)
+        fresh.push_back(nc.first);
+    }
+    if (fresh.empty()) return;
+    for (parse::Node* c : fresh) registerClassBody(tree, *c, diag);   // Phase 2
+    for (parse::Node* c : fresh) checkClassByValueAcyclic(tree, *c, diag);
     bool changed = true;
     while (changed) {
         changed = false;
@@ -4096,20 +4196,35 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         }
     }
 
+    // Namespace-nested classes are first-class — they thread through the SAME
+    // two-phase class machinery as file-scope classes, owned by their namespace
+    // frame (member_of), exactly like a hoisted class is owned by its host class
+    // frame. Collected now that the namespace frames are stamped (pass 1a-ns).
+    std::vector<std::pair<parse::Node*, int>> ns_classes;
+    for (auto& ch : program->children) {
+        if (ch && ch->kind == parse::Kind::kNamespaceDecl) {
+            collectNamespaceClasses(*ch, ns_classes);
+        }
+    }
+
     // Pass 1a-class — register every file-scope class (its field layout + the
     // named kSlid type) before any body, so a decl `Class c` / param `Class^`
     // resolves and carries the layout. TWO-PHASE: all class NAMES first, then all
     // BODIES, so a class field may forward-reference a sibling class defined later.
+    // Namespace-nested classes join both phases so the forward-reference window
+    // spans file-scope and namespace classes alike.
     for (auto& ch : program->children) {
         if (ch && ch->kind == parse::Kind::kClassDef) {
             registerClassName(tree, *ch, diag);
         }
     }
+    for (auto& nc : ns_classes) registerClassName(tree, *nc.first, diag, nc.second);
     for (auto& ch : program->children) {
         if (ch && ch->kind == parse::Kind::kClassDef) {
             registerClassBody(tree, *ch, diag);
         }
     }
+    for (auto& nc : ns_classes) registerClassBody(tree, *nc.first, diag);
     // Reject infinite-size by-value cycles (`Foo(Foo f_)`, mutual `A(B)`/`B(A)`)
     // before the lifecycle fixpoint / classify / codegen recurse forever.
     for (auto& ch : program->children) {
@@ -4117,6 +4232,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             checkClassByValueAcyclic(tree, *ch, diag);
         }
     }
+    for (auto& nc : ns_classes) checkClassByValueAcyclic(tree, *nc.first, diag);
 
     // Pass 1a-alias-validate — now that enums, namespaces, and classes exist,
     // validate each alias target (an alias may name any of them).

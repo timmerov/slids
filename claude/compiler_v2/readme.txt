@@ -611,7 +611,10 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
   * A CLASS IS ALSO A NAMESPACE. Every class gets a `kClass` ENTRY (a new
     EntryKind) carrying an ns_frame_id (its member set) AND its kSlid as
     slids_type (so the name is a type too). Its body holds member DEFINITIONS —
-    aliases, consts, enums (NOT free functions). Qualify them by the class name:
+    aliases, consts, enums, methods, nested classes, AND nested namespaces (a free
+    function in a class body becomes a method; only a bare runtime statement is
+    rejected). The class is itself a member of its enclosing scope — see NAMESPACE
+    ↔ CLASS below. Qualify members by the class name:
     `Space:Float` (a member type-alias), `Space:kPi` (a member const),
     `Space:Count:kOne` (an enum member — the enum keeps its name in the path). A
     type-alias to a class sees through to both facets (`alias Time = Space;` then
@@ -748,6 +751,51 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     instead of a blunt "Unknown type" (the precise form fires where the entry is
     already registered — e.g. a body var decl; a class FIELD validates before
     file-scope functions/consts register, so those stay "Unknown type").
+
+
+NAMESPACE ↔ CLASS — ONE SCOPE ABSTRACTION (landed; spans parse / desugar / classify)
+
+  A namespace, a class body, and PROGRAM scope are the same construct: a brace body
+  holding member definitions. A class is a namespace with a field tuple + methods; a
+  namespace is a class with neither (and non-instantiable); program scope is the
+  implicit global namespace bounded by EOF instead of braces. So they nest in each
+  other freely: a class in a namespace (`Ns:Class`), a namespace in a class
+  (`Class:Ns:member`), to ANY depth (`Ns:Class:Ns2:Inner`), each registered by the
+  SAME code as the one-level case.
+
+  * PARSE — one member dispatch. parseDefinitionMember(in_class, recv_type) is the
+    universal definition-member parser (const / alias / enum / nested class / nested
+    namespace / function), shared by a namespace body, a class body, and program
+    scope (parseProgram → parseNamespaceMember → parseDefinitionMember). Only two
+    bits vary, both intrinsic: a function becomes a METHOD in a class (receiver
+    `_$recv` injected); the function fallback is PERMISSIVE outside a class (a
+    namespace/program member that isn't matched is a function def OR `;`-decl, so
+    forward declarations parse — looksLikeFunctionDef is a statement-context
+    disambiguator that wrongly rejects `name();`, so it gates ONLY in a class body).
+    ctor/dtor are method-shaped, legal only in a class. The shared statement-body
+    loop is parseStmtsThroughRBrace.
+  * DESUGAR — one flatten. flattenScope recurses every scope uniformly: a namespace
+    hoists its direct functions, a class lifts its methods + `__$ctor`/`__$dtor`
+    hooks, both recurse — so a scope nested in a scope, any depth, flattens by the
+    same walk (replaced collectClassDefs + collectAllNamespaces + the two lift loops).
+  * CLASSIFY — one walk. classifyScope types a scope's member bodies (functions +
+    const inits) and recurses into nested namespaces AND classes through itself;
+    run() calls it once on the program (replaced classifyNamespace +
+    classifyClassMemberBodies + their cross-arms).
+  * RESOLVE — NOT yet unified (todo.txt: RESOLVE SCOPE UNIFICATION). It still runs
+    parallel namespace vs class pipelines: registration (registerNamespaceTree /
+    registerMemberSignature vs registerClassName / registerClassMembers /
+    registerClassBody) and body resolution (resolveNamespaceBodies vs
+    resolveClassMemberBodies), bridged by per-kind ARMS plus the helpers
+    collectNamespaceClasses / registerNestedNamespaceClasses so namespace-nested
+    classes (in three contexts: file, function body, class body) thread the class
+    two-phase. It works to any depth, but it is the cross-wiring the other stages
+    deleted. Unifying = a global name-phase + body-phase recursion over scopes
+    (preserving the cross-scope forward-ref guarantee the global two-phase gives),
+    unbundling resolveClassMemberInits/FieldDefaults into per-member steps, and
+    rewriting run()'s 1a/1b/2 passes. The intrinsic per-scope differences (field
+    tuple, method receiver, no-reopen for a class) stay as a small isClass config —
+    not separate pipelines.
 
 
 STAGE FILES (.h / .cpp pairs)

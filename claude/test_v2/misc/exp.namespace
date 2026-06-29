@@ -8,3 +8,17 @@ mn = 13
 j = 200
 k = 100
 h = 8
+g = 70
+cr = 1050
+Meter:ctor 4
+Meter:dtor 4
+amp = 12
+knob = 10
+tag = 42
+Tracked:ctor 77
+Tracked:dtor 77
+wrap = 77
+heap = 13
+arr = 9
+cell = 21
+lnc = 42

@@ -202,6 +202,30 @@ BLOCKED FEATURES
 
 REACH GOALS
 
+  * RESOLVE SCOPE UNIFICATION — a namespace, a class body, and PROGRAM scope are one
+    construct (a brace body of member definitions); parse, desugar, and classify each
+    handle them with ONE recursive routine (parseDefinitionMember / flattenScope /
+    classifyScope), so class-in-namespace, namespace-in-class, etc. is correct at any
+    depth BY CONSTRUCTION. RESOLVE is the holdout: it still runs parallel namespace vs
+    class pipelines — registration (registerNamespaceTree / registerMemberSignature vs
+    registerClassName / registerClassMembers / registerClassBody) and body resolution
+    (resolveNamespaceBodies vs resolveClassMemberBodies) — bridged by per-kind ARMS
+    plus collectNamespaceClasses / registerNestedNamespaceClasses to thread
+    namespace-nested classes through the class two-phase in three separate contexts
+    (file / function body / class body). It works, but it is the exact cross-wiring the
+    other stages deleted, and each new nesting context needed its own wire
+    (class-in-namespace, class-in-local-namespace, class-in-namespace-in-class landed
+    as three separate patches). UNIFY = collapse to a global NAME-phase + BODY-phase
+    recursion over scopes (one registerScopeNames / registerScopeBodies, an isClass
+    config for the field tuple / method receiver / no-reopen), preserving the
+    cross-scope forward-ref guarantee the current global two-phase gives; this requires
+    UNBUNDLING resolveClassMemberInits/FieldDefaults into per-member steps, reconciling
+    frame push/pop discipline, and rewriting run()'s 1a/1b/2 passes — then deleting
+    registerNamespaceTree, registerMemberSignature, registerNestedNamespaceClasses,
+    collectNamespaceClasses, and the four arms. A semantic-core redesign; verify the
+    full suite (cross-scope forward refs, lifecycle, local namespaces) at each step.
+    Detail: readme "NAMESPACE ↔ CLASS".
+
   * NESTED FUNCTION RESTRICTIONS TO REVISIT — three deliberate limits, each a
     compile error today (canon nested.sl says "needs to be revisited"):
       - DEEP NESTING — a nested function may not contain a further nested

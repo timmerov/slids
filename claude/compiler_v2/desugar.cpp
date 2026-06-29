@@ -853,44 +853,34 @@ std::unique_ptr<ast::Node> lowerForTuple(parse::Node const& p,
     return out;
 }
 
-// Collect every class definition reachable from `node` — at file scope and
-// nested in function bodies (a local class). Recurses uniformly so a class in a
-// nested function (or in a ctor/dtor body) is found too.
-void collectClassDefs(parse::Node const& node,
-                      std::vector<parse::Node const*>& acc) {
-    for (auto const& c : node.children) {
-        if (!c) continue;
-        if (c->kind == parse::Kind::kClassDef) acc.push_back(c.get());
-        collectClassDefs(*c, acc);
-    }
-}
-
-// Collect a namespace's member function definitions (recursing into nested
-// namespaces) so they can be hoisted to program scope.
-void collectNamespaceFunctions(parse::Node const& ns,
-                               std::vector<parse::Node const*>& fns) {
-    for (auto const& m : ns.children) {
+// Flatten every scope reachable from `node` to program-scope functions, in one
+// uniform recursion. A namespace contributes its DIRECT member functions as-is; a
+// class contributes its member functions renamed to the lifted hook/method symbols
+// (`<Class>__$ctor` / `__$dtor` / `__<method>`). Either kind recurses into itself,
+// so a scope nested in a scope — class-in-namespace, namespace-in-class, a local
+// class in a function body, to any depth — is flattened by the SAME walk, with no
+// per-context arm. (The wrapper nodes themselves were dropped by copyNode; this
+// repopulates their members at program scope where codegen emits them.)
+void flattenScope(parse::Node const& node, ast::Node* prog,
+                  parse::Tree const& in, int& next_id) {
+    for (auto const& m : node.children) {
         if (!m) continue;
-        if (m->kind == parse::Kind::kFunctionDef) {
-            fns.push_back(m.get());
-        } else if (m->kind == parse::Kind::kNamespaceDecl) {
-            collectNamespaceFunctions(*m, fns);
+        if (m->kind == parse::Kind::kNamespaceDecl) {
+            for (auto const& f : m->children)
+                if (f && f->kind == parse::Kind::kFunctionDef)
+                    prog->children.push_back(copyNode(*f, in, next_id));
+        } else if (m->kind == parse::Kind::kClassDef) {
+            std::string sym = widen::classSymbol(widen::strip(m->return_type));
+            for (auto const& f : m->children) {
+                if (!f || f->kind != parse::Kind::kFunctionDef) continue;
+                auto fn = copyNode(*f, in, next_id);
+                if      (f->name == "_$ctor") fn->name = sym + "__$ctor";
+                else if (f->name == "_$dtor") fn->name = sym + "__$dtor";
+                else                          fn->name = sym + "__" + f->name;
+                prog->children.push_back(std::move(fn));
+            }
         }
-    }
-}
-
-// Find the outermost namespace decls reachable from `node`: at file scope and
-// inside function bodies (a namespace may be opened in either). Nesting is left
-// to collectNamespaceFunctions, so this does not descend into namespaces.
-void findTopNamespaces(parse::Node const& node,
-                       std::vector<parse::Node const*>& out) {
-    for (auto const& c : node.children) {
-        if (!c) continue;
-        if (c->kind == parse::Kind::kNamespaceDecl) {
-            out.push_back(c.get());
-        } else if (c->kind == parse::Kind::kFunctionDef) {
-            findTopNamespaces(*c, out);
-        }
+        flattenScope(*m, prog, in, next_id);   // recurse: deeper scopes, fn bodies
     }
 }
 
@@ -2262,49 +2252,14 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
     for (auto const& n : in.nodes) {
         out.nodes.push_back(copyNode(*n, in, next_id));
     }
-    // Hoist namespace member functions to program scope as plain (symbol-renamed)
-    // functions; the namespace wrappers were dropped by copyNode. Member consts
-    // were substituted away by constfold and need no runtime form.
+    // Flatten every scope's member functions to program scope in ONE uniform
+    // recursion (namespaces hoist their functions, classes lift their methods +
+    // ctor/dtor hooks, both recurse), so any nesting is handled the same way. The
+    // wrappers themselves were dropped by copyNode; member consts were substituted
+    // away by constfold and need no runtime form.
     for (std::size_t i = 0; i < in.nodes.size(); i++) {
         if (!in.nodes[i] || in.nodes[i]->kind != parse::Kind::kProgram) continue;
-        ast::Node* prog = out.nodes[i].get();
-        std::vector<parse::Node const*> nss;
-        findTopNamespaces(*in.nodes[i], nss);
-        for (parse::Node const* ns : nss) {
-            std::vector<parse::Node const*> fns;
-            collectNamespaceFunctions(*ns, fns);
-            for (parse::Node const* f : fns) {
-                prog->children.push_back(copyNode(*f, in, next_id));
-            }
-        }
-    }
-    // Lift each class's ctor/dtor member bodies to top-level functions named
-    // <Class>__$ctor / <Class>__$dtor (the bodies are self-bound — resolve
-    // rewrote bare field refs to `self.field`, lowered to slot indices on copy).
-    // Codegen calls these symbols at construction / scope exit. Classes defined
-    // in a function body (local classes) are collected recursively, and the
-    // symbol uses the class's (possibly scope-mangled) canonical type name so
-    // same-named local classes don't collide.
-    for (std::size_t i = 0; i < in.nodes.size(); i++) {
-        if (!in.nodes[i] || in.nodes[i]->kind != parse::Kind::kProgram) continue;
-        ast::Node* prog = out.nodes[i].get();
-        std::vector<parse::Node const*> classdefs;
-        collectClassDefs(*in.nodes[i], classdefs);
-        for (parse::Node const* c : classdefs) {
-            // The lifted symbol base is minted from the class handle (bare name +
-            // def_id for a local), matching codegen's call/struct/sizeof sites.
-            std::string sym = widen::classSymbol(widen::strip(c->return_type));
-            for (auto const& m : c->children) {
-                if (!m || m->kind != parse::Kind::kFunctionDef) continue;
-                auto fn = copyNode(*m, in, next_id);
-                // ctor/dtor lift to the hook symbols; a METHOD lifts to
-                // <Class>__<method> (self is already params[0]). All self-bound.
-                if (m->name == "_$ctor")      fn->name = sym + "__$ctor";
-                else if (m->name == "_$dtor") fn->name = sym + "__$dtor";
-                else                          fn->name = sym + "__" + m->name;
-                prog->children.push_back(std::move(fn));
-            }
-        }
+        flattenScope(*in.nodes[i], out.nodes[i].get(), in, next_id);
     }
     // sret-call lift: hoist a hook-returning call out of an inline (expression)
     // position into a preceding `_$cret` temp decl, so the call lands at a position

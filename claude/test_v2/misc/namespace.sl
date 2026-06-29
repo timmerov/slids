@@ -84,6 +84,110 @@ Global {
 }
 alias Global;
 
+/* --- a class is a first-class namespace member. forward references span file
+   scope and namespace scope (their names register together, so either may name
+   the other before it is defined). --- */
+
+/* a file-scope class whose by-value field is a NAMESPACE class defined below. */
+Crate(Space:Gadget g_) {
+    int total() {
+        return g_.tick() + 1000;
+    }
+}
+
+Space {
+    /* a namespace class (Space:Gadget) whose by-value field is a FILE-scope class
+       defined below — the reverse forward reference. */
+    Gadget(Cog c_) {
+        int tick() {
+            return c_.teeth() * 10;
+        }
+    }
+}
+
+/* the file-scope class the namespace class above refers to. */
+Cog(int teeth_) {
+    int teeth() {
+        return teeth_;
+    }
+}
+
+/* a namespace class with lifecycle hooks (ctor/dtor), whose method reaches a
+   namespace sibling const BARE (kGain) — no qualifier, like a free function in
+   the namespace. */
+Space {
+    const int kGain = 3;
+    Meter(int v_) {
+        _() { __println("Meter:ctor " + v_); }
+        ~() { __println("Meter:dtor " + v_); }
+        int amp() { return v_ * kGain; }
+    }
+}
+
+/* contained scope so the dtor fires at this return, keeping output ordered. */
+int meter_demo() {
+    Space:Meter mtr(4);
+    return mtr.amp();
+}
+
+/* a class in a NESTED namespace — reached A:B:Knob. */
+A {
+    B {
+        Knob(int t_) {
+            int turn() { return t_ + 1; }
+        }
+    }
+}
+
+/* an EMPTY namespace class (no fields → no-self ABI), constructed and called. */
+Space {
+    Tag() {
+        int answer() { return 42; }
+    }
+}
+
+/* a namespace class with lifecycle hooks used as a BY-VALUE field of a file-scope
+   class: the container inherits the ctor/dtor need transitively (Wrapper has no
+   hooks of its own). */
+Space {
+    Tracked(int id_) {
+        _() { __println("Tracked:ctor " + id_); }
+        ~() { __println("Tracked:dtor " + id_); }
+        int id() { return id_; }
+    }
+}
+Wrapper(Space:Tracked t_) {
+    int wid() { return t_.id(); }
+}
+int wrap_demo() {
+    Wrapper w(77);
+    return w.wid();
+}
+
+/* a namespace class reached through the heap, an explicit reference param, and a
+   by-value return. */
+Space {
+    Cell(int v_ = 9) {
+        int g() { return v_; }
+    }
+}
+void show_cell(Space:Cell^ c) { __println("cell = " + c^.g()); }
+Space:Cell make_cell(int n) {
+    Space:Cell c(n);
+    return c;
+}
+
+/* a class defined in a LOCALLY-opened namespace (a reopen inside a function). */
+int local_ns_class() {
+    Depot {
+        Crate(int n_) {
+            int size() { return n_; }
+        }
+    }
+    Depot:Crate c(42);
+    return c.size();
+}
+
 int32 main() {
 
     int x = Space:bar();
@@ -129,6 +233,49 @@ int32 main() {
     int h = kEight;
     __println("h = " + h);
 
+    /* a class defined in a namespace — constructed and method-called like any
+       class (Space:Gadget). */
+    Space:Gadget g(7);
+    __println("g = " + g.tick());
+
+    /* a class whose fields forward-reference across file/namespace scope. */
+    Crate cr(5);
+    __println("cr = " + cr.total());
+
+    /* a namespace class with ctor/dtor; the method reaches kGain bare. The
+       ctor/dtor prints bracket the value inside meter_demo. */
+    int amp = meter_demo();
+    __println("amp = " + amp);
+
+    /* a class in a nested namespace. */
+    A:B:Knob kb(9);
+    __println("knob = " + kb.turn());
+
+    /* an empty namespace class. */
+    Space:Tag tg;
+    __println("tag = " + tg.answer());
+
+    /* transitive lifecycle: Wrapper's dtor runs because its field's class has one.
+       ctor/dtor prints bracket the value inside wrap_demo. */
+    int wr = wrap_demo();
+    __println("wrap = " + wr);
+
+    /* a namespace class on the heap. */
+    Space:Cell^ hp = new Space:Cell(13);
+    __println("heap = " + hp^.g());
+    delete hp;
+
+    /* an array of a namespace class (default field value). */
+    Space:Cell arr[2];
+    __println("arr = " + arr[0].g());
+
+    /* a namespace class as a function return + reference param. */
+    Space:Cell mc = make_cell(21);
+    show_cell(mc);
+
+    /* a class in a locally-opened namespace. */
+    __println("lnc = " + local_ns_class());
+
     /* compile error: need qualifier */
     //-EXPECT-ERROR: 'foo' needs a namespace qualifier
     //int e1 = foo();
@@ -147,9 +294,30 @@ int32 main() {
     //-EXPECT-ERROR: 'Space:Nested' has no member 'kFive'
     //int e6 = Space:Nested:kFive;
 
-    /* compile error: cannot instantiate a namespace. */
+    /* compile error: cannot instantiate a namespace (even one holding a class). */
     //-EXPECT-ERROR: 'Space' is a namespace, not a type.
     //Space space;
 
     return 0;
 }
+
+/* compile error: ctor/dtor are method-shaped — illegal in a namespace body. */
+//-EXPECT-ERROR: A constructor or destructor may only appear in a class body.
+//NsHook { ~() { } }
+
+/* compile error: a namespace body holds definitions, never a naked statement —
+   a non-definition item is read as a (malformed) function. */
+//-EXPECT-ERROR: Expected function name.
+//NsNaked { __println("naked"); }
+
+/* compile error: a duplicate class within a namespace. */
+//-EXPECT-ERROR: Duplicate definition of class 'Dup'.
+//Space { Dup(int a_){} Dup(int b_){} }
+
+/* compile error: a class name colliding with a sibling const in a namespace. */
+//-EXPECT-ERROR: Duplicate declaration of 'Clash'.
+//Space { const int Clash = 1; Clash(int a_){} }
+
+/* compile error: a namespace class field naming an unknown type. */
+//-EXPECT-ERROR: Unknown type 'Nope'.
+//Space { BadField(Nope n_){} }

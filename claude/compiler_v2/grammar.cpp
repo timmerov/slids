@@ -2026,15 +2026,60 @@ struct Parser {
         return node;
     }
 
-    // A namespace member: const, nested namespace, enum, or member function.
-    std::unique_ptr<parse::Node> parseNamespaceMember() {
+    // The shared definition-member dispatch for BOTH namespace and class bodies —
+    // the universal vocabulary: const, alias, enum, nested class, nested namespace,
+    // and a function. The function arm is the only context-varying part: a free
+    // function in a namespace, a receiver-bound method in a class (the implicit
+    // `_$recv` of type `recv_type` is spliced in when in_class). ctor/dtor are
+    // method-shaped and class-only; the class body loop peels them off BEFORE
+    // calling here, and parseNamespaceMember rejects them. Returns nullptr on error.
+    std::unique_ptr<parse::Node> parseDefinitionMember(bool in_class,
+                                                       std::string const& recv_type) {
         token::Token const& t = peek();
         if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();
-        if (t.kind == token::Kind::kEnum) return parseEnumDecl();
+        if (t.kind == token::Kind::kEnum)  return parseEnumDecl();
+        if (looksLikeClassDef())           return parseClassDef();   // nested class
         if (t.kind == token::Kind::kIdentifier
             && peekKind(1) == token::Kind::kLBrace) return parseNamespaceDecl();
+        if (in_class) {
+            // A class body: a method is a function-shaped member (receiver-injected).
+            // looksLikeFunctionDef gates here — anything not function-shaped is a
+            // naked statement and rejected. (A class has no forward-decl members; the
+            // ctor/dtor `_();`/`~();` decls are handled separately by the class loop.)
+            if (!looksLikeFunctionDef()) {
+                error("A class body holds the constructor '_()', the destructor "
+                      "'~()', member definitions (aliases, constants, enums, "
+                      "classes, namespaces), and methods.");
+                return nullptr;
+            }
+            auto m = parseFunctionDef();
+            if (!m) return nullptr;
+            auto recv = newNodeAt(parse::Kind::kParam, m->file_id, m->name_tok);
+            recv->name = "_$recv";
+            recv->name_tok = m->name_tok;
+            recv->return_type = widen::internOrNone(recv_type);
+            m->params.insert(m->params.begin(), std::move(recv));
+            return m;
+        }
+        // A namespace / file-scope body has no call statements, so anything not
+        // matched above is a function DEFINITION or DECLARATION — parseFunctionDef
+        // parses both and diagnoses a malformed one. looksLikeFunctionDef must NOT
+        // gate here: it is a statement-context disambiguator that wrongly rejects a
+        // `name();` forward declaration (reading it as a construction call).
         return parseFunctionDef();
+    }
+
+    // A namespace member: the universal definition vocabulary, minus ctor/dtor
+    // (method-shaped, legal only in a class body).
+    std::unique_ptr<parse::Node> parseNamespaceMember() {
+        if (peek().kind == token::Kind::kBitNot
+            || (peek().kind == token::Kind::kIdentifier && peek().text == "_"
+                && peekKind(1) == token::Kind::kLParen)) {
+            error("A constructor or destructor may only appear in a class body.");
+            return nullptr;
+        }
+        return parseDefinitionMember(/*in_class=*/false, /*recv_type=*/"");
     }
 
     // Name { members } — open or reopen a namespace. No trailing semicolon.
@@ -2062,6 +2107,24 @@ struct Parser {
         return node;
     }
 
+    // The shared statement-body loop: parse statements up to and including the
+    // closing `}`. The opening `{` must ALREADY be consumed by the caller (each
+    // call site distinguishes `{` from `;`/custom errors before reaching here).
+    // Appends each statement to `out`; returns false on error (already reported).
+    bool parseStmtsThroughRBrace(std::vector<std::unique_ptr<parse::Node>>& out) {
+        while (!fatal && peek().kind != token::Kind::kRBrace) {
+            if (peek().kind == token::Kind::kEndOfFile
+                || peek().kind == token::Kind::kEndOfInput) {
+                error("Expected '}'.");
+                return false;
+            }
+            auto stmt = parseStmt();
+            if (!stmt) return false;
+            out.push_back(std::move(stmt));
+        }
+        return expect(token::Kind::kRBrace, "}");
+    }
+
     // { stmts } — a nested lexical scope. A bare `{` (no leading ident) is a
     // block; `ident {` is a namespace decl, dispatched separately in parseStmt.
     std::unique_ptr<parse::Node> parseBlock() {
@@ -2069,17 +2132,7 @@ struct Parser {
         int blk_tok = pos;
         advance();   // {
         auto node = newNodeAt(parse::Kind::kBlockStmt, blk_file, blk_tok);
-        while (!fatal && peek().kind != token::Kind::kRBrace) {
-            if (peek().kind == token::Kind::kEndOfFile
-                || peek().kind == token::Kind::kEndOfInput) {
-                error("Expected '}'.");
-                return nullptr;
-            }
-            auto stmt = parseStmt();
-            if (!stmt) return nullptr;
-            node->children.push_back(std::move(stmt));
-        }
-        if (!expect(token::Kind::kRBrace, "}")) return nullptr;
+        if (!parseStmtsThroughRBrace(node->children)) return nullptr;
         return node;
     }
 
@@ -2815,57 +2868,18 @@ struct Parser {
                 error("Expected '}'.");
                 return nullptr;
             }
-            // Member definitions — the namespace facet of a class. A class body
-            // holds aliases, constants, and enums (qualified `Class:member`), as
-            // well as the constructor / destructor. A method would be a member
-            // too, but methods are not yet supported; a non-member (free)
-            // function is never a class member.
-            token::Kind mk = peek().kind;
-            if (mk == token::Kind::kConst || mk == token::Kind::kAlias
-                || mk == token::Kind::kEnum) {
-                std::unique_ptr<parse::Node> m =
-                    (mk == token::Kind::kConst) ? parseVarDeclStmt()
-                  : (mk == token::Kind::kAlias) ? parseAliasDecl()
-                                                : parseEnumDecl();
-                if (!m) return nullptr;
-                node->children.push_back(std::move(m));
-                continue;
-            }
+            // ctor/dtor are method-shaped and class-only — peel them off first
+            // (a `_()` / `~()` also matches looksLikeClassDef). Everything else is
+            // the shared definition vocabulary, parsed exactly as a namespace member
+            // except functions become methods here (in_class injects `_$recv`).
             bool is_ctor = (peek().kind == token::Kind::kIdentifier
                             && peek().text == "_");
             bool is_dtor = (peek().kind == token::Kind::kBitNot);
             if (!is_ctor && !is_dtor) {
-                // A HOISTED class — a class defined in the body, a namespace-member
-                // of the host (reached as `Host:Inner`), like its alias/const/enum
-                // members. Checked AFTER ctor/dtor, since `_()` also matches
-                // looksLikeClassDef (a name `(` `)` `{`).
-                if (looksLikeClassDef()) {
-                    auto m = parseClassDef();
-                    if (!m) return nullptr;
-                    node->children.push_back(std::move(m));
-                    continue;
-                }
-                // A METHOD — a named function member (`void print() {...}`). Like
-                // ctor/dtor it is receiver-bound: inject the implicit receiver param
-                // `_$recv` (Class^, the object's address) as the first param. (Spec
-                // `self` is the OBJECT = `_$recv^`; the internal param is the pointer,
-                // named distinctly so it never collides with the `self` keyword.)
-                // The body is a full function body (parseFunctionDef).
-                if (looksLikeFunctionDef()) {
-                    auto m = parseFunctionDef();
-                    if (!m) return nullptr;
-                    auto recv = newNodeAt(parse::Kind::kParam, m->file_id, m->name_tok);
-                    recv->name = "_$recv";
-                    recv->name_tok = m->name_tok;
-                    recv->return_type = widen::internOrNone(recv_type);
-                    m->params.insert(m->params.begin(), std::move(recv));
-                    node->children.push_back(std::move(m));
-                    continue;
-                }
-                error("A class body holds the constructor '_()', the destructor "
-                      "'~()', member definitions (aliases, constants, enums, "
-                      "classes), and methods.");
-                return nullptr;
+                auto m = parseDefinitionMember(/*in_class=*/true, recv_type);
+                if (!m) return nullptr;
+                node->children.push_back(std::move(m));
+                continue;
             }
             int m_file = peek().file_id;
             int m_tok = pos;
@@ -2905,17 +2919,7 @@ struct Parser {
 
             std::string saved_func = current_func;
             current_func = name + (is_ctor ? "._" : ".~");
-            while (!fatal && peek().kind != token::Kind::kRBrace) {
-                if (peek().kind == token::Kind::kEndOfFile
-                    || peek().kind == token::Kind::kEndOfInput) {
-                    error("Expected '}'.");
-                    return nullptr;
-                }
-                auto stmt = parseStmt();
-                if (!stmt) return nullptr;
-                member->children.push_back(std::move(stmt));
-            }
-            if (!expect(token::Kind::kRBrace, "}")) return nullptr;
+            if (!parseStmtsThroughRBrace(member->children)) return nullptr;
             current_func = std::move(saved_func);
 
             if (is_ctor) ctor_def = true; else dtor_def = true;
@@ -2982,17 +2986,7 @@ struct Parser {
 
         std::string saved_func = current_func;
         current_func = node->name;   // ##func in the body names this function
-        while (!fatal && peek().kind != token::Kind::kRBrace) {
-            if (peek().kind == token::Kind::kEndOfFile
-                || peek().kind == token::Kind::kEndOfInput) {
-                error("Expected '}'.");
-                return nullptr;
-            }
-            auto stmt = parseStmt();
-            if (!stmt) return nullptr;
-            node->children.push_back(std::move(stmt));
-        }
-        if (!expect(token::Kind::kRBrace, "}")) return nullptr;
+        if (!parseStmtsThroughRBrace(node->children)) return nullptr;
         current_func = std::move(saved_func);
         return node;
     }
@@ -3003,26 +2997,13 @@ struct Parser {
         while (!fatal) {
             while (peek().kind == token::Kind::kEndOfFile) advance();
             if (peek().kind == token::Kind::kEndOfInput) break;
-            // Top-level dispatch: `const` -> file-scope const decl; else
-            // assume function def/decl.
-            std::unique_ptr<parse::Node> child;
-            if (peek().kind == token::Kind::kConst) {
-                child = parseVarDeclStmt();
-            } else if (peek().kind == token::Kind::kAlias) {
-                child = parseAliasDecl();
-            } else if (peek().kind == token::Kind::kEnum) {
-                child = parseEnumDecl();
-            } else if (peek().kind == token::Kind::kIdentifier
-                       && peekKind(1) == token::Kind::kLBrace) {
-                child = parseNamespaceDecl();
-            } else if (peek().kind == token::Kind::kIdentifier
-                       && peekKind(1) == token::Kind::kLParen) {
-                // `Name(` with no leading return type is a class definition; a
-                // function is `Type Name(` (a return type precedes the name).
-                child = parseClassDef();
-            } else {
-                child = parseFunctionDef();
-            }
+            // File scope IS the global namespace body — bounded by end-of-input
+            // instead of braces, framed by the pre-existing kGlobalFrame instead of
+            // an opened one. Its members are exactly namespace members, so the same
+            // dispatch applies (const/alias/enum/class/namespace/function; ctor/dtor
+            // rejected). The two file-scope-only differences (terminator, frame) live
+            // in this loop and in resolve, not in what a member may be.
+            auto child = parseNamespaceMember();
             if (!child) return;
             prog->children.push_back(std::move(child));
         }
