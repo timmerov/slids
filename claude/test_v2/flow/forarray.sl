@@ -52,7 +52,29 @@ the examples desugar to the following:
 
 note:
 the compiler inserts instructions at the start of the loop body.
+*/
 
+/*
+claude says:
+
+- `for (v : arr) {body}` iterates a FIXED-SIZE array. Lowers to a kForLongStmt:
+  a counter `_$idx < arr.$size` (the static size) stepped each pass, the loop var
+  bound from `arr[_$idx]` as the body's FIRST instruction (compiler-inserted).
+- by value (`int x`, or typeless `x`) requires a PRIMITIVE element. by reference
+  (`int^ iter`) works for EVERY element type; a non-primitive element (a sub-array
+  row, a class) FORCES a reference — there is no by-value copy of a non-primitive.
+- a by-ref loop var aliases the element IN PLACE, so writes flow back (a by-ref
+  loop can FILL an uninitialized array); a by-value loop var COPIES, so the array
+  must already be initialized (else use-before-init).
+- the loop var is typed or typeless (element type inferred). A typeless var REUSES
+  an enclosing local of the same name if one exists — observable after the loop,
+  and it may be wider than the element (int element into an int64 local) — else a
+  fresh local. On ambiguity, by value.
+- a 2-D array iterates ROWS: each row is a sub-array `int[N]` (non-primitive), so
+  the loop var is a reference (`sub`); `sub^` then iterates the row. Class elements
+  iterate by reference too (`for (ref : arr)` over `Class arr[3]`, `ref^.x_`).
+- break / continue, a labeled break (`break scan` + `:scan`), and a numbered break
+  (`break 2` exits N enclosing loops) all work in the body.
 */
 
 alias Cell = int;

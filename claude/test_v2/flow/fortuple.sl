@@ -74,12 +74,13 @@ claude says:
 - The iterable is a tuple LITERAL (`for (x : (7,4,2))`) or a tuple VARIABLE
   (`for (x : tuple)`). A variable is iterated IN PLACE — no copy — so a by-mutable-
   reference loop var writes back to it. A literal is spilled to a temp.
-- by value (`x`) or by reference (`T^ p`); by value when ambiguous. The loop var's
-  type must match the slot type T. The element type for a typeless `x` is inferred
-  (the iterator/loop var are synthesized typeless and classify fills T).
+- by value (`x`) or by reference (`T^ p`); by value when ambiguous. A NON-PRIMITIVE
+  slot type (a nested tuple, a class) FORCES a reference — there is no by-value copy;
+  the by-ref var aliases the slot in place (`sub^` re-iterates a nested tuple, `ref^.x_`
+  reads a class slot). The loop var's type must match the slot type T; a typeless `x`
+  infers it (iterator + loop var are synthesized typeless and classify fills T).
 - (todo: by-reference-to-const enforcement for a literal — needs const pointers
-  [Phase 6]; rejecting a heterogeneous tuple LITERAL; non-primitive element types
-  [Phase 5, forced by-ref].)
+  [Phase 6]; rejecting a heterogeneous tuple LITERAL.)
 */
 
 /* a function returning a tuple — for the rvalue-spill case. */
@@ -229,6 +230,16 @@ int32 main() {
     ((int[kFN], int), (int[kFN], int)) pairs = (((1,2,3), 10), ((4,5,6), 20));
     for ((int[kFN], int)^ e : pairs) {
         __println("pair= " + e^[0][2] + " " + e^[1]);   // 3 10  then  6 20
+    }
+
+    {
+        Class(int x_) { }
+        tuple = (Class(1), Class(2), Class(3));
+        __print("tuple = (");
+        for (ref : tuple) {
+            __print(" " + ref^.x_);
+        }
+        __println(" )");
     }
 
     return 0;

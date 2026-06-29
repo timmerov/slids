@@ -21,3 +21,4 @@ float= 7
 call_spill= 15
 pair= 3 10
 pair= 6 20
+tuple = ( 1 2 3 )
