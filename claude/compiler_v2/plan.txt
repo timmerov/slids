@@ -612,17 +612,19 @@ Phase 4 — types beyond primitives
     in the other to ANY depth (`Class:Ns:Inner`, `Ns:Class:Ns2`...). Program scope is
     the implicit global namespace: parseProgram parses its members through the SAME
     dispatch as a namespace body (parseNamespaceMember → parseDefinitionMember). The
-    parse, desugar, classify stages + resolve's BODY phase are UNIFIED — one recursive
-    routine each over a brace body (parseDefinitionMember / flattenScope /
-    classifyScope / resolveScopeBodies), so a new block kind or member feature lands
-    once and works in every scope. RESOLVE's REGISTRATION side is the remaining holdout
-    (step 2): the body merge (resolveScopeBodies) landed and deleted the body arms +
-    bundled inits/defaults, but registration still runs parallel namespace/class
-    pipelines + the registration arms (collectNamespaceClasses,
-    registerNestedNamespaceClasses) — a global name-phase + types-phase split is the
-    remaining work, which also fixes two forward-ref bugs (todo.txt: RESOLVE SCOPE
-    UNIFICATION + BUGS). Canon: test_v2/misc/namespace.sl (class-in-namespace, forward
-    refs, lifecycle, heap, array, local), test_v2/class/namespace_cls.sl
+    parse, desugar, classify stages + resolve's BODY and TYPES phases are UNIFIED — one
+    recursive routine each over a brace body (parseDefinitionMember / flattenScope /
+    classifyScope / resolveScopeBodies / resolveScopeTypes), so a new block kind or
+    member feature lands once and works in every scope. Resolve's BODY merge (step 1)
+    and TYPES phase (step 2a) landed: signature types now resolve AFTER all names, which
+    FIXED two forward-ref bugs (a namespace member / method signature can name any class
+    regardless of order). The only remaining holdout is the registration TOPOLOGY
+    (step 2b): parallel namespace/class name-registration pipelines + the registration
+    arms (collectNamespaceClasses, registerNestedNamespaceClasses) — a single recursive
+    NAME phase (registerScopeNames) feeding resolveScopeTypes, then deleting the arms.
+    Pure structural cleanup now (the bugs are fixed); todo.txt: RESOLVE SCOPE
+    UNIFICATION. Canon: test_v2/misc/namespace.sl (class-in-namespace, forward refs,
+    lifecycle, heap, array, local), test_v2/class/namespace_cls.sl
     (namespace-in-class, `Class:Ns:Inner`).
   * enums — LANDED. `enum [type] [Name] ( m1 [= v], ... )`, type-first (default
     int), optional name. Lowered at RESOLVE: named → a kNamespace whose

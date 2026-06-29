@@ -783,8 +783,8 @@ NAMESPACE ↔ CLASS — ONE SCOPE ABSTRACTION (landed; spans parse / desugar / c
     const inits) and recurses into nested namespaces AND classes through itself;
     run() calls it once on the program (replaced classifyNamespace +
     classifyClassMemberBodies + their cross-arms).
-  * RESOLVE — BODY side UNIFIED (step 1, landed); REGISTRATION side remains (step 2;
-    todo.txt: RESOLVE SCOPE UNIFICATION).
+  * RESOLVE — BODY phase + TYPES phase UNIFIED (steps 1 + 2a, landed); registration
+    TOPOLOGY remains (step 2b; todo.txt: RESOLVE SCOPE UNIFICATION).
     - STEP 1 (done): resolveScopeBodies(node, isClass) is the one recursive body-phase
       routine for any scope — it resolved away resolveNamespaceBodies +
       resolveClassMemberBodies + the bundled resolveClassMemberInits/FieldDefaults +
@@ -792,23 +792,31 @@ NAMESPACE ↔ CLASS — ONE SCOPE ABSTRACTION (landed; spans parse / desugar / c
       2-class / 2-ns passes collapsed into one resolveScopeBodies sweep over file
       classes + namespaces; registerLocalClasses + the local-namespace stmt case call
       it too. The intrinsic per-scope bits are an isClass config (a class resolves its
-      field-default exprs + injects the `_$recv` method-param type + sets method_fields
-      for self-binding; a namespace resets method_fields so a free function nested in a
-      class body does NOT self-bind — a latent bug the merge fixed). All member
-      inits/defaults now run in the body phase (every entry exists by then, so order
-      is free).
-    - STEP 2 (remaining): the REGISTRATION pipelines are still parallel —
-      registerNamespaceTree / registerMemberSignature vs registerClassName /
-      registerClassMembers / registerClassBody — bridged by the registration ARMS +
-      collectNamespaceClasses / registerNestedNamespaceClasses. Unify = split into a
-      global NAME phase (entries + frames + slotless kSlid + placeholder ClassInfo, NO
-      type resolution) then a global TYPES phase (resolve every declared type — field
-      types, function/method/const SIGNATURE types, alias targets — now that all names
-      exist, writing back to entries), recurse uniformly, delete the namespace pipeline
-      + arms. This fixes the two forward-ref BUGS by construction (todo.txt: a
-      namespace member / method signature can't name a class because its signature
-      type resolves before all class names exist). The intrinsic per-scope differences
-      (field tuple, method receiver, no-reopen for a class) stay as the isClass config.
+      field-default exprs + sets method_fields for self-binding; a namespace resets
+      method_fields so a free function nested in a class body does NOT self-bind — a
+      latent bug the merge fixed). All member inits/defaults now run in the body phase.
+    - STEP 2a (done): resolveScopeTypes(node, isClass) is the TYPES phase. Member
+      SIGNATURE types — a member const's type, a function's/method's param + return
+      types — no longer resolve during REGISTRATION: registerMemberSignature /
+      registerClassMembers create the entry with PROVISIONAL types, and resolveScopeTypes
+      (pass 1a-types in run(), + the local-class / local-namespace paths) resolves them
+      AFTER every name across every scope exists and writes back to the entry, recursing
+      all nested scopes. resolveScopeBodies no longer touches params. This FIXED the two
+      forward-ref bugs: a namespace member or a method signature can now name ANY class
+      regardless of declaration/pass order (the bug was "signature type resolved before
+      all class names exist"). Class FIELD types still resolve in registerClassBody;
+      member alias targets still resolve at registration.
+    - STEP 2b (remaining — pure structural cleanup, no behavior change): the registration
+      TOPOLOGY is still two parallel pipelines — registerNamespaceTree /
+      registerMemberSignature vs registerClassName / registerClassMembers — bridged by
+      the registration ARMS + collectNamespaceClasses / registerNestedNamespaceClasses.
+      Finish = one recursive NAME phase (registerScopeNames: entries + frames + slotless
+      kSlid + placeholder ClassInfo) feeding the existing resolveScopeTypes (moving class
+      FIELD types + member ALIAS targets into TYPES too), then deleting registerClassMembers,
+      registerNamespaceTree, registerMemberSignature, registerNestedNamespaceClasses,
+      collectNamespaceClasses, and the arms. The isClass config (field tuple, method
+      receiver, no-reopen) is the only split that stays. 2a already fixed the visible bugs,
+      so this is the last cross-wiring deletion, not a capability change.
 
 
 STAGE FILES (.h / .cpp pairs)
