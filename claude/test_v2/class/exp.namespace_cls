@@ -7,3 +7,5 @@ Box:Util:kScale = 10
 Box:Util:Deep:kZ = 7
 crate first = 700
 Crate:Bin:Item = 55
+useW = 7
+gauge = 5

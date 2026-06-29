@@ -381,6 +381,10 @@ file-scope negative cases — whole enum decls, so they sit outside main
 //-EXPECT-ERROR: Duplicate declaration of 'kX'
 //enum Dup ( kX, kX );
 
+/* the duplicate carries a 'first declared here' note pointing at the first kX. */
+//-EXPECT-ERROR: first declared here
+//enum Dup2 ( kX, kX );
+
 /* the underlying type is not a known type. */
 //-EXPECT-ERROR: Unknown type 'Nope'
 //enum Nope Bad ( kA );

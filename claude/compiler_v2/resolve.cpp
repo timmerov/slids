@@ -698,6 +698,22 @@ int openNamespace(parse::Tree& tree, std::string const& name, int name_tok,
     return fid;
 }
 
+// Every member kind a namespace/class body may hold (parse emits only these). The
+// scope phases assert this at each member (NO silent defaults — an unhandled kind is
+// a parse/compiler bug, not a quiet skip), then handle the kinds relevant to that
+// phase and legitimately no-op the rest (e.g. an alias has no BODY). A non-const
+// var-decl member would be a GLOBAL — parse rejects it today; when globals land
+// (Phase 8) they get explicit handling, so the assert flags the gap loudly.
+bool isScopeMember(parse::Node const& m) {
+    return m.kind == parse::Kind::kClassDef
+        || m.kind == parse::Kind::kNamespaceDecl
+        || m.kind == parse::Kind::kEnumDecl
+        || m.kind == parse::Kind::kAliasDecl
+        || m.kind == parse::Kind::kFunctionDef
+        || m.kind == parse::Kind::kFunctionDecl
+        || (m.kind == parse::Kind::kVarDeclStmt && m.is_const);
+}
+
 // The BODY phase for ONE scope (a namespace, a class, or — recursing — either
 // nested in the other to any depth), with its frame OPEN. Resolves, in member
 // order: a class's field-default exprs and its const/enum-member inits; every
@@ -736,9 +752,11 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
     }
     for (auto& m : node.children) {
         if (!m) continue;
+        assert(isScopeMember(*m) && "unexpected scope-member kind in BODY phase");
         if (m->kind == parse::Kind::kFunctionDef) {
             // Signature types (incl. the `_$recv` receiver) were resolved in the
-            // TYPES phase (resolveScopeTypes); the body is resolved here.
+            // TYPES phase (resolveScopeTypes); the body is resolved here. A
+            // kFunctionDecl (forward decl) has no body — legitimately no-op'd below.
             resolveFunctionBody(tree, *m, diag, /*nested=*/false);
         } else if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
             for (auto& init : m->children) {
@@ -787,6 +805,7 @@ void resolveScopeTypes(parse::Tree& tree, parse::Node& node, bool isClass,
     if (isClass) registerClassBody(tree, node, diag);
     for (auto& m : node.children) {
         if (!m) continue;
+        assert(isScopeMember(*m) && "unexpected scope-member kind in TYPES phase");
         if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
             if (m->resolved_entry_id < 0) continue;   // a duplicate — skipped at NAMES
             resolveDeclType(tree, m->return_type, m->file_id, m->tok, diag);
@@ -798,10 +817,14 @@ void resolveScopeTypes(parse::Tree& tree, parse::Node& node, bool isClass,
             tree.entries[m->resolved_entry_id].slids_type = m->return_type;
         } else if (m->kind == parse::Kind::kFunctionDef
                 || m->kind == parse::Kind::kFunctionDecl) {
-            // Resolve param + return types on the NODE (incl. a method's `_$recv`
-            // and ctor/dtor params — the class kSlid is a known type by now). A
-            // non-hook member also has an ENTRY whose signature is written back,
-            // index-aligned with the node's params.
+            // ctor/dtor hooks have no entry but still need their `_$recv` param typed
+            // for the body; a DUPLICATE member (entry skipped at NAME) is done — skip
+            // it so a bad type doesn't pile a second diagnostic on the dup error.
+            bool isHook = m->name == "_$ctor" || m->name == "_$dtor";
+            if (m->resolved_entry_id < 0 && !isHook) continue;
+            // Resolve param + return types on the NODE (incl. a method's `_$recv` —
+            // the class kSlid is a known type by now); write the signature back to a
+            // non-hook member's ENTRY, index-aligned with the node's params.
             resolveDeclType(tree, m->return_type, m->file_id, m->tok, diag);
             std::vector<widen::TypeRef> ptypes;
             for (auto& p : m->params) {
@@ -869,9 +892,11 @@ void resolveInlineQualifiedDecl(parse::Tree& tree, parse::Node& s,
             "A const variable of a non-scalar type (array, tuple, class, or "
             "pointer) requires global storage, which is not yet supported.", {}});
     }
-    if (findMemberDeclared(tree, frame, s.name) >= 0) {
+    if (int prev = findMemberDeclared(tree, frame, s.name); prev >= 0) {
+        parse::Entry const& pe = tree.entries[prev];
         diagnostic::report(diag, {s.file_id, s.name_tok,
-            "Duplicate declaration of '" + s.name + "'.", {}});
+            "Duplicate declaration of '" + s.name + "'.",
+            {{pe.file_id, pe.tok, "first declared here"}}});
         return;
     }
     parse::Entry e;
@@ -994,12 +1019,14 @@ void registerEnumMembers(parse::Tree& tree, parse::Node& node, int ns_frame,
         steps++;
         ordinal++;
 
-        bool dup = (ns_frame >= 0)
-            ? (findMemberDeclared(tree, ns_frame, m->name) >= 0)
-            : (parse::findInFrame(tree, parse::currentFrameId(tree), m->name) >= 0);
-        if (dup) {
+        int prev = (ns_frame >= 0)
+            ? findMemberDeclared(tree, ns_frame, m->name)
+            : parse::findInFrame(tree, parse::currentFrameId(tree), m->name);
+        if (prev >= 0) {
+            parse::Entry const& pe = tree.entries[prev];
             diagnostic::report(diag, {m->file_id, m->name_tok,
-                "Duplicate declaration of '" + m->name + "'.", {}});
+                "Duplicate declaration of '" + m->name + "'.",
+                {{pe.file_id, pe.tok, "first declared here"}}});
             continue;
         }
         parse::Entry e;
@@ -3568,9 +3595,12 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
                         std::vector<parse::Node*>& classes,
                         diagnostic::Sink& diag) {
     auto isDup = [&](parse::Node& m) {
-        if (findMemberDeclared(tree, frame, m.name) >= 0) {
+        int prev = findMemberDeclared(tree, frame, m.name);
+        if (prev >= 0) {
+            parse::Entry const& pe = tree.entries[prev];
             diagnostic::report(diag, {m.file_id, m.name_tok,
-                "Duplicate declaration of '" + m.name + "'.", {}});
+                "Duplicate declaration of '" + m.name + "'.",
+                {{pe.file_id, pe.tok, "first declared here"}}});
             return true;
         }
         return false;
@@ -3579,9 +3609,11 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
     // bare via the scope frame stack.
     tree.open_ns_frames.push_back(frame);
     // Type names first: nested classes (name-only, collected for the body phase),
-    // nested namespace frames, enums.
+    // nested namespace frames, enums. (This loop visits every child, so the assert
+    // guards the whole member set — NO silent default — for all three sub-passes.)
     for (auto& m : node.children) {
         if (!m) continue;
+        assert(isScopeMember(*m) && "unexpected scope-member kind in NAME phase");
         if (m->kind == parse::Kind::kClassDef) {
             registerClassName(tree, *m, diag, frame);
             classes.push_back(m.get());

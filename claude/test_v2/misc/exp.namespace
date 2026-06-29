@@ -14,6 +14,8 @@ Meter:ctor 4
 Meter:dtor 4
 amp = 12
 knob = 10
+cnt = 12 cn = 3
+sized = 8
 tag = 42
 Tracked:ctor 77
 Tracked:dtor 77

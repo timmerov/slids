@@ -71,6 +71,29 @@ Crate(int lot_) {
     }
 }
 
+/* a METHOD signature typed by a sibling class defined LATER (Widget) — a regression
+   for the forward-ref fix: a member signature type resolves after every name exists,
+   so it may name any class regardless of order. */
+Caller(int h_) {
+    int useW(Widget^ w) { return w^.val(); }
+}
+Widget(int v_) {
+    int val() { return v_; }
+}
+
+/* a class FIELD typed by a host MEMBER ALIAS (Reading) — aliases resolve first in
+   the TYPES phase, with the host frame open, so the field type expands the alias. */
+Gauge(int n_) {
+    alias Reading = int;
+    Dial(Reading r_) {
+        int read() { return r_; }
+    }
+    int show() {
+        Dial d(n_);
+        return d.read();
+    }
+}
+
 int32 main() {
 
     Space:Float press = 101.325;
@@ -99,6 +122,15 @@ int32 main() {
     __println("crate first = " + cr.first());
     Crate:Bin:Item di(55);
     __println("Crate:Bin:Item = " + di.sku());
+
+    /* a method signature forward-references a sibling class. */
+    Caller ho(0);
+    Widget wg(7);
+    __println("useW = " + ho.useW(wg));
+
+    /* a class field typed by a host member alias. */
+    Gauge gg(5);
+    __println("gauge = " + gg.show());
 
     return 0;
 }

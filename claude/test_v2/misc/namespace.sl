@@ -188,6 +188,21 @@ int local_ns_class() {
     return c.size();
 }
 
+/* a namespace member ALIAS (the uniform vocabulary — alias is a member kind here
+   just as in a class body), and a namespace function whose SIGNATURE names a class
+   defined LATER (Span) — a regression for the forward-ref fix: member signature
+   types resolve after every name exists, so they may name any class regardless of
+   order. */
+Space {
+    alias Count = int;
+    const Count kCountBase = 12;
+    Count counted() { return kCountBase; }
+    int sized(Span^ s) { return s^.len(); }
+}
+Span(int len_) {
+    int len() { return len_; }
+}
+
 int32 main() {
 
     int x = Space:bar();
@@ -250,6 +265,15 @@ int32 main() {
     /* a class in a nested namespace. */
     A:B:Knob kb(9);
     __println("knob = " + kb.turn());
+
+    /* a namespace member alias used as a qualified type, + a namespace function
+       returning it (Count = int). */
+    Space:Count cn = 3;
+    __println("cnt = " + Space:counted() + " cn = " + cn);
+
+    /* a namespace function whose param is a class defined later (forward-ref). */
+    Span sp(8);
+    __println("sized = " + Space:sized(sp));
 
     /* an empty namespace class. */
     Space:Tag tg;
@@ -321,3 +345,8 @@ int32 main() {
 /* compile error: a namespace class field naming an unknown type. */
 //-EXPECT-ERROR: Unknown type 'Nope'.
 //Space { BadField(Nope n_){} }
+
+/* compile error: a duplicate namespace member carries a 'first declared here' note
+   pointing at the earlier declaration (the runner matches the note's text). */
+//-EXPECT-ERROR: first declared here
+//Space { const int kDupMember = 1; const int kDupMember = 2; }
