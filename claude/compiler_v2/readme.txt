@@ -649,12 +649,12 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
   * SCOPE-AWARE MEMBER RESOLUTION (name-then-resolve, frames open) — NOT a leniency.
     A type name resolves via resolveName (open-ns chain + lexical-with-owner<0), not
     a frame-blind any-live-entry lookup. For that to be correct, member TYPES must
-    resolve with the enclosing frame OPEN: registerScopeNames (the NAME phase recurses
-    with frames open) and the flat field-BODY / TYPES / BODY passes (registerClassBody
-    via openOwnerChain, resolveScopeTypes / resolveScopeBodies via their recursion) each
-    open the enclosing chain around the member-type / body resolution (names were
-    registered first — type-introducing
-    members before consts — so forward refs resolve). Result: a member type resolves
+    resolve with the enclosing frame OPEN: the NAME (registerScopeNames), TYPES
+    (resolveScopeTypes — incl. field types via registerClassBody), and BODY
+    (resolveScopeBodies) phases all RECURSE through the scope tree, so the enclosing
+    frame chain is naturally on the stack at every member-type / body resolution (names
+    were registered first — all names before any type — so forward refs resolve).
+    Result: a member type resolves
     bare only where its frame is open (inside the host); a bare member type at file
     scope FAILS — "'Inner' needs a namespace qualifier" when it IS a member-type
     elsewhere (namespaceMemberTypeExists — class/alias/enum, NOT a const/function),
@@ -786,28 +786,32 @@ NAMESPACE ↔ CLASS — ONE SCOPE ABSTRACTION (landed; spans parse / desugar / c
     classifyClassMemberBodies + their cross-arms).
   * RESOLVE — FULLY UNIFIED (NAME + TYPES + BODY phases). Three recursive routines over
     a scope, each with an isClass config; the parallel namespace/class pipelines and all
-    cross-arms are GONE. Run() does: global NAME phase -> global field-BODY phase -> cycle
-    -> needs-fixpoint -> TYPES phase -> function entries -> BODY phase.
+    cross-arms are GONE. Run() does: global NAME -> global TYPES -> cycle -> needs-fixpoint
+    -> function entries -> BODY.
     - NAME phase — registerScopeNames(node, frame, classes): one recursive walk
-      registers every member NAME / entry (const/function/method/alias/enum), opens
-      nested namespace frames, and registers nested class NAMES (slotless kSlid +
-      placeholder ClassInfo via name-only registerClassName), recursing through nested
-      namespaces AND classes. Member entries carry PROVISIONAL signature types. Every
-      class NODE (file / namespace-nested / hoisted, any depth) is collected so the
-      caller runs the field-BODY phase after ALL names — the global two-phase that lets a
-      field forward-reference any class in any scope. Replaced registerClassMembers +
+      registers every member NAME / entry (const/function/method/alias/enum) with
+      PROVISIONAL types, opens nested namespace frames, and registers nested class NAMES
+      (slotless kSlid + placeholder ClassInfo via name-only registerClassName), recursing
+      through nested namespaces AND classes. NO declared type is resolved here. Every
+      class NODE (file / namespace-nested / hoisted, any depth) is collected so cycle +
+      the needs-fixpoint can sweep them after TYPES. Replaced registerClassMembers +
       registerNamespaceTree + registerMemberSignature + collectNamespaceClasses +
       registerNestedNamespaceClasses (all DELETED) and the registration arms.
-    - field-BODY phase — registerClassBody over the collected class list (registerClassBodies
-      bundles it + cycle + transitive-needs fixpoint for a LOCAL set). registerClassBody now
-      reopens the enclosing frame chain (openOwnerChain) because it runs in a FLAT loop,
-      not inside the name recursion — so a hoisted class's field naming a host sibling
-      (`Ring { Ping(Pong^) Pong(Ping^) }`) still resolves bare.
-    - TYPES phase — resolveScopeTypes(node, isClass): resolves member SIGNATURE types (a
-      const's type, a function's/method's param + return types) AFTER every name exists,
-      writing back to the entry, recursing with frames open. This is why a namespace
-      member or a method signature can name ANY class regardless of order (the old
-      forward-ref bugs). Member alias targets still resolve at registration.
+    - TYPES phase — resolveScopeTypes(node, isClass): now that EVERY name exists, resolve
+      EVERY declared type with the scope frame open — member alias TARGETS first, then a
+      class's FIELD types (via the now frame-agnostic registerClassBody, attaching slots),
+      then const + function/method SIGNATURE types — writing back to the entries, recursing
+      into nested namespaces AND classes. Because it recurses with the frame stack open, a
+      field / signature naming a hoisted member or an enclosing-scope sibling bare
+      (`Ring { Ping(Pong^) Pong(Ping^) }`) resolves with NO frame-chain reopening (the old
+      openOwnerChain workaround — needed only while a FLAT field loop ran outside the
+      recursion — is DELETED). Resolving all types AFTER all names is what lets a member
+      type name ANY class regardless of order (the old forward-ref bugs); a field may even
+      be typed by a host member alias (aliases resolve first).
+    - cycle + needs-fixpoint — checkClassByValueAcyclic over the collected classes + the
+      transitive ctor/dtor fixpoint over tree.classes, after TYPES (field slots attached).
+      checkClassCyclesAndNeeds bundles cycle + a local fixpoint for a function-body /
+      local-namespace class set.
     - BODY phase — resolveScopeBodies(node, isClass): field-default exprs, const/enum-member
       inits, and every member function body, recursing.
     A side effect of the uniform vocabulary: a namespace now accepts MEMBER ALIASES

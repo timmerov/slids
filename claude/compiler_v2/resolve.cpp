@@ -590,8 +590,9 @@ void registerLocalClasses(parse::Tree& tree,
                           diagnostic::Sink& diag);
 void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
                         std::vector<parse::Node*>& classes, diagnostic::Sink& diag);
-void registerClassBodies(parse::Tree& tree, std::vector<parse::Node*> const& classes,
-                         diagnostic::Sink& diag);
+void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag);
+void checkClassCyclesAndNeeds(parse::Tree& tree, std::vector<parse::Node*> const& classes,
+                              diagnostic::Sink& diag);
 void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
                         diagnostic::Sink& diag);
 void resolveScopeTypes(parse::Tree& tree, parse::Node& node, bool isClass,
@@ -756,15 +757,15 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
 }
 
 // The TYPES phase for ONE scope: now that EVERY name across every scope exists (the
-// registration / NAME phase ran), resolve each member's DECLARED signature types —
-// a const's type, a function's/method's param + return types — with the scope frame
-// OPEN (a sibling member resolves bare), and write the resolved types BACK to the
-// member's entry. Recurses into nested namespaces AND classes. This is what lets a
-// namespace member or a method signature name ANY class regardless of registration
-// order (the two forward-ref bugs): the type resolves AFTER all names, not during
-// registration. (Class FIELD types still resolve in registerClassBody; enums are
-// self-contained; member aliases resolve at registration — those move here in the
-// step-2b pipeline merge.)
+// NAME phase ran), resolve EVERY declared type with the scope frame OPEN — member
+// alias targets, then a class's FIELD types (via registerClassBody, attaching slots),
+// then const types and function/method param + return types — writing the resolved
+// types BACK to the member entries. Recurses into nested namespaces AND classes, so
+// the enclosing frame chain is naturally on the stack (a field / signature may name a
+// hoisted member or an enclosing-scope sibling bare — NO frame-chain reopening). This
+// is what lets a member type name ANY class regardless of order (the forward-ref
+// bugs): types resolve AFTER all names, not during registration. (Enums are
+// self-contained, resolved at NAME.)
 void resolveScopeTypes(parse::Tree& tree, parse::Node& node, bool isClass,
                        diagnostic::Sink& diag) {
     int frame = isClass
@@ -773,6 +774,17 @@ void resolveScopeTypes(parse::Tree& tree, parse::Node& node, bool isClass,
         : node.resolved_entry_id;
     if (frame < 0) return;
     tree.open_ns_frames.push_back(frame);
+    // Member alias TARGETS first, so a later const / field / signature type in this
+    // scope may name a member alias.
+    for (auto& m : node.children) {
+        if (!m || m->kind != parse::Kind::kAliasDecl) continue;
+        if (m->resolved_entry_id < 0) continue;   // a duplicate — skipped at NAMES
+        resolveDeclType(tree, m->return_type, m->file_id, m->tok, diag);
+        tree.entries[m->resolved_entry_id].slids_type = m->return_type;
+    }
+    // A class's FIELD types (resolve + attach slots). The frame is open, so a field
+    // may name a hoisted member / enclosing sibling bare with no chain reopening.
+    if (isClass) registerClassBody(tree, node, diag);
     for (auto& m : node.children) {
         if (!m) continue;
         if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
@@ -2522,10 +2534,10 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             if (ns >= 0) {
                 s.resolved_entry_id = ns;
                 std::vector<parse::Node*> classes;
-                registerScopeNames(tree, s, ns, classes, diag);
-                registerClassBodies(tree, classes, diag);
-                resolveScopeTypes(tree, s, /*isClass=*/false, diag);
-                resolveScopeBodies(tree, s, /*isClass=*/false, diag);
+                registerScopeNames(tree, s, ns, classes, diag);        // NAME
+                resolveScopeTypes(tree, s, /*isClass=*/false, diag);   // TYPES (+ fields)
+                checkClassCyclesAndNeeds(tree, classes, diag);         // cycle + needs
+                resolveScopeBodies(tree, s, /*isClass=*/false, diag);  // BODY
             }
             return Completion::Normal;
         }
@@ -3585,15 +3597,15 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
             registerEnum(tree, *m, frame, diag);
         }
     }
-    // Member aliases — the target resolves now that sibling type names exist.
+    // Member aliases — entry with a PROVISIONAL target (resolveScopeTypes resolves
+    // the target after all names exist, so an alias may name any class).
     for (auto& m : node.children) {
         if (!m || m->kind != parse::Kind::kAliasDecl) continue;
         if (isDup(*m)) continue;
-        resolveDeclType(tree, m->return_type, m->file_id, m->tok, diag);
         parse::Entry e;
         e.kind = parse::EntryKind::kAlias;
         e.name = m->name;
-        e.slids_type = m->return_type;
+        e.slids_type = m->return_type;   // provisional
         e.file_id = m->file_id;
         e.tok = m->name_tok;
         e.owner_ns_frame = frame;
@@ -3705,37 +3717,16 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     (void)cls_frame;
 }
 
-// Open the enclosing namespace/class frame chain for a member owned by `owner`
-// (outermost first) and return the count pushed. The global NAME phase recurses
-// with frames open, but the field-BODY / TYPES passes run as FLAT loops over
-// collected classes — so a hoisted/nested class's field or signature that names an
-// ENCLOSING-scope sibling bare (`Ring { Ping(Pong^) Pong(Ping^) }`) needs the host
-// frames reopened here. Walks owner_ns_frame up via the entry that owns each frame.
-int openOwnerChain(parse::Tree& tree, int owner) {
-    if (owner < 0 || owner == kGlobalFrame) return 0;
-    int grandparent = -1;
-    for (parse::Entry const& e : tree.entries)
-        if (e.ns_frame_id == owner) { grandparent = e.owner_ns_frame; break; }
-    int n = openOwnerChain(tree, grandparent);
-    tree.open_ns_frames.push_back(owner);
-    return n + 1;
-}
-
-// Phase 2: resolve the field types (every sibling class name is known now, so a
-// forward field reference validates) and attach the slots to the class's handle.
-// Direct ctor/dtor needs are set here; TRANSITIVE needs are widened afterwards
-// (the file-scope fixpoint in run(), or registerLocalClasses for a local class).
+// Resolve the field types (every class name is known now, so a forward field
+// reference validates) and attach the slots to the class's handle; set the direct
+// ctor/dtor needs. The CALLER (resolveScopeTypes) has already pushed this class's
+// frame AND its enclosing chain (the TYPES recursion), so a field may name a hoisted
+// member / enclosing sibling bare — this routine touches no frames.
 void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag) {
     if (node.resolved_entry_id < 0) return;        // a duplicate (Phase 1 skipped it)
     widen::TypeRef type = node.return_type;
     parse::ClassInfo& info = tree.classes.at(widen::strip(type));
     int def_id = widen::get(widen::strip(type)).def_id;
-    // Open this class's OWN frame while resolving its FIELD types, so a field may
-    // name one of the class's hoisted members bare (`Outer(Inner i_)`) — the same
-    // scope the ctor/dtor bodies see. The members were registered in Phase 1.
-    int self_frame = tree.entries[node.resolved_entry_id].ns_frame_id;
-    int owner_pushed = openOwnerChain(tree, tree.entries[node.resolved_entry_id].owner_ns_frame);
-    tree.open_ns_frames.push_back(self_frame);
     std::vector<std::pair<int, int>> field_locs;   // first-seen loc per field name
     for (auto& p : node.params) {
         if (!p) continue;
@@ -3758,8 +3749,6 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
         info.field_params.push_back(p.get());   // stable; default read live later
         field_locs.push_back({p->file_id, p->name_tok});
     }
-    tree.open_ns_frames.pop_back();   // self_frame
-    for (int i = 0; i < owner_pushed; i++) tree.open_ns_frames.pop_back();
     // Constructor / destructor presence (parsed as `_$ctor`/`_$dtor` members).
     bool has_ctor = false, has_dtor = false;
     for (auto& m : node.children) {
@@ -3773,14 +3762,12 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     widen::setSlidLifecycle(type, has_ctor, has_dtor);
 }
 
-// The class BODY phase over a NAME-registered set: resolve field types + attach
-// slots (registerClassBody), reject by-value cycles, then run the transitive
-// ctor/dtor-needs fixpoint over THIS set and publish to the kSlid flags. Driven over
-// a flat list of class nodes collected by registerScopeNames, so all NAMES register
-// before any field BODY — a field forward-references any class in the set / scope.
-void registerClassBodies(parse::Tree& tree, std::vector<parse::Node*> const& classes,
-                         diagnostic::Sink& diag) {
-    for (parse::Node* c : classes) registerClassBody(tree, *c, diag);
+// Reject by-value cycles and run the transitive ctor/dtor-needs fixpoint over a
+// class set whose field types were already resolved by resolveScopeTypes (the TYPES
+// phase). Used for a LOCAL set (a function-body class / local namespace), which the
+// whole-program fixpoint in run() doesn't sweep.
+void checkClassCyclesAndNeeds(parse::Tree& tree, std::vector<parse::Node*> const& classes,
+                              diagnostic::Sink& diag) {
     for (parse::Node* c : classes) checkClassByValueAcyclic(tree, *c, diag);
     bool changed = true;
     while (changed) {
@@ -3868,12 +3855,12 @@ void registerLocalClasses(parse::Tree& tree,
             fresh.push_back(s.get());
     }
     if (fresh.empty()) return;
-    // NAME phase: each local class name + its members (recursing, collecting nested
-    // classes into `classes`), then the BODY phase (field types + cycle + the
-    // transitive-needs fixpoint, scoped to this set — the file-scope fixpoint already
-    // ran). Names register before any field body, so a local sibling field forward-
-    // references a later sibling. TYPES + BODY then run over the top-level fresh set
-    // (resolveScopeTypes/Bodies recurse into nested scopes).
+    // The four phases over this local set, scoped to a function body's lifetime:
+    // NAME (each local class name + its members, recursing + collecting nested) ->
+    // TYPES (resolveScopeTypes resolves aliases + FIELD types + signatures, recursing)
+    // -> cycle + needs-fixpoint over the collected set (the whole-program fixpoint in
+    // run() doesn't sweep a local set) -> BODY. Names register before any field type,
+    // so a local sibling field forward-references a later sibling.
     std::vector<parse::Node*> classes;
     for (parse::Node* c : fresh) {
         registerClassName(tree, *c, diag);   // local scope: def_id via currentFrameId
@@ -3882,8 +3869,8 @@ void registerLocalClasses(parse::Tree& tree,
             registerScopeNames(tree, *c,
                 tree.entries[c->resolved_entry_id].ns_frame_id, classes, diag);
     }
-    registerClassBodies(tree, classes, diag);
     for (parse::Node* c : fresh) resolveScopeTypes(tree, *c, /*isClass=*/true, diag);
+    checkClassCyclesAndNeeds(tree, classes, diag);
     for (parse::Node* c : fresh) resolveScopeBodies(tree, *c, /*isClass=*/true, diag);
 }
 
@@ -4056,27 +4043,23 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         }
     }
 
-    // Pass 1a-bodies — the global field-BODY phase: now that EVERY class name exists,
-    // resolve each class's field types + attach slots (a field may forward-reference
-    // any class, in any scope), then reject by-value size cycles. The transitive
-    // ctor/dtor-needs fixpoint runs below over tree.classes (covers this whole set).
-    for (parse::Node* c : all_classes) registerClassBody(tree, *c, diag);
-    for (parse::Node* c : all_classes) checkClassByValueAcyclic(tree, *c, diag);
-
-    // Pass 1a-types — the TYPES phase: every namespace/class NAME now exists (the
-    // registration passes above ran), so resolve every member SIGNATURE type — a
-    // namespace/class member const's type, a function's/method's param + return
-    // types — recursing through every nested namespace AND class. Deferring these
-    // out of registration is what lets a namespace member or a method signature name
-    // any class regardless of pass order (the two forward-ref bugs). File-scope
-    // function entries (their own pass below) already resolve after classes; class
-    // FIELD types resolved in registerClassBody.
+    // Pass 1a-types — the global TYPES phase: every name now exists, so one recursive
+    // resolveScopeTypes per file-scope namespace/class resolves EVERY declared type —
+    // member alias targets, class FIELD types (attach slots), and const / function /
+    // method SIGNATURE types — recursing with frames open. Deferring all type
+    // resolution out of registration is what lets a member type name ANY class
+    // regardless of pass order (the forward-ref bugs). File-scope function entries
+    // resolve in their own pass below (already after classes).
     for (auto& ch : program->children) {
         if (ch && ch->kind == parse::Kind::kClassDef)
             resolveScopeTypes(tree, *ch, /*isClass=*/true, diag);
         else if (ch && ch->kind == parse::Kind::kNamespaceDecl)
             resolveScopeTypes(tree, *ch, /*isClass=*/false, diag);
     }
+
+    // Pass 1a-cycle — reject infinite-size by-value cycles now that every field type
+    // is resolved + slotted (the transitive needs-fixpoint runs below over tree.classes).
+    for (parse::Node* c : all_classes) checkClassByValueAcyclic(tree, *c, diag);
 
     // Pass 1a-alias-validate — now that enums, namespaces, and classes exist,
     // validate each alias target (an alias may name any of them).

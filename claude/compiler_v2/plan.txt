@@ -622,9 +622,9 @@ Phase 4 — types beyond primitives
     block kind or member feature lands once and works in every scope — `ns:class` correct
     ⟹ `class:ns:class` correct BY CONSTRUCTION. Two forward-ref bugs (a namespace member /
     method signature naming a later class) FIXED by the global NAME-before-TYPES split; a
-    namespace now also accepts member aliases (uniform vocabulary). resolve's NAME phase
-    collects all class nodes for a global field-BODY two-phase (registerClassBody, with
-    openOwnerChain reopening host frames in the flat loop). Canon: test_v2/misc/namespace.sl
+    namespace now also accepts member aliases (uniform vocabulary). resolve runs NAME
+    (names only) -> TYPES (resolveScopeTypes resolves alias targets + field types + sigs,
+    recursing with frames open) -> cycle + needs-fixpoint -> BODY. Canon: test_v2/misc/namespace.sl
     (class-in-namespace, forward refs,
     lifecycle, heap, array, local), test_v2/class/namespace_cls.sl
     (namespace-in-class, `Class:Ns:Inner`).
@@ -722,9 +722,9 @@ Phase 5 — classes
     kClass leaf returns the HANDLE (no spelling round-trip). Sees host namespace
     members (bare + qualified), NOT host fields. The lookup is SCOPE-AWARE
     (resolveName, not a frame-blind any-live-entry lookup): member TYPES resolve with the
-    enclosing frame OPEN (registerScopeNames recurses with frames open; the flat
-    field-BODY / TYPES passes reopen the host chain via openOwnerChain / resolveScopeTypes
-    recursion; names register first), so a bare
+    enclosing frame OPEN — the NAME / TYPES / BODY phases all RECURSE through the scope
+    tree (registerScopeNames / resolveScopeTypes / resolveScopeBodies), so the enclosing
+    chain is on the stack; names register first), so a bare
     member type out of scope FAILS ("needs a namespace qualifier"). Built per the
     name-then-resolve / opaque-body model. Detail: readme + [[project_v2_class_as_namespace]].
   * LOCAL classes (defined in a function body / nested block) — LANDED. A
