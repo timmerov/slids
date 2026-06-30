@@ -886,6 +886,50 @@ NAMESPACE ↔ CLASS — ONE SCOPE ABSTRACTION (landed; spans parse / desugar / c
     (field tuple, method receiver self-binding, no-reopen) is the only split that stays.
 
 
+SINGLE INHERITANCE (landed; spans grammar / resolve / classify; non-virtual)
+
+  `Base : Derived(fields){ body }` declares Derived inheriting Base. THE WHOLE DESIGN
+  is one idea: the base is an UNNAMED FIRST FIELD. grammar.parseClassDef recognizes the
+  `Ident : Ident(...)` head and PREPENDS a synthetic `_$base : Base` param at slot 0, so
+  Derived's layout is `{ Base, own... }`. Because the base is just a class-typed field,
+  EVERYTHING about lifetime rides the existing machinery for free: layout/sizeof,
+  per-field construction, ctor/dtor ORDER (Itanium: base first, derived dtor first —
+  the base is the leading class-typed field), the needs-ctor/dtor fixpoint, and the
+  by-value CYCLE check (an inheritance cycle is just a by-value field cycle —
+  checkClassByValueAcyclic catches it; the resolve/classify base-chain walkers are
+  bounded by class-count so a cyclic chain can't hang before that check fires).
+
+  CONSTRUCTION IS FLAT. The base's fields splice in ahead of the derived's, so
+  `Derived d = (b0, b1, own...)` fills base-then-derived. classifyClassInit walks a
+  RUNNING FLAT INDEX: the `_$base` field consumes flatFieldWidth(base) initializers —
+  0 for a data-less base (only consts/methods), 1 for a single-field base, N for a
+  wider/transitive one — every other field consumes one; a leading base-class VALUE
+  (`(Base(..), own...)`) is detected (same-type) and taken whole instead.
+
+  MEMBER ACCESS. A derived OPENS its whole base chain — resolve.pushBaseChain pushes
+  every ancestor's member frame onto open_ns_frames (deepest-first, so a nearer class
+  shadows a farther one), making inherited STATICS (const/alias/enum) resolve BARE.
+  Inherited FIELDS resolve bare too (resolve.baseFieldDepth rewrites a bare base field
+  to `self._$base...(_$base).field`), and inherited METHODS via classify.inferMethodCall
+  gathering the receiver's class frame + base chain (first frame with the name wins, so
+  a derived same-name member HIDES the base's overload set — C++ name hiding); a base
+  method runs on the derived receiver (the base sub-object is at offset 0 = the same
+  address). The `Base:` QUALIFIER reframes `self` to slot 0: tryResolveBaseQualifier
+  rewrites `Base:self`/`Base:field`/`Base:method()` to `self._$base...X` (parse allows
+  `self` as a `:`-segment; depth from baseClassDepth handles `GrandBase:`), but a
+  `Base:STATIC` is NOT a field access — it's left for the normal qualified-name lookup,
+  which is the disambiguation handle for a shadowed static.
+
+  POINTER CASTS. derived->base is IMPLICIT, base->derived is EXPLICIT `<Derived^>`;
+  both are offset-0 pointer no-ops (classify.ptrBaseUpcastOk on the assignment relation,
+  ptrBaseCastOk on `<T^>`), backed by classBaseType/isTransitiveBase reading the slot-0
+  `_$base` marker. An implicit DOWNcast is rejected.
+
+  DEFERRED: a derived static shadowing a SAME-NAMED base static is bare-ambiguous
+  (qualify to pick) — see todo "OPENED-SCOPE NAME AMBIGUITY". OUT OF SCOPE: virtual,
+  reopen. Canon test_v2/class/inheritance.sl (Stages 1-5 + cast/cycle/hiding negatives).
+
+
 STAGE FILES (.h / .cpp pairs)
 
   lex       text -> tokens. Wraps the scanner in an ImportWrapper that

@@ -624,6 +624,15 @@ struct Parser {
         advance();
         while (peek().kind == token::Kind::kColon) {
             advance();
+            // `Base:self` — the receiver viewed as the base sub-object. `self` (a
+            // reserved word) is allowed as a qualified-name segment; resolve reframes
+            // `Base:self` to `self._$base`.
+            if (peek().kind == token::Kind::kSelf) {
+                segments.push_back("self");
+                toks.push_back(pos);
+                advance();
+                continue;
+            }
             if (peek().kind != token::Kind::kIdentifier) {
                 error("Expected a name after ':'.");
                 return false;
@@ -2718,9 +2727,16 @@ struct Parser {
     // nothing.
     bool looksLikeClassDef() const {
         if (peekKind(0) != token::Kind::kIdentifier) return false;
-        if (peekKind(1) != token::Kind::kLParen) return false;
+        // A derived class: `Base : Derived(field-list) { body }` — the field list
+        // starts after `Base : Derived` (offset 3). A non-derived class starts at 1.
+        int start = 1;
+        if (peekKind(1) == token::Kind::kColon
+            && peekKind(2) == token::Kind::kIdentifier) {
+            start = 3;
+        }
+        if (peekKind(start) != token::Kind::kLParen) return false;
         int depth = 0;
-        for (int i = 1; ; i++) {
+        for (int i = start; ; i++) {
             token::Kind k = peekKind(i);
             if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput)
                 return false;
@@ -2865,14 +2881,42 @@ struct Parser {
         int cls_tok = pos;
         std::string name = peek().text;
         int name_tok = pos;
-        advance();   // class name
+        advance();   // class (or base) name
+        // `Base : Derived(...)` — the leading name was the BASE; the real class name
+        // follows the `:`. Store the base name on the node (text); resolve prepends
+        // it as the unnamed first field.
+        std::string base_name;
+        if (peek().kind == token::Kind::kColon) {
+            advance();   // :
+            base_name = name;
+            if (peek().kind != token::Kind::kIdentifier) {
+                error("Expected the derived class name after 'Base :'.");
+                return nullptr;
+            }
+            name = peek().text;
+            name_tok = pos;
+            advance();   // derived class name
+        }
         if (!expect(token::Kind::kLParen, "(")) return nullptr;
 
         auto node = newNodeAt(parse::Kind::kClassDef, cls_file, cls_tok);
         node->name = name;
         node->name_tok = name_tok;
+        node->text = base_name;          // "" if not derived
 
         if (!parseParamList(node.get(), /*allow_mutable=*/false)) return nullptr;
+        // A derived class carries its base as the UNNAMED FIRST FIELD `_$base` of
+        // type Base: the layout becomes [Base, own fields...], so construction,
+        // ctor/dtor hooks, the needs-fixpoint, and the by-value cycle check all reuse
+        // the class-typed-field machinery. `Base:` resolution reframes `self` to this
+        // slot 0.
+        if (!base_name.empty()) {
+            auto bp = newNodeAt(parse::Kind::kParam, cls_file, name_tok);
+            bp->name = "_$base";
+            bp->name_tok = name_tok;
+            bp->return_type = widen::internOrNone(base_name);
+            node->params.insert(node->params.begin(), std::move(bp));
+        }
         if (!expect(token::Kind::kLBrace, "{")) return nullptr;
 
         std::string recv_type = name + "^";   // the implicit receiver param's type

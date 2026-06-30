@@ -372,6 +372,11 @@ struct Tree {
     // outside a class member body.
     std::vector<std::string> const* method_fields = nullptr;
 
+    // The immediate base class name while resolving a DERIVED class member body, else
+    // empty. A qualified `Base:member` whose qualifier is this base reframes `self` to
+    // the base sub-object (slot 0): `Base:member` -> `self._$base.member`.
+    std::string current_base_name;
+
     // Transient scope state — valid only during classify's run.
     std::vector<int> frame_id_stack;
     std::vector<std::size_t> frame_entries_start_stack;

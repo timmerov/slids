@@ -724,6 +724,33 @@ bool isScopeMember(parse::Node const& m) {
 // routine for all three contexts replaces resolveNamespaceBodies +
 // resolveClassMemberBodies + the bundled resolveClassMemberInits/FieldDefaults +
 // the kClassDef/kNamespaceDecl cross-arms.
+// A DERIVED class (node.text = base name) opens its base's member frame so base
+// members (alias/const/enum/method) resolve BARE in the derived — the base is the
+// unnamed first field. Returns the base's ns_frame, or -1. Opened BELOW the derived's
+// own frame so derived members shadow base members; the WHOLE base chain (immediate
+// base, its base, ...) is opened, deepest-ancestor-first so a nearer base shadows a
+// farther one. Returns the number of frames pushed (to pop).
+int pushBaseChain(parse::Tree& tree, parse::Node const& node) {
+    if (node.kind != parse::Kind::kClassDef || node.text.empty()) return 0;
+    int id = resolveName(tree, node.text);
+    if (id < 0 || tree.entries[id].kind != parse::EntryKind::kClass) return 0;
+    std::vector<int> frames;   // immediate base first
+    int guard = (int)tree.classes.size() + 2;   // a cyclic base chain (error case) is bounded
+    for (widen::TypeRef cls = widen::strip(tree.entries[id].slids_type);
+         cls != widen::kNoType && guard-- > 0; ) {
+        int cid = parse::classEntryForType(tree, cls);
+        if (cid < 0) break;
+        frames.push_back(tree.entries[cid].ns_frame_id);
+        auto it = tree.classes.find(cls);
+        cls = (it != tree.classes.end() && !it->second.field_names.empty()
+               && it->second.field_names[0] == "_$base")
+            ? widen::strip(it->second.field_types[0]) : widen::kNoType;
+    }
+    for (auto it = frames.rbegin(); it != frames.rend(); ++it)  // deepest pushed first
+        tree.open_ns_frames.push_back(*it);
+    return (int)frames.size();
+}
+
 void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
                         diagnostic::Sink& diag) {
     int frame = isClass
@@ -731,8 +758,10 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
                ? tree.entries[node.resolved_entry_id].ns_frame_id : -1)
         : node.resolved_entry_id;
     if (frame < 0) return;   // a duplicate / unregistered scope — no members to resolve
+    int base_pushed = pushBaseChain(tree, node);
     tree.open_ns_frames.push_back(frame);
     std::vector<std::string> const* saved_mf = tree.method_fields;
+    std::string saved_base = tree.current_base_name;
     if (isClass) {
         auto it = tree.classes.find(widen::strip(node.return_type));
         // Bare field names in a method/ctor/dtor body rewrite to `self.field` via
@@ -740,6 +769,7 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
         // itself — a nested namespace's free functions reset it (the else below).
         tree.method_fields = (it != tree.classes.end()) ? &it->second.field_names
                                                         : nullptr;
+        tree.current_base_name = node.text;   // base name for the `Base:` reframe (or "")
         // Field-default exprs, with the class frame open (a default may name a
         // sibling member bare).
         for (auto& p : node.params) {
@@ -749,6 +779,7 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
         }
     } else {
         tree.method_fields = nullptr;   // a free function does not self-bind
+        tree.current_base_name.clear();
     }
     for (auto& m : node.children) {
         if (!m) continue;
@@ -771,7 +802,9 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
         }
     }
     tree.method_fields = saved_mf;
+    tree.current_base_name = saved_base;
     tree.open_ns_frames.pop_back();
+    for (int i = 0; i < base_pushed; i++) tree.open_ns_frames.pop_back();
 }
 
 // The TYPES phase for ONE scope: now that EVERY name across every scope exists (the
@@ -791,6 +824,7 @@ void resolveScopeTypes(parse::Tree& tree, parse::Node& node, bool isClass,
                ? tree.entries[node.resolved_entry_id].ns_frame_id : -1)
         : node.resolved_entry_id;
     if (frame < 0) return;
+    int base_pushed = pushBaseChain(tree, node);
     tree.open_ns_frames.push_back(frame);
     // Member alias TARGETS first, so a later const / field / signature type in this
     // scope may name a member alias.
@@ -845,6 +879,7 @@ void resolveScopeTypes(parse::Tree& tree, parse::Node& node, bool isClass,
         }
     }
     tree.open_ns_frames.pop_back();
+    for (int i = 0; i < base_pushed; i++) tree.open_ns_frames.pop_back();
 }
 
 
@@ -1148,6 +1183,121 @@ std::unique_ptr<parse::Node> buildSelfField(std::string const& field,
     return fe;
 }
 
+// `Base:member` inside a DERIVED class member (Base = the immediate base) reframes
+// `self` to the base sub-object (slot 0): `Base:self` -> `self._$base`, `Base:field`
+// -> `self._$base.field`, `Base:method(args)` -> a method call on `self._$base`. The
+// base is at offset 0, so the receiver is `self` reinterpreted as Base^. Returns true
+// (and resolves the rewritten node) when it applied. Single base segment for now.
+// If `name` is a FIELD of the current class's BASE chain, the number of `_$base`
+// hops to reach the ancestor that declares it (1 = immediate base), else 0. A bare
+// `self._$base...(_$base)` — the ancestor sub-object `depth` levels up (depth>=1).
+std::unique_ptr<parse::Node> buildBaseReceiver(int depth, int file_id, int tok) {
+    std::unique_ptr<parse::Node> recv = buildRecvDeref(file_id, tok);   // self
+    for (int h = 0; h < depth; h++) {
+        auto hop = std::make_unique<parse::Node>();
+        hop->kind = parse::Kind::kFieldExpr;
+        hop->name = "_$base";
+        hop->file_id = file_id;
+        hop->tok = tok;
+        hop->children.push_back(std::move(recv));
+        recv = std::move(hop);
+    }
+    return recv;
+}
+
+// The `_$base` hop count to reach a transitive BASE CLASS named `className` from the
+// current class (1 = immediate base), else 0. Used by the `Base:` qualifier.
+int baseClassDepth(parse::Tree& tree, std::string const& className) {
+    if (tree.current_base_name.empty()) return 0;
+    int id = resolveName(tree, tree.current_base_name);
+    if (id < 0 || tree.entries[id].kind != parse::EntryKind::kClass) return 0;
+    widen::TypeRef cls = widen::strip(tree.entries[id].slids_type);
+    int guard = (int)tree.classes.size() + 2;
+    for (int depth = 1; cls != widen::kNoType && guard-- > 0; depth++) {
+        auto it = tree.classes.find(cls);
+        if (it == tree.classes.end()) return 0;
+        if (it->second.name == className) return depth;
+        cls = (!it->second.field_names.empty() && it->second.field_names[0] == "_$base")
+            ? widen::strip(it->second.field_types[0]) : widen::kNoType;
+    }
+    return 0;
+}
+
+// base field reads through `self._$base...(_$base).name`.
+int baseFieldDepth(parse::Tree& tree, std::string const& name) {
+    if (tree.current_base_name.empty()) return 0;
+    int id = resolveName(tree, tree.current_base_name);
+    if (id < 0 || tree.entries[id].kind != parse::EntryKind::kClass) return 0;
+    widen::TypeRef cls = widen::strip(tree.entries[id].slids_type);
+    int guard = (int)tree.classes.size() + 2;
+    for (int depth = 1; cls != widen::kNoType && guard-- > 0; depth++) {
+        auto it = tree.classes.find(cls);
+        if (it == tree.classes.end()) return 0;
+        parse::ClassInfo const& info = it->second;
+        for (std::size_t i = 0; i < info.field_names.size(); i++)
+            if (info.field_names[i] == name) return depth;   // not "_$base" (synthetic)
+        if (!info.field_names.empty() && info.field_names[0] == "_$base")
+            cls = widen::strip(info.field_types[0]);
+        else
+            return 0;
+    }
+    return 0;
+}
+
+bool frameHasFunction(parse::Tree& tree, int frame, std::string const& name) {
+    if (frame < 0) return false;
+    for (parse::Entry const& e : tree.entries)
+        if (e.kind == parse::EntryKind::kFunction && e.owner_ns_frame == frame
+            && e.name == name)
+            return true;
+    return false;
+}
+
+bool tryResolveBaseQualifier(parse::Tree& tree, parse::Node& e,
+                             diagnostic::Sink& diag, bool unevaluated) {
+    if (e.qualifier.size() != 1) return false;
+    int depth = baseClassDepth(tree, e.qualifier[0]);   // a transitive base? (1 = immediate)
+    if (depth == 0) return false;
+    bool is_call  = (e.kind == parse::Kind::kCallExpr || e.kind == parse::Kind::kCallStmt);
+    bool is_ident = (e.kind == parse::Kind::kIdentExpr);
+    if (!is_call && !is_ident) return false;
+    // `Base:X` reframes self to the base ONLY for an INSTANCE member (a field, a method,
+    // or `self`). A static (const / alias / enum / nested type) is left for the normal
+    // qualified-name lookup — it is not reached through `self._$base`.
+    int aid = resolveName(tree, e.qualifier[0]);
+    if (aid < 0) return false;
+    widen::TypeRef anc = widen::strip(tree.entries[aid].slids_type);
+    auto ci = tree.classes.find(anc);
+    bool is_field = false;
+    if (ci != tree.classes.end())
+        for (std::string const& fn : ci->second.field_names)
+            if (fn == e.name) { is_field = true; break; }
+    bool is_self   = (is_ident && e.name == "self");
+    bool is_method = (is_call && frameHasFunction(tree, tree.entries[aid].ns_frame_id, e.name));
+    if (!is_self && !(is_ident && is_field) && !is_method) return false;  // static -> defer
+    auto base_recv = buildBaseReceiver(depth, e.file_id, e.tok);   // self._$base...(depth)
+    e.qualifier.clear();
+    e.qualifier_toks.clear();
+    if (is_ident && e.name == "self") {
+        e.kind = parse::Kind::kFieldExpr;            // Base:self -> self._$base
+        e.name = "_$base";
+        e.children = std::move(base_recv->children);
+    } else if (is_ident) {
+        e.kind = parse::Kind::kFieldExpr;            // Base:field -> self._$base.field
+        e.children.clear();
+        e.children.push_back(std::move(base_recv));  // [0] = self._$base; e.name = field
+    } else {                                         // Base:method(args) -> method call
+        std::vector<std::unique_ptr<parse::Node>> args = std::move(e.children);
+        e.kind = parse::Kind::kMethodCallStmt;       // e.name = method
+        e.children.clear();
+        e.children.push_back(std::move(base_recv));  // [0] = receiver self._$base
+        for (auto& a : args) e.children.push_back(std::move(a));
+    }
+    for (auto& ch : e.children)
+        if (ch) resolveExpr(tree, *ch, diag, unevaluated);
+    return true;
+}
+
 void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                  bool unevaluated) {
     // Const-expression array dims in a TYPE operand (`sizeof(int[N])`, `<int[N]^>`,
@@ -1155,6 +1305,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
     // folds + bakes the size (provisional `[1]` until then).
     for (auto& d : e.dim_exprs)
         if (d) resolveExpr(tree, *d, diag, /*unevaluated=*/false);
+    if (tryResolveBaseQualifier(tree, e, diag, unevaluated)) return;
     switch (e.kind) {
         case parse::Kind::kIdentExpr: {
             int id;
@@ -1182,6 +1333,16 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                         auto fe = buildSelfField(e.name, e.file_id, e.tok);
                         e.kind = parse::Kind::kFieldExpr;   // e.name stays the field
                         e.children = std::move(fe->children);
+                        resolveExpr(tree, *e.children[0], diag, unevaluated);
+                        return;
+                    }
+                    // A bare BASE field (not shadowed by a derived field) reads through
+                    // the base sub-object: `self._$base...(_$base).field`.
+                    if (int depth = baseFieldDepth(tree, e.name); depth > 0) {
+                        auto recv = buildBaseReceiver(depth, e.file_id, e.tok);
+                        e.kind = parse::Kind::kFieldExpr;   // e.name stays the field
+                        e.children.clear();
+                        e.children.push_back(std::move(recv));
                         resolveExpr(tree, *e.children[0], diag, unevaluated);
                         return;
                     }

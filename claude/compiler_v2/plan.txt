@@ -859,10 +859,25 @@ Phase 6 — const correctness
   only a runtime-SCALAR typeless const (`const x = y`) still errors (todo.txt).
 
 Phase 7 — class advanced
-  * reopens; incomplete-class semantics
   * hoisted classes (file-scope hoist across reopens)
-  * derived classes
-  * virtual methods + virtual destructors
+  * SINGLE INHERITANCE (`Base : Derived(fields){body}`) — LANDED (non-virtual). The
+    base is an UNNAMED FIRST FIELD: grammar injects `_$base : Base` at slot 0, so
+    layout, FLAT construction (base fields splice in: `Derived d = (b0,b1,own...)`,
+    width 0/1/N), ctor/dtor order (base first / derived-dtor first), the needs-ctor/dtor
+    fixpoint, and the by-value CYCLE check all reuse the class-typed-field machinery.
+    A derived OPENS its whole base chain (resolve pushBaseChain): inherited statics,
+    FIELDS, and METHODS resolve BARE across the chain (transitive), a derived same-name
+    member HIDES the base's (C++ name hiding), and a base method runs on a derived-typed
+    receiver. The `Base:` qualifier reframes `self` to slot 0 — `Base:self`/`Base:field`/
+    `Base:method()` -> `self._$base...X` (resolve tryResolveBaseQualifier), while a
+    `Base:STATIC` (const/alias/enum) defers to the normal qualified-name lookup. Pointer
+    casts: derived->base IMPLICIT, base->derived EXPLICIT `<Derived^>` (both offset-0
+    no-ops; classify ptrBaseUpcastOk/ptrBaseCastOk). Canon test_v2/class/inheritance.sl
+    (Stages 1-5). DEFERRED: a derived STATIC shadowing a same-named base static is bare-
+    ambiguous (qualify to disambiguate) — see todo "OPENED-SCOPE NAME AMBIGUITY".
+    [[project_inheritance]]
+  * virtual methods + virtual destructors  — OUT OF SCOPE for now
+  * reopens; incomplete-class semantics  — OUT OF SCOPE for now
   * inheritance contracts (`= default`, `= delete`)
   * `instantiation` statement / unnamed instances (`Type(args);`, `Type;`)
 

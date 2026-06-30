@@ -21,6 +21,7 @@ SAMPLES = \
 	nested_cls \
 	operator \
 	overload_cls \
+	reopen \
 	self \
 	virtual
 

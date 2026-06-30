@@ -161,6 +161,80 @@ bool ptrExplicitOk(widen::TypeRef from, widen::TypeRef to,
     return false;
 }
 
+// The base type of a DERIVED class — its unnamed first field `_$base` (the base is
+// slot 0), or kNoType for a non-derived class.
+widen::TypeRef classBaseType(parse::Tree& tree, widen::TypeRef cls) {
+    auto it = tree.classes.find(widen::strip(cls));
+    if (it == tree.classes.end()) return widen::kNoType;
+    parse::ClassInfo const& info = it->second;
+    if (!info.field_names.empty() && info.field_names[0] == "_$base")
+        return widen::strip(info.field_types[0]);
+    return widen::kNoType;
+}
+
+// A class's own member frame + all transitive base frames (most-derived first), for
+// member lookup that sees inherited members.
+std::vector<int> classAndBaseFrames(parse::Tree& tree, widen::TypeRef cls) {
+    std::vector<int> frames;
+    int guard = (int)tree.classes.size() + 2;   // a cyclic base chain (error case) is bounded
+    for (widen::TypeRef c = widen::strip(cls); c != widen::kNoType && guard-- > 0; ) {
+        int cid = parse::classEntryForType(tree, c);
+        if (cid < 0) break;
+        frames.push_back(tree.entries[cid].ns_frame_id);
+        c = classBaseType(tree, c);
+    }
+    return frames;
+}
+
+// The number of FLAT initializers a class consumes during construction: a base
+// (`_$base`) field splices its own fields in flat (recursively); every other field is
+// one slot. So `C:B:A` (each adding one field) has flat width 3.
+int flatFieldWidth(parse::Tree& tree, widen::TypeRef cls) {
+    int w = 0;
+    int guard = (int)tree.classes.size() + 2;   // a cyclic base chain (error case) is bounded
+    for (widen::TypeRef c = widen::strip(cls); guard-- > 0; ) {
+        auto it = tree.classes.find(c);
+        if (it == tree.classes.end()) { w += 1; break; }   // a non-class type is one slot
+        parse::ClassInfo const& info = it->second;
+        widen::TypeRef next = widen::kNoType;              // only the base (slot 0) splices
+        for (std::size_t i = 0; i < info.field_names.size(); i++) {
+            if (info.field_names[i] == "_$base") next = widen::strip(info.field_types[i]);
+            else w += 1;
+        }
+        if (next == widen::kNoType) break;
+        c = next;
+    }
+    return w;
+}
+
+// Is `base` a TRANSITIVE base of `derived`?
+bool isTransitiveBase(parse::Tree& tree, widen::TypeRef base, widen::TypeRef derived) {
+    base = widen::strip(base);
+    for (widen::TypeRef b = classBaseType(tree, derived);
+         b != widen::kNoType; b = classBaseType(tree, b)) {
+        if (b == base) return true;
+    }
+    return false;
+}
+
+// A derived->base pointer is an IMPLICIT upcast (the base is at offset 0, so the
+// pointer is unchanged): both pointer-ish, the target pointee a base of the source's.
+bool ptrBaseUpcastOk(parse::Tree& tree, widen::TypeRef from, widen::TypeRef to) {
+    if (!isPtrLikeType(from) || !isPtrLikeType(to)) return false;
+    widen::TypeRef pf = castPointee(from), pt = castPointee(to);
+    if (pf == widen::kNoType || pt == widen::kNoType) return false;
+    return isTransitiveBase(tree, pt, pf);
+}
+
+// A base<->derived pointer cast is EXPLICITLY allowed (downcast or upcast); both at
+// offset 0, so a value no-op.
+bool ptrBaseCastOk(parse::Tree& tree, widen::TypeRef from, widen::TypeRef to) {
+    if (!isPtrLikeType(from) || !isPtrLikeType(to)) return false;
+    widen::TypeRef pf = castPointee(from), pt = castPointee(to);
+    if (pf == widen::kNoType || pt == widen::kNoType) return false;
+    return isTransitiveBase(tree, pf, pt) || isTransitiveBase(tree, pt, pf);
+}
+
 // A fixed-size array type (`int[5]`, `int[3][5]`), distinct from `int[]`
 // (iterator) and `int^` (ref). strip() sees through a transparent alias.
 bool isArrayType(widen::TypeRef t) {
@@ -1294,7 +1368,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             if (operand.inferred_type != widen::kNoType) {
                 std::string why;
                 std::string ot = widen::spellOrEmpty(operand.inferred_type);
-                if (!ptrExplicitOk(operand.inferred_type, e.return_type, why)) {
+                if (!ptrExplicitOk(operand.inferred_type, e.return_type, why)
+                    && !ptrBaseCastOk(tree, operand.inferred_type, e.return_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Cannot cast '" + ot + "' to '" + to
                         + "'; " + why + ".", {}});
@@ -1908,14 +1983,15 @@ bool rangeFirstTestFalse(parse::Node const& start, parse::Node const& end,
 // involved on either side — pure-numeric assignments keep the width-coercion
 // path. An info-adding implicit cast is rejected here; the user must write an
 // explicit `<Type^>` (which then passes this check as a same-typed rhs).
-void checkPtrAssign(widen::TypeRef lvalue_type, parse::Node const& rhs,
-                    diagnostic::Sink& diag) {
+void checkPtrAssign(parse::Tree& tree, widen::TypeRef lvalue_type,
+                    parse::Node const& rhs, diagnostic::Sink& diag) {
     // An empty type on either side rides an already-reported upstream error
     // (an unresolved name, a void value, ...) — skip silently rather than emit a
     // misleading second diagnostic. Deliberate, not a missing check.
     if (rhs.inferred_type == widen::kNoType || lvalue_type == widen::kNoType) return;
     if (!isPtrLikeType(lvalue_type) && !isPtrLikeType(rhs.inferred_type)) return;  // numeric
     if (ptrImplicitOk(rhs.inferred_type, lvalue_type)) return;
+    if (ptrBaseUpcastOk(tree, rhs.inferred_type, lvalue_type)) return;  // derived^ -> base^
     diagnostic::report(diag, {rhs.file_id, rhs.tok,
         "Cannot implicitly cast '" + widen::spellOrEmpty(rhs.inferred_type)
         + "' to '" + widen::spellOrEmpty(lvalue_type)
@@ -2399,19 +2475,33 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
             provided.push_back(std::move(s.children[0]));
         }
     }
-    if (provided.size() > n) {
+    // Construction is FLAT: a derived class's base (`_$base`, slot 0) splices its OWN
+    // fields in, so it consumes flatFieldWidth(base) initializers (0 for a data-less
+    // base, 1 for a single-field base, N for a wider/transitive one); every other field
+    // consumes exactly one. A running index `pi` walks the flat initializer list; the
+    // arity bound is the FLAT width, not the slot count.
+    int flatCap = flatFieldWidth(tree, info.type);
+    if ((int)provided.size() > flatCap) {
         // Caret the first EXTRA initializer (the offender), not the decl.
-        parse::Node const& extra = *provided[n];
+        parse::Node const& extra = *provided[flatCap];
         diagnostic::report(diag, {extra.file_id, extra.tok,
-            "Class '" + info.name + "' has " + std::to_string(n)
+            "Class '" + info.name + "' has " + std::to_string(flatCap)
             + " field(s) but " + std::to_string(provided.size())
             + " initializer(s) were given.", {}});
-        provided.resize(n);
+        provided.resize(flatCap);
     }
     auto tup = std::make_unique<parse::Node>();
     tup->kind = parse::Kind::kTupleExpr;
     tup->file_id = s.file_id;
     tup->tok = s.tok;
+    std::size_t pi = 0;   // running index into the FLAT initializer list
+    // UNDER-FILL IS INTENTIONAL, NOT A SILENT DEFAULT: when fewer initializers are given
+    // than the class has flat fields (`B b = (10)` for a wider B, or the base sub-tuple
+    // running short below), each unfilled field takes its AUTHOR DEFAULT, else a
+    // zero / default-construct. This is the same partial-construction the language gives
+    // a NON-derived class (`P(int a, int b); P p = (1)` -> b defaults) — the base just
+    // splices its fields into the same flat sequence. OVER-fill is the only arity error
+    // (reported above). Do not "fix" the `pi >= provided.size()` fall-throughs.
     for (std::size_t i = 0; i < n; i++) {
         widen::TypeRef ft = info.field_types[i];
         widen::TypeRef fts = widen::strip(ft);
@@ -2420,25 +2510,44 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
         parse::Node* fparam = info.field_params[i];
         parse::Node* fdefault = (fparam && !fparam->children.empty())
             ? fparam->children[0].get() : nullptr;
-        std::unique_ptr<parse::Node> provVal;
-        if (i < provided.size() && provided[i]) provVal = std::move(provided[i]);
+        bool is_base = (info.field_names[i] == "_$base");
 
         // A CLASS field is constructed (not raw-filled): a value already of the
-        // field's class type is a copy; a scalar / tuple is the field's
-        // constructor input, recursively filled with the sub-class's defaults; no
-        // value default-constructs it.
+        // field's class type is a copy; a scalar / tuple is the field's constructor
+        // input, recursively filled with the sub-class's defaults; no value
+        // default-constructs it. A base field additionally splices flat (below).
         if (widen::form(fts) == widen::Type::Form::kSlid
             && tree.classes.count(fts)) {
             parse::ClassInfo const& sub = tree.classes.at(fts);
+            bool sameClass = false;
+            if (pi < provided.size() && provided[pi]) {
+                inferExpr(tree, *provided[pi], ft, diag);
+                sameClass =
+                    widen::deepStrip(provided[pi]->inferred_type) == widen::deepStrip(ft);
+            }
             std::unique_ptr<parse::Node> slot;
-            if (provVal) {
-                inferExpr(tree, *provVal, ft, diag);
-                if (widen::deepStrip(provVal->inferred_type) == widen::deepStrip(ft)) {
-                    slot = std::move(provVal);   // same-class value -> copy
+            if (pi < provided.size() && provided[pi] && sameClass) {
+                slot = std::move(provided[pi++]);   // same-class value -> copy
+            } else if (is_base) {
+                // FLAT: the base consumes its flat width of initializers (maybe 0).
+                int bw = flatFieldWidth(tree, ft);
+                if (bw <= 0) {
+                    slot = constructClass(tree, sub, nullptr, s.file_id, s.tok, diag);
                 } else {
-                    slot = constructClass(tree, sub, std::move(provVal),
+                    auto subtup = std::make_unique<parse::Node>();
+                    subtup->kind = parse::Kind::kTupleExpr;
+                    subtup->file_id = s.file_id;
+                    subtup->tok = s.tok;
+                    // May take FEWER than bw if the list runs short — the base then
+                    // partial-fills from its own defaults (intended; see loop header).
+                    for (int k = 0; k < bw && pi < provided.size(); k++)
+                        subtup->children.push_back(std::move(provided[pi++]));
+                    slot = constructClass(tree, sub, std::move(subtup),
                                           s.file_id, s.tok, diag);
                 }
+            } else if (pi < provided.size() && provided[pi]) {
+                slot = constructClass(tree, sub, std::move(provided[pi++]),
+                                      s.file_id, s.tok, diag);
             } else if (fdefault) {
                 slot = constructClass(tree, sub, cloneExpr(*fdefault),
                                       s.file_id, s.tok, diag);
@@ -2451,7 +2560,7 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
 
         // A non-class field: provided slot / author default / zero.
         std::unique_ptr<parse::Node> slot;
-        if (provVal) slot = std::move(provVal);
+        if (pi < provided.size() && provided[pi]) slot = std::move(provided[pi++]);
         else if (fdefault) slot = cloneExpr(*fdefault);
         else slot = classZeroValue(tree, ft, s.file_id, s.tok, diag);
         inferExpr(tree, *slot, ft, diag);
@@ -2654,7 +2763,7 @@ void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
             // Neither side is a tuple/array: scalar / pointer / class. The terminal
             // checks — pointer implicit-cast, strong-const widen, typed-value widen,
             // class same-type.
-            checkPtrAssign(dest, rhs, diag);
+            checkPtrAssign(tree, dest, rhs, diag);
             checkStrongConstAssign(dest, rhs, diag);
             if (!isLiteralKind(rhs.kind)
                 && !isPtrLikeType(rhs.inferred_type)
@@ -2840,10 +2949,14 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
     }
     // Gather the same-name method OVERLOAD SET in the receiver's class frame. A
     // same-name non-method member never enters the set (a method is a kFunction).
-    int classId = parse::classEntryForType(tree, rs);
-    int ns_frame = classId < 0 ? -1 : tree.entries[classId].ns_frame_id;
+    // Gather the method's overload set from the receiver's class frame AND its base
+    // chain — the first frame (most-derived) that has the name shadows the rest (a
+    // derived overload set hides the base's). A method found in a BASE frame runs on
+    // the receiver's base sub-object (offset 0, so the same address).
+    std::vector<int> frames = classAndBaseFrames(tree, rs);
     std::vector<int> cands;
-    if (ns_frame >= 0) {
+    for (int fr : frames) {
+        if (fr < 0) continue;
         for (std::size_t id = 0; id < tree.entries.size(); id++) {
             parse::Entry const& e = tree.entries[id];
             // Only DEFINED methods are candidates — a forward declaration shares the
@@ -2851,10 +2964,11 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
             // undefined entries keeps a decl+def pair from looking like an ambiguous
             // overload. A decl with no definition is already an orphan error.
             if (e.kind == parse::EntryKind::kFunction && e.defined
-                && e.owner_ns_frame == ns_frame && e.name == s.name) {
+                && e.owner_ns_frame == fr && e.name == s.name) {
                 cands.push_back((int)id);
             }
         }
+        if (!cands.empty()) break;   // most-derived frame with the name shadows bases
     }
     if (cands.empty()) {
         diagnostic::report(diag, {s.file_id, s.name_tok,

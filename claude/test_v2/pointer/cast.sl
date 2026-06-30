@@ -103,6 +103,7 @@ void[] is a compile error.
 
 notes:
 pointers to class hierarchies will be written when the feature lands.
+see class/inheritance.sl.
 */
 
 /*

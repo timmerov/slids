@@ -8,6 +8,23 @@ quest's progress lives in plan.txt).
 
 BUGS
 
+  * REVISIT plan-declarator.txt — the declarator design doc is only PARTIALLY
+    landed. The semantics shipped (core-type wrapper chain, sized-dim-on-name
+    rule, destructure declarators, const/mutable qualifiers, mungeParamTypes,
+    call-side by-pointer passing, autoRefPointee), but the structural
+    unification did not. Open items:
+      - "all 10 sites funnel through parseDeclarator" — only the 4 NAMED sites
+        use it (all passing NamePolicy::Required); the nameless/Forbidden sites
+        (return type, alias RHS, enum underlying, cast, conversion, sizeof) and
+        tuple-type slots still call parseType directly. NamePolicy::Forbidden /
+        Optional are defined but never passed as an argument.
+      - parseType + parseNameDims merge — parseDeclarator only WRAPS both; they
+        remain separate functions (a wrapper, not the fusion the plan describes).
+      - tuple-TYPE "too many names" rule (`(int x, int y) z` -> error) — no such
+        diagnostic exists; tuple slots are not ListSlot declarators.
+      - typed-no-name destructure discard (`(int x, int) = e` drops a position) —
+        errors instead; only the bare-`,` empty discard is supported.
+
   * ARENA REALLOC DANGLES `get()` REFERENCES (structural) — `widen::get(ref)`
     returns a `Type const&` into `arena().types`, a `std::vector<Type>`. Any intern
     (`intern` / `internArray` / `internTuple` / `internPointer` / `internIterator`,
@@ -194,6 +211,26 @@ BLOCKED FEATURES
     Class( Other field = (1,2,3) ) { }
     Class( Other field(1,2,3) ) { }
     lean yes to both.
+
+  * OPENED-SCOPE NAME AMBIGUITY (not unique to inheritance — applies to ANY opened
+    scope). resolveNameDetail flags a name found in two OPENED frames ("Reference to
+    'X' is ambiguous"). Single inheritance HAS LANDED and opens the whole base chain
+    (resolve pushBaseChain, same mechanism as `alias Ns;`). FIELDS and METHODS shadow
+    correctly (derived-first lookup / `self._$base` rewrite), so the live residue is
+    STATICS: a derived `const/alias/enum` with the SAME NAME as a base one is flagged
+    ambiguous BARE — `inheritance.sl` pins this as a negative. WORKAROUND IN PLACE:
+    qualify it (`Sa:kBase` / `Sd:kBase`), which `tryResolveBaseQualifier` now defers to
+    the normal qualified-static lookup. Same tie also from `alias Ns1; alias Ns2;`
+    sharing a member. STILL TO DECIDE: precedence of an opened base (or inner derived)
+    vs a co-equal import — strict precedence (inner/derived shadows, no error) vs
+    co-equal (ambiguous error). Lean: strict precedence, so "ambiguous" stays sourced
+    only from multiple co-equal imports, and a derived static shadows its base's.
+
+  * QUALIFIED-NAME COLLISIONS — DEFER ENTIRELY until a TRULY UNRESOLVABLE example
+    surfaces. Inheritance landed using exactly this policy: NO special collision logic
+    — a class qualifier opens its hoisted members + its base chain, and NORMAL scoping
+    (greedy per-segment, inner shadows outer) resolves `A:B:C:D`. No case that normal
+    scoping can't resolve deterministically has surfaced; revisit only when one does.
 
 
 REACH GOALS
