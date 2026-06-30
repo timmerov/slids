@@ -1319,6 +1319,25 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
             // an indexed element yields an iterator (`T[]`); a class field yields
             // a reference. Walk any subscript / field chain (resolving each index
             // as a read) down to the base variable.
+            // `^field` (a bare field in a method body) -> `^self.field`: rewrite the
+            // operand to a self.field access (using the `self` keyword, an address-
+            // aliased local, so the walk below descends to a resolvable ident — like
+            // the explicit `^self.field` form). A local shadowing the field resolves
+            // normally, so this only fires when no name resolved AND it is a field.
+            if (e.children[0] && e.children[0]->kind == parse::Kind::kIdentExpr
+                && !isQualified(*e.children[0])
+                && resolveName(tree, e.children[0]->name) < 0
+                && isMethodField(tree, e.children[0]->name)) {
+                parse::Node& op = *e.children[0];
+                auto self_id = std::make_unique<parse::Node>();
+                self_id->kind = parse::Kind::kIdentExpr;
+                self_id->name = "self";
+                self_id->file_id = op.file_id;
+                self_id->tok = op.tok;
+                op.kind = parse::Kind::kFieldExpr;   // op.name stays the field
+                op.children.clear();
+                op.children.push_back(std::move(self_id));
+            }
             parse::Node* base = e.children[0].get();
             while (base->kind == parse::Kind::kIndexExpr
                 || base->kind == parse::Kind::kFieldExpr) {
@@ -1549,6 +1568,18 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                         "'" + operand.name + "' is a " + what
                             + ", not a value or an alias.", {}});
                 }
+                return;
+            }
+            // A bare FIELD name in a method body: rewrite the operand to `self.field`
+            // (the same kFieldExpr the value-position ident path mints), so ##type
+            // reports the FIELD's type. resolveName found nothing because a field is a
+            // kSlid slot, not a frame entry (and a local shadowing the field would
+            // have resolved above).
+            if (!qualified && isMethodField(tree, operand.name)) {
+                auto fe = buildSelfField(operand.name, operand.file_id, operand.tok);
+                operand.kind = parse::Kind::kFieldExpr;   // operand.name stays the field
+                operand.children = std::move(fe->children);
+                resolveExpr(tree, *operand.children[0], diag, /*unevaluated=*/true);
                 return;
             }
             // qualified: resolveQualifiedRef already reported the resolution error.
@@ -3808,13 +3839,21 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
             continue;
         }
         if (p->return_type == widen::kNoType) {
-            diagnostic::report(diag, {p->file_id, p->name_tok,
-                "Field '" + p->name + "' needs an explicit type.", {}});
-            continue;
+            // A typeless field with a DEFAULT infers its type from that default — but
+            // the field is a kSlid LAYOUT slot and the default isn't folded yet, so
+            // DEFER: register a kNoType slot now; classify's classifyClassSignature
+            // folds the default, infers the type, and re-interns the handle (same
+            // name+def_id key). With NO default there is nothing to infer from.
+            if (p->children.empty() || !p->children[0]) {
+                diagnostic::report(diag, {p->file_id, p->name_tok,
+                    "Field '" + p->name + "' needs an explicit type.", {}});
+                continue;
+            }
+        } else {
+            resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
         }
-        resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
         info.field_names.push_back(p->name);
-        info.field_types.push_back(p->return_type);
+        info.field_types.push_back(p->return_type);   // kNoType -> inferred in classify
         info.field_params.push_back(p.get());   // stable; default read live later
         field_locs.push_back({p->file_id, p->name_tok});
     }
@@ -4391,6 +4430,25 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // that distinction defers with the rest of the .slh work.)
     for (parse::Entry const& e : tree.entries) {
         if (e.kind == parse::EntryKind::kFunction && !e.defined) {
+            // A forward declaration is SATISFIED by a same-signature DEFINITION in
+            // the same scope. A free function merges its decl + def into ONE entry
+            // (Pass 1a, matched by signature); a class METHOD's decl + def stay
+            // SEPARATE entries (registered before types resolve), so match them here
+            // — parity with bare functions ("a method is a function").
+            bool defined_elsewhere = false;
+            for (parse::Entry const& q : tree.entries) {
+                // Same EXACT scope: owner_ns_frame (class/namespace) AND
+                // parent_frame_id (a nested function's host body) — else a nested
+                // `bar` in one host would wrongly satisfy a decl in another.
+                if (&q != &e && q.kind == parse::EntryKind::kFunction && q.defined
+                    && q.name == e.name && q.owner_ns_frame == e.owner_ns_frame
+                    && q.parent_frame_id == e.parent_frame_id
+                    && q.param_types == e.param_types) {
+                    defined_elsewhere = true;
+                    break;
+                }
+            }
+            if (defined_elsewhere) continue;
             diagnostic::report(diag, {e.file_id, e.tok,
                 "Function '" + e.name + "' is declared but never defined.", {}});
         }

@@ -2846,7 +2846,11 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
     if (ns_frame >= 0) {
         for (std::size_t id = 0; id < tree.entries.size(); id++) {
             parse::Entry const& e = tree.entries[id];
-            if (e.kind == parse::EntryKind::kFunction
+            // Only DEFINED methods are candidates — a forward declaration shares the
+            // name + signature with its definition (separate entries), so skipping
+            // undefined entries keeps a decl+def pair from looking like an ambiguous
+            // overload. A decl with no definition is already an orphan error.
+            if (e.kind == parse::EntryKind::kFunction && e.defined
                 && e.owner_ns_frame == ns_frame && e.name == s.name) {
                 cands.push_back((int)id);
             }
@@ -4018,20 +4022,21 @@ void classifyFunctionSignature(parse::Tree& tree, parse::Node& fn,
         nreq++;
     }
     e.num_required = nreq;
-    // A METHOD with the same name + identical (now-final) param types as an EARLIER
-    // method in the same class is a duplicate DEFINITION, not an overload — functions
-    // catch this in resolve, but the method overload-set registration allows the
-    // same name, so detect it here. Reported on the later one (lower id = earlier).
-    if (is_method) {
+    // Two DEFINED methods with the same name + identical (now-final) param types are a
+    // duplicate DEFINITION, not an overload — functions catch this in resolve, but the
+    // method overload-set registration allows the same name, so detect it here.
+    // Reported on the later one (lower id = earlier). Both must be DEFINITIONS: a
+    // forward decl + a definition is a redeclaration, not a duplicate.
+    if (is_method && e.defined) {
         for (int id = 0; id < (int)tree.entries.size(); id++) {
             if (id >= fn.resolved_entry_id) break;
             parse::Entry const& q = tree.entries[id];
-            if (q.kind == parse::EntryKind::kFunction
+            if (q.kind == parse::EntryKind::kFunction && q.defined
                 && q.owner_ns_frame == e.owner_ns_frame
                 && q.name == e.name && q.param_types == e.param_types) {
                 diagnostic::report(diag, {fn.file_id, fn.name_tok,
                     "Duplicate definition of '" + fn.name + "'.",
-                    {{q.file_id, q.tok, "first defined here"}}});
+                    {{q.def_file_id, q.def_tok, "first defined here"}}});
                 break;
             }
         }
@@ -4044,6 +4049,48 @@ void classifyFunctionSignature(parse::Tree& tree, parse::Node& fn,
 // across scopes) sees the full signature. Members only; a function nested in a BODY
 // is handled by classifyFunctionBody's own pre-pass. ctor/dtor hooks (no entry) are
 // no-op'd by classifyFunctionSignature's resolved_entry_id guard.
+// Infer typeless FIELD types from their (constfold-folded) default literals and
+// patch the class's kSlid layout slots. Mirrors classifyFunctionSignature for params,
+// but a field is a LAYOUT slot, so after inferring we re-intern the handle with the
+// updated slots — same name+def_id key, so every reference sees the patch. An inferred
+// field is always PRIMITIVE (a const-expr default can't be a class), so the resolve
+// needs-ctor/dtor fixpoint, which saw a kNoType slot and contributed nothing, stays
+// correct — no re-run needed.
+void classifyClassSignature(parse::Tree& tree, widen::TypeRef classType,
+                            diagnostic::Sink& diag) {
+    widen::TypeRef s = widen::strip(classType);
+    auto it = tree.classes.find(s);
+    if (it == tree.classes.end()) return;
+    parse::ClassInfo& info = it->second;
+    bool changed = false;
+    for (std::size_t i = 0;
+         i < info.field_types.size() && i < info.field_params.size(); i++) {
+        if (info.field_types[i] != widen::kNoType) continue;   // explicitly typed
+        // A kNoType slot means resolve DEFERRED this field — which it does only for a
+        // typeless field that HAS a default (a no-default typeless field errored at
+        // resolve and was never registered). So a default must be present; a missing
+        // one is a compiler-invariant break, not a case to silently skip.
+        parse::Node* p = info.field_params[i];
+        assert(p && !p->children.empty() && p->children[0]
+            && "classifyClassSignature: a deferred field must carry a default");
+        parse::Node& def = *p->children[0];
+        inferExpr(tree, def, widen::kNoType, diag);
+        if (!isLiteralKind(def.kind)) {
+            diagnostic::report(diag, {def.file_id, def.tok,
+                "A field default must be a constant expression.", {}});
+            continue;
+        }
+        info.field_types[i] = def.inferred_type;   // preferred no-width handle
+        p->return_type = def.inferred_type;
+        changed = true;
+    }
+    if (changed) {
+        std::string name = widen::get(s).name;     // capture BEFORE internSlid (arena)
+        int def_id = widen::get(s).def_id;
+        widen::internSlid(name, info.field_types, def_id);
+    }
+}
+
 void classifyScopeSignatures(parse::Tree& tree, parse::Node& node,
                              diagnostic::Sink& diag) {
     for (auto& m : node.children) {
@@ -4053,6 +4100,10 @@ void classifyScopeSignatures(parse::Tree& tree, parse::Node& node,
             classifyFunctionSignature(tree, *m, diag);
         } else if (m->kind == parse::Kind::kNamespaceDecl
                 || m->kind == parse::Kind::kClassDef) {
+            // Infer this class's typeless field types BEFORE any body / construction
+            // is typed (this pre-pass runs ahead of classifyScope).
+            if (m->kind == parse::Kind::kClassDef)
+                classifyClassSignature(tree, m->return_type, diag);
             classifyScopeSignatures(tree, *m, diag);
         }
     }

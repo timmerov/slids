@@ -699,7 +699,13 @@ Phase 5 — classes
     sizeof/##type keep the type), and a bare `Class;` statement parses as a parenless
     kCallStmt that resolve turns into form 1 (a parenless non-class is rejected, not
     called). Detail: readme "CONSTRUCTION" + test_v2/class/nameless.sl.
-  * inferred field types (`Foo(name = const_expr)`) — LANDED.
+  * inferred field types (`Foo(x = 1, y = 3.14)`) — LANDED. A typeless field infers
+    its type from its default. resolve DEFERS (registers a kNoType layout slot; a
+    typeless field with no default errors); a classify pre-pass (classifyClassSignature)
+    folds the default + infers + RE-INTERNS the kSlid slot (name+def_id key) before any
+    body/construction reads it. An inferred field is always primitive, so the resolve
+    needs-fixpoint stays correct. Canon test_v2/class/field.sl;
+    [[project_inferred_field_types]].
   * destructor balance invariant — LANDED. Reverse-order teardown on every exit
     (block / return / break / continue) via a DtorScope chain threaded through
     codegen's emitStmt alongside the loop context, gated by completion; TRANSITIVE
@@ -755,14 +761,19 @@ Phase 5 — classes
     (reportNameCollision, source-order carets); requireKnownType names a non-type
     precisely ("'X' is a namespace/function/constant/variable, not a type").
   * operator overloading per slid
-  * METHOD / FUNCTION PARITY — methods get overloading + default params + infer-
-    from-default (all of which free functions already have) by routing both through
-    one shared overload-resolution ENGINE (resolveOverload + fillDefaults, a receiver
-    offset for methods); resolve allows a method overload SET in the class frame.
-    Definition/body/codegen are already unified (a method is a lifted function); the
-    divergence is only resolve lookup + the classify call path. Detail + landing
-    order: plan-method-parity.txt; canon test_v2/class/overload_cls.sl mirrors
-    overload_fn.sl. Constructors have NO overload analog — `_()` is nullary (a hook
+  * METHOD / FUNCTION PARITY — LANDED. methods get overloading + default params +
+    infer-from-default (all of which free functions already had) by routing both
+    through ONE shared overload engine: pickOverload(cands, args, recv_offset) +
+    fillDefaults, factored out of classifyCall (recv_offset 0) and adopted by
+    inferMethodCall (recv_offset 1 — `_$recv` held out of ranking/arity). resolve
+    allows a method overload SET in a class frame; classifyScopeSignatures runs the
+    signature pre-pass over every member (defaults + num_required + infer-from-default).
+    SINCE: method-only signature validations (typeless-needs-default, required-after-
+    optional, same-sig dup-DEFINITION); distinct overloads mangle via methodSymbol; a
+    method FORWARD DECL is satisfied by a same-(exact-scope)-signature definition
+    (orphan check matches owner_ns_frame + parent_frame_id + param_types; inferMethodCall
+    gathers only DEFINED candidates) — full decl+def parity. Detail: plan-method-
+    parity.txt; canon test_v2/class/overload_cls.sl + method.sl. Constructors have NO overload analog — `_()` is nullary (a hook
     over tuple-initialized fields, not a signature-bearing callable); the `Class(args)`
     "args" are field initializers. The adjacent overloadable construct is post-
     construction assignment (`op=`), under operator overloading — not a ctor feature.

@@ -1,0 +1,9 @@
+int float char bool int64 int int
+1 3.14 q true 9999999999 5 7
+int float char bool int64 int int
+10 2 q true 9999999999 5 7
+def.expr = 56
+part.expr = 17
+def.more = 115
+part.more = 142
+def.outsum = 1108

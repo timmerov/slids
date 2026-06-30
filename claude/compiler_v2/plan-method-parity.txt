@@ -1,5 +1,15 @@
 compiler_v2 — PLAN: METHOD / FUNCTION PARITY (Phase 5)
 
+STATUS — LANDED (this is now a record). All three sessions shipped: S1 extracted
+pickOverload from classifyCall; S2 method overload-set registration; S3 inferMethodCall
+adopts the engine. SINCE: classifyScopeSignatures runs the signature pre-pass over every
+member (defaults + num_required + infer-from-default); method-only signature validations
+(typeless-needs-default, required-after-optional, same-sig dup-DEFINITION); methodSymbol
+mangles distinct overloads; method FORWARD DECL + def parity (orphan check matches the
+EXACT scope owner_ns_frame + parent_frame_id + param_types, inferMethodCall gathers only
+DEFINED candidates). Canon test_v2/class/overload_cls.sl + method.sl; standing record
+[[project_method_function_parity]].
+
 GOAL — give METHODS the three callable features FREE FUNCTIONS already have:
 overloading, default parameters, and inferring a param type from its default
 value. Do it by routing both through ONE shared overload-resolution ENGINE, not by

@@ -480,6 +480,18 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     slot, iteratively and recursively, the leaf reusing the single-element class
     init — no separate aggregate leaf path (the rewritten slots are layout-matching
     construction values, so desugar/codegen are unchanged).
+  * INFERRED FIELD TYPES — a typeless field with a DEFAULT (`Class(x = 1, y = 3.14)`)
+    infers its type from the default's preferred type (x -> int, y -> float, width
+    follows the value), like an inferred local / param / const. STAGING: a field type
+    is a kSlid LAYOUT slot (attached by internSlid at resolve registerClassBody) and a
+    default isn't folded until constfold, so resolve DEFERS — it registers a kNoType
+    slot (a typeless field with NO default still errors "needs an explicit type"); then
+    a classify pre-pass (classifyClassSignature, in classifyScopeSignatures, BEFORE any
+    method body / construction reads the field type) folds the default, infers, and
+    RE-INTERNS the handle (internSlid by name+def_id, slots excluded from structKey, so
+    every reference updates). An inferred field is always PRIMITIVE (a const-expr default
+    can't be a class), so the resolve needs-ctor/dtor fixpoint that ran on the kNoType
+    slot stays correct — no re-run. Canon test_v2/class/field.sl; [[project_inferred_field_types]].
   * `.field` is a kFieldExpr (grammar postfix `.name`); classify types it via the
     ClassInfo; desugar lowers it to a kIndexExpr over the field's slot index, so it
     never reaches codegen (slot access by name). `^field` address-of walks
@@ -773,6 +785,32 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     runs no ctor/dtor; the unconditional LHS lifts into the condition pre. Still
     todo.txt: a construction in a store-target / move operand (rejected). Detail:
     [[project_self_and_method_calls]].
+  * BARE-FIELD REWRITE reaches MORE expression contexts. Besides reads / `=` writes /
+    compound writes, the `bare field -> self.field` rewrite now fires for a `##type`
+    OPERAND (`##type(field)` -> the field's type) and an ADDRESS-OF operand (`^field`
+    -> `^self.field`, using the `self` keyword so the addr-of walk descends to a
+    resolvable base). So a bare field works as a value, a store target, a `##type`
+    operand, and under `^`. Canon test_v2/class/field.sl.
+  * METHOD / FUNCTION PARITY — methods get OVERLOADING + DEFAULT PARAMS + INFER-PARAM-
+    TYPE-FROM-DEFAULT (the three callable features free functions already had) through
+    ONE shared overload engine. pickOverload(cands, args, recv_offset) is factored out
+    of classifyCall (exact 0 / widen 1 cost, lowest-total wins; tie = "Ambiguous call",
+    none = "No matching overload") and used by BOTH classifyCall (recv_offset 0) and
+    inferMethodCall (recv_offset 1 — `_$recv` is held out of ranking + the arity range).
+    resolve allows a method OVERLOAD SET in a class frame (a same-name method is an
+    overload; a collision with a non-function member is still a dup); a NAMESPACE
+    function stays single-definition. classifyScopeSignatures runs classifyFunctionSig-
+    nature over EVERY member (defaults + num_required + infer-from-default) BEFORE any
+    body types; fillDefaults is receiver-aligned. Method-only signature checks (a type-
+    less param needs a default; a required param may not follow an optional) run in
+    classifyFunctionSignature; two same-signature method DEFINITIONS are a "Duplicate
+    definition". A method FORWARD DECLARATION is satisfied by a same-signature definition
+    in the EXACT scope (orphan check matches owner_ns_frame + parent_frame_id +
+    param_types; inferMethodCall gathers only DEFINED candidates). Distinct overloads get
+    distinct symbols via methodSymbol (mirrors functionSymbol's entry-id mangle). A
+    CONSTRUCTOR has no overload analog — `_()` is nullary (a hook over tuple-initialized
+    fields), not a signature-bearing callable. Canon test_v2/class/overload_cls.sl +
+    method.sl; detail plan-method-parity.txt; [[project_method_function_parity]].
   * NAME COLLISIONS + TYPE-NAME DIAGNOSTICS. A class name collides with ANY
     same-name entry (another class, an alias / enum / namespace, a const, a
     function) — reportNameCollision carets the source-LATER declaration as the

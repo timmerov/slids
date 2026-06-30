@@ -36,7 +36,12 @@ not a raw `store i64 <ptr>`). SINCE (canon test_v2/class/nameless.sl): a BARE cl
 name is a DEFAULT construction (`Class` == `Class()`) — resolve rewrites a class
 kIdentExpr in a value position into a zero-arg construction (evaluated only), and a
 bare `Class;` statement parses as a parenless kCallStmt that resolve turns into
-form 1 (a parenless non-class is rejected, never silently called). ALSO LANDED
+form 1 (a parenless non-class is rejected, never silently called). SINCE (canon
+test_v2/class/field.sl, [[project_inferred_field_types]]): INFERRED FIELD TYPES — a
+typeless field with a default infers its type; resolve defers a kNoType slot, a
+classify pre-pass (classifyClassSignature) folds + infers + re-interns the slot; and
+the bare-field -> self.field rewrite now reaches `##type(field)` and `^field`
+operands too (not just reads/writes). ALSO LANDED
 (detail in readme "CLASSES: AS A
 NAMESPACE + LOCAL", standing-record memories [[project_v2_class_as_namespace]] /
 [[project_v2_local_classes]]): CLASS-AS-NAMESPACE (a kClass entry; member

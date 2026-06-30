@@ -192,6 +192,17 @@ Args(int x_) {
     void run() { __println("Args:run: " + add2(x_, 5) + " " + pick(true, x_, 0)); }  // 14, 9
 }
 
+/* a method FORWARD DECLARATION followed by its definition — parity with a bare
+   function. The decl and def are SEPARATE entries matched by signature, so the decl
+   is not an orphan and the decl+def pair is not an ambiguous overload. A distinct-
+   signature overload coexists with the forward-declared one. */
+FwdDecl(int x_) {
+    int twice(int n);                       // forward declaration
+    int twice(int n)        { return n * 2; }   // its definition
+    int twice(int n, int k) { return n * k; }   // a distinct overload
+    void run() { __println("FwdDecl:run: " + twice(x_) + " " + twice(x_, 3)); }  // 10 15
+}
+
 int32 main() {
 
     Method method1(76);
@@ -291,6 +302,9 @@ int32 main() {
     Args arg(9);
     arg.run();                                        // Args:run: 14 9
 
+    FwdDecl fd(5);
+    fd.run();                                         // FwdDecl:run: 10 15
+
     return 0;
 }
 
@@ -335,4 +349,11 @@ int32 main() {
 //ParamShadowBad(int x_) {
 //    int m()        { return 7; }
 //    int run(int m) { return m(); }
+//}
+
+/* a method DECLARED but never DEFINED is an orphan — parity with a bare function.
+   (A same-signature definition would satisfy it; here there is none.) */
+//-EXPECT-ERROR: declared but never defined
+//Orphan(int x_) {
+//    int ghost(int n);
 //}

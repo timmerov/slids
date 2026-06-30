@@ -156,7 +156,11 @@ BLOCKED FEATURES
     adjacent .sl, or a link error). Today every declared-nowhere-defined
     function is an error regardless of file. Needs the `.slh` declare-only
     carve-out; lands with the cross-TU / .slh-propagation work (plan Phase 8).
-    prerequisite: group with general work on import.
+    prerequisite: group with general work on import. NOTE: the orphan check now
+    satisfies a forward decl by a SAME-(exact-scope)-signature DEFINITION
+    (owner_ns_frame + parent_frame_id + param_types) — that is the in-TU decl+def
+    parity (a class method decl+def, a free-function decl+def); the remaining gap is
+    only the CROSS-TU `.slh` declare-only case.
 
   * UNUSED PARAMETER AS A COMPILE ERROR — NEEDS REVIEW. Today the unused-local
     sweep (resolve) covers only body-declared locals; parameters are exempt
