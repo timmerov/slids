@@ -246,9 +246,10 @@ Phase 4 — types beyond primitives
     dim is rejected in the grammar [a const-EXPRESSION dim in constfold]. A dim may
     be a const EXPRESSION, not just a literal [`T a[N]`, `T a[sizeof(int)]`,
     `T a[N+1]`], in ANY type position [LANDED everywhere, not just the name]:
-    parseType takes a dim_sink passed by every composition context — tuple slot,
-    var-decl / param / return / alias-RHS / sizeof / cast / conversion target /
-    for-var [a tuple slot is how a const dim rides a pointer/for-var/return type;
+    parseDeclarator (the unified per-site declarator — see plan-declarator.txt)
+    supplies a dim_sink at every type site — var-decl / param / for-var / return /
+    alias-RHS / sizeof / cast / conversion target / enum underlying, and tuple slots
+    [a tuple slot is how a const dim rides a pointer/for-var/return type;
     `int[N]^` array-then-`^` isn't a type]. A non-literal dim spells a provisional
     `[1]` + pushes its expr; constfold's bakeDimsWalk folds + bakes PRE-ORDER over
     the whole TypeRef tree [tuple slots + array elements, through ptr/iter/alias],
@@ -281,7 +282,9 @@ Phase 4 — types beyond primitives
     in type position, const-expr-in-type deferred to "Phase 2"], usable in tuple
     slots `(int[3],int[4])`, alias RHS `alias V=float[3]`, params [via alias] and
     RETURNS `int[3] f()`. Variable decls STAY name-anchored `int x[3]` —
-    reject_array_dims rejects a top-level sized-array type at every declaration site.
+    reject_top_dim (set from NamePolicy: Required / BindSlot) rejects a top-level
+    sized-array type at every named declaration site. [DECLARATOR UNIFICATION LANDED —
+    every type site funnels through parseDeclarator; see plan-declarator.txt.]
     array↔tuple VALUE copy both directions [extractvalue/insertvalue, per-slot
     widen]; array-from-tuple is ELEMENT-AWARE [collectArrayElementNodes descends
     dims.size() levels — a tuple/array element stays an aggregate, REPLACING the old
@@ -496,7 +499,8 @@ Phase 4 — types beyond primitives
   * anonymous tuples (`(T1, T2, ...)`) — LANDED (Form::kTuple + slots, NOT a
     string mechanism). kTupleExpr through all stages. Landed: construct +
     whole-copy + const-index read (runtime tuple index rejected); slot write
-    `t[k]=v` + destructure `(a,b,)=t` (kDestructureStmt, null = skipped slot; typed/
+    `t[k]=v` + destructure `(a,b,)=t` (kDestructureStmt, BindSlot slots; null = a
+    skipped slot — a bare `,` OR a typed-no-name `int` discard; typed/
     untyped/nested slots, one-name-per-pattern dup check, MULTI-DIM array rows now
     destructure — was a dangling-get() crash, fixed); slot-wise arith + scalar
     broadcast; params/returns/references. ARRAY-from-

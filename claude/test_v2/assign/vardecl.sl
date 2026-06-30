@@ -210,6 +210,34 @@ int32 main() {
     int csum = sum_int3(carg);
     __println("csum = " + csum);                                       // 66
 
+    /* TYPED-no-name destructure discard: a typed slot with NO name drops its tuple
+       position — a documented discard, same as an empty `,` slot. It still counts
+       toward arity, so the 3-slot pattern matches a 3-tuple (the middle is dropped). */
+    (int td, int, int te) = (1, 2, 3);
+    __println("td = " + td + " te = " + te);                           // 1 3
+
+    /* COMPOSED nameless slot types: the wrapper chain spells a multi-modifier slot
+       (ref-to-array, array-of-refs) inside a tuple TYPE — unspellable before the
+       declarator unification (the single-suffix slot parser gave "Expected ')'"). */
+    int sra_a[3] = (1, 2, 3);
+    (int[3]^, int) sra = (^sra_a, 99);          // slot 0: reference TO an int[3]
+    __println("sra = " + sra[0]^[2] + " " + sra[1]);                   // 3 99
+
+    int sar_a = 5;
+    int sar_b = 6;
+    (int^[2], int) sar = ((^sar_a, ^sar_b), 77);   // slot 0: array OF 2 references
+    __println("sar = " + sar[0][1]^ + " " + sar[1]);                   // 6 77
+
+    /* redundant / nested type grouping collapses to the inner type at any depth —
+       each `(T)` is a size-1 tuple (grouping; the comma is the tuple marker, there is
+       no 1-tuple), so the parens evaporate unless one scopes a qualifier. Pins the
+       collapse (a deferred item is whether to warn on this pointless grouping). */
+    ((((int)))) grp = 5;
+    int grp1 = grp + 1;
+    __println("grp = " + grp1 + " (" + ##type(grp) + ")");             // 6 (int)
+    (((int[3]))) garr = (7, 8, 9);
+    __println("garr = " + garr[2] + " (" + ##type(garr) + ")");        // 9 (int[3])
+
     return 0;
 }
 
@@ -515,4 +543,33 @@ family / sign-change at the leaf, attributed to the rhs.
 //int32 neg_agg_narrow_call() {
 //    int wide[3] = (1, 2, 3);
 //    return call_narrow_helper(wide);
+//}
+
+/*
+declarator unification — tuple-TYPE slots must be anonymous, and a top-level sized
+array dim is written on the NAME, not inline on the type.
+*/
+
+/* a NAMED slot in a tuple TYPE is "too many names" — the name belongs on the
+   variable, not inside the type. */
+//-EXPECT-ERROR: A tuple-type slot cannot be named
+//int32 neg_tuple_slot_named() {
+//    (int x, int y) z = (1, 2);
+//    return 0;
+//}
+
+/* the same rule holds at ANY nesting depth — a named inner slot is rejected. */
+//-EXPECT-ERROR: A tuple-type slot cannot be named
+//int32 neg_tuple_slot_named_deep() {
+//    ((int a, int b), int) v = ((1, 2), 3);
+//    return 0;
+//}
+
+/* a TOP-LEVEL sized array dim must go on the NAME (`int x[3]`), not inline on the
+   type (`int[3] x`). A dim NESTED in a pointer (`int[3]^ x`) is fine, as is an
+   alias whose underlying is an array. */
+//-EXPECT-ERROR: An array size belongs on the declared name
+//int32 neg_top_dim_on_type() {
+//    int[3] x = (1, 2, 3);
+//    return 0;
 //}

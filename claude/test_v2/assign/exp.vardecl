@@ -22,3 +22,8 @@ pdst^ = 4 5 6
 mdst = 10 20 30
 rret = 11 12 13
 csum = 66
+td = 1 te = 3
+sra = 3 99
+sar = 6 77
+grp = 6 (int)
+garr = 9 (int[3])

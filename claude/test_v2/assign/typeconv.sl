@@ -417,6 +417,16 @@ int32 main() {
     //    return inner_bad2[0][0];
     //}
 
+    /* a NAMED slot in a conversion-TARGET tuple type is "too many names" — the
+       target is a nameless type position, so its slots must be anonymous (the name
+       belongs on the variable). */
+    //-EXPECT-ERROR: A tuple-type slot cannot be named
+    //int neg_conv_slot_named() {
+    //    (int, int) p = (1, 2);
+    //    cs_es = ((int x, int) = p);
+    //    return cs_es[0];
+    //}
+
     /* A class as a conversion target is deferred until op= lands. The grammar
        has no top-level user-named conversion target, so a class would have to
        be reached through a tuple/array slot — but a tuple type with a class

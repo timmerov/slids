@@ -356,12 +356,15 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
 
   * A tuple is Form::kTuple (slots). LITERAL `(a,b,...)` is kTupleExpr (grammar:
     parsePrimary, comma after the first paren expr; size-1 collapses to the bare
-    expr). TYPE `(T,T,...)` parses in parseType; a `(`-led statement disambiguates
-    via looksLikeTupleTypeDecl (trailing name) / looksLikeTupleDestructure (`)=`).
+    expr). TYPE `(T,T,...)` parses in parseType, each slot a ListSlot declarator
+    (anonymous — a NAMED slot `(int x, int y)` is "too many names"); a `(`-led
+    statement disambiguates via looksLikeTupleTypeDecl (trailing name) /
+    looksLikeTupleDestructure (`)=`).
   * Landed: construct + whole-copy + const-index read `t[k]` (extractvalue; a
     RUNTIME index on a tuple is rejected — heterogeneous slots); slot write
-    `t[k]=v` (struct-GEP) + destructure `(a,b,)=t` (kDestructureStmt, null child =
-    skipped slot); slot-wise arith + scalar broadcast (`(1,2,3)+7`); references
+    `t[k]=v` (struct-GEP) + destructure `(a,b,)=t` (kDestructureStmt, each slot a
+    BindSlot declarator; a null child = a skipped slot — a bare `,` OR a typed-no-name
+    `int` discard); slot-wise arith + scalar broadcast (`(1,2,3)+7`); references
     (`(T,T)^` = ptr). A non-primitive RETURN goes via sret (see NON-PRIMITIVE
     RETURN), not by value. Codegen builds the aggregate via insertvalue; classify
     slot-types via internTuple.
@@ -424,14 +427,19 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     able (isIncDecable). Not the arith path — the bump IS the existing inc-dec, just
     leaf-walked.
   * ARRAY TYPES (`int[N]`): parseType parses sized dims, so array types compose —
-    tuple slots `(int[3],int[4])`, alias RHS, params, returns `int[3] f()`. Variable
-    decls stay name-anchored `int x[3]` (reject_array_dims rejects a top-level
-    sized-array type at decl sites; a tuple slot inside still takes dims). A dim may
-    be a const EXPRESSION in ANY type position, not just on a name: parseType takes
-    a `dim_sink` (passed by every composition context — tuple-slot recursion,
-    var-decl / param / return / alias-RHS / sizeof / cast / conversion target /
-    for-var) into which a non-literal dim spells a provisional `[1]` and pushes its
-    expr; with no sink (enum underlying) a non-literal dim is an error. constfold's
+    tuple slots `(int[3],int[4])`, alias RHS, params, returns `int[3] f()`. Every type
+    site funnels through parseDeclarator(NamePolicy) — the UNIFIED declarator (see
+    plan-declarator.txt): Required (var-decl / param / for-var, name-anchored
+    `int x[3]`), Forbidden (return / alias-RHS / cast / conversion / sizeof / enum
+    underlying), ListSlot (a tuple-TYPE slot — anonymous; a named slot is "too many
+    names"), BindSlot (a destructure slot). reject_top_dim (set from the policy:
+    Required / BindSlot, which bind a name) rejects a TOP-LEVEL sized dim — the size
+    goes on the NAME; a dim nested in a `^` (`int[3]^`) or hidden behind an alias is
+    always allowed. parseType is now internal (called only by parseDeclarator + its
+    own const recursion); parseBracketGroup is the shared one-bracket dim primitive.
+    A dim may be a const EXPRESSION in ANY type position: parseDeclarator always
+    supplies a `dim_sink` into which a non-literal dim spells a provisional `[1]` and
+    pushes its expr. constfold's
     bakeDimsWalk then folds + bakes them PRE-ORDER over the whole TypeRef tree
     (descends tuple slots + array elements, through ptr/iter/alias by handle-rebuild)
     — name dims outer, type-position dims inner. ALIAS targets refresh: resolve

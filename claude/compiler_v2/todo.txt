@@ -8,23 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS
 
-  * REVISIT plan-declarator.txt — the declarator design doc is only PARTIALLY
-    landed. The semantics shipped (core-type wrapper chain, sized-dim-on-name
-    rule, destructure declarators, const/mutable qualifiers, mungeParamTypes,
-    call-side by-pointer passing, autoRefPointee), but the structural
-    unification did not. Open items:
-      - "all 10 sites funnel through parseDeclarator" — only the 4 NAMED sites
-        use it (all passing NamePolicy::Required); the nameless/Forbidden sites
-        (return type, alias RHS, enum underlying, cast, conversion, sizeof) and
-        tuple-type slots still call parseType directly. NamePolicy::Forbidden /
-        Optional are defined but never passed as an argument.
-      - parseType + parseNameDims merge — parseDeclarator only WRAPS both; they
-        remain separate functions (a wrapper, not the fusion the plan describes).
-      - tuple-TYPE "too many names" rule (`(int x, int y) z` -> error) — no such
-        diagnostic exists; tuple slots are not ListSlot declarators.
-      - typed-no-name destructure discard (`(int x, int) = e` drops a position) —
-        errors instead; only the bare-`,` empty discard is supported.
-
   * ARENA REALLOC DANGLES `get()` REFERENCES (structural) — `widen::get(ref)`
     returns a `Type const&` into `arena().types`, a `std::vector<Type>`. Any intern
     (`intern` / `internArray` / `internTuple` / `internPointer` / `internIterator`,
@@ -314,3 +297,12 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
 
   * allow partial initialization of an array/tuple of class elements.
     Class arr[3] = (1,2); (Class,Class,Class) tup = (1,2);
+
+  * REDUNDANT / NESTED TYPE GROUPING accepted silently — `((((int)))) x` parses as
+    `int`, at any nesting depth. Each `(T)` layer is a size-1 tuple that collapses to
+    grouping (the comma is the tuple marker; there is no 1-tuple), so the parens
+    evaporate unless one scopes a qualifier (`(const int)^`). A bare `(int) x` is thus
+    pointless parens. Open: reject / warn on grouping with nothing to scope. Note
+    parseType recurses one frame per `(` layer, so a pathological depth is a theoretical
+    parser-stack DoS. Same 1-tuple-collapse root as UNIT ARRAY WITH A NON-SCALAR ELEMENT
+    above. Pinned by vardecl.sl (`((((int)))) grp`). Low priority; harmless today.

@@ -1,9 +1,28 @@
-compiler_v2 — UNIFIED DECLARATOR (design)
+compiler_v2 — UNIFIED DECLARATOR (design + STATUS: LANDED)
 
 A single declarator parser for every site that consumes a type. Replaces the
-current split between parseType (the type spelling, gated by reject_array_dims)
-and parseNameDims (dims that follow a name), and folds destructure in too. This
-is a design doc — nothing here is built yet.
+split between parseType (the type spelling, gated by reject_array_dims, now
+reject_top_dim) and parseNameDims (dims that follow a name), and folds destructure
+in too.
+
+STATUS: LANDED. Every type site funnels through parseDeclarator(NamePolicy) — the
+named sites (Required), the nameless type sites (Forbidden: return type, alias RHS,
+enum underlying, cast / conversion target, sizeof operand), tuple-TYPE slots, and
+destructure slots. parseType is now an internal core-type producer (called only by
+parseDeclarator + its own const recursion). The shared dim-group primitive is
+parseBracketGroup (parseType + parseNameDims fused at the bracket level). Two
+deviations from the design below, both intentional:
+  1. The doc's single ListSlot became TWO policy values — ListSlot (tuple-TYPE
+     slot: force-has_type, a trailing name is "too many names") and BindSlot
+     (destructure slot: normal heuristic, name optional, a typed-no-name slot is a
+     discard). Unavoidable: a bare identifier is a TYPE in a tuple slot but a
+     BINDING NAME in a destructure slot, so they need different has_type handling.
+  2. Tuple-type and destructure slots both build via parseDeclarator (the real
+     shared primitive) but keep SEPARATE per-slot loops — one composes a spelling
+     string, the other builds parse nodes — rather than one literal
+     `parseDeclaratorList` routine.
+Tests: test_v2/assign/vardecl.sl (named-slot / dim-on-name negatives, typed-no-name
+discard, composed nameless slot types), typeconv.sl (conv-target named slot).
 
 
 MOTIVATION

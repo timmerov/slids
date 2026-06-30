@@ -1,5 +1,6 @@
 #include "grammar.h"
 
+#include <cassert>
 #include <ctime>
 #include <memory>
 #include <string>
@@ -136,25 +137,63 @@ struct Parser {
         return newNodeAt(kind, peek().file_id, pos);
     }
 
+    // Parse the contents of ONE sized-array bracket group — the `[` already consumed,
+    // the matching `]` consumed here. A group is one or more comma-separated dims
+    // (`[3]`, `[3,5]`). Fills `spell` with each dim's spelling (the literal text, or a
+    // provisional "1" for a const-EXPRESSION dim) and `exprs` 1:1 (nullptr for a
+    // literal, the parsed expr for a const-expr dim). `allow_expr` gates non-literal
+    // dims: a name-dim / dim_sink context allows them; a no-sink type context rejects
+    // them. Dims are returned in SOURCE order — the caller applies the comma transpose
+    // (`[a,b]` -> `[b][a]`) when appending. The single dim-group parser shared by the
+    // core-type suffix chain (parseType) and the name-anchored dims (parseNameDims).
+    // Returns false (after error()) on a non-positive / malformed literal dim or a
+    // rejected non-literal.
+    bool parseBracketGroup(std::vector<std::string>& spell,
+                           std::vector<std::unique_ptr<parse::Node>>& exprs,
+                           bool allow_expr) {
+        while (true) {
+            if (peek().kind == token::Kind::kIntLiteral) {
+                if (std::strtoll(peek().text.c_str(), nullptr, 10) <= 0) {
+                    error("Array size must be a positive integer constant.");
+                    return false;
+                }
+                spell.push_back(peek().text);
+                advance();   // size
+                exprs.push_back(nullptr);
+            } else if (allow_expr) {
+                auto dim = parseExpr();
+                if (!dim) return false;
+                spell.push_back("1");   // provisional; constfold bakes it
+                exprs.push_back(std::move(dim));
+            } else {
+                error("An array type dimension must be an integer literal.");
+                return false;
+            }
+            if (peek().kind != token::Kind::kComma) break;
+            advance();   // ,
+        }
+        return expect(token::Kind::kRBracket, "]");
+    }
+
     // `seg_toks` (optional out): for a qualified identifier type, the token index
     // of each `:`-separated segment, so resolve can caret the offending segment
     // (a flat spelling string otherwise loses them). Left empty for a primitive.
-    // reject_array_dims: at a DECLARATION (local / global / field / constant /
-    // param / for-var), a top-level sized array type is rejected — the size goes on
-    // the NAME (`int x[3]`). Composition contexts (tuple slot, alias / enum RHS,
-    // sizeof / cast operand, return type) leave it false and accept `int[3]`. An
-    // array TYPE still reaches a declaration via an alias (`Vec3 x`) — its spelling
-    // has no top-level dims — or as a tuple slot.
-    // dim_sink (optional out): a composition context (tuple slot, var-decl /
-    // param / return / alias-RHS / sizeof / cast / conversion target) that supports
-    // const-EXPRESSION array dims passes it. A non-literal type-position dim
-    // (`int[N]`, `int[N+1]`) is then parsed as an expression, a provisional `[1]`
-    // is spelled, and the expr is pushed (a literal dim pushes a nullptr) — so the
-    // sink aligns 1:1 with every type-position array dim, in tree pre-order. With
-    // no sink, a non-literal dim is an error (the pre-fold contexts: enum underlying).
-    // constfold's bakeNodeDims folds + bakes them into the owner node's type.
+    // parseType is the internal core-type producer; every type site reaches it through
+    // parseDeclarator (which owns the per-site policy), so these flags are no longer a
+    // proxy for "is there a name" — NamePolicy is.
+    // reject_top_dim: reject a TOP-LEVEL sized array dim in the spelling (`int[3]`,
+    // `int^[3]`) — set by parseDeclarator from the NamePolicy (Required / BindSlot, where
+    // the size belongs on the NAME: `int x[3]`). An anonymous position (a Forbidden type
+    // site, a ListSlot tuple slot) passes false and accepts a top-level dim. A dim NESTED
+    // inside a pointer wrapper (`int[3]^`) or hidden behind an alias (`Vec3 x`) is never
+    // top-level, so it is always allowed.
+    // dim_sink (out): collects const-EXPRESSION array dims so constfold can fold + bake
+    // them. A non-literal dim (`int[N]`) is parsed as an expression, spelled as a
+    // provisional `[1]`, and pushed (a literal dim pushes a nullptr) — the sink aligns
+    // 1:1 with every type-position array dim, in tree pre-order. parseDeclarator (the
+    // sole entry) always supplies it; a null sink (defensive) rejects a non-literal dim.
     std::string parseType(std::vector<int>* seg_toks = nullptr,
-                          bool reject_array_dims = false,
+                          bool reject_top_dim = false,
                           std::vector<std::unique_ptr<parse::Node>>* dim_sink = nullptr) {
         // `mutable` is a PARAMETER qualifier only — parseParamList consumes it before
         // the type, so reaching it here means a non-parameter position (return type,
@@ -170,7 +209,7 @@ struct Parser {
         // suffix lands OUTSIDE the parens.
         if (peek().kind == token::Kind::kConst) {
             advance();   // const
-            std::string rest = parseType(seg_toks, reject_array_dims, dim_sink);
+            std::string rest = parseType(seg_toks, reject_top_dim, dim_sink);
             if (rest.empty()) return "";
             return "const " + rest;
         }
@@ -186,12 +225,31 @@ struct Parser {
             }
             std::vector<std::string> elems;
             while (true) {
-                // A tuple slot is a composition context: propagate dim_sink so a
-                // const-expr dim in a slot type (`(int[N], int)`) is collected.
-                std::string e = parseType(nullptr, /*reject_array_dims=*/false,
-                                          dim_sink);
-                if (e.empty()) return "";
-                elems.push_back(e);
+                // Each tuple-TYPE slot is a ListSlot declarator: it must be a type and
+                // anonymous. A named slot is "too many names" — the name belongs on the
+                // variable, not inside the type (at ANY nesting depth).
+                Declarator slot;
+                if (!parseDeclarator(NamePolicy::ListSlot, /*parse_name_dims=*/false,
+                                     /*allow_qualified=*/false, nullptr, slot)) {
+                    return "";
+                }
+                if (!slot.name.empty()) {
+                    errorAt(slot.name_tok,
+                            "A tuple-type slot cannot be named; move the name to the "
+                            "variable (write '(T, T) name', not '(T x, T y) name').");
+                    return "";
+                }
+                elems.push_back(slot.type);
+                // Propagate the slot's const-EXPRESSION dims to the outer sink in source
+                // order (bakeDimsWalk visits tuple slots left-to-right) — preserving the
+                // pre-order contract. With no outer sink, a non-literal slot dim is
+                // rejected, exactly as a no-sink type position rejects one.
+                if (dim_sink) {
+                    for (auto& sd : slot.dim_exprs) dim_sink->push_back(std::move(sd));
+                } else if (slot.any_dim_expr) {
+                    error("An array type dimension must be an integer literal.");
+                    return "";
+                }
                 if (peek().kind != token::Kind::kComma) break;
                 advance();   // ,
             }
@@ -264,28 +322,11 @@ struct Parser {
                 advance();   // [
                 std::vector<std::string> bracket_spell;
                 std::vector<std::unique_ptr<parse::Node>> bracket_expr;
-                while (true) {
-                    if (peek().kind == token::Kind::kIntLiteral) {
-                        if (std::strtoll(peek().text.c_str(), nullptr, 10) <= 0) {
-                            error("Array size must be a positive integer constant.");
-                            return "";
-                        }
-                        bracket_spell.push_back(peek().text);
-                        advance();   // size
-                        bracket_expr.push_back(nullptr);
-                    } else if (dim_sink) {
-                        auto dim = parseExpr();
-                        if (!dim) return "";
-                        bracket_spell.push_back("1");   // provisional; constfold bakes
-                        bracket_expr.push_back(std::move(dim));
-                    } else {
-                        error("An array type dimension must be an integer literal.");
-                        return "";
-                    }
-                    if (peek().kind != token::Kind::kComma) break;
-                    advance();   // ,
+                // A non-literal dim is allowed only with a dim_sink to fold it.
+                if (!parseBracketGroup(bracket_spell, bracket_expr,
+                                       /*allow_expr=*/dim_sink != nullptr)) {
+                    return "";
                 }
-                if (!expect(token::Kind::kRBracket, "]")) return "";
                 if (dim_sink && !in_run) {
                     runs.emplace_back();
                     in_run = true;
@@ -312,11 +353,11 @@ struct Parser {
                 break;
             }
         }
-        // TOP-LEVEL SIZED DIM ON THE NAME: at a named declarator (reject_array_dims),
+        // TOP-LEVEL SIZED DIM ON THE NAME: at a named declarator (reject_top_dim),
         // the OUTERMOST sized dim must be written on the name, not inline. A dim
         // NESTED inside a pointer/iterator wrapper (`int[3]^ v`) stays in the type —
         // only a top-level one (`int[3] v`, `int^[3] v`) is rejected.
-        if (reject_array_dims && outermost_sized) {
+        if (reject_top_dim && outermost_sized) {
             error("An array size belongs on the declared name; "
                   "write 'T name[N]', not 'T[N] name'.");
             return "";
@@ -343,40 +384,36 @@ struct Parser {
             advance();   // [
             std::vector<std::string> bracket_spell;
             std::vector<std::unique_ptr<parse::Node>> bracket_expr;
-            while (true) {
-                if (peek().kind == token::Kind::kIntLiteral) {
-                    if (std::strtoll(peek().text.c_str(), nullptr, 10) <= 0) {
-                        error("Array size must be a positive integer constant.");
-                        return false;
-                    }
-                    bracket_spell.push_back(peek().text);
-                    advance();   // size
-                    bracket_expr.push_back(nullptr);
-                } else {
-                    auto dim = parseExpr();
-                    if (!dim) return false;
-                    bracket_spell.push_back("1");   // provisional; constfold bakes it
-                    bracket_expr.push_back(std::move(dim));
-                    any_dim_expr = true;
-                }
-                if (peek().kind != token::Kind::kComma) break;
-                advance();   // ,
+            // Name-dims always allow a const-EXPRESSION dim (the dim_exprs sink folds it).
+            if (!parseBracketGroup(bracket_spell, bracket_expr, /*allow_expr=*/true)) {
+                return false;
             }
-            if (!expect(token::Kind::kRBracket, "]")) return false;
             // Append this bracket's dims reversed (the comma transpose).
             for (std::size_t k = bracket_spell.size(); k-- > 0; ) {
                 type += "[" + bracket_spell[k] + "]";
+                if (bracket_expr[k]) any_dim_expr = true;
                 dim_exprs.push_back(std::move(bracket_expr[k]));
             }
         }
         return true;
     }
 
-    // Whether a declarator site requires / forbids / optionally accepts a name.
-    enum class NamePolicy { Required, Forbidden, Optional };
+    // Whether a declarator site requires / forbids a name, or is a list slot.
+    // Required: var-decl / param / for-var (a name, with the top-level sized dim moved to
+    // it). Forbidden: a nameless type position (return type, alias / cast / conversion
+    // target, sizeof operand). The doc's "ListSlot" — a `( declarator-list )` slot — is
+    // realized as two parse modes, because a bare identifier is a TYPE in one and a NAME
+    // in the other:
+    //   ListSlot: a tuple-TYPE slot — the slot IS a type, anonymous (force has_type); a
+    //     trailing identifier is parsed only to diagnose it ("too many names"), and a
+    //     top-level inline sized dim is allowed (no name to host it).
+    //   BindSlot: a destructure slot — a binding; the type is OPTIONAL (a bare identifier
+    //     is the bound name, inferred), the name is OPTIONAL (a typed-no-name slot is a
+    //     discard), and the top-level sized dim moves to the name as at a Required site.
+    enum class NamePolicy { Required, Forbidden, ListSlot, BindSlot };
 
     // A parsed declarator: `[core-type] [name] [name-dims]` — the unified shape behind
-    // every named type site (and, later, tuple/destructure slots). `type` is the full
+    // every named type site, the nameless type sites, and tuple-type slots. `type` is the full
     // spelling (core + name-dims); `typeless` means no core-type was written (the type
     // is inferred). `dim_exprs` holds const-EXPRESSION dims in name-then-type
     // (pre-order) order for constfold's bake.
@@ -397,10 +434,13 @@ struct Parser {
 
     // Parse a declarator under `policy`. A leading type-start (or qualified-typed-decl
     // / tuple-type shape) is the core-type; otherwise the declarator is TYPELESS and a
-    // lone identifier is the name. `parse_name_dims` enables name-anchored array dims
-    // after the name (var-decl / param shape; a for-var has none). On a Required site
-    // with no name, `missing_name_error` is reported. Returns false on a diagnosed
-    // error.
+    // lone identifier is the name. A Forbidden / ListSlot site has the whole declarator
+    // as the core-type (always present); ListSlot additionally parses an optional
+    // trailing name so the caller can diagnose it. A BindSlot uses the normal heuristic
+    // but the name is OPTIONAL (a typed-no-name slot — the caller treats it as a
+    // discard). `parse_name_dims` enables name-anchored array dims after the name
+    // (var-decl / param shape; a for-var has none). On a Required site with no name,
+    // `missing_name_error` is reported. Returns false on a diagnosed error.
     bool parseDeclarator(NamePolicy policy, bool parse_name_dims, bool allow_qualified,
                          char const* missing_name_error, Declarator& d) {
         d.file_id = peek().file_id;
@@ -410,13 +450,23 @@ struct Parser {
         // diagnosed by parseType) begins a type. At a statement-level var decl the
         // `const` is the named-constant marker and is already consumed before here, so
         // these only fire for params / class fields / inner type positions.
-        bool has_type = isTypeStart(peek().kind) || looksLikeQualifiedTypedDecl()
+        // A Forbidden site is a NAMELESS type position (return type, alias / cast /
+        // conversion target, sizeof operand) and a ListSlot is a tuple-TYPE slot: in
+        // both the whole declarator is the core-type (always present) and any trailing
+        // name is not part of the type, so the trailing-name lookaheads don't apply —
+        // force has_type. (For ListSlot a trailing identifier is then the to-be-rejected
+        // slot name, picked up by have_name below.)
+        bool has_type = policy == NamePolicy::Forbidden || policy == NamePolicy::ListSlot
+            || isTypeStart(peek().kind) || looksLikeQualifiedTypedDecl()
             || peek().kind == token::Kind::kConst || peek().kind == token::Kind::kMutable
             || (peek().kind == token::Kind::kLParen && looksLikeTupleTypeDecl());
         if (has_type) {
-            d.type = parseType(&d.type_seg_toks,
-                               /*reject_array_dims=*/policy != NamePolicy::Forbidden,
-                               &type_dims);
+            // A named declarator (Required) or a destructure slot (BindSlot, which binds
+            // a name) moves the top-level sized dim to the name; an anonymous Forbidden /
+            // ListSlot site has no name to host it, so an inline top-level dim is allowed.
+            bool reject_top_dim = policy == NamePolicy::Required
+                || policy == NamePolicy::BindSlot;
+            d.type = parseType(&d.type_seg_toks, reject_top_dim, &type_dims);
             if (fatal) return false;
         } else {
             d.typeless = true;   // no core-type; the type is inferred
@@ -685,11 +735,14 @@ struct Parser {
     // keyword (`(float64 = intptr = ref)`), else a full expression.
     std::unique_ptr<parse::Node> parseConvertChain(int file_id) {
         int op_tok = pos;
-        std::vector<int> target_seg_toks;
-        std::vector<std::unique_ptr<parse::Node>> conv_dims;
-        std::string target = parseType(&target_seg_toks,
-                                       /*reject_array_dims=*/false, &conv_dims);
-        if (target.empty()) return nullptr;
+        Declarator d;
+        if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
+                             /*allow_qualified=*/false, nullptr, d)) {
+            return nullptr;
+        }
+        std::string target = std::move(d.type);
+        std::vector<int> target_seg_toks = std::move(d.type_seg_toks);
+        std::vector<std::unique_ptr<parse::Node>> conv_dims = std::move(d.dim_exprs);
         if (!expect(token::Kind::kEquals, "=")) return nullptr;
         std::unique_ptr<parse::Node> operand =
             isTypeStart(peek().kind) ? parseConvertChain(file_id) : parseExpr();
@@ -697,9 +750,7 @@ struct Parser {
         auto node = newNodeAt(parse::Kind::kConvertExpr, file_id, op_tok);
         node->return_type = widen::internOrNone(target);
         node->return_type_seg_toks = std::move(target_seg_toks);
-        bool any_conv_dim = false;
-        for (auto& d : conv_dims) if (d) any_conv_dim = true;
-        if (any_conv_dim) node->dim_exprs = std::move(conv_dims);
+        if (d.any_dim_expr) node->dim_exprs = std::move(conv_dims);
         node->children.push_back(std::move(operand));
         return node;
     }
@@ -884,14 +935,13 @@ struct Parser {
             if (!expect(token::Kind::kLParen, "(")) return nullptr;
             auto node = newNodeAt(parse::Kind::kSizeofExpr, sz_file, sz_tok);
             if (isTypeStart(peek().kind)) {
-                std::vector<std::unique_ptr<parse::Node>> sz_dims;
-                std::string ty = parseType(nullptr, /*reject_array_dims=*/false,
-                                           &sz_dims);
-                if (ty.empty()) return nullptr;
-                node->return_type = widen::internOrNone(ty);
-                bool any_sz_dim = false;
-                for (auto& d : sz_dims) if (d) any_sz_dim = true;
-                if (any_sz_dim) node->dim_exprs = std::move(sz_dims);
+                Declarator d;
+                if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
+                                     /*allow_qualified=*/false, nullptr, d)) {
+                    return nullptr;
+                }
+                node->return_type = widen::internOrNone(d.type);
+                if (d.any_dim_expr) node->dim_exprs = std::move(d.dim_exprs);
             } else {
                 auto operand = parseExpr();
                 if (!operand) return nullptr;
@@ -1234,20 +1284,18 @@ struct Parser {
                 node->children.push_back(std::move(operand));
                 return node;
             }
-            std::vector<int> target_seg_toks;
-            std::vector<std::unique_ptr<parse::Node>> cast_dims;
-            std::string target = parseType(&target_seg_toks,
-                                           /*reject_array_dims=*/false, &cast_dims);
-            if (target.empty()) return nullptr;
+            Declarator d;
+            if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
+                                 /*allow_qualified=*/false, nullptr, d)) {
+                return nullptr;
+            }
             if (!expect(token::Kind::kGt, ">")) return nullptr;
             auto operand = parseUnary();
             if (!operand) return nullptr;
             auto node = newNodeAt(parse::Kind::kCastExpr, op_file, op_tok);
-            node->return_type = widen::internOrNone(target);
-            node->return_type_seg_toks = std::move(target_seg_toks);
-            bool any_cast_dim = false;
-            for (auto& d : cast_dims) if (d) any_cast_dim = true;
-            if (any_cast_dim) node->dim_exprs = std::move(cast_dims);
+            node->return_type = widen::internOrNone(d.type);
+            node->return_type_seg_toks = std::move(d.type_seg_toks);
+            if (d.any_dim_expr) node->dim_exprs = std::move(d.dim_exprs);
             node->children.push_back(std::move(operand));
             return node;
         }
@@ -1960,18 +2008,17 @@ struct Parser {
         node->global_qualified = global;
         if (peek().kind == token::Kind::kEquals) {
             advance();   // =
-            std::vector<std::unique_ptr<parse::Node>> alias_dims;
-            std::string target = parseType(nullptr, /*reject_array_dims=*/false,
-                                           &alias_dims);
-            if (fatal) return nullptr;
-            node->return_type = widen::internOrNone(target);
+            Declarator d;
+            if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
+                                 /*allow_qualified=*/false, nullptr, d)) {
+                return nullptr;
+            }
+            node->return_type = widen::internOrNone(d.type);
             // A const-expr dim in the alias TARGET (`alias V = int[N]`): the alias
             // entry's slids_type IS the target, so bakeNodeDims bakes it; constfold's
             // alias-refresh then re-propagates the baked underlying to every use
             // (resolve expanded the alias eagerly, capturing the provisional [1]).
-            bool any_alias_dim = false;
-            for (auto& d : alias_dims) if (d) any_alias_dim = true;
-            if (any_alias_dim) node->dim_exprs = std::move(alias_dims);
+            if (d.any_dim_expr) node->dim_exprs = std::move(d.dim_exprs);
         }
         // else: bare import form — return_type left empty.
         if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
@@ -1996,19 +2043,36 @@ struct Parser {
         //   enum type (        -> anonymous, explicit type
         //   enum type Name (   -> named, explicit type
         std::string underlying = "int";
-        // An explicit underlying type: point the node's error-attribution token at
-        // it (the enum node's tok is read ONLY by registerEnum's underlying-type
-        // validation), so "Unknown type" carets the type name, not the `enum` kw.
+        // An explicit underlying type: point the node's error-attribution token at it
+        // (the enum node's tok is read ONLY by registerEnum's underlying-type validation),
+        // so "Unknown type" carets the type name, not the `enum` kw. The underlying is a
+        // nameless type position — a Forbidden declarator (the enum's bespoke type-vs-name
+        // detection stays here; only the type parse funnels).
+        // We consume ONLY d.type: any const-EXPRESSION dim (d.dim_exprs) or per-segment
+        // tokens are intentionally DROPPED. An array underlying (`enum int[N] X`) is never
+        // valid, so registerEnum rejects it regardless — dropping the dim cannot turn an
+        // invalid enum into an accepted one (a literal `enum int[3]` likewise still fails
+        // there). If enum ever admits an array underlying, revisit: the dim would matter.
         if (isTypeStart(peek().kind)) {
             node->tok = pos;
-            underlying = parseType();
-            if (fatal) return nullptr;
+            Declarator d;
+            if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
+                                 /*allow_qualified=*/false, nullptr, d)) {
+                return nullptr;
+            }
+            underlying = std::move(d.type);
+            assert(!underlying.empty() && "Forbidden declarator yields a non-empty type");
         } else if (peek().kind == token::Kind::kIdentifier
                    && peekKind(1) == token::Kind::kIdentifier) {
             // `ident ident (` -> first ident is an (identifier) type spelling.
             node->tok = pos;
-            underlying = parseType();
-            if (fatal) return nullptr;
+            Declarator d;
+            if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
+                                 /*allow_qualified=*/false, nullptr, d)) {
+                return nullptr;
+            }
+            underlying = std::move(d.type);
+            assert(!underlying.empty() && "Forbidden declarator yields a non-empty type");
         }
         node->return_type = widen::internOrNone(underlying);
         // Optional name.
@@ -2674,16 +2738,19 @@ struct Parser {
     // slot. Targets are parsed first (syntactic order) into [1..], then the rhs
     // is filled into [0].
     // Parse `( slot, ... )` (the leading `(` consumed here) and append the slots to
-    // `node->children` (after children[0], the rhs placeholder). A slot is empty (a
-    // bare `,` -> discard), a DECLARATOR (`[type] name` -> a kVarDeclStmt; `int x`
+    // `node->children` (after children[0], the rhs placeholder). A slot is a discard (a
+    // bare `,`, OR a TYPED-no-name slot `int` — both drop their tuple position, recorded
+    // as a NULL child), a binding DECLARATOR (`[type] name` -> a kVarDeclStmt; `int x`
     // declares, a bare `x` reuses-or-declares per resolve), or a NESTED `( ... )`
-    // destructure (recurse — a kDestructureStmt slot with no rhs of its own).
+    // destructure (recurse — a kDestructureStmt slot with no rhs of its own). Slots are
+    // BindSlot declarators: type optional (a bare name infers), name optional (no name +
+    // a type is the discard).
     bool parseDestructureSlots(parse::Node* node) {
         advance();   // (
         while (true) {
             if (peek().kind == token::Kind::kComma
                 || peek().kind == token::Kind::kRParen) {
-                node->children.push_back(nullptr);   // discard slot
+                node->children.push_back(nullptr);   // empty discard slot
             } else if (peek().kind == token::Kind::kLParen) {
                 auto sub = newNodeAt(parse::Kind::kDestructureStmt, peek().file_id, pos);
                 sub->children.push_back(nullptr);    // [0] = rhs (none for a nested slot)
@@ -2691,16 +2758,27 @@ struct Parser {
                 node->children.push_back(std::move(sub));
             } else {
                 Declarator d;
-                if (!parseDeclarator(NamePolicy::Required, /*parse_name_dims=*/false,
-                                     /*allow_qualified=*/false,
-                                     "Expected a destructure target name.", d)) {
+                if (!parseDeclarator(NamePolicy::BindSlot, /*parse_name_dims=*/false,
+                                     /*allow_qualified=*/false, nullptr, d)) {
                     return false;
                 }
-                auto slot = newNodeAt(parse::Kind::kVarDeclStmt, d.file_id, d.tok);
-                slot->name = std::move(d.name);
-                slot->name_tok = d.name_tok;
-                slot->return_type = widen::internOrNone(d.type);
-                node->children.push_back(std::move(slot));
+                if (!d.name.empty()) {
+                    auto slot = newNodeAt(parse::Kind::kVarDeclStmt, d.file_id, d.tok);
+                    slot->name = std::move(d.name);
+                    slot->name_tok = d.name_tok;
+                    slot->return_type = widen::internOrNone(d.type);
+                    node->children.push_back(std::move(slot));
+                } else if (!d.typeless) {
+                    // A TYPED slot with NO name (`int`) drops its position — a documented
+                    // discard, recorded as a null child exactly like an empty slot. The
+                    // spelled type is NOT validated against the dropped tuple slot (it is
+                    // documentation only); classify/resolve skip a null child entirely.
+                    assert(!d.type.empty() && "a typed-no-name slot has a type spelling");
+                    node->children.push_back(nullptr);
+                } else {
+                    error("Expected a destructure target name or type.");
+                    return false;
+                }
             }
             if (peek().kind != token::Kind::kComma) break;
             advance();   // ,
@@ -3012,9 +3090,12 @@ struct Parser {
     std::unique_ptr<parse::Node> parseFunctionDef() {
         int fn_file = peek().file_id;
         int fn_tok = pos;
-        std::vector<std::unique_ptr<parse::Node>> ret_dims;
-        std::string ret_type = parseType(nullptr, /*reject_array_dims=*/false, &ret_dims);
-        if (fatal) return nullptr;
+        Declarator d;
+        if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
+                             /*allow_qualified=*/false, nullptr, d)) {
+            return nullptr;
+        }
+        std::string ret_type = std::move(d.type);
         if (peek().kind != token::Kind::kIdentifier) {
             error("Expected function name.");
             return nullptr;
@@ -3031,9 +3112,7 @@ struct Parser {
         // A const-expr dim in the RETURN type (`(int[N],int) f()`): a function's
         // entry slids_type IS its return type, so bakeNodeDims bakes node->dim_exprs
         // against node->return_type exactly as for a var-decl.
-        bool any_ret_dim = false;
-        for (auto& d : ret_dims) if (d) any_ret_dim = true;
-        if (any_ret_dim) node->dim_exprs = std::move(ret_dims);
+        if (d.any_dim_expr) node->dim_exprs = std::move(d.dim_exprs);
 
         if (!parseParamList(node.get())) return nullptr;
 
