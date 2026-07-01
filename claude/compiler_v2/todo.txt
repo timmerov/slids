@@ -45,7 +45,7 @@ BLOCKED FEATURES
     only there; `Space:kTwo` outside is "not visible from this scope").
       PHASE 1 — SAME SCOPE: the external form works in the SAME scope as the class decl
       (function body, namespace body, class body — relocate among that scope's siblings).
-      Covers test_v2/misc/bug.sl (`void Class:method1()` beside a local `Class` in main).
+      e.g. `void Class:method1()` beside a local `Class` in a function body.
       PHASE 2 — ALL VISIBLE SCOPES: a re-open in an enclosing/sibling-visible scope, with
       the ASYMMETRY that the members it adds are lexically scoped to the re-open's
       location — the class's own scope and sibling scopes cannot see them (only the
@@ -59,8 +59,10 @@ BLOCKED FEATURES
     pre-pass, before that scope registers its classes), and DELETE the blanket file-scope
     guard, keeping only the genuine per-segment "not a class or namespace in THIS scope"
     error. NOTE a separate, unaffected limit: a LOCAL class still has no name reachable
-    from OUTSIDE its function (naming, not scope). Canon: test_v2/misc/bug.sl (forbidden
-    to modify; golden exp.bug — currently empty, wants `boo-yah` once this lands).
+    from OUTSIDE its function (naming, not scope). Canon: extend test_v2/class/reopen.sl —
+    its STAGE D pins the file-scope-only limit as the current-impl gap (`The external
+    qualified form 'Inner:Deep' is only valid at file scope`). (Do NOT cite bug.sl as
+    canon — it is a rotating "bug of the day" scratch file, not stable.)
 
   * CONSTRUCTION-IN-EXPRESSION — remaining gaps (record:
     [[project_self_and_method_calls]]):

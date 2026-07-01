@@ -497,3 +497,19 @@ int32 fwd_decl(int32 n) {
 //    neg_class_mismatch_fn(^cm);
 //    return 0;
 //}
+
+/* a bare function NAME with no call parens is not a value. As a STATEMENT `helper;`
+   is rejected as a non-statement. */
+//-EXPECT-ERROR: is not a statement
+//int32 neg_fn_stmt() {
+//    helper;
+//    return 0;
+//}
+
+/* ...and in VALUE position `int32 fv = helper;` the call is missing its parameter
+   list — it is NOT an implicit call (and must not crash codegen). */
+//-EXPECT-ERROR: Function call is missing parameter list
+//int32 neg_fn_value() {
+//    int32 fv = helper;
+//    return fv;
+//}

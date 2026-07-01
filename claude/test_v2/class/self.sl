@@ -41,7 +41,7 @@ const-ness is currently parsed but not enforced.
 claude says:
 
 self is the object; ^self is a reference to it. this() returns ^self,
-so `s.this` hands back a Self^ that aliases s.
+so `s.this()` hands back a Self^ that aliases s.
 
 self.NAME forces member lookup past any shadowing name in scope:
 - shadow_x declares a local x_ that hides the field. bare x_ is the
@@ -81,7 +81,7 @@ Self(int x_) {
 int32 main() {
 
     Self s(47);
-    ref = s.this;
+    ref = s.this();
     __println("ref = " + ref^.x_);
 
     int shadow = s.shadow_x();

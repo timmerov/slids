@@ -1153,19 +1153,19 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             }
             int idx = it->second.fieldIndex(e.name);
             if (idx < 0) {
-                // Paren-less zero-arg method call: `obj.method` naming a method
-                // member (no `(args)`) IS a call. Rewrite this kFieldExpr in place
-                // to a kMethodCallStmt (receiver = children[0], no args) and type
-                // it through the shared method-call path.
-                int classId = parse::classEntryForType(tree, bt);
-                int methodId = classId < 0 ? -1
-                    : parse::findMemberDeclared(tree,
-                          tree.entries[classId].ns_frame_id, e.name);
-                if (methodId >= 0
-                    && tree.entries[methodId].kind == parse::EntryKind::kFunction) {
-                    e.kind = parse::Kind::kMethodCallStmt;   // name=method, child[0]=recv
-                    inferMethodCall(tree, e, diag);
-                    return;
+                // A bare method NAME with no `(args)` — `obj.method` — is not a
+                // value; the call is missing its parameter list. (`obj.method(args)`
+                // parses straight to a kMethodCallStmt and never reaches here.)
+                // Search the class AND its bases so an inherited method reports the
+                // missing-`()` error, not a misleading "has no field".
+                for (int frame : parse::classAndBaseFrames(tree, bt)) {
+                    int mid = parse::findMemberDeclared(tree, frame, e.name);
+                    if (mid >= 0
+                        && tree.entries[mid].kind == parse::EntryKind::kFunction) {
+                        diagnostic::report(diag, {e.file_id, e.name_tok,
+                            "Function call is missing parameter list '()'.", {}});
+                        return;
+                    }
                 }
                 diagnostic::report(diag, {e.file_id, e.name_tok,
                     "Class '" + it->second.name + "' has no field '" + e.name
@@ -1426,6 +1426,16 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kIdentExpr: {
             assert(e.resolved_entry_id >= 0
                 && "inferExpr kIdentExpr: resolve did not stamp resolved_entry_id");
+            // A bare FUNCTION name used as a value — `x = fn` — is not a value; the
+            // call is missing its parameter list. (`fn(args)` parses to a kCallExpr,
+            // never a bare ident.) Without this it slips to codegen and asserts (the
+            // name has no alloca).
+            if (tree.entries[e.resolved_entry_id].kind
+                    == parse::EntryKind::kFunction) {
+                diagnostic::report(diag, {e.file_id, e.name_tok,
+                    "Function call is missing parameter list '()'.", {}});
+                return;
+            }
             e.inferred_type = parse::entryType(tree, e.resolved_entry_id);
             // The alias label is the type itself when it's a (scalar) alias —
             // drives binaryLabel's sticky-alias rule; the kAlias type is the

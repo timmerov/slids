@@ -750,7 +750,10 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     two non-classes flex per codegen's numeric rules.)
   * METHODS — a named function in a class body is a method: a ctor/dtor with a user
     name. Grammar parses it like any function and injects an implicit RECEIVER param
-    `_$recv` (Class^, the object's address) at params[0]. (The spec `self` is the
+    `_$recv` (Class^, the object's address) at params[0] — the node built by the
+    shared factory `parse::makeReceiverParam`, the ONE construction of the receiver
+    param, reused by the ctor/dtor form (grammar) and the out-of-line `Class:method`
+    relocation (resolve). (The spec `self` is the
     OBJECT — `_$recv^`; the internal param is the pointer, named distinctly so it
     never collides with the `self` keyword.) The body is a FULL function body (local
     consts/classes, unused-local sweep, nested functions, return checks), with bare
@@ -771,10 +774,18 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     the pointer — an addr-of of a deref is not a codegen lvalue). A bare call resolving
     to a method errors ("Method 'm' must be called on an object.") — call it on the
     receiver or via `self`. LANDED since: the EXPRESSION form (`x = obj.m()`, lowered
-    to a value kCallExpr); SIBLING calls via `self` (`self.m()`); paren-less zero-arg
-    calls (`obj.m`, a kFieldExpr→method rewrite in classify); and a method signature
+    to a value kCallExpr); SIBLING calls via `self` (`self.m()`); and a method signature
     naming its OWN class (`Self^ m(Self^)` — the placeholder ClassInfo is emplaced
-    before member registration so the type is known). The `self` KEYWORD is an
+    before member registration so the type is known). A PAREN-LESS callable used as a
+    VALUE is an ERROR, never a fabricated call — a function/method is only ever called
+    with `()`. classify rejects a bare method name `obj.m` (kFieldExpr with no args,
+    searching the receiver's class + base frames) and a bare FUNCTION name `x = fn`
+    (kIdentExpr resolving to a kFunction) alike, with `Function call is missing
+    parameter list '()'.`. (Before: `obj.m` was silently rewritten to a call and
+    `x = fn` crashed codegen — the kIdentExpr-not-in-SymTab assert.) A paren-less name
+    as a STATEMENT is already rejected upstream (`cls.method;` -> `Expected '='`;
+    `fn;` -> `'fn' is not a statement`). Canon test_v2/class/method.sl +
+    test_v2/function/call.sl. The `self` KEYWORD is an
     address-aliased LOCAL of the class type whose storage IS `_$recv`'s target:
     `self`, `self.field`, `self.m()`, and `^self` (= `_$recv`, its own address) all
     flow through ordinary local machinery — resolve registers it in
@@ -994,8 +1005,9 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   AND namespaces (collectScopeOpenings), searching ALL openings at each level so a segment
   introduced in a re-open is reachable — and MOVES the node into the target scope's children,
   where the ordinary in-scope machinery handles it with no special-casing. A method whose
-  immediate scope is a CLASS gets the implicit `_$recv` receiver spliced in; a namespace/class
-  node, or a free function whose scope is a namespace, gets none. The chained form
+  immediate scope is a CLASS gets the implicit `_$recv` receiver spliced in (via the shared
+  parse::makeReceiverParam); a namespace/class node, or a free function whose scope is a
+  namespace, gets none. The chained form
   `Class1:Ns1:Class2:Ns2:Class3:method` follows; an external namespace MERGES with an in-block
   namespace of the same name and may be re-opened repeatedly.
 

@@ -357,3 +357,21 @@ int32 main() {
 //Orphan(int x_) {
 //    int ghost(int n);
 //}
+
+/* a paren-less method reference is not a value. As a STATEMENT `m.get;` is rejected
+   (an lvalue with no '='). */
+//-EXPECT-ERROR: Expected '='
+//int32 neg_method_stmt() {
+//    Method m(0);
+//    m.get;
+//    return 0;
+//}
+
+/* ...and in VALUE position `int v = m.get;` the call is missing its parameter list —
+   it is NOT an implicit call. */
+//-EXPECT-ERROR: Function call is missing parameter list
+//int32 neg_method_value() {
+//    Method m(0);
+//    int v = m.get;
+//    return v;
+//}

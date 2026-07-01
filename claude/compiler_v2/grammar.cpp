@@ -2150,11 +2150,9 @@ struct Parser {
             }
             auto m = parseFunctionDef();
             if (!m) return nullptr;
-            auto recv = newNodeAt(parse::Kind::kParam, m->file_id, m->name_tok);
-            recv->name = "_$recv";
-            recv->name_tok = m->name_tok;
-            recv->return_type = widen::internOrNone(recv_type);
-            m->params.insert(m->params.begin(), std::move(recv));
+            m->params.insert(m->params.begin(),
+                parse::makeReceiverParam(widen::internOrNone(recv_type),
+                                         m->file_id, m->name_tok));
             return m;
         }
         // A namespace / file-scope body has no call statements, so anything not
@@ -3105,11 +3103,9 @@ struct Parser {
             member->name = is_ctor ? "_$ctor" : "_$dtor";
             member->name_tok = m_tok;
             member->return_type = widen::internOrNone("void");
-            auto recv = newNodeAt(parse::Kind::kParam, m_file, m_tok);
-            recv->name = "_$recv";
-            recv->name_tok = m_tok;
-            recv->return_type = widen::internOrNone(recv_type);
-            member->params.push_back(std::move(recv));
+            member->params.push_back(
+                parse::makeReceiverParam(widen::internOrNone(recv_type),
+                                         m_file, m_tok));
 
             std::string saved_func = current_func;
             current_func = name + (is_ctor ? "._" : ".~");

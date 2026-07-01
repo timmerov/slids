@@ -488,6 +488,12 @@ int  classEntryForType(Tree const& t, widen::TypeRef classType);
 int  classEntryForFrame(Tree const& t, int ns_frame);
 widen::TypeRef entryType(Tree const& t, int entry_id);
 
+// Build the implicit method-receiver param `_$recv` of the given (already-interned)
+// type, stamped at `file_id`/`tok`. THE one construction of the receiver-param node —
+// the in-class method form and the ctor/dtor form (grammar) and the out-of-line
+// relocation (resolve) all splice this same node in at params[0].
+std::unique_ptr<Node> makeReceiverParam(widen::TypeRef type, int file_id, int tok);
+
 // THE canonical walk over a class and its HOISTED descendants (a class's hoisted
 // classes are exactly its kClassDef-kind children, recursively). One place owns
 // the recursion so a new per-class step or nesting rule lands once — resolve,

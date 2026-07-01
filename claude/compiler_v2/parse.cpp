@@ -120,4 +120,15 @@ widen::TypeRef entryType(Tree const& t, int entry_id) {
     return t.entries[entry_id].slids_type;
 }
 
+std::unique_ptr<Node> makeReceiverParam(widen::TypeRef type, int file_id, int tok) {
+    auto n = std::make_unique<Node>();
+    n->kind = Kind::kParam;
+    n->name = "_$recv";
+    n->file_id = file_id;
+    n->tok = tok;
+    n->name_tok = tok;
+    n->return_type = type;
+    return n;
+}
+
 }  // namespace parse

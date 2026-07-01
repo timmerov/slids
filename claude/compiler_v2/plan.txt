@@ -348,7 +348,8 @@ Phase 4 — types beyond primitives
     `Point pt = 0`], so a scalar/tuple slot is the slot-class's ctor input and
     field-arity is validated per slot. No desugar/codegen change — the rewritten slots
     are layout-matching construction values. Covers the ctor/dtor case too
-    [test_v2/misc/bug.sl: `(Class,Class) tuple('a','b')` runs ctors a,b / dtors b,a].
+    [a tuple of hook classes `(Class,Class) tuple('a','b')` runs ctors a,b / dtors b,a;
+    canon tuple/combined.sl].
     This is [[project_aggregate_return_roadmap]] step 2 [tuple of classes].
     Coverage: test_v2/tuple/combined.sl.)
   * non-primitive RETURN via sret (+ RVO / NRVO)                   LANDED
@@ -678,14 +679,17 @@ Phase 5 — classes
     from the method's DEFINING class. Detail: readme "METHODS" +
     [[project_self_and_method_calls]]. SINCE (canon class/self.sl + nameless.sl): the
     `self` KEYWORD is an address-aliased local (so `^self` = `_$recv` for free);
-    EXPRESSION-form calls (`x = obj.m()`), SIBLING calls via `self`, paren-less calls,
+    EXPRESSION-form calls (`x = obj.m()`), SIBLING calls via `self`,
     a method signature naming its OWN class, bare `x_ += 1` field writes, a
     CONSTRUCTION receiver in an EXPRESSION (lifted to a `_$cret` temp), and
     constructions / ctor-calls in a CONDITION (if/while/for/switch — lifted into the
     condition's PPID seq, rebuilt+destroyed per evaluation), incl. under `&&`/`||`
     (the short-circuit RHS lifts into its OWN sub-seq, so a skipped branch runs no
-    ctor/dtor) all LANDED. OPEN (todo.txt): a construction in a store-target / move
-    operand (rejected).
+    ctor/dtor) all LANDED. A paren-less callable used as a VALUE is a compile ERROR,
+    NOT a call: `x = obj.m` (method) / `x = fn` (function) both report `Function call
+    is missing parameter list '()'.` in classify — a function/method is only ever
+    called with `()` (canon method.sl + call.sl). OPEN (todo.txt): a construction in
+    a store-target / move operand (rejected).
   * NAMELESS class objects (`Class(args)`) — LANDED. A call whose callee resolves to
     a kClass is a CONSTRUCTION, not a function call: resolve flags is_construction;
     classify spreads the args into the per-field tuple via classifyClassInit. Form 1

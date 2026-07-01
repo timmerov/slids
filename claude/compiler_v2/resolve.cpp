@@ -4363,13 +4363,9 @@ void relocateOutOfLineMembers(parse::Node* program, diagnostic::Sink& diag) {
         // receiver `_$recv` of type `Class^`. A namespace/class node, or a free
         // function in a namespace, has no receiver.
         if (is_fn && target->kind == parse::Kind::kClassDef) {
-            auto recv = std::make_unique<parse::Node>();
-            recv->kind = parse::Kind::kParam;
-            recv->name = "_$recv";
-            recv->name_tok = ch->name_tok;
-            recv->file_id = ch->file_id;
-            recv->return_type = widen::internOrNone(target->name + "^");
-            ch->params.insert(ch->params.begin(), std::move(recv));
+            ch->params.insert(ch->params.begin(),
+                parse::makeReceiverParam(widen::internOrNone(target->name + "^"),
+                                         ch->file_id, ch->name_tok));
         }
         ch->qualifier.clear();
         ch->qualifier_toks.clear();
