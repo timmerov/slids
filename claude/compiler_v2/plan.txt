@@ -665,8 +665,8 @@ Phase 5 — classes
     (kSlid carrying its field-slot types); construction reuses the tuple aggregate
     path; `.field` lowers to a slot index. ctor/dtor are scope HOOKS (field-init
     first, then the ctor; dtor at scope exit), self-bound, call-if-needed, with
-    forward declarations. Full detail: plan-class-basic.txt + readme "CLASSES +
-    CTOR/DTOR" + [[project_v2_classes]].
+    forward declarations. Full detail: plan-class-basic.txt + readme-classes.txt
+    "CLASSES + CTOR/DTOR" + [[project_v2_classes]].
   * METHODS — LANDED (statement-call form). A named function in a class body is a
     receiver-bound member (a ctor/dtor with a user name): grammar injects the
     implicit receiver param `_$recv` (Class^, the object's address) at params[0],
@@ -676,7 +676,7 @@ Phase 5 — classes
     so it never collides with the `self` keyword.) `obj.method(args)` is a
     kMethodCallStmt resolved via the receiver's class frame (shared member lookup),
     args type-checked, lowered to the lifted `<Class>__method(_$recv, ...)` minted
-    from the method's DEFINING class. Detail: readme "METHODS" +
+    from the method's DEFINING class. Detail: readme-classes.txt "METHODS" +
     [[project_self_and_method_calls]]. SINCE (canon class/self.sl + nameless.sl): the
     `self` KEYWORD is an address-aliased local (so `^self` = `_$recv` for free);
     EXPRESSION-form calls (`x = obj.m()`), SIBLING calls via `self`,
@@ -706,7 +706,7 @@ Phase 5 — classes
     resolve rewrites a class kIdentExpr into a zero-arg construction (EVALUATED only;
     sizeof/##type keep the type), and a bare `Class;` statement parses as a parenless
     kCallStmt that resolve turns into form 1 (a parenless non-class is rejected, not
-    called). Detail: readme "CONSTRUCTION" + test_v2/class/nameless.sl.
+    called). Detail: readme-classes.txt "CONSTRUCTION" + test_v2/class/nameless.sl.
   * inferred field types (`Foo(x = 1, y = 3.14)`) — LANDED. A typeless field infers
     its type from its default. resolve DEFERS (registers a kNoType layout slot; a
     typeless field with no default errors); a classify pre-pass (classifyClassSignature)
@@ -726,7 +726,7 @@ Phase 5 — classes
     cookie + ctor/dtor loops; `delete` runs the dtor (single null-guarded, array
     reverse via the cookie); placement constructs at the buffer; `lvalue.~()`
     (kDtorCallStmt) runs the dtor with no free. Also: `.field` WRITES + field access
-    through deref/iterator (emitElementAddr generalized). Detail in readme "CLASSES:
+    through deref/iterator (emitElementAddr generalized). Detail in readme-classes.txt "CLASSES:
     NEW / DELETE / SIZEOF" + the Phase-4 sizeof / memory-mgmt entries.
     SINCE: an EMPTY class (no fields) gets a 1-byte minimum size — llvmForRef lowers
     a zero-slot kSlid to `{ i8 }`, not `{  }` — so distinct instances, array elements
@@ -738,7 +738,7 @@ Phase 5 — classes
     aliases/consts/enums, methods, nested classes, AND nested namespaces; qualified
     `Class:member`; alias-to-class transparency (`alias Time = Space; Time:Count`);
     `alias Class;` rejected. The class is itself a first-class member of an enclosing
-    namespace (NAMESPACE ↔ CLASS, above). Detail: readme "CLASSES: AS A NAMESPACE +
+    namespace (NAMESPACE ↔ CLASS, above). Detail: readme-classes.txt "CLASSES: AS A NAMESPACE +
     LOCAL" + [[project_namespace_class_unification]].
   * HOISTED classes (a class in another class's BODY) — LANDED. A namespace-member
     of the host, reached as `Outer:Inner` / `Outer:Inner:Innerger` (any depth);
@@ -750,7 +750,7 @@ Phase 5 — classes
     tree (registerScopeNames / resolveScopeTypes / resolveScopeBodies), so the enclosing
     chain is on the stack; names register first), so a bare
     member type out of scope FAILS ("needs a namespace qualifier"). Built per the
-    name-then-resolve / opaque-body model. Detail: readme + [[project_v2_class_as_namespace]].
+    name-then-resolve / opaque-body model. Detail: readme-classes.txt + [[project_v2_class_as_namespace]].
   * LOCAL classes (defined in a function body / nested block) — LANDED. A
     resolveStmtList pre-pass registers each scope's classes (use-before-def +
     block-scoped); shadowing local + file-scope; identity by a def_id in structKey,
@@ -760,7 +760,7 @@ Phase 5 — classes
     mismatched var-decl/assign/call-arg/return. A local class may be named in a
     nested function's SIGNATURE (top-of-body classes register before the nested-fn
     pre-pass), and nested-fn BODIES resolve after the host body so they FORWARD-
-    capture host locals. Detail: readme + [[project_v2_local_classes]].
+    capture host locals. Detail: readme-classes.txt + [[project_v2_local_classes]].
   * class registration is TWO-PHASE (names then bodies) — LANDED. A class field may
     forward-reference a sibling class defined later; the kSlid handle is stable
     slotless->slotful (structKey excludes slots). A by-value field cycle (self /
