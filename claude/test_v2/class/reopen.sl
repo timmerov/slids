@@ -1,7 +1,7 @@
 /*
 test re-opening classes.
 
-classes can be re-opened one or more times.
+classes can be re-opened one or more times in the same scope.
 the class declaration must precede all re-opens.
 from the author's perspective, it's as if everything was declared
 within a single class definition.

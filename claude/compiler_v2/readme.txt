@@ -958,7 +958,12 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   merges into ONE class — members are visible bare or qualified across ALL openings. The
   PRIMARY (field-bearing) definition must come first; the class's LAYOUT is the primary's
   kSlid, and a field-bearing re-open is rejected ("Duplicate definition of class 'X'; a
-  re-open cannot add fields").
+  re-open cannot add fields"). Re-open is a SAME-SCOPE construct — all openings live in the
+  scope where the class is declared. The CROSS-SCOPE / run-time-scope variant (re-opening a
+  class from a scope that isn't its own) is a SEPARATE, not-yet-landed feature — REFINEMENTS:
+  a scoped zero-field derived class ($T) that USURPS the base's name in the scope and only
+  LOOKS like re-opening (rides the landed inheritance + a free offset-0 cast; motivated by
+  giving a generic like `sort<T>` a method the element type lacks). Canon test_v2/class/refine.sl.
 
   BLOCK RE-OPEN. A same-name class with an EMPTY field list re-opens the existing one.
   registerClassName points the re-open node's resolved_entry_id at the PRIMARY's entry and
@@ -996,12 +1001,15 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
 
   DIAGNOSTICS. A missing path segment is careted at the SPECIFIC failing segment, named against
   its parent scope: `'Gone' is not a class or namespace in scope` (first segment) /
-  `'Onest' has no class or namespace member 'Gone'` (a later one). The external form is
-  FILE-SCOPE only — a qualified def nested in a class/namespace body is never relocated (its
-  qualifier would be silently dropped), so reportNestedQualified rejects it: "The external
-  qualified form 'Inner:Deep' is only valid at file scope." (Finding: `Class:Reopen()` of a
+  `'Onest' has no class or namespace member 'Gone'` (a later one). CURRENT-IMPL GAP: the
+  external form's relocation (relocateOutOfLineMembers) only runs over `program->children`, so
+  the external form works only at FILE scope — a qualified def in a namespace / class / function
+  body is rejected by reportNestedQualified ("The external qualified form 'Inner:Deep' is only
+  valid at file scope"). The same-scope DESIGN wants it in every scope where the class is
+  declared; extending relocation per-scope is a todo. (Finding: `Class:Reopen()` of a
   non-existent hoisted class silently creates a new empty class, consistent with the block
-  field-less create-or-re-open rule.) OUT OF SCOPE: `global` vars, `...` incomplete classes.
+  field-less create-or-re-open rule.) OUT OF SCOPE for re-open proper: `global` vars, `...`
+  incomplete classes, and the cross-scope run-time variant (REFINEMENTS, above).
   Canon test_v2/class/reopen.sl.
 
 

@@ -906,11 +906,28 @@ Phase 7 — class advanced
     the target scope — a method into a CLASS gets `_$recv`, a namespace/class node or a
     namespace free function gets none. Chained (`C1:Ns1:C2:Ns2:C3:m`) + external-ns merge with
     an in-block ns both work. Diagnostics: a missing segment carets THAT segment against its
-    parent ('X' is not a class or namespace / 'P' has no ... member 'X'); the external form is
-    FILE-SCOPE only (reportNestedQualified rejects a nested one — its qualifier would be
-    silently dropped). Canon test_v2/class/reopen.sl (Stages A-D + external form:
-    block/method/namespace/hoisted-reopen/chained positives; field-add / redefine / leak /
-    bad-path / nested-form negatives). [[project_reopen_classes]]
+    parent ('X' is not a class or namespace / 'P' has no ... member 'X'). Re-open is a
+    SAME-SCOPE construct; the cross-scope run-time variant is split into REFINEMENTS below.
+    CURRENT-IMPL GAP: relocateOutOfLineMembers only scans program->children, so the external
+    form works only at FILE scope — a qualified def in a namespace/class/function body is
+    rejected (reportNestedQualified, "only valid at file scope"); the same-scope design wants
+    it in every scope (per-scope relocation is a todo). Canon test_v2/class/reopen.sl (Stages
+    A-D + external form: block/method/namespace/hoisted-reopen/chained positives; field-add /
+    redefine / leak / bad-path / nested-form negatives). [[project_reopen_classes]]
+  * REFINEMENTS (run-time-scope re-open) — PLANNED (stub test_v2/class/refine.sl). Re-opening
+    a class from a scope that ISN'T its own is an ILLUSION: it desugars to an anonymous
+    zero-field DERIVED class ($T : T) that USURPS the base's name within that lexical scope,
+    and existing base instances are cast into it (`(<T:$T^> ^x)^.m()`). Both the block form
+    (`Class(){ ... }`) and the external form (`void Class:method(){ }`) trigger it in a run-time
+    scope. SOUND because a re-open adds NO fields, so $T is layout-identical to T → the
+    base->derived cast is a free offset-0 no-op, and the whole thing rides the LANDED inheritance
+    (_$base slot 0, base-chain member lookup). Delivers the scoping asymmetry for free (the
+    original + sibling scopes can't name $T, so they never see the added members) and COMPOSES
+    WITH TEMPLATES: because the refinement is a real TYPE, `sort(^arr)` in the refining scope
+    instantiates `sort<$T>`, whose body finds the refined method — retroactive, scoped
+    conformance (slids's answer to a comparator / trait-impl, no orphan-rule problem). MOTIVATION:
+    `sort<T>(T^ c){ if (c[j].lessthan(c[i])) c[i] <--> c[j]; }` — refine the element type to
+    supply `lessthan` locally. Internal name for $T: the "usurper". [[project_refinements]]
   * incomplete-class semantics (`...`)  — OUT OF SCOPE for now
   * inheritance contracts (`= default`, `= delete`)
   * `instantiation` statement / unnamed instances (`Type(args);`, `Type;`)
