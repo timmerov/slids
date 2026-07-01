@@ -13,7 +13,8 @@ preferredSpelling
 spellOrEmpty
 widen::strip
 
-probably need to code review inherited classes.
+ensure we can define and re-open a class in any scope.
+decide about re-opening a class in a scope not visible to the original declaration.
 
 inferred reference type.
 int x = 100;

@@ -2128,6 +2128,12 @@ struct Parser {
         if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();
         if (t.kind == token::Kind::kEnum)  return parseEnumDecl();
+        // A qualified external scope def — `Class:Namespace { }` (a namespace member
+        // of the class) or `Class:Reopen() { }` (an external re-open of a hoisted
+        // class, empty parens). Checked before looksLikeClassDef, which would grab
+        // the empty-parens form as an (empty-field) derived class. Resolve relocates
+        // the node into its target scope's children.
+        if (looksLikeQualifiedScopeDef()) return parseQualifiedScopeDef();
         if (looksLikeClassDef())           return parseClassDef();   // nested class
         if (t.kind == token::Kind::kIdentifier
             && peekKind(1) == token::Kind::kLBrace) return parseNamespaceDecl();
@@ -2193,6 +2199,35 @@ struct Parser {
             node->children.push_back(std::move(m));
         }
         if (!expect(token::Kind::kRBrace, "}")) return nullptr;
+        return node;
+    }
+
+    // A qualified external scope def — the abbreviated re-open form for a namespace
+    // or hoisted class. Consume the qualifier prefix `A:B:…:` (all but the final
+    // segment), leaving the final segment for parseNamespaceDecl / parseClassDef to
+    // parse as it normally would, then hang the qualifier path on the result. Resolve
+    // relocates the node under the scope named by the qualifier. Gated by
+    // looksLikeQualifiedScopeDef, so the shape is already known valid.
+    std::unique_ptr<parse::Node> parseQualifiedScopeDef() {
+        std::vector<std::string> qualifier;
+        std::vector<int> qualifier_toks;
+        // Count segments so we can stop one short of the final one.
+        int nsegs = 1, o = 1;
+        while (peekKind(o) == token::Kind::kColon
+               && peekKind(o + 1) == token::Kind::kIdentifier) { nsegs++; o += 2; }
+        for (int i = 0; i < nsegs - 1; i++) {
+            qualifier.push_back(peek().text);
+            qualifier_toks.push_back(pos);
+            advance();   // segment identifier
+            advance();   // :
+        }
+        // `pos` is now at the final segment; `{` -> namespace, `(` -> class re-open.
+        std::unique_ptr<parse::Node> node =
+            (peekKind(1) == token::Kind::kLBrace) ? parseNamespaceDecl()
+                                                  : parseClassDef();
+        if (!node) return nullptr;
+        node->qualifier = std::move(qualifier);
+        node->qualifier_toks = std::move(qualifier_toks);
         return node;
     }
 
@@ -2826,6 +2861,27 @@ struct Parser {
         }
     }
 
+    // Pure lookahead: does a bare-identifier head form a QUALIFIED external scope
+    // def — `A:B:…:X { }` (a namespace member of the qualified scope) or
+    // `A:B:…:X() { }` (an external re-open of a hoisted class, EMPTY parens)? At
+    // least one qualifier segment is required (`A:X`), which distinguishes it from
+    // a plain namespace (`A { }`, no colon). A non-empty param list (`A:X(fields)`)
+    // is NOT matched — that is inheritance (`Base:Derived(fields)`), left to
+    // looksLikeClassDef. Consumes nothing.
+    bool looksLikeQualifiedScopeDef() const {
+        if (peekKind(0) != token::Kind::kIdentifier) return false;
+        int o = 1;
+        if (peekKind(o) != token::Kind::kColon
+            || peekKind(o + 1) != token::Kind::kIdentifier) return false;
+        while (peekKind(o) == token::Kind::kColon
+               && peekKind(o + 1) == token::Kind::kIdentifier) o += 2;
+        // `o` now indexes the token after the final segment.
+        if (peekKind(o) == token::Kind::kLBrace) return true;           // namespace
+        return peekKind(o) == token::Kind::kLParen                       // re-open
+            && peekKind(o + 1) == token::Kind::kRParen
+            && peekKind(o + 2) == token::Kind::kLBrace;
+    }
+
     // Pure lookahead: do the tokens form `<return-type> <name> (` — a (nested)
     // function definition — as opposed to a var decl (`type name = / ;`) or a
     // call (`name(...)`, no leading type)? Consumes nothing.
@@ -3103,11 +3159,32 @@ struct Parser {
         std::string name = peek().text;
         int name_tok = pos;
         advance();
+        // A QUALIFIED head `Ret Class:method(...)` (or `A:B:m`) defines a member OUT OF
+        // LINE: the leading segments are the qualifier (the target class / namespace),
+        // the last is the member name. resolve routes it into that frame — for a class
+        // target it becomes a method (receiver-injected). The return-type prefix
+        // distinguishes this from an inheritance head (`Base : Derived(...)`).
+        std::vector<std::string> qualifier;
+        std::vector<int> qualifier_toks;
+        while (peek().kind == token::Kind::kColon) {
+            advance();   // :
+            qualifier.push_back(std::move(name));
+            qualifier_toks.push_back(name_tok);
+            if (peek().kind != token::Kind::kIdentifier) {
+                error("Expected a member name after ':' in a qualified definition.");
+                return nullptr;
+            }
+            name = peek().text;
+            name_tok = pos;
+            advance();
+        }
         if (!expect(token::Kind::kLParen, "(")) return nullptr;
 
         auto node = newNodeAt(parse::Kind::kFunctionDef, fn_file, fn_tok);
         node->name = std::move(name);
         node->name_tok = name_tok;
+        node->qualifier = std::move(qualifier);
+        node->qualifier_toks = std::move(qualifier_toks);
         node->return_type = widen::internOrNone(ret_type);
         // A const-expr dim in the RETURN type (`(int[N],int) f()`): a function's
         // entry slids_type IS its return type, so bakeNodeDims bakes node->dim_exprs

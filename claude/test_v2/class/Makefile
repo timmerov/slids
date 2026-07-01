@@ -11,10 +11,10 @@ SAMPLES = \
 	construct \
 	empty \
 	field \
-	initialize \
 	hoisted \
 	incomplete \
 	inheritance \
+	initialize \
 	method \
 	nameless \
 	namespace_cls \

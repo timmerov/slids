@@ -472,7 +472,7 @@ one at a time and asserts the marked error substring.
 //Dup(int a_, int a_) {
 //}
 
-//-EXPECT-ERROR: Duplicate definition of class 'MyFirstClass'
+//-EXPECT-ERROR: Duplicate definition of class 'MyFirstClass'; a re-open cannot add fields
 //MyFirstClass(int x_) {
 //}
 

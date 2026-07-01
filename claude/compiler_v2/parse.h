@@ -220,6 +220,9 @@ struct Node {
     std::string label;
     int loop_levels = -1;
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
+    bool is_reopen = false;      // kClassDef: a field-less RE-OPEN of an existing class
+                                 // (resolve points resolved_entry_id at the primary's
+                                 // entry; the class BODY passes skip this node)
     bool is_construction = false; // kCallStmt/kCallExpr: a `Class(args)` nameless
                                  // class construction (target resolved to a kClass),
                                  // NOT a function call. resolve sets it; classify

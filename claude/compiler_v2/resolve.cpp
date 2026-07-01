@@ -1,5 +1,6 @@
 #include "resolve.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -3816,7 +3817,7 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
         assert(isScopeMember(*m) && "unexpected scope-member kind in NAME phase");
         if (m->kind == parse::Kind::kClassDef) {
             registerClassName(tree, *m, diag, frame);
-            classes.push_back(m.get());
+            if (!m->is_reopen) classes.push_back(m.get());   // a re-open owns no body
             if (m->resolved_entry_id >= 0)
                 registerScopeNames(tree, *m,
                     tree.entries[m->resolved_entry_id].ns_frame_id, classes, diag);
@@ -3924,15 +3925,31 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
         ? findMemberDeclared(tree, member_of, node.name)
         : parse::findInFrame(tree, decl_frame, node.name);
     if (prev_id >= 0) {
-        // Any same-name entry already in this frame collides — another class
-        // (aliases/enums/namespaces register before classes), or, when classes
-        // register first, a later const/function reports the mirror case itself.
         parse::Entry const& prev = tree.entries[prev_id];
-        std::string msg = prev.kind == parse::EntryKind::kClass
-            ? "Duplicate definition of class '" + node.name + "'."
-            : "Duplicate declaration of '" + node.name + "'.";
-        reportNameCollision(diag, msg, prev.file_id, prev.tok,
-                            node.file_id, node.name_tok);
+        // A same-name CLASS already declared in this frame is a RE-OPEN: the new
+        // opening merges its members into the existing class frame. It may add NO
+        // fields (the layout is the primary's) — a field-bearing re-open is an
+        // error. Point this node at the primary's entry so the caller's member
+        // recursion registers into the shared frame; the class BODY passes
+        // (registerClassBody / cycle / needs) skip a reopen node.
+        if (prev.kind == parse::EntryKind::kClass) {
+            bool has_fields = false;
+            for (auto& p : node.params) if (p) { has_fields = true; break; }
+            if (has_fields) {
+                diagnostic::report(diag, {node.file_id, node.name_tok,
+                    "Duplicate definition of class '" + node.name + "'; a re-open "
+                    "cannot add fields (use '" + node.name + "()' to add members).",
+                    {{prev.file_id, prev.tok, "first defined here"}}});
+                return;
+            }
+            node.is_reopen = true;
+            node.resolved_entry_id = prev_id;
+            node.return_type = prev.slids_type;
+            return;
+        }
+        // A same-name NON-class entry (alias/enum/namespace/const/function) collides.
+        reportNameCollision(diag, "Duplicate declaration of '" + node.name + "'.",
+                            prev.file_id, prev.tok, node.file_id, node.name_tok);
         return;
     }
     // Slotless handle now; registerClassBody re-interns with the field slots (same
@@ -3972,6 +3989,8 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
 // member / enclosing sibling bare — this routine touches no frames.
 void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag) {
     if (node.resolved_entry_id < 0) return;        // a duplicate (Phase 1 skipped it)
+    if (node.is_reopen) return;                    // a re-open adds no fields; the
+                                                   // primary owns the layout + lifecycle
     widen::TypeRef type = node.return_type;
     parse::ClassInfo& info = tree.classes.at(widen::strip(type));
     int def_id = widen::get(widen::strip(type)).def_id;
@@ -4243,6 +4262,131 @@ void mungeParamTypes(parse::Tree& tree, parse::Node& node, diagnostic::Sink& dia
 
 }  // namespace
 
+// Find a class def node named `name` directly among `nodes` (the first opening).
+// Collect every class OR namespace def node named `name` among `scope` (ALL
+// openings of it) — a qualifier segment may be either a class or a namespace.
+void collectScopeOpenings(std::vector<std::unique_ptr<parse::Node>>& scope,
+                          std::string const& name, std::vector<parse::Node*>& out) {
+    for (auto& n : scope)
+        if (n && (n->kind == parse::Kind::kClassDef
+                  || n->kind == parse::Kind::kNamespaceDecl) && n->name == name)
+            out.push_back(n.get());
+}
+
+// Join a qualified def's path (`qualifier[0]:…:name`) for diagnostics.
+std::string qualifiedPath(parse::Node const& n) {
+    std::string p;
+    for (auto const& seg : n.qualifier) p += seg + ":";
+    return p + n.name;
+}
+
+// A qualified external def (`Class:method`, `Class:Namespace {}`, `Class:Reopen()`)
+// is only meaningful at FILE scope, where relocateOutOfLineMembers moves it under its
+// target scope and clears its qualifier. One nested in a class/namespace body is never
+// reached by that pass, so its qualifier would be silently dropped (the member
+// misplaced) — report it instead. Recurses the whole subtree; a successfully relocated
+// def has an empty qualifier and is skipped.
+void reportNestedQualified(parse::Node* node, diagnostic::Sink& diag) {
+    for (auto& ch : node->children) {
+        if (!ch) continue;
+        bool is_def = (ch->kind == parse::Kind::kFunctionDef
+                       || ch->kind == parse::Kind::kFunctionDecl
+                       || ch->kind == parse::Kind::kNamespaceDecl
+                       || ch->kind == parse::Kind::kClassDef);
+        if (is_def && !ch->qualifier.empty())
+            diagnostic::report(diag, {ch->file_id, ch->qualifier_toks.front(),
+                "The external qualified form '" + qualifiedPath(*ch)
+                + "' is only valid at file scope.", {}});
+        reportNestedQualified(ch.get(), diag);
+    }
+}
+
+// OUT-OF-LINE MEMBER RELOCATION. A qualified definition at file scope — the external
+// re-open form — desugars to a member of the scope named by its qualifier path:
+//   `Ret Class:method(...)`  -> a method of Class      (`node->qualifier = [Class]`)
+//   `Class:Namespace { }`    -> a namespace of Class   (`qualifier = [Class]`, ns node)
+//   `Class:Reopen() { }`     -> a hoisted class of Class (`qualifier = [Class]`, cls node)
+// Move the node into the target scope's children, so ALL the in-scope machinery
+// (registration, signatures, self-binding body resolution, the `<Class>__method`
+// lift, namespace/class re-open merge) handles it with no special-casing. A method
+// whose immediate scope is a CLASS gets the implicit `_$recv` receiver spliced in;
+// a namespace/class node — or a free function whose scope is a namespace — gets none.
+// Runs BEFORE any registration pass. A multi-segment path (`A:B:m`,
+// `Class1:Ns1:Class2:m`) walks scope-in-scope through classes AND namespaces,
+// searching ALL openings at each level — a nested scope may be introduced in a
+// re-open, so every opening of the enclosing scope is a candidate parent.
+void relocateOutOfLineMembers(parse::Node* program, diagnostic::Sink& diag) {
+    bool moved = false;
+    for (auto& ch : program->children) {
+        if (!ch) continue;
+        bool is_fn = (ch->kind == parse::Kind::kFunctionDef
+                      || ch->kind == parse::Kind::kFunctionDecl);
+        bool is_scope = (ch->kind == parse::Kind::kNamespaceDecl
+                         || ch->kind == parse::Kind::kClassDef);
+        if ((!is_fn && !is_scope) || ch->qualifier.empty()) continue;
+        // Walk the qualifier path to the target scope. At each level the candidates
+        // are the class/namespace nodes named seg among the children of the previous
+        // level's openings; the target is the first opening of the final segment
+        // (appending to any opening is equivalent — they share one frame).
+        std::vector<parse::Node*> level;
+        collectScopeOpenings(program->children, ch->qualifier[0], level);
+        std::size_t fail_i = 0;                 // segment index where the walk emptied
+        for (std::size_t i = 1; i < ch->qualifier.size() && !level.empty(); i++) {
+            std::vector<parse::Node*> next;
+            for (parse::Node* p : level)
+                collectScopeOpenings(p->children, ch->qualifier[i], next);
+            level = std::move(next);
+            fail_i = i;
+        }
+        if (level.empty()) {
+            // Caret the SPECIFIC segment that could not be resolved (fail_i), named
+            // against its parent scope — not the whole prefix as an undifferentiated
+            // unit (which mis-carets and over-blames when an earlier segment is the
+            // one missing).
+            std::string const& seg = ch->qualifier[fail_i];
+            std::string msg;
+            if (fail_i == 0) {
+                msg = "'" + seg + "' is not a class or namespace in scope.";
+            } else {
+                std::string parent = ch->qualifier[0];
+                for (std::size_t i = 1; i < fail_i; i++)
+                    parent += ":" + ch->qualifier[i];
+                msg = "'" + parent + "' has no class or namespace member '"
+                    + seg + "'.";
+            }
+            diagnostic::report(diag,
+                {ch->file_id, ch->qualifier_toks[fail_i], msg, {}});
+            continue;
+        }
+        parse::Node* target = level.front();
+        // A method (function whose immediate scope is a class) needs the implicit
+        // receiver `_$recv` of type `Class^`. A namespace/class node, or a free
+        // function in a namespace, has no receiver.
+        if (is_fn && target->kind == parse::Kind::kClassDef) {
+            auto recv = std::make_unique<parse::Node>();
+            recv->kind = parse::Kind::kParam;
+            recv->name = "_$recv";
+            recv->name_tok = ch->name_tok;
+            recv->file_id = ch->file_id;
+            recv->return_type = widen::internOrNone(target->name + "^");
+            ch->params.insert(ch->params.begin(), std::move(recv));
+        }
+        ch->qualifier.clear();
+        ch->qualifier_toks.clear();
+        target->children.push_back(std::move(ch));   // leaves a null slot in program
+        moved = true;
+    }
+    if (moved) {
+        auto& c = program->children;
+        c.erase(std::remove(c.begin(), c.end(), nullptr), c.end());
+    }
+    // A qualified external def nested off file scope is never relocated — flag it
+    // rather than silently dropping the qualifier. Scan BELOW each file-scope node
+    // (the file-scope nodes themselves were handled by the loop above).
+    for (auto& ch : program->children)
+        if (ch) reportNestedQualified(ch.get(), diag);
+}
+
 void run(parse::Tree& tree, diagnostic::Sink& diag) {
     parse::Node* program = nullptr;
     for (auto& n : tree.nodes) {
@@ -4254,6 +4398,10 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     if (!program) return;
 
     parse::pushFrame(tree);   // program frame
+
+    // Out-of-line member defs (`Ret Class:method(){...}`) move into their class
+    // before any registration pass sees them.
+    relocateOutOfLineMembers(program, diag);
 
     // Pass 1a-alias — register all file-scope value aliases first, so any decl
     // below (in any order) can resolve through them. Targets are validated after
@@ -4292,7 +4440,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             registerScopeNames(tree, *ch, ns, all_classes, diag);
         } else if (ch->kind == parse::Kind::kClassDef) {
             registerClassName(tree, *ch, diag);   // file scope: member_of = -1
-            all_classes.push_back(ch.get());
+            if (!ch->is_reopen) all_classes.push_back(ch.get());   // re-open owns no body
             if (ch->resolved_entry_id >= 0)
                 registerScopeNames(tree, *ch,
                     tree.entries[ch->resolved_entry_id].ns_frame_id, all_classes, diag);

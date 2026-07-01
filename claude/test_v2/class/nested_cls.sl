@@ -271,8 +271,8 @@ int32 main() {
 
 /* compile errors. */
 
-// two same-named classes in one body collide.
-//-EXPECT-ERROR: Duplicate definition of class 'Dup'
+// two field-bearing same-named classes in one body collide — a re-open cannot add fields.
+//-EXPECT-ERROR: Duplicate definition of class 'Dup'; a re-open cannot add fields
 //void dupbody() {
 //    Dup(int x_) { _(){} ~(){} }
 //    Dup(int y_) { _(){} ~(){} }

@@ -863,7 +863,9 @@ Phase 6 — const correctness
   only a runtime-SCALAR typeless const (`const x = y`) still errors (todo.txt).
 
 Phase 7 — class advanced
-  * hoisted classes (file-scope hoist across reopens)
+  * hoisted classes (file-scope hoist across reopens) — LANDED (see Phase 5 "HOISTED
+    classes"; a nested class introduced/re-opened via a class re-open is reachable — the
+    RE-OPENING entry below + test_v2/class/reopen.sl Host:Nested / Bag:Item).
   * SINGLE INHERITANCE (`Base : Derived(fields){body}`) — LANDED (non-virtual). The
     base is an UNNAMED FIRST FIELD: grammar injects `_$base : Base` at slot 0, so
     layout, FLAT construction (base fields splice in: `Derived d = (b0,b1,own...)`,
@@ -885,7 +887,31 @@ Phase 7 — class advanced
     (qualify to disambiguate) — see todo "OPENED-SCOPE NAME AMBIGUITY".
     [[project_inheritance]]
   * virtual methods + virtual destructors  — OUT OF SCOPE for now
-  * reopens; incomplete-class semantics  — OUT OF SCOPE for now
+  * RE-OPENING CLASSES + THE EXTERNAL FORM — LANDED (non-virtual). A class re-opens to
+    add members after its primary def, as a BLOCK (`Class() {}`, EMPTY field list) or the
+    EXTERNAL qualified form (`Class:member`); all openings merge into ONE frame (members
+    visible bare + qualified across openings), the PRIMARY (field-bearing) def comes first, a
+    field-bearing re-open is rejected ("a re-open cannot add fields"). BLOCK: registerClassName
+    points the re-open node's resolved_entry_id at the primary + marks is_reopen;
+    registerScopeNames recurses members into the shared ns_frame_id; the field-body pass +
+    class-collection loops skip the is_reopen node (primary's layout/lifecycle intact);
+    flattenScope lifts each opening's methods. EXTERNAL: `int C:m()` (method), `C:Ns {}`
+    (namespace), `C:R() {}` (hoisted-class re-open, EMPTY parens), plus const/alias via the
+    inline-qualified machinery; a field-bearing `C:X(fields){}` STAYS inheritance (token-
+    identical to `Base:Derived`). grammar tags node->qualifier (parseFunctionDef head +
+    looksLikeQualifiedScopeDef/parseQualifiedScopeDef, the tail `{`/`()`/`(fields)` dispatching
+    namespace/re-open/inheritance BEFORE looksLikeClassDef); resolve.relocateOutOfLineMembers
+    (pre-registration) walks the qualifier scope-in-scope through classes AND namespaces (all
+    openings searched, so a re-open-introduced segment is reachable) and MOVES the node under
+    the target scope — a method into a CLASS gets `_$recv`, a namespace/class node or a
+    namespace free function gets none. Chained (`C1:Ns1:C2:Ns2:C3:m`) + external-ns merge with
+    an in-block ns both work. Diagnostics: a missing segment carets THAT segment against its
+    parent ('X' is not a class or namespace / 'P' has no ... member 'X'); the external form is
+    FILE-SCOPE only (reportNestedQualified rejects a nested one — its qualifier would be
+    silently dropped). Canon test_v2/class/reopen.sl (Stages A-D + external form:
+    block/method/namespace/hoisted-reopen/chained positives; field-add / redefine / leak /
+    bad-path / nested-form negatives). [[project_reopen_classes]]
+  * incomplete-class semantics (`...`)  — OUT OF SCOPE for now
   * inheritance contracts (`= default`, `= delete`)
   * `instantiation` statement / unnamed instances (`Type(args);`, `Type;`)
 

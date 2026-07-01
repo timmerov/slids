@@ -334,8 +334,9 @@ int32 main() {
 //-EXPECT-ERROR: Expected function name.
 //NsNaked { __println("naked"); }
 
-/* compile error: a duplicate class within a namespace. */
-//-EXPECT-ERROR: Duplicate definition of class 'Dup'.
+/* compile error: a field-bearing duplicate class within a namespace — a re-open
+   cannot add fields. */
+//-EXPECT-ERROR: Duplicate definition of class 'Dup'; a re-open cannot add fields
 //Space { Dup(int a_){} Dup(int b_){} }
 
 /* compile error: a class name colliding with a sibling const in a namespace. */

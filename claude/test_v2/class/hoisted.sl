@@ -267,8 +267,9 @@ int32 main() {
 //    B(A a_) { }
 //}
 
-/* two hoisted classes of the same name in one host collide. */
-//-EXPECT-ERROR: Duplicate definition of class 'Dup'
+/* two field-bearing hoisted classes of the same name in one host collide — a re-open
+   cannot add fields. */
+//-EXPECT-ERROR: Duplicate definition of class 'Dup'; a re-open cannot add fields
 //DupHost(int x_) {
 //    Dup(int a_) { }
 //    Dup(int b_) { }

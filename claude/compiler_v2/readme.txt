@@ -944,11 +944,65 @@ SINGLE INHERITANCE (landed; spans grammar / resolve / classify; non-virtual)
   resolve.frameHasFunction is just findMemberDeclared + a kind check.
 
   DEFERRED: a derived static shadowing a SAME-NAMED base static is bare-ambiguous
-  (qualify to pick) — see todo "OPENED-SCOPE NAME AMBIGUITY". OUT OF SCOPE: virtual,
-  reopen. Canon test_v2/class/inheritance.sl (Stages 1-5; positives incl. synthesized
-  ctor/dtor, field shadowing, transitive sizeof + single heap derived; negatives:
-  implicit downcast, unrelated/sibling cast, off-chain qualifier, cycle + direct
-  self-inheritance, name hiding).
+  (qualify to pick) — see todo "OPENED-SCOPE NAME AMBIGUITY". OUT OF SCOPE: virtual
+  (re-open is now landed — see RE-OPENING CLASSES below). Canon test_v2/class/inheritance.sl
+  (Stages 1-5; positives incl. synthesized ctor/dtor, field shadowing, transitive sizeof +
+  single heap derived; negatives: implicit downcast, unrelated/sibling cast, off-chain
+  qualifier, cycle + direct self-inheritance, name hiding).
+
+
+RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-virtual)
+
+  A class may be RE-OPENED to add members after its primary definition, as a BLOCK
+  (`Class() { ... }`) or via the EXTERNAL qualified form (`Class:member`). Every opening
+  merges into ONE class — members are visible bare or qualified across ALL openings. The
+  PRIMARY (field-bearing) definition must come first; the class's LAYOUT is the primary's
+  kSlid, and a field-bearing re-open is rejected ("Duplicate definition of class 'X'; a
+  re-open cannot add fields").
+
+  BLOCK RE-OPEN. A same-name class with an EMPTY field list re-opens the existing one.
+  registerClassName points the re-open node's resolved_entry_id at the PRIMARY's entry and
+  marks it is_reopen; registerScopeNames recurses the opening's members into the SHARED frame
+  (the persistent ns_frame_id that namespaces already reuse), so const / alias / enum / method
+  / nested class / nested namespace all land in one member set. The field-body pass and the
+  class-collection loops SKIP an is_reopen node (guarded by the flag), so the primary's fields
+  / lifecycle / layout are never clobbered; flattenScope lifts each opening's methods under
+  `<Class>__method` for free. A re-open of a BASE is visible on a DERIVED instance (it rides
+  the _$base chain); a nested class introduced by a re-open, and re-opened again, both work.
+
+  THE EXTERNAL (out-of-line) FORM. `Class:member` at file scope defines a member of Class out
+  of line — it desugars to `Class() { member }`, seeing Class's fields / consts / methods bare.
+  Member kinds: const / alias (the existing inline-qualified-decl machinery); a METHOD
+  `int C:method() { }`; a NAMESPACE `Class:Namespace { }` (brace tail); and a hoisted-class
+  RE-OPEN `Class:Reopen() { }` (EMPTY parens). A field-bearing head `Class:Name(fields) { }`
+  is NOT this form — it is token-identical to inheritance (`Base:Derived(fields)`) and STAYS
+  inheritance; a hoisted class WITH fields is written in a block, not by qualified name. The
+  TAIL disambiguates at grammar (looksLikeQualifiedScopeDef, checked BEFORE looksLikeClassDef
+  so the empty-parens re-open isn't grabbed as an empty-field derived class): `{` -> namespace,
+  `()` -> class re-open, `(fields)` -> inheritance.
+
+  RELOCATION. grammar tags a qualified head with node->qualifier (the target path):
+  parseFunctionDef parses `Ret A:B:m`; parseQualifiedScopeDef parses `A:B:X {` / `A:B:X() {`
+  (consuming the qualifier prefix, then letting parseNamespaceDecl / parseClassDef parse the
+  final segment and hanging the qualifier on the result). resolve.relocateOutOfLineMembers, a
+  pre-pass BEFORE any registration, walks the qualifier path — scope-in-scope through classes
+  AND namespaces (collectScopeOpenings), searching ALL openings at each level so a segment
+  introduced in a re-open is reachable — and MOVES the node into the target scope's children,
+  where the ordinary in-scope machinery handles it with no special-casing. A method whose
+  immediate scope is a CLASS gets the implicit `_$recv` receiver spliced in; a namespace/class
+  node, or a free function whose scope is a namespace, gets none. The chained form
+  `Class1:Ns1:Class2:Ns2:Class3:method` follows; an external namespace MERGES with an in-block
+  namespace of the same name and may be re-opened repeatedly.
+
+  DIAGNOSTICS. A missing path segment is careted at the SPECIFIC failing segment, named against
+  its parent scope: `'Gone' is not a class or namespace in scope` (first segment) /
+  `'Onest' has no class or namespace member 'Gone'` (a later one). The external form is
+  FILE-SCOPE only — a qualified def nested in a class/namespace body is never relocated (its
+  qualifier would be silently dropped), so reportNestedQualified rejects it: "The external
+  qualified form 'Inner:Deep' is only valid at file scope." (Finding: `Class:Reopen()` of a
+  non-existent hoisted class silently creates a new empty class, consistent with the block
+  field-less create-or-re-open rule.) OUT OF SCOPE: `global` vars, `...` incomplete classes.
+  Canon test_v2/class/reopen.sl.
 
 
 STAGE FILES (.h / .cpp pairs)
