@@ -518,9 +518,10 @@ STAGE FILES (.h / .cpp pairs)
             here (a zero/negative literal -> "Array size must be a positive integer
             constant"); a const-EXPRESSION dim is validated in constfold;
             `alias Name = type;` + bare `alias Ns;` decls; namespace decls
-            (`Name { members }`) and inline qualified member decls
-            (`const int Space:kSix = 6;`); enum decls
-            (`enum [type] [Name] ( m1 [= v], ... )`); function defs/decls with typed
+            (`Name { members }`) and qualified member decls
+            (`const int Space:kSix = 6;`, `alias`/`enum` likewise); enum decls
+            (`enum [type] [Name] ( m1 [= v], ... )`, name may be qualified
+            `Class:E`); function defs/decls with typed
             param lists; var-decls with optional leading `const` (file
             scope or function scope) — incl. a TYPELESS const (`const name =
             expr`, detected by `=` immediately after the name, parseType skipped

@@ -16,6 +16,16 @@
 
 namespace resolve {
 
+// Relocate the external qualified defs (`int C:m(){}`, `C:Ns{}`, `C:R(){}`) among a
+// scope's `children` into their target class/namespace, BEFORE that scope registers
+// its members. Runs per-scope (file / namespace / class / function body) so the
+// external re-open form works in any scope the class is declared in. Defined at
+// resolve:: scope (with collectScopeOpenings) but forward-declared here so the
+// anon-namespace scope resolvers can call it.
+void relocateOutOfLineMembers(parse::Tree& tree,
+                              std::vector<std::unique_ptr<parse::Node>>& children,
+                              diagnostic::Sink& diag);
+
 namespace {
 
 bool isPrintIntrinsic(std::string const& name) {
@@ -781,10 +791,12 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
             // kFunctionDecl (forward decl) has no body — legitimately no-op'd below.
             resolveFunctionBody(tree, *m, diag, /*nested=*/false);
         } else if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
+            if (isQualified(*m)) continue;   // remote-namespace member, done by relocation
             for (auto& init : m->children) {
                 if (init) resolveExpr(tree, *init, diag);
             }
         } else if (m->kind == parse::Kind::kEnumDecl) {
+            if (isQualified(*m)) continue;   // remote-namespace member, done by relocation
             resolveEnumMemberInits(tree, *m, diag);
         } else if (m->kind == parse::Kind::kNamespaceDecl) {
             resolveScopeBodies(tree, *m, /*isClass=*/false, diag);
@@ -821,6 +833,7 @@ void resolveScopeTypes(parse::Tree& tree, parse::Node& node, bool isClass,
     // scope may name a member alias.
     for (auto& m : node.children) {
         if (!m || m->kind != parse::Kind::kAliasDecl) continue;
+        if (isQualified(*m) && m->return_type != widen::kNoType) continue;  // remote member
         if (m->resolved_entry_id < 0) continue;   // a duplicate — skipped at NAMES
         resolveDeclType(tree, m->return_type, m->file_id, m->tok, diag);
         tree.entries[m->resolved_entry_id].slids_type = m->return_type;
@@ -832,6 +845,7 @@ void resolveScopeTypes(parse::Tree& tree, parse::Node& node, bool isClass,
         if (!m) continue;
         assert(isScopeMember(*m) && "unexpected scope-member kind in TYPES phase");
         if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
+            if (isQualified(*m)) continue;   // remote-namespace member, done by relocation
             if (m->resolved_entry_id < 0) continue;   // a duplicate — skipped at NAMES
             resolveDeclType(tree, m->return_type, m->file_id, m->tok, diag);
             if (constNeedsStorage(m->return_type)) {
@@ -895,47 +909,6 @@ void resolveBareAlias(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag)
         }
     }
     tree.open_ns_frames.push_back(frame);
-}
-
-// An inline qualified member declaration: `const int Space:kSix = 6;` defines a
-// const member of an existing namespace by qualified name. Registers the entry
-// (lifetime = current lexical frame) and resolves its init.
-void resolveInlineQualifiedDecl(parse::Tree& tree, parse::Node& s,
-                                diagnostic::Sink& diag) {
-    if (!s.is_const) {
-        diagnostic::report(diag, {s.file_id, s.name_tok,
-            "Only constant members may be defined by qualified name.", {}});
-        return;
-    }
-    int frame = resolveNamespaceSegments(tree, s.qualifier, s.qualifier_toks,
-                                         s.global_qualified, s.file_id, diag);
-    if (frame < 0) return;
-    resolveDeclType(tree, s.return_type, s.file_id, s.tok, diag);
-    // A non-scalar const member is a not-mutable GLOBAL — globals are not yet built
-    // (Phase 8).
-    if (constNeedsStorage(s.return_type)) {
-        diagnostic::report(diag, {s.file_id, s.name_tok,
-            "A const variable of a non-scalar type (array, tuple, class, or "
-            "pointer) requires global storage, which is not yet supported.", {}});
-    }
-    if (int prev = findMemberDeclared(tree, frame, s.name); prev >= 0) {
-        parse::Entry const& pe = tree.entries[prev];
-        diagnostic::report(diag, {s.file_id, s.name_tok,
-            "Duplicate declaration of '" + s.name + "'.",
-            {{pe.file_id, pe.tok, "first declared here"}}});
-        return;
-    }
-    parse::Entry e;
-    e.kind = parse::EntryKind::kConst;
-    e.name = s.name;
-    e.slids_type = s.return_type;
-    e.file_id = s.file_id;
-    e.tok = s.name_tok;
-    e.owner_ns_frame = frame;
-    s.resolved_entry_id = parse::addEntry(tree, std::move(e));
-    for (auto& init : s.children) {
-        if (init) resolveExpr(tree, *init, diag);
-    }
 }
 
 // ---- Enums ------------------------------------------------------------------
@@ -2481,11 +2454,11 @@ void resolveDestructureSlots(parse::Tree& tree, parse::Node& node,
 Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     switch (s.kind) {
         case parse::Kind::kVarDeclStmt: {
-            // A qualified name defines a namespace member, not a local.
-            if (isQualified(s)) {
-                resolveInlineQualifiedDecl(tree, s, diag);
-                return Completion::Normal;
-            }
+            // A qualified const targeting a LOCAL class was physically moved into it by
+            // relocateOutOfLineMembers; one targeting a remote NAMESPACE was registered
+            // in place (registerQualifiedLeaf) and left here so constfold folds its init.
+            // Either way it is already a member, not a local — skip it.
+            if (isQualified(s)) return Completion::Normal;
             // Const-expression array dims (`arr[N]`, `arr[sizeof(int)]`): resolve
             // each so its const refs / sizeof resolve; constfold folds + bakes the
             // size into the type spelling (provisional `[1]` until then).
@@ -2736,11 +2709,17 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             return Completion::Normal;
         }
         case parse::Kind::kAliasDecl: {
-            // Bare `alias Ns;` imports a namespace's members into this scope.
+            // Bare `alias Ns;` / `alias Ns:Sub;` (NO target) imports a namespace's
+            // members into this scope — checked FIRST, so a qualified import isn't
+            // mistaken for a member decl.
             if (s.return_type == widen::kNoType) {
                 resolveBareAlias(tree, s, diag);
                 return Completion::Normal;
             }
+            // A qualified alias WITH a target (`alias C:Num = int;`) was relocated into a
+            // LOCAL class, or registered into a remote NAMESPACE's frame in place — either
+            // way it is already a member, so skip it here.
+            if (isQualified(s)) return Completion::Normal;
             // Function-scope value alias: register in the body frame, then
             // validate the target (forward refs within a body aren't pre-scanned).
             registerAlias(tree, s, diag);
@@ -2770,6 +2749,10 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             return Completion::Normal;
         }
         case parse::Kind::kEnumDecl: {
+            // A qualified enum (`enum int C:E(…)` / `enum int Space:E(…)`) was moved into
+            // a local class, or registered into a remote namespace's frame in place —
+            // already a member, so skip it.
+            if (isQualified(s)) return Completion::Normal;
             // An enum opened in a function body: registers its alias+namespace+
             // members (named) or bare consts (anonymous) in the current frame.
             // All enclosing-scope entries already exist here, so resolve the
@@ -3477,6 +3460,10 @@ Completion resolveStmtList(parse::Tree& tree,
     // class works in any of them. Idempotent: a function body's top-level classes
     // were already registered by resolveFunctionBody (ahead of the nested-fn
     // signature pre-pass), so registerLocalClasses skips an already-registered one.
+    // First relocate any external qualified defs (`int C:m(){}`, `C:Ns{}`, `C:R(){}`)
+    // into their target — the external re-open form in a function body / nested block
+    // — so the pre-pass registers them as members of that class/namespace.
+    relocateOutOfLineMembers(tree, stmts, diag);
     registerLocalClasses(tree, stmts, diag);
     for (std::size_t i = 0; i < stmts.size(); i++) {
         if (!stmts[i]) continue;
@@ -3613,6 +3600,9 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
     // name a body-local class in its signature, `void use(LocalClass^ p)`).
     // resolveStmtList's own pre-pass (covering nested blocks) is idempotent — it
     // skips a class already registered here — so these don't double-register.
+    // Relocate external qualified defs first (so a `int C:m(){}` beside a body-local
+    // `C` registers as C's method before this pre-pass runs).
+    relocateOutOfLineMembers(tree, fn.children, diag);
     registerLocalClasses(tree, fn.children, diag);
     // Forward-decl pre-pass for kConst: pre-create entries so const init
     // expressions can reference later-declared consts in the same body.
@@ -3795,6 +3785,11 @@ void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
 void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
                         std::vector<parse::Node*>& classes,
                         diagnostic::Sink& diag) {
+    // External qualified defs among this scope's members (`int Sib:m(){}`, `Sib:Ns{}`,
+    // `Sib:R(){}` targeting a sibling class/namespace declared here) relocate into
+    // their target BEFORE we register anything — the external re-open form in a
+    // namespace / class body.
+    relocateOutOfLineMembers(tree, node.children, diag);
     auto isDup = [&](parse::Node& m) {
         int prev = findMemberDeclared(tree, frame, m.name);
         if (prev >= 0) {
@@ -3827,13 +3822,19 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
             m->resolved_entry_id = ns;
             registerScopeNames(tree, *m, ns, classes, diag);
         } else if (m->kind == parse::Kind::kEnumDecl) {
+            // A qualified enum was moved into a local class, or (remote namespace)
+            // registered in place by relocation — already done; skip.
+            if (isQualified(*m)) continue;
             registerEnum(tree, *m, frame, diag);
         }
     }
     // Member aliases — entry with a PROVISIONAL target (resolveScopeTypes resolves
-    // the target after all names exist, so an alias may name any class).
+    // the target after all names exist, so an alias may name any class). A qualified
+    // external alias was moved into a local class, or (remote namespace) registered in
+    // place by relocation — only local aliases (and bare imports) remain here.
     for (auto& m : node.children) {
         if (!m || m->kind != parse::Kind::kAliasDecl) continue;
+        if (isQualified(*m) && m->return_type != widen::kNoType) continue;
         if (isDup(*m)) continue;
         parse::Entry e;
         e.kind = parse::EntryKind::kAlias;
@@ -3850,6 +3851,7 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
     for (auto& m : node.children) {
         if (!m) continue;
         if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
+            if (isQualified(*m)) continue;   // remote-namespace member, done by relocation
             if (isDup(*m)) continue;
             parse::Entry e;
             e.kind = parse::EntryKind::kConst;
@@ -4144,6 +4146,10 @@ void registerLocalClasses(parse::Tree& tree,
             registerScopeNames(tree, *c,
                 tree.entries[c->resolved_entry_id].ns_frame_id, classes, diag);
     }
+    // A qualified external const / alias / enum declared beside a local class was
+    // relocated into that class's children by relocateOutOfLineMembers (run over the
+    // stmt list before this), so registerScopeNames above already registered it as an
+    // ordinary member — no separate qualified-member pass is needed here.
     for (parse::Node* c : fresh) resolveScopeTypes(tree, *c, /*isClass=*/true, diag);
     checkClassCyclesAndNeeds(tree, classes, diag);
     for (parse::Node* c : fresh) resolveScopeBodies(tree, *c, /*isClass=*/true, diag);
@@ -4280,56 +4286,111 @@ std::string qualifiedPath(parse::Node const& n) {
     return p + n.name;
 }
 
-// A qualified external def (`Class:method`, `Class:Namespace {}`, `Class:Reopen()`)
-// is only meaningful at FILE scope, where relocateOutOfLineMembers moves it under its
-// target scope and clears its qualifier. One nested in a class/namespace body is never
-// reached by that pass, so its qualifier would be silently dropped (the member
-// misplaced) — report it instead. Recurses the whole subtree; a successfully relocated
-// def has an empty qualifier and is skipped.
-void reportNestedQualified(parse::Node* node, diagnostic::Sink& diag) {
-    for (auto& ch : node->children) {
-        if (!ch) continue;
-        bool is_def = (ch->kind == parse::Kind::kFunctionDef
-                       || ch->kind == parse::Kind::kFunctionDecl
-                       || ch->kind == parse::Kind::kNamespaceDecl
-                       || ch->kind == parse::Kind::kClassDef);
-        if (is_def && !ch->qualifier.empty())
-            diagnostic::report(diag, {ch->file_id, ch->qualifier_toks.front(),
-                "The external qualified form '" + qualifiedPath(*ch)
-                + "' is only valid at file scope.", {}});
-        reportNestedQualified(ch.get(), diag);
+// Register a qualified LEAF member (const / alias / enum) into an already-resolved target
+// FRAME — the remote-namespace case of the external re-open form (a namespace opens in
+// any scope, so a nested scope may add a member to it). The caller has verified the frame
+// and consumes (nulls) the node afterward, so no later pass re-processes it.
+void registerQualifiedLeaf(parse::Tree& tree, parse::Node& s, int frame,
+                           diagnostic::Sink& diag) {
+    if (s.kind == parse::Kind::kEnumDecl) {
+        registerEnum(tree, s, frame, diag);
+        resolveEnumMemberInits(tree, s, diag);
+        return;
     }
+    if (int prev = findMemberDeclared(tree, frame, s.name); prev >= 0) {
+        parse::Entry const& pe = tree.entries[prev];
+        diagnostic::report(diag, {s.file_id, s.name_tok,
+            "Duplicate declaration of '" + s.name + "'.",
+            {{pe.file_id, pe.tok, "first declared here"}}});
+        return;
+    }
+    parse::Entry e;
+    e.name = s.name;
+    e.slids_type = s.return_type;
+    e.file_id = s.file_id;
+    e.tok = s.name_tok;
+    e.owner_ns_frame = frame;
+    if (s.kind == parse::Kind::kAliasDecl) {
+        e.kind = parse::EntryKind::kAlias;
+        s.resolved_entry_id = parse::addEntry(tree, std::move(e));
+        for (auto& d : s.dim_exprs) if (d) resolveExpr(tree, *d, diag);
+        resolveDeclType(tree, s.return_type, s.file_id, s.tok, diag);
+        return;
+    }
+    // const
+    e.kind = parse::EntryKind::kConst;
+    resolveDeclType(tree, s.return_type, s.file_id, s.tok, diag);
+    if (constNeedsStorage(s.return_type)) {
+        diagnostic::report(diag, {s.file_id, s.name_tok,
+            "A const variable of a non-scalar type (array, tuple, class, or "
+            "pointer) requires global storage, which is not yet supported.", {}});
+    }
+    s.resolved_entry_id = parse::addEntry(tree, std::move(e));
+    for (auto& init : s.children) if (init) resolveExpr(tree, *init, diag);
 }
 
-// OUT-OF-LINE MEMBER RELOCATION. A qualified definition at file scope — the external
+// OUT-OF-LINE MEMBER RELOCATION. A qualified definition — the external
 // re-open form — desugars to a member of the scope named by its qualifier path:
 //   `Ret Class:method(...)`  -> a method of Class      (`node->qualifier = [Class]`)
 //   `Class:Namespace { }`    -> a namespace of Class   (`qualifier = [Class]`, ns node)
 //   `Class:Reopen() { }`     -> a hoisted class of Class (`qualifier = [Class]`, cls node)
+//   `const int Class:k = 7;` -> a const of Class       (`qualifier = [Class]`, var node)
+//   `alias Class:A = int;`   -> an alias of Class       (`qualifier = [Class]`, alias node)
+//   `enum int Class:E ( … );`-> an enum of Class        (`qualifier = [Class]`, enum node)
 // Move the node into the target scope's children, so ALL the in-scope machinery
 // (registration, signatures, self-binding body resolution, the `<Class>__method`
 // lift, namespace/class re-open merge) handles it with no special-casing. A method
 // whose immediate scope is a CLASS gets the implicit `_$recv` receiver spliced in;
-// a namespace/class node — or a free function whose scope is a namespace — gets none.
-// Runs BEFORE any registration pass. A multi-segment path (`A:B:m`,
-// `Class1:Ns1:Class2:m`) walks scope-in-scope through classes AND namespaces,
-// searching ALL openings at each level — a nested scope may be introduced in a
-// re-open, so every opening of the enclosing scope is a candidate parent.
-void relocateOutOfLineMembers(parse::Node* program, diagnostic::Sink& diag) {
+// a namespace/class node — or a free function whose scope is a namespace — gets none;
+// a const/alias/enum leaf gets none. Runs per-scope (over `children`), BEFORE that
+// scope registers its members, so the target opening is a SIBLING in the same
+// `children` (same-scope re-open). A multi-segment path (`A:B:m`, `Class1:Ns1:Class2:m`)
+// walks scope-in-scope through classes AND namespaces, searching ALL openings at each
+// level — a nested scope may be introduced in a re-open, so every opening of the
+// enclosing scope is a candidate parent.
+//
+// A CLASS re-open is SAME-SCOPE only: the target class must be a sibling opening in THIS
+// `children` — a class merely VISIBLE from an enclosing scope is NOT searched, so
+// re-opening it from a non-declaring scope (refine) is rejected per-segment. A NAMESPACE,
+// by contrast, may be opened in ANY scope: a qualified LEAF (const/alias/enum) whose first
+// segment names an enclosing-scope namespace is registered into that namespace's frame in
+// place (registerQualifiedLeaf) rather than physically moved.
+void relocateOutOfLineMembers(parse::Tree& tree,
+                              std::vector<std::unique_ptr<parse::Node>>& children,
+                              diagnostic::Sink& diag) {
     bool moved = false;
-    for (auto& ch : program->children) {
+    for (auto& ch : children) {
         if (!ch) continue;
+        if (ch->qualifier.empty()) continue;   // not the external out-of-line form
         bool is_fn = (ch->kind == parse::Kind::kFunctionDef
                       || ch->kind == parse::Kind::kFunctionDecl);
         bool is_scope = (ch->kind == parse::Kind::kNamespaceDecl
                          || ch->kind == parse::Kind::kClassDef);
-        if ((!is_fn && !is_scope) || ch->qualifier.empty()) continue;
+        bool is_enum = (ch->kind == parse::Kind::kEnumDecl);
+        bool is_const = (ch->kind == parse::Kind::kVarDeclStmt && ch->is_const);
+        // A qualified alias with a TARGET is an external member; a bare qualified alias
+        // (`alias Ns:Sub;`, kNoType) is a namespace IMPORT resolved at its use scope —
+        // leave it in place.
+        bool is_alias = (ch->kind == parse::Kind::kAliasDecl
+                         && ch->return_type != widen::kNoType);
+        // A qualified MUTABLE var (`int C:x = 5;`) is not a re-openable member — only
+        // constants / aliases / enums (and whole method / namespace / class defs) are.
+        // Report and drop it so no later pass mis-registers a stray qualified var.
+        if (ch->kind == parse::Kind::kVarDeclStmt && !ch->is_const) {
+            diagnostic::report(diag, {ch->file_id, ch->name_tok,
+                "Only constants, aliases, and enums may be defined by qualified name.",
+                {}});
+            ch.reset();
+            moved = true;
+            continue;
+        }
+        if (!is_fn && !is_scope && !is_enum && !is_const && !is_alias) continue;
         // Walk the qualifier path to the target scope. At each level the candidates
         // are the class/namespace nodes named seg among the children of the previous
         // level's openings; the target is the first opening of the final segment
         // (appending to any opening is equivalent — they share one frame).
         std::vector<parse::Node*> level;
-        collectScopeOpenings(program->children, ch->qualifier[0], level);
+        collectScopeOpenings(children, ch->qualifier[0], level);
         std::size_t fail_i = 0;                 // segment index where the walk emptied
         for (std::size_t i = 1; i < ch->qualifier.size() && !level.empty(); i++) {
             std::vector<parse::Node*> next;
@@ -4339,6 +4400,26 @@ void relocateOutOfLineMembers(parse::Node* program, diagnostic::Sink& diag) {
             fail_i = i;
         }
         if (level.empty()) {
+            // A LEAF whose FIRST segment is not a local sibling may still target a
+            // NAMESPACE opened in an enclosing scope (namespaces open in any scope):
+            // register it into that namespace's frame in place, then drop the node. A
+            // CLASS first segment is NOT accepted here — a class re-open is same-scope
+            // only, so a non-local class (refine) falls through to the per-segment error.
+            if (fail_i == 0 && (is_const || is_alias || is_enum)) {
+                // Idempotent: relocation runs more than once over a function body
+                // (resolveFunctionBody + resolveStmtList), so register the leaf once.
+                if (ch->resolved_entry_id >= 0) continue;
+                int seg0 = resolveName(tree, ch->qualifier[0]);
+                if (seg0 >= 0
+                    && tree.entries[seg0].kind == parse::EntryKind::kNamespace) {
+                    int frame = resolveNamespaceSegments(tree, ch->qualifier,
+                        ch->qualifier_toks, ch->global_qualified, ch->file_id, diag);
+                    if (frame >= 0) registerQualifiedLeaf(tree, *ch, frame, diag);
+                    // Leave the node in place (qualifier intact) so constfold folds its
+                    // init; the intermediate resolve passes skip a qualified leaf.
+                    continue;
+                }
+            }
             // Caret the SPECIFIC segment that could not be resolved (fail_i), named
             // against its parent scope — not the whole prefix as an undifferentiated
             // unit (which mis-carets and over-blames when an earlier segment is the
@@ -4369,18 +4450,12 @@ void relocateOutOfLineMembers(parse::Node* program, diagnostic::Sink& diag) {
         }
         ch->qualifier.clear();
         ch->qualifier_toks.clear();
-        target->children.push_back(std::move(ch));   // leaves a null slot in program
+        target->children.push_back(std::move(ch));   // leaves a null slot behind
         moved = true;
     }
-    if (moved) {
-        auto& c = program->children;
-        c.erase(std::remove(c.begin(), c.end(), nullptr), c.end());
-    }
-    // A qualified external def nested off file scope is never relocated — flag it
-    // rather than silently dropping the qualifier. Scan BELOW each file-scope node
-    // (the file-scope nodes themselves were handled by the loop above).
-    for (auto& ch : program->children)
-        if (ch) reportNestedQualified(ch.get(), diag);
+    if (moved)
+        children.erase(std::remove(children.begin(), children.end(), nullptr),
+                       children.end());
 }
 
 void run(parse::Tree& tree, diagnostic::Sink& diag) {
@@ -4395,15 +4470,17 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
 
     parse::pushFrame(tree);   // program frame
 
-    // Out-of-line member defs (`Ret Class:method(){...}`) move into their class
-    // before any registration pass sees them.
-    relocateOutOfLineMembers(program, diag);
+    // Out-of-line member defs — every external re-open form (`Ret Class:method(){…}`,
+    // `Class:Ns{}`, `Class:R(){}`, `const int Class:k=…;`, `alias Class:A=…;`,
+    // `enum int Class:E(…);`) — move into their target class before any registration
+    // pass sees them, so what remains here is only same-scope (non-qualified) members.
+    relocateOutOfLineMembers(tree, program->children, diag);
 
     // Pass 1a-alias — register all file-scope value aliases first, so any decl
     // below (in any order) can resolve through them. Targets are validated after
     // enums / namespaces / classes register (an alias may target one of those —
     // `alias Time = Space;`). Bare `alias Ns;` (no target) is a namespace import,
-    // handled at use scope.
+    // handled at use scope. A qualified alias was relocated above.
     for (auto& ch : program->children) {
         if (ch && ch->kind == parse::Kind::kAliasDecl
             && ch->return_type != widen::kNoType) {
@@ -4607,9 +4684,9 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             continue;
         }
         if (ch->kind == parse::Kind::kVarDeclStmt && ch->is_const) {
-            // A qualified file-scope const defines a namespace member; handled
-            // in the inline-member pass below (the namespace must exist first).
-            if (isQualified(*ch)) continue;
+            // A qualified file-scope const (`const int C:k = 7;`) was relocated into
+            // its target class by relocateOutOfLineMembers, so only a local const is
+            // here.
             resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
             // A non-scalar const at file scope is a not-mutable GLOBAL (allocated,
             // not substituted) — globals are not yet built (Phase 8).
@@ -4643,14 +4720,6 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         diagnostic::report(diag, {ch->file_id, ch->tok,
             "Only function definitions, function declarations, and "
             "constants are allowed at file scope.", {}});
-    }
-
-    // Pass 1a-inline — file-scope qualified const members (`const int Space:kSix
-    // = 6;`). The namespace exists now; register the member and resolve its init.
-    for (auto& ch : program->children) {
-        if (ch && ch->kind == parse::Kind::kVarDeclStmt && isQualified(*ch)) {
-            resolveInlineQualifiedDecl(tree, *ch, diag);
-        }
     }
 
     // Pass 1a-import — file-scope bare `alias Ns;`. Opens the namespace for the

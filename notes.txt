@@ -1,7 +1,6 @@
 
 agenda:
 fix the external reopen form for not-file scope.
-split readme into several smaller files.
 
 things to do before commits:
 check for silent defaults and mis/unattributed diagnostics.

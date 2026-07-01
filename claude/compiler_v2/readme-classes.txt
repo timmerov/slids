@@ -527,40 +527,47 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   `<Class>__method` for free. A re-open of a BASE is visible on a DERIVED instance (it rides
   the _$base chain); a nested class introduced by a re-open, and re-opened again, both work.
 
-  THE EXTERNAL (out-of-line) FORM. `Class:member` at file scope defines a member of Class out
-  of line — it desugars to `Class() { member }`, seeing Class's fields / consts / methods bare.
-  Member kinds: const / alias (the existing inline-qualified-decl machinery); a METHOD
-  `int C:method() { }`; a NAMESPACE `Class:Namespace { }` (brace tail); and a hoisted-class
-  RE-OPEN `Class:Reopen() { }` (EMPTY parens). A field-bearing head `Class:Name(fields) { }`
-  is NOT this form — it is token-identical to inheritance (`Base:Derived(fields)`) and STAYS
-  inheritance; a hoisted class WITH fields is written in a block, not by qualified name. The
-  TAIL disambiguates at grammar (looksLikeQualifiedScopeDef, checked BEFORE looksLikeClassDef
-  so the empty-parens re-open isn't grabbed as an empty-field derived class): `{` -> namespace,
-  `()` -> class re-open, `(fields)` -> inheritance.
+  THE EXTERNAL (out-of-line) FORM. `Class:member` defines a member of Class out of line —
+  it desugars to `Class() { member }`, seeing Class's fields / consts / methods bare. Member
+  kinds: const `const int C:k=7;`, alias `alias C:A=int;`, ENUM `enum int C:E ( … );` (a
+  NAMED enum — its members are reached qualified, `C:E:m` / `E:m`), a METHOD `int C:m() { }`,
+  a NAMESPACE `Class:Namespace { }` (brace tail), and a hoisted-class RE-OPEN
+  `Class:Reopen() { }` (EMPTY parens). A field-bearing head `Class:Name(fields) { }` is NOT
+  this form — token-identical to inheritance (`Base:Derived(fields)`) and STAYS inheritance.
+  The TAIL disambiguates at grammar (looksLikeQualifiedScopeDef, checked BEFORE
+  looksLikeClassDef so the empty-parens re-open isn't grabbed as an empty-field derived
+  class): `{` -> namespace, `()` -> class re-open, `(fields)` -> inheritance. The form works
+  in ANY scope the class is DECLARED in — file, namespace body, class body, function body /
+  nested block — because relocation runs per-scope (below), not only over program->children.
 
   RELOCATION. grammar tags a qualified head with node->qualifier (the target path):
-  parseFunctionDef parses `Ret A:B:m`; parseQualifiedScopeDef parses `A:B:X {` / `A:B:X() {`
-  (consuming the qualifier prefix, then letting parseNamespaceDecl / parseClassDef parse the
-  final segment and hanging the qualifier on the result). resolve.relocateOutOfLineMembers, a
-  pre-pass BEFORE any registration, walks the qualifier path — scope-in-scope through classes
-  AND namespaces (collectScopeOpenings), searching ALL openings at each level so a segment
-  introduced in a re-open is reachable — and MOVES the node into the target scope's children,
-  where the ordinary in-scope machinery handles it with no special-casing. A method whose
-  immediate scope is a CLASS gets the implicit `_$recv` receiver spliced in (via the shared
-  parse::makeReceiverParam); a namespace/class node, or a free function whose scope is a
-  namespace, gets none. The chained form
-  `Class1:Ns1:Class2:Ns2:Class3:method` follows; an external namespace MERGES with an in-block
-  namespace of the same name and may be re-opened repeatedly.
+  parseFunctionDef parses `Ret A:B:m`; parseQualifiedScopeDef parses `A:B:X {` / `A:B:X() {`;
+  parseEnumDecl parses a qualified enum name `enum int A:B:E ( … )`. resolve.
+  relocateOutOfLineMembers, a pre-pass BEFORE registration in EVERY scope (over
+  program->children, plus registerScopeNames / resolveStmtList / resolveFunctionBody for
+  namespace / class / function bodies), walks the qualifier path via collectScopeOpenings —
+  scope-in-scope through classes AND namespaces, searching ALL openings at each level so a
+  segment introduced in a re-open is reachable — and MOVES the node into the target's children
+  (a LOCAL sibling), where the ordinary machinery handles it with no special-casing. A method
+  whose immediate scope is a CLASS gets the implicit `_$recv` spliced in HERE (via
+  parse::makeReceiverParam); the parser does NOT add a receiver to a qualified method in a
+  class body (else `_$recv` doubles — Outer's from the parser, the target's from relocation).
+
+  SAME-SCOPE for classes; namespaces open anywhere. A CLASS re-open is same-scope: the target
+  must be a local sibling opening in THIS `children`, so re-opening a class merely VISIBLE from
+  an enclosing scope (refine) fails the local walk and errors per-segment. A NAMESPACE opens in
+  ANY scope, so a qualified LEAF (const/alias/enum) whose first segment names an enclosing-scope
+  namespace is not physically movable — registerQualifiedLeaf registers it into that namespace's
+  frame IN PLACE (node left for constfold; the intermediate resolve passes skip a qualified
+  leaf). A qualified MUTABLE var is not a member ("Only constants, aliases, and enums may be
+  defined by qualified name"). The chained form `Class1:Ns1:Class2:Ns2:Class3:method` follows;
+  an external namespace MERGES with an in-block namespace of the same name and re-opens repeatedly.
 
   DIAGNOSTICS. A missing path segment is careted at the SPECIFIC failing segment, named against
   its parent scope: `'Gone' is not a class or namespace in scope` (first segment) /
-  `'Onest' has no class or namespace member 'Gone'` (a later one). CURRENT-IMPL GAP: the
-  external form's relocation (relocateOutOfLineMembers) only runs over `program->children`, so
-  the external form works only at FILE scope — a qualified def in a namespace / class / function
-  body is rejected by reportNestedQualified ("The external qualified form 'Inner:Deep' is only
-  valid at file scope"). The same-scope DESIGN wants it in every scope where the class is
-  declared; extending relocation per-scope is a todo. (Finding: `Class:Reopen()` of a
-  non-existent hoisted class silently creates a new empty class, consistent with the block
-  field-less create-or-re-open rule.) OUT OF SCOPE for re-open proper: `global` vars, `...`
-  incomplete classes, and the cross-scope run-time variant (REFINEMENTS, above).
-  Canon test_v2/class/reopen.sl.
+  `'Onest' has no class or namespace member 'Gone'` (a later one). A refine attempt (external
+  member on a class merely visible from an enclosing scope) hits the same first-segment
+  message. (Finding: `Class:Reopen()` of a non-existent hoisted class silently creates a new
+  empty class, consistent with the block field-less create-or-re-open rule.) OUT OF SCOPE for
+  re-open proper: `global` vars, `...` incomplete classes, and the cross-scope run-time variant
+  (REFINEMENTS, above). Canon test_v2/class/reopen.sl.

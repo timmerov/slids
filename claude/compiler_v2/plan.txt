@@ -607,8 +607,9 @@ Phase 4 — types beyond primitives
     nested namespaces, AND classes (a class is a first-class namespace member,
     reached `Ns:Class` — see NAMESPACE ↔ CLASS below); kNamespace entry with
     persistent frame identity; open-namespace-chain bare lookup (qualifiers
-    optional, `::` defeats a shadow); qualified `A:B:C` / `::`; inline qualified
-    member decls; bare `alias Ns;` import; desugar hoists member functions with
+    optional, `::` defeats a shadow); qualified `A:B:C` / `::`; qualified member
+    decls (`const int Ns:k=6;` — relocated per-scope, or registerQualifiedLeaf for an
+    enclosing-scope namespace); bare `alias Ns;` import; desugar hoists member functions with
     entry-id-derived symbols (no cached canonical names). registerScopeNames (the
     unified NAME phase) registers type names first, for order-independence. Cross-TU
     namespaces + `.slh` propagation → Phase 8.
@@ -900,24 +901,28 @@ Phase 7 — class advanced
     registerScopeNames recurses members into the shared ns_frame_id; the field-body pass +
     class-collection loops skip the is_reopen node (primary's layout/lifecycle intact);
     flattenScope lifts each opening's methods. EXTERNAL: `int C:m()` (method), `C:Ns {}`
-    (namespace), `C:R() {}` (hoisted-class re-open, EMPTY parens), plus const/alias via the
-    inline-qualified machinery; a field-bearing `C:X(fields){}` STAYS inheritance (token-
-    identical to `Base:Derived`). grammar tags node->qualifier (parseFunctionDef head +
-    looksLikeQualifiedScopeDef/parseQualifiedScopeDef, the tail `{`/`()`/`(fields)` dispatching
-    namespace/re-open/inheritance BEFORE looksLikeClassDef); resolve.relocateOutOfLineMembers
-    (pre-registration) walks the qualifier scope-in-scope through classes AND namespaces (all
-    openings searched, so a re-open-introduced segment is reachable) and MOVES the node under
-    the target scope — a method into a CLASS gets `_$recv`, a namespace/class node or a
-    namespace free function gets none. Chained (`C1:Ns1:C2:Ns2:C3:m`) + external-ns merge with
-    an in-block ns both work. Diagnostics: a missing segment carets THAT segment against its
-    parent ('X' is not a class or namespace / 'P' has no ... member 'X'). Re-open is a
-    SAME-SCOPE construct; the cross-scope run-time variant is split into REFINEMENTS below.
-    CURRENT-IMPL GAP: relocateOutOfLineMembers only scans program->children, so the external
-    form works only at FILE scope — a qualified def in a namespace/class/function body is
-    rejected (reportNestedQualified, "only valid at file scope"); the same-scope design wants
-    it in every scope (per-scope relocation is a todo). Canon test_v2/class/reopen.sl (Stages
-    A-D + external form: block/method/namespace/hoisted-reopen/chained positives; field-add /
-    redefine / leak / bad-path / nested-form negatives). [[project_reopen_classes]]
+    (namespace), `C:R() {}` (hoisted-class re-open, EMPTY parens), `const int C:k=7;`,
+    `alias C:A=int;`, and `enum int C:E ( … )` (NAMED enum, members reached qualified). A
+    field-bearing `C:X(fields){}` STAYS inheritance (token-identical to `Base:Derived`).
+    grammar tags node->qualifier (parseFunctionDef head + looksLikeQualifiedScopeDef/
+    parseQualifiedScopeDef + parseEnumDecl qualified name; tail `{`/`()`/`(fields)` dispatching
+    namespace/re-open/inheritance BEFORE looksLikeClassDef). resolve.relocateOutOfLineMembers
+    runs PER-SCOPE (program->children + registerScopeNames + resolveStmtList/resolveFunctionBody),
+    so the external form works in ANY scope the class is DECLARED in — file, namespace body,
+    class body, function body/nested block. It walks the qualifier scope-in-scope through classes
+    AND namespaces (all openings searched) and MOVES the node under the LOCAL target sibling — a
+    method into a CLASS gets `_$recv` HERE (the parser skips the receiver for a qualified method
+    in a class body, else it doubles); a namespace/class node or namespace free function gets
+    none. SAME-SCOPE for classes: the target must be a local sibling, so re-opening a class merely
+    VISIBLE from an enclosing scope (refine) fails the walk and errors per-segment. NAMESPACES
+    open in any scope: a qualified LEAF whose first segment names an enclosing-scope namespace is
+    registered into that frame IN PLACE (registerQualifiedLeaf, node left for constfold; the
+    intermediate resolve passes skip a qualified leaf). A qualified MUTABLE var is rejected
+    ("Only constants, aliases, and enums may be defined by qualified name"). Chained
+    (`C1:Ns1:C2:Ns2:C3:m`) + external-ns merge both work. The cross-scope run-time variant is
+    split into REFINEMENTS below. Canon test_v2/class/reopen.sl (Stages A-F: block/method/
+    namespace/hoisted-reopen/chained + const/alias/enum in file/namespace/class/function scope;
+    field-add / redefine / leak / bad-path / refine-reject negatives). [[project_reopen_classes]]
   * REFINEMENTS (run-time-scope re-open) — PLANNED (stub test_v2/class/refine.sl). Re-opening
     a class from a scope that ISN'T its own is an ILLUSION: it desugars to an anonymous
     zero-field DERIVED class ($T : T) that USURPS the base's name within that lexical scope,

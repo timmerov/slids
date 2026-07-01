@@ -2075,11 +2075,23 @@ struct Parser {
             assert(!underlying.empty() && "Forbidden declarator yields a non-empty type");
         }
         node->return_type = widen::internOrNone(underlying);
-        // Optional name.
+        // Optional name — possibly QUALIFIED (`Class:Enum`, `A:B:Enum`): the external
+        // out-of-line form. Leading segments become the qualifier path; the LAST is the
+        // enum name. relocateOutOfLineMembers moves the node into the target scope, where
+        // it registers exactly as an in-block `enum int Enum ( … )`.
         if (peek().kind == token::Kind::kIdentifier) {
             node->name = peek().text;
             node->name_tok = pos;
             advance();
+            while (peek().kind == token::Kind::kColon
+                   && peekKind(1) == token::Kind::kIdentifier) {
+                node->qualifier.push_back(node->name);
+                node->qualifier_toks.push_back(node->name_tok);
+                advance();   // :
+                node->name = peek().text;
+                node->name_tok = pos;
+                advance();
+            }
         }
         if (!expect(token::Kind::kLParen, "(")) return nullptr;
         // Member list: ident [= expr], comma-separated.
@@ -2150,9 +2162,15 @@ struct Parser {
             }
             auto m = parseFunctionDef();
             if (!m) return nullptr;
-            m->params.insert(m->params.begin(),
-                parse::makeReceiverParam(widen::internOrNone(recv_type),
-                                         m->file_id, m->name_tok));
+            // A QUALIFIED method (`int Sib:go()`) is an EXTERNAL def targeting ANOTHER
+            // class — relocateOutOfLineMembers splices the receiver for its TARGET, so
+            // this class's receiver must NOT be added here (else a doubled `_$recv`).
+            // Only a plain same-class method gets this class's receiver.
+            if (m->qualifier.empty()) {
+                m->params.insert(m->params.begin(),
+                    parse::makeReceiverParam(widen::internOrNone(recv_type),
+                                             m->file_id, m->name_tok));
+            }
             return m;
         }
         // A namespace / file-scope body has no call statements, so anything not
@@ -2717,6 +2735,12 @@ struct Parser {
         if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();
         if (t.kind == token::Kind::kEnum) return parseEnumDecl();
+        // An external qualified SCOPE def — `C:Ns { }` (a namespace member) or
+        // `C:R() { }` (a hoisted-class re-open, EMPTY parens) — of a class declared in
+        // THIS scope, out of line. Checked before the function / class / name-led
+        // dispatches (its `ident:` lead would otherwise route to a qualified var-decl
+        // or a call); resolve relocates it into the target.
+        if (looksLikeQualifiedScopeDef()) return parseQualifiedScopeDef();
         // A nested function definition (`type name (params) {body}`) — checked
         // before the var-decl / name-led dispatches it would otherwise hit.
         if (looksLikeFunctionDef()) return parseFunctionDef();
@@ -2906,6 +2930,11 @@ struct Parser {
             && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
         if (peekKind(o) != token::Kind::kIdentifier) return false;   // fn name
         o++;
+        // A QUALIFIED method name (`int Class:m(`, `void A:B:m(`) — the external
+        // out-of-line form. Consume the `:segment` chain after the first name segment
+        // so the shape reaches parseFunctionDef (which parses the qualifier itself).
+        while (peekKind(o) == token::Kind::kColon
+               && peekKind(o + 1) == token::Kind::kIdentifier) o += 2;
         if (peekKind(o) != token::Kind::kLParen) return false;
         // `Type name (` is shared with a variable CONSTRUCTION `Type name(args);`.
         // Scan to the matching `)` and look past it: a `{` body is always a

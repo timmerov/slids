@@ -1,23 +1,25 @@
 /*
 test re-opening classes.
 
-classes can be re-opened one or more times in the same scope.
-the class declaration must precede all re-opens.
+classes can be declared in any scope.
+they can be re-opened one or more times in the same scope.
+the class declaration (with fields) must precede all re-opens.
 from the author's perspective, it's as if everything was declared
 within a single class definition.
 
     Class(int x) {
-        /* alias, constant, global, method, namespace, class */
+        /* alias, constant, enum, global, method, namespace, class */
     }
     Class() {
-        /* more alias, constant, global, method, namespace, class */
+        /* more alias, constant, enum, global, method, namespace, class */
     }
 
 the external form uses the class name as a qualifier.
-it applies only to the current definition.
+it applies only to the current declaration.
 
     alias Class:Alias = int;
     const int Class:kConst = 7;
+    enum int Class:Enum ( kZero );
     global int Class:g_counter = 0;
     int Class:method() { }
     Class:Namespace { }
@@ -28,6 +30,7 @@ these all conceptually desugar to:
     Class() {
         alias Alias = int;
         const int kConst = 7;
+        enum int Enum ( kZero );
         global int g_counter = 0;
         int method() { }
         Namespace { }
@@ -70,6 +73,25 @@ also defines whole nested SCOPES: `Class:Namespace { }` adds a namespace member,
 `Class:Name(fields) { }` is NOT this form — it stays inheritance (a derived class),
 so a hoisted class with fields is written in a block, not by qualified name. Still out
 of scope: `global` vars, `...`.
+
+STAGE E (landed): the external form is NOT file-scope-bound. Every external form
+(method / namespace / hoisted-class re-open / const / alias / enum) applies in ANY scope
+the class is DECLARED in — file, namespace body, class body, or function body / nested
+block. relocateOutOfLineMembers runs per-scope (file + registerScopeNames + resolveStmtList
+/ resolveFunctionBody) and MOVES the qualified node into its target — a LOCAL sibling
+opening — so the target's ordinary registration handles it, no special-casing. A CLASS is
+re-opened only in its OWN scope: a class merely VISIBLE from an enclosing scope is not a
+local sibling, so re-opening it there (REFINE) is rejected per-segment ('X' is not a class
+or namespace in scope). A NAMESPACE, by contrast, opens in ANY scope: a leaf
+(const/alias/enum) whose first segment names an enclosing-scope namespace is registered
+into that namespace's frame IN PLACE (registerQualifiedLeaf), left for constfold. A
+qualified MUTABLE var is not a member; a bad qualifier errors per-segment.
+
+STAGE F (landed): the external ENUM form (`enum int Class:E ( kZero );`) — a NAMED enum
+defined out of line. Its members are reached qualified (`Class:E:member`, or `E:member`
+from inside the class — a named enum's members are never bare). Enum joins const / alias /
+method / namespace / re-open as a full external member, in every scope. (`global` stays
+out — not implemented.)
 */
 
 /* STAGE A — a primary + block re-opens: later openings add members that see the
@@ -226,6 +248,51 @@ Ro() {
 }
 int Ro:Sp:In:rm() { return im() + 30; }       // Sp introduced in a re-open of Ro
 
+/* STAGE E — a STANDALONE external const + external alias at FILE scope (alias newly
+   landed), plus an external method that reads BOTH bare. */
+Efc(int a_) {
+    int base() { return a_; }
+}
+const int Efc:kAdd = 100;                      // external const, file scope
+alias Efc:Num = int;                           // external alias, file scope
+int Efc:combine() { Num n = a_ + kAdd; return n; }   // ext method sees ext const+alias
+
+/* STAGE E — external forms INSIDE A NAMESPACE body (the class is declared there): an
+   external const, alias, and method on a namespace-local class. */
+Ens {
+    Ec(int c_) { int cm() { return c_; } }
+    const int Ec:kQ = 5;
+    alias Ec:Num = int;
+    int Ec:plus() { Num n = cm() + kQ; return n; }
+}
+
+/* STAGE F — the external ENUM form at FILE scope: a named enum defined out of line, its
+   members reached qualified; a method reads a member via the enum name. */
+Efe(int a_) {
+    int base() { return a_; }
+}
+enum int Efe:Col ( kR, kG, kB );               // external enum, file scope (kB = 2)
+int Efe:pick() { return base() + Col:kB; }     // ext method reads ext enum member
+
+/* STAGE F — all external members INSIDE A NAMESPACE body, including an enum. */
+Enf {
+    Nc(int c_) { int cm() { return c_; } }
+    const int Nc:kQ = 5;
+    alias Nc:Num = int;
+    enum int Nc:E ( kZero, kOne, kTwo );
+    int Nc:go() { Num n = cm() + kQ + E:kTwo; return n; }   // cm + 5 + 2
+}
+
+/* STAGE F — CLASS-BODY scope: external const / alias / enum / method written inside a
+   class body, each targeting a SIBLING hoisted class (re-opened in the class scope). */
+Outer(int o_) {
+    Sib(int s_) { int sm() { return s_; } }
+    const int Sib:kC = 4;
+    alias Sib:Num = int;
+    enum int Sib:E ( kA, kB );
+    int Sib:go() { Num n = sm() + kC + E:kB; return n; }    // sm + 4 + 1
+}
+
 int32 main() {
     Rc r = (10);
     __println("base = " + r.base_m());        // 10 + 1 = 11
@@ -275,6 +342,55 @@ int32 main() {
 
     Ro:Sp:In ri = (2);
     __println("ro.rm = " + ri.rm());           // 32  (namespace segment from a re-open)
+
+    /* STAGE E — external const + alias + method at FILE scope. */
+    Efc ef = (5);
+    __println("efc.base = " + ef.base());       // 5
+    __println("efc.combine = " + ef.combine()); // 105  (a_ + kAdd, via ext alias Num)
+    __println("efc.kAdd = " + Efc:kAdd);        // 100  (external const, qualified)
+
+    /* STAGE E — external forms inside a NAMESPACE body. */
+    Ens:Ec ec = (3);
+    __println("ec.plus = " + ec.plus());        // 8    (cm() + kQ)
+    __println("ec.kQ = " + Ens:Ec:kQ);          // 5    (external const in target frame)
+
+    /* STAGE E — external forms in a FUNCTION body on a body-local class: an external
+       method / const / alias, an external hoisted-class re-open, and an external
+       namespace def — all re-opening the body-local class in this same scope. */
+    Elc(int v_) {
+        Item(int i_) { int im() { return i_; } }
+    }
+    const int Elc:kL = 30;
+    alias Elc:Num = int;
+    int Elc:viaExt() { Num n = v_ + kL; return n; }   // ext method + ext const + alias
+    Elc:Item() { int extra() { return im() + 1; } }    // ext hoisted-class re-open
+    Elc:Sp { const int kB = 8; }                        // ext namespace def
+
+    Elc el = (7);
+    __println("el.via = " + el.viaExt());       // 37   (v_ + kL)
+    Elc:Item eit = (9);
+    __println("el.item = " + eit.extra());      // 10   (im() + 1, via ext re-open)
+    __println("el.sp = " + Elc:Sp:kB);          // 8    (ext namespace const)
+
+    /* STAGE F — external ENUM at file scope, namespace body, and class body. */
+    Efe efe = (5);
+    __println("efe.pick = " + efe.pick());      // 7    (base + Col:kB)
+    __println("efe.col = " + Efe:Col:kB);       // 2    (ext enum member, qualified)
+    Enf:Nc nc = (3);
+    __println("nc.go = " + nc.go());            // 10   (cm + kQ + E:kTwo)
+    __println("nc.e = " + Enf:Nc:E:kOne);       // 1    (ext enum in a namespace body)
+    Outer:Sib os = (6);
+    __println("os.go = " + os.go());            // 11   (sm + kC + E:kB, class-body forms)
+    __println("os.kC = " + Outer:Sib:kC);       // 4
+    __println("os.e = " + Outer:Sib:E:kB);      // 1
+
+    /* STAGE F — external ENUM in a FUNCTION body on a body-local class. */
+    Lce(int v_) { int lm() { return v_; } }
+    enum int Lce:E ( kX, kY, kZ );
+    int Lce:sum() { return lm() + E:kZ; }        // lm + 2
+    Lce le = (5);
+    __println("le.sum = " + le.sum());          // 7
+    __println("le.e = " + Lce:E:kY);            // 1
     return 0;
 }
 
@@ -305,7 +421,22 @@ int32 main() {
 //Onest(int x_) { Inr(int y_) { } }
 //int Onest:Gone:m() { return 0; }
 
-/* the external qualified form is only valid at FILE scope — nested in a class body
-   its qualifier would be silently dropped, so it is rejected outright. */
-//-EXPECT-ERROR: The external qualified form 'Inner:Deep' is only valid at file scope
+/* an external qualified form whose target names no class/namespace DECLARED in the
+   current scope errors per-segment. (The external form now works in any scope the
+   class is declared — STAGE E — so this is a bad-target error, not a scope
+   restriction; NestQ has no member 'Inner'.) */
+//-EXPECT-ERROR: 'Inner' is not a class or namespace in scope
 //NestQ(int x_) { Inner:Deep { const int kD = 1; } }
+
+/* REFINE reject — re-opening a CLASS from a scope where it is only VISIBLE (not
+   declared) is out. An external CONST targeting a file-scope class from a function body
+   is not a local sibling, so it errors per-segment (a namespace would be allowed; a
+   class is same-scope only). */
+//-EXPECT-ERROR: 'Rfc' is not a class or namespace in scope
+//Rfc(int a_) { }
+//int32 refuse_c() { const int Rfc:k = 1; return 0; }
+
+/* REFINE reject — same for an external ENUM targeting a merely-visible class. */
+//-EXPECT-ERROR: 'Rfe' is not a class or namespace in scope
+//Rfe(int a_) { }
+//int32 refuse_e() { enum int Rfe:E ( kZ ); return 0; }

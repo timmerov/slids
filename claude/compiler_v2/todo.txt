@@ -31,39 +31,6 @@ BLOCKED FEATURES
 
   deferred features involving classes:
 
-  * OUT-OF-LINE / EXTERNAL RE-OPEN RESTRICTED TO FILE SCOPE — the external qualified
-    form (`int Class:method()`, `Class:Ns{}`, `Class:Reopen()`) currently works ONLY at
-    file scope; a qualified def in a namespace / class / function body is rejected
-    ("The external qualified form ... is only valid at file scope" — resolve's
-    reportNestedQualified). That guard was an IMPLEMENTATION SHORTCUT, not a real
-    boundary: relocateOutOfLineMembers only scans program->children, so instead of
-    relocating a nested qualified def I forbade it. A class can be declared + re-opened
-    at nearly every block scope, so the external form should follow. SPEC (reopen.sl
-    header): a class may be re-opened (ALL forms) in any scope where the original
-    declaration is VISIBLE, with LEXICAL-scope visibility — mirroring a namespace
-    re-open (namespace.sl: a `Space {}` re-open inside a function adds members visible
-    only there; `Space:kTwo` outside is "not visible from this scope").
-      PHASE 1 — SAME SCOPE: the external form works in the SAME scope as the class decl
-      (function body, namespace body, class body — relocate among that scope's siblings).
-      e.g. `void Class:method1()` beside a local `Class` in a function body.
-      PHASE 2 — ALL VISIBLE SCOPES: a re-open in an enclosing/sibling-visible scope, with
-      the ASYMMETRY that the members it adds are lexically scoped to the re-open's
-      location — the class's own scope and sibling scopes cannot see them (only the
-      re-open's scope + nested). This needs per-scope member VISIBILITY, not the current
-      single-shared-frame merge (which leaks everywhere) — the namespace open-chain model.
-    WHAT IT TAKES: grammar — parseStmt needs a looksLikeQualifiedScopeDef arm, and
-    looksLikeFunctionDef must recognize a qualified method name after a KEYWORD return
-    type (`void Class:m(` — today only a qualified RETURN TYPE is handled, so this dies
-    at parse "Expected ';'"). resolve — generalize relocateOutOfLineMembers to run
-    per-scope (in the registerScopeNames recursion + the resolveStmtList / local-class
-    pre-pass, before that scope registers its classes), and DELETE the blanket file-scope
-    guard, keeping only the genuine per-segment "not a class or namespace in THIS scope"
-    error. NOTE a separate, unaffected limit: a LOCAL class still has no name reachable
-    from OUTSIDE its function (naming, not scope). Canon: extend test_v2/class/reopen.sl —
-    its STAGE D pins the file-scope-only limit as the current-impl gap (`The external
-    qualified form 'Inner:Deep' is only valid at file scope`). (Do NOT cite bug.sl as
-    canon — it is a rotating "bug of the day" scratch file, not stable.)
-
   * CONSTRUCTION-IN-EXPRESSION — remaining gaps (record:
     [[project_self_and_method_calls]]):
     - CONSTRUCTION in a STORE TARGET / MOVE operand: `arr[i] = Class()`,
