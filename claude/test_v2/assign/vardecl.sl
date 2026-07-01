@@ -238,6 +238,11 @@ int32 main() {
     (((int[3]))) garr = (7, 8, 9);
     __println("garr = " + garr[2] + " (" + ##type(garr) + ")");        // 9 (int[3])
 
+    {
+        /* trivial statement uses x. */
+        int x = 42; x;
+    }
+
     return 0;
 }
 

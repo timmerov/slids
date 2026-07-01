@@ -381,6 +381,14 @@ int32 main() {
     //-EXPECT-ERROR: '__println' cannot be used as an expression
     //int32 pv = __println("x");
 
+    // a bare VALUE name is a discarded READ that "uses" the local — no "set but never
+    // used" — and evaluates to nothing. `bare_use` is used ONLY by the bare statement.
+    int bare_use = 123;
+    bare_use;
+    const int bare_k = 7;
+    bare_k;                          // a const value name works the same way
+    __println("bare = ok");          // reached: the bare reads compiled + ran
+
     return 0;
 }
 
@@ -498,9 +506,11 @@ int32 fwd_decl(int32 n) {
 //    return 0;
 //}
 
-/* a bare function NAME with no call parens is not a value. As a STATEMENT `helper;`
-   is rejected as a non-statement. */
-//-EXPECT-ERROR: is not a statement
+/* a bare function NAME with no call parens is a call missing its parens, NOT a value.
+   As a STATEMENT `helper;` reports the missing parameter list. (A bare VALUE name —
+   variable / param / const — is instead a discarded read that "uses" it; a function is
+   not a value, so it does not get that treatment.) */
+//-EXPECT-ERROR: Function call is missing parameter list
 //int32 neg_fn_stmt() {
 //    helper;
 //    return 0;

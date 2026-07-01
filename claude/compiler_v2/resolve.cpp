@@ -1819,13 +1819,18 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         s.is_construction = true;
         return true;
     }
-    // A bare `Name;` (parenless) is only valid as a class construction. A non-class
-    // bare name is not a statement — reject it rather than treat it as a `Name()`
-    // call (so a stray function/variable name is never silently invoked).
+    // A bare `Name;` statement. A class constructs (above); a VALUE is a discarded read
+    // (rewritten in resolveUserCall before reaching here). What remains: a FUNCTION name
+    // is a call missing its `()` (never silently invoked); a namespace / type is not a
+    // statement.
     if (s.parenless) {
-        diagnostic::report(diag, {s.file_id, s.name_tok,
-            "'" + s.name + "' is not a statement; a bare name is a class "
-            "construction.", {}});
+        if (entry.kind == parse::EntryKind::kFunction) {
+            diagnostic::report(diag, {s.file_id, s.name_tok,
+                "Function call is missing parameter list '()'.", {}});
+        } else {
+            diagnostic::report(diag, {s.file_id, s.name_tok,
+                "'" + s.name + "' is not a statement.", {}});
+        }
         return false;
     }
     if (entry.kind != parse::EntryKind::kFunction) {
@@ -1846,6 +1851,32 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
 // check arity against the entry's param list, and cache return + param types
 // for downstream stages. Then recurse into the argument expressions.
 void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+    // A bare `Name;` STATEMENT (parenless, unqualified) that resolves to a VALUE
+    // (variable / param / const) is a discarded READ — it "uses" the name (so the
+    // unused-local sweep stays quiet) and evaluates to nothing. Rewrite it to a
+    // kExprStmt holding the read; the pipeline evaluates-and-discards, exactly like a
+    // postfix `arr[0];`. (A class name constructs, a function is a call missing its
+    // `()`, a namespace/type is not a statement — all fall through to resolveCallTarget.)
+    if (s.parenless && !isQualified(s)) {
+        int id = resolveName(tree, s.name);
+        if (id >= 0) {
+            parse::EntryKind k = tree.entries[id].kind;
+            if (k == parse::EntryKind::kLocalVar || k == parse::EntryKind::kConst) {
+                auto rd = std::make_unique<parse::Node>();
+                rd->kind = parse::Kind::kIdentExpr;
+                rd->name = s.name;
+                rd->name_tok = s.name_tok;
+                rd->file_id = s.file_id;
+                rd->tok = s.tok;
+                s.kind = parse::Kind::kExprStmt;
+                s.name.clear();
+                s.children.clear();
+                s.children.push_back(std::move(rd));
+                resolveExpr(tree, *s.children[0], diag);
+                return;
+            }
+        }
+    }
     if (resolveCallTarget(tree, s, diag)) {
         // `Class(args)` construction: resolveCallTarget marked it (is_construction)
         // and stamped the class entry. There is no function arity / method / nested

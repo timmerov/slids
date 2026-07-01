@@ -686,11 +686,13 @@ Phase 5 — classes
     constructions / ctor-calls in a CONDITION (if/while/for/switch — lifted into the
     condition's PPID seq, rebuilt+destroyed per evaluation), incl. under `&&`/`||`
     (the short-circuit RHS lifts into its OWN sub-seq, so a skipped branch runs no
-    ctor/dtor) all LANDED. A paren-less callable used as a VALUE is a compile ERROR,
-    NOT a call: `x = obj.m` (method) / `x = fn` (function) both report `Function call
-    is missing parameter list '()'.` in classify — a function/method is only ever
-    called with `()` (canon method.sl + call.sl). OPEN (todo.txt): a construction in
-    a store-target / move operand (rejected).
+    ctor/dtor) all LANDED. A paren-less callable is a compile ERROR, NOT a call: as a
+    VALUE `x = obj.m` (method) / `x = fn` (function) report `Function call is missing
+    parameter list '()'.` in classify; as a STATEMENT `fn;` reports the SAME (in resolve's
+    resolveCallTarget) — a function/method is only ever called with `()` (canon method.sl +
+    call.sl). (A bare VALUE name statement `x;` is NOT an error — it is a discarded read;
+    see the CONSTRUCTION entry.) OPEN (todo.txt): a construction in a store-target / move
+    operand (rejected).
   * NAMELESS class objects (`Class(args)`) — LANDED. A call whose callee resolves to
     a kClass is a CONSTRUCTION, not a function call: resolve flags is_construction;
     classify spreads the args into the per-field tuple via classifyClassInit. Form 1
@@ -706,8 +708,12 @@ Phase 5 — classes
     parens) is a DEFAULT construction, `Class` == `Class()` — in a value position
     resolve rewrites a class kIdentExpr into a zero-arg construction (EVALUATED only;
     sizeof/##type keep the type), and a bare `Class;` statement parses as a parenless
-    kCallStmt that resolve turns into form 1 (a parenless non-class is rejected, not
-    called). Detail: readme-classes.txt "CONSTRUCTION" + test_v2/class/nameless.sl.
+    kCallStmt that resolve turns into form 1. A bare `Name;` = "evaluate + discard": a
+    VALUE name (local/param/const) becomes a discarded READ that "uses" it (marks
+    read_locals — no unused warning); a FUNCTION name is a call missing its `()`
+    ("Function call is missing parameter list '()'."); a namespace/type is "not a
+    statement". Detail: readme-classes.txt "CONSTRUCTION" + test_v2/class/nameless.sl,
+    test_v2/function/call.sl.
   * inferred field types (`Foo(x = 1, y = 3.14)`) — LANDED. A typeless field infers
     its type from its default. resolve DEFERS (registers a kNoType layout slot; a
     typeless field with no default errors); a classify pre-pass (classifyClassSignature)

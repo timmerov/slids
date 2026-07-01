@@ -89,10 +89,15 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     (is_construction) — but ONLY when EVALUATED; an UNEVALUATED operand (sizeof /
     ##type, the resolveExpr `unevaluated` flag) keeps the name as the TYPE. In a
     STATEMENT position grammar accepts a bare `Name;` as a zero-arg kCallStmt flagged
-    `parenless`; resolveCallTarget turns a parenless kClass into a construction (form
-    1) and REJECTS a parenless non-class ("'X' is not a statement; a bare name is a
-    class construction") so a stray function/variable name is never silently called.
-    No new codegen — both flow through the existing zero-arg construction machinery.
+    `parenless`. Model: `Name;` = "evaluate Name and DISCARD". resolveCallTarget turns a
+    parenless kClass into a construction (form 1); resolveUserCall turns a parenless
+    VALUE name (local / param / const) into a discarded READ — a kExprStmt holding the
+    kIdentExpr — which "uses" the name (marks read_locals, so the unused-local sweep stays
+    quiet) and evaluates to nothing, exactly like a postfix `arr[0];`. A parenless FUNCTION
+    name is a call missing its parens ("Function call is missing parameter list '()'." — a
+    function is never a value); a namespace / type is "'X' is not a statement." So a stray
+    name is never silently CALLED, but a value name is a cheap "use it" no-op.
+    No new codegen — construction reuses the zero-arg machinery, the read the expr-stmt path.
     Canon: `NoInitClass;` / `(NoInitClass, 7)` / `NoInitClass a[2] = (NoInitClass,
     NoInitClass)` in test_v2/class/nameless.sl.
   * INIT FROM A TUPLE-LIKE VALUE: a class also initializes from any aggregate VALUE
@@ -323,10 +328,11 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     searching the receiver's class + base frames) and a bare FUNCTION name `x = fn`
     (kIdentExpr resolving to a kFunction) alike, with `Function call is missing
     parameter list '()'.`. (Before: `obj.m` was silently rewritten to a call and
-    `x = fn` crashed codegen — the kIdentExpr-not-in-SymTab assert.) A paren-less name
-    as a STATEMENT is already rejected upstream (`cls.method;` -> `Expected '='`;
-    `fn;` -> `'fn' is not a statement`). Canon test_v2/class/method.sl +
-    test_v2/function/call.sl. The `self` KEYWORD is an
+    `x = fn` crashed codegen — the kIdentExpr-not-in-SymTab assert.) A paren-less FUNCTION
+    name as a STATEMENT gets the SAME message (`fn;` -> `Function call is missing parameter
+    list '()'.`, in resolveCallTarget); `cls.method;` is `Expected '='` at grammar. (A bare
+    VALUE name as a statement is NOT an error — it is a discarded read; see BARE CLASS NAME
+    above.) Canon test_v2/class/method.sl + test_v2/function/call.sl. The `self` KEYWORD is an
     address-aliased LOCAL of the class type whose storage IS `_$recv`'s target:
     `self`, `self.field`, `self.m()`, and `^self` (= `_$recv`, its own address) all
     flow through ordinary local machinery — resolve registers it in
