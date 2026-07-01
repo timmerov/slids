@@ -63,6 +63,39 @@ int findMemberDeclared(Tree const& t, int ns_frame, std::string const& name) {
     return -1;
 }
 
+bool classHasField(ClassInfo const& info, std::string const& name) {
+    for (std::string const& f : info.field_names)
+        if (f == name) return true;
+    return false;
+}
+
+widen::TypeRef baseTypeOf(ClassInfo const& info) {
+    if (!info.field_names.empty() && info.field_names[0] == "_$base")
+        return widen::strip(info.field_types[0]);
+    return widen::kNoType;
+}
+
+widen::TypeRef classBaseType(Tree const& t, widen::TypeRef cls) {
+    auto it = t.classes.find(widen::strip(cls));
+    if (it == t.classes.end()) return widen::kNoType;
+    return baseTypeOf(it->second);
+}
+
+std::vector<int> classAndBaseFrames(Tree const& t, widen::TypeRef cls) {
+    std::vector<int> frames;
+    // Backstop only: a cyclic base chain is the error reported by
+    // resolve::checkClassByValueAcyclic (a base is a by-value `_$base` field); this
+    // guard just bounds the walk so it can't hang before that diagnostic fires.
+    int guard = static_cast<int>(t.classes.size()) + 2;
+    for (widen::TypeRef c = widen::strip(cls); c != widen::kNoType && guard-- > 0; ) {
+        int cid = classEntryForType(t, c);
+        if (cid < 0) break;
+        frames.push_back(t.entries[cid].ns_frame_id);
+        c = classBaseType(t, c);
+    }
+    return frames;
+}
+
 int classEntryForType(Tree const& t, widen::TypeRef classType) {
     for (std::size_t id = 0; id < t.entries.size(); ++id) {
         Entry const& e = t.entries[id];

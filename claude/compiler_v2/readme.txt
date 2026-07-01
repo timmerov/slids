@@ -930,12 +930,25 @@ SINGLE INHERITANCE (landed; spans grammar / resolve / classify; non-virtual)
 
   POINTER CASTS. derived->base is IMPLICIT, base->derived is EXPLICIT `<Derived^>`;
   both are offset-0 pointer no-ops (classify.ptrBaseUpcastOk on the assignment relation,
-  ptrBaseCastOk on `<T^>`), backed by classBaseType/isTransitiveBase reading the slot-0
-  `_$base` marker. An implicit DOWNcast is rejected.
+  ptrBaseCastOk on `<T^>`), backed by parse::classBaseType/classify.isTransitiveBase
+  reading the slot-0 `_$base` marker. An implicit DOWNcast is rejected; so is a cast
+  between UNRELATED or SIBLING classes (not on one chain — nothing to reinterpret).
+
+  SHARED DECODE. The per-step "base of a class" and the whole "class + its base frames"
+  walk live ONCE in parse:: — baseTypeOf reads the slot-0 `_$base` field, classBaseType
+  and classAndBaseFrames iterate it under a class-count guard (a backstop only; a cyclic
+  chain is the by-value error above). Every consumer delegates the `_$base` decode to
+  these: resolve (pushBaseChain / baseClassDepth / baseFieldDepth) and classify
+  (flatFieldWidth / isTransitiveBase / method-overload gathering). No site re-open-codes
+  the sentinel. Companion query parse::classHasField backs the field-vs-static tests;
+  resolve.frameHasFunction is just findMemberDeclared + a kind check.
 
   DEFERRED: a derived static shadowing a SAME-NAMED base static is bare-ambiguous
   (qualify to pick) — see todo "OPENED-SCOPE NAME AMBIGUITY". OUT OF SCOPE: virtual,
-  reopen. Canon test_v2/class/inheritance.sl (Stages 1-5 + cast/cycle/hiding negatives).
+  reopen. Canon test_v2/class/inheritance.sl (Stages 1-5; positives incl. synthesized
+  ctor/dtor, field shadowing, transitive sizeof + single heap derived; negatives:
+  implicit downcast, unrelated/sibling cast, off-chain qualifier, cycle + direct
+  self-inheritance, name hiding).
 
 
 STAGE FILES (.h / .cpp pairs)

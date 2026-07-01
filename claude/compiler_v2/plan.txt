@@ -876,9 +876,13 @@ Phase 7 — class advanced
     `Base:method()` -> `self._$base...X` (resolve tryResolveBaseQualifier), while a
     `Base:STATIC` (const/alias/enum) defers to the normal qualified-name lookup. Pointer
     casts: derived->base IMPLICIT, base->derived EXPLICIT `<Derived^>` (both offset-0
-    no-ops; classify ptrBaseUpcastOk/ptrBaseCastOk). Canon test_v2/class/inheritance.sl
-    (Stages 1-5). DEFERRED: a derived STATIC shadowing a same-named base static is bare-
-    ambiguous (qualify to disambiguate) — see todo "OPENED-SCOPE NAME AMBIGUITY".
+    no-ops; classify ptrBaseUpcastOk/ptrBaseCastOk); unrelated/sibling casts rejected.
+    The slot-0 `_$base` decode is centralized in parse:: (baseTypeOf / classBaseType /
+    classAndBaseFrames); resolve + classify delegate every base-chain step to it. Canon
+    test_v2/class/inheritance.sl (Stages 1-5; synthesized ctor/dtor + field shadowing +
+    transitive sizeof/heap positives; cast/cycle/self-inheritance/hiding negatives).
+    DEFERRED: a derived STATIC shadowing a same-named base static is bare-ambiguous
+    (qualify to disambiguate) — see todo "OPENED-SCOPE NAME AMBIGUITY".
     [[project_inheritance]]
   * virtual methods + virtual destructors  — OUT OF SCOPE for now
   * reopens; incomplete-class semantics  — OUT OF SCOPE for now

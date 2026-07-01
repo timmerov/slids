@@ -734,18 +734,8 @@ int pushBaseChain(parse::Tree& tree, parse::Node const& node) {
     if (node.kind != parse::Kind::kClassDef || node.text.empty()) return 0;
     int id = resolveName(tree, node.text);
     if (id < 0 || tree.entries[id].kind != parse::EntryKind::kClass) return 0;
-    std::vector<int> frames;   // immediate base first
-    int guard = (int)tree.classes.size() + 2;   // a cyclic base chain (error case) is bounded
-    for (widen::TypeRef cls = widen::strip(tree.entries[id].slids_type);
-         cls != widen::kNoType && guard-- > 0; ) {
-        int cid = parse::classEntryForType(tree, cls);
-        if (cid < 0) break;
-        frames.push_back(tree.entries[cid].ns_frame_id);
-        auto it = tree.classes.find(cls);
-        cls = (it != tree.classes.end() && !it->second.field_names.empty()
-               && it->second.field_names[0] == "_$base")
-            ? widen::strip(it->second.field_types[0]) : widen::kNoType;
-    }
+    // derived frame first, then each base frame (most-derived first)
+    std::vector<int> frames = parse::classAndBaseFrames(tree, tree.entries[id].slids_type);
     for (auto it = frames.rbegin(); it != frames.rend(); ++it)  // deepest pushed first
         tree.open_ns_frames.push_back(*it);
     return (int)frames.size();
@@ -1212,13 +1202,14 @@ int baseClassDepth(parse::Tree& tree, std::string const& className) {
     int id = resolveName(tree, tree.current_base_name);
     if (id < 0 || tree.entries[id].kind != parse::EntryKind::kClass) return 0;
     widen::TypeRef cls = widen::strip(tree.entries[id].slids_type);
+    // Backstop only: a cyclic base chain is diagnosed by checkClassByValueAcyclic
+    // (a base is a by-value `_$base` field); this guard just bounds the walk.
     int guard = (int)tree.classes.size() + 2;
     for (int depth = 1; cls != widen::kNoType && guard-- > 0; depth++) {
         auto it = tree.classes.find(cls);
         if (it == tree.classes.end()) return 0;
         if (it->second.name == className) return depth;
-        cls = (!it->second.field_names.empty() && it->second.field_names[0] == "_$base")
-            ? widen::strip(it->second.field_types[0]) : widen::kNoType;
+        cls = parse::baseTypeOf(it->second);
     }
     return 0;
 }
@@ -1229,28 +1220,26 @@ int baseFieldDepth(parse::Tree& tree, std::string const& name) {
     int id = resolveName(tree, tree.current_base_name);
     if (id < 0 || tree.entries[id].kind != parse::EntryKind::kClass) return 0;
     widen::TypeRef cls = widen::strip(tree.entries[id].slids_type);
+    // Backstop only: a cyclic base chain is diagnosed by checkClassByValueAcyclic
+    // (a base is a by-value `_$base` field); this guard just bounds the walk.
     int guard = (int)tree.classes.size() + 2;
     for (int depth = 1; cls != widen::kNoType && guard-- > 0; depth++) {
         auto it = tree.classes.find(cls);
         if (it == tree.classes.end()) return 0;
         parse::ClassInfo const& info = it->second;
-        for (std::size_t i = 0; i < info.field_names.size(); i++)
-            if (info.field_names[i] == name) return depth;   // not "_$base" (synthetic)
-        if (!info.field_names.empty() && info.field_names[0] == "_$base")
-            cls = widen::strip(info.field_types[0]);
-        else
-            return 0;
+        if (parse::classHasField(info, name)) return depth;   // a user name never matches _$base
+        cls = parse::baseTypeOf(info);
+        if (cls == widen::kNoType) return 0;
     }
     return 0;
 }
 
 bool frameHasFunction(parse::Tree& tree, int frame, std::string const& name) {
     if (frame < 0) return false;
-    for (parse::Entry const& e : tree.entries)
-        if (e.kind == parse::EntryKind::kFunction && e.owner_ns_frame == frame
-            && e.name == name)
-            return true;
-    return false;
+    // The first member by name in the frame; same-name members are a redeclaration
+    // error, so a function's presence is exactly "first match is a function".
+    int id = findMemberDeclared(tree, frame, name);
+    return id >= 0 && tree.entries[id].kind == parse::EntryKind::kFunction;
 }
 
 bool tryResolveBaseQualifier(parse::Tree& tree, parse::Node& e,
@@ -1268,10 +1257,8 @@ bool tryResolveBaseQualifier(parse::Tree& tree, parse::Node& e,
     if (aid < 0) return false;
     widen::TypeRef anc = widen::strip(tree.entries[aid].slids_type);
     auto ci = tree.classes.find(anc);
-    bool is_field = false;
-    if (ci != tree.classes.end())
-        for (std::string const& fn : ci->second.field_names)
-            if (fn == e.name) { is_field = true; break; }
+    bool is_field = (ci != tree.classes.end())
+        && parse::classHasField(ci->second, e.name);
     bool is_self   = (is_ident && e.name == "self");
     bool is_method = (is_call && frameHasFunction(tree, tree.entries[aid].ns_frame_id, e.name));
     if (!is_self && !(is_ident && is_field) && !is_method) return false;  // static -> defer

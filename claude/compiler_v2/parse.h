@@ -465,6 +465,20 @@ int  findInFrame(Tree const& t, int frame_id, std::string const& name);
 // A namespace/class MEMBER by name in its owning frame (owner_ns_frame == ns_frame;
 // at kGlobalFrame, a file-scope non-member). Returns entry id or -1.
 int  findMemberDeclared(Tree const& t, int ns_frame, std::string const& name);
+// True if `info` declares a field named `name`. The synthetic base slot `_$base`
+// is included, but a user field name never collides with it (the `_$` prefix is
+// reserved), so callers checking a user name need no special-case.
+bool classHasField(ClassInfo const& info, std::string const& name);
+// The base class TYPE of a DERIVED class — its unnamed first field `_$base` (slot 0),
+// stripped; kNoType for a non-derived class. THE single decode of the `_$base` slot-0
+// inheritance convention — every base-chain walk (resolve + classify) steps through it
+// rather than re-spelling `field_names[0] == "_$base"`. baseTypeOf decodes a ClassInfo
+// directly (no map lookup); classBaseType is the lookup-then-decode for a TypeRef.
+widen::TypeRef baseTypeOf(ClassInfo const& info);
+widen::TypeRef classBaseType(Tree const& t, widen::TypeRef cls);
+// A class's own member frame + every transitive base frame (most-derived first), for
+// member lookup / scope-opening that sees inherited members. The shared chain iterator.
+std::vector<int> classAndBaseFrames(Tree const& t, widen::TypeRef cls);
 // The kClass entry for a class TYPE (slids_type match) / for its member FRAME
 // (ns_frame_id match). The one place a class type <-> its entry is bridged.
 int  classEntryForType(Tree const& t, widen::TypeRef classType);

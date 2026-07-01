@@ -161,46 +161,20 @@ bool ptrExplicitOk(widen::TypeRef from, widen::TypeRef to,
     return false;
 }
 
-// The base type of a DERIVED class — its unnamed first field `_$base` (the base is
-// slot 0), or kNoType for a non-derived class.
-widen::TypeRef classBaseType(parse::Tree& tree, widen::TypeRef cls) {
-    auto it = tree.classes.find(widen::strip(cls));
-    if (it == tree.classes.end()) return widen::kNoType;
-    parse::ClassInfo const& info = it->second;
-    if (!info.field_names.empty() && info.field_names[0] == "_$base")
-        return widen::strip(info.field_types[0]);
-    return widen::kNoType;
-}
-
-// A class's own member frame + all transitive base frames (most-derived first), for
-// member lookup that sees inherited members.
-std::vector<int> classAndBaseFrames(parse::Tree& tree, widen::TypeRef cls) {
-    std::vector<int> frames;
-    int guard = (int)tree.classes.size() + 2;   // a cyclic base chain (error case) is bounded
-    for (widen::TypeRef c = widen::strip(cls); c != widen::kNoType && guard-- > 0; ) {
-        int cid = parse::classEntryForType(tree, c);
-        if (cid < 0) break;
-        frames.push_back(tree.entries[cid].ns_frame_id);
-        c = classBaseType(tree, c);
-    }
-    return frames;
-}
-
 // The number of FLAT initializers a class consumes during construction: a base
 // (`_$base`) field splices its own fields in flat (recursively); every other field is
 // one slot. So `C:B:A` (each adding one field) has flat width 3.
 int flatFieldWidth(parse::Tree& tree, widen::TypeRef cls) {
     int w = 0;
-    int guard = (int)tree.classes.size() + 2;   // a cyclic base chain (error case) is bounded
+    // Backstop only: a cyclic base chain is diagnosed by checkClassByValueAcyclic
+    // (a base is a by-value `_$base` field); this guard just bounds the walk.
+    int guard = (int)tree.classes.size() + 2;
     for (widen::TypeRef c = widen::strip(cls); guard-- > 0; ) {
         auto it = tree.classes.find(c);
         if (it == tree.classes.end()) { w += 1; break; }   // a non-class type is one slot
         parse::ClassInfo const& info = it->second;
-        widen::TypeRef next = widen::kNoType;              // only the base (slot 0) splices
-        for (std::size_t i = 0; i < info.field_names.size(); i++) {
-            if (info.field_names[i] == "_$base") next = widen::strip(info.field_types[i]);
-            else w += 1;
-        }
+        widen::TypeRef next = parse::baseTypeOf(info);      // only the base (slot 0) splices
+        w += (int)info.field_names.size() - (next != widen::kNoType ? 1 : 0);
         if (next == widen::kNoType) break;
         c = next;
     }
@@ -210,8 +184,8 @@ int flatFieldWidth(parse::Tree& tree, widen::TypeRef cls) {
 // Is `base` a TRANSITIVE base of `derived`?
 bool isTransitiveBase(parse::Tree& tree, widen::TypeRef base, widen::TypeRef derived) {
     base = widen::strip(base);
-    for (widen::TypeRef b = classBaseType(tree, derived);
-         b != widen::kNoType; b = classBaseType(tree, b)) {
+    for (widen::TypeRef b = parse::classBaseType(tree, derived);
+         b != widen::kNoType; b = parse::classBaseType(tree, b)) {
         if (b == base) return true;
     }
     return false;
@@ -2953,7 +2927,7 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
     // chain — the first frame (most-derived) that has the name shadows the rest (a
     // derived overload set hides the base's). A method found in a BASE frame runs on
     // the receiver's base sub-object (offset 0, so the same address).
-    std::vector<int> frames = classAndBaseFrames(tree, rs);
+    std::vector<int> frames = parse::classAndBaseFrames(tree, rs);
     std::vector<int> cands;
     for (int fr : frames) {
         if (fr < 0) continue;

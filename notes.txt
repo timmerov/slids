@@ -13,9 +13,6 @@ preferredSpelling
 spellOrEmpty
 widen::strip
 
-probably need to code review plan-declarators.
-second-claude implied previous-claude didn't follow the plan.
-
 probably need to code review inherited classes.
 
 inferred reference type.

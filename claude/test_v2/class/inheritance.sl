@@ -165,6 +165,24 @@ Mb : Md(int r_) {
     _() { } ~() { }
 }
 
+/* COVERAGE — SYNTHESIZED ctor/dtor: a derived that declares NEITHER _() nor ~() but
+   whose base has them gets both synthesized to chain the base's. */
+Sb(int s_) {
+    int sv() { return s_; }
+    _() { __println("Sb:ctor " + s_); }
+    ~() { __println("Sb:dtor " + s_); }
+}
+Sb : SynD(int d_) { int dv() { return d_; } }   // no _()/~(): both synthesized
+
+/* COVERAGE — a derived FIELD shadowing a same-named base field: bare resolves to the
+   derived's copy, the `Base:` qualifier reaches the base's. */
+Fb(int val_) { int fb_get() { return val_; } _(){} ~(){} }
+Fb : Fd(int val_) {
+    int fd_get()   { return val_; }        // bare -> derived's val_ (shadows base)
+    int base_get() { return Fb:val_; }     // qualifier -> base's val_
+    _(){} ~(){}
+}
+
 int32 main() {
 
     {
@@ -230,6 +248,26 @@ int32 main() {
         __println("newarr ok");
     }
 
+    // COVERAGE — synthesized ctor/dtor: derived omits both; the base's still run.
+    {
+        SynD sy = (5, 6);                             // Sb:ctor 5 ... Sb:dtor 5
+        __println("syn = " + sy.sv() + " " + sy.dv());   // 5 6
+    }
+
+    // COVERAGE — a derived field shadows a same-named base field.
+    {
+        Fd fd = (10, 20);
+        __println("fd shadow = " + fd.fd_get() + " " + fd.base_get());   // 20 10
+    }
+
+    // COVERAGE — sizeof a transitive chain, and a SINGLE heap derived (base ctor runs).
+    __println("sizeof G3 = " + sizeof(G3));           // 12 (three int fields, flat)
+    {
+        B^ hp = new B(8, 9);                          // A:ctor 8 / B:ctor 9
+        __println("heap.gx = " + hp^.gx());           // 8 (base field through the ptr)
+        delete hp;                                    // B:dtor 9 / A:dtor 8
+    }
+
     return 0;
 }
 
@@ -283,3 +321,39 @@ Base : Derived(Integer a_ = kSeven, int b_ = kEight) {
    viaQual above) to disambiguate. */
 //-EXPECT-ERROR: ambiguous
 //Sa : Samb(int x_) { const int kBase = 99; int m() { return kBase; } _(){} ~(){} }
+
+/* an EXPLICIT cast between UNRELATED classes (neither is a base of the other) is
+   rejected — there is no base sub-object offset to reinterpret. */
+//-EXPECT-ERROR: Cannot cast 'Ua^' to 'Ub^'
+//Ua(int a_) { _(){} ~(){} }
+//Ub(int b_) { _(){} ~(){} }
+//int32 neg_unrelated_cast() {
+//    Ua x = (1);
+//    Ua^ ap = ^x;
+//    Ub^ bp = <Ub^> ap;
+//    return bp^.b_;
+//}
+
+/* SIBLINGS (two classes sharing a base) are NOT on each other's chain, so an explicit
+   cast between them is rejected too — only up/down a single chain reinterprets. */
+//-EXPECT-ERROR: Cannot cast 'Sib1^' to 'Sib2^'
+//Wbase(int w_) { _(){} ~(){} }
+//Wbase : Sib1(int p_) { _(){} ~(){} }
+//Wbase : Sib2(int q_) { _(){} ~(){} }
+//int32 neg_sibling_cast() {
+//    Sib1 s = (1, 2);
+//    Sib1^ p1 = ^s;
+//    Sib2^ p2 = <Sib2^> p1;
+//    return p2^.q_;
+//}
+
+/* a `Base:` qualifier naming a class that is NOT on the chain (baseClassDepth == 0)
+   defers to normal qualified lookup, which finds no such member. */
+//-EXPECT-ERROR: 'Stranger' has no member 'a_'
+//Stranger(int s_) { _(){} ~(){} }
+//NotDerived(int a_) { int m() { return Stranger:a_; } _(){} ~(){} }
+
+/* DIRECT self-inheritance is an infinite-size by-value embedding (base = first field),
+   caught by the same by-value cycle check as a two-class loop. */
+//-EXPECT-ERROR: contains itself by value
+//Selfie : Selfie(int q_) { }
