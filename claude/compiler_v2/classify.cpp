@@ -541,6 +541,7 @@ widen::TypeRef defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kForRangedStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
+        case parse::Kind::kGlobalScopeStmt:
         case parse::Kind::kSwitchStmt:
         case parse::Kind::kCaseClause:
         case parse::Kind::kParam:
@@ -583,6 +584,9 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                widen::TypeRef context, diagnostic::Sink& diag);
 void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
                           diagnostic::Sink& diag);
+void classifyStmt(parse::Tree& tree, parse::Node& s,
+                  widen::TypeRef fn_return_type, diagnostic::Sink& diag,
+                  std::vector<std::unique_ptr<parse::Node>>* prelude);
 // Resolve+type a method call (kMethodCallStmt): bind the method on the receiver's
 // class, arity/type-check args, stamp param_types/return_type/inferred_type.
 // Shared by the statement form (classifyStmt) and the expression form (inferExpr).
@@ -660,6 +664,13 @@ void classifyScope(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag)
                     checkValueAssign(tree, m->return_type, *init, diag);
                 }
             }
+        } else if (m->kind == parse::Kind::kVarDeclStmt && m->is_global) {
+            // A scope-level GLOBAL is constructed exactly like a local: run the
+            // construction funnel so a class global gets its field-default tuple and an
+            // array/tuple initializer is type-inferred (codegen's synthesized ctor
+            // thunk then stores it / fires the ctors). Block-scope globals already
+            // reach this via classifyStmt.
+            classifyStmt(tree, *m, widen::kNoType, diag, nullptr);
         } else if (m->kind == parse::Kind::kNamespaceDecl
                 || m->kind == parse::Kind::kClassDef) {
             classifyScope(tree, *m, diag);
@@ -1795,6 +1806,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kForRangedStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
+        case parse::Kind::kGlobalScopeStmt:
         case parse::Kind::kSwitchStmt:
         case parse::Kind::kCaseClause:
         case parse::Kind::kParam:
@@ -3916,6 +3928,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         }
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
+        case parse::Kind::kGlobalScopeStmt:
             // Nothing to type-infer; resolve handled loop-legality.
             return;
         case parse::Kind::kSwitchStmt: {

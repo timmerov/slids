@@ -1,5 +1,7 @@
 
 agenda:
+add tests for globals.
+maybe factor helpers.
 
 things to do before commits:
 check for silent defaults and mis/unattributed diagnostics.

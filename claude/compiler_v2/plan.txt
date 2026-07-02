@@ -983,7 +983,17 @@ Phase 8 — namespaces + cross-TU
     Phase 8 adds only the cross-TU pieces below.
   * .slh → .sl propagation (header → consumer, transitive impl-load)
   * C interop (`= import`, `import {}`)
-  * globals (lazy ctor/dtor, sentinel + ensure widget, dtor walker, `global;`)
+  * globals — SINGLE-TU CORE LANDED (pulled forward from Phase 8; see readme.txt
+    "GLOBALS" + [[project_globals]]). Complete across every SCOPE (file / namespace /
+    class / function) and every TYPE (scalar / array / tuple / class, incl. aggregates
+    containing classes): the short/bare form, named + anonymous groups, static + lazy
+    ctor/dtor with a runtime LIFO dtor registry, the `global;` scope statement + its
+    region-flow errors, and function-internal scoped statics. Rides the existing
+    scope/SymTab machinery + the one lazy-group mechanism; the only globals-specific
+    code is the `explodeAnonGlobalGroups` bridge (dissolves an anon group into bare
+    members) and the compound-global lazy marking. Phase 8 adds only the CROSS-TU
+    piece: a global declared in a `.slh` header is visible to all linked files (a `.sl`
+    global stays file-local) — deferred with the rest of .slh propagation.
 
 Phase 9 — templates
   * template functions

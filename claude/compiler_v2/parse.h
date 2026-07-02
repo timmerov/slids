@@ -120,6 +120,9 @@ enum class Kind {
     kBreakStmt,    // break; — exits the nearest enclosing loop OR switch.
     kContinueStmt, // continue; — jumps to the nearest enclosing loop's test
                    // (switch frames are transparent to continue).
+    kGlobalScopeStmt, // `global;` — opens the global lifetime for its enclosing
+                   // scope; at that scope's exit the lazy-global dtor registry runs.
+                   // Auto-inserted at the top of `main` when absent.
     kSwitchStmt,   // switch (value) { C: {..} default: {..} }. children[0] =
                    // scrutinee expr, [1..] = kCaseClause (source order).
     kCaseClause,   // one clause of a switch: a label-list + a body block.
@@ -220,6 +223,13 @@ struct Node {
     std::string label;
     int loop_levels = -1;
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
+    bool is_global = false;      // kVarDeclStmt: a GLOBAL variable (`global T x=…;`
+                                 // or a bare file-scope decl) — mutable static
+                                 // storage; resolve registers it as kGlobalVar.
+    int global_group_id = -1;    // >=0: a member var-decl / ctor / dtor dissolved from
+                                 // a LAZY anonymous group (resolve explodes it into
+                                 // bare siblings); collectGlobals rebuilds the shared
+                                 // sentinel/ctor/dtor GlobalGroup keyed by this id.
     bool is_reopen = false;      // kClassDef: a field-less RE-OPEN of an existing class
                                  // (resolve points resolved_entry_id at the primary's
                                  // entry; the class BODY passes skip this node)
@@ -289,6 +299,11 @@ enum class EntryKind {
     kFunction,
     kLocalVar,
     kConst,
+    kGlobalVar,    // a file-local GLOBAL variable — mutable static storage (an
+                   // `internal @`-global), reached like a namespace member. Unlike
+                   // kConst it is NOT substituted; unlike kLocalVar it has static
+                   // (not stack) storage. slids_type = declared/inferred type;
+                   // literal_text/literal_kind carry the folded static initializer.
     kAlias,        // type alias; slids_type = target spelling (may be another alias)
     kNamespace,    // namespace name; ns_frame_id identifies its member set
     kClass,        // class name; a type (slids_type = its kSlid) AND a namespace

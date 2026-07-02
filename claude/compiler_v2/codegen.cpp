@@ -160,6 +160,22 @@ std::string newTmp(char const* tag) {
 // ast::Tree::vtables. A virtual class's ctor stamps its vtable; `delete` of a virtual
 // pointer dispatches the destructor through the vtable (slot 0).
 std::set<std::string> g_vtable_syms;
+// File-local globals, keyed by resolved_entry_id. Populated in run() from
+// ast::Tree::globals; a kIdentExpr / lvalue whose id is here loads/stores through
+// `@<symbol>` instead of a SymTab alloca. (Global storage, not stack.)
+// The global registry — every file-local global, keyed by resolved_entry_id. Used to
+// SEED each function's SymTab (a global is a variable whose address is its `@`-symbol),
+// after which access sites treat globals and locals uniformly. NOT consulted per-access.
+std::map<int, ast::GlobalVar const*> g_globals;
+// True when lazy global groups exist: `main` runs `__$global_dtor_all` at exit.
+bool g_has_lazy_globals = false;
+
+// Before ANY access (read or write) to a lazy global's member, run its group's
+// once-only touch thunk (first-touch construction). `sym` is VarInfo::touch_symbol
+// (empty for a local / static global → no-op).
+void emitTouch(std::string const& sym, std::ostream& out) {
+    if (!sym.empty()) out << "  call void @" << sym << "()\n";
+}
 
 bool isFloatType(widen::TypeRef t) {
     widen::TypeKind k;
@@ -862,6 +878,7 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
             && "emitElementAddr: subscript base must be a variable or a deref");
         auto bit = syms.find(node->resolved_entry_id);
         assert(bit != syms.end() && "emitElementAddr: base not in SymTab");
+        emitTouch(bit->second.touch_symbol, out);   // lazy global first-access gate
         addr = bit->second.alloca_name;
         cur = bit->second.slids_type;
         // Implicit deref for the ARRAY-BY-POINTER param shorthand: `int a[3]`
@@ -1121,7 +1138,9 @@ std::string emitLvalueAddr(ast::Node const& lv, SymTab const& syms,
                            diagnostic::Sink& diag, bool allow_partial) {
     if (lv.kind == ast::Kind::kIdentExpr) {
         auto it = syms.find(lv.resolved_entry_id);
-        assert(it != syms.end() && "emitLvalueAddr: ident not in SymTab");
+        assert(it != syms.end()
+            && "emitLvalueAddr: ident not in SymTab (local nor seeded global)");
+        emitTouch(it->second.touch_symbol, out);   // lazy global first-access gate
         return it->second.alloca_name;
     }
     if (lv.kind == ast::Kind::kIndexExpr) {
@@ -1296,7 +1315,8 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                 && "emitExpr kIdentExpr: classify did not stamp resolved_entry_id");
             auto it = syms.find(expr.resolved_entry_id);
             assert(it != syms.end()
-                && "emitExpr kIdentExpr: entry not in SymTab (alloca never emitted?)");
+                && "emitExpr kIdentExpr: entry not in SymTab (local nor seeded global)");
+            emitTouch(it->second.touch_symbol, out);   // lazy global first-access gate
             std::string tmp = newTmp("ld");
             out << "  " << tmp << " = load " << it->second.llvm_type
                 << ", ptr " << it->second.alloca_name << "\n";
@@ -1698,6 +1718,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kForLongStmt:
         case ast::Kind::kBreakStmt:
         case ast::Kind::kContinueStmt:
+        case ast::Kind::kGlobalScopeStmt:
         case ast::Kind::kSwitchStmt:
         case ast::Kind::kCaseClause:
         case ast::Kind::kParam:
@@ -1735,7 +1756,10 @@ struct LoopCtx {
 // A live destructible: the address of a class instance + the class name (its
 // dtor symbol is `<class>__$dtor`). Tracked per lexical scope, destroyed in
 // REVERSE declaration order on every exit (the destructor-balance invariant).
-struct DtorObj { std::string addr; widen::TypeRef type; };
+// A scope-exit destruction. Normally a class instance at `addr` of `type`; but a
+// non-empty `call_symbol` instead emits `call void @<call_symbol>()` — used to run
+// the global dtor registry (`__$global_dtor_all`) when the `global;` scope exits.
+struct DtorObj { std::string addr; widen::TypeRef type; std::string call_symbol; };
 struct DtorScope {
     std::vector<DtorObj> objs;
     DtorScope const* outer = nullptr;
@@ -1864,7 +1888,10 @@ void emitDestructHooks(std::string const& addr, widen::TypeRef type,
 // Emit the destructors for ONE scope, in reverse declaration order.
 void emitScopeDtors(DtorScope const& s, std::ostream& out) {
     for (auto it = s.objs.rbegin(); it != s.objs.rend(); ++it) {
-        emitDestructHooks(it->addr, it->type, out);
+        if (!it->call_symbol.empty())
+            out << "  call void @" << it->call_symbol << "()\n";
+        else
+            emitDestructHooks(it->addr, it->type, out);
     }
 }
 
@@ -2039,7 +2066,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                          it->second.alloca_name);
                 if (typeNeedsHook(T, /*ctor=*/true)) {
                     assert(scope && "sret call init without a dtor scope");
-                    scope->objs.push_back({it->second.alloca_name, widen::strip(T)});
+                    scope->objs.push_back({it->second.alloca_name, widen::strip(T), ""});
                 }
                 return;
             }
@@ -2144,7 +2171,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                     if (!stmt.nrvo) {
                         assert(scope && "class instance constructed without a dtor "
                                         "scope — it would never be destroyed");
-                        scope->objs.push_back({it->second.alloca_name, st});
+                        scope->objs.push_back({it->second.alloca_name, st, ""});
                     }
                 }
             }
@@ -2156,6 +2183,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             auto it = syms.find(stmt.resolved_entry_id);
             assert(it != syms.end()
                 && "kAssignStmt: entry not in SymTab (alloca never emitted?)");
+            emitTouch(it->second.touch_symbol, out);   // lazy global first-access gate
             // sret CALL into an existing var (`obj = fn()`). Phase B case 2 — an
             // existing POD target (no leaf ctor) of the exact type is OVERWRITTEN in
             // place: the callee builds straight into it, no temp.
@@ -2774,6 +2802,13 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             out << "  br label %" << t->header_label << "\n";
             return;
         }
+        case ast::Kind::kGlobalScopeStmt:
+            // `global;` opens the global lifetime for THIS scope: register the lazy-
+            // global dtor registry so `__$global_dtor_all` runs at the scope's exit
+            // (and on any `return` unwinding through it). No-op without lazy groups.
+            if (g_has_lazy_globals && scope)
+                scope->objs.push_back({"", widen::kNoType, "__$global_dtor_all"});
+            return;
         case ast::Kind::kSwitchStmt: {
             // children[0]=scrutinee, [1..]=kCaseClause (a label-list +
             // children.back()=body block; text=="continue" => trailing
@@ -3098,7 +3133,18 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     // The function body is the outermost dtor scope: a class instance declared
     // at top level is destroyed at the function's exit. An explicit `return`
     // unwinds this scope itself; the implicit fall-through below does it here.
+    // Seed the SymTab with every file-local global: a global is a variable whose
+    // address is its `@`-symbol (LLVM `ptr`), so every load / store / GEP / assign
+    // path treats it exactly like a local — no separate global lookup. A LAZY global
+    // carries its touch thunk so its access sites gate on first-touch construction.
+    for (auto const& [id, gv] : g_globals) {
+        syms[id] = {"@" + gv->symbol, llvmForRef(gv->type), gv->type,
+                    gv->touch_symbol};
+    }
     DtorScope root_scope;
+    // The global lifetime is opened by a `global;` statement (auto-inserted at the
+    // top of `main` by desugar, or placed explicitly) — its emitStmt registers the
+    // dtor registry in the scope where it appears. No `main`-name special-case here.
     for (auto const& s : fn.children) {
         emitStmt(*s, syms, pool, fn.return_type, /*loop=*/nullptr, &root_scope,
                  out, diag);
@@ -3153,6 +3199,123 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
             else body << "ptr @" << vt.slot_symbols[i];
         }
         body << "]\n\n";
+    }
+    // File-local globals: emit one `internal @`-global per declaration, initialized
+    // to its folded static constant (a literal init emits no instructions). Register
+    // them in g_globals so use sites load/store through the symbol.
+    g_globals.clear();
+    // A COMPOUND global (array/tuple/class) has zero-init storage; its synthesized ctor
+    // thunk (emitted below) initializes/constructs it in place on first touch.
+    std::set<int> synth_globals;
+    for (ast::GlobalGroup const& g : tree.global_groups)
+        if (g.synth_global_id >= 0) synth_globals.insert(g.synth_global_id);
+    for (auto const& [id, gv] : tree.globals) {
+        g_globals[id] = &gv;
+        std::string llty = llvmForRef(gv.type);
+        std::string init = "zeroinitializer";
+        if (gv.init && !synth_globals.count(id)) {
+            SymTab no_syms;
+            std::ostringstream scratch;
+            init = emitExpr(*gv.init, no_syms, pool, scratch, diag, gv.type);
+            assert(scratch.str().empty()
+                && "global initializer must fold to a pure constant");
+        }
+        body << "@" << gv.symbol << " = internal global " << llty << " "
+             << init << "\n";
+    }
+    if (!tree.globals.empty()) body << "\n";
+    // Lazy global groups: the runtime LIFO dtor registry + a per-group sentinel and
+    // touch thunk. touch = check sentinel; on first call set it, REGISTER the dtor
+    // (before running the ctor, so registration order == ctor-invocation order and
+    // the reverse-order teardown is correct), then run the ctor.
+    g_has_lazy_globals = !tree.global_groups.empty();
+    if (g_has_lazy_globals) {
+        std::size_t K = tree.global_groups.size();
+        body << "@__$global_dtors = internal global [" << K
+             << " x ptr] zeroinitializer\n";
+        body << "@__$global_dtor_count = internal global i64 0\n\n";
+        body << "define void @__$global_register(ptr %fn) {\n"
+             << "  %c = load i64, ptr @__$global_dtor_count\n"
+             << "  %slot = getelementptr [" << K
+             << " x ptr], ptr @__$global_dtors, i64 0, i64 %c\n"
+             << "  store ptr %fn, ptr %slot\n"
+             << "  %c1 = add i64 %c, 1\n"
+             << "  store i64 %c1, ptr @__$global_dtor_count\n"
+             << "  ret void\n}\n\n";
+        body << "define void @__$global_dtor_all() {\n"
+             << "entry:\n"
+             << "  %c = load i64, ptr @__$global_dtor_count\n"
+             << "  br label %loop\n"
+             << "loop:\n"
+             << "  %i = phi i64 [ %c, %entry ], [ %ni, %bodyb ]\n"
+             << "  %z = icmp eq i64 %i, 0\n"
+             << "  br i1 %z, label %exitb, label %bodyb\n"
+             << "bodyb:\n"
+             << "  %ni = sub i64 %i, 1\n"
+             << "  %slot = getelementptr [" << K
+             << " x ptr], ptr @__$global_dtors, i64 0, i64 %ni\n"
+             << "  %fn = load ptr, ptr %slot\n"
+             << "  call void %fn()\n"
+             << "  br label %loop\n"
+             << "exitb:\n"
+             << "  ret void\n}\n\n";
+        for (ast::GlobalGroup const& g : tree.global_groups) {
+            body << "@" << g.sentinel_symbol << " = internal global i1 false\n";
+            body << "define void @" << g.touch_symbol << "() {\n"
+                 << "entry:\n"
+                 << "  %s = load i1, ptr @" << g.sentinel_symbol << "\n"
+                 << "  br i1 %s, label %done, label %init\n"
+                 << "init:\n"
+                 << "  store i1 true, ptr @" << g.sentinel_symbol << "\n";
+            if (!g.dtor_symbol.empty())
+                body << "  call void @__$global_register(ptr @" << g.dtor_symbol << ")\n";
+            body << "  call void @" << g.ctor_symbol << "()\n"
+                 << "  br label %done\n"
+                 << "done:\n"
+                 << "  ret void\n}\n\n";
+        }
+        // Synthesized ctor/dtor thunk BODIES for COMPOUND globals: construct/destruct
+        // `@symbol` in place. The generic touch thunk above already gates them and
+        // registers the dtor. A no-ctor-hook type with an initializer stores its value;
+        // a class-containing type is default-constructed via the lifecycle hooks (a
+        // class initializer with args is a later stage — it default-constructs).
+        for (ast::GlobalGroup const& g : tree.global_groups) {
+            if (g.synth_global_id < 0) continue;
+            ast::GlobalVar const& gv = tree.globals.at(g.synth_global_id);
+            std::string addr = "@" + gv.symbol;
+            body << "define void @" << g.ctor_symbol << "() {\nentry:\n";
+            // Mirror a local class/aggregate decl: store the initializer (the field-
+            // default tuple for a class, or the array/tuple init value) THEN fire the
+            // lifecycle ctors. For a pure-scalar aggregate the store stands alone
+            // (emitConstructHooks is a no-op); for a class the store seeds field
+            // defaults and the hooks run the ctors.
+            if (gv.init) {
+                SymTab gsyms;
+                for (auto const& [id2, gv2] : tree.globals)
+                    gsyms[id2] = {"@" + gv2.symbol, llvmForRef(gv2.type), gv2.type,
+                                  gv2.touch_symbol};
+                // An ARRAY filled from a tuple literal needs the tuple->array element
+                // walk (their LLVM types differ); a tuple/scalar/class value stores
+                // whole. Mirrors the local class/aggregate decl path in emitStmt.
+                if (widen::form(widen::strip(gv.type)) == widen::Type::Form::kArray
+                    && gv.init->kind == ast::Kind::kTupleExpr) {
+                    emitArrayFromTuple(addr, gv.type, *gv.init, gsyms, pool, body, diag);
+                } else {
+                    std::ostringstream b;
+                    std::string v = emitExpr(*gv.init, gsyms, pool, b, diag, gv.type);
+                    body << b.str()
+                         << "  store " << llvmForRef(gv.type) << " " << v
+                         << ", ptr " << addr << "\n";
+                }
+            }
+            emitConstructHooks(addr, gv.type, body);
+            body << "  ret void\n}\n\n";
+            if (!g.dtor_symbol.empty()) {
+                body << "define void @" << g.dtor_symbol << "() {\nentry:\n";
+                emitDestructHooks(addr, gv.type, body);
+                body << "  ret void\n}\n\n";
+            }
+        }
     }
     for (auto const& n : tree.nodes) {
         if (n->kind != ast::Kind::kProgram) continue;

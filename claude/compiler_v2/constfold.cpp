@@ -148,6 +148,7 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kForRangedStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
+        case parse::Kind::kGlobalScopeStmt:
         case parse::Kind::kSwitchStmt:
         case parse::Kind::kCaseClause:
         case parse::Kind::kStringLiteral:
@@ -976,10 +977,15 @@ bool trySubstituteConst(std::unique_ptr<parse::Node>& slot, parse::Tree& tree) {
 // `enum char` member keeps char through its auto-incremented (int-folded) value.
 
 bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& diag) {
-    if (!decl.is_const) return false;
+    // Also captures a GLOBAL's static initializer + infers its type from the init
+    // (a typeless `global x = 7;`). A kGlobalVar is never SUBSTITUTED at use sites
+    // (trySubstituteConst gates on kConst), so it keeps its storage — only its
+    // literal_text / slids_type are captured here for codegen's static init.
+    if (!decl.is_const && !decl.is_global) return false;
     if (decl.resolved_entry_id < 0) return false;
     parse::Entry& entry = tree.entries[decl.resolved_entry_id];
-    if (entry.kind != parse::EntryKind::kConst) return false;
+    if (entry.kind != parse::EntryKind::kConst
+        && entry.kind != parse::EntryKind::kGlobalVar) return false;
     if (!entry.literal_text.empty()) return false;  // already captured
     if (decl.children.empty()) return false;        // grammar should have rejected
     parse::Node const& rhs = *decl.children[0];

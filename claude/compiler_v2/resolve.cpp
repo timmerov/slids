@@ -722,7 +722,7 @@ bool isScopeMember(parse::Node const& m) {
         || m.kind == parse::Kind::kAliasDecl
         || m.kind == parse::Kind::kFunctionDef
         || m.kind == parse::Kind::kFunctionDecl
-        || (m.kind == parse::Kind::kVarDeclStmt && m.is_const);
+        || (m.kind == parse::Kind::kVarDeclStmt && (m.is_const || m.is_global));
 }
 
 // The BODY phase for ONE scope (a namespace, a class, or — recursing — either
@@ -1797,6 +1797,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
         case parse::Kind::kForRangedStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
+        case parse::Kind::kGlobalScopeStmt:
         case parse::Kind::kSwitchStmt:
         case parse::Kind::kCaseClause:
         case parse::Kind::kParam:
@@ -1817,12 +1818,13 @@ bool resolveAssignTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& di
         return false;
     }
     parse::Entry const& entry = tree.entries[id];
-    // Allowlist: only a local variable (incl. a param) is an assignable lvalue.
-    // Every other kind rejects — an explicit arm per kind, no silent default
-    // (a fall-through used to set resolved_entry_id and crash codegen with no
-    // alloca). "variable" is unreachable here (kLocalVar is the accepted case);
-    // it mirrors resolveCallTarget's `what` so the wording stays identical.
-    if (entry.kind != parse::EntryKind::kLocalVar) {
+    // Allowlist: a local variable (incl. a param) or a GLOBAL variable is an
+    // assignable lvalue. Every other kind rejects — an explicit arm per kind, no
+    // silent default (a fall-through used to set resolved_entry_id and crash codegen
+    // with no alloca). "variable" is unreachable here (kLocalVar/kGlobalVar are the
+    // accepted cases); it mirrors resolveCallTarget's `what` so the wording matches.
+    if (entry.kind != parse::EntryKind::kLocalVar
+        && entry.kind != parse::EntryKind::kGlobalVar) {
         char const* what = entry.kind == parse::EntryKind::kAlias ? "type"
                          : entry.kind == parse::EntryKind::kConst ? "constant"
                          : entry.kind == parse::EntryKind::kNamespace ? "namespace"
@@ -1833,7 +1835,8 @@ bool resolveAssignTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& di
             {{entry.file_id, entry.tok, std::string(what) + " declared here"}}});
         return false;
     }
-    noteCapture(tree, id);   // an assigned host local is a (by-ref) capture
+    if (entry.kind == parse::EntryKind::kLocalVar)
+        noteCapture(tree, id);   // an assigned host local is a (by-ref) capture
     s.resolved_entry_id = id;
     return true;
 }
@@ -2353,13 +2356,17 @@ void resolveStoreTarget(parse::Tree& tree, parse::Node& lv,
             return;
         }
         parse::Entry const& entry = tree.entries[id];
-        if (entry.kind != parse::EntryKind::kLocalVar) {
+        if (entry.kind != parse::EntryKind::kLocalVar
+            && entry.kind != parse::EntryKind::kGlobalVar) {
             diagnostic::report(diag, {lv.file_id, lv.tok,
                 "Cannot assign to '" + lv.name + "'.",
                 {{entry.file_id, entry.tok, "declared here"}}});
             return;
         }
         lv.resolved_entry_id = id;
+        // A global has static storage — always initialized, never swept — so it needs
+        // no definite-assignment / unused tracking; an element/field store just stands.
+        if (entry.kind == parse::EntryKind::kGlobalVar) return;
         if (isInPlaceAggregate(entry.slids_type)) {
             // An array/tuple slot store assigns the aggregate (monotonic may-set).
             tree.assigned_arrays.insert(id);
@@ -2572,9 +2579,15 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                     // not yet enforced (Phase 6).
                     bool needs_storage = constNeedsStorage(s.return_type);
                     bool as_const = s.is_const && !needs_storage;
+                    // A block-scope `global` is a scoped STATIC: kGlobalVar (one
+                    // persistent storage cell, static-initialized) registered in this
+                    // body/block frame, so it is reached bare here and is invisible
+                    // outside — and, being static, is exempt from the unused-local
+                    // sweep and definite-assignment tracking below.
                     parse::Entry e;
-                    e.kind = as_const ? parse::EntryKind::kConst
-                                      : parse::EntryKind::kLocalVar;
+                    e.kind = s.is_global   ? parse::EntryKind::kGlobalVar
+                             : as_const    ? parse::EntryKind::kConst
+                                           : parse::EntryKind::kLocalVar;
                     e.name = s.name;
                     // A named type (alias / enum / qualified) erased to a different
                     // underlying — keep the as-declared spelling as the ##type label.
@@ -2588,7 +2601,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                     // Track body-declared locals for the unused sweep. A substituted
                     // const is folded away and never "unused"; a const VARIABLE is a
                     // real local and IS swept.
-                    if (!as_const) {
+                    if (!as_const && !s.is_global) {
                         tree.body_locals.push_back(s.resolved_entry_id);
                     }
                 }
@@ -3506,6 +3519,11 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                    && "kClassDef reached resolveStmt unregistered — a body path "
                       "skipped resolveStmtList's local-class pre-pass");
             return Completion::Normal;
+        case parse::Kind::kGlobalScopeStmt:
+            // `global;` opens the global lifetime for its scope. Nothing to resolve;
+            // placement rules (main-only, at most one) are checked by a dedicated
+            // pass, and codegen registers the dtor-registry call at scope exit.
+            return Completion::Normal;
         case parse::Kind::kProgram:
         case parse::Kind::kStringLiteral:
         case parse::Kind::kIntLiteral:
@@ -3940,13 +3958,14 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
     // implicit `_$recv` at [0]. ctor/dtor (`_$ctor`/`_$dtor`) are hooks, not entries.
     for (auto& m : node.children) {
         if (!m) continue;
-        if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
+        if (m->kind == parse::Kind::kVarDeclStmt && (m->is_const || m->is_global)) {
             if (isQualified(*m)) continue;   // remote-namespace member, done by relocation
             if (isDup(*m)) continue;
             parse::Entry e;
-            e.kind = parse::EntryKind::kConst;
+            e.kind = m->is_global ? parse::EntryKind::kGlobalVar
+                                  : parse::EntryKind::kConst;
             e.name = m->name;
-            e.slids_type = m->return_type;   // provisional
+            e.slids_type = m->return_type;   // provisional (kNoType if inferred)
             e.file_id = m->file_id;
             e.tok = m->name_tok;
             e.owner_ns_frame = frame;
@@ -4702,6 +4721,111 @@ void relocateOutOfLineMembers(parse::Tree& tree,
                        children.end());
 }
 
+// Does this subtree open the global scope itself (a `global;` at any depth, NOT
+// crossing into a nested function)? If not, desugar auto-inserts one over all of main.
+bool subtreeOpensGlobalScope(parse::Node const& n) {
+    if (n.kind == parse::Kind::kGlobalScopeStmt) return true;
+    if (n.kind == parse::Kind::kFunctionDef
+        || n.kind == parse::Kind::kFunctionDecl) return false;   // its own scope
+    for (auto const& c : n.children)
+        if (c && subtreeOpensGlobalScope(*c)) return true;
+    return false;
+}
+
+// The `global;` REGION check over main's body. `active` is inherited into children and
+// advanced across SIBLINGS — a `global;` opens the rest of its block AND everything
+// nested in that rest — but is passed BY VALUE, so it does not leak out of a block.
+//   - a global USE (an ident / assign target resolving to a kGlobalVar) while inactive
+//     is "outside the global scope"
+//   - a second `global;` while already active is a double instantiation
+// A nested function is a separate scope (skipped): its global uses run during the
+// scope dynamically, like a lazy group's ctor.
+void checkGlobalRegion(parse::Tree& tree, parse::Node& n, bool active,
+                       diagnostic::Sink& diag) {
+    if (n.resolved_entry_id >= 0
+        && tree.entries[n.resolved_entry_id].kind == parse::EntryKind::kGlobalVar
+        && !active) {
+        diagnostic::report(diag, {n.file_id, n.tok,
+            "A global variable is accessed outside the 'global;' scope.", {}});
+    }
+    bool local = active;
+    for (auto& c : n.children) {
+        if (!c) continue;
+        if (c->kind == parse::Kind::kFunctionDef
+            || c->kind == parse::Kind::kFunctionDecl) continue;
+        if (c->kind == parse::Kind::kGlobalScopeStmt) {
+            if (local)
+                diagnostic::report(diag, {c->file_id, c->tok,
+                    "A second 'global;' — the global scope is already open.", {}});
+            local = true;
+            continue;
+        }
+        checkGlobalRegion(tree, *c, local, diag);
+    }
+}
+
+// Explode anonymous global groups (`global (a=…, b=…) {…}`, an EMPTY-name is_global
+// namespace) BEFORE registration: splice each group's members into its enclosing scope,
+// so they register through the ordinary bare-global path — reached bare / via `::` at
+// file scope, `Enclosing:member` in a namespace. A named group keeps its namespace
+// (`name:member`); only the name-less form is dissolved.
+//
+// A STATIC anon group (empty body) just splices its members. A LAZY anon group (with a
+// ctor/dtor) has no namespace to anchor its shared lifetime, so it is DISSOLVED: its
+// members splice into the enclosing scope as bare siblings, and its ctor/dtor move into
+// a GENERATED plain namespace of the enclosing scope (`$glazy<id>`) — a receiver-less
+// home whose function bodies resolve the members bare UP the frame chain (works at
+// file / namespace / class scope alike). Members and ctor/dtor share a fresh group id;
+// collectGlobals rebuilds the shared lazy GlobalGroup from it.
+void explodeAnonGlobalGroups(parse::Node& scope, int& gid_counter) {
+    for (auto& c : scope.children)
+        if (c) explodeAnonGlobalGroups(*c, gid_counter);
+    bool any = false;
+    for (auto& c : scope.children)
+        if (c && c->kind == parse::Kind::kNamespaceDecl && c->is_global
+            && c->name.empty()) { any = true; break; }
+    if (!any) return;
+    std::vector<std::unique_ptr<parse::Node>> flat;
+    for (auto& c : scope.children) {
+        if (!(c && c->kind == parse::Kind::kNamespaceDecl && c->is_global
+              && c->name.empty())) {
+            flat.push_back(std::move(c));
+            continue;
+        }
+        bool lazy = false;
+        for (auto& m : c->children)
+            if (m && m->kind == parse::Kind::kFunctionDef
+                && (m->name == "_$gctor" || m->name == "_$gdtor")) { lazy = true; break; }
+        if (!lazy) {
+            for (auto& m : c->children)
+                if (m) flat.push_back(std::move(m));   // static: bare members only
+            continue;
+        }
+        int gid = gid_counter++;
+        auto genns = std::make_unique<parse::Node>();
+        genns->kind = parse::Kind::kNamespaceDecl;
+        genns->name = "$glazy" + std::to_string(gid);
+        genns->file_id = c->file_id;
+        genns->tok = c->tok;
+        genns->name_tok = c->name_tok;
+        for (auto& m : c->children) {
+            if (!m) continue;
+            if (m->kind == parse::Kind::kFunctionDef) {
+                m->name = (m->name == "_$gctor" ? "_$glazyctor_" : "_$glazydtor_")
+                          + std::to_string(gid);
+                m->name_tok = c->name_tok;
+                m->global_group_id = gid;
+                genns->children.push_back(std::move(m));
+            } else if (m->kind == parse::Kind::kVarDeclStmt) {
+                m->global_group_id = gid;
+                flat.push_back(std::move(m));   // dissolve into enclosing scope
+            }
+        }
+        flat.push_back(std::move(genns));
+    }
+    scope.children = std::move(flat);
+}
+
 void run(parse::Tree& tree, diagnostic::Sink& diag) {
     parse::Node* program = nullptr;
     for (auto& n : tree.nodes) {
@@ -4719,6 +4843,11 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // `enum int Class:E(…);`) — move into their target class before any registration
     // pass sees them, so what remains here is only same-scope (non-qualified) members.
     relocateOutOfLineMembers(tree, program->children, diag);
+
+    // Dissolve anonymous global groups into bare members in their enclosing scope
+    // (all depths), before any name registration sees them.
+    int anon_group_counter = 0;
+    explodeAnonGlobalGroups(*program, anon_group_counter);
 
     // Pass 1a-alias — register all file-scope value aliases first, so any decl
     // below (in any order) can resolve through them. Targets are validated after
@@ -4964,15 +5093,38 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             ch->resolved_entry_id = parse::addEntry(tree, std::move(e));
             continue;
         }
+        if (ch->kind == parse::Kind::kVarDeclStmt && ch->is_global) {
+            // A file-scope GLOBAL — mutable static storage in the unnamed global
+            // namespace (reached bare or via `::`). Register a kGlobalVar in the
+            // global frame (owner_ns_frame < 0 so it resolves bare); constfold
+            // folds its init, codegen emits the `internal @`-global.
+            if (ch->return_type != widen::kNoType)
+                resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
+            int existing = parse::findInFrame(tree, parse::currentFrameId(tree), ch->name);
+            if (existing >= 0) {
+                parse::Entry const& prev = tree.entries[existing];
+                reportNameCollision(diag, "Duplicate declaration of '" + ch->name + "'.",
+                                    prev.file_id, prev.tok, ch->file_id, ch->name_tok);
+                continue;
+            }
+            parse::Entry e;
+            e.kind = parse::EntryKind::kGlobalVar;
+            e.name = ch->name;
+            e.slids_type = ch->return_type;   // kNoType if inferred — classify fills it
+            e.file_id = ch->file_id;
+            e.tok = ch->name_tok;
+            ch->resolved_entry_id = parse::addEntry(tree, std::move(e));
+            continue;
+        }
         if (ch->kind == parse::Kind::kAliasDecl) continue;     // handled above
         if (ch->kind == parse::Kind::kNamespaceDecl) continue; // handled above
         if (ch->kind == parse::Kind::kClassDef) continue;      // handled above
         if (ch->kind == parse::Kind::kEnumDecl) continue;      // handled above
-        // Mutable globals + other top-level shapes not supported today.
-        // Grammar rejects them; if one slips through, it's a grammar bug.
+        // Other top-level shapes not supported today. Grammar rejects them; if one
+        // slips through, it's a grammar bug.
         diagnostic::report(diag, {ch->file_id, ch->tok,
-            "Only function definitions, function declarations, and "
-            "constants are allowed at file scope.", {}});
+            "Only function definitions, function declarations, "
+            "constants, and globals are allowed at file scope.", {}});
     }
 
     // Pass 1a-import — file-scope bare `alias Ns;`. Opens the namespace for the
@@ -4994,11 +5146,12 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         }
     }
 
-    // Pass 1b — walk each top-level const's init expression to resolve
+    // Pass 1b — walk each top-level const's / global's init expression to resolve
     // ident references. By now every program-scope entry is in the table,
     // so forward refs between globals resolve cleanly.
     for (auto& ch : program->children) {
-        if (!ch || ch->kind != parse::Kind::kVarDeclStmt || !ch->is_const) continue;
+        if (!ch || ch->kind != parse::Kind::kVarDeclStmt
+            || !(ch->is_const || ch->is_global)) continue;
         if (isQualified(*ch)) continue;   // inline member init resolved above
         for (auto& init : ch->children) {
             if (init) resolveExpr(tree, *init, diag);
@@ -5020,6 +5173,20 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     for (auto& ch : program->children) {
         if (!ch || ch->kind != parse::Kind::kFunctionDef) continue;
         resolveFunctionBody(tree, *ch, diag);
+    }
+
+    // Pass 2-global-region — the `global;` scope rules over `main`. If main opens the
+    // scope itself, access before/after it (and a second `global;`) is an error; if it
+    // does not, the scope is auto-inserted over all of main, so everything is active.
+    for (auto& ch : program->children) {
+        if (ch && ch->kind == parse::Kind::kFunctionDef && ch->name == "main") {
+            // Check main's CHILDREN for an explicit `global;` (main itself is a
+            // kFunctionDef, which subtreeOpensGlobalScope treats as a scope boundary).
+            bool opens = false;
+            for (auto& c : ch->children)
+                if (c && subtreeOpensGlobalScope(*c)) { opens = true; break; }
+            checkGlobalRegion(tree, *ch, /*active=*/!opens, diag);
+        }
     }
 
     // Pass 2-scope — the BODY phase for every file-scope namespace and class:

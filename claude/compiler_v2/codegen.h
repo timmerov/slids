@@ -13,9 +13,13 @@ namespace strings { struct Pool; }
 namespace codegen {
 
 struct VarInfo {
-    std::string alloca_name;       // e.g. "%ch"
+    std::string alloca_name;       // storage address: "%ch" (a local alloca) OR
+                                   // "@__global_x" (a global's symbol) — both `ptr`,
+                                   // so load/store/GEP treat them identically.
     std::string llvm_type;         // e.g. "i8", "i32", "ptr"
     widen::TypeRef slids_type;     // structured type handle — for widening checks
+    std::string touch_symbol = {}; // "" for a local / static global; else a LAZY
+                                   // global's first-touch thunk, called before access.
 };
 
 // Keyed by parse::Tree::entries index — every ident / lvalue node carries its

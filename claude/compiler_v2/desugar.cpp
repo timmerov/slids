@@ -80,6 +80,7 @@ ast::Kind toAstKind(parse::Kind k) {
             __builtin_unreachable();
         case parse::Kind::kBreakStmt:     return ast::Kind::kBreakStmt;
         case parse::Kind::kContinueStmt:  return ast::Kind::kContinueStmt;
+        case parse::Kind::kGlobalScopeStmt: return ast::Kind::kGlobalScopeStmt;
         case parse::Kind::kSwitchStmt:    return ast::Kind::kSwitchStmt;
         case parse::Kind::kCaseClause:    return ast::Kind::kCaseClause;
         case parse::Kind::kStringLiteral: return ast::Kind::kStringLiteral;
@@ -474,6 +475,8 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
         if (c->kind == parse::Kind::kNamespaceDecl) continue;  // members hoisted
         if (c->kind == parse::Kind::kClassDef) continue;       // resolve-recorded
         if (c->kind == parse::Kind::kEnumDecl) continue;       // resolve-lowered
+        if (c->kind == parse::Kind::kVarDeclStmt && c->is_global) continue;  // a
+                          // GLOBAL is static storage (out.globals), not a statement
         node->children.push_back(copyNode(*c, tree, next_id));
     }
     for (auto const& pp : p.params) {
@@ -1297,6 +1300,7 @@ void lowerStatementPPID(ast::Node& stmt,
         case ast::Kind::kDtorCallStmt:
         case ast::Kind::kBreakStmt:
         case ast::Kind::kContinueStmt:
+        case ast::Kind::kGlobalScopeStmt:
         case ast::Kind::kFunctionDef:
         case ast::Kind::kFunctionDecl:
             return;
@@ -2368,6 +2372,103 @@ std::unique_ptr<ast::Node> lowerMethodCall(parse::Node const& p,
 
 }  // namespace
 
+// Does this subtree contain an explicit `global;` statement (at any depth)? Used to
+// suppress the auto-insert when main already opens the global scope itself.
+bool astHasGlobalScope(ast::Node const& n) {
+    if (n.kind == ast::Kind::kGlobalScopeStmt) return true;
+    for (auto const& c : n.children)
+        if (c && astHasGlobalScope(*c)) return true;
+    return false;
+}
+
+// Record a file-local global (kGlobalVar) for codegen: mint a stable `@`-symbol,
+// carry its declared/inferred type, and lower its folded initializer to a literal
+// ast node (codegen emits it as the static LLVM constant; a null init zero-fills).
+void recordGlobal(parse::Node const& n, parse::Tree const& in, ast::Tree& out,
+                  int& next_id) {
+    int id = n.resolved_entry_id;
+    if (id < 0) return;
+    ast::GlobalVar gv;
+    gv.symbol = "__global_" + n.name + "_" + std::to_string(id);
+    gv.type = in.entries[id].slids_type;
+    if (!n.children.empty() && n.children[0])
+        gv.init = copyNode(*n.children[0], in, next_id);
+    out.globals[id] = std::move(gv);
+}
+
+// Walk scope containers, recording every global declaration into out.globals.
+// A global GROUP (an is_global namespace) with a `_$gctor` member is LAZY: record a
+// GlobalGroup (sentinel/touch/ctor/dtor symbols) and stamp each member's
+// touch_symbol so its access sites gate on first-touch construction.
+void collectGlobals(std::vector<std::unique_ptr<parse::Node>> const& nodes,
+                    parse::Tree const& in, ast::Tree& out, int& next_id,
+                    std::map<int, ast::GlobalGroup>& lazy_anon) {
+    for (auto const& n : nodes) {
+        if (!n) continue;
+        // A dissolved LAZY anonymous group's ctor/dtor — a receiver-less free function
+        // stamped with the group id. Fills the shared group's ctor/dtor symbol; the
+        // sentinel/touch symbols derive from the id (distinct `__ganon_` prefix so they
+        // never collide with a named group's `__global_` ones).
+        if (n->kind == parse::Kind::kFunctionDef && n->global_group_id >= 0) {
+            int gid = n->global_group_id;
+            ast::GlobalGroup& g = lazy_anon[gid];
+            g.sentinel_symbol = "__ganon_sentinel_" + std::to_string(gid);
+            g.touch_symbol = "__ganon_touch_" + std::to_string(gid);
+            std::string sym = functionSymbol(*n, in);
+            if (n->name.rfind("_$glazyctor_", 0) == 0) g.ctor_symbol = sym;
+            else g.dtor_symbol = sym;
+            collectGlobals(n->children, in, out, next_id, lazy_anon);
+            continue;
+        }
+        if (n->kind == parse::Kind::kVarDeclStmt && n->is_global) {
+            recordGlobal(*n, in, out, next_id);
+            // A dissolved LAZY anon member gates on the shared group's touch thunk.
+            if (n->global_group_id >= 0 && n->resolved_entry_id >= 0) {
+                int gid = n->global_group_id;
+                ast::GlobalGroup& g = lazy_anon[gid];
+                g.sentinel_symbol = "__ganon_sentinel_" + std::to_string(gid);
+                g.touch_symbol = "__ganon_touch_" + std::to_string(gid);
+                out.globals[n->resolved_entry_id].touch_symbol = g.touch_symbol;
+            }
+            continue;
+        }
+        if (n->kind == parse::Kind::kNamespaceDecl && n->is_global) {
+            parse::Node* ctor = nullptr;
+            parse::Node* dtor = nullptr;
+            for (auto const& m : n->children) {
+                if (!m || m->kind != parse::Kind::kFunctionDef) continue;
+                if (m->name == "_$gctor") ctor = m.get();
+                else if (m->name == "_$gdtor") dtor = m.get();
+            }
+            std::string touch;
+            if (ctor) {
+                ast::GlobalGroup g;
+                int gid = n->resolved_entry_id;
+                g.sentinel_symbol = "__global_sentinel_" + std::to_string(gid);
+                g.touch_symbol = "__global_touch_" + std::to_string(gid);
+                g.ctor_symbol = functionSymbol(*ctor, in);
+                g.dtor_symbol = dtor ? functionSymbol(*dtor, in) : std::string();
+                touch = g.touch_symbol;
+                out.global_groups.push_back(std::move(g));
+            }
+            for (auto const& m : n->children) {
+                if (m && m->kind == parse::Kind::kVarDeclStmt && m->is_global) {
+                    recordGlobal(*m, in, out, next_id);
+                    if (!touch.empty() && m->resolved_entry_id >= 0)
+                        out.globals[m->resolved_entry_id].touch_symbol = touch;
+                }
+            }
+            continue;
+        }
+        if (n->kind == parse::Kind::kProgram
+            || n->kind == parse::Kind::kNamespaceDecl
+            || n->kind == parse::Kind::kClassDef
+            || n->kind == parse::Kind::kFunctionDef
+            || n->kind == parse::Kind::kBlockStmt)
+            collectGlobals(n->children, in, out, next_id, lazy_anon);
+    }
+}
+
 void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
     (void)diag;
     // One program-wide id counter, seeded past every real entry. resolve/classify
@@ -2377,6 +2478,31 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
     // Compute the vtable slot map + per-class vtable globals BEFORE lowering, so
     // lowerMethodCall can stamp each virtual call's slot (via g_entry_slot).
     buildVtables(in, out);
+    std::map<int, ast::GlobalGroup> lazy_anon;
+    collectGlobals(in.nodes, in, out, next_id, lazy_anon);
+    for (auto& [gid, g] : lazy_anon) out.global_groups.push_back(std::move(g));
+    // COMPOUND globals (array / tuple / class) are LAZY (the all-compound-lazy policy):
+    // zero-init storage + a SYNTHESIZED ctor/dtor that construct/destruct `@symbol` in
+    // place on first touch. A class-containing type needs both hooks; a scalar
+    // aggregate needs a ctor only when it has an initializer to store (a zero-init
+    // scalar array stays a static `zeroinitializer`). Codegen emits the thunk bodies.
+    for (auto& [id, gv] : out.globals) {
+        if (!gv.touch_symbol.empty()) continue;      // already in a user / anon group
+        widen::Type::Form f = widen::form(widen::strip(gv.type));
+        bool aggregate = f == widen::Type::Form::kArray
+                         || f == widen::Type::Form::kTuple
+                         || f == widen::Type::Form::kSlid;
+        bool has_class = widen::hasInPlaceClass(gv.type);
+        if (!has_class && !(aggregate && gv.init)) continue;   // scalars / zero-init stay static
+        ast::GlobalGroup g;
+        g.synth_global_id = id;
+        g.sentinel_symbol = "__cg_sentinel_" + std::to_string(id);
+        g.touch_symbol = "__cg_touch_" + std::to_string(id);
+        g.ctor_symbol = "__cgctor_" + std::to_string(id);
+        g.dtor_symbol = has_class ? "__cgdtor_" + std::to_string(id) : std::string();
+        gv.touch_symbol = g.touch_symbol;
+        out.global_groups.push_back(std::move(g));
+    }
     for (auto const& n : in.nodes) {
         out.nodes.push_back(copyNode(*n, in, next_id));
     }
@@ -2429,6 +2555,25 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
         for (auto& fn : n->children) {
             if (!fn || fn->kind != ast::Kind::kFunctionDef) continue;
             analyzeNrvo(*fn);
+        }
+    }
+    // Auto-insert `global;` at the TOP of `main` when it has none and lazy groups
+    // exist — the global lifetime then spans all of `main` (its dtor registry runs
+    // at main's exit). An EXPLICIT `global;` anywhere in main suppresses this.
+    if (!out.global_groups.empty()) {
+        for (auto& n : out.nodes) {
+            if (!n || n->kind != ast::Kind::kProgram) continue;
+            for (auto& fn : n->children) {
+                if (!fn || fn->kind != ast::Kind::kFunctionDef || fn->name != "main")
+                    continue;
+                if (!astHasGlobalScope(*fn)) {
+                    auto g = std::make_unique<ast::Node>();
+                    g->kind = ast::Kind::kGlobalScopeStmt;
+                    g->file_id = fn->file_id;
+                    g->tok = fn->tok;
+                    fn->children.insert(fn->children.begin(), std::move(g));
+                }
+            }
         }
     }
     // Carry the class kSlid types so codegen can emit each `<Name>__$sizeof()`

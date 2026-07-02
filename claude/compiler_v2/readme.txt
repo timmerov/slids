@@ -477,6 +477,58 @@ CLASSES — moved to the companion file readme-classes.txt
   CONSTRUCTION, hoisted/local-class, inheritance, and re-open notes.
 
 
+GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machinery)
+
+  A global variable is a `kGlobalVar` entry registered in WHATEVER FRAME it is declared
+  in — file, namespace, class, or function body. Bare access, `::` (the unnamed global
+  root), and `Enclosing:member` all fall out of ordinary frame-chain name resolution;
+  no per-scope code. Storage is an `internal @`-symbol (a `ptr`), so a global slots into
+  the SymTab uniformly beside a `%`-alloca local — after emitFunction seeds the globals,
+  every access site (read / lvalue / index-base / assign) treats them identically.
+
+  SPELLINGS (all desugar to the same two shapes — a plain global or a named group):
+    * SHORT / BARE — `global [Type] name = init;`, or at namespace/file scope the
+      keyword is OPTIONAL (`int x = 0;` IS a global). Typed or inferred.
+    * NAMED GROUP — `global name(decls){body}` is a NAMESPACE (`kNamespaceDecl`,
+      is_global); members are `name:member`. Because namespaces nest in every scope
+      (incl. functions), a named group works everywhere with no special casing.
+    * ANONYMOUS GROUP — `global (decls){body}`: members promote into the ENCLOSING
+      scope (bare / `::` / `Enclosing:member`), not under a group name. This is the ONE
+      thing the resolver can't express natively, so resolve's `explodeAnonGlobalGroups`
+      (the only globals-specific transform) dissolves it BEFORE registration: members
+      splice in as bare siblings; a LAZY anon group's ctor/dtor move into a generated
+      plain namespace `$glazy<id>` whose bodies resolve the members bare up the frame
+      chain. After it, everything downstream sees only plain globals / named groups.
+
+  STATIC vs LAZY:
+    * A scalar with a foldable constant init is STATICALLY allocated (`@sym = internal
+      global <ty> <const>`); constfold captures the literal.
+    * A COMPOUND global (array / tuple / class, or any aggregate containing a class) is
+      LAZY (the all-compound-lazy policy): zero-init storage + codegen SYNTHESIZES a
+      ctor (fills the array/tuple init or the class construction-args + field-defaults,
+      then fires the ctors on first touch) and, for a class-containing type, a dtor.
+      classify runs a scope-level global through the SAME construction funnel as a local
+      (classifyClassInit / classZeroValue), which types the aggregate init and builds
+      the class field-default tuple. A group WITH a user ctor/dtor is lazy the same way.
+    * FIRST-TOUCH gate + LIFO teardown: each lazy global/group has a sentinel bool + a
+      touch thunk (checks/sets the sentinel, REGISTERS the dtor with a runtime LIFO list
+      BEFORE running the ctor, so registration order == ctor-invocation order). Access
+      sites call the touch thunk; a never-touched group is neither built nor destroyed.
+
+  THE `global;` SCOPE STATEMENT — a real scope-registered lifetime (a `DtorScope`
+  entry): at its scope's exit the `__$global_dtor_all` registry walker runs. Auto-
+  inserted at the top of `main` when omitted; may be placed explicitly (incl. a nested
+  block to scope teardown earlier); `main`-only. resolve's region check flags a global
+  accessed OUTSIDE the open scope and a SECOND `global;`.
+
+  FUNCTION / METHOD-INTERNAL — a block-scope global is a SCOPED STATIC: `kGlobalVar` in
+  the body frame, so it persists across calls, is reached bare inside, and is invisible
+  outside (a function is not a namespace). Two bodies' same-named internals are distinct.
+
+  DEFERRED (Phase 8): a global declared in a `.slh` header is visible to all linked
+  files; a `.sl` global stays file-local. Rides the cross-TU `.slh` propagation work.
+
+
 STAGE FILES (.h / .cpp pairs)
 
   lex       text -> tokens. Wraps the scanner in an ImportWrapper that

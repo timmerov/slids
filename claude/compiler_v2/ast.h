@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -35,6 +36,9 @@ enum class Kind {
                     // [3..]=varlist decls. The canonical for node.
     kBreakStmt,     // break;
     kContinueStmt,  // continue;
+    kGlobalScopeStmt, // `global;` — opens the global lifetime; at the enclosing
+                    // scope's exit the lazy-global dtor registry (__$global_dtor_all)
+                    // runs. Auto-inserted at the top of `main` when absent.
     kSwitchStmt,    // switch (value) { clauses }; children[0]=scrutinee,
                     // [1..]=kCaseClause (source order).
     kCaseClause,    // a label-list + body block: children[0..n-2]=labels (null=
@@ -129,12 +133,47 @@ struct Vtable {
     std::vector<std::string> slot_symbols;
 };
 
+// A file-local global variable, lowered by desugar for codegen. `symbol` is its
+// `@`-name (emitted as `@<symbol> = internal global <llvm(type)> <init>`); `init`
+// is a literal Node carrying the folded static initializer (codegen emits it as
+// the LLVM constant). A use site (kIdentExpr whose resolved_entry_id is a key of
+// `Tree::globals`) loads/stores through `@<symbol>` instead of a SymTab alloca.
+struct GlobalVar {
+    std::string symbol;
+    widen::TypeRef type = widen::kNoType;
+    std::unique_ptr<Node> init;      // a literal node (may be null → zero-init)
+    std::string touch_symbol;        // "" = static; else the lazy group's touch thunk,
+                                     // called before any access (first-touch ctor gate)
+};
+
+// A LAZY global group (ctor/dtor present): its members are constructed on first
+// access. `touch_symbol` names the once-only gate: it checks `sentinel`, and on the
+// first call sets it, registers `dtor_symbol` with the runtime LIFO dtor list, then
+// runs `ctor_symbol`. codegen emits the sentinel + touch thunk; the ctor/dtor
+// themselves are ordinary lifted namespace-member functions.
+struct GlobalGroup {
+    std::string touch_symbol;
+    std::string sentinel_symbol;
+    std::string ctor_symbol;
+    std::string dtor_symbol;
+    // >=0: a COMPOUND global (array / tuple / class) whose ctor/dtor are SYNTHESIZED by
+    // codegen — construct/destruct this global's `@symbol` in place, rather than the
+    // ctor/dtor being user-written functions. Keyed by the global's id (into `globals`).
+    int synth_global_id = -1;
+};
+
 struct Tree {
     std::vector<std::unique_ptr<Node>> nodes;
     // Class kSlid types carried from parse, so codegen can emit each class's
     // `<Name>__$sizeof()` helper (GEP-null/ptrtoint — LLVM owns the layout).
     std::vector<widen::TypeRef> classes;
     std::vector<Vtable> vtables;
+    // File-local globals, keyed by resolved_entry_id (a use site looks itself up
+    // here when it is not a SymTab local). Emitted as `internal @`-globals.
+    std::map<int, GlobalVar> globals;
+    // Lazy global groups (ctor/dtor). codegen emits a sentinel + touch thunk per
+    // group and the shared runtime dtor registry sized to global_groups.size().
+    std::vector<GlobalGroup> global_groups;
 };
 
 }  // namespace ast

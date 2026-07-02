@@ -1560,6 +1560,142 @@ struct Parser {
         return node;
     }
 
+    // `global;` — the statement that opens the global lifetime for its enclosing
+    // scope. (A block-scope global DECLARATION — `global int x;` inside a function —
+    // is a later stage; only the scope statement is wired in statement position.)
+    std::unique_ptr<parse::Node> parseGlobalStmt() {
+        int g_file = peek().file_id, g_tok = pos;
+        // `global;` opens the ONE global scope for the program — only inside `main`
+        // (its lifetime is the process lifetime). current_func is the enclosing
+        // function throughout its body, incl. nested blocks.
+        if (peekKind(1) == token::Kind::kSemicolon) {
+            advance();   // global
+            if (current_func != "main") {
+                errorAt(g_tok, "'global;' may appear only in 'main'.");
+                return nullptr;
+            }
+            advance();   // ;
+            return newNodeAt(parse::Kind::kGlobalScopeStmt, g_file, g_tok);
+        }
+        // Every other `global …` in statement position is the SAME grammar as at file
+        // scope — a short form `global [Type] name = init;` (a scoped static) or a
+        // group `global [name] (decls) { body }`. A group is a namespace, and a
+        // namespace nests inside a function, so parseGlobal + the ordinary scope
+        // machinery lower a block-scope group with no special casing.
+        return parseGlobal();
+    }
+
+    // `global …` — a global variable declaration, in three spellings:
+    //   LONG   `global [name] (decls) { body }` — a group; its `decls` become
+    //          static members of the namespace `name` (or the unnamed global
+    //          namespace, reached bare / via `::`, when anonymous). Group members
+    //          are lowered to is_global var-decls; the group node is a is_global
+    //          kNamespaceDecl. (A non-empty body — ctor/dtor — is a later stage.)
+    //   SHORT  `global [Type] name [= init];` — an anonymous single member; reuses
+    //          parseVarDeclStmt.
+    std::unique_ptr<parse::Node> parseGlobal() {
+        int g_file = peek().file_id;
+        int g_tok = pos;
+        advance();   // global
+        bool named = (peek().kind == token::Kind::kIdentifier
+                      && peekKind(1) == token::Kind::kLParen);
+        // An ANONYMOUS group `global (decls) {}` — its members promote into the
+        // ENCLOSING scope (reached bare / via `::` at file scope, `Enclosing:member`
+        // in a namespace/class), unlike a named group's `name:member`. Parsed as an
+        // EMPTY-name is_global namespace; resolve explodes it into its member
+        // var-decls before registration, so they flow through the bare-global path.
+        bool anon = (peek().kind == token::Kind::kLParen);
+        // Disambiguate an anonymous group `global (decls) {…}` from a TUPLE-TYPED
+        // short form `global (T, U) name = …`: scan to the matching `)` — a `{` after
+        // it opens a group body; anything else is a tuple type followed by the var
+        // name, so it is a plain (tuple-typed) declaration handled by parseVarDeclStmt.
+        if (anon) {
+            int depth = 0;
+            int o = 0;
+            for (;; o++) {
+                token::Kind k = peekKind(o);
+                if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput
+                    || k == token::Kind::kError) break;
+                if (k == token::Kind::kLParen) depth++;
+                else if (k == token::Kind::kRParen && --depth == 0) { o++; break; }
+            }
+            if (peekKind(o) != token::Kind::kLBrace) anon = false;   // tuple-typed decl
+        }
+        if (named || anon) {
+            auto node = newNodeAt(parse::Kind::kNamespaceDecl, g_file, g_tok);
+            node->is_global = true;
+            if (named) { node->name = peek().text; node->name_tok = pos; advance(); }
+            if (!expect(token::Kind::kLParen, "(")) return nullptr;
+            // Reuse the field/param-list parser (typeless-with-init allowed, no
+            // mutable), then convert each param into a global var-decl member.
+            if (!parseParamList(node.get(), /*allow_mutable=*/false)) return nullptr;
+            for (auto& p : node->params) {
+                if (!p) continue;
+                auto v = newNodeAt(parse::Kind::kVarDeclStmt, p->file_id, p->tok);
+                v->name = std::move(p->name);
+                v->name_tok = p->name_tok;
+                v->return_type = p->return_type;
+                v->is_global = true;
+                v->dim_exprs = std::move(p->dim_exprs);
+                if (!p->children.empty() && p->children[0])
+                    v->children.push_back(std::move(p->children[0]));
+                node->children.push_back(std::move(v));
+            }
+            node->params.clear();
+            if (!expect(token::Kind::kLBrace, "{")) return nullptr;
+            // Body: the group's constructor `_(){…}` and/or destructor `~(){…}`
+            // (both together or neither — the pairing rule). A group WITH them is
+            // lazily constructed on first access; one WITHOUT is static. Each is a
+            // void, receiver-less member function `_$gctor` / `_$gdtor` (resolve
+            // resolves its body with the group's namespace open, so members are bare).
+            bool ctor_def = false, dtor_def = false;
+            while (!fatal && peek().kind != token::Kind::kRBrace) {
+                if (peek().kind == token::Kind::kEndOfFile
+                    || peek().kind == token::Kind::kEndOfInput) {
+                    error("Expected '}'."); return nullptr;
+                }
+                bool is_ctor = (peek().kind == token::Kind::kIdentifier
+                                && peek().text == "_");
+                bool is_dtor = (peek().kind == token::Kind::kBitNot);
+                if (!is_ctor && !is_dtor) {
+                    error("A global group body holds only the constructor '_()' "
+                          "and destructor '~()'.");
+                    return nullptr;
+                }
+                int m_file = peek().file_id, m_tok = pos;
+                advance();   // _ or ~
+                if (!expect(token::Kind::kLParen, "(")) return nullptr;
+                if (peek().kind != token::Kind::kRParen) {
+                    error("A constructor or destructor takes no parameters.");
+                    return nullptr;
+                }
+                advance();   // )
+                if (!expect(token::Kind::kLBrace, "{")) return nullptr;
+                if (is_ctor && ctor_def) { errorAt(m_tok, "Duplicate constructor."); return nullptr; }
+                if (is_dtor && dtor_def) { errorAt(m_tok, "Duplicate destructor."); return nullptr; }
+                auto member = newNodeAt(parse::Kind::kFunctionDef, m_file, m_tok);
+                member->name = is_ctor ? "_$gctor" : "_$gdtor";
+                member->name_tok = m_tok;
+                member->return_type = widen::internOrNone("void");
+                if (!parseStmtsThroughRBrace(member->children)) return nullptr;
+                if (is_ctor) ctor_def = true; else dtor_def = true;
+                node->children.push_back(std::move(member));
+            }
+            if (!expect(token::Kind::kRBrace, "}")) return nullptr;
+            if (ctor_def != dtor_def) {
+                errorAt(node->name_tok,
+                        ctor_def ? "A global constructor requires a matching destructor."
+                                 : "A global destructor requires a matching constructor.");
+                return nullptr;
+            }
+            return node;
+        }
+        auto d = parseVarDeclStmt();
+        if (!d) return nullptr;
+        d->is_global = true;
+        return d;
+    }
+
     // Build a move (`<--`) or swap (`<-->`) statement from an already-parsed lhs
     // lvalue expression. Positioned at the arrow token; consumes the arrow, the
     // rhs expression, and the trailing `;`. children[0] = lhs, [1] = rhs.
@@ -2140,6 +2276,7 @@ struct Parser {
         if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();
         if (t.kind == token::Kind::kEnum)  return parseEnumDecl();
+        if (t.kind == token::Kind::kGlobal) return parseGlobal();
         // A qualified external scope def — `Class:Namespace { }` (a namespace member
         // of the class) or `Class:Reopen() { }` (an external re-open of a hoisted
         // class, empty parens). Checked before looksLikeClassDef, which would grab
@@ -2172,6 +2309,16 @@ struct Parser {
                                              m->file_id, m->name_tok));
             }
             return m;
+        }
+        // A bare var-decl (no `global` keyword) at namespace / file scope IS a global
+        // — the short form `int x = 0;` desugars to `global int x = 0;`. Detected
+        // before the function fallback and only for the DECLARATION shape (name not
+        // followed by `(`), so function defs and `name();` forward decls fall through.
+        if (looksLikeBareVarDecl()) {
+            auto d = parseVarDeclStmt();
+            if (!d) return nullptr;
+            d->is_global = true;
+            return d;
         }
         // A namespace / file-scope body has no call statements, so anything not
         // matched above is a function DEFINITION or DECLARATION — parseFunctionDef
@@ -2735,6 +2882,7 @@ struct Parser {
         if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();
         if (t.kind == token::Kind::kEnum) return parseEnumDecl();
+        if (t.kind == token::Kind::kGlobal) return parseGlobalStmt();
         // An external qualified SCOPE def — `C:Ns { }` (a namespace member) or
         // `C:R() { }` (a hoisted-class re-open, EMPTY parens) — of a class declared in
         // THIS scope, out of line. Checked before the function / class / name-led
@@ -2976,6 +3124,38 @@ struct Parser {
         if (first == token::Kind::kIdentifier
             && peekKind(open + 2) == token::Kind::kIdentifier) return true;  // `Type name`
         return false;                                          // expression args
+    }
+
+    // At a namespace / file-scope body (where there are no statements), a var-decl
+    // shape with no `global` keyword IS a bare global (`int x = 0;` desugars to
+    // `global int x = 0;`). True for the DECLARATION shapes only — a name NOT
+    // followed by `(` — so function defs and `name();` forward decls still route to
+    // parseFunctionDef. Mirrors looksLikeFunctionDef's type scan.
+    bool looksLikeBareVarDecl() const {
+        // Inferred: `name = init` — a lone identifier assigned. (No assignment
+        // statements exist at namespace/file scope, so this is always a decl.)
+        if (peekKind(0) == token::Kind::kIdentifier
+            && peekKind(1) == token::Kind::kEquals) return true;
+        int o = 0;
+        if (isTypeStart(peekKind(o))) {
+            o++;
+        } else if (peekKind(o) == token::Kind::kColonColon
+                   || peekKind(o) == token::Kind::kIdentifier) {
+            if (peekKind(o) == token::Kind::kColonColon) o++;
+            if (peekKind(o) != token::Kind::kIdentifier) return false;
+            o++;
+            while (peekKind(o) == token::Kind::kColon
+                   && peekKind(o + 1) == token::Kind::kIdentifier) o += 2;
+        } else {
+            return false;
+        }
+        if (peekKind(o) == token::Kind::kBitXor
+            || peekKind(o) == token::Kind::kXorXor) o++;
+        else if (peekKind(o) == token::Kind::kLBracket
+                 && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
+        if (peekKind(o) != token::Kind::kIdentifier) return false;   // var name
+        token::Kind after = peekKind(o + 1);
+        return after == token::Kind::kEquals || after == token::Kind::kSemicolon;
     }
 
     // Parse a parenthesized parameter / field list — the `(` already consumed —

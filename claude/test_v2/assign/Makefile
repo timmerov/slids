@@ -9,6 +9,7 @@ BUILD_DIR = ../../build/test_v2/$(DIR)
 
 SAMPLES = \
 	augment \
+	global \
 	infer \
 	lvalue \
 	moveswap \
